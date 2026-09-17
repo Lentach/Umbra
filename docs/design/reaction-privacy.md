@@ -53,13 +53,34 @@ column value   = {"<token>":[userId, …], …}
   user rooms, and history mapping are untouched.
 - **Chips still aggregate.** The token is deterministic per conversation, so both participants'
   "👍" collapse to one chip with two userIds — which is also the leak, priced in §6.
-- **The client needs no new storage.** It derives `token(emoji)` for its picker set on demand and
-  caches the map in memory; rendering a chip is a reverse lookup in that map.
-- **No new secret at rest on the client.** `K_react` is held in memory for the session and pulled
-  again next launch from the row already wrapped to this device. That matters here specifically:
-  web key custody is the open hole (`signal_stores.dart:27-52` — the unwrapping key sits beside
-  the ciphertext in localStorage), so a design that added another persisted secret would be
-  borrowing against it.
+- **The client needs no new storage for the MAP.** It derives `token(emoji)` for its picker set on
+  demand and caches the map in memory; rendering a chip is a reverse lookup in that map.
+- **`K_react` DOES have to persist on the client — corrected 2026-09-17, and it changes a property
+  this document previously advertised.** The earlier draft claimed the key never rests: held in
+  memory, pulled again next launch. That is impossible with a Signal-wrapped key. **Signal
+  decryption consumes the message key**, which is the same fact that forces this app to keep a
+  LOCAL plaintext record store for messages (`reconcileStoredPlaintext`; the server's copy is
+  ciphertext whose ratchet key is spent). A stored wrap can therefore be opened exactly ONCE, so a
+  device that discards `K_react` at exit cannot recover it from the mailbox next launch.
+  Consequences, all of which must be stated rather than discovered later:
+    * `K_react` is persisted through the machinery that already holds content keys
+      (`content_key_manager.dart` / `content_key_wrap.dart`) — the same custody, not a new class of
+      secret. On web that custody is the documented obfuscation, not encryption
+      (`signal_stores.dart:27-52`: the unwrapping key sits beside the ciphertext in localStorage),
+      so on web this key is as exposed as the content key already is. It buys privacy against the
+      SERVER, which is the threat D10 is about, and nothing against someone who can read that
+      origin's localStorage.
+    * PULL is still right for FIRST acquisition — the mailbox row is what a newly linked or
+      long-offline device reads once.
+    * Losing the local copy costs readability of existing chips, exactly as losing local plaintext
+      costs message history. Self-healing needs no new event: a participant that cannot open its
+      row generates a fresh key and uploads it at `epoch + 1`. Old chips stay unreadable (their
+      key is gone), new ones work. Accepted residual.
+    * The alternative that would keep nothing at rest is wrapping with a STATIC DH between the two
+      devices' long-term identity keys instead of a ratchet session — re-derivable forever, so the
+      mailbox row could be opened on every launch. It is also hand-rolled key agreement outside
+      libsignal's session machinery, which is a much bigger review surface than a persisted key.
+      Not chosen; recorded so the trade is visible.
 
 ### 3.1 Key distribution — PULL, not push (corrected after measuring the client)
 
@@ -130,13 +151,13 @@ note. Owner call — this is the only user-visible data loss in the design.
 
 | # | Change | Size |
 |---|---|---|
-| 1 | `reaction_keys` entity + `conversations.reactionKeyEpoch` + numbered migration (and, if the owner says so, nulling legacy `messages.reactions`) | S |
+| 1 | `reaction_keys` entity (incl. the server-attributed `senderUserId`/`senderDeviceId` a receiver needs to pick the right session) + `conversations.reactionKeyEpoch` + numbered migration `0018` (and, if the owner says so, nulling legacy `messages.reactions`) | S |
 | 2 | DTO: accept token \| emoji; `chat-reaction.service` untouched except validation | S |
-| 3 | `uploadReactionKey` / `fetchReactionKey` handlers, server-assigned epoch, stale-epoch refusal, envelope-count bound reuse | M |
+| 3 | `uploadReactionKey` / `fetchReactionKey` handlers, server-assigned epoch, stale-epoch + foreign-recipient refusals, envelope-count bound reuse | M |
 | 4 | Append the reaction contract (it has none) to `docs/contracts/wire.md` | S |
-| 5 | Client: key create/upload via the EXISTING `_resolveFanOut`→`ensureSession`→`encrypt` path, pull-on-miss, in-memory HMAC map, picker → token, chip reverse lookup, placeholder render | M |
-| 6 | Client: re-upload on `deviceListChanged`, rotate on revoke | M |
-| 7 | Tests: token determinism, one-emoji-per-user through tokens, placeholder render, epoch race refusal, legacy-shape compat, pull-on-miss | M |
+| 5 | Client: key create/upload via the EXISTING `_resolveFanOut`→`ensureSession`→`encrypt` path, pull-on-miss, **persist `K_react` through the content-key store (§3, the one-shot decryption fact)**, in-memory HMAC map, picker → token, chip reverse lookup, placeholder render | L |
+| 6 | Client: re-upload on `deviceListChanged`, rotate on revoke, self-heal by re-keying at `epoch + 1` when the local key is gone and the mailbox row is spent | M |
+| 7 | Tests: token determinism, one-emoji-per-user through tokens, placeholder render, epoch race refusal, legacy-shape compat, pull-on-miss, and re-launch readability (the regression the old "nothing at rest" claim would have shipped) | M |
 | 8 | Follow-up: remove the emoji branch, refuse legacy | S |
 
 ## 5. Falsifications to drive the implementation
@@ -153,6 +174,12 @@ note. Owner call — this is the only user-visible data loss in the design.
   written as plaintext into a column clients now read as tokens.
 - (R6) Truncate the token to 8 bytes → collisions inside one conversation merge two different
   emoji into one chip.
+- (R7) Keep `K_react` in memory only, as the first draft of §3 said → reactions render on the
+  session that created the key and are permanently unreadable after a relaunch, because the
+  mailbox wrap was already consumed. This is the falsification that killed that claim.
+- (R8) Let the client name the uploader in `fetchReactionKey`'s answer instead of the server
+  attributing it → a hostile server (or client) points a victim's device at the wrong Signal
+  session and burns a ratchet step on garbage.
 
 ## 6. What this design does NOT hide, stated plainly
 
