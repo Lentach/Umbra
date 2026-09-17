@@ -22,10 +22,25 @@ sealed class ReactionKeyLookup {
 
 /// This device holds the key for [epoch].
 final class ReactionKeyFound extends ReactionKeyLookup {
-  const ReactionKeyFound({required this.epoch, required this.keyB64});
+  const ReactionKeyFound({
+    required this.epoch,
+    required this.keyB64,
+    this.pending = false,
+  });
 
   final int epoch;
   final String keyB64;
+
+  /// The key was stored before its upload was CONFIRMED, and the confirmation
+  /// never arrived (a lost ack, a timeout, a dead socket).
+  ///
+  /// It exists because neither answer to "was my upload accepted?" is safe to
+  /// assume. Deleting the record would destroy a key the server may well be
+  /// serving — unrecoverably, since the epoch has then moved and this device
+  /// may not re-key. Trusting it would publish tokens no peer device can
+  /// decode if the upload never landed. So the record survives, marked, and
+  /// the next acquisition reconciles it against the server's epoch.
+  final bool pending;
 }
 
 /// The store answered, and there is no record. The ONLY state that may

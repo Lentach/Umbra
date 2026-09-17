@@ -427,13 +427,17 @@ class EncryptionService {
     required int conversationId,
     required int epoch,
     required String keyB64,
+    bool pending = false,
   }) async {
     final userId = _userId;
     if (userId == null) return false;
     try {
       final prefs = await _sharedPrefs;
       final key = _reactionKeyRecordKey(userId, conversationId);
-      await prefs.setString(key, jsonEncode({'e': epoch, 'k': keyB64}));
+      await prefs.setString(
+        key,
+        jsonEncode({'e': epoch, 'k': keyB64, if (pending) 'p': true}),
+      );
       // Read back through the AUTHORITATIVE snapshot, like every other
       // durable record here. The per-engine cache can miss a write that
       // landed, and a false "not stored" on this path is destructive: the
@@ -442,7 +446,10 @@ class EncryptionService {
       final readBack = _rawRecord(await _authoritativeSnapshot(), prefs, key);
       if (readBack == null) return false;
       final decoded = jsonDecode(readBack);
-      return decoded is Map && decoded['e'] == epoch && decoded['k'] == keyB64;
+      return decoded is Map &&
+          decoded['e'] == epoch &&
+          decoded['k'] == keyB64 &&
+          (decoded['p'] == true) == pending;
     } on Object catch (_) {
       return false;
     }
@@ -507,7 +514,13 @@ class EncryptionService {
       if (epoch is! int || keyB64 is! String || keyB64.isEmpty) {
         return const ReactionKeyUnavailable('corrupt');
       }
-      return ReactionKeyFound(epoch: epoch, keyB64: keyB64);
+      return ReactionKeyFound(
+        epoch: epoch,
+        keyB64: keyB64,
+        // Absent marker = confirmed. Only a record written between "stored"
+        // and "server said yes" carries it.
+        pending: decoded['p'] == true,
+      );
     } on ContentStoreUnavailable catch (e) {
       return ReactionKeyUnavailable(e.locked ? 'locked' : e.stage);
     } on Object catch (e) {

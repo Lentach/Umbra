@@ -604,15 +604,20 @@ extension MessagingEvents on MessagingProvider {
     );
 
     final index = _messages.indexWhere((msg) => msg.id == messageId);
-    if (index != -1) {
-      _messages[index] = _messages[index].copyWith(
-        reactions: _renderableReactions(
-          _messages[index].conversationId,
-          wire,
-        ),
-      );
-      notifyListeners();
-    }
+    if (index == -1) return;
+    final conversationId = _messages[index].conversationId;
+    final resolved = _renderableReactions(conversationId, wire);
+    _messages[index] = _messages[index].copyWith(reactions: resolved);
+    // The CACHE too, like `_decryptEditedMessage` does. Without this, leaving
+    // and re-entering the chat serves the cached copy — which still holds the
+    // raw tokens this just resolved, so every chip reverts to a placeholder
+    // and the reaction itself looks like it was rolled back.
+    _patchMessageInCache(
+      conversationId,
+      messageId,
+      (msg) => msg.copyWith(reactions: resolved),
+    );
+    notifyListeners();
   }
 
   void _handleLinkPreviewReady(dynamic data) {

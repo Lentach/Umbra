@@ -440,6 +440,130 @@ void main() {
     expect(await store.loadReactionKey(conversationId), isA<ReactionKeyAbsent>());
   });
 
+  test('an UNANSWERED upload keeps the key, marked provisional', () async {
+    // Silence is not refusal. The server may have accepted and advanced the
+    // epoch with only the ack lost — deleting here would destroy a key it is
+    // actively serving, and the epoch rule then forbids re-keying it. So the
+    // record survives, marked, and the ambiguity is resolved later.
+    final store = await boot();
+    final svc = build(
+      store,
+      answer: (event, _) =>
+          event == 'fetchReactionKey' ? {'epoch': 0, 'ciphertext': null} : null,
+    );
+
+    final result = await svc.ensureCodec(
+      conversationId,
+      peerUserId: peerUserId,
+      mayCreate: true,
+    );
+
+    expect(result.failure, ReactionKeyFailure.unavailable);
+    final held = await store.loadReactionKey(conversationId);
+    expect(held, isA<ReactionKeyFound>());
+    expect((held as ReactionKeyFound).pending, isTrue);
+    expect(held.epoch, 1);
+  });
+
+  test('a provisional key the server DID accept is confirmed, not re-minted', () async {
+    // The lost-ack case, resolved on the next acquisition: the server reports
+    // the very epoch we stored, so the upload landed. The key must be kept as
+    // is — re-minting would advance the epoch and orphan the tokens already
+    // written under it.
+    final store = await boot();
+    await store.saveReactionKey(
+      conversationId: conversationId,
+      epoch: 1,
+      keyB64: key,
+      pending: true,
+    );
+    final svc = build(
+      store,
+      answer: (event, _) => event == 'fetchReactionKey'
+          ? {'epoch': 1, 'ciphertext': null}
+          : fail('must not publish a key the server already holds'),
+    );
+
+    final result = await svc.ensureCodec(
+      conversationId,
+      peerUserId: peerUserId,
+      mayCreate: true,
+    );
+
+    expect(result.codec, isNotNull);
+    final held = await store.loadReactionKey(conversationId);
+    expect(
+      (held as ReactionKeyFound).keyB64,
+      key,
+      reason: 'the SAME key, not a replacement',
+    );
+    expect(held.pending, isFalse);
+  });
+
+  test('a provisional key the server never got is re-published, same key', () async {
+    // The other resolution: the server is still at epoch 0, so the upload
+    // never arrived. Resume it with the SAME bytes so the tokens already
+    // rendered locally stay valid and the peer gets the key it was meant to.
+    final store = await boot();
+    await store.saveReactionKey(
+      conversationId: conversationId,
+      epoch: 1,
+      keyB64: key,
+      pending: true,
+    );
+    final uploads = <Map<String, dynamic>>[];
+    final svc = build(
+      store,
+      answer: (event, payload) {
+        if (event == 'fetchReactionKey') return {'epoch': 0, 'ciphertext': null};
+        uploads.add(payload);
+        return {'success': true, 'epoch': 1};
+      },
+    );
+
+    final result = await svc.ensureCodec(
+      conversationId,
+      peerUserId: peerUserId,
+      mayCreate: true,
+    );
+
+    expect(result.codec, isNotNull);
+    expect(uploads, hasLength(1));
+    expect(uploads.single['epoch'], 1);
+    final held = await store.loadReactionKey(conversationId);
+    expect((held as ReactionKeyFound).keyB64, key);
+    expect(held.pending, isFalse);
+  });
+
+  test('a provisional key the conversation has moved past is dropped', () async {
+    // Someone re-keyed while this device was unsure. Our copy can never be
+    // read by anyone, and leaving it would have `loadReactionKey` answer Found
+    // forever — placeholders are the honest state.
+    final store = await boot();
+    await store.saveReactionKey(
+      conversationId: conversationId,
+      epoch: 1,
+      keyB64: key,
+      pending: true,
+    );
+    final svc = build(
+      store,
+      answer: (event, _) => event == 'fetchReactionKey'
+          ? {'epoch': 4, 'ciphertext': null}
+          : fail('must not publish over a newer epoch'),
+    );
+
+    final result = await svc.ensureCodec(
+      conversationId,
+      peerUserId: peerUserId,
+      mayCreate: true,
+    );
+
+    expect(result.codec, isNull);
+    expect(result.failure, ReactionKeyFailure.noKeyYet);
+    expect(await store.loadReactionKey(conversationId), isA<ReactionKeyAbsent>());
+  });
+
   test('the generated key is 32 bytes and conversation-specific', () async {
     final store = await boot();
     final captured = <String>[];

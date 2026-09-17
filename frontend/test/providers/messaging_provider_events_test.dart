@@ -27,6 +27,10 @@ class _MemoryReactionStore extends EncryptionService {
   final Map<int, String> keys = <int, String>{};
   final Map<int, int> epochs = <int, int>{};
 
+  /// Whether the stored record is still provisional — i.e. saved before the
+  /// server confirmed the upload.
+  final Map<int, bool> pendings = <int, bool>{};
+
   @override
   Future<ReactionKeyLookup> loadReactionKey(int conversationId) async {
     if (locked) return const ReactionKeyUnavailable('locked');
@@ -35,7 +39,11 @@ class _MemoryReactionStore extends EncryptionService {
         ? const ReactionKeyAbsent()
         // The epoch actually recorded, not a constant: a fake that lies here
         // would hide an epoch mismatch rather than expose it.
-        : ReactionKeyFound(epoch: epochs[conversationId] ?? 0, keyB64: key);
+        : ReactionKeyFound(
+            epoch: epochs[conversationId] ?? 0,
+            keyB64: key,
+            pending: pendings[conversationId] ?? false,
+          );
   }
 
   @override
@@ -43,11 +51,20 @@ class _MemoryReactionStore extends EncryptionService {
     required int conversationId,
     required int epoch,
     required String keyB64,
+    bool pending = false,
   }) async {
     if (locked) return false;
     keys[conversationId] = keyB64;
     epochs[conversationId] = epoch;
+    pendings[conversationId] = pending;
     return true;
+  }
+
+  @override
+  Future<void> dropReactionKey(int conversationId) async {
+    keys.remove(conversationId);
+    epochs.remove(conversationId);
+    pendings.remove(conversationId);
   }
 }
 

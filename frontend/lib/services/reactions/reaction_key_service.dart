@@ -199,7 +199,7 @@ class ReactionKeyService {
     required bool mayCreate,
   }) async {
     switch (await _store.loadReactionKey(conversationId)) {
-      case ReactionKeyFound(:final keyB64):
+      case ReactionKeyFound(:final keyB64, :final epoch, :final pending):
         // Measured like a pulled key is. HMAC accepts any key length, so a
         // truncated record would mint well-formed tokens that nobody else
         // agrees with — every reaction from this device showing as a
@@ -208,6 +208,14 @@ class ReactionKeyService {
         // re-key.
         if (!_isValidKey(keyB64)) {
           return (codec: null, failure: ReactionKeyFailure.unavailable);
+        }
+        if (pending) {
+          return _reconcile(
+            conversationId,
+            peerUserId: peerUserId,
+            keyB64: keyB64,
+            storedEpoch: epoch,
+          );
         }
         return (codec: _remember(conversationId, keyB64), failure: null);
       case ReactionKeyUnavailable():
@@ -332,28 +340,45 @@ class ReactionKeyService {
   }
 
   /// Mints the conversation's first `K_react` and publishes it.
-  ///
-  /// ORDER IS THE WHOLE POINT. The upload is what advances the server's
-  /// epoch, and the fan-out deliberately never addresses this device, so
-  /// there is no mailbox row to recover from: if the key were published
-  /// before being stored, a lost ack would leave the server serving an epoch
-  /// whose only plaintext copy died with this call — and the epoch-0 gate
-  /// would then refuse to re-key, forever. So the key is persisted FIRST and
-  /// rolled back on every refusal, which is the direction that cannot lose
-  /// data: a stored-but-unpublished key is simply retried, and a stored key
-  /// the server rejected is deleted before anyone relies on it.
   Future<({ReactionTokenCodec? codec, ReactionKeyFailure? failure})> _create(
     int conversationId, {
     required int peerUserId,
     required int currentEpoch,
-  }) async {
+  }) {
     final key = Uint8List.fromList(
       List<int>.generate(
         ReactionTokenCodec.keyBytes,
         (_) => _random.nextInt(256),
       ),
     );
-    final keyB64 = base64Encode(key);
+    return _publish(
+      conversationId,
+      peerUserId: peerUserId,
+      keyB64: base64Encode(key),
+      currentEpoch: currentEpoch,
+    );
+  }
+
+  /// Seals [keyB64] to every addressable device and announces it.
+  ///
+  /// ORDER IS THE WHOLE POINT. The upload is what advances the server's
+  /// epoch, and the fan-out deliberately never addresses this device, so
+  /// there is no mailbox row to recover from: if the key were published
+  /// before being stored, a lost ack would leave the server serving an epoch
+  /// whose only plaintext copy died with this call — and the epoch rule would
+  /// then refuse to re-key, forever. So the key is persisted FIRST, marked
+  /// `pending` until the server confirms, and then either confirmed, deleted,
+  /// or LEFT pending — one outcome per answer, and none of them loses the
+  /// key.
+  ///
+  /// Also the resume path: [_reconcile] calls this with an existing key when
+  /// the server turns out never to have received it.
+  Future<({ReactionTokenCodec? codec, ReactionKeyFailure? failure})> _publish(
+    int conversationId, {
+    required int peerUserId,
+    required String keyB64,
+    required int currentEpoch,
+  }) async {
     final epoch = currentEpoch + 1;
 
     final List<ReactionKeyTarget> targets;
@@ -385,12 +410,13 @@ class ReactionKeyService {
       return (codec: null, failure: ReactionKeyFailure.refused);
     }
 
-    // Persist BEFORE publishing (see the doc comment). Nothing has been
+    // Persist BEFORE publishing, marked provisional. Nothing has been
     // announced yet, so a failure here is free to retry.
     if (!await _store.saveReactionKey(
       conversationId: conversationId,
       epoch: epoch,
       keyB64: keyB64,
+      pending: true,
     )) {
       return (codec: null, failure: ReactionKeyFailure.unavailable);
     }
@@ -403,12 +429,21 @@ class ReactionKeyService {
       'epoch': epoch,
       'envelopes': envelopes,
     });
-    if (answer == null || answer['success'] != true) {
-      // Roll back: a key the server never accepted must not survive, because
-      // `loadReactionKey` would answer `Found` on every later launch and the
-      // real key would never be pulled.
+
+    if (answer == null) {
+      // SILENCE, not refusal — a timeout, a dead socket, a dropped ack. The
+      // server may well have accepted and moved to `epoch`, so deleting the
+      // record here would destroy a key it is actively serving, with no
+      // mailbox row for this device to recover from. The record STAYS,
+      // pending: the next acquisition asks the server which happened.
+      return (codec: null, failure: ReactionKeyFailure.unavailable);
+    }
+    if (answer['success'] != true) {
+      // An explicit refusal IS proof the server holds nothing of ours, so the
+      // provisional record must go: left behind, `loadReactionKey` would
+      // answer Found forever and the real key would never be pulled.
       await _store.dropReactionKey(conversationId);
-      if (answer != null && answer['error'] == 'stale_epoch') {
+      if (answer['error'] == 'stale_epoch') {
         final pulled = await _pull(conversationId);
         if (pulled.hasRow || pulled.failure != null) {
           return (codec: pulled.codec, failure: pulled.failure);
@@ -417,17 +452,70 @@ class ReactionKeyService {
       return (codec: null, failure: ReactionKeyFailure.refused);
     }
 
-    // The server assigns the epoch. If it differs from the proposal, re-stamp
-    // the record so the stored epoch matches what the mailbox says.
+    // Confirmed. Re-stamp without the pending marker, at the epoch the SERVER
+    // assigned (it owns that number, not us). A failed re-stamp is NOT a
+    // failure of the publish: the key is out there and readable, and the only
+    // cost is that the next launch reconciles once more.
     final assigned = answer['epoch'];
-    if (assigned is int && assigned != epoch) {
+    await _store.saveReactionKey(
+      conversationId: conversationId,
+      epoch: assigned is int ? assigned : epoch,
+      keyB64: keyB64,
+    );
+    return (codec: _remember(conversationId, keyB64), failure: null);
+  }
+
+  /// Decides what a provisional record actually is, by asking the server.
+  ///
+  /// Reached when a publish got no answer. Four outcomes, and the reason this
+  /// exists rather than a guess: the ambiguous case is common (any dropped
+  /// socket) and both guesses are destructive in one direction.
+  Future<({ReactionTokenCodec? codec, ReactionKeyFailure? failure})> _reconcile(
+    int conversationId, {
+    required int peerUserId,
+    required String keyB64,
+    required int storedEpoch,
+  }) async {
+    final pulled = await _pull(conversationId);
+
+    // The server has a row for this device: whatever it holds outranks our
+    // provisional copy, and `_pull` has already stored it.
+    if (pulled.codec != null) return (codec: pulled.codec, failure: null);
+
+    if (pulled.failure != null) {
+      // Still cannot get a straight answer. Keep using our own key — the
+      // tokens we already wrote are ours to read — and stay pending so the
+      // question gets asked again later.
+      return (codec: _remember(conversationId, keyB64), failure: null);
+    }
+
+    if (pulled.epoch == storedEpoch) {
+      // The upload DID land; only the ack was lost. Confirm and move on.
       await _store.saveReactionKey(
         conversationId: conversationId,
-        epoch: assigned,
+        epoch: storedEpoch,
         keyB64: keyB64,
       );
+      return (codec: _remember(conversationId, keyB64), failure: null);
     }
-    return (codec: _remember(conversationId, keyB64), failure: null);
+
+    if (pulled.epoch < storedEpoch) {
+      // The upload never arrived. Resume it with the SAME key rather than
+      // minting a second one — the tokens already rendered locally stay
+      // valid, and the peer gets the key they were always meant to have.
+      return _publish(
+        conversationId,
+        peerUserId: peerUserId,
+        keyB64: keyB64,
+        currentEpoch: pulled.epoch,
+      );
+    }
+
+    // The server has moved PAST our epoch and holds no row for this device:
+    // someone re-keyed. Our copy is dead weight and must not keep answering
+    // `Found`, so it goes; the placeholder state is the honest one.
+    await _store.dropReactionKey(conversationId);
+    return (codec: null, failure: ReactionKeyFailure.noKeyYet);
   }
 
   // (see the top-level `_PullOutcome` for what a mailbox read can answer)
