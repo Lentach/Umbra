@@ -70,6 +70,44 @@ String? sentinelDisplayText(
   return null;
 }
 
+/// A short second line explaining WHY a row is unreadable, or null when the
+/// row needs no explanation.
+///
+/// Lives beside [sentinelDisplayText] on purpose: that function decides the
+/// body, this one the reason, and the two must stay in agreement about which
+/// rows are unreadable — a reason attached to a row that renders fine, or a
+/// dead row with no reason, is worse than no note at all.
+///
+/// Why it exists: "can't be read on this device" states the symptom and hides
+/// the cause, so the reader is left suspecting the app broke. The cause is
+/// always the same shape — the keys that would open this row are gone from
+/// THIS install — and it differs only in which copy went missing:
+///   * a PEER row failed a real Signal decrypt, so the message was sealed to
+///     an identity/ratchet key this install no longer holds (a reinstall, a
+///     new browser, or cleared site data replaces them);
+///   * an OWN row never had a Signal copy to decrypt — the sender keeps its
+///     plaintext only in the local cache, which the same wipe destroyed.
+///
+/// Rendered by the bubble only. The provider-free context-menu replica shows
+/// the body alone: it is a transient measuring overlay sized to the body text,
+/// and a second line there would change that measurement without being read.
+String? sentinelUnreadableReason(
+  BuildContext context,
+  MessageModel message, {
+  bool isMine = false,
+  bool decryptInProgress = false,
+}) {
+  if (decryptInProgress && message.displayAsEncryptedPlaceholder) return null;
+  final content = message.content;
+  if (content == kDecryptionFailedLabel) {
+    return AppLocalizations.of(context).messageUnreadableReasonKeysGone;
+  }
+  if (!decryptInProgress && isMine && content == kEncryptedPlaceholderLabel) {
+    return AppLocalizations.of(context).messageUnreadableReasonOwnCopyGone;
+  }
+  return null;
+}
+
 /// Human-readable body text for a message bubble: the sentinel mapping above,
 /// else the decrypted plaintext, else an unsupported-type fallback.
 ///

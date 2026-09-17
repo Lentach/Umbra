@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../../models/message_model.dart';
 import '../../providers/messaging_provider.dart';
+import '../../providers/settings_provider.dart';
 import 'file_message_content.dart';
 import 'voice_message_content.dart';
 import 'gif_message_content.dart';
@@ -22,6 +23,7 @@ class MessageContentFactory {
     required bool isDark,
     required Color textColor,
     required double contentAreaWidth,
+    String themePreference = SettingsProvider.kDefaultThemePreference,
   }) {
     if (message.content == kRetiredMessageLabel) {
       return TextMessageContent(
@@ -30,6 +32,7 @@ class MessageContentFactory {
         textColor: textColor,
         isDark: isDark,
         maxWidth: contentAreaWidth,
+        themePreference: themePreference,
       );
     }
     switch (message.messageType) {
@@ -43,6 +46,7 @@ class MessageContentFactory {
           textColor: textColor,
           isDark: isDark,
           maxWidth: contentAreaWidth,
+          themePreference: themePreference,
           // Only TEXT rows can be mislabelled: keyed media legitimately keeps
           // content == "[encrypted]" forever (its payload is the mediaKey, not
           // text) and renders through the media widgets, so it can never pick

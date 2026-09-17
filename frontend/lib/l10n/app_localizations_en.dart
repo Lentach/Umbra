@@ -488,6 +488,14 @@ class AppLocalizationsEn extends AppLocalizations {
       'This message can\'t be read on this device.';
 
   @override
+  String get messageUnreadableReasonKeysGone =>
+      'The keys are gone — reinstalling won\'t bring them back.';
+
+  @override
+  String get messageUnreadableReasonOwnCopyGone =>
+      'Your only copy was on the sending device.';
+
+  @override
   String get historyBeforeDeviceLinked =>
       'History from before this device was linked';
 

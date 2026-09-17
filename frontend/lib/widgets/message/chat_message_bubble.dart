@@ -203,6 +203,10 @@ class ChatMessageBubble extends StatelessWidget {
           isDark: isDark,
           textColor: textColor,
           contentAreaWidth: contentAreaWidth,
+          // Only the unreadable-reason caption consumes this, so it can share
+          // `messageBubbleMetaColor` with the timestamp instead of inventing
+          // an alpha that would disagree with it on the white-on-teal bubbles.
+          themePreference: context.read<SettingsProvider>().themePreference,
         ),
         Builder(
           builder: (ctx) {
