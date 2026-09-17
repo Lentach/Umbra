@@ -46,4 +46,25 @@ ALTER TABLE public.conversations
 -- is the exact thing this change exists to end; re-adding a reaction costs one
 -- tap. History served after this point carries `reactions: {}` for old
 -- messages.
-UPDATE public.messages SET reactions = NULL WHERE reactions IS NOT NULL;
+--
+-- GUARDED, because the rest of this file is written to be re-runnable
+-- (`IF NOT EXISTS` throughout) and an unconditional wipe is not: legacy
+-- plaintext and new TOKEN reactions live in the SAME column, so a second run
+-- — a repeated staging rehearsal, a recovery re-apply, a copy-paste on the VM
+-- — would destroy live reactions, not just historical ones.
+--
+-- The guard is exact rather than heuristic: a token reaction cannot exist
+-- without a key, a key cannot exist without an accepted `uploadReactionKey`,
+-- and that is the only thing that lifts a conversation's `reactionKeyEpoch`
+-- above 0 or writes a `reaction_keys` row. So "no key has ever been uploaded
+-- anywhere" is precisely "every reaction in this column is legacy plaintext".
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM public.reaction_keys)
+     AND NOT EXISTS (
+       SELECT 1 FROM public.conversations WHERE "reactionKeyEpoch" > 0
+     )
+  THEN
+    UPDATE public.messages SET reactions = NULL WHERE reactions IS NOT NULL;
+  END IF;
+END $$;

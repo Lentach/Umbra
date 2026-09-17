@@ -155,9 +155,39 @@ void main() {
 
     expect(verdict, isA<ReactionKeyUnavailable>());
   });
+
+  test('a locked open does NOT answer for the rest of the process', () async {
+    final svc = await boot(uid);
+    var opens = 0;
+    svc.debugSetContentKvOpener(() async {
+      opens++;
+      if (opens == 1) {
+        // What the web opener really does when the passcode vault is locked:
+        // rethrow rather than fall back, because falling back would write the
+        // plaintext cache while the app is still locked.
+        throw const ContentStoreUnavailable('web-locked', locked: true);
+      }
+      return PrefsContentKv(await SharedPreferences.getInstance());
+    });
+
+    final locked = await svc.loadReactionKey(conversationId);
+    expect(locked, isA<ReactionKeyUnavailable>());
+    expect((locked as ReactionKeyUnavailable).reason, 'locked');
+
+    // The user unlocks. Before this fix the REJECTED opening stayed memoized,
+    // so every later read rethrew locked until a relaunch — chips stayed
+    // unreadable for the whole session and the three-state verdict was
+    // decorative.
+    final afterUnlock = await svc.loadReactionKey(conversationId);
+
+    expect(opens, 2, reason: 'a failed opening must be retried, not cached');
+    expect(afterUnlock, isA<ReactionKeyAbsent>());
+  });
 }
 
 /// Mirrors the web store's locked behaviour: rethrow, never fall back.
+/// Pinned separately from the reaction path because the whole point is that
+/// ONE locked read must not answer for the rest of the process.
 class _LockedContentKv implements ContentKv {
   @override
   String? getString(String key) =>

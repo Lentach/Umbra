@@ -166,7 +166,7 @@ class EncryptionService {
   Future<ContentKv> get _sharedPrefs async {
     final cached = _prefs;
     if (cached != null) return cached;
-    final opening = _prefsOpening ??= openPlatformContentKv();
+    final opening = _prefsOpening ??= (_kvOpener ?? openPlatformContentKv)();
     try {
       return _prefs = await opening;
     } catch (_) {
@@ -184,6 +184,21 @@ class EncryptionService {
     _prefs = kv;
     _prefsOpening = Future.value(kv);
   }
+
+  /// Test-only seam for the OPENER, not the opened store.
+  ///
+  /// [debugSetContentKv] above pins a store and therefore cannot exercise the
+  /// open path at all. This one exists so the "a locked open must not poison
+  /// the process" behaviour above has a test: a fake that throws first and
+  /// succeeds second.
+  @visibleForTesting
+  void debugSetContentKvOpener(Future<ContentKv> Function()? opener) {
+    _kvOpener = opener;
+    _prefs = null;
+    _prefsOpening = null;
+  }
+
+  Future<ContentKv> Function()? _kvOpener;
 
   /// Ground truth for a record read, or null when [ContentKv.getString] is
   /// already authoritative on this backend.
