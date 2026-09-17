@@ -998,8 +998,24 @@ describe('MessagesService reactions (BE-152/BE-201 atomicity)', () => {
 
   it('concurrent add then remove resolves without a ghost reaction', async () => {
     await service.addOrUpdateReaction(42, 1, '👍');
-    await service.removeReaction(42, 1, '👍');
+    await service.removeReaction(42, 1);
     expect(JSON.parse(store as string)).toEqual({});
+  });
+
+  it('removes the user from a LEGACY plaintext key too', async () => {
+    // The reaction-token compat window: an un-updated client stored the plain
+    // emoji, and the updated client that toggles it off knows only its own
+    // blinded token. An exact-key delete left the chip lit forever.
+    store = JSON.stringify({ '👍': [1, 2] });
+    await service.removeReaction(42, 1);
+    expect(JSON.parse(store)).toEqual({ '👍': [2] });
+  });
+
+  it('removes the user from a token key without being told which', async () => {
+    const token = 'AAAAAAAAAAAAAAAAAAAAAA';
+    store = JSON.stringify({ [token]: [1] });
+    await service.removeReaction(42, 1);
+    expect(JSON.parse(store)).toEqual({});
   });
 
   it('degrades corrupt stored reactions instead of throwing', async () => {

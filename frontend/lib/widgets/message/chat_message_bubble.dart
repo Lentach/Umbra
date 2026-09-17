@@ -16,6 +16,7 @@ import '../message_swipe_wrapper.dart';
 import '../dialogs/message_delete_dialog.dart';
 import '../top_snackbar.dart';
 import 'message_context_menu_overlay.dart';
+import 'reaction_tap.dart';
 import 'message_context_menu_bubble_highlight.dart';
 import 'context_menu_bubble_anchor.dart';
 import 'message_bubble_inline_time.dart';
@@ -165,11 +166,12 @@ class ChatMessageBubble extends StatelessWidget {
         );
       },
       onReaction: (emoji, alreadyReacted) {
-        if (alreadyReacted) {
-          messaging.removeReaction(message.id, emoji);
-        } else {
-          messaging.addReaction(message.id, emoji);
-        }
+        toggleReaction(
+          context,
+          message.id,
+          emoji,
+          alreadyReacted: alreadyReacted,
+        ).ignore();
       },
     );
   }
@@ -508,12 +510,12 @@ class ChatMessageBubble extends StatelessWidget {
                     reactions: message.reactions,
                     currentUserId: currentUserId ?? -1,
                     onTap: (emoji, isMyReaction) {
-                      final messaging = context.read<MessagingProvider>();
-                      if (isMyReaction) {
-                        messaging.removeReaction(message.id, emoji);
-                      } else {
-                        messaging.addReaction(message.id, emoji);
-                      }
+                      toggleReaction(
+                        context,
+                        message.id,
+                        emoji,
+                        alreadyReacted: isMyReaction,
+                      ).ignore();
                     },
                   ),
                 ),

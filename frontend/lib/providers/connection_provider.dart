@@ -1270,9 +1270,19 @@ class ConnectionProvider extends ChangeNotifier {
     _socketService.on('editMessageFailed', (data) {
       _messagingProvider?.onEditMessageFailed(data);
     });
-    _socketService.on('reactionUpdated', (data) {
-      _messagingProvider?.onReactionUpdated(data);
-    });
+    // `reactionUpdated` is the chip state; the two key events are the mailbox
+    // that makes those chips readable (docs/design/reaction-privacy.md).
+    // MessagingProvider holds the pending round trips because it issues them.
+    _socketService
+      ..on('reactionUpdated', (data) {
+        _messagingProvider?.onReactionUpdated(data);
+      })
+      ..on('reactionKeyUploaded', (data) {
+        _messagingProvider?.onReactionKeyUploaded(data);
+      })
+      ..on('reactionKeyResponse', (data) {
+        _messagingProvider?.onReactionKeyResponse(data);
+      });
     _socketService.on('linkPreviewReady', (data) {
       _messagingProvider?.onLinkPreviewReady(data);
     });

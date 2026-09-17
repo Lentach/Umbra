@@ -107,10 +107,13 @@ export class ChatReactionService {
       conv.userOne.id === userId ? conv.userTwo.id : conv.userOne.id;
     if (await this.blockedService.isBlockedByEither(userId, otherId)) return;
 
+    // `data.emoji` is validated on the wire but deliberately not passed: a
+    // user has at most one reaction per message, so removal is "drop this
+    // user", independent of whether their reaction was stored as a blinded
+    // token or as a legacy plain emoji.
     const updated = await this.messagesService.removeReaction(
       data.messageId,
       userId,
-      data.emoji,
     );
     if (!updated) return;
 

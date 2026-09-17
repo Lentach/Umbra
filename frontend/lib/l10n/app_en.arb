@@ -641,6 +641,8 @@
   "messageReactionSelected": "selected",
   "messageReactionNotSelected": "not selected",
   "messageReactionSemantics": "Reaction {emoji}, {state}",
+  "messageReactionUnreadable": "Reaction not readable on this device ({count})",
+  "snackbarReactionUnavailable": "Reactions aren't ready on this device yet",
   "snackbarPinnedMessageUnavailable": "Message is no longer available",
   "snackbarMessageCopied": "Message copied",
   "composerAttachmentRemoveTooltip": "Remove attachment",

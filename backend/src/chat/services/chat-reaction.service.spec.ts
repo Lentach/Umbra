@@ -189,11 +189,10 @@ describe('ChatReactionService', () => {
         mockServer,
       );
 
-      expect(mockMessagesService.removeReaction).toHaveBeenCalledWith(
-        5,
-        1,
-        '👍',
-      );
+      // No key argument: removal drops this user's single reaction whatever
+      // key holds it, so a legacy plaintext entry cannot survive a token-shaped
+      // removal (and vice versa).
+      expect(mockMessagesService.removeReaction).toHaveBeenCalledWith(5, 1);
       expect(mockClient.emit).toHaveBeenCalledWith('reactionUpdated', {
         messageId: 5,
         conversationId: 10,

@@ -2858,6 +2858,18 @@ abstract class AppLocalizations {
   /// **'Reakcja {emoji}, {state}'**
   String messageReactionSemantics(Object emoji, Object state);
 
+  /// No description provided for @messageReactionUnreadable.
+  ///
+  /// In pl, this message translates to:
+  /// **'Reakcja nieczytelna na tym urządzeniu ({count})'**
+  String messageReactionUnreadable(int count);
+
+  /// No description provided for @snackbarReactionUnavailable.
+  ///
+  /// In pl, this message translates to:
+  /// **'Reakcje nie są jeszcze gotowe na tym urządzeniu'**
+  String get snackbarReactionUnavailable;
+
   /// No description provided for @snackbarPinnedMessageUnavailable.
   ///
   /// In pl, this message translates to:

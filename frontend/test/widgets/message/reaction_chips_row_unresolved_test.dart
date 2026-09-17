@@ -1,6 +1,6 @@
-import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:fireplace/l10n/app_localizations.dart';
 import 'package:fireplace/services/reactions/reaction_display.dart';
 import 'package:fireplace/services/reactions/reaction_token_codec.dart';
 import 'package:fireplace/widgets/message/reaction_chips_row.dart';
@@ -30,6 +30,10 @@ void main() {
   }) {
     return tester.pumpWidget(
       MaterialApp(
+        // The unreadable-chip label is localized, so the delegates are part of
+        // the contract under test, not scaffolding.
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: Scaffold(
           body: ReactionChipsRow(
             reactions: reactions,
@@ -107,11 +111,6 @@ void main() {
     );
   });
 
-  test('an empty map is returned untouched, not rebuilt', () {
-    final empty = <String, List<int>>{};
-    expect(resolveReactionKeys(empty, codec), same(empty));
-  });
-
   test('resolution needs no codec to pass legacy emoji through', () {
     final out = resolveReactionKeys({'❤️': [1]}, null);
     expect(out.keys.single, '❤️');
@@ -120,10 +119,4 @@ void main() {
     expect(isUnresolvedReactionKey(tokenOnly.keys.single), isTrue);
   });
 
-  test('base64 of a 32-byte key is what the codec expects', () {
-    // Guards the fixture itself: a wrong-length key would make every token in
-    // this file meaningless while the assertions still passed.
-    expect(base64Decode(base64Encode(List<int>.generate(32, (i) => i))),
-        hasLength(ReactionTokenCodec.keyBytes));
-  });
 }

@@ -434,12 +434,35 @@ class EncryptionService {
       final prefs = await _sharedPrefs;
       final key = _reactionKeyRecordKey(userId, conversationId);
       await prefs.setString(key, jsonEncode({'e': epoch, 'k': keyB64}));
-      final readBack = _rawRecord(null, prefs, key);
+      // Read back through the AUTHORITATIVE snapshot, like every other
+      // durable record here. The per-engine cache can miss a write that
+      // landed, and a false "not stored" on this path is destructive: the
+      // caller treats it as a lost key while the server already serves the
+      // epoch (the 2026-07-29 incident, same mechanism).
+      final readBack = _rawRecord(await _authoritativeSnapshot(), prefs, key);
       if (readBack == null) return false;
       final decoded = jsonDecode(readBack);
       return decoded is Map && decoded['e'] == epoch && decoded['k'] == keyB64;
     } on Object catch (_) {
       return false;
+    }
+  }
+
+  /// Forgets this device's `K_react` for [conversationId].
+  ///
+  /// Used when a key was stored optimistically and the server then refused to
+  /// publish it: keeping it would mint tokens no other device agrees with,
+  /// and — worse — make `loadReactionKey` answer `Found`, so the real key
+  /// would never be pulled.
+  Future<void> dropReactionKey(int conversationId) async {
+    final userId = _userId;
+    if (userId == null) return;
+    try {
+      final prefs = await _sharedPrefs;
+      await prefs.remove(_reactionKeyRecordKey(userId, conversationId));
+    } on Object catch (_) {
+      // Best effort: a surviving record is re-validated on the next read and
+      // a failed removal must not fail the caller's recovery path.
     }
   }
 
@@ -461,13 +484,19 @@ class EncryptionService {
     if (userId == null) return const ReactionKeyUnavailable('unbound-user');
     try {
       final prefs = await _sharedPrefs;
+      // The AUTHORITATIVE snapshot, not the per-engine cache. This read
+      // decides ABSENCE, and absence is the one verdict that spends the
+      // Signal mailbox row (or, at epoch 0, mints a new key). A stale cache
+      // that has dropped a landed write would therefore destroy the key
+      // rather than merely miss it — the 2026-07-29 mechanism, with no
+      // second copy to recover from.
       final raw = _rawRecord(
-        null,
+        await _authoritativeSnapshot(),
         prefs,
         _reactionKeyRecordKey(userId, conversationId),
       );
-      // `_rawRecord` returning null means GENUINELY absent (its own contract),
-      // which is the one state that may authorise a re-key.
+      // `_rawRecord` returning null now means GENUINELY absent, which is the
+      // one state that may authorise a re-key.
       if (raw == null) return const ReactionKeyAbsent();
       final decoded = jsonDecode(raw);
       if (decoded is! Map) return const ReactionKeyUnavailable('corrupt');

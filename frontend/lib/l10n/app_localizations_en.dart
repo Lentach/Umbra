@@ -1622,6 +1622,15 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String messageReactionUnreadable(int count) {
+    return 'Reaction not readable on this device ($count)';
+  }
+
+  @override
+  String get snackbarReactionUnavailable =>
+      'Reactions aren\'t ready on this device yet';
+
+  @override
   String get snackbarPinnedMessageUnavailable =>
       'Message is no longer available';
 

@@ -83,7 +83,15 @@ export class ChatReactionKeyService {
     } catch {
       // Includes the envelope-count bound: an over-bound upload is refused by
       // `ArrayMaxSize` before any participant lookup, so it writes nothing.
+      // The conversation id is echoed from the RAW payload when it is usable,
+      // so the client can retire exactly that pending upload instead of
+      // waiting out its timeout.
+      const claimed: unknown =
+        data !== null && typeof data === 'object' && 'conversationId' in data
+          ? data.conversationId
+          : null;
       client.emit('reactionKeyUploaded', {
+        conversationId: typeof claimed === 'number' ? claimed : null,
         success: false,
         error: 'invalid_payload' satisfies ReactionKeyRefusal,
       });
@@ -97,6 +105,7 @@ export class ChatReactionKeyService {
     if (!participants) {
       this.refuseUpload(principal.userId, dto.conversationId, 'unauthorized');
       client.emit('reactionKeyUploaded', {
+        conversationId: dto.conversationId,
         success: false,
         error: 'unauthorized' satisfies ReactionKeyRefusal,
       });
@@ -106,7 +115,11 @@ export class ChatReactionKeyService {
     const refusal = this.envelopeRefusal(dto.envelopes, participants);
     if (refusal) {
       this.refuseUpload(principal.userId, dto.conversationId, refusal);
-      client.emit('reactionKeyUploaded', { success: false, error: refusal });
+      client.emit('reactionKeyUploaded', {
+        conversationId: dto.conversationId,
+        success: false,
+        error: refusal,
+      });
       return;
     }
 
@@ -126,6 +139,7 @@ export class ChatReactionKeyService {
       // publishing tokens the peer can never decode.
       this.refuseUpload(principal.userId, dto.conversationId, 'stale_epoch');
       client.emit('reactionKeyUploaded', {
+        conversationId: dto.conversationId,
         success: false,
         error: 'stale_epoch' satisfies ReactionKeyRefusal,
         epoch: result.epoch,
@@ -133,7 +147,16 @@ export class ChatReactionKeyService {
       return;
     }
 
-    client.emit('reactionKeyUploaded', { success: true, epoch: result.epoch });
+    // The conversation id is REQUIRED in the answer, not decoration: the
+    // client allows one upload in flight at a time and releases that slot on
+    // timeout, so an answer that cannot be attributed could complete a later
+    // upload for a different conversation — persisting a key the server never
+    // accepted for it.
+    client.emit('reactionKeyUploaded', {
+      conversationId: dto.conversationId,
+      success: true,
+      epoch: result.epoch,
+    });
   }
 
   async handleFetchReactionKey(client: Socket, data: unknown): Promise<void> {

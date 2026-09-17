@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:fireplace/services/encryption/content_kv.dart';
@@ -40,7 +41,10 @@ void main() {
 
   ReactionKeyService build(
     EncryptionService store, {
-    required Map<String, dynamic>? Function(String, Map<String, dynamic>) answer,
+    // FutureOr: a case that inspects the store AT the moment of the round
+    // trip (persist-before-publish) has to await; the rest stay synchronous.
+    required FutureOr<Map<String, dynamic>?> Function(String, Map<String, dynamic>)
+    answer,
     List<ReactionKeyTarget> targets = const [
       (userId: peerUserId, deviceId: 1),
     ],
@@ -49,7 +53,7 @@ void main() {
     store: store,
     request: (event, payload) async {
       events.add(event);
-      return answer(event, payload);
+      return await answer(event, payload);
     },
     resolveTargets: (_) async => targets,
     encryptFor: (u, d, plaintext) async => 'ct:$u:$d:$plaintext',
@@ -329,9 +333,10 @@ void main() {
     final store = await boot();
     final svc = build(
       store,
+      // Epoch 0: the only epoch at which creating is allowed at all.
       answer: (event, _) => event == 'fetchReactionKey'
-          ? {'epoch': 2, 'ciphertext': null}
-          : {'success': true, 'epoch': 3},
+          ? {'epoch': 0, 'ciphertext': null}
+          : {'success': true, 'epoch': 1},
     );
 
     await svc.ensureCodec(
@@ -347,6 +352,92 @@ void main() {
           'the fetch that proved there is no row already reported the epoch; '
           'asking again was a wasted round trip on every first reaction',
     );
+  });
+
+  test('a device linked after distribution is never allowed to re-key', () async {
+    // The conversation is at epoch 2 and the server has no row for THIS
+    // device: it was linked after the key went out. Minting here would
+    // advance the epoch and blank every existing chip for the devices that
+    // can still read the messages those chips sit on (owner ruling
+    // 2026-09-17). This device waits for a same-epoch top-up instead.
+    final store = await boot();
+    final svc = build(
+      store,
+      answer: (event, _) => event == 'fetchReactionKey'
+          ? {'epoch': 2, 'ciphertext': null}
+          : {'success': true, 'epoch': 3},
+    );
+
+    final result = await svc.ensureCodec(
+      conversationId,
+      peerUserId: peerUserId,
+      mayCreate: true,
+    );
+
+    expect(result.codec, isNull);
+    expect(result.failure, ReactionKeyFailure.noKeyYet);
+    expect(
+      events,
+      ['fetchReactionKey'],
+      reason: 'no upload: the epoch must not move',
+    );
+  });
+
+  test('a created key is STORED before it is published', () async {
+    // The upload is what advances the server's epoch, and the fan-out never
+    // addresses this device — so there is no mailbox row to recover from. If
+    // the key were published first, a lost ack would leave the server serving
+    // an epoch whose only plaintext copy died with the call, and the epoch-0
+    // rule would then refuse to re-key it. Forever.
+    final store = await boot();
+    String? storedAtUploadTime;
+    final svc = build(
+      store,
+      answer: (event, _) async {
+        if (event == 'uploadReactionKey') {
+          final held = await store.loadReactionKey(conversationId);
+          storedAtUploadTime = held is ReactionKeyFound ? held.keyB64 : null;
+          return {'success': true, 'epoch': 1};
+        }
+        return {'epoch': 0, 'ciphertext': null};
+      },
+    );
+
+    final result = await svc.ensureCodec(
+      conversationId,
+      peerUserId: peerUserId,
+      mayCreate: true,
+    );
+
+    expect(result.codec, isNotNull);
+    expect(
+      storedAtUploadTime,
+      isNotNull,
+      reason: 'the key must already be on disk when the upload goes out',
+    );
+  });
+
+  test('a REFUSED upload leaves no key behind', () async {
+    // The other half of persist-before-publish: a key the server rejected must
+    // not survive locally, or `loadReactionKey` answers Found on every later
+    // launch and the real key is never pulled — the same permanent blindness,
+    // arrived at from the opposite direction.
+    final store = await boot();
+    final svc = build(
+      store,
+      answer: (event, _) => event == 'fetchReactionKey'
+          ? {'epoch': 0, 'ciphertext': null}
+          : {'success': false, 'error': 'rate_limited'},
+    );
+
+    final result = await svc.ensureCodec(
+      conversationId,
+      peerUserId: peerUserId,
+      mayCreate: true,
+    );
+
+    expect(result.failure, ReactionKeyFailure.refused);
+    expect(await store.loadReactionKey(conversationId), isA<ReactionKeyAbsent>());
   });
 
   test('the generated key is 32 bytes and conversation-specific', () async {
@@ -382,6 +473,14 @@ void main() {
 class _WriteLosingContentKv implements ContentKv {
   @override
   String? getString(String key) => null;
+
+  /// An EMPTY authoritative view: the write was accepted and then lost.
+  /// Reaction-key reads go through this snapshot (a stale cache deciding
+  /// "absent" is what spends the mailbox row), so a fake that cannot answer
+  /// it would fail the read for the wrong reason.
+  @override
+  Future<Map<String, Object>?> authoritativeSnapshot() async =>
+      const <String, Object>{};
 
   @override
   Future<bool> setString(String key, String value) async => true;

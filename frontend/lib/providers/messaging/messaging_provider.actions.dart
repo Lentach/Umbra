@@ -222,12 +222,34 @@ extension MessagingActions on MessagingProvider {
     _emit?.call('unpinMessage', {'conversationId': conversationId});
   }
 
-  void addReaction(int messageId, String emoji) {
-    _emit?.call('addReaction', {'messageId': messageId, 'emoji': emoji});
-  }
+  /// Adds a reaction, blinded. Returns false when this device could not, in
+  /// which case the caller SHOWS that — a silent no-op looks like a dead tap.
+  Future<bool> addReaction(int messageId, String emoji) =>
+      _emitReaction('addReaction', messageId, emoji);
 
-  void removeReaction(int messageId, String emoji) {
-    _emit?.call('removeReaction', {'messageId': messageId, 'emoji': emoji});
+  /// Removes a reaction, blinded. False has the same meaning as in
+  /// [addReaction].
+  Future<bool> removeReaction(int messageId, String emoji) =>
+      _emitReaction('removeReaction', messageId, emoji);
+
+  /// The one path both reaction actions take.
+  ///
+  /// The wire value is a blinded token, never the emoji (design §3.1): the
+  /// server stores reaction keys verbatim, so an emoji here is an emoji in the
+  /// database. When no token can be produced the action FAILS — it does not
+  /// fall back to plaintext, which would silently re-open exactly the hole
+  /// this closes.
+  Future<bool> _emitReaction(String event, int messageId, String emoji) async {
+    final emit = _emit;
+    if (emit == null) return false;
+    final conversationId =
+        messageById(messageId)?.conversationId ??
+        _effectiveActiveConversationId;
+    if (conversationId == null) return false;
+    final wireKey = await _reactionWireKey(conversationId, emoji);
+    if (wireKey == null) return false;
+    emit(event, {'messageId': messageId, 'emoji': wireKey});
+    return true;
   }
 
   /// Remove messages whose expiresAt has passed. Called every second by ChatDetailScreen timer.

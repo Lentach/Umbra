@@ -135,7 +135,7 @@ note. Owner call — this is the only user-visible data loss in the design.
 | 3 | `uploadReactionKey` / `fetchReactionKey` handlers, server-assigned epoch, stale-epoch refusal, envelope-count bound reuse | M |
 | 4 | Append the reaction contract (it has none) to `docs/contracts/wire.md` | S |
 | 5 | Client: key create/upload via the EXISTING `_resolveFanOut`→`ensureSession`→`encrypt` path, pull-on-miss, in-memory HMAC map, picker → token, chip reverse lookup, placeholder render | M |
-| 6 | Client: re-upload on `deviceListChanged`, rotate on revoke | M |
+| 6 | Client: re-upload on `deviceListChanged`, rotate on revoke — **NOT DONE (owner ruling: out of scope for the token cutover).** The server accepts both shapes; no client sends them. Consequence, stated plainly: a device linked after the key was distributed renders placeholder chips for that conversation INDEFINITELY. It is not waiting for a mechanism that exists. | M |
 | 7 | Tests: token determinism, one-emoji-per-user through tokens, placeholder render, epoch race refusal, legacy-shape compat, pull-on-miss | M |
 | 8 | Follow-up: remove the emoji branch, refuse legacy | S |
 
@@ -160,8 +160,13 @@ note. Owner call — this is the only user-visible data loss in the design.
   needs, and the message's sender/recipient/timestamps are already visible metadata
   (`docs/audit/2026-07-07-metadata-privacy-audit.md`).
 - **Emoji equality inside one conversation.** The server learns that two reactions are the same
-  emoji, and how many distinct emoji a conversation uses. It cannot name any of them, and
-  per-conversation keys block cross-conversation correlation and any global frequency attack.
+  emoji, and how many distinct emoji a conversation uses. It cannot INVERT a token — 16 bytes of
+  HMAC-SHA256 under a per-conversation key — and per-conversation keys block cross-conversation
+  correlation and the global frequency attack. What survives, priced honestly: the token is stable
+  for the life of an epoch and the server counts each one's occurrences, so within a single
+  conversation it can RANK tokens against public emoji-frequency priors. Naming the most-used token
+  is probabilistic guesswork, not a break — but it is not impossible either, and the earlier
+  phrasing ("cannot name any of them") overstated it.
 - **A participant-run server learns its own conversations' mapping.** It holds that conversation's
   key legitimately as a participant. No design fixes this one.
 - This is a *blinding*, not a ratchet: the token for an emoji is stable for the life of an epoch.

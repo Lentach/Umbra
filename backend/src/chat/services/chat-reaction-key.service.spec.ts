@@ -62,6 +62,7 @@ describe('ChatReactionKeyService', () => {
       });
 
       expect(socket.emit).toHaveBeenCalledWith('reactionKeyUploaded', {
+        conversationId: 7,
         success: true,
         epoch: 1,
       });
@@ -116,6 +117,7 @@ describe('ChatReactionKeyService', () => {
       });
 
       expect(socket.emit).toHaveBeenCalledWith('reactionKeyUploaded', {
+        conversationId: 7,
         success: false,
         error: 'stale_epoch',
         epoch: 4,
@@ -132,6 +134,7 @@ describe('ChatReactionKeyService', () => {
       });
 
       expect(socket.emit).toHaveBeenCalledWith('reactionKeyUploaded', {
+        conversationId: 7,
         success: false,
         error: 'foreign_recipient',
       });
@@ -148,6 +151,7 @@ describe('ChatReactionKeyService', () => {
       });
 
       expect(socket.emit).toHaveBeenCalledWith('reactionKeyUploaded', {
+        conversationId: 7,
         success: false,
         error: 'duplicate_envelope_device',
       });
@@ -168,6 +172,7 @@ describe('ChatReactionKeyService', () => {
       });
 
       expect(socket.emit).toHaveBeenCalledWith('reactionKeyUploaded', {
+        conversationId: 7,
         success: false,
         error: 'invalid_payload',
       });
@@ -185,6 +190,7 @@ describe('ChatReactionKeyService', () => {
       });
 
       expect(socket.emit).toHaveBeenCalledWith('reactionKeyUploaded', {
+        conversationId: 7,
         success: false,
         error: 'unauthorized',
       });
@@ -202,6 +208,7 @@ describe('ChatReactionKeyService', () => {
       });
 
       expect(socket.emit).toHaveBeenCalledWith('reactionKeyUploaded', {
+        conversationId: 7,
         success: false,
         error: 'unauthorized',
       });

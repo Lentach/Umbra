@@ -92,7 +92,9 @@ extension MessagingEvents on MessagingProvider {
 
   void _handleIncomingMessage(dynamic data) {
     final dataMap = data as Map<String, dynamic>;
-    var msg = _enrichReplyPreview(MessageModel.fromJson(dataMap));
+    var msg = _withRenderableReactions(
+      _enrichReplyPreview(MessageModel.fromJson(dataMap)),
+    );
     final activeConversationId = _effectiveActiveConversationId;
 
     // Queue incoming encrypted messages for active conversation while we're
@@ -597,13 +599,18 @@ extension MessagingEvents on MessagingProvider {
     final m = data as Map<String, dynamic>;
     final messageId = m['messageId'] as int;
     final reactionsRaw = (m['reactions'] as Map<String, dynamic>?) ?? {};
-    final reactions = reactionsRaw.map(
+    final wire = reactionsRaw.map(
       (k, v) => MapEntry(k, (v as List).map((e) => e as int).toList()),
     );
 
     final index = _messages.indexWhere((msg) => msg.id == messageId);
     if (index != -1) {
-      _messages[index] = _messages[index].copyWith(reactions: reactions);
+      _messages[index] = _messages[index].copyWith(
+        reactions: _renderableReactions(
+          _messages[index].conversationId,
+          wire,
+        ),
+      );
       notifyListeners();
     }
   }

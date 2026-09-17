@@ -621,6 +621,11 @@
   "messageReactionSelected": "wybrana",
   "messageReactionNotSelected": "niewybrana",
   "messageReactionSemantics": "Reakcja {emoji}, {state}",
+  "messageReactionUnreadable": "Reakcja nieczytelna na tym urządzeniu ({count})",
+  "@messageReactionUnreadable": {
+    "placeholders": { "count": { "type": "int" } }
+  },
+  "snackbarReactionUnavailable": "Reakcje nie są jeszcze gotowe na tym urządzeniu",
   "snackbarPinnedMessageUnavailable": "Wiadomość jest niedostępna",
   "snackbarMessageCopied": "Skopiowano wiadomość",
   "composerAttachmentRemoveTooltip": "Usuń załącznik",

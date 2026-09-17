@@ -533,8 +533,13 @@ void main() {
     );
 
     test(
-      'reactions round-trip to both sides and clear on removal',
+      'a legacy plaintext reaction still round-trips and clears on removal',
       () async {
+        // The compat window (design §3.3): the server accepts a plain emoji as
+        // a reaction key so clients that have not updated keep working. Driven
+        // on the RAW socket, because the app's own provider now blinds every
+        // reaction into a token — this case exists to prove the OLD shape is
+        // still served, so it must not go through the new client path.
         final messageId = await roundTrip(
           alice,
           bob,
@@ -543,7 +548,10 @@ void main() {
           expectedWireType: 2,
         );
 
-        bob.socketService.emitAddReaction(messageId, '🔥');
+        bob.socketService.socket!.emit('addReaction', {
+          'messageId': messageId,
+          'emoji': '🔥',
+        });
         for (final client in [alice, bob]) {
           final updated =
               await client.events.next(
@@ -556,7 +564,14 @@ void main() {
           expect((updated['reactions'] as Map)['🔥'], [bob.userId]);
         }
 
-        bob.socketService.emitRemoveReaction(messageId, '🔥');
+        // Removal names a DIFFERENT key than the one stored, which is the
+        // real compat hazard: an updated client only knows its token. The
+        // server drops the user's single reaction regardless of the key, so
+        // the chip clears instead of staying lit forever.
+        bob.socketService.socket!.emit('removeReaction', {
+          'messageId': messageId,
+          'emoji': 'AAAAAAAAAAAAAAAAAAAAAA',
+        });
         for (final client in [alice, bob]) {
           final updated =
               await client.events.next(

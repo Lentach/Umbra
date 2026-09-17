@@ -15,6 +15,7 @@ import '../hearth_fade_arc.dart';
 import '../message_swipe_wrapper.dart';
 import '../dialogs/message_delete_dialog.dart';
 import 'message_context_menu_overlay.dart';
+import 'reaction_tap.dart';
 import 'message_context_menu_bubble_highlight.dart';
 import 'context_menu_bubble_anchor.dart';
 import 'reaction_chips_row.dart';
@@ -107,11 +108,12 @@ class VoiceMessageContent extends StatelessWidget {
         );
       },
       onReaction: (emoji, alreadyReacted) {
-        if (alreadyReacted) {
-          messaging.removeReaction(message.id, emoji);
-        } else {
-          messaging.addReaction(message.id, emoji);
-        }
+        toggleReaction(
+          context,
+          message.id,
+          emoji,
+          alreadyReacted: alreadyReacted,
+        ).ignore();
       },
     );
   }
@@ -405,12 +407,12 @@ class VoiceMessageContent extends StatelessWidget {
                     reactions: message.reactions,
                     currentUserId: currentUserId ?? -1,
                     onTap: (emoji, isMyReaction) {
-                      final msg = context.read<MessagingProvider>();
-                      if (isMyReaction) {
-                        msg.removeReaction(message.id, emoji);
-                      } else {
-                        msg.addReaction(message.id, emoji);
-                      }
+                      toggleReaction(
+                        context,
+                        message.id,
+                        emoji,
+                        alreadyReacted: isMyReaction,
+                      ).ignore();
                     },
                   ),
                 ),

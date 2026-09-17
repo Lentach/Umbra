@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../l10n/app_localizations.dart';
 import '../../services/reactions/reaction_display.dart';
 import '../../utils/jumbo_emoji.dart';
 
@@ -27,6 +28,7 @@ class ReactionChipsRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final chips = reactions.entries.where((e) => e.value.isNotEmpty).map((e) {
       final isMine = e.value.contains(currentUserId);
       final unresolved = isUnresolvedReactionKey(e.key);
@@ -35,7 +37,7 @@ class ReactionChipsRow extends StatelessWidget {
         label: unresolved
             // Never claims WHICH reaction it is, because this device does not
             // know — a screen reader must not invent one.
-            ? 'Reaction not readable on this device (${e.value.length})'
+            ? l10n.messageReactionUnreadable(e.value.length)
             : isMine
             ? 'Remove ${e.key} reaction (${e.value.length})'
             : 'React with ${e.key} (${e.value.length})',

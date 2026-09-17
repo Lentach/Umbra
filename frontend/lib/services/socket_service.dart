@@ -146,14 +146,6 @@ class SocketService {
     _socket?.emit('markConversationRead', {'conversationId': conversationId});
   }
 
-  void emitAddReaction(int messageId, String emoji) {
-    _socket?.emit('addReaction', {'messageId': messageId, 'emoji': emoji});
-  }
-
-  void emitRemoveReaction(int messageId, String emoji) {
-    _socket?.emit('removeReaction', {'messageId': messageId, 'emoji': emoji});
-  }
-
   void searchUsers(String handle) {
     _socket?.emit('searchUsers', {'handle': handle});
   }

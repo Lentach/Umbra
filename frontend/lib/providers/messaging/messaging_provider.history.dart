@@ -315,8 +315,8 @@ extension MessagingHistory on MessagingProvider {
 
     if (droppedForConversationMismatch(effectiveActive)) return;
     final newMessages = list.map((m) {
-      final row = _enrichReplyPreview(
-        MessageModel.fromJson(m as Map<String, dynamic>),
+      final row = _withRenderableReactions(
+        _enrichReplyPreview(MessageModel.fromJson(m as Map<String, dynamic>)),
       );
       // The server says this device has no ciphertext for this row by
       // design — it predates this device's link (spec §12 amendment

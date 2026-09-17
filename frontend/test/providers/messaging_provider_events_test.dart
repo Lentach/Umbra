@@ -1,17 +1,65 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:fake_async/fake_async.dart';
 import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
+import 'package:fireplace/services/device_list/device_list_cache.dart';
 import 'package:fireplace/services/encryption_service.dart';
+import 'package:fireplace/services/reactions/reaction_display.dart';
+import 'package:fireplace/services/reactions/reaction_key_lookup.dart';
+import 'package:fireplace/services/reactions/reaction_token_codec.dart';
 import 'package:fireplace/utils/e2e_envelope.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+/// In-memory `K_react` custody, standing in for the content-key store.
+///
+/// [locked] reproduces the passcode-locked vault, which must read as
+/// "cannot answer" and NEVER as "no key exists" — conflating those re-keys the
+/// conversation and orphans every existing chip.
+class _MemoryReactionStore extends EncryptionService {
+  _MemoryReactionStore({this.locked = false});
+
+  final bool locked;
+  final Map<int, String> keys = <int, String>{};
+  final Map<int, int> epochs = <int, int>{};
+
+  @override
+  Future<ReactionKeyLookup> loadReactionKey(int conversationId) async {
+    if (locked) return const ReactionKeyUnavailable('locked');
+    final key = keys[conversationId];
+    return key == null
+        ? const ReactionKeyAbsent()
+        // The epoch actually recorded, not a constant: a fake that lies here
+        // would hide an epoch mismatch rather than expose it.
+        : ReactionKeyFound(epoch: epochs[conversationId] ?? 0, keyB64: key);
+  }
+
+  @override
+  Future<bool> saveReactionKey({
+    required int conversationId,
+    required int epoch,
+    required String keyB64,
+  }) async {
+    if (locked) return false;
+    keys[conversationId] = keyB64;
+    epochs[conversationId] = epoch;
+    return true;
+  }
+}
+
 /// Encryption fake that succeeds immediately — happy send path.
 class _WorkingEncryption extends EncryptionProvider {
+  _WorkingEncryption({EncryptionService? store}) : _store = store;
+
+  final EncryptionService? _store;
+
+  @override
+  EncryptionService get encryptionService => _store ?? super.encryptionService;
+
   final List<Set<int>> localPurges = <Set<int>>[];
   final List<Set<int>> conversationPurges = <Set<int>>[];
   final Map<int, DateTime> stampedExpiries = <int, DateTime>{};
@@ -26,6 +74,17 @@ class _WorkingEncryption extends EncryptionProvider {
 
   @override
   Future<void> ensureSession(int recipientId, {int deviceId = 1}) async {}
+
+  /// Both accounts are non-enrolled, i.e. single device 1 — the shape the
+  /// server affirms with `authorization: null`. The reaction-key fan-out
+  /// RESOLVES lists rather than guessing, so a fake that cannot answer this
+  /// makes every key creation refuse.
+  @override
+  Future<VerifiedDeviceList> getVerifiedDeviceList(
+    int userId, {
+    bool forceRefresh = false,
+    Duration timeout = const Duration(seconds: 10),
+  }) async => const VerifiedDeviceList.notEnrolled();
 
   @override
   Future<String> encrypt(
@@ -91,9 +150,27 @@ class _WorkingEncryption extends EncryptionProvider {
   }
 }
 
+/// Like [_WorkingEncryption], but its `decrypt` answers a raw `K_react`
+/// instead of a message envelope — i.e. a device whose reaction-key mailbox
+/// row opens successfully.
+class _KeyBearingEncryption extends _WorkingEncryption {
+  _KeyBearingEncryption(this.keyB64, {super.store});
+
+  final String keyB64;
+
+  @override
+  Future<String> decrypt(
+    int senderId,
+    String ciphertext, {
+    int? messageId,
+    int deviceId = 1,
+  }) async => keyB64;
+}
+
 /// Encryption fake whose ensureSession never completes — rows stay SENDING.
 class _StuckEncryption extends _WorkingEncryption {
   final _never = Completer<void>();
+
 
   @override
   Future<void> ensureSession(int recipientId, {int deviceId = 1}) =>
@@ -125,10 +202,33 @@ void main() {
   late ConversationsProvider conversations;
   late List<Map<String, dynamic>> emitted;
 
+  /// The conversation epoch a stubbed server reports, or null for "no server
+  /// answer at all" (every acquisition then fails on timeout, as offline).
+  int? serverReactionKeyEpoch;
+
+  /// A wrapped key the stubbed mailbox serves to this device, or null for
+  /// "no row for you" (the common case).
+  String? serverWrappedKey;
+
+  /// When true, every upload answer is preceded by one naming a DIFFERENT
+  /// conversation — the mis-correlation the single upload slot must reject.
+  var answerWrongConversationFirst = false;
+
+  /// Stubs the two reaction-key round trips: the mailbox holds
+  /// [serverWrappedKey] for this device at [currentEpoch] (or nothing), and an
+  /// upload is accepted at the next epoch. The stubbing itself lives in
+  /// [wire]'s emit callback, which is where the socket would be.
+  void answerReactionKeyRequests({required int currentEpoch}) {
+    serverReactionKeyEpoch = currentEpoch;
+  }
+
   void wire(EncryptionProvider encryption) {
     provider = MessagingProvider();
     conversations = ConversationsProvider();
     emitted = <Map<String, dynamic>>[];
+    serverReactionKeyEpoch = null;
+    serverWrappedKey = null;
+    answerWrongConversationFirst = false;
 
     conversations.setCurrentUserId(1);
     conversations.onConversationsList([_convJson()]);
@@ -142,6 +242,35 @@ void main() {
     provider.onConnect(false);
     provider.setEmitCallback((event, data) {
       emitted.add({'event': event, 'data': data});
+      final epoch = serverReactionKeyEpoch;
+      if (epoch == null) return;
+      // Answered synchronously: the provider registers its completer before
+      // it emits, so this lands exactly where a socket answer would.
+      if (event == 'fetchReactionKey') {
+        final wrapped = serverWrappedKey;
+        provider.onReactionKeyResponse({
+          'conversationId': (data as Map<String, dynamic>)['conversationId'],
+          'epoch': epoch,
+          'senderUserId': wrapped == null ? null : 2,
+          'senderDeviceId': wrapped == null ? null : 1,
+          'ciphertext': wrapped,
+        });
+      } else if (event == 'uploadReactionKey') {
+        final conversationId =
+            (data as Map<String, dynamic>)['conversationId'] as int;
+        if (answerWrongConversationFirst) {
+          provider.onReactionKeyUploaded({
+            'conversationId': conversationId + 89,
+            'success': true,
+            'epoch': epoch + 1,
+          });
+        }
+        provider.onReactionKeyUploaded({
+          'conversationId': conversationId,
+          'success': true,
+          'epoch': epoch + 1,
+        });
+      }
     });
     provider.setActiveConversationIdForTest(10);
   }
@@ -270,20 +399,206 @@ void main() {
       expect(provider.messages.single.reactions, isEmpty);
     });
 
-    test('addReaction / removeReaction emit the wire payloads', () {
-      provider.addReaction(50, '🔥');
-      provider.removeReaction(50, '🔥');
+    test('a tap sends a blinded token, never the emoji', () async {
+      final store = _MemoryReactionStore();
+      wire(_WorkingEncryption(store: store));
+      answerReactionKeyRequests(currentEpoch: 0);
 
-      expect(emitted, [
-        {
-          'event': 'addReaction',
-          'data': {'messageId': 50, 'emoji': '🔥'},
+      expect(await provider.addReaction(50, '🔥'), isTrue);
+
+      final reaction = emitted.singleWhere((e) => e['event'] == 'addReaction');
+      final sent = (reaction['data'] as Map<String, dynamic>)['emoji'] as String;
+      expect(sent, isNot('🔥'));
+      expect(
+        sent,
+        matches(RegExp(r'^[A-Za-z0-9_-]{22}$')),
+        reason: 'the server must receive a token, not a reaction anyone can read',
+      );
+      // And it is the RIGHT token: the key the upload distributed produces it.
+      final codec = ReactionTokenCodec(
+        Uint8List.fromList(base64Decode(store.keys[10]!)),
+      );
+      expect(codec.tokenFor('🔥'), sent);
+    });
+
+    test('the first reaction distributes a key to the peer', () async {
+      wire(_WorkingEncryption(store: _MemoryReactionStore()));
+      answerReactionKeyRequests(currentEpoch: 0);
+
+      await provider.addReaction(50, '🔥');
+
+      final upload = emitted.singleWhere(
+        (e) => e['event'] == 'uploadReactionKey',
+      );
+      final payload = upload['data'] as Map<String, dynamic>;
+      expect(payload['epoch'], 1, reason: 'the conversation had no key');
+      final envelopes = payload['envelopes'] as List;
+      expect(
+        envelopes.map((e) => (e as Map<String, dynamic>)['userId']),
+        contains(2),
+        reason: 'the peer cannot read a single chip without this',
+      );
+    });
+
+    test('an incoming token renders as its emoji', () async {
+      final store = _MemoryReactionStore();
+      wire(_WorkingEncryption(store: store));
+      answerReactionKeyRequests(currentEpoch: 0);
+      await provider.addReaction(50, '🔥');
+      await provider.onMessageHistory({
+        'conversationId': 10,
+        'messages': [_plainIncomingJson(50)],
+      });
+      final codec = ReactionTokenCodec(
+        Uint8List.fromList(base64Decode(store.keys[10]!)),
+      );
+
+      provider.onReactionUpdated({
+        'messageId': 50,
+        'reactions': {
+          codec.tokenFor('👍'): [2],
         },
-        {
-          'event': 'removeReaction',
-          'data': {'messageId': 50, 'emoji': '🔥'},
+      });
+
+      expect(provider.messages.single.reactions['👍'], [2]);
+    });
+
+    test('a token this device cannot name survives as a token', () async {
+      // No key anywhere, and the server has none to hand over: the chip must
+      // stay renderable as a placeholder rather than vanish.
+      wire(_WorkingEncryption(store: _MemoryReactionStore()));
+      answerReactionKeyRequests(currentEpoch: 0);
+      await provider.onMessageHistory({
+        'conversationId': 10,
+        'messages': [_plainIncomingJson(50)],
+      });
+
+      provider.onReactionUpdated({
+        'messageId': 50,
+        'reactions': {
+          'AAAAAAAAAAAAAAAAAAAAAA': [2],
         },
-      ]);
+      });
+
+      expect(provider.messages.single.reactions.keys.single,
+          'AAAAAAAAAAAAAAAAAAAAAA');
+    });
+
+    test('a device linked after the key was made does NOT re-key', () async {
+      // The owner's rule: this device cannot read the history those chips sit
+      // on, but the devices that CAN would lose them if the epoch advanced.
+      wire(_WorkingEncryption(store: _MemoryReactionStore()));
+      answerReactionKeyRequests(currentEpoch: 3);
+
+      expect(await provider.addReaction(50, '🔥'), isFalse);
+      expect(
+        emitted.where((e) => e['event'] == 'uploadReactionKey'),
+        isEmpty,
+        reason: "a re-key here would blank the other devices' chips",
+      );
+      expect(emitted.where((e) => e['event'] == 'addReaction'), isEmpty);
+    });
+
+    test('a locked store never re-keys and never sends plaintext', () async {
+      wire(_WorkingEncryption(store: _MemoryReactionStore(locked: true)));
+      answerReactionKeyRequests(currentEpoch: 0);
+
+      expect(await provider.addReaction(50, '🔥'), isFalse);
+      expect(emitted.where((e) => e['event'] == 'addReaction'), isEmpty);
+      expect(emitted.where((e) => e['event'] == 'uploadReactionKey'), isEmpty);
+    });
+
+    test('one unreadable chat asks the server for its key once', () async {
+      wire(_WorkingEncryption(store: _MemoryReactionStore()));
+      answerReactionKeyRequests(currentEpoch: 2);
+
+      await provider.onMessageHistory({
+        'conversationId': 10,
+        'messages': [
+          {
+            ..._plainIncomingJson(50),
+            'reactions': {
+              'AAAAAAAAAAAAAAAAAAAAAA': [2],
+            },
+          },
+          {
+            ..._plainIncomingJson(51),
+            'reactions': {
+              'BBBBBBBBBBBBBBBBBBBBBB': [2],
+            },
+          },
+        ],
+      });
+      await Future<void>.delayed(Duration.zero);
+
+      expect(
+        emitted.where((e) => e['event'] == 'fetchReactionKey').length,
+        1,
+        reason: 'a chat of fifty unreadable chips must not send fifty fetches',
+      );
+    });
+
+    test('chips rendered before the key arrives flip to emoji when it does', () async {
+      // The single most likely silent failure of the feature: history paints
+      // placeholders (no key yet), the key lands a moment later, and nothing
+      // re-renders — every chip frozen on the placeholder until the chat is
+      // reopened.
+      final keyB64 = base64Encode(List<int>.generate(32, (i) => i + 7));
+      final codec = ReactionTokenCodec(
+        Uint8List.fromList(base64Decode(keyB64)),
+      );
+      wire(_KeyBearingEncryption(keyB64, store: _MemoryReactionStore()));
+      // The mailbox HAS a row for this device, so the background fetch that
+      // history kicks off resolves into a real codec.
+      serverWrappedKey = 'wrapped';
+      answerReactionKeyRequests(currentEpoch: 4);
+
+      await provider.onMessageHistory({
+        'conversationId': 10,
+        'messages': [
+          {
+            ..._plainIncomingJson(50),
+            'reactions': {
+              codec.tokenFor('🔥'): [2],
+            },
+          },
+        ],
+      });
+      // At ingest there is no key, so the token is all the UI has.
+      expect(
+        isUnresolvedReactionKey(provider.messages.single.reactions.keys.single),
+        isTrue,
+      );
+
+      // Let the background acquisition and the re-render pass run.
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(provider.messages.single.reactions['🔥'], [2]);
+    });
+
+    test('an upload answer for another conversation is not mistaken for this one', () async {
+      // The slot is released on timeout, so a late answer can arrive while a
+      // DIFFERENT conversation's upload is pending. Accepting it would persist
+      // a key the server never took for this conversation — unreadable for
+      // both sides, forever, with no client-side recovery.
+      final store = _MemoryReactionStore();
+      wire(_WorkingEncryption(store: store));
+      answerWrongConversationFirst = true;
+      answerReactionKeyRequests(currentEpoch: 0);
+
+      expect(await provider.addReaction(50, '🔥'), isTrue);
+
+      // The key stored is the one THIS conversation's accepted upload carried,
+      // at the epoch that upload was accepted at.
+      expect(store.epochs[10], 1);
+      final sent =
+          (emitted.singleWhere((e) => e['event'] == 'addReaction')['data']
+              as Map<String, dynamic>)['emoji'];
+      final codec = ReactionTokenCodec(
+        Uint8List.fromList(base64Decode(store.keys[10]!)),
+      );
+      expect(sent, codec.tokenFor('🔥'));
     });
   });
 
@@ -418,7 +733,7 @@ void main() {
         wire(_StuckEncryption());
 
         // Settled row from the peer.
-        provider.onMessageHistory({
+        await provider.onMessageHistory({
           'conversationId': 10,
           'messages': [_plainIncomingJson(80)],
         });

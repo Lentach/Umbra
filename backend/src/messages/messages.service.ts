@@ -960,10 +960,16 @@ export class MessagesService {
     });
   }
 
+  /**
+   * Removes `userId`'s reaction from `messageId`, whatever key holds it.
+   *
+   * The reaction key is deliberately not a parameter: one reaction per user
+   * is already an invariant of `addOrUpdateReaction`, so the caller does not
+   * need to know whether it was stored as a blinded token or a plain emoji.
+   */
   async removeReaction(
     messageId: number,
     userId: number,
-    emoji: string,
   ): Promise<Message | null> {
     // BE-152/BE-201: same row-lock as addOrUpdateReaction — a remove racing an
     // add must not clobber; the later writer must observe the earlier result.
@@ -976,9 +982,18 @@ export class MessagesService {
 
       const reactions = parseReactions(rows[0].reactions);
 
-      if (reactions[emoji]) {
-        reactions[emoji] = reactions[emoji].filter((id) => id !== userId);
-        if (reactions[emoji].length === 0) delete reactions[emoji];
+      // Strip this user from EVERY key, not just the one named.
+      //
+      // `addOrUpdateReaction` already enforces at most one reaction per user,
+      // so this removes exactly that one reaction — but it no longer depends
+      // on the caller naming the key it was stored under. That matters during
+      // the reaction-token compat window: a reaction placed by a client that
+      // still writes the plain emoji is toggled off by an updated client that
+      // sends a blinded token, and an exact-key delete left it lit forever
+      // with no way to clear it.
+      for (const key of Object.keys(reactions)) {
+        reactions[key] = reactions[key].filter((id) => id !== userId);
+        if (reactions[key].length === 0) delete reactions[key];
       }
 
       await manager.query(
