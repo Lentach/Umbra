@@ -47,11 +47,16 @@ ALTER TABLE public.conversations
 -- tap. History served after this point carries `reactions: {}` for old
 -- messages.
 --
--- GUARDED, because the rest of this file is written to be re-runnable
--- (`IF NOT EXISTS` throughout) and an unconditional wipe is not: legacy
--- plaintext and new TOKEN reactions live in the SAME column, so a second run
--- — a repeated staging rehearsal, a recovery re-apply, a copy-paste on the VM
--- — would destroy live reactions, not just historical ones.
+-- GUARDED, and NOT redundant with the migration runner. The runner records
+-- each filename in `schema_migrations` inside the file's own transaction, so
+-- IT never executes this twice — but the documented workflow for a schema
+-- change does not go through the runner twice: `staging.ps1 sql <file>`
+-- (staging.ps1:205-217) applies a migration file with raw `psql -f` and no
+-- bookkeeping at all, and that script's own runbook header says
+-- "run the same SQL on the VPS" (staging.ps1:22). Legacy plaintext and new
+-- TOKEN reactions live in the SAME column, so one rehearsal replay or one
+-- copy-paste on the VM after launch destroys LIVE reactions, not historical
+-- ones. Do not delete this guard as dead weight.
 --
 -- The guard is exact rather than heuristic: a token reaction cannot exist
 -- without a key, a key cannot exist without an accepted `uploadReactionKey`,

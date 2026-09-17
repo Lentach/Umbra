@@ -3,7 +3,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:libsignal_protocol_dart/libsignal_protocol_dart.dart';
 import 'encryption/content_kv.dart';
-import 'reactions/reaction_key_lookup.dart';
 import 'encryption/sealed_web_content_kv.dart';
 import 'encryption/sealed_web_envelope.dart';
 import 'encryption/content_kv_opener_stub.dart'
@@ -16,6 +15,7 @@ import 'encryption/signal_stores.dart';
 import 'device_link/identity_backup.dart';
 import 'passcode_wrap_hook.dart';
 import 'encryption/session_cross_context_lock.dart';
+import 'reactions/reaction_key_lookup.dart';
 
 /// Thrown by [EncryptionService.initialize] when identity material is present
 /// but incomplete.
@@ -438,7 +438,7 @@ class EncryptionService {
       if (readBack == null) return false;
       final decoded = jsonDecode(readBack);
       return decoded is Map && decoded['e'] == epoch && decoded['k'] == keyB64;
-    } catch (_) {
+    } on Object catch (_) {
       return false;
     }
   }
@@ -481,7 +481,7 @@ class EncryptionService {
       return ReactionKeyFound(epoch: epoch, keyB64: keyB64);
     } on ContentStoreUnavailable catch (e) {
       return ReactionKeyUnavailable(e.locked ? 'locked' : e.stage);
-    } catch (e) {
+    } on Object catch (e) {
       // Unknown failure is NOT absence. Fail toward "leave it alone".
       return ReactionKeyUnavailable(e.runtimeType.toString());
     }
