@@ -27,8 +27,17 @@ const confPath = join(root, 'infra/nginx/security-headers.conf');
 const INLINE_SCRIPT = /<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g;
 
 const html = readFileSync(indexPath, 'utf8');
+// CRLF -> LF before hashing. index.html is CRLF in this repo, but the HTML
+// parser normalizes newlines in the input stream BEFORE tokenizing, so the
+// script text a browser hashes is always LF. Hashing the raw bytes produced
+// digests that matched nothing (measured 2026-09-17: Chrome's report-only
+// violation named the LF digests, not the CRLF ones) — which under an
+// enforcing policy means no theme sync and no privacy curtain.
 const tokens = [...html.matchAll(INLINE_SCRIPT)].map(
-  (m) => `'sha256-${createHash('sha256').update(m[1], 'utf8').digest('base64')}'`,
+  (m) =>
+    `'sha256-${createHash('sha256')
+      .update(m[1].replace(/\r\n/g, '\n'), 'utf8')
+      .digest('base64')}'`,
 );
 
 if (process.argv.includes('--print')) {
