@@ -18,7 +18,7 @@ MessageModel _msg(String content) => MessageModel(
   senderId: 2,
   senderUsername: 'bob',
   conversationId: 10,
-  createdAt: DateTime.utc(2026, 1, 1),
+  createdAt: DateTime.utc(2026),
 );
 
 Widget _host(

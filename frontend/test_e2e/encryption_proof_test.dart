@@ -89,6 +89,10 @@ Uint8List decryptLikeTheApp(Uint8List ciphertext, String keyB64, String ivB64) {
 
 /// Everything printed by the proof is prefixed so the evidence is greppable
 /// out of the surrounding test noise.
+// Why ignored: the printed transcript IS this suite's deliverable —
+// docs/proof/e2e-encryption-proof.md quotes it verbatim — so `print` here is
+// the product, not debug litter.
+// ignore: avoid_print
 void say(String line) => print('[PROOF] $line');
 
 void rule(String title) {
@@ -185,7 +189,7 @@ SELECT tbl, col, hits FROM _proof_hits ORDER BY tbl, col;
   /// which IS a LIKE metacharacter (any single character). Key material is
   /// base64 and gets swept in full — see [sweepDatabaseFor].
   String longestAlnumRun(String s) {
-    final runs = RegExp(r'[A-Za-z0-9]+').allMatches(s).map((m) => m[0]!);
+    final runs = RegExp('[A-Za-z0-9]+').allMatches(s).map((m) => m[0]!);
     return runs.reduce((a, b) => b.length > a.length ? b : a);
   }
 
@@ -211,9 +215,10 @@ SELECT tbl, col, hits FROM _proof_hits ORDER BY tbl, col;
         HttpHeaders.contentTypeHeader,
         'multipart/form-data; boundary=$boundary',
       );
-      req.add(head);
-      req.add(bytes);
-      req.add(tail);
+      req
+        ..add(head)
+        ..add(bytes)
+        ..add(tail);
       final res = await req.close();
       final body = await res.transform(utf8.decoder).join();
       if (res.statusCode != 200 && res.statusCode != 201) {
@@ -251,9 +256,7 @@ SELECT tbl, col, hits FROM _proof_hits ORDER BY tbl, col;
         throw StateError('fetch failed ${res.statusCode} for $url');
       }
       final chunks = <int>[];
-      await for (final chunk in res) {
-        chunks.addAll(chunk);
-      }
+      await res.forEach(chunks.addAll);
       return Uint8List.fromList(chunks);
     } finally {
       http.close(force: true);
@@ -263,8 +266,12 @@ SELECT tbl, col, hits FROM _proof_hits ORDER BY tbl, col;
   setUpAll(() async {
     await requireBackendUp(baseUrl);
 
+    // Why ignored: seeding the real plugin's mock store is the only way to run
+    // the app's own storage stack here, and the setter is @visibleForTesting in
+    // a package we do not own.
     // ignore: invalid_use_of_visible_for_testing_member
     FlutterSecureStorage.setMockInitialValues({});
+    // Same reason as above, for the SharedPreferences backend.
     // ignore: invalid_use_of_visible_for_testing_member
     SharedPreferences.setMockInitialValues({});
 
@@ -454,7 +461,7 @@ SELECT "id", "content", coalesce("encryptedContent", '<NULL>'),
       final controlNeedle = longestAlnumRun(alice.username);
       final (controlHits, _) = await sweepDatabaseFor(controlNeedle);
       say('');
-      say('CONTROL — sweeping for a run of alice\'s USERNAME '
+      say("CONTROL — sweeping for a run of alice's USERNAME "
           '("$controlNeedle" out of "${alice.username}"):');
       for (final h in controlHits) {
         say('HIT -> ${h[0]}.${h[1]} x${h[2]}');
@@ -483,7 +490,7 @@ SELECT "userId", "deviceId", "identityPublicKey"
       say('key_bundles row for bob: userId=${stored.first[0]} '
           'deviceId=${stored.first[1]}');
       say('  stored identityPublicKey: ${preview(stored.first[2])}');
-      say('  bob\'s real PUBLIC key   : ${preview(bobPublic)}');
+      say("  bob's real PUBLIC key   : ${preview(bobPublic)}");
       expect(
         stored.first[2],
         bobPublic,
@@ -493,7 +500,7 @@ SELECT "userId", "deviceId", "identityPublicKey"
       // The WHOLE key, not a fragment: base64 contains no LIKE metacharacter
       // (`%`, `_`) and no quote, so the entire string is a safe pattern.
       say('');
-      say('bob\'s PRIVATE identity key : ${preview(bobPrivate)}');
+      say("bob's PRIVATE identity key : ${preview(bobPrivate)}");
       say('searching every column of the database for it, in full…');
       final (hits, scanned) = await sweepDatabaseFor(bobPrivate);
       say('columns scanned: $scanned');
@@ -543,12 +550,12 @@ SELECT table_name || '.' || column_name
     test('4. census: every message row in the database is ciphertext', () async {
       rule('4. CENSUS OVER EVERY MESSAGE IN THIS DATABASE');
 
-      final census = await e2eSql('''
+      final census = await e2eSql(r'''
 SELECT count(*),
        count(*) FILTER (WHERE "content" = '[encrypted]'),
        count(*) FILTER (WHERE "content" <> '[encrypted]'),
        count(*) FILTER (WHERE "encryptedContent" IS NOT NULL
-                          AND "encryptedContent" !~ '^[0-9]+:[A-Za-z0-9+/]+=*\$')
+                          AND "encryptedContent" !~ '^[0-9]+:[A-Za-z0-9+/]+=*$')
   FROM public.messages;
 ''');
       final total = int.parse(census.single[0]);
@@ -561,9 +568,9 @@ SELECT count(*),
       say('  content = anything else (READABLE!) : $readable');
       say('  encryptedContent not Signal-shaped  : $malformed');
 
-      final envelopes = await e2eSql('''
+      final envelopes = await e2eSql(r'''
 SELECT count(*),
-       count(*) FILTER (WHERE "ciphertext" ~ '^[0-9]+:[A-Za-z0-9+/]+=*\$')
+       count(*) FILTER (WHERE "ciphertext" ~ '^[0-9]+:[A-Za-z0-9+/]+=*$')
   FROM public.message_envelopes;
 ''');
       say('message_envelopes total               : ${envelopes.single[0]}');
