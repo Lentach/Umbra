@@ -283,6 +283,72 @@ void main() {
     );
   });
 
+  test('a PULLED key whose store write fails reports unavailable, not undecryptable', () async {
+    final store = await boot();
+    var fetches = 0;
+    // The decrypt below SPENDS the Signal message key, so if the write is lost
+    // the plaintext exists only in this process. Reporting `undecryptable`
+    // would be terminal — the next launch re-pulls the same row, hits
+    // DuplicateMessage and answers undecryptable for good, chips orphaned with
+    // no way back. `unavailable` keeps the caller retrying.
+    final svc = build(
+      store,
+      answer: (event, _) {
+        if (event != 'fetchReactionKey') fail('must not upload');
+        fetches++;
+        return {
+          'epoch': 6,
+          'senderUserId': peerUserId,
+          'senderDeviceId': 1,
+          'ciphertext': 'wrapped',
+        };
+      },
+      decryptFrom: (_, _, _) async => key,
+    );
+    // A store that reads ABSENT and silently loses the write: the local lookup
+    // still says "no key" (so the pull runs), and the armed read-back after
+    // saving finds nothing.
+    store.debugSetContentKv(_WriteLosingContentKv());
+
+    final result = await svc.ensureCodec(
+      conversationId,
+      peerUserId: peerUserId,
+      mayCreate: true,
+    );
+
+    expect(result.codec, isNull);
+    expect(
+      result.failure,
+      ReactionKeyFailure.unavailable,
+      reason: 'undecryptable here would be a permanent, unrecoverable verdict',
+    );
+    expect(fetches, 1, reason: 'and it must not have created a replacement key');
+  });
+
+  test('creating costs ONE fetch, not two', () async {
+    final store = await boot();
+    final svc = build(
+      store,
+      answer: (event, _) => event == 'fetchReactionKey'
+          ? {'epoch': 2, 'ciphertext': null}
+          : {'success': true, 'epoch': 3},
+    );
+
+    await svc.ensureCodec(
+      conversationId,
+      peerUserId: peerUserId,
+      mayCreate: true,
+    );
+
+    expect(
+      events,
+      ['fetchReactionKey', 'uploadReactionKey'],
+      reason:
+          'the fetch that proved there is no row already reported the epoch; '
+          'asking again was a wasted round trip on every first reaction',
+    );
+  });
+
   test('the generated key is 32 bytes and conversation-specific', () async {
     final store = await boot();
     final captured = <String>[];
@@ -307,4 +373,25 @@ void main() {
     final wrapped = captured.single.split(':').last;
     expect(base64Decode(wrapped), hasLength(ReactionTokenCodec.keyBytes));
   });
+}
+
+/// Reads as empty and drops every write, so the armed read-back in
+/// `saveReactionKey` reports failure without any exception being thrown —
+/// which is exactly the shape that makes a SPENT wrap unrecoverable if the
+/// caller mistakes it for "undecryptable".
+class _WriteLosingContentKv implements ContentKv {
+  @override
+  String? getString(String key) => null;
+
+  @override
+  Future<bool> setString(String key, String value) async => true;
+
+  @override
+  Set<String> getKeys() => const <String>{};
+
+  @override
+  Future<void> reload() async {}
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => null;
 }

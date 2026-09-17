@@ -26,6 +26,18 @@ enum ReactionKeyFailure {
   refused,
 }
 
+/// What one mailbox read can answer.
+///
+/// `hasRow: false` with no failure is the ONLY answer that lets a caller
+/// consider creating a key, and `epoch` is always the server's current epoch
+/// so the create path needs no second round trip.
+typedef _PullOutcome = ({
+  ReactionTokenCodec? codec,
+  ReactionKeyFailure? failure,
+  int epoch,
+  bool hasRow,
+});
+
 /// Acquires the per-conversation `K_react` this device needs to read and write
 /// blinded reaction tokens (`docs/design/reaction-privacy.md` §3.1).
 ///
@@ -121,16 +133,27 @@ class ReactionKeyService {
     }
 
     final pulled = await _pull(conversationId);
-    if (pulled != null) return pulled;
+    if (pulled.hasRow || pulled.failure != null) {
+      return (codec: pulled.codec, failure: pulled.failure);
+    }
 
     if (!mayCreate) return (codec: null, failure: ReactionKeyFailure.noKeyYet);
-    return _create(conversationId, peerUserId: peerUserId);
+    // `_pull` already told us the server's epoch, so creating costs no second
+    // round trip.
+    return _create(
+      conversationId,
+      peerUserId: peerUserId,
+      currentEpoch: pulled.epoch,
+    );
   }
 
-  /// Reads this device's mailbox row. Null means "no row, decide upstream".
-  Future<({ReactionTokenCodec? codec, ReactionKeyFailure? failure})?> _pull(
-    int conversationId,
-  ) async {
+  /// Reads this device's mailbox row.
+  ///
+  /// `hasRow: false` with no failure means "the server has no row for this
+  /// device", which is the only answer that lets a caller consider creating
+  /// one. `epoch` is always the server's current epoch, so the create path
+  /// needs no second fetch.
+  Future<_PullOutcome> _pull(int conversationId) async {
     final answer = await _request('fetchReactionKey', {
       'conversationId': conversationId,
     });
@@ -138,17 +161,22 @@ class ReactionKeyService {
       // `error` present is a REFUSAL; a null ciphertext without it is the
       // legitimate "no row for this device". Conflating them would render
       // placeholder chips forever instead of retrying.
-      return (codec: null, failure: ReactionKeyFailure.refused);
+      return (
+        codec: null,
+        failure: ReactionKeyFailure.refused,
+        epoch: 0,
+        hasRow: false,
+      );
     }
+    final rawEpoch = answer['epoch'];
+    final epoch = rawEpoch is int ? rawEpoch : 0;
     final ciphertext = answer['ciphertext'];
     final senderUserId = answer['senderUserId'];
     final senderDeviceId = answer['senderDeviceId'];
-    final epoch = answer['epoch'];
     if (ciphertext is! String ||
         senderUserId is! int ||
-        senderDeviceId is! int ||
-        epoch is! int) {
-      return null;
+        senderDeviceId is! int) {
+      return (codec: null, failure: null, epoch: epoch, hasRow: false);
     }
 
     final String keyB64;
@@ -158,23 +186,54 @@ class ReactionKeyService {
       // The row exists and this device cannot open it — a spent ratchet step,
       // most likely. Deliberately NOT treated as an absence: re-keying here
       // would orphan chips for a peer who is perfectly healthy.
-      return (codec: null, failure: ReactionKeyFailure.undecryptable);
+      return (
+        codec: null,
+        failure: ReactionKeyFailure.undecryptable,
+        epoch: epoch,
+        hasRow: true,
+      );
     }
     if (!_isValidKey(keyB64)) {
-      return (codec: null, failure: ReactionKeyFailure.undecryptable);
+      return (
+        codec: null,
+        failure: ReactionKeyFailure.undecryptable,
+        epoch: epoch,
+        hasRow: true,
+      );
     }
 
-    await _store.saveReactionKey(
+    // The bool is LOAD-BEARING on this side, more than on the create side.
+    // The decrypt above SPENT the Signal message key, so if the store write
+    // fails the plaintext exists only in this process: the next launch reads
+    // Absent, pulls the same row, hits DuplicateMessage and answers
+    // `undecryptable` for good — chips orphaned with no way back. Reporting
+    // `unavailable` instead keeps the door open: the caller retries, and the
+    // store may well answer next time (a locked vault unlocks).
+    final stored = await _store.saveReactionKey(
       conversationId: conversationId,
       epoch: epoch,
       keyB64: keyB64,
     );
-    return (codec: _remember(conversationId, keyB64), failure: null);
+    if (!stored) {
+      return (
+        codec: null,
+        failure: ReactionKeyFailure.unavailable,
+        epoch: epoch,
+        hasRow: true,
+      );
+    }
+    return (
+      codec: _remember(conversationId, keyB64),
+      failure: null,
+      epoch: epoch,
+      hasRow: true,
+    );
   }
 
   Future<({ReactionTokenCodec? codec, ReactionKeyFailure? failure})> _create(
     int conversationId, {
     required int peerUserId,
+    required int currentEpoch,
   }) async {
     final targets = await _resolveTargets(peerUserId);
     if (targets.isEmpty) {
@@ -195,19 +254,20 @@ class ReactionKeyService {
       });
     }
 
-    // The server owns the epoch; this is a proposal. A race loses with
-    // `stale_epoch` + the current epoch, and the loser must PULL rather than
-    // retry with a key nobody else has.
-    final current = await _currentEpoch(conversationId);
+    // The server owns the epoch; this is a proposal built on the epoch the
+    // preceding fetch already reported. A race loses with `stale_epoch`, and
+    // the loser must PULL rather than retry with a key nobody else has.
     final answer = await _request('uploadReactionKey', {
       'conversationId': conversationId,
-      'epoch': current + 1,
+      'epoch': currentEpoch + 1,
       'envelopes': envelopes,
     });
     if (answer == null || answer['success'] != true) {
       if (answer != null && answer['error'] == 'stale_epoch') {
         final pulled = await _pull(conversationId);
-        if (pulled != null) return pulled;
+        if (pulled.hasRow || pulled.failure != null) {
+          return (codec: pulled.codec, failure: pulled.failure);
+        }
       }
       return (codec: null, failure: ReactionKeyFailure.refused);
     }
@@ -215,7 +275,7 @@ class ReactionKeyService {
     final epoch = answer['epoch'];
     final stored = await _store.saveReactionKey(
       conversationId: conversationId,
-      epoch: epoch is int ? epoch : current + 1,
+      epoch: epoch is int ? epoch : currentEpoch + 1,
       keyB64: keyB64,
     );
     if (!stored) {
@@ -226,13 +286,7 @@ class ReactionKeyService {
     return (codec: _remember(conversationId, keyB64), failure: null);
   }
 
-  Future<int> _currentEpoch(int conversationId) async {
-    final answer = await _request('fetchReactionKey', {
-      'conversationId': conversationId,
-    });
-    final epoch = answer?['epoch'];
-    return epoch is int ? epoch : 0;
-  }
+  // (see the top-level `_PullOutcome` for what a mailbox read can answer)
 
   static bool _isValidKey(String keyB64) {
     try {
