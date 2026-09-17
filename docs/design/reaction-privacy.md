@@ -55,27 +55,48 @@ column value   = {"<token>":[userId, …], …}
   "👍" collapse to one chip with two userIds — which is also the leak, priced in §6.
 - **The client needs no new storage.** It derives `token(emoji)` for its picker set on demand and
   caches the map in memory; rendering a chip is a reverse lookup in that map.
+- **No new secret at rest on the client.** `K_react` is held in memory for the session and pulled
+  again next launch from the row already wrapped to this device. That matters here specifically:
+  web key custody is the open hole (`signal_stores.dart:27-52` — the unwrapping key sits beside
+  the ciphertext in localStorage), so a design that added another persisted secret would be
+  borrowing against it.
 
-### 3.1 Key distribution — the only genuinely new machinery
+### 3.1 Key distribution — PULL, not push (corrected after measuring the client)
 
-`K_react` must reach **every device of both participants**, including devices that appear later. It
-rides the transport that already solves exactly this problem: the per-device envelope fan-out.
+`K_react` must reach **every device of both participants**, including devices that appear later.
+The first draft of this section said it rides the message envelope fan-out. Measuring
+`messaging_provider.send.dart:1489-1557` says that is the wrong shape: the fan-out's offline
+durability comes from the `message_envelopes` rows hanging off a MESSAGE row, so a pushed control
+message needs its own store plus delivery-on-connect and ack/cleanup machinery — all of it new.
+Piggy-backing the key on the next real message's `E2eEnvelope` is cheaper but leaves a quiet
+conversation unable to react until somebody speaks.
 
-- A control message `reactionKey { conversationId, epoch }` whose per-device ciphertext is the key,
-  one envelope per recipient device **and** per the sender's other devices — the same shape as
-  `sendMessage`'s `envelopes`, with the same `MAX_ENVELOPES_PER_MESSAGE` bound.
-- The first client to react (or to open a conversation that has a token it cannot read) generates
-  and fans out the key. Two clients racing produce two keys; last write wins per `(conversation,
-  epoch)` and the loser's tokens become undecodable — so the epoch must be **server-assigned**, on
-  `conversations`, and a fan-out that names a stale epoch is refused. This is the one place the
-  design needs a new server-side invariant rather than reuse.
-- `deviceListChanged` (already emitted to both parties on any device mutation — `wire.md:41`) is
-  the trigger to re-fan the current key to the new device set.
-- Revocation: a revoked device keeps the key material it already holds. That is consistent with
-  the standing posture — revocation is logout, never remote wipe (`wire.md:42`) — and it cannot
-  read new rows because it has no session. **Recommendation: rotate anyway on revoke** (new epoch,
-  re-fan, old tokens stay readable to the remaining devices because they keep the old key by
-  epoch). Rotation is what makes "remove this device" mean something for reactions.
+So: one small table, and clients **pull their own copy**.
+
+```
+reaction_keys(conversationId, userId, deviceId, epoch, ciphertext, createdAt)
+  PK (conversationId, userId, deviceId, epoch)
+```
+
+- The creating client generates `K_react`, resolves targets exactly like a send
+  (`_resolveFanOut` → `ensureSession` → `encrypt(userId, key, deviceId:)`, unchanged code), and
+  uploads N wrapped copies in one emit. Reuses the existing per-device Signal sessions and the
+  `MAX_ENVELOPES_PER_MESSAGE` bound; adds no crypto primitive.
+- A device that needs a key asks for its OWN row (`fetchReactionKey { conversationId }` → the row
+  for the caller's authenticated `(userId, deviceId)`). Offline-safe with no delivery state to
+  track, because the store IS the mailbox and the reader is the owner.
+- The **epoch is server-assigned** on `conversations`. Two clients racing would otherwise both
+  write epoch 1 and one side's tokens would be permanently undecodable; an upload naming a stale
+  epoch is refused. This is the one genuinely new server-side invariant.
+- A newly linked device has no row for any old conversation. The peer's client re-uploads on
+  `deviceListChanged` (already emitted to both parties on any device mutation — `wire.md:41`);
+  until it lands, §3.2's placeholder renders. The account's OWN other devices are covered by the
+  same upload, since a send already addresses them.
+- Revocation: a revoked device keeps material it already holds, consistent with revocation being
+  logout and never remote wipe (`wire.md:42`), and it cannot read new rows without a session.
+  **Rotate anyway on revoke** — new epoch, fresh upload to the surviving devices only, old rows
+  kept so existing chips stay readable. Rotation is what makes "remove this device" mean something
+  for reactions.
 
 ### 3.2 What a device without the key renders
 
@@ -109,13 +130,13 @@ note. Owner call — this is the only user-visible data loss in the design.
 
 | # | Change | Size |
 |---|---|---|
-| 1 | `conversations.reactionKeyEpoch` + migration; null legacy `messages.reactions` | S |
+| 1 | `reaction_keys` entity + `conversations.reactionKeyEpoch` + numbered migration (and, if the owner says so, nulling legacy `messages.reactions`) | S |
 | 2 | DTO: accept token \| emoji; `chat-reaction.service` untouched except validation | S |
-| 3 | `reactionKey` envelope event + epoch refusal + fan-out bound reuse | M |
+| 3 | `uploadReactionKey` / `fetchReactionKey` handlers, server-assigned epoch, stale-epoch refusal, envelope-count bound reuse | M |
 | 4 | Append the reaction contract (it has none) to `docs/contracts/wire.md` | S |
-| 5 | Client: key generation, HMAC map, picker → token, chip reverse lookup, unknown-token render | M |
-| 6 | Client: re-fan on `deviceListChanged`, rotate on revoke | M |
-| 7 | Tests: token determinism, one-emoji-per-user through tokens, unknown-token render, epoch race refusal, legacy-shape compat | M |
+| 5 | Client: key create/upload via the EXISTING `_resolveFanOut`→`ensureSession`→`encrypt` path, pull-on-miss, in-memory HMAC map, picker → token, chip reverse lookup, placeholder render | M |
+| 6 | Client: re-upload on `deviceListChanged`, rotate on revoke | M |
+| 7 | Tests: token determinism, one-emoji-per-user through tokens, placeholder render, epoch race refusal, legacy-shape compat, pull-on-miss | M |
 | 8 | Follow-up: remove the emoji branch, refuse legacy | S |
 
 ## 5. Falsifications to drive the implementation
