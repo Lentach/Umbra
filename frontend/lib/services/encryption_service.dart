@@ -154,8 +154,26 @@ class EncryptionService {
   /// concurrent first touches must not race two backends into existence.
   ContentKv? _prefs;
   Future<ContentKv>? _prefsOpening;
-  Future<ContentKv> get _sharedPrefs async =>
-      _prefs ??= await (_prefsOpening ??= openPlatformContentKv());
+  ///
+  /// A REJECTED opening is NOT memoized. On web a locked passcode vault makes
+  /// the opener rethrow instead of falling back (`frontend/docs/e2e-invariants.md`
+  /// — falling back there would write the plaintext cache while the app is
+  /// still locked), and caching that rejected future made the failure last the
+  /// whole PROCESS: every later read rethrew locked even after the user
+  /// unlocked, so nothing recovered without a relaunch. The race guarantee is
+  /// unchanged — concurrent first touches still share ONE opening; only a
+  /// failed one is dropped so the next touch can retry.
+  Future<ContentKv> get _sharedPrefs async {
+    final cached = _prefs;
+    if (cached != null) return cached;
+    final opening = _prefsOpening ??= openPlatformContentKv();
+    try {
+      return _prefs = await opening;
+    } catch (_) {
+      if (_prefsOpening == opening) _prefsOpening = null;
+      rethrow;
+    }
+  }
 
   Future<void> _reloadPrefsForCrossContext(ContentKv prefs) => prefs.reload();
 
