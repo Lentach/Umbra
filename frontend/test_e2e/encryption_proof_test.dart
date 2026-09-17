@@ -41,6 +41,17 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'support/e2e_test_client.dart';
 
+/// Opt-in, and it MUST stay that way: this file registers two accounts and
+/// `/auth/register` is 10 per HOUR per IP with an in-memory counter shared by
+/// every account in `test_e2e/`. The shared `e2e-wire` run already spends that
+/// bucket to the edge, so these two registrations are what tipped
+/// `full_stack_e2e_test.dart` into `ThrottlerException(429)` on
+/// `f86a43de` — the failure lands on whichever suite runs last, which is why it
+/// looked like a defect in a file this change never touched. It runs on the
+/// `e2e-isolated-probes` stack instead, whose fresh backend means a fresh
+/// counter. Never raise the production cap to fit a test (`.github/workflows/ci.yml`).
+const bool _enabled = bool.fromEnvironment('ENCRYPTION_PROOF');
+
 /// AES-256-GCM with the app's parameters (32-byte key, 12-byte IV) — the same
 /// shape `MediaCryptoService` produces.
 ///
@@ -64,8 +75,9 @@ import 'support/e2e_test_client.dart';
     );
   final key = rnd.nextBytes(32);
   final iv = rnd.nextBytes(12);
-  final cipher = pc.GCMBlockCipher(pc.AESEngine())
-    ..init(true, pc.AEADParameters(pc.KeyParameter(key), 128, iv, Uint8List(0)));
+  final cipher = pc.GCMBlockCipher(
+    pc.AESEngine(),
+  )..init(true, pc.AEADParameters(pc.KeyParameter(key), 128, iv, Uint8List(0)));
   return (
     ciphertext: cipher.process(bytes),
     keyBase64: base64Encode(key),
@@ -263,276 +275,324 @@ SELECT tbl, col, hits FROM _proof_hits ORDER BY tbl, col;
     }
   }
 
-  setUpAll(() async {
-    await requireBackendUp(baseUrl);
+  group(
+    'E2E proof',
+    () {
+      late int messageId;
+      late String wireCiphertext;
+      // Guards the teardown below. `setUpAll` fails BEFORE the clients exist
+      // whenever the backend is not up yet — the common local case — and an
+      // unguarded `tearDownAll` then reports a second, misleading
+      // `LateInitializationError` on top of the real cause. `addTearDown` is
+      // NOT the fix here: package:test runs `setUpAll` as its own synthetic
+      // test, so a callback registered inside it fires the moment `setUpAll`
+      // completes — disposing both clients before test 1 ever runs.
+      var clientsBuilt = false;
+      setUpAll(() async {
+        await requireBackendUp(baseUrl);
 
-    // Why ignored: seeding the real plugin's mock store is the only way to run
-    // the app's own storage stack here, and the setter is @visibleForTesting in
-    // a package we do not own.
-    // ignore: invalid_use_of_visible_for_testing_member
-    FlutterSecureStorage.setMockInitialValues({});
-    // Same reason as above, for the SharedPreferences backend.
-    // ignore: invalid_use_of_visible_for_testing_member
-    SharedPreferences.setMockInitialValues({});
+        // Why ignored: seeding the real plugin's mock store is the only way to run
+        // the app's own storage stack here, and the setter is @visibleForTesting in
+        // a package we do not own.
+        // ignore: invalid_use_of_visible_for_testing_member
+        FlutterSecureStorage.setMockInitialValues({});
+        // Same reason as above, for the SharedPreferences backend.
+        // ignore: invalid_use_of_visible_for_testing_member
+        SharedPreferences.setMockInitialValues({});
 
-    alice = E2eClient('alice', baseUrl);
-    bob = E2eClient('bob', baseUrl);
+        alice = E2eClient('alice', baseUrl);
+        bob = E2eClient('bob', baseUrl);
+        clientsBuilt = true;
 
-    await alice.registerFresh();
-    await bob.registerFresh();
-    await alice.connectSocket();
-    await bob.connectSocket();
-    await alice.initializeAndUploadKeys();
-    await bob.initializeAndUploadKeys();
+        await alice.registerFresh();
+        await bob.registerFresh();
+        await alice.connectSocket();
+        await bob.connectSocket();
+        await alice.initializeAndUploadKeys();
+        await bob.initializeAndUploadKeys();
 
-    // Friendship, so a conversation exists.
-    alice.socketService.sendFriendRequest(bob.userId);
-    final request =
-        await bob.events.next(
-              'newFriendRequest',
-              where: (p) =>
-                  p is Map &&
-                  p['sender'] is Map &&
-                  (p['sender'] as Map)['id'] == alice.userId,
-              reason: 'bob receives the invite',
-            )
-            as Map;
-    bob.socketService.acceptFriendRequest(request['id'] as int);
-    final accepted =
-        await alice.events.next('friendRequestAccepted', reason: 'accept')
-            as Map;
-    conversationId = accepted['conversationId'] as int;
+        // Friendship, so a conversation exists.
+        alice.socketService.sendFriendRequest(bob.userId);
+        final request =
+            await bob.events.next(
+                  'newFriendRequest',
+                  where: (p) =>
+                      p is Map &&
+                      p['sender'] is Map &&
+                      (p['sender'] as Map)['id'] == alice.userId,
+                  reason: 'bob receives the invite',
+                )
+                as Map;
+        bob.socketService.acceptFriendRequest(request['id'] as int);
+        final accepted =
+            await alice.events.next('friendRequestAccepted', reason: 'accept')
+                as Map;
+        conversationId = accepted['conversationId'] as int;
 
-    // X3DH: alice fetches bob's PUBLIC bundle and builds a Signal session.
-    final bundle = await alice.fetchBundleFor(bob.userId);
-    await alice.encryption.buildSession(
-      bob.userId,
-      bundle,
-      expectedIdentityBase64: null,
-    );
+        // X3DH: alice fetches bob's PUBLIC bundle and builds a Signal session.
+        final bundle = await alice.fetchBundleFor(bob.userId);
+        await alice.encryption.buildSession(
+          bob.userId,
+          bundle,
+          expectedIdentityBase64: null,
+        );
 
-    rule('SETUP');
-    say('backend under test      : $baseUrl');
-    say('alice userId            : ${alice.userId} (${alice.username})');
-    say('bob   userId            : ${bob.userId} (${bob.username})');
-    say('conversationId          : $conversationId');
-    say('bob PUBLIC bundle the server served alice:');
-    say('  identityPublicKey     : ${preview(bundle['identityPublicKey'] as String)}');
-    say('  signedPreKeyPublic    : ${preview(bundle['signedPreKeyPublic'] as String)}');
-    say('  oneTimePreKeyId       : ${bundle['oneTimePreKeyId']}');
-    say('Note: every field above is a PUBLIC key half. That is all the server');
-    say('has ever been given.');
-  });
+        rule('SETUP');
+        say('backend under test      : $baseUrl');
+        say('alice userId            : ${alice.userId} (${alice.username})');
+        say('bob   userId            : ${bob.userId} (${bob.username})');
+        say('conversationId          : $conversationId');
+        say('bob PUBLIC bundle the server served alice:');
+        say(
+          '  identityPublicKey     : ${preview(bundle['identityPublicKey'] as String)}',
+        );
+        say(
+          '  signedPreKeyPublic    : ${preview(bundle['signedPreKeyPublic'] as String)}',
+        );
+        say('  oneTimePreKeyId       : ${bundle['oneTimePreKeyId']}');
+        say(
+          'Note: every field above is a PUBLIC key half. That is all the server',
+        );
+        say('has ever been given.');
+      });
 
-  tearDownAll(() {
-    alice.dispose();
-    bob.dispose();
-  });
+      tearDownAll(() {
+        if (!clientsBuilt) return;
+        alice.dispose();
+        bob.dispose();
+      });
 
-  group('E2E proof', () {
-    late int messageId;
-    late String wireCiphertext;
+      test(
+        '1. one message, fully disclosed: plaintext vs. what the server got',
+        () async {
+          rule('1. ONE MESSAGE, FULLY DISCLOSED');
 
-    test('1. one message, fully disclosed: plaintext vs. what the server got', () async {
-      rule('1. ONE MESSAGE, FULLY DISCLOSED');
+          // The exact plaintext JSON the app hands to libsignal.
+          final envelopeJson = jsonEncode(E2eEnvelope.build(needle));
+          say('Alice types            : $needle');
+          say('App builds envelope    : $envelopeJson');
 
-      // The exact plaintext JSON the app hands to libsignal.
-      final envelopeJson = jsonEncode(E2eEnvelope.build(needle));
-      say('Alice types            : $needle');
-      say('App builds envelope    : $envelopeJson');
+          wireCiphertext = await alice.encryption.encrypt(
+            bob.userId,
+            envelopeJson,
+          );
+          say('libsignal produces     : ${preview(wireCiphertext, head: 96)}');
 
-      wireCiphertext = await alice.encryption.encrypt(bob.userId, envelopeJson);
-      say('libsignal produces     : ${preview(wireCiphertext, head: 96)}');
+          final sent = await alice.sendEncrypted(
+            bob.userId,
+            wireCiphertext,
+            tempId: 'proof-1-$runTag',
+          );
+          messageId = sent['id'] as int;
+          say('server acks message id : $messageId');
 
-      final sent = await alice.sendEncrypted(
-        bob.userId,
-        wireCiphertext,
-        tempId: 'proof-1-$runTag',
-      );
-      messageId = sent['id'] as int;
-      say('server acks message id : $messageId');
-
-      // --- what the database actually holds -----------------------------
-      final rows = await e2eSql('''
+          // --- what the database actually holds -----------------------------
+          final rows = await e2eSql('''
 SELECT "id", "content", coalesce("encryptedContent", '<NULL>'),
        "messageType", coalesce("mediaUrl", '<NULL>'),
        "sender_id", "conversation_id", "createdAt"
   FROM public.messages WHERE "id" = $messageId;
 ''');
-      expect(rows, hasLength(1), reason: 'the row must exist');
-      final row = rows.single;
-      rule('WHAT THE SERVER STORED FOR MESSAGE $messageId');
-      say('messages.id            : ${row[0]}');
-      say('messages.content       : ${row[1]}');
-      say('messages.encryptedContent: ${preview(row[2], head: 96)}');
-      say('messages.messageType   : ${row[3]}');
-      say('messages.mediaUrl      : ${row[4]}');
-      say('messages.sender_id     : ${row[5]}   <- metadata, NOT hidden');
-      say('messages.conversation_id: ${row[6]}  <- metadata, NOT hidden');
-      say('messages.createdAt     : ${row[7]}   <- metadata, NOT hidden');
+          expect(rows, hasLength(1), reason: 'the row must exist');
+          final row = rows.single;
+          rule('WHAT THE SERVER STORED FOR MESSAGE $messageId');
+          say('messages.id            : ${row[0]}');
+          say('messages.content       : ${row[1]}');
+          say('messages.encryptedContent: ${preview(row[2], head: 96)}');
+          say('messages.messageType   : ${row[3]}');
+          say('messages.mediaUrl      : ${row[4]}');
+          say('messages.sender_id     : ${row[5]}   <- metadata, NOT hidden');
+          say('messages.conversation_id: ${row[6]}  <- metadata, NOT hidden');
+          say('messages.createdAt     : ${row[7]}   <- metadata, NOT hidden');
 
-      expect(
-        row[1],
-        '[encrypted]',
-        reason: 'the readable column holds a literal placeholder, never text',
-      );
-      expect(
-        row[2],
-        wireCiphertext,
-        reason: 'what the server stored is byte-identical to the ciphertext '
-            'libsignal produced on the client',
-      );
-      expect(
-        row[2],
-        matches(RegExp(r'^\d+:[A-Za-z0-9+/]+=*$')),
-        reason: 'Signal wire format "{type}:{base64}"',
-      );
+          expect(
+            row[1],
+            '[encrypted]',
+            reason:
+                'the readable column holds a literal placeholder, never text',
+          );
+          expect(
+            row[2],
+            wireCiphertext,
+            reason:
+                'what the server stored is byte-identical to the ciphertext '
+                'libsignal produced on the client',
+          );
+          expect(
+            row[2],
+            matches(RegExp(r'^\d+:[A-Za-z0-9+/]+=*$')),
+            reason: 'Signal wire format "{type}:{base64}"',
+          );
 
-      // The ciphertext is not a reversible encoding of the plaintext.
-      final rawBytes = base64Decode(
-        wireCiphertext.substring(wireCiphertext.indexOf(':') + 1),
-      );
-      final asLatin1 = String.fromCharCodes(rawBytes);
-      expect(
-        asLatin1.contains(needle),
-        isFalse,
-        reason: 'decoding the base64 must not reveal the plaintext',
-      );
-      say('');
-      say('base64-decoded ciphertext is ${rawBytes.length} bytes of noise;');
-      say('it does NOT contain the sentence Alice typed.');
+          // The ciphertext is not a reversible encoding of the plaintext.
+          final rawBytes = base64Decode(
+            wireCiphertext.substring(wireCiphertext.indexOf(':') + 1),
+          );
+          final asLatin1 = String.fromCharCodes(rawBytes);
+          expect(
+            asLatin1.contains(needle),
+            isFalse,
+            reason: 'decoding the base64 must not reveal the plaintext',
+          );
+          say('');
+          say(
+            'base64-decoded ciphertext is ${rawBytes.length} bytes of noise;',
+          );
+          say('it does NOT contain the sentence Alice typed.');
 
-      // --- and the recipient can still read it ---------------------------
-      final received = await bob.awaitNewMessage('proof-1-$runTag');
-      final decrypted = await bob.decryptText(
-        alice.userId,
-        received['encryptedContent'] as String,
-      );
-      expect(decrypted, needle);
-      say('');
-      say('Bob decrypts it back to: $decrypted');
-      say('So this is encryption, not deletion: the ONLY parties who can read');
-      say('it are the two devices holding the Signal session.');
-    }, timeout: const Timeout(Duration(minutes: 2)));
-
-    test('2. the plaintext is in ZERO columns of the entire database', () async {
-      rule('2. FULL-DATABASE SWEEP FOR THE PLAINTEXT');
-      say('needle: $needle');
-
-      // Three encodings, because a literal-only sweep would miss plaintext
-      // sitting verbatim inside a base64 or hex blob — e.g. an envelope that
-      // was stored unencrypted but base64'd on the way in.
-      final encodings = <String, String>{
-        'literal UTF-8': needle,
-        'base64': base64Encode(utf8.encode(needle)),
-        'hex': utf8
-            .encode(needle)
-            .map((b) => b.toRadixString(16).padLeft(2, '0'))
-            .join(),
-      };
-
-      var scanned = 0;
-      for (final entry in encodings.entries) {
-        final (hits, n) = await sweepDatabaseFor(entry.value);
-        scanned = n;
-        say('as ${entry.key.padRight(13)} -> '
-            '${hits.isEmpty ? 'NOT FOUND' : 'FOUND'} '
-            '(${entry.value.length} chars, $n columns scanned)');
-        for (final h in hits) {
-          say('    HIT -> ${h[0]}.${h[1]} x${h[2]}');
-        }
-        expect(
-          hits,
-          isEmpty,
-          reason: 'the sentence Alice typed must not exist anywhere in the '
-              'database, in any encoding (${entry.key})',
-        );
-      }
-
-      expect(
-        scanned,
-        greaterThan(50),
-        reason: 'the sweep must actually have scanned the schema; a sweep of '
-            'nothing would find nothing and prove nothing',
+          // --- and the recipient can still read it ---------------------------
+          final received = await bob.awaitNewMessage('proof-1-$runTag');
+          final decrypted = await bob.decryptText(
+            alice.userId,
+            received['encryptedContent'] as String,
+          );
+          expect(decrypted, needle);
+          say('');
+          say('Bob decrypts it back to: $decrypted');
+          say(
+            'So this is encryption, not deletion: the ONLY parties who can read',
+          );
+          say('it are the two devices holding the Signal session.');
+        },
+        timeout: const Timeout(Duration(minutes: 2)),
       );
 
-      // Control: the sweep is capable of finding things. Without this the
-      // "no hits" result above could just mean the query is broken.
-      final controlNeedle = longestAlnumRun(alice.username);
-      final (controlHits, _) = await sweepDatabaseFor(controlNeedle);
-      say('');
-      say("CONTROL — sweeping for a run of alice's USERNAME "
-          '("$controlNeedle" out of "${alice.username}"):');
-      for (final h in controlHits) {
-        say('HIT -> ${h[0]}.${h[1]} x${h[2]}');
-      }
-      expect(
-        controlHits,
-        isNotEmpty,
-        reason: 'the sweep finds a string that IS in the database, so the '
-            'empty result for the message plaintext is a real negative',
+      test(
+        '2. the plaintext is in ZERO columns of the entire database',
+        () async {
+          rule('2. FULL-DATABASE SWEEP FOR THE PLAINTEXT');
+          say('needle: $needle');
+
+          // Three encodings, because a literal-only sweep would miss plaintext
+          // sitting verbatim inside a base64 or hex blob — e.g. an envelope that
+          // was stored unencrypted but base64'd on the way in.
+          final encodings = <String, String>{
+            'literal UTF-8': needle,
+            'base64': base64Encode(utf8.encode(needle)),
+            'hex': utf8
+                .encode(needle)
+                .map((b) => b.toRadixString(16).padLeft(2, '0'))
+                .join(),
+          };
+
+          var scanned = 0;
+          for (final entry in encodings.entries) {
+            final (hits, n) = await sweepDatabaseFor(entry.value);
+            scanned = n;
+            say(
+              'as ${entry.key.padRight(13)} -> '
+              '${hits.isEmpty ? 'NOT FOUND' : 'FOUND'} '
+              '(${entry.value.length} chars, $n columns scanned)',
+            );
+            for (final h in hits) {
+              say('    HIT -> ${h[0]}.${h[1]} x${h[2]}');
+            }
+            expect(
+              hits,
+              isEmpty,
+              reason:
+                  'the sentence Alice typed must not exist anywhere in the '
+                  'database, in any encoding (${entry.key})',
+            );
+          }
+
+          expect(
+            scanned,
+            greaterThan(50),
+            reason:
+                'the sweep must actually have scanned the schema; a sweep of '
+                'nothing would find nothing and prove nothing',
+          );
+
+          // Control: the sweep is capable of finding things. Without this the
+          // "no hits" result above could just mean the query is broken.
+          final controlNeedle = longestAlnumRun(alice.username);
+          final (controlHits, _) = await sweepDatabaseFor(controlNeedle);
+          say('');
+          say(
+            "CONTROL — sweeping for a run of alice's USERNAME "
+            '("$controlNeedle" out of "${alice.username}"):',
+          );
+          for (final h in controlHits) {
+            say('HIT -> ${h[0]}.${h[1]} x${h[2]}');
+          }
+          expect(
+            controlHits,
+            isNotEmpty,
+            reason:
+                'the sweep finds a string that IS in the database, so the '
+                'empty result for the message plaintext is a real negative',
+          );
+          say('The sweep works. The message plaintext is simply not there.');
+        },
+        timeout: const Timeout(Duration(minutes: 3)),
       );
-      say('The sweep works. The message plaintext is simply not there.');
-    }, timeout: const Timeout(Duration(minutes: 3)));
 
-    test('3. the private keys are not on the server either', () async {
-      rule('3. WHERE THE KEYS LIVE');
+      test(
+        '3. the private keys are not on the server either',
+        () async {
+          rule('3. WHERE THE KEYS LIVE');
 
-      final bobPair = await bob.encryption.identityKeyPairForLinking();
-      final bobPrivate = base64Encode(bobPair.getPrivateKey().serialize());
-      final bobPublic = base64Encode(bobPair.getPublicKey().serialize());
+          final bobPair = await bob.encryption.identityKeyPairForLinking();
+          final bobPrivate = base64Encode(bobPair.getPrivateKey().serialize());
+          final bobPublic = base64Encode(bobPair.getPublicKey().serialize());
 
-      final stored = await e2eSql('''
+          final stored = await e2eSql('''
 SELECT "userId", "deviceId", "identityPublicKey"
   FROM public.key_bundles WHERE "userId" = ${bob.userId};
 ''');
-      expect(stored, isNotEmpty);
-      say('key_bundles row for bob: userId=${stored.first[0]} '
-          'deviceId=${stored.first[1]}');
-      say('  stored identityPublicKey: ${preview(stored.first[2])}');
-      say("  bob's real PUBLIC key   : ${preview(bobPublic)}");
-      expect(
-        stored.first[2],
-        bobPublic,
-        reason: 'the server holds exactly the PUBLIC half',
-      );
+          expect(stored, isNotEmpty);
+          say(
+            'key_bundles row for bob: userId=${stored.first[0]} '
+            'deviceId=${stored.first[1]}',
+          );
+          say('  stored identityPublicKey: ${preview(stored.first[2])}');
+          say("  bob's real PUBLIC key   : ${preview(bobPublic)}");
+          expect(
+            stored.first[2],
+            bobPublic,
+            reason: 'the server holds exactly the PUBLIC half',
+          );
 
-      // The WHOLE key, not a fragment: base64 contains no LIKE metacharacter
-      // (`%`, `_`) and no quote, so the entire string is a safe pattern.
-      say('');
-      say("bob's PRIVATE identity key : ${preview(bobPrivate)}");
-      say('searching every column of the database for it, in full…');
-      final (hits, scanned) = await sweepDatabaseFor(bobPrivate);
-      say('columns scanned: $scanned');
-      for (final h in hits) {
-        say('HIT -> ${h[0]}.${h[1]} x${h[2]}');
-      }
-      expect(scanned, greaterThan(50));
-      expect(
-        hits,
-        isEmpty,
-        reason: 'the private identity key must exist nowhere on the server',
-      );
+          // The WHOLE key, not a fragment: base64 contains no LIKE metacharacter
+          // (`%`, `_`) and no quote, so the entire string is a safe pattern.
+          say('');
+          say("bob's PRIVATE identity key : ${preview(bobPrivate)}");
+          say('searching every column of the database for it, in full…');
+          final (hits, scanned) = await sweepDatabaseFor(bobPrivate);
+          say('columns scanned: $scanned');
+          for (final h in hits) {
+            say('HIT -> ${h[0]}.${h[1]} x${h[2]}');
+          }
+          expect(scanned, greaterThan(50));
+          expect(
+            hits,
+            isEmpty,
+            reason: 'the private identity key must exist nowhere on the server',
+          );
 
-      // Control: the PUBLIC half of the same key IS findable, which proves
-      // the sweep would have found the private half had it been stored.
-      final (publicHits, _) = await sweepDatabaseFor(bobPublic);
-      say('');
-      say('CONTROL — the same full-string sweep for the PUBLIC half:');
-      for (final h in publicHits) {
-        say('HIT -> ${h[0]}.${h[1]} x${h[2]}');
-      }
-      expect(
-        publicHits,
-        isNotEmpty,
-        reason: 'the public half IS on the server, so the sweep can see key '
-            'material when it is there',
-      );
-      say('Not present. The server was never given it, so there is no key on');
-      say('the server with which the stored ciphertext could be opened.');
+          // Control: the PUBLIC half of the same key IS findable, which proves
+          // the sweep would have found the private half had it been stored.
+          final (publicHits, _) = await sweepDatabaseFor(bobPublic);
+          say('');
+          say('CONTROL — the same full-string sweep for the PUBLIC half:');
+          for (final h in publicHits) {
+            say('HIT -> ${h[0]}.${h[1]} x${h[2]}');
+          }
+          expect(
+            publicHits,
+            isNotEmpty,
+            reason:
+                'the public half IS on the server, so the sweep can see key '
+                'material when it is there',
+          );
+          say(
+            'Not present. The server was never given it, so there is no key on',
+          );
+          say('the server with which the stored ciphertext could be opened.');
 
-      // No column anywhere is even NAMED like private key material.
-      final suspicious = await e2eSql('''
+          // No column anywhere is even NAMED like private key material.
+          final suspicious = await e2eSql('''
 SELECT table_name || '.' || column_name
   FROM information_schema.columns
  WHERE table_schema = 'public'
@@ -541,16 +601,22 @@ SELECT table_name || '.' || column_name
      OR lower(column_name) LIKE '%privkey%')
  ORDER BY 1;
 ''');
-      say('');
-      say('columns whose NAME suggests private material: '
-          '${suspicious.isEmpty ? 'none' : suspicious.map((r) => r[0]).join(', ')}');
-      expect(suspicious, isEmpty);
-    }, timeout: const Timeout(Duration(minutes: 3)));
+          say('');
+          say(
+            'columns whose NAME suggests private material: '
+            '${suspicious.isEmpty ? 'none' : suspicious.map((r) => r[0]).join(', ')}',
+          );
+          expect(suspicious, isEmpty);
+        },
+        timeout: const Timeout(Duration(minutes: 3)),
+      );
 
-    test('4. census: every message row in the database is ciphertext', () async {
-      rule('4. CENSUS OVER EVERY MESSAGE IN THIS DATABASE');
+      test(
+        '4. census: every message row in the database is ciphertext',
+        () async {
+          rule('4. CENSUS OVER EVERY MESSAGE IN THIS DATABASE');
 
-      final census = await e2eSql(r'''
+          final census = await e2eSql(r'''
 SELECT count(*),
        count(*) FILTER (WHERE "content" = '[encrypted]'),
        count(*) FILTER (WHERE "content" <> '[encrypted]'),
@@ -558,144 +624,182 @@ SELECT count(*),
                           AND "encryptedContent" !~ '^[0-9]+:[A-Za-z0-9+/]+=*$')
   FROM public.messages;
 ''');
-      final total = int.parse(census.single[0]);
-      final encrypted = int.parse(census.single[1]);
-      final readable = int.parse(census.single[2]);
-      final malformed = int.parse(census.single[3]);
+          final total = int.parse(census.single[0]);
+          final encrypted = int.parse(census.single[1]);
+          final readable = int.parse(census.single[2]);
+          final malformed = int.parse(census.single[3]);
 
-      say('messages total                        : $total');
-      say('  content = "[encrypted]"             : $encrypted');
-      say('  content = anything else (READABLE!) : $readable');
-      say('  encryptedContent not Signal-shaped  : $malformed');
+          say('messages total                        : $total');
+          say('  content = "[encrypted]"             : $encrypted');
+          say('  content = anything else (READABLE!) : $readable');
+          say('  encryptedContent not Signal-shaped  : $malformed');
 
-      final envelopes = await e2eSql(r'''
+          final envelopes = await e2eSql(r'''
 SELECT count(*),
        count(*) FILTER (WHERE "ciphertext" ~ '^[0-9]+:[A-Za-z0-9+/]+=*$')
   FROM public.message_envelopes;
 ''');
-      say('message_envelopes total               : ${envelopes.single[0]}');
-      say('  Signal-shaped ciphertext            : ${envelopes.single[1]}');
+          say('message_envelopes total               : ${envelopes.single[0]}');
+          say('  Signal-shaped ciphertext            : ${envelopes.single[1]}');
 
-      expect(total, greaterThan(0), reason: 'the census must see real rows');
-      expect(
-        readable,
-        0,
-        reason: 'not one message row in this database holds readable text',
-      );
-      expect(malformed, 0);
-      expect(envelopes.single[0], envelopes.single[1]);
-    }, timeout: const Timeout(Duration(minutes: 2)));
-
-    test('5. a picture: the server stores and serves ciphertext bytes', () async {
-      rule('5. MEDIA');
-
-      // Stand in for a photo: bytes a human would recognise instantly.
-      final plainBytes = Uint8List.fromList(
-        utf8.encode('$mediaNeedle ${'.' * 400}'),
-      );
-      final encrypted = encryptLikeTheApp(plainBytes);
-      say('original bytes          : ${plainBytes.length} B, '
-          'starting "$mediaNeedle"');
-      say('AES-256-GCM ciphertext  : ${encrypted.ciphertext.length} B');
-      say('media key (client-side) : ${preview(encrypted.keyBase64)}');
-
-      final mediaUrl = await uploadMedia(alice, encrypted.ciphertext);
-      say('server stored it at     : $mediaUrl');
-
-      // First: an outsider holding the link.
-      final anonStatus = await probeAnonymous(mediaUrl);
-      say('GET with no credentials : HTTP $anonStatus');
-      expect(
-        anonStatus,
-        isNot(200),
-        reason: 'the media endpoint must not serve strangers',
+          expect(
+            total,
+            greaterThan(0),
+            reason: 'the census must see real rows',
+          );
+          expect(
+            readable,
+            0,
+            reason: 'not one message row in this database holds readable text',
+          );
+          expect(malformed, 0);
+          expect(envelopes.single[0], envelopes.single[1]);
+        },
+        timeout: const Timeout(Duration(minutes: 2)),
       );
 
-      // What the server hands back when asked for that file.
-      final served = await fetchAsUser(mediaUrl, alice);
-      say('server serves back      : ${served.length} B');
-      expect(
-        served,
-        orderedEquals(encrypted.ciphertext),
-        reason: 'the server serves exactly the ciphertext it was handed — it '
-            'never had anything else',
-      );
-      expect(
-        String.fromCharCodes(served).contains(mediaNeedle),
-        isFalse,
-        reason: 'what comes off the server is not the picture',
-      );
-      say('Those bytes do NOT contain the content: the server stored an');
-      say('opaque blob and gave the same opaque blob back.');
+      test(
+        '5. a picture: the server stores and serves ciphertext bytes',
+        () async {
+          rule('5. MEDIA');
 
-      // The key rides INSIDE the Signal-encrypted envelope, so it never
-      // becomes a column.
-      final envelopeJson = jsonEncode(
-        E2eEnvelope.build(
-          '',
-          messageType: 'IMAGE',
-          mediaUrl: mediaUrl,
-          mediaKey: encrypted.keyBase64,
-          mediaIv: encrypted.ivBase64,
-        ),
-      );
-      final ct = await alice.encryption.encrypt(bob.userId, envelopeJson);
+          // Stand in for a photo: bytes a human would recognise instantly.
+          final plainBytes = Uint8List.fromList(
+            utf8.encode('$mediaNeedle ${'.' * 400}'),
+          );
+          final encrypted = encryptLikeTheApp(plainBytes);
+          say(
+            'original bytes          : ${plainBytes.length} B, '
+            'starting "$mediaNeedle"',
+          );
+          say('AES-256-GCM ciphertext  : ${encrypted.ciphertext.length} B');
+          say('media key (client-side) : ${preview(encrypted.keyBase64)}');
 
-      // Send it the way the app does: the ciphertext plus the metadata the
-      // server legitimately needs (type, media URL). Those two DO become
-      // columns — that is exactly the metadata boundary being disclosed here.
-      final tempId = 'proof-media-$runTag';
-      alice.socketService.sendMessage(
-        bob.userId,
-        '[encrypted]',
-        tempId: tempId,
-        encryptedContent: ct,
-        messageType: 'IMAGE',
-        mediaUrl: mediaUrl,
-      );
-      final sent =
-          await alice.events.next(
-                'messageSent',
-                where: (p) => p is Map && p['tempId'] == tempId,
-                reason: 'image send ack',
-              )
-              as Map;
-      final mediaMessageId = sent['id'] as int;
-      say('');
-      say('image message id        : $mediaMessageId');
+          final mediaUrl = await uploadMedia(alice, encrypted.ciphertext);
+          say('server stored it at     : $mediaUrl');
 
-      final stored = await e2eSql('''
+          // First: an outsider holding the link.
+          final anonStatus = await probeAnonymous(mediaUrl);
+          say('GET with no credentials : HTTP $anonStatus');
+          expect(
+            anonStatus,
+            isNot(200),
+            reason: 'the media endpoint must not serve strangers',
+          );
+
+          // What the server hands back when asked for that file.
+          final served = await fetchAsUser(mediaUrl, alice);
+          say('server serves back      : ${served.length} B');
+          expect(
+            served,
+            orderedEquals(encrypted.ciphertext),
+            reason:
+                'the server serves exactly the ciphertext it was handed — it '
+                'never had anything else',
+          );
+          expect(
+            String.fromCharCodes(served).contains(mediaNeedle),
+            isFalse,
+            reason: 'what comes off the server is not the picture',
+          );
+          say('Those bytes do NOT contain the content: the server stored an');
+          say('opaque blob and gave the same opaque blob back.');
+
+          // The key rides INSIDE the Signal-encrypted envelope, so it never
+          // becomes a column.
+          final envelopeJson = jsonEncode(
+            E2eEnvelope.build(
+              '',
+              messageType: 'IMAGE',
+              mediaUrl: mediaUrl,
+              mediaKey: encrypted.keyBase64,
+              mediaIv: encrypted.ivBase64,
+            ),
+          );
+          final ct = await alice.encryption.encrypt(bob.userId, envelopeJson);
+
+          // Send it the way the app does: the ciphertext plus the metadata the
+          // server legitimately needs (type, media URL). Those two DO become
+          // columns — that is exactly the metadata boundary being disclosed here.
+          final tempId = 'proof-media-$runTag';
+          alice.socketService.sendMessage(
+            bob.userId,
+            '[encrypted]',
+            tempId: tempId,
+            encryptedContent: ct,
+            messageType: 'IMAGE',
+            mediaUrl: mediaUrl,
+          );
+          final sent =
+              await alice.events.next(
+                    'messageSent',
+                    where: (p) => p is Map && p['tempId'] == tempId,
+                    reason: 'image send ack',
+                  )
+                  as Map;
+          final mediaMessageId = sent['id'] as int;
+          say('');
+          say('image message id        : $mediaMessageId');
+
+          final stored = await e2eSql('''
 SELECT "content", coalesce("mediaUrl", '<NULL>'), "messageType"
   FROM public.messages WHERE "id" = $mediaMessageId;
 ''');
-      say('messages.content        : ${stored.single[0]}      <- no content');
-      say('messages.mediaUrl       : ${stored.single[1]}');
-      say('messages.messageType    : ${stored.single[2]}   <- METADATA the '
-          'server does see');
+          say(
+            'messages.content        : ${stored.single[0]}      <- no content',
+          );
+          say('messages.mediaUrl       : ${stored.single[1]}');
+          say(
+            'messages.messageType    : ${stored.single[2]}   <- METADATA the '
+            'server does see',
+          );
 
-      // The media key must not be anywhere in the database — full string.
-      final (keyHits, scanned) = await sweepDatabaseFor(encrypted.keyBase64);
-      say('swept $scanned columns for the media key, in full');
-      for (final h in keyHits) {
-        say('HIT -> ${h[0]}.${h[1]} x${h[2]}');
-      }
-      expect(scanned, greaterThan(50));
-      expect(keyHits, isEmpty, reason: 'the media key is not a column');
-      say('The key that opens that file is in no column of the database. It');
-      say('exists only inside the Signal ciphertext of the message.');
+          // The media key must not be anywhere in the database — full string.
+          final (keyHits, scanned) = await sweepDatabaseFor(
+            encrypted.keyBase64,
+          );
+          say('swept $scanned columns for the media key, in full');
+          for (final h in keyHits) {
+            say('HIT -> ${h[0]}.${h[1]} x${h[2]}');
+          }
+          expect(scanned, greaterThan(50));
+          expect(keyHits, isEmpty, reason: 'the media key is not a column');
+          say(
+            'The key that opens that file is in no column of the database. It',
+          );
+          say('exists only inside the Signal ciphertext of the message.');
 
-      // And the recipient can open the picture.
-      final receivedMessage = await bob.awaitNewMessage('proof-media-$runTag');
-      final receivedJson = await bob.encryption.decrypt(
-        alice.userId,
-        receivedMessage['encryptedContent'] as String,
+          // And the recipient can open the picture.
+          final receivedMessage = await bob.awaitNewMessage(
+            'proof-media-$runTag',
+          );
+          final receivedJson = await bob.encryption.decrypt(
+            alice.userId,
+            receivedMessage['encryptedContent'] as String,
+          );
+          final env = E2eEnvelope.parse(receivedJson);
+          final reopened = decryptLikeTheApp(
+            served,
+            env.mediaKey!,
+            env.mediaIv!,
+          );
+          expect(reopened, orderedEquals(plainBytes));
+          say('');
+          say(
+            'Bob pulls the same ciphertext, takes key+IV out of the DECRYPTED',
+          );
+          say('envelope, and recovers the original bytes exactly.');
+        },
+        timeout: const Timeout(Duration(minutes: 3)),
       );
-      final env = E2eEnvelope.parse(receivedJson);
-      final reopened = decryptLikeTheApp(served, env.mediaKey!, env.mediaIv!);
-      expect(reopened, orderedEquals(plainBytes));
-      say('');
-      say('Bob pulls the same ciphertext, takes key+IV out of the DECRYPTED');
-      say('envelope, and recovers the original bytes exactly.');
-    }, timeout: const Timeout(Duration(minutes: 3)));
-  });
+    },
+    // The gate lives on the GROUP and the lifecycle hooks live INSIDE it, both
+    // deliberately. A test-level `skip:` still runs `setUpAll`, so the default
+    // run would pay this file's entire register-bucket cost only to skip every
+    // test — and `tearDownAll` would then throw disposing an uninitialized
+    // `alice`. `enrolled_identity_lock_test.dart:60-66` records the same lesson.
+    skip: _enabled
+        ? false
+        : 'set --dart-define=ENCRYPTION_PROOF=true (needs a fresh register bucket)',
+  );
 }

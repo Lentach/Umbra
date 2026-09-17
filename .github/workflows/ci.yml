@@ -296,7 +296,15 @@ jobs:
   # ThrottlerException). A fresh backend is what resets it. Never raise the
   # production cap to fit a test.
   #
-  # Budget on THIS stack: reset probe 2 registers + lock probe 2 = 4 of 10.
+  #  * The encryption proof (`encryption_proof_test.dart`) is the always-on
+  #    evidence that messages, keys and media are ciphertext on the server. It
+  #    registers 2 accounts, and on `f86a43de` those two tipped the SHARED run
+  #    into `ThrottlerException(429)` — the 429 surfaced in
+  #    `full_stack_e2e_test.dart`'s `setUpAll` because that suite happened to run
+  #    last, which is why it read as a defect in an untouched file. Moved here.
+  #
+  # Budget on THIS stack: reset probe 2 + lock probe 2 + encryption proof 2
+  # = 6 of 10.
   # Both probes are also destructive or state-heavy (the ceremony replaces the
   # account identity, revokes every device and burns a device id forward), so
   # they need accounts nothing else depends on. A dedicated stack gives them that.
@@ -379,6 +387,22 @@ jobs:
             --dart-define=ENROLLED_LOCK_PROBE=true | tee lock-probe.log
           if ! grep -Eq '(^|[^0-9])[1-9][0-9]* tests? passed|\+[1-9][0-9]*[ :].*All tests passed' lock-probe.log; then
             echo "::error::the enrolled-lock probe reported no PASSING test — the ENROLLED_LOCK_PROBE define is not taking effect, so F1 is unproven"
+            exit 1
+          fi
+
+      # Same skip-gate, same silent-green hazard: the group is gated on
+      # bool.fromEnvironment('ENCRYPTION_PROOF'), and the hooks live INSIDE the
+      # group so a default run registers nothing. The guard below is what stops
+      # a dropped define from reporting a green encryption proof that never ran.
+      - name: Run the encryption proof (server holds ciphertext only)
+        working-directory: frontend
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter test test_e2e/encryption_proof_test.dart \
+            --dart-define=ENCRYPTION_PROOF=true | tee encryption-proof.log
+          if ! grep -Eq '(^|[^0-9])[1-9][0-9]* tests? passed|\+[1-9][0-9]*[ :].*All tests passed' encryption-proof.log; then
+            echo "::error::the encryption proof reported no PASSING test — the ENCRYPTION_PROOF define is not taking effect, so nothing about at-rest ciphertext is proven"
             exit 1
           fi
 
