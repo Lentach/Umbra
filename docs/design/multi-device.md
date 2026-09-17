@@ -2173,7 +2173,9 @@ that is the designed outcome).
        adoption cleared the stamp, so the next confirm TOFU-stamps the primary id under the
        adopted material; there the server-side clause 1 is the guard that refuses the clobbering
        write, and the failure state already has its own error surface.
-    8. *(appended to the (lxiii) residual list, RECORDED and NOT fixed)* **`_reenrollAfterReset` has
+    8. *(appended to the (lxiii) residual list, RECORDED and NOT fixed — **the latch half is CLOSED
+       by (lxxxv), 2026-09-17, which also corrects the price below: the two passes destroy each
+       other's ack channel, so NEITHER promotes**)* **`_reenrollAfterReset` has
        no in-flight latch** — the rebind path and the every-upload owed-offer listener can run it
        concurrently; both share one `_resetEnrollAck` completer and one pending-DAK slot, and
        `promotePending` promotes whatever the slot holds, unbound to the enrollment the server
@@ -3079,6 +3081,33 @@ that is the designed outcome).
     return → a second server event after an evicted note writes nothing; (F49) make the dismiss
     peer-keyed → a dismissal carrying a stale instant removes a fresher note; (F50) let the loader
     accept any string → an unparseable instant reaches the screen.
+
+- **Amendment 2026-09-17 ((lxxxv), no owner call needed — it closes a residual this document
+  already carried as RECORDED and NOT fixed):**
+  - **(lxxxv) — THE §6.2 RE-ENROLLMENT IS SINGLE-FLIGHT, AND THE LATCH IS TAKEN BEFORE THE
+    MINT.** (lxiv) residual 8 described the overlap and priced it as "device authority stranded
+    until another §6.2 ceremony". Re-reading the source puts the price higher: the two passes do
+    not merely disagree about which DAK is armed, they **destroy each other's ack channel**.
+    `_reenrollAfterReset` is fired unawaited from the owed-offer listener, and the offer rides
+    EVERY authenticated `keyBundleUploaded` — so a second upload inside the 20 s ack window
+    started a whole second pass, which overwrote `_resetEnrollAck` (orphaning the first waiter)
+    and the pending DAK slot; the first pass then timed out and its `finally` cleared the
+    SURVIVOR's completer, so `deviceAuthorityEnrolled` had nowhere to land and the second pass
+    timed out too. Neither promoted. Fixed with a `_reenrollInFlight` latch taken **before the
+    mint** — not at the ack — so a duplicate offer allocates no DAK and arms no record; it is
+    recorded as `RESET_REENROLL_INFLIGHT` and returns. Cleared when the pass settles, exactly
+    like `_reboundInFlight`, because a later offer is a legitimate retry and the server re-offers
+    the terms on every upload anyway. This does NOT supersede residual 1's
+    compare-and-promote primitive: the latch closes the concurrent case, while a
+    compare-and-promote would also bind the promote to the enrollment the server accepted across
+    a process restart.
+    Falsification, and this is the shape the regression test drives: (F51) remove the latch → two
+    offers inside the ack window emit TWO enrollments (measured: red at `hasLength(1)`, actual 2);
+    (F52) take the latch at the ack instead of before the mint → the second pass still mints a DAK
+    and arms a pending record before it is turned away; (F53) clear the latch unconditionally in
+    `finally` without the single-flight guard → the surviving pass's ack is dropped and the third
+    offer is swallowed, which the test's second assertion catches (a still-held latch leaves the
+    enrollment count at 1).
 
 - **Next gate:** T11 implementation review, then the T1–T11 merge decision. The T1–T8 phase
   gate itself is CLOSED 2026-08-22: three reviewers, verdicts SHIP / SHIP WITH FIXES ×2; the

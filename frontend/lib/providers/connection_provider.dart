@@ -748,6 +748,19 @@ class ConnectionProvider extends ChangeNotifier {
   /// not simply live on the ceremony controller.
   Completer<Map<String, dynamic>>? _resetEnrollAck;
 
+  /// Whether a §6.2 re-enrollment pass is already running ((lxxxv), closing
+  /// the (lxiv) residual 8).
+  ///
+  /// The owed-enrollment offer rides EVERY authenticated `keyBundleUploaded`
+  /// and the listener fires the pass unawaited, so two passes could overlap
+  /// inside the 20 s ack window: each minted its own DAK, the second overwrote
+  /// the pending slot and the [_resetEnrollAck] the first was waiting on, and
+  /// then the FIRST pass's `finally` cleared the survivor's ack — so the
+  /// server's answer had nowhere to land and both passes timed out, leaving the
+  /// account addressable by nobody. Mirrors [_reboundInFlight]: cleared when
+  /// the pass settles, because a later offer is a legitimate second attempt.
+  bool _reenrollInFlight = false;
+
   /// Plausibility ceiling for a server-named replacement list version
   /// ((xlv) clause 1). A list version advances once per device mutation, so
   /// no real account comes near this; the bound exists only to deny a hostile
@@ -888,6 +901,19 @@ class ConnectionProvider extends ChangeNotifier {
       });
       return;
     }
+    // Single-flight ((lxxxv)). Taken BEFORE the mint, not at the ack: two
+    // concurrent passes each minted a DAK and armed a pending record, so even
+    // the winner's promote was no longer bound to the enrollment the server
+    // accepted. A duplicate offer must cost nothing — the one in flight is
+    // already the attempt, and the offer rides every later upload anyway.
+    if (_reenrollInFlight) {
+      E2ePersistentDiag.record('RESET_REENROLL_INFLIGHT', {
+        'deviceId': '$deviceId',
+        'version': '$version',
+      });
+      return;
+    }
+    _reenrollInFlight = true;
     try {
       final identity = await EncryptionServiceLinkGateway(
         encryption.encryptionService,
@@ -962,6 +988,7 @@ class ConnectionProvider extends ChangeNotifier {
       });
     } finally {
       _resetEnrollAck = null;
+      _reenrollInFlight = false;
     }
   }
 

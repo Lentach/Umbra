@@ -445,4 +445,51 @@ void main() {
       reason: 'the exemption must skip the enrollment, never swallow the ack',
     );
   });
+
+  test('a second offer INSIDE the ack window enrolls ONCE, and the answer still lands', () async {
+    conn.onSessionRebound = (_) async {};
+
+    Map<String, dynamic> offer(int version) => {
+      'success': true,
+      'identityChanged': false,
+      'deviceId': 5,
+      'nextListVersion': version,
+    };
+
+    // The offer rides EVERY authenticated upload and the listener fires the
+    // pass unawaited, so a second upload arriving before
+    // `deviceAuthorityEnrolled` used to start an entire second pass: two DAKs
+    // minted, the pending slot AND the ack completer overwritten, and then the
+    // first pass's `finally` cleared the survivor's completer — so the server's
+    // answer had nowhere to land, both passes timed out on the 20 s ceiling,
+    // and the account stayed addressable by nobody ((lxxxv)).
+    socket.emitServer('keyBundleUploaded', offer(2));
+    await pumpEventQueue();
+    socket.emitServer('keyBundleUploaded', offer(2));
+    await pumpEventQueue();
+
+    expect(
+      socket.enrollments,
+      hasLength(1),
+      reason: 'the duplicate offer must cost nothing — one pass is already it',
+    );
+
+    socket.emitServer('deviceAuthorityEnrolled', {'success': true});
+    await pumpEventQueue();
+
+    // This second enrollment is the load-bearing half: it can only happen if
+    // the answer above reached the pass that was waiting (which releases the
+    // latch). A clobbered completer leaves the pass stuck until its timeout,
+    // so a still-held latch would swallow this offer and leave the count at 1.
+    socket.emitServer('keyBundleUploaded', offer(3));
+    await pumpEventQueue();
+
+    expect(
+      socket.enrollments,
+      hasLength(2),
+      reason:
+          'the latch guards CONCURRENCY, not the session — and the answer '
+          'must have landed for it to have cleared at all',
+    );
+  });
 }
