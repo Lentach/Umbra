@@ -1,0 +1,37 @@
+# Isolated stack for the E2E-encryption proof run.
+# Override on top of docker-compose.yml, under its own compose project
+# (`-p fpproof`), so it cannot touch the fireplace-* dev stack another agent is
+# using: different container names, host ports and named volumes.
+#
+#   docker compose -p fpproof -f docker-compose.yml -f docker-compose.proof.yml up -d
+#
+# Host ports: backend 3100 (container 3000), db 5434 (container 5432).
+# `!override` is REQUIRED: Compose merges sequences like `ports`, so a plain
+# list would publish 5433 AND 5434 and collide with the dev stack.
+services:
+  db:
+    ports: !override
+      - '5434:5432'
+
+  backend:
+    ports: !override
+      - '3100:3000'
+    # NOTE on restarts: the base file runs `npm install && npm run start:dev`,
+    # so every restart re-runs a full install against the Windows bind mount.
+    # Measured cold boot to a live /health on this stack: 302 s. You need
+    # restarts, because the register throttle (10/hr per IP) is in-memory and
+    # only a fresh node process clears it.
+    #   * `touch src/main.ts` in the container DOES NOT WORK — inotify does not
+    #     cross the bind mount, so `nest --watch` never fires and the app PID
+    #     survives unchanged (measured: same PID across 6 probes, 2:34→3:37).
+    #     `--watch` is effectively inert here; a full restart is the only way.
+    #   * Overriding `command` to skip the install when node_modules exists is
+    #     UNVERIFIED, not disproven: it compiled clean, but I gave it only
+    #     3:37 before reverting — SHORTER than the 302 s known-good boot, so
+    #     the "no banner yet" reading proves nothing. Retry with a >10 min
+    #     window if the 6-minute cycle ever becomes the bottleneck.
+    # Until then: budget the full restart, or run the suite once and keep the
+    # whole transcript.
+    environment:
+      ALLOWED_ORIGINS: 'http://localhost:3100,http://127.0.0.1:3100'
+      MEDIA_BASE_URL: 'http://localhost:3100'
