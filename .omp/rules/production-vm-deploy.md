@@ -116,6 +116,39 @@ file so the two `sha256-` tokens can go. Until then, `node scripts/verify-csp-in
 fails if index.html and the CSP disagree — a stale hash is a phantom report today and a dead
 privacy curtain the moment it is enforced.
 
+**Do the logged-in pass LOCALLY, not on prod or the owner's phone (recipe, proven 2026-09-17).**
+The report stream only says something once you are past the login screen, and the surfaces that
+matter are the ones no anonymous load touches. Serve the real bundle behind the real snippet:
+
+1. Own compose project on ports nobody else uses — the dev stack (`:3000`/`:5433`) and the staging
+   stack (`:3100`/`:5533`) may both be live in other sessions:
+   `docker compose -p fireplace-csp --env-file <own> -f docker-compose.prod.yml -f <override> up -d`
+   with `NODE_ENV: development` (TypeORM creates the schema in a fresh volume), `ALLOWED_ORIGINS`
+   and `MEDIA_BASE_URL` set to the nginx origin, and `build: !reset null` + `image:` to reuse an
+   already-built backend image instead of rebuilding.
+2. Build the bundle in a THROWAWAY WORKTREE (`git worktree add`), never the shared checkout — a
+   concurrent `flutter test` and your `flutter build web` fight over `.dart_tool`/`build/`.
+   `--no-web-resources-cdn` so CanvasKit stays local, `--dart-define=BASE_URL=<nginx origin>`.
+3. `nginx:alpine` with the bundle as root, the API proxied to `host.docker.internal:<backend port>`,
+   and `include snippets/fireplace-security-headers.conf` **mounted from `infra/nginx/`** — mount
+   the real file so the rehearsal cannot drift from what prod serves.
+4. Seed two accounts by `POST /auth/register`, then one `conversations` row and one accepted
+   `friend_requests` row by SQL (columns are snake_case: `user_one_id`/`user_two_id`,
+   `sender_id`/`receiver_id`).
+5. Drive it with CDP: **portrait viewport** (the app shows "rotate your device" and eats every tap
+   otherwise), pixel clicks from screenshots, `Input.insertText` for the login fields,
+   `overridePermissions` for mic/camera, and read violations from the `Log` domain — NOT from a
+   `securitypolicyviolation` listener installed via `evaluateOnNewDocument` (it did not survive
+   into the page context). Use a FRESH tab per verification: `Log.enable` replays entries from the
+   previous policy and reads as a failure you already fixed.
+
+What that pass found, and would not have been found any other way: under CanvasKit
+`Image.network` XHRs image bytes, so **`connect-src` — not `img-src` — governs every remote
+image**, including Giphy thumbnails (`media0..4.giphy.com`) and `google_fonts` webfonts. Enforcing
+the first draft would have shipped an empty GIF picker. The remaining arbitrary-host need is the
+link-preview `og:image`; preview HTML is already same-origin on web
+(`POST /messages/link-preview`), so proxying that image is clause 3 of the do-not-enforce list.
+
 Apply/rollback commands live in the header comment of `infra/nginx/fireplace.conf`. Always
 `sudo nginx -t` before `sudo systemctl reload nginx`, and never edit via `ssh … sed` (mangles
 `$host`).
