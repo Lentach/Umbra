@@ -13,7 +13,9 @@
 //   4. main.dart.js       -> served bundle CONTAINS the expected git short-sha
 //                            (the GIT_COMMIT dart-define is compiled into the JS; this is the
 //                             definitive stale-build check — version.json alone can lie)
-//   5. Playwright chromium boots the app (fresh profile = no stale SW) and the Flutter
+//   5. security headers -> HSTS/nosniff/DENY/Referrer-Policy/Permissions-Policy/CSP-RO on the
+//                          STATIC document, and /health still carrying helmet's set ONLY
+//   6. Playwright chromium boots the app (fresh profile = no stale SW) and the Flutter
 //      view renders within 60 s. Screenshot saved next to this script.
 //
 // Expected commit defaults to `git rev-parse --short HEAD` of this repo; override with --commit.
@@ -102,7 +104,49 @@ try {
   fail("bundle commit", e.message);
 }
 
-// 5. browser boot (fresh profile — no service worker cache involved)
+// 5. security headers on the STATIC document (nginx), and helmet's set left
+//    alone on a PROXIED path. Regression guard: the app shell shipped with none
+//    of these until 2026-09-17 because the vhost was untracked, and nginx
+//    `add_header` in a location silently REPLACES an inherited set — so a
+//    future edit can drop them without anything else failing.
+try {
+  const doc = await fetch(`${BASE}/?smoke=${Date.now()}`, { cache: "no-store" });
+  const want = {
+    "strict-transport-security": /max-age=\d{7,}/,
+    "x-content-type-options": /^nosniff$/,
+    "x-frame-options": /^DENY$/,
+    "referrer-policy": /^no-referrer$/,
+    "permissions-policy": /camera=\(self\)/,
+    "content-security-policy-report-only": /script-src 'self' 'wasm-unsafe-eval'/,
+    "cache-control": /no-cache/,
+  };
+  const missing = Object.entries(want)
+    .filter(([h, re]) => !re.test((doc.headers.get(h) ?? "").trim()))
+    .map(([h]) => h);
+  missing.length === 0
+    ? ok("static security headers", `${Object.keys(want).length} present on /`)
+    : fail(
+        "static security headers",
+        `missing/wrong on /: ${missing.join(", ")} — re-apply infra/nginx/ ` +
+          `(see .omp/rules/production-vm-deploy.md § Static security headers)`,
+      );
+
+  // The API half must keep exactly ONE set — helmet's. Two X-Frame-Options with
+  // different values is an invalid response, not defence in depth.
+  const api = await fetch(`${BASE}/health`, { cache: "no-store" });
+  const xfo = api.headers.get("x-frame-options");
+  xfo === "SAMEORIGIN"
+    ? ok("proxied headers untouched", "/health still SAMEORIGIN from helmet")
+    : fail(
+        "proxied headers untouched",
+        `/health X-Frame-Options is ${JSON.stringify(xfo)}; expected helmet's SAMEORIGIN ` +
+          `(a server-level nginx add_header would duplicate/conflict here)`,
+      );
+} catch (e) {
+  fail("static security headers", e.message);
+}
+
+// 6. browser boot (fresh profile — no service worker cache involved)
 try {
   const { chromium } = await import("playwright");
   const browser = await chromium.launch();

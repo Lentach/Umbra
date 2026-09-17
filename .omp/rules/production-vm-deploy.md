@@ -90,6 +90,36 @@ in both blocks. Also removed `fireplace.bak.1784434246` from `sites-enabled/` (a
 nginx was loading as live config — caused "conflicting server name" warns; never leave backups in
 that dir, they are live). Backups of the config: `/home/ubuntu/nginx-fireplace.bak.<epoch>`.
 
+**Static security headers (2026-09-17) — and the config is TRACKED now.** `infra/nginx/` is the
+source of truth for the two VM files: `fireplace.conf` → `/etc/nginx/sites-available/fireplace`
+and `security-headers.conf` → `/etc/nginx/snippets/fireplace-security-headers.conf`. Keeping the
+vhost untracked is why the app document served ZERO security headers for months while every
+proxied API response carried helmet's full set (`backend/src/main.ts:30`) — nothing in the repo
+described the origin users actually load. **`frontend/nginx.conf` is NOT that file**: it is the
+container nginx for `docker-compose.yml`/`.staging.yml` only, and editing it changes nothing in
+production.
+
+The header set is scoped to the two STATIC document blocks (`location /`, `^~ /welcome/`) on
+purpose — adding it at the server level would emit a second, conflicting `X-Frame-Options`/CSP on
+top of helmet's on every API response. HSTS mirrors helmet's `max-age=31536000; includeSubDomains`
+(no `preload`: one-way door). `Permissions-Policy` keeps `camera=(self)` (QR link scanner) and
+`microphone=(self)` (voice messages) — denying them breaks both. COEP is deliberately absent: it
+would block `fonts.gstatic.com`, which `google_fonts` fetches at runtime because the fonts are not
+bundled.
+
+**The CSP is REPORT-ONLY by design.** It is the exact intended enforcing policy, so the reports are
+the truth about what would break; flipping it needs (1) one logged-in pass in DESKTOP Chrome (chat,
+GIF picker, voice, media, QR scan — a phone PWA has no console), (2) `frame-ancestors 'none'` added
+(report-only ignores it; `X-Frame-Options: DENY` is what protects framing today), and (3) the two
+pre-paint inline `<script>` blocks in `frontend/web/index.html` moved to a blocking same-origin
+file so the two `sha256-` tokens can go. Until then, `node scripts/verify-csp-inline-hashes.mjs`
+fails if index.html and the CSP disagree — a stale hash is a phantom report today and a dead
+privacy curtain the moment it is enforced.
+
+Apply/rollback commands live in the header comment of `infra/nginx/fireplace.conf`. Always
+`sudo nginx -t` before `sudo systemctl reload nginx`, and never edit via `ssh … sed` (mangles
+`$host`).
+
 ## Contact inbox service (standalone, VM-only)
 
 The landing contact form + owner push inbox is a **separate** service — repo
