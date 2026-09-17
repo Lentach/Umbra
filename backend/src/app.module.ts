@@ -42,6 +42,7 @@ import { ProfilePhoto } from './users/profile-photo.entity';
 import { Device } from './key-bundles/device.entity';
 import { AccountAuthorization } from './key-bundles/account-authorization.entity';
 import { MessageEnvelope } from './messages/message-envelope.entity';
+import { ReactionKey } from './reaction-keys/reaction-key.entity';
 @Module({
   imports: [
     // Load and validate environment variables
@@ -91,6 +92,7 @@ import { MessageEnvelope } from './messages/message-envelope.entity';
           SecretNote,
           ConversationNotificationPreference,
           ProfilePhoto,
+          ReactionKey,
         ],
         synchronize: process.env.NODE_ENV !== 'production',
       }),

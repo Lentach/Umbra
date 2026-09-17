@@ -21,6 +21,7 @@ import { ChatPresenceService } from './services/chat-presence.service';
 import { ChatBlockService } from './services/chat-block.service';
 import { ChatSearchService } from './services/chat-search.service';
 import { ChatReactionService } from './services/chat-reaction.service';
+import { ChatReactionKeyService } from './services/chat-reaction-key.service';
 import { ChatDeviceListService } from './services/chat-device-list.service';
 import { ChatProvisioningService } from './services/chat-provisioning.service';
 import { ChatDeviceRevocationService } from './services/chat-device-revocation.service';
@@ -85,6 +86,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private chatProvisioningService: ChatProvisioningService,
     private devicesService: DevicesService,
     private chatDeviceRevocationService: ChatDeviceRevocationService,
+    private chatReactionKeyService: ChatReactionKeyService,
   ) {}
 
   // On WebSocket connection — verify the JWT token.
@@ -390,6 +392,31 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       data,
       this.server,
     );
+  }
+
+  // Key distribution for blinded reaction tokens
+  // (docs/design/reaction-privacy.md §3.1). Publishing is rare — key creation,
+  // a rotation on revoke, a re-upload when a device is linked — so it is
+  // throttled well below the reaction rate; the PULL side shares the reaction
+  // limit because every device asks once per conversation it opens.
+  @UseGuards(WsThrottlerGuard)
+  @Throttle({ default: { limit: 30, ttl: 900000 } })
+  @SubscribeMessage('uploadReactionKey')
+  async handleUploadReactionKey(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: unknown,
+  ) {
+    return this.chatReactionKeyService.handleUploadReactionKey(client, data);
+  }
+
+  @UseGuards(WsThrottlerGuard)
+  @Throttle({ default: { limit: 120, ttl: 900000 } })
+  @SubscribeMessage('fetchReactionKey')
+  async handleFetchReactionKey(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: unknown,
+  ) {
+    return this.chatReactionKeyService.handleFetchReactionKey(client, data);
   }
 
   @SubscribeMessage('recordingVoice')

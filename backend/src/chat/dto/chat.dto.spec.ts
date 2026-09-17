@@ -353,6 +353,59 @@ describe('Reaction DTOs', () => {
       expect(errors.length).toBeGreaterThan(0);
     },
   );
+
+  // Compat window (docs/design/reaction-privacy.md §3.3): an updated client
+  // sends a 22-char blinded token, a not-yet-updated one still sends the
+  // emoji, and BOTH must validate until the emoji branch is removed.
+  const tokenCases = [
+    'AAAAAAAAAAAAAAAAAAAAAA',
+    '0123456789abcdefABCDEF',
+    '-_-_-_-_-_-_-_-_-_-_-_',
+  ];
+  // A token is 16 bytes of HMAC in base64url — exactly 22 characters. A
+  // shorter one is a truncation (R6: collisions merge two emoji into one
+  // chip); a longer one is not a token at all.
+  const nonTokenCases = [
+    'AAAAAAAAAAAAAAAAAAAAA',
+    'AAAAAAAAAAAAAAAAAAAAAAA',
+    'AAAAAAAAAAAAAAAAAAAA+/',
+  ];
+
+  it.each(tokenCases)(
+    'should accept a blinded reaction token: %s',
+    async (emoji) => {
+      expect(
+        await validate(
+          plainToInstance(AddReactionDto, { messageId: 1, emoji }),
+        ),
+      ).toHaveLength(0);
+      expect(
+        await validate(
+          plainToInstance(RemoveReactionDto, { messageId: 1, emoji }),
+        ),
+      ).toHaveLength(0);
+    },
+  );
+
+  it.each(nonTokenCases)(
+    'should reject a mis-sized token shape: %s',
+    async (emoji) => {
+      expect(
+        (
+          await validate(
+            plainToInstance(AddReactionDto, { messageId: 1, emoji }),
+          )
+        ).length,
+      ).toBeGreaterThan(0);
+      expect(
+        (
+          await validate(
+            plainToInstance(RemoveReactionDto, { messageId: 1, emoji }),
+          )
+        ).length,
+      ).toBeGreaterThan(0);
+    },
+  );
 });
 
 // BE-553: id fields were under-constrained (@IsNumber/@IsInt only), accepting

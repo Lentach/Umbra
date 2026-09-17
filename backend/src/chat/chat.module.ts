@@ -9,6 +9,7 @@ import { ChatPresenceService } from './services/chat-presence.service';
 import { ChatBlockService } from './services/chat-block.service';
 import { ChatSearchService } from './services/chat-search.service';
 import { ChatReactionService } from './services/chat-reaction.service';
+import { ChatReactionKeyService } from './services/chat-reaction-key.service';
 import { ChatDeviceListService } from './services/chat-device-list.service';
 import { ChatProvisioningService } from './services/chat-provisioning.service';
 import { ChatDeviceRevocationService } from './services/chat-device-revocation.service';
@@ -26,6 +27,7 @@ import { PushNotificationsModule } from '../push-notifications/push-notification
 import { FcmTokensModule } from '../fcm-tokens/fcm-tokens.module';
 import { WebPushSubscriptionsModule } from '../web-push-subscriptions/web-push-subscriptions.module';
 import { ConversationNotificationPreferencesModule } from '../conversation-notification-preferences/conversation-notification-preferences.module';
+import { ReactionKeysModule } from '../reaction-keys/reaction-keys.module';
 
 @Module({
   imports: [
@@ -45,6 +47,7 @@ import { ConversationNotificationPreferencesModule } from '../conversation-notif
     FcmTokensModule,
     WebPushSubscriptionsModule,
     ConversationNotificationPreferencesModule,
+    ReactionKeysModule,
   ],
   providers: [
     ChatGateway,
@@ -56,6 +59,7 @@ import { ConversationNotificationPreferencesModule } from '../conversation-notif
     ChatBlockService,
     ChatSearchService,
     ChatReactionService,
+    ChatReactionKeyService,
     ChatDeviceListService,
     ChatProvisioningService,
     ChatDeviceRevocationService,

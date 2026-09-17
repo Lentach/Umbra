@@ -118,6 +118,26 @@ const THROTTLE_ANSWERS: Record<
     'deviceListUpdated',
     { success: false, error: RATE_LIMITED, retryAfterMs },
   ],
+  // Reaction-key distribution answers on its own events: a throttled upload
+  // must not look like a successful publish (the peer would never get the
+  // key), and a throttled fetch must not look like "this conversation has no
+  // key" — the `error` field is what distinguishes a refusal from a null
+  // ciphertext, so the caller retries instead of rendering placeholder chips
+  // forever.
+  uploadReactionKey: (_data, retryAfterMs) => [
+    'reactionKeyUploaded',
+    { success: false, error: RATE_LIMITED, retryAfterMs },
+  ],
+  fetchReactionKey: (data, retryAfterMs) => [
+    'reactionKeyResponse',
+    {
+      conversationId: (data as { conversationId?: number } | null)
+        ?.conversationId,
+      success: false,
+      error: RATE_LIMITED,
+      retryAfterMs,
+    },
+  ],
 };
 
 /** One warn per (tracker, event) per this long; the rest go to debug. */
@@ -198,7 +218,8 @@ export class WsThrottlerGuard extends ThrottlerGuard {
         // Bound the map: a flood from many trackers must not grow it forever.
         if (this.lastRefusalLog.size > 1000) {
           for (const [key, at] of this.lastRefusalLog) {
-            if (now - at >= REFUSAL_LOG_INTERVAL_MS) this.lastRefusalLog.delete(key);
+            if (now - at >= REFUSAL_LOG_INTERVAL_MS)
+              this.lastRefusalLog.delete(key);
           }
         }
         this.wsLogger.warn(line);

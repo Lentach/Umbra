@@ -47,4 +47,15 @@ export class Conversation {
 
   @Column({ type: 'int', nullable: true, default: null })
   pinnedByUserId: number | null;
+
+  /**
+   * Server-assigned epoch of this conversation's reaction key
+   * (`docs/design/reaction-privacy.md` §3.1); 0 = none was ever uploaded.
+   *
+   * The server owns this number, not the client: two clients racing to create
+   * the first key would otherwise both publish epoch 1 and one side's tokens
+   * would be permanently undecodable. Prod truth is migration 0018.
+   */
+  @Column({ type: 'int', nullable: false, default: 0 })
+  reactionKeyEpoch: number;
 }
