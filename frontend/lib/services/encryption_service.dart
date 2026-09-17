@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:libsignal_protocol_dart/libsignal_protocol_dart.dart';
 import 'encryption/content_kv.dart';
+import 'reactions/reaction_key_lookup.dart';
 import 'encryption/sealed_web_content_kv.dart';
 import 'encryption/sealed_web_envelope.dart';
 import 'encryption/content_kv_opener_stub.dart'
@@ -363,6 +364,94 @@ class EncryptionService {
         _peerKeyChangeNotes[peerId] = occurredAt;
       }
     } catch (_) {}
+  }
+
+  // --- Reaction keys (D10, docs/design/reaction-privacy.md) ---------------
+  //
+  // K_react is the per-conversation HMAC key that blinds reaction emoji from
+  // the server. It rides the SAME at-rest path as every other record here
+  // (the `ContentKv` seam: SQLCipher on Android, sealed store on web, prefs on
+  // desktop/test) rather than minting its own key family — same custody as the
+  // plaintext cache, one place to reason about.
+  //
+  // It MUST persist, and the reason is the same one that forces a local
+  // plaintext record store: the server's copy is a Signal-wrapped mailbox row,
+  // and Signal decryption CONSUMES the message key, so that row opens exactly
+  // once. A device that kept the key in RAM only would be unable to read its
+  // own conversation's chips after a relaunch (design §3, falsification R7).
+  String _reactionKeyPrefix(int userId) => 'e2e_${userId}_rkey_v1_';
+
+  String _reactionKeyRecordKey(int userId, int conversationId) =>
+      '${_reactionKeyPrefix(userId)}$conversationId';
+
+  /// Stores [keyB64] as this device's `K_react` for [conversationId].
+  ///
+  /// ARMED, like every other key in this app: the write is verified by a
+  /// read-back before the caller is told it succeeded, because a key the
+  /// sender believes is stored but is not would blind reactions this device can
+  /// never read again.
+  Future<bool> saveReactionKey({
+    required int conversationId,
+    required int epoch,
+    required String keyB64,
+  }) async {
+    final userId = _userId;
+    if (userId == null) return false;
+    try {
+      final prefs = await _sharedPrefs;
+      final key = _reactionKeyRecordKey(userId, conversationId);
+      await prefs.setString(key, jsonEncode({'e': epoch, 'k': keyB64}));
+      final readBack = _rawRecord(null, prefs, key);
+      if (readBack == null) return false;
+      final decoded = jsonDecode(readBack);
+      return decoded is Map && decoded['e'] == epoch && decoded['k'] == keyB64;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// This device's `K_react` for [conversationId], as a THREE-state answer.
+  ///
+  /// The three states exist because the recovery they feed is destructive.
+  /// "I cannot open my mailbox row" is supposed to let a participant re-key at
+  /// `epoch + 1`, and that permanently orphans every existing chip for BOTH
+  /// participants' other devices — so it may fire ONLY on a proven absence.
+  /// A locked passcode vault makes the content store RETHROW
+  /// `ContentStoreUnavailable(locked: true)` rather than fall back
+  /// (`frontend/docs/e2e-invariants.md`, and the passcode-lock doc records that
+  /// locked deliberately outranks the "no keys" probe because conflating
+  /// absent-with-locked destroyed data once already). Collapsing that into
+  /// `null` would re-key a device whose key is sitting right there, unreadable
+  /// for the next few seconds.
+  Future<ReactionKeyLookup> loadReactionKey(int conversationId) async {
+    final userId = _userId;
+    if (userId == null) return const ReactionKeyUnavailable('unbound-user');
+    try {
+      final prefs = await _sharedPrefs;
+      final raw = _rawRecord(
+        null,
+        prefs,
+        _reactionKeyRecordKey(userId, conversationId),
+      );
+      // `_rawRecord` returning null means GENUINELY absent (its own contract),
+      // which is the one state that may authorise a re-key.
+      if (raw == null) return const ReactionKeyAbsent();
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return const ReactionKeyUnavailable('corrupt');
+      final epoch = decoded['e'];
+      final keyB64 = decoded['k'];
+      // A half record is corrupt storage, NOT an absence: re-keying over it
+      // would throw away a key that may still be recoverable.
+      if (epoch is! int || keyB64 is! String || keyB64.isEmpty) {
+        return const ReactionKeyUnavailable('corrupt');
+      }
+      return ReactionKeyFound(epoch: epoch, keyB64: keyB64);
+    } on ContentStoreUnavailable catch (e) {
+      return ReactionKeyUnavailable(e.locked ? 'locked' : e.stage);
+    } catch (e) {
+      // Unknown failure is NOT absence. Fail toward "leave it alone".
+      return ReactionKeyUnavailable(e.runtimeType.toString());
+    }
   }
 
   /// (lxxxiv): the timeline moved past [peerId]'s muted note recorded at
