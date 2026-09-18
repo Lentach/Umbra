@@ -3763,6 +3763,30 @@ abstract class AppLocalizations {
   /// In pl, this message translates to:
   /// **'Ta nazwa zawiera znaki, których nie zapiszemy. Wpisz ją z klawiatury, zamiast wklejać.'**
   String get devicesRenameNotStorable;
+
+  /// Title of the sideloaded-APK update offer.
+  ///
+  /// In pl, this message translates to:
+  /// **'Nowa wersja aplikacji'**
+  String get updateAvailableTitle;
+
+  /// Body of the update offer. Names the version and states that an in-place install keeps keys; uninstalling is the action that destroys them.
+  ///
+  /// In pl, this message translates to:
+  /// **'Dostępna jest wersja {version}. Pobierz i zainstaluj ją na tym telefonie — Twoje wiadomości i klucze zostaną zachowane. Nie odinstalowuj aplikacji.'**
+  String updateAvailableBody(String version);
+
+  /// Opens the APK download link in the browser.
+  ///
+  /// In pl, this message translates to:
+  /// **'Pobierz'**
+  String get updateAvailableDownload;
+
+  /// Dismisses the offer for this exact build; a later build still prompts.
+  ///
+  /// In pl, this message translates to:
+  /// **'Później'**
+  String get updateAvailableLater;
 }
 
 class _AppLocalizationsDelegate

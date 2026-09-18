@@ -2168,4 +2168,18 @@ class AppLocalizationsPl extends AppLocalizations {
   @override
   String get devicesRenameNotStorable =>
       'Ta nazwa zawiera znaki, których nie zapiszemy. Wpisz ją z klawiatury, zamiast wklejać.';
+
+  @override
+  String get updateAvailableTitle => 'Nowa wersja aplikacji';
+
+  @override
+  String updateAvailableBody(String version) {
+    return 'Dostępna jest wersja $version. Pobierz i zainstaluj ją na tym telefonie — Twoje wiadomości i klucze zostaną zachowane. Nie odinstalowuj aplikacji.';
+  }
+
+  @override
+  String get updateAvailableDownload => 'Pobierz';
+
+  @override
+  String get updateAvailableLater => 'Później';
 }

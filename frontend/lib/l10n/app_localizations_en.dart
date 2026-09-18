@@ -2134,4 +2134,18 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get devicesRenameNotStorable =>
       'That name contains characters we cannot store. Type it in instead of pasting it.';
+
+  @override
+  String get updateAvailableTitle => 'New app version';
+
+  @override
+  String updateAvailableBody(String version) {
+    return 'Version $version is available. Download and install it on this phone — your messages and keys are kept. Do not uninstall the app.';
+  }
+
+  @override
+  String get updateAvailableDownload => 'Download';
+
+  @override
+  String get updateAvailableLater => 'Later';
 }

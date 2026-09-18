@@ -828,5 +828,22 @@
   "devicesRenameNotStorable": "Ta nazwa zawiera znaki, których nie zapiszemy. Wpisz ją z klawiatury, zamiast wklejać.",
   "@devicesRenameNotStorable": {
     "description": "Shown when a device name is refused BEFORE signing because it is not NFC-normalized ((lxxx) clause 1) — the storage gate would refuse it as invalid_canonical."
+  },
+  "updateAvailableTitle": "Nowa wersja aplikacji",
+  "@updateAvailableTitle": {
+    "description": "Title of the sideloaded-APK update offer."
+  },
+  "updateAvailableBody": "Dostępna jest wersja {version}. Pobierz i zainstaluj ją na tym telefonie — Twoje wiadomości i klucze zostaną zachowane. Nie odinstalowuj aplikacji.",
+  "@updateAvailableBody": {
+    "description": "Body of the update offer. Names the version and states that an in-place install keeps keys; uninstalling is the action that destroys them.",
+    "placeholders": { "version": { "type": "String" } }
+  },
+  "updateAvailableDownload": "Pobierz",
+  "@updateAvailableDownload": {
+    "description": "Opens the APK download link in the browser."
+  },
+  "updateAvailableLater": "Później",
+  "@updateAvailableLater": {
+    "description": "Dismisses the offer for this exact build; a later build still prompts."
   }
 }

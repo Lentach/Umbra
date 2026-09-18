@@ -836,5 +836,22 @@
   "devicesRenameNotStorable": "That name contains characters we cannot store. Type it in instead of pasting it.",
   "@devicesRenameNotStorable": {
     "description": "Shown when a device name is refused BEFORE signing because it is not NFC-normalized ((lxxx) clause 1) — the storage gate would refuse it as invalid_canonical."
+  },
+  "updateAvailableTitle": "New app version",
+  "@updateAvailableTitle": {
+    "description": "Title of the sideloaded-APK update offer."
+  },
+  "updateAvailableBody": "Version {version} is available. Download and install it on this phone — your messages and keys are kept. Do not uninstall the app.",
+  "@updateAvailableBody": {
+    "description": "Body of the update offer. Names the version and states that an in-place install keeps keys; uninstalling is the action that destroys them.",
+    "placeholders": { "version": { "type": "String" } }
+  },
+  "updateAvailableDownload": "Download",
+  "@updateAvailableDownload": {
+    "description": "Opens the APK download link in the browser."
+  },
+  "updateAvailableLater": "Later",
+  "@updateAvailableLater": {
+    "description": "Dismisses the offer for this exact build; a later build still prompts."
   }
 }

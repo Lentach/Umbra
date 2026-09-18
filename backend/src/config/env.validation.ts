@@ -78,6 +78,24 @@ export class EnvironmentVariables {
   @IsOptional()
   @IsString()
   BUILD_TIME?: string;
+
+  /**
+   * The published APK channel, read by `VersionController`. Optional: absent
+   * means "no APK published", which is the correct state for a web-only
+   * deploy. Kept as a string so an unset var and an empty one behave the
+   * same; the controller parses and rejects a non-positive integer.
+   */
+  @IsOptional()
+  @IsString()
+  ANDROID_APK_VERSION_CODE?: string;
+
+  @IsOptional()
+  @IsString()
+  ANDROID_APK_VERSION_NAME?: string;
+
+  @IsOptional()
+  @IsString()
+  ANDROID_APK_URL?: string;
 }
 
 export function validate(config: Record<string, any>): EnvironmentVariables {
