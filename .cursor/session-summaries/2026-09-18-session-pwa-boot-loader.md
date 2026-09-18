@@ -1,6 +1,6 @@
 # PWA cold-start boot loader — makes the multi-MB shell re-download legible
 
-**Date:** 2026-09-18 · **Version:** 0.2.49 → 0.2.50 (web; PR-only, NOT deployed; rebased onto master's 0.2.49 reaction-tokens release) · **Tiers deployed:** none
+**Date:** 2026-09-18 · **Version:** 0.2.49 → 0.2.50 (rebased onto master's 0.2.49 reaction-tokens release) · **Tiers deployed:** web (LIVE `0.2.50 / d37e2dcc`)
 
 ## What was done
 - Added `#fp-boot` inert DOM boot loader to `frontend/web/index.html` (CSS in `<head>`; element at end of `<body>`, logic in the external `web/fp_boot.js`): brand shield + determinate fake-progress bar + localized label/hint; theme-accent + locale read from `localStorage`; removed on Flutter's `flutter-first-frame` event (bubbles to `window`). Paints with no Flutter frame, so it shows during the pre-boot blank window.
@@ -21,10 +21,10 @@
 - Browser drive (headless Chromium, CDP throttle ~200–300 kbit/s): loader paints instantly on `light` + `dark` themes; correct accent (`#C2410C` light / `#5C9EAD` dark) + Polish label; bar creeps 20→39→50→59%; 6 s hint reveals; empty-storage default = Polish `Wczytywanie…`; removed on `flutter-first-frame` (deterministic dispatch → element gone, then un-throttled full boot to Chats). Screenshots in transcript.
 - `flutter build web --release --no-web-resources-cdn` succeeded (152 s). `build/web` was hand-patched for the smoke tests only — a **defines-less throwaway**; must NOT be published via `deploy-web.ps1 -SkipBuild` (a real deploy runs `flutter clean` + build with defines).
 - `node scripts/verify-csp-inline-hashes.mjs` → OK (2 inline scripts; loader is external, no third hash). **Execution proof** (fresh headless Chromium, served build): `window.__fpBoot` set (fp_boot.js RAN), `#fp-boot` REMOVED after boot, Flutter login screen painted — the external script executes and self-removes, so it cannot brick the app behind an opaque overlay.
-- NOT verified: real mobile device, iOS Safari, production. The loader MASKS the ~15 s; it does not shorten the download.
+- **DEPLOYED.** Merged to master (fast-forward `d37e2dcc`, PR #180), CI **5/5**, `deploy-web.ps1` smoke **7/7** (`/version.json` 0.2.50, `main.dart.js` contains `d37e2dcc`, 7 headers, Flutter view rendered). NOT verified on a real phone / iOS Safari. The loader MASKS the ~15 s; it does not shorten the download.
 
 ## Notes for next session
-- **PR open, NOT deployed** (owner chose the PR-review path). On merge: `git pull ; .\deploy-web.ps1` → `scripts/smoke/post-deploy-smoke.mjs`, then update the LATEST DEPLOY STATE line (version · SHA · CI run · smoke).
+- **Do FIRST — brick risk from externalizing:** if `fp_boot.js` (served `no-cache`, fetched every launch) fails to load while the rest of the shell boots, nothing registers the `flutter-first-frame` listener and the opaque `#fp-boot` (z-index 2147483646) never lifts → app unusable, worse than the blank screen. `script-src-attr 'none'` forbids an `onerror` attr. Fix: a Dart post-first-frame interop that does `document.getElementById('fp-boot')?.remove()` (web-only, stub for native), so teardown never depends on that file. Low probability (same-origin atomic deploy, 4 KB vs 14 MB shell) but severe.
 - **Owner-owed, bigger real fix:** nginx has no `gzip_types`/brotli for JS/wasm, so 7.6 MB `main.dart.js` + `canvaskit.wasm` go over the wire uncompressed; add `gzip_types application/javascript application/wasm …` (or `gzip_static`) **and** `Cache-Control: public, max-age=31536000, immutable` on `/canvaskit/` (byte-identical per `engineRevision`) — keep index.html / bootstrap / main.dart.js / version.json on `no-cache`. ~3–4× cold-start cut, far bigger than the loader. Verify: `curl -sI -H 'Accept-Encoding: br' https://fireplace.ignorelist.com/main.dart.js | grep -i content-encoding`.
 - Passcode-lock users still see the static `#fp-curtain` (z-index above `#fp-boot`) during boot — no progress bar for them; deliberate for now. Raise `#fp-boot` above the curtain (both opaque, no privacy loss) if the owner wants the bar there too.
 - A real offline shell cache (custom SW) is the deep fix; needs owner sign-off in an E2E app.
