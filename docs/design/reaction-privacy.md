@@ -73,9 +73,12 @@ column value   = {"<token>":[userId, …], …}
     * PULL is still right for FIRST acquisition — the mailbox row is what a newly linked or
       long-offline device reads once.
     * Losing the local copy costs readability of existing chips, exactly as losing local plaintext
-      costs message history. Self-healing needs no new event: a participant that cannot open its
-      row generates a fresh key and uploads it at `epoch + 1`. Old chips stay unreadable (their
-      key is gone), new ones work. Accepted residual.
+      costs message history. **This draft claimed self-healing needed no new event — "a participant
+      that cannot open its row generates a fresh key and uploads it at `epoch + 1`". That is NOT
+      what ships** (owner ruling 2026-09-17, §4 row 6): re-keying blanks the chips of every device
+      that can still read those messages, so a key is minted at epoch 0 ONLY and a device with no
+      readable row keeps rendering §3.2's placeholder indefinitely. Accepted residual, and a
+      permanent one until the top-up in row 6 is built.
     * The alternative that would keep nothing at rest is wrapping with a STATIC DH between the two
       devices' long-term identity keys instead of a ratchet session — re-derivable forever, so the
       mailbox row could be opened on every launch. It is also hand-rolled key agreement outside
@@ -109,10 +112,12 @@ reaction_keys(conversationId, userId, deviceId, epoch, ciphertext, createdAt)
 - The **epoch is server-assigned** on `conversations`. Two clients racing would otherwise both
   write epoch 1 and one side's tokens would be permanently undecodable; an upload naming a stale
   epoch is refused. This is the one genuinely new server-side invariant.
-- A newly linked device has no row for any old conversation. The peer's client re-uploads on
-  `deviceListChanged` (already emitted to both parties on any device mutation — `wire.md:41`);
-  until it lands, §3.2's placeholder renders. The account's OWN other devices are covered by the
-  same upload, since a send already addresses them.
+- A newly linked device has no row for any old conversation. The mechanism for that is the peer's
+  client re-uploading on `deviceListChanged` (already emitted to both parties on any device
+  mutation — `wire.md:41`) — **which is specified but NOT IMPLEMENTED (§4 row 6)**, so today
+  §3.2's placeholder renders for that conversation indefinitely rather than until an upload lands.
+  The account's OWN other devices are covered by the same unbuilt upload; a send already addresses
+  them, a key does not.
 - Revocation: a revoked device keeps material it already holds, consistent with revocation being
   logout and never remote wipe (`wire.md:42`), and it cannot read new rows without a session.
   **Rotate anyway on revoke** — new epoch, fresh upload to the surviving devices only, old rows
