@@ -17,6 +17,8 @@ Standing warnings that used to live in the `LATEST.md` banner and in rotated-out
 
 ## Deploy / CI / release
 - **Check CI with `gh api repos/Lentach/Umbra/commits/master/check-runs`, never `gh run list --branch master`** — it returned weeks-old rows twice (`2026-09-08-session-dependabot-sweep-and-pc-health.md`).
+- **`docker-compose.prod.yml` ENUMERATES every backend env var, so a new key in `~/fireplace/.env` never reaches the container** — `ANDROID_APK_*` was set correctly and `/version` still answered `"android": null`, which reads as working because `null` is also the right answer when nothing is published. Any new backend env var needs a line in the compose `environment:` block (with a `:-` default) or it is silently dropped (`2026-09-18-apk-update-check.md`).
+- **NEVER host a downloadable file under `~/fireplace/frontend-build/`** — `deploy-web.ps1` publishes by `rm -rf frontend-build && mv ~/web-staging/web frontend-build`, so the next web deploy deletes it and any URL pointing there 404s. APKs live in the sibling `~/fireplace/apk/` with its own `location ^~ /apk/` (`2026-09-18-apk-update-check.md`).
 - **`deploy-web.ps1` overwrites `frontend/build/web` with the PROD bundle** — rebuild locally before any 8093 check (`2026-09-03-session-lxxii-reset-door.md`).
 - `deploy-web.ps1` exits 1 in a worktree after `PUBLISHED_OK` — run the gate from the main checkout, never `-SkipVerify` (`2026-09-06-session-auth-clarity.md`).
 - **Merging an older release branch must never roll the pubspec back** — prod served a branch as a test until the 0.2.0 deploy (`2026-09-01-session-video-messages.md`).
