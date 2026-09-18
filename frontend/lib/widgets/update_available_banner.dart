@@ -70,13 +70,11 @@ class _UpdateAvailableBannerState extends State<UpdateAvailableBanner> {
     if (release == null) return const SizedBox.shrink();
 
     final l10n = AppLocalizations.of(context);
-    final colors = Theme.of(context).colorScheme;
 
     return IdentityAlertBanner(
       key: const Key('update-available-banner'),
       icon: Icons.system_update_outlined,
-      background: colors.surfaceContainerHighest,
-      foreground: colors.onSurface,
+      tone: AlertTone.informational,
       title: l10n.updateAvailableTitle,
       summary: release.versionName,
       detail: l10n.updateAvailableBody(release.versionName),

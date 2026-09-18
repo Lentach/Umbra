@@ -12,7 +12,6 @@ import '../providers/encryption_provider.dart';
 import '../providers/passcode_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/api_service.dart';
-import '../services/apk_update_service.dart';
 import '../services/push_service.dart';
 import '../config/app_config.dart';
 import '../config/app_version_info.dart';
@@ -34,11 +33,7 @@ import '../utils/instant_opaque_route.dart';
 import 'user_card_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key, this.apkUpdateService});
-
-  /// Test seam. Production leaves this null and the state builds the real
-  /// service, which answers null on every platform except Android.
-  final ApkUpdateService? apkUpdateService;
+  const SettingsScreen({super.key});
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -50,11 +45,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     'https://fireplace.ignorelist.com/welcome/',
   );
   String? _appVersionLine;
-  /// The published APK worth offering, or null when there is nothing to say.
-  /// Android-only; [ApkUpdateService] returns null everywhere else.
-  ApkRelease? _apkUpdate;
-  late final ApkUpdateService _apkUpdateService =
-      widget.apkUpdateService ?? ApkUpdateService();
   late final PushService _pushService = PushService(
     ApiService(baseUrl: AppConfig.baseUrl),
   );
@@ -64,7 +54,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     _loadDeviceName();
     _loadAppVersion();
-    _checkApkUpdate().ignore();
     final userId = context.read<AuthProvider>().currentUser?.id;
     if (userId != null) {
       context.read<SettingsProvider>().loadChatBackground(userId);
@@ -82,29 +71,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  /// Asks the server whether a newer APK exists. Never surfaces an error:
-  /// [ApkUpdateService.check] answers null for every failure, and a settings
-  /// screen is the wrong place to report that a version poll timed out.
-  Future<void> _checkApkUpdate() async {
-    final release = await _apkUpdateService.check();
-    if (release != null && mounted) {
-      setState(() => _apkUpdate = release);
-    }
-  }
-
-  void _downloadApkUpdate(ApkRelease release) {
-    launchUrl(
-      Uri.parse(release.url),
-      mode: LaunchMode.externalApplication,
-    ).ignore();
-  }
-
-  Future<void> _dismissApkUpdate(ApkRelease release) async {
-    await _apkUpdateService.dismiss(release.versionCode);
-    if (mounted) {
-      setState(() => _apkUpdate = null);
-    }
-  }
 
   Future<void> _loadDeviceName() async {
     String name = 'Unknown Device';
@@ -534,84 +500,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  /// The sideload update offer.
-  ///
-  /// Deliberately quiet: this sits at the foot of Settings beside the version
-  /// line, not as a modal over the app. A friend who ignores it keeps a
-  /// working messenger; the only thing at stake is being a build behind.
-  ///
-  /// The body carries the uninstall warning because THIS is the moment a user
-  /// is most likely to reach for "uninstall and reinstall the new one" — the
-  /// one action that destroys their Signal identity and history.
-  Widget _buildApkUpdateCard(ApkRelease release) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final l10n = AppLocalizations.of(context);
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24),
-      child: Container(
-        key: const Key('settings-apk-update-card'),
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
-        decoration: BoxDecoration(
-          color: colorScheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: colorScheme.outlineVariant),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              l10n.updateAvailableTitle,
-              style: RpgTheme.bodyFont(
-                fontSize: 13,
-                color: colorScheme.onSurface,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              l10n.updateAvailableBody(release.versionName),
-              style: RpgTheme.bodyFont(
-                fontSize: 12,
-                color: colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton(
-                  key: const Key('settings-apk-update-later'),
-                  onPressed: () => _dismissApkUpdate(release).ignore(),
-                  child: Text(
-                    l10n.updateAvailableLater,
-                    style: RpgTheme.bodyFont(
-                      fontSize: 12,
-                      color: colorScheme.onSurfaceVariant,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 4),
-                TextButton(
-                  key: const Key('settings-apk-update-download'),
-                  onPressed: () => _downloadApkUpdate(release),
-                  child: Text(
-                    l10n.updateAvailableDownload,
-                    style: RpgTheme.bodyFont(
-                      fontSize: 12,
-                      color: colorScheme.primary,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -771,11 +659,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                   const SizedBox(height: 28),
                   _buildAboutFireplaceLink(),
-
-                  if (_apkUpdate != null) ...[
-                    const SizedBox(height: 14),
-                    _buildApkUpdateCard(_apkUpdate!),
-                  ],
 
                   if (_appVersionLine != null) ...[
                     const SizedBox(height: 14),

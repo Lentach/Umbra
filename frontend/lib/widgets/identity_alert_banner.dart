@@ -2,6 +2,32 @@ import 'package:flutter/material.dart';
 
 import '../l10n/app_localizations.dart';
 
+/// Which palette an [IdentityAlertBanner] wears.
+///
+/// An ENUM rather than a pair of colors on purpose: this shell exists because
+/// three banners each carried their own hand-pinned foreground, and handing
+/// callers raw `Color`s would reopen exactly that — including the freedom to
+/// pair two slots that do not contrast. The mapping to `ColorScheme` lives in
+/// one place, below.
+enum AlertTone {
+  /// Identity and key material: "act now, your keys are at stake."
+  security,
+
+  /// Routine news that happens to need the same collapsed chrome. Kept
+  /// visually distinct so it cannot spend [security]'s urgency.
+  informational;
+
+  Color background(ColorScheme colors) => switch (this) {
+    security => colors.errorContainer,
+    informational => colors.surfaceContainerHighest,
+  };
+
+  Color foreground(ColorScheme colors) => switch (this) {
+    security => colors.onErrorContainer,
+    informational => colors.onSurface,
+  };
+}
+
 /// The ONE shell every identity/security banner in the app shell uses.
 ///
 /// Banners ([OwnIdentityReplacedBanner],
@@ -26,6 +52,7 @@ import '../l10n/app_localizations.dart';
 /// [Column], and sibling `SafeArea`s each apply the FULL top inset, so three of
 /// them stacked produced two phantom status-bar gaps. The shell wraps the whole
 /// stack once instead.
+
 class IdentityAlertBanner extends StatefulWidget {
   const IdentityAlertBanner({
     super.key,
@@ -36,8 +63,7 @@ class IdentityAlertBanner extends StatefulWidget {
     this.action,
     this.secondaryAction,
     this.semanticPrefix,
-    this.background,
-    this.foreground,
+    this.tone = AlertTone.security,
   });
 
   /// The 20px security glyph. Distinct per banner so the three states are
@@ -68,15 +94,8 @@ class IdentityAlertBanner extends StatefulWidget {
   /// Prepended to the screen-reader announcement, e.g. a severity word.
   final String? semanticPrefix;
 
-  /// Surface tone. Defaults to the security palette
-  /// (`errorContainer`/`onErrorContainer`) that every identity banner uses.
-  ///
-  /// A NON-security notice passes the neutral pair instead. The identity
-  /// banners mean "act now, your keys are at stake"; if a routine notice wears
-  /// the same red, it spends their urgency. Both come from `ColorScheme`, so
-  /// neither escapes the theme.
-  final Color? background;
-  final Color? foreground;
+  /// Which palette this banner wears. See [AlertTone].
+  final AlertTone tone;
 
   @override
   State<IdentityAlertBanner> createState() => _IdentityAlertBannerState();
@@ -90,7 +109,7 @@ class _IdentityAlertBannerState extends State<IdentityAlertBanner> {
     final l10n = AppLocalizations.of(context);
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
-    final onColor = widget.foreground ?? colors.onErrorContainer;
+    final onColor = widget.tone.foreground(colors);
     // Screen readers get the whole thing regardless of the visual disclosure:
     // collapsing is a density decision, never a way to hide a warning from
     // someone who cannot see the chevron.
@@ -105,7 +124,7 @@ class _IdentityAlertBannerState extends State<IdentityAlertBanner> {
       container: true,
       label: announcement,
       child: Material(
-        color: widget.background ?? colors.errorContainer,
+        color: widget.tone.background(colors),
         // A hairline so two stacked warnings do not read as one red block.
         // It matters here specifically: the damaged-identity action is
         // DESTRUCTIVE ("start fresh") and the takeover action is a benign
