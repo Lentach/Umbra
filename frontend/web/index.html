@@ -53,6 +53,43 @@
       display: none; background-color: inherit; }
     #fp-curtain svg { position: absolute; top: 44px; left: 50%;
       transform: translateX(-50%); width: 64px; height: 56px; }
+    /* Boot loader. The app shell (main.dart.js + CanvasKit wasm + fonts) is
+       several MB and is served with `no-cache` (infra/nginx/fireplace.conf) and
+       with NO offline service-worker cache (Flutter's generated SW self-
+       unregisters since 3.x). So an idle-return or post-deploy launch re-fetches
+       the whole shell over the network with nothing on screen; a daily user
+       stays warm in the HTTP cache and never sees it, but a user returning after
+       days waited on a bare background and assumed the app was broken. This
+       inert DOM loader paints instantly (no Flutter frame needed) and is removed
+       on `flutter-first-frame` (fp_boot.js). It sits one z-index
+       BELOW #fp-curtain so a locked relaunch still shows the shield on top. */
+    #fp-boot { position: fixed; inset: 0; z-index: 2147483646;
+      display: flex; align-items: center; justify-content: center;
+      background-color: inherit; color: #C2410C; }
+    #fp-boot .fp-boot-inner { display: flex; flex-direction: column;
+      align-items: center; opacity: 0;
+      animation: fpBootIn .45s ease-out .2s forwards; }
+    #fp-boot svg { width: 72px; height: 63px; }
+    #fp-boot svg path { animation: fpBootPulse 1.9s ease-in-out infinite; }
+    #fp-boot .fp-boot-bar { margin-top: 22px; width: 132px; height: 3px;
+      border-radius: 3px; overflow: hidden;
+      background-color: rgba(128, 128, 128, 0.18); }
+    #fp-boot .fp-boot-bar > i { display: block; height: 100%; width: 6%;
+      border-radius: 3px; background-color: currentColor;
+      transition: width .35s cubic-bezier(.25, .8, .35, 1); }
+    #fp-boot .fp-boot-label { margin-top: 16px; letter-spacing: .2px;
+      font: 500 13px/1.3 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      color: rgba(128, 128, 128, 0.85); }
+    #fp-boot .fp-boot-hint { margin-top: 8px; max-width: 260px; text-align: center;
+      opacity: 0; transition: opacity .4s ease;
+      font: 400 12px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      color: rgba(128, 128, 128, 0.6); }
+    @keyframes fpBootIn { to { opacity: 1; } }
+    @keyframes fpBootPulse { 0%, 100% { opacity: .5; } 50% { opacity: 1; } }
+    @media (prefers-reduced-motion: reduce) {
+      #fp-boot .fp-boot-inner { animation: none; opacity: 1; }
+      #fp-boot svg path { animation: none; opacity: 1; }
+      #fp-boot .fp-boot-bar > i { transition: none; } }
   </style>
   <script>
     // Pre-paint theme sync: the static #F7F4F0 above is the FRESH-INSTALL
@@ -151,6 +188,22 @@
       <path d="M27 26 V21 a5 5 0 0 1 10 0 V26"/>
     </svg>
   </div>
+  <div id="fp-boot" role="status" aria-live="polite">
+    <div class="fp-boot-inner">
+      <svg viewBox="0 0 64 56" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path d="M32 2 L58 16 L58 40 L32 54 L6 40 L6 16 Z"/>
+      </svg>
+      <div class="fp-boot-bar"><i></i></div>
+      <div class="fp-boot-label" id="fp-boot-label">Wczytywanie&#8230;</div>
+      <div class="fp-boot-hint" id="fp-boot-hint"></div>
+    </div>
+  </div>
+  <!-- Boot loader logic lives in fp_boot.js (EXTERNAL, same-origin). Kept out
+       of an inline element so the prod CSP script-src stays 'self' with no
+       third sha256 hash to maintain (infra/nginx/security-headers.conf,
+       scripts/verify-csp-inline-hashes.mjs). Plain (not defer/async): it must
+       run the instant #fp-boot is parsed. -->
+  <script src="fp_boot.js"></script>
   <!-- Vendored jsQR (Apache-2.0) — fallback QR decoder for the link scanner
        (lib/widgets/link_qr_scanner_web.dart) when the browser lacks
        BarcodeDetector. Local by design: never a runtime CDN. `defer` keeps it
