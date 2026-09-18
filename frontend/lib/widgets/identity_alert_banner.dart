@@ -52,7 +52,6 @@ enum AlertTone {
 /// [Column], and sibling `SafeArea`s each apply the FULL top inset, so three of
 /// them stacked produced two phantom status-bar gaps. The shell wraps the whole
 /// stack once instead.
-
 class IdentityAlertBanner extends StatefulWidget {
   const IdentityAlertBanner({
     super.key,

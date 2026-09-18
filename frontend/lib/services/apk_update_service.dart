@@ -1,9 +1,8 @@
 import 'dart:convert';
 import 'dart:io' show Platform;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config/app_config.dart';
 import '../config/app_version_info.dart';
@@ -13,9 +12,6 @@ import '../config/app_version_info.dart';
 /// `versionCode` is the Android packaging integer the installer compares;
 /// `versionName` is display only.
 typedef ApkRelease = ({int versionCode, String versionName, String url});
-
-/// Key under which the last user-dismissed `versionCode` is remembered.
-const String _dismissedKey = 'apk_update_dismissed_version_code';
 
 /// Offers a newer sideloaded APK, and only when there genuinely is one.
 ///
@@ -33,6 +29,13 @@ const String _dismissedKey = 'apk_update_dismissed_version_code';
 /// is the wrong shape, and when the user has already dismissed this exact
 /// build. The prompt exists to inform, and a wrong prompt costs more trust
 /// than a missing one.
+///
+/// **Dismissal is in-memory and dies with the process, deliberately.** The
+/// banner is the only surface that offers the download, so a PERSISTED
+/// dismissal would be a dead end: one tap on "Later" and the user could not
+/// reach the APK again until a newer build shipped. Forgetting on cold start
+/// keeps "Later" meaning "not now" instead of "never", without a second
+/// entry point to maintain.
 class ApkUpdateService {
   ApkUpdateService({
     http.Client? client,
@@ -43,8 +46,8 @@ class ApkUpdateService {
     bool? isAndroid,
   }) : _client = client ?? http.Client(),
        _baseUrl = baseUrl ?? AppConfig.baseUrl,
-       _readDismissed = readDismissed ?? _readDismissedFromPrefs,
-       _writeDismissed = writeDismissed ?? _writeDismissedToPrefs,
+       _readDismissed = readDismissed ?? _readDismissedInMemory,
+       _writeDismissed = writeDismissed ?? _writeDismissedInMemory,
        _readInstalledCode = readInstalledCode ?? _installedFromPackage,
        _isAndroid = isAndroid ?? (!kIsWeb && Platform.isAndroid);
 
@@ -115,9 +118,17 @@ class ApkUpdateService {
   static Future<int?> _installedFromPackage() async =>
       int.tryParse((await AppVersionInfo.load()).buildNumber);
 
-  static Future<int?> _readDismissedFromPrefs() async =>
-      SharedPreferencesAsync().getInt(_dismissedKey);
+  /// The build the user turned down in THIS process. Not persisted — see the
+  /// class doc: the banner is the only download surface, so remembering a
+  /// dismissal across launches would strand the user.
+  static int? _dismissedThisRun;
 
-  static Future<void> _writeDismissedToPrefs(int versionCode) =>
-      SharedPreferencesAsync().setInt(_dismissedKey, versionCode);
+  /// Drops the in-process dismissal, which is what a cold start does.
+  @visibleForTesting
+  static void debugResetDismissal() => _dismissedThisRun = null;
+
+  static Future<int?> _readDismissedInMemory() async => _dismissedThisRun;
+
+  static Future<void> _writeDismissedInMemory(int versionCode) async =>
+      _dismissedThisRun = versionCode;
 }

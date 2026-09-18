@@ -166,6 +166,31 @@ void main() {
     expect(await service.check(), isNull);
   });
 
+  // The banner is the ONLY surface offering the download, so a dismissal that
+  // outlived the process would strand the user on "Later" until a newer build
+  // shipped. A relaunch must ask again.
+  test('a dismissal does not survive a cold start', () async {
+    final service = ApkUpdateService(
+      client: serving(
+        payload({
+          'versionCode': 20050,
+          'versionName': '0.2.50',
+          'url': 'https://example.invalid/a.apk',
+        }),
+      ),
+      baseUrl: 'https://example.invalid',
+      isAndroid: true,
+      readInstalledCode: () async => 20049,
+    );
+    addTearDown(ApkUpdateService.debugResetDismissal);
+
+    await service.dismiss(20050);
+    expect(await service.check(), isNull, reason: 'silent within the run');
+
+    ApkUpdateService.debugResetDismissal(); // what a relaunch does
+    expect((await service.check())?.versionCode, 20050);
+  });
+
   test('dismiss records the build the user turned down', () async {
     int? recorded;
     final service = build(
