@@ -90,6 +90,13 @@ services:
       APP_VERSION: ${APP_VERSION:-0.0.1}
       GIT_COMMIT: ${GIT_COMMIT:-unknown}
       BUILD_TIME: ${BUILD_TIME:-}
+      # Sideloaded APK channel, served by GET /version as the `android` block
+      # so an installed APK can learn a newer one exists. Unset = no channel
+      # published and the client prompts nobody, which is the correct state
+      # between APK releases.
+      ANDROID_APK_VERSION_CODE: ${ANDROID_APK_VERSION_CODE:-}
+      ANDROID_APK_VERSION_NAME: ${ANDROID_APK_VERSION_NAME:-}
+      ANDROID_APK_URL: ${ANDROID_APK_URL:-}
       NODE_ENV: production
     depends_on:
       - db
