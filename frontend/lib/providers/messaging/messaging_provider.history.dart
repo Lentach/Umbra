@@ -381,6 +381,11 @@ extension MessagingHistory on MessagingProvider {
       }
 
       _messages = [...newMessages, ..._messages];
+      // Same relaunch race as the first-page path below: the key can land while
+      // these rows are still caller-local, so re-resolve after the install.
+      if (_paginationConversationId >= 0) {
+        _reRenderReactions(_paginationConversationId);
+      }
       _paginationOffset += newMessages.length;
       _hasMore = newMessages.length == _pageSize;
       _finishPaginationLoad();
@@ -455,6 +460,15 @@ extension MessagingHistory on MessagingProvider {
     // Immediately remove any already-expired messages
     final now = DateTime.now();
     _messages.removeWhere((m) => isMessageExpired(m, now));
+    // The reaction-key acquisition started by `_withRenderableReactions` above
+    // (line 318) reads the LOCAL key store, so on a relaunch it finishes during
+    // the `await hydration` above — while these rows are still caller-local.
+    // `_reRenderReactions` therefore found nothing in `_messages` to repair and
+    // spent its one latched attempt, so without this every chip whose key this
+    // device already holds stays the unreadable placeholder for the rest of the
+    // session (falsification R7, observed on a real Chrome relaunch 2026-09-18).
+    // Idempotent: rows whose keys are already emoji are skipped.
+    if (convIdForMerge != null) _reRenderReactions(convIdForMerge);
     notifyListeners();
     // Snapshot to cache immediately (may include encrypted placeholders for E2E messages).
     // A second snapshot runs after _decryptMessageHistory completes with decrypted content.

@@ -224,6 +224,13 @@ switch ($Command) {
     'harness' {
         Write-Host '==> running E2E wire harness against staging (prod-mode backend)'
         $env:E2E_BASE_URL = $BackendUrl
+        # The opt-in SQL channel (`e2eSql`, frontend/test_e2e/support/e2e_test_client.dart)
+        # defaults to `fireplace-db-1` -- the DEV stack's container, which on this PC is a
+        # different session's live database. Without this the harness reads and WRITES
+        # (`DELETE FROM identity_reset_requests`, `UPDATE recovery_keys`) against that DB
+        # instead of staging: the staging rows never move, so `registration_lock_test`
+        # fails with `existing`/`cooldown` mismatches that look like product bugs.
+        $env:E2E_DB_CONTAINER = $DbCtr
         try {
             Push-Location (Join-Path $RepoDir 'frontend')
             flutter test test_e2e
@@ -231,6 +238,7 @@ switch ($Command) {
         } finally {
             Pop-Location
             Remove-Item Env:\E2E_BASE_URL -ErrorAction SilentlyContinue
+            Remove-Item Env:\E2E_DB_CONTAINER -ErrorAction SilentlyContinue
         }
     }
 

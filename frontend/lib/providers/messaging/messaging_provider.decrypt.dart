@@ -775,7 +775,16 @@ extension MessagingDecrypt on MessagingProvider {
               !_isEditStale(msg.editedAt, cached.editedAt)) {
             final idx = _messages.indexWhere((m) => m.id == msg.id);
             if (idx != -1) {
-              final merged = _mergeMessagePreferNewer(_messages[idx], cached);
+              // `_mergeMessagePreferNewer` returns `server.copyWith(...)`, so
+              // the RAM decryption cache's OWN reactions map wins — and that
+              // copy was cached when this device could not yet name the
+              // tokens. Without re-resolving, this pass silently reverts an
+              // already-named chip to the unreadable placeholder, which is why
+              // inbound rows stayed placeholders after a relaunch while the
+              // sender's own rows resolved.
+              final merged = _withRenderableReactions(
+                _mergeMessagePreferNewer(_messages[idx], cached),
+              );
               _messages[idx] = merged;
               _encryptionProvider?.cacheDecryption(msg.id, merged);
               changed = true;

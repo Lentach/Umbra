@@ -594,6 +594,60 @@ void main() {
       expect(provider.messages.single.reactions['🔥'], [2]);
     });
 
+    test('a relaunch names its chips from the LOCAL key, with no round trip', () async {
+      // The relaunch case the test above cannot reach. There the key arrives
+      // from the mailbox, i.e. after an awaited round trip, so the rows are
+      // long installed by then. Here the key is ALREADY in the local store, so
+      // the acquisition completes in a microtask — during the `await` a COLD
+      // history entry spends hydrating plaintext from storage, while the rows
+      // are still caller-local. The re-render pass then found nothing in
+      // `_messages` to repair and spent its one latched attempt, so every chip
+      // stayed the unreadable placeholder for the rest of the session on a
+      // device that holds the key (falsification R7; observed on a real Chrome
+      // relaunch 2026-09-18, chips resolving only for reactions that arrived
+      // live afterwards).
+      final keyB64 = base64Encode(List<int>.generate(32, (i) => i + 11));
+      final codec = ReactionTokenCodec(
+        Uint8List.fromList(base64Decode(keyB64)),
+      );
+      final store = _MemoryReactionStore()
+        ..keys[10] = keyB64
+        ..epochs[10] = 4;
+      wire(_WorkingEncryption(store: store));
+      // Deliberately no `answerReactionKeyRequests`: a device holding its own
+      // key must not depend on the server answering anything.
+
+      await provider.onMessageHistory({
+        'conversationId': 10,
+        'messages': [
+          {
+            ..._plainIncomingJson(50),
+            // '[encrypted]' is what makes this a COLD entry: the snapshot has
+            // to be hydrated from storage, which is the suspension point the
+            // regression hides behind. A plaintext row never awaits.
+            'content': '[encrypted]',
+            'encryptedContent': 'ciphertext',
+            'reactions': {
+              codec.tokenFor('🔥'): [2],
+            },
+          },
+        ],
+      });
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(
+        provider.messages.single.reactions['🔥'],
+        [2],
+        reason: 'the key was on this device the whole time',
+      );
+      expect(
+        emitted.where((e) => e['event'] == 'fetchReactionKey'),
+        isEmpty,
+        reason: 'a locally held key must not spend the one-shot mailbox row',
+      );
+    });
+
     test('an upload answer for another conversation is not mistaken for this one', () async {
       // The slot is released on timeout, so a late answer can arrive while a
       // DIFFERENT conversation's upload is pending. Accepting it would persist
