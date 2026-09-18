@@ -32,6 +32,7 @@ import '../widgets/console_glyphs.dart';
 import '../widgets/glass/glass_bottom_nav.dart';
 import '../widgets/own_identity_replaced_banner.dart';
 import '../widgets/identity_reset_pending_banner.dart';
+import '../widgets/update_available_banner.dart';
 import 'user_card_screen.dart';
 
 /// Shell after login: bottom nav with Conversations, Contacts, Settings.
@@ -377,6 +378,11 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
                 // replacing this account's keys. Above the fold with a one-tap
                 // cancel, because the delay only protects anyone who sees it.
                 IdentityResetPendingBanner(),
+                // A newer sideloaded APK exists. NOT a security banner and
+                // deliberately not dressed as one — neutral tone, collapsed,
+                // dismissible per build. Renders nothing off Android or when
+                // no channel is published.
+                UpdateAvailableBanner(),
               ],
             ),
             Expanded(

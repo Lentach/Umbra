@@ -36,6 +36,8 @@ class IdentityAlertBanner extends StatefulWidget {
     this.action,
     this.secondaryAction,
     this.semanticPrefix,
+    this.background,
+    this.foreground,
   });
 
   /// The 20px security glyph. Distinct per banner so the three states are
@@ -66,6 +68,16 @@ class IdentityAlertBanner extends StatefulWidget {
   /// Prepended to the screen-reader announcement, e.g. a severity word.
   final String? semanticPrefix;
 
+  /// Surface tone. Defaults to the security palette
+  /// (`errorContainer`/`onErrorContainer`) that every identity banner uses.
+  ///
+  /// A NON-security notice passes the neutral pair instead. The identity
+  /// banners mean "act now, your keys are at stake"; if a routine notice wears
+  /// the same red, it spends their urgency. Both come from `ColorScheme`, so
+  /// neither escapes the theme.
+  final Color? background;
+  final Color? foreground;
+
   @override
   State<IdentityAlertBanner> createState() => _IdentityAlertBannerState();
 }
@@ -78,7 +90,7 @@ class _IdentityAlertBannerState extends State<IdentityAlertBanner> {
     final l10n = AppLocalizations.of(context);
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
-    final onColor = colors.onErrorContainer;
+    final onColor = widget.foreground ?? colors.onErrorContainer;
     // Screen readers get the whole thing regardless of the visual disclosure:
     // collapsing is a density decision, never a way to hide a warning from
     // someone who cannot see the chevron.
@@ -93,7 +105,7 @@ class _IdentityAlertBannerState extends State<IdentityAlertBanner> {
       container: true,
       label: announcement,
       child: Material(
-        color: colors.errorContainer,
+        color: widget.background ?? colors.errorContainer,
         // A hairline so two stacked warnings do not read as one red block.
         // It matters here specifically: the damaged-identity action is
         // DESTRUCTIVE ("start fresh") and the takeover action is a benign
