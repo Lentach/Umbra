@@ -4,11 +4,11 @@ import {
   PrimaryGeneratedColumn,
   Column,
   CreateDateColumn,
-  JoinColumn,
-  ManyToOne,
 } from 'typeorm';
-import { User } from '../users/user.entity';
 
+// No creator column (metadata privacy step 0, 2026-09-20): a note is a random
+// token + ciphertext + expiry, owned by nobody the server knows. Account
+// deletion therefore no longer cascades into notes; they expire within 24h.
 @Entity('secret_notes')
 export class SecretNote {
   @PrimaryGeneratedColumn()
@@ -22,15 +22,6 @@ export class SecretNote {
 
   @Column({ type: 'timestamp' })
   expiresAt: Date;
-
-  @Column({ nullable: true })
-  creatorId: number;
-
-  // CASCADE, not SET NULL: account deletion destroys everything the account
-  // created (privacy contract); notes expire within 24h regardless.
-  @ManyToOne(() => User, { onDelete: 'CASCADE', nullable: true })
-  @JoinColumn({ name: 'creatorId' })
-  creator: User | null;
 
   @CreateDateColumn()
   createdAt: Date;

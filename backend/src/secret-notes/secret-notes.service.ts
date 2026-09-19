@@ -15,10 +15,13 @@ export class SecretNotesService {
     private readonly repo: Repository<SecretNote>,
   ) {}
 
-  async create(ciphertext: string, expiresInSeconds: number, creatorId: number): Promise<{ token: string }> {
+  async create(
+    ciphertext: string,
+    expiresInSeconds: number,
+  ): Promise<{ token: string }> {
     const token = crypto.randomBytes(16).toString('hex'); // 32-char hex
     const expiresAt = new Date(Date.now() + expiresInSeconds * 1000);
-    const note = this.repo.create({ token, ciphertext, expiresAt, creatorId });
+    const note = this.repo.create({ token, ciphertext, expiresAt });
     await this.repo.save(note);
     return { token };
   }

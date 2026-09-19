@@ -31,22 +31,28 @@ describe('SecretNotesService', () => {
 
   describe('create', () => {
     it('returns a token and saves the note', async () => {
-      const note = { token: 'abc123', ciphertext: 'enc', expiresAt: new Date(), creatorId: 1 };
+      const note = { token: 'abc123', ciphertext: 'enc', expiresAt: new Date() };
       repo.create.mockReturnValue(note);
       repo.save.mockResolvedValue(note);
 
       const before = Date.now();
-      const result = await service.create('enc', 7200, 1);
+      const result = await service.create('enc', 7200);
       const after = Date.now();
 
       expect(repo.save).toHaveBeenCalled();
       expect(result.token).toHaveLength(32);
-      // Field-mapping + TTL-scaling contract: ciphertext/creatorId forwarded verbatim,
+      // Field-mapping + TTL-scaling contract: ciphertext forwarded verbatim and
+      // nothing about the caller (the server does not know whose note this is),
       // expiresAt = now + expiresInSeconds*1000 (ms, not seconds).
-      expect(repo.create).toHaveBeenCalledWith(
-        expect.objectContaining({ ciphertext: 'enc', creatorId: 1 }),
-      );
-      const createArg = repo.create.mock.calls[0][0];
+      const [createArg] = repo.create.mock.calls[0] as [
+        { ciphertext: string; expiresAt: Date },
+      ];
+      expect(Object.keys(createArg).sort()).toEqual([
+        'ciphertext',
+        'expiresAt',
+        'token',
+      ]);
+      expect(createArg.ciphertext).toBe('enc');
       const expiresAtMs = new Date(createArg.expiresAt).getTime();
       expect(expiresAtMs).toBeGreaterThanOrEqual(before + 7200 * 1000);
       expect(expiresAtMs).toBeLessThanOrEqual(after + 7200 * 1000);

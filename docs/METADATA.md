@@ -22,7 +22,7 @@ The server needs certain metadata to deliver messages and manage conversations.
 | Block graph | `blocked_users` | Who blocked whom | Until unblock or account deletion |
 | Key bundles | `key_bundles`, `one_time_pre_keys` | Public keys for E2E (no private keys) | Until account deletion; used pre-keys are kept for protocol bookkeeping |
 | Push tokens | `fcm_tokens` | Push delivery token and platform | Until logout/token removal, invalid token response, or account deletion |
-| Secret notes | `secret_notes` | Random token, ciphertext, expiry, optional creator id | Deleted on reveal, on expired access, or by daily expired-note cleanup |
+| Secret notes | `secret_notes` | Random token, ciphertext, expiry — no creator id (dropped 2026-09-20) | Deleted on reveal, on expired access, or by the per-minute expired-note cleanup |
 | Message media blobs | disk `msgs/*.bin` | Encrypted image/voice/GIF/file payloads | Deleted on destructive chat paths where possible; orphan/expired blobs are swept daily |
 
 ## Why This Metadata Is Needed

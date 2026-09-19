@@ -9,11 +9,12 @@ const mockService = () => ({
   revealAndDelete: jest.fn(),
 });
 
-const mockUser = { id: 1 };
 // A well-formed token: 32 lowercase hex chars (crypto.randomBytes(16).toString('hex')).
 // The controller now gates on /^[0-9a-f]{32}$/ before any service/DB/HTML work,
 // so valid-path tests must use a token that passes the gate.
-const VALID_TOKEN = '0123456789abcdef0123456789abcdef';
+// gitleaks:allow — a counting-pattern test fixture, not a secret; the
+// pre-commit scan flags any 32-hex literal near the word "token".
+const VALID_TOKEN = '0123456789abcdef0123456789abcdef'; // gitleaks:allow
 const INVALID_TOKENS = [
   '<script>alert(1)</script>', // XSS-shaped
   'ZZZZ', // non-hex
@@ -48,44 +49,32 @@ describe('SecretNotesController', () => {
   describe('createNote', () => {
     it('returns token for valid request', async () => {
       service.create.mockResolvedValue({ token: 'abc123' });
-      const result = await controller.createNote(
-        { ciphertext: 'enc', expiresIn: 3600 },
-        { user: mockUser },
-      );
+      const result = await controller.createNote({ ciphertext: 'enc', expiresIn: 3600 });
       expect(result).toEqual({ token: 'abc123' });
-      expect(service.create).toHaveBeenCalledWith('enc', 3600, 1);
+      expect(service.create).toHaveBeenCalledWith('enc', 3600);
     });
 
     it.each([3600, 21600, 43200, 86400])(
       'passes whitelisted TTL %d through unchanged',
       async (ttl) => {
         service.create.mockResolvedValue({ token: 'tok' });
-        await controller.createNote(
-          { ciphertext: 'enc', expiresIn: ttl },
-          { user: mockUser },
-        );
-        expect(service.create).toHaveBeenCalledWith('enc', ttl, 1);
+        await controller.createNote({ ciphertext: 'enc', expiresIn: ttl });
+        expect(service.create).toHaveBeenCalledWith('enc', ttl);
       },
     );
 
     it('falls back to 21600 for a non-whitelisted TTL (7200)', async () => {
       service.create.mockResolvedValue({ token: 'tok' });
-      await controller.createNote(
-        { ciphertext: 'enc', expiresIn: 7200 },
-        { user: mockUser },
-      );
-      expect(service.create).toHaveBeenCalledWith('enc', 21600, 1);
+      await controller.createNote({ ciphertext: 'enc', expiresIn: 7200 });
+      expect(service.create).toHaveBeenCalledWith('enc', 21600);
     });
 
     it.each([0, -1, 60, 3599, 1000000])(
       'falls back to 21600 for out-of-whitelist TTL %d',
       async (ttl) => {
         service.create.mockResolvedValue({ token: 'tok' });
-        await controller.createNote(
-          { ciphertext: 'enc', expiresIn: ttl },
-          { user: mockUser },
-        );
-        expect(service.create).toHaveBeenCalledWith('enc', 21600, 1);
+        await controller.createNote({ ciphertext: 'enc', expiresIn: ttl });
+        expect(service.create).toHaveBeenCalledWith('enc', 21600);
       },
     );
   });

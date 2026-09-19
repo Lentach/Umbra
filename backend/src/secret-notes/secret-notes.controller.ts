@@ -1,6 +1,6 @@
 // backend/src/secret-notes/secret-notes.controller.ts
 import {
-  Controller, Post, Get, Body, Param, Req, Res, UseGuards,
+  Controller, Post, Get, Body, Param, Res, UseGuards,
 } from '@nestjs/common';
 import { IsString, IsNotEmpty, IsInt, MaxLength } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -30,13 +30,10 @@ export class SecretNotesController {
 
   @UseGuards(JwtAuthGuard)
   @Post('notes')
-  async createNote(
-    @Body() dto: CreateNoteDto,
-    @Req() req: { user: { id: number } },
-  ) {
+  async createNote(@Body() dto: CreateNoteDto) {
     const validTtls = [3600, 21600, 43200, 86400];
     const expiresIn = validTtls.includes(dto.expiresIn) ? dto.expiresIn : 21600;
-    return this.service.create(dto.ciphertext, expiresIn, req.user.id);
+    return this.service.create(dto.ciphertext, expiresIn);
   }
 
   @Get('note/:token')
