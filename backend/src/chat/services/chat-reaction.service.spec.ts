@@ -1,5 +1,9 @@
 import { ChatReactionService } from './chat-reaction.service';
 
+// A blinded reaction token (22 base64url chars) — the only shape the DTO
+// accepts since D10 closed (2026-09-19).
+const TOKEN = 'AAAAAAAAAAAAAAAAAAAAAA';
+
 describe('ChatReactionService', () => {
   let service: ChatReactionService;
   let mockMessagesService: any;
@@ -38,30 +42,30 @@ describe('ChatReactionService', () => {
       });
       mockMessagesService.addOrUpdateReaction.mockResolvedValue({
         id: 5,
-        reactions: JSON.stringify({ '👍': [1] }),
+        reactions: JSON.stringify({ [TOKEN]: [1] }),
       });
 
       await service.handleAddReaction(
         mockClient,
-        { messageId: 5, emoji: '👍' },
+        { messageId: 5, emoji: TOKEN },
         mockServer,
       );
 
       expect(mockMessagesService.addOrUpdateReaction).toHaveBeenCalledWith(
         5,
         1,
-        '👍',
+        TOKEN,
       );
       expect(mockClient.emit).toHaveBeenCalledWith('reactionUpdated', {
         messageId: 5,
         conversationId: 10,
-        reactions: { '👍': [1] },
+        reactions: { [TOKEN]: [1] },
       });
       expect(mockServer.to).toHaveBeenCalledWith('user:2');
       expect(mockServer.emit).toHaveBeenCalledWith('reactionUpdated', {
         messageId: 5,
         conversationId: 10,
-        reactions: { '👍': [1] },
+        reactions: { [TOKEN]: [1] },
       });
     });
 
@@ -70,7 +74,7 @@ describe('ChatReactionService', () => {
 
       await service.handleAddReaction(
         mockClient,
-        { messageId: 999, emoji: '👍' },
+        { messageId: 999, emoji: TOKEN },
         mockServer,
       );
 
@@ -83,7 +87,7 @@ describe('ChatReactionService', () => {
     it('should not proceed if no user on client', async () => {
       await service.handleAddReaction(
         { data: {} } as any,
-        { messageId: 5, emoji: '👍' },
+        { messageId: 5, emoji: TOKEN },
         mockServer,
       );
 
@@ -95,7 +99,7 @@ describe('ChatReactionService', () => {
     it('should emit error on invalid dto', async () => {
       await service.handleAddReaction(
         mockClient,
-        { messageId: -1, emoji: '👍' },
+        { messageId: -1, emoji: TOKEN },
         mockServer,
       );
 
@@ -113,7 +117,7 @@ describe('ChatReactionService', () => {
 
       await service.handleAddReaction(
         mockClient,
-        { messageId: 5, emoji: '👍' },
+        { messageId: 5, emoji: TOKEN },
         mockServer,
       );
 
@@ -132,7 +136,7 @@ describe('ChatReactionService', () => {
 
       await service.handleAddReaction(
         mockClient,
-        { messageId: 5, emoji: '👍' },
+        { messageId: 5, emoji: TOKEN },
         mockServer,
       );
 
@@ -158,12 +162,12 @@ describe('ChatReactionService', () => {
       });
       mockMessagesService.addOrUpdateReaction.mockResolvedValue({
         id: 5,
-        reactions: JSON.stringify({ '👍': [1] }),
+        reactions: JSON.stringify({ [TOKEN]: [1] }),
       });
 
       await service.handleAddReaction(
         mockClient,
-        { messageId: 5, emoji: '👍' },
+        { messageId: 5, emoji: TOKEN },
         mockServer,
       );
 
@@ -185,7 +189,7 @@ describe('ChatReactionService', () => {
 
       await service.handleRemoveReaction(
         mockClient,
-        { messageId: 5, emoji: '👍' },
+        { messageId: 5, emoji: TOKEN },
         mockServer,
       );
 
@@ -211,7 +215,7 @@ describe('ChatReactionService', () => {
 
       await service.handleRemoveReaction(
         mockClient,
-        { messageId: 999, emoji: '👍' },
+        { messageId: 999, emoji: TOKEN },
         mockServer,
       );
 
@@ -224,7 +228,7 @@ describe('ChatReactionService', () => {
     it('should not proceed if no user on client', async () => {
       await service.handleRemoveReaction(
         { data: {} } as any,
-        { messageId: 5, emoji: '👍' },
+        { messageId: 5, emoji: TOKEN },
         mockServer,
       );
 
@@ -241,7 +245,7 @@ describe('ChatReactionService', () => {
 
       await service.handleRemoveReaction(
         mockClient,
-        { messageId: 5, emoji: '👍' },
+        { messageId: 5, emoji: TOKEN },
         mockServer,
       );
 
@@ -260,7 +264,7 @@ describe('ChatReactionService', () => {
 
       await service.handleRemoveReaction(
         mockClient,
-        { messageId: 5, emoji: '👍' },
+        { messageId: 5, emoji: TOKEN },
         mockServer,
       );
 

@@ -304,59 +304,32 @@ describe('SendMessageDto', () => {
 });
 
 describe('Reaction DTOs', () => {
-  const validCases = [
-    '👍',
-    '❤️',
-    '🔥',
-    '🧙',
-    '👏🏽',
-    '👨‍👩‍👧‍👦',
-    '🇵🇱',
-    '1️⃣',
-    '🏴󠁧󠁢󠁳󠁣󠁴󠁿',
-    '✌️🏻',
-  ];
+  // D10 closed 2026-09-19: the compat window that also accepted a plain emoji
+  // grapheme (design §3.3) is over. A legacy emoji — simple, ZWJ family,
+  // tag-sequence flag — is REFUSED on both events, never stored in the clear.
+  const legacyEmojiCases = ['👍', '👨‍👩‍👧‍👦', '🏴󠁧󠁢󠁳󠁣󠁴󠁿'];
   const invalidCases = ['hi', '😀😀', '123', '#', '', ' ', '👍 reaction'];
 
-  it.each(validCases)(
-    'should accept a single emoji reaction: %s',
+  it.each([...legacyEmojiCases, ...invalidCases])(
+    'should reject a non-token reaction: %s',
     async (emoji) => {
-      const dto = plainToInstance(AddReactionDto, { messageId: 1, emoji });
-      const errors = await validate(dto);
-      expect(errors).toHaveLength(0);
+      expect(
+        (
+          await validate(
+            plainToInstance(AddReactionDto, { messageId: 1, emoji }),
+          )
+        ).length,
+      ).toBeGreaterThan(0);
+      expect(
+        (
+          await validate(
+            plainToInstance(RemoveReactionDto, { messageId: 1, emoji }),
+          )
+        ).length,
+      ).toBeGreaterThan(0);
     },
   );
 
-  it.each(validCases)(
-    'should accept removing a single emoji reaction: %s',
-    async (emoji) => {
-      const dto = plainToInstance(RemoveReactionDto, { messageId: 1, emoji });
-      const errors = await validate(dto);
-      expect(errors).toHaveLength(0);
-    },
-  );
-
-  it.each(invalidCases)(
-    'should reject non-single-emoji reaction: %s',
-    async (emoji) => {
-      const dto = plainToInstance(AddReactionDto, { messageId: 1, emoji });
-      const errors = await validate(dto);
-      expect(errors.length).toBeGreaterThan(0);
-    },
-  );
-
-  it.each(invalidCases)(
-    'should reject removing a non-single-emoji reaction: %s',
-    async (emoji) => {
-      const dto = plainToInstance(RemoveReactionDto, { messageId: 1, emoji });
-      const errors = await validate(dto);
-      expect(errors.length).toBeGreaterThan(0);
-    },
-  );
-
-  // Compat window (docs/design/reaction-privacy.md §3.3): an updated client
-  // sends a 22-char blinded token, a not-yet-updated one still sends the
-  // emoji, and BOTH must validate until the emoji branch is removed.
   const tokenCases = [
     'AAAAAAAAAAAAAAAAAAAAAA',
     '0123456789abcdefABCDEF',

@@ -264,34 +264,18 @@ export * from './set-conversation-mute.dto';
 export * from './served-message-ids.dto';
 
 /**
- * One emoji grapheme: basic pictographic with optional VS16/skin tone and ZWJ
- * sequences, tag-sequence flags, regional-indicator flags, keycaps.
- */
-const REACTION_EMOJI_GRAPHEME = String.raw`\u{1F3F4}[\u{E0061}-\u{E007A}]+\u{E007F}|\p{Extended_Pictographic}\uFE0F?\p{Emoji_Modifier}?(?:\u200D\p{Extended_Pictographic}\uFE0F?\p{Emoji_Modifier}?)*|\p{Regional_Indicator}{2}|[0-9#*]\uFE0F?\u20E3`;
-
-/**
  * A blinded reaction token: `base64url(HMAC-SHA256(K_react, "umbra.reaction.v1"
  * || emoji)[0..15])`, so exactly 22 base64url characters
  * (`docs/design/reaction-privacy.md` §3). The server can neither read nor
  * guess the emoji behind it — it holds no `K_react`.
+ *
+ * The ONLY accepted shape since 2026-09-19 (D10 closed). The compat window
+ * that also took a plain emoji grapheme (design §3.3) ended once every live
+ * install was ≥ 0.2.49: a plaintext emoji here was the one piece of message
+ * content the server stored in the clear. A client below that floor gets its
+ * reaction refused with the DTO's stable validation error, not written.
  */
-export const REACTION_TOKEN_REGEX = /^[A-Za-z0-9_-]{22}$/;
-const REACTION_TOKEN = String.raw`[A-Za-z0-9_-]{22}`;
-
-/**
- * EITHER shape, for one explicit compat window (design §3.3): a token from an
- * updated client, or a single emoji from one that has not updated yet. There
- * is no auto-update — an APK floor exists and PWAs update on relaunch — so
- * refusing legacy emoji here would simply break reactions for live clients.
- * The two are distinguishable by shape and a token can never be a valid emoji,
- * so a row may hold both and the client renders each accordingly. Removing the
- * emoji branch is what actually closes D10; until then the hole is narrowed,
- * not closed.
- */
-const REACTION_VALUE_REGEX = new RegExp(
-  `^(?:${REACTION_TOKEN}|${REACTION_EMOJI_GRAPHEME})$`,
-  'u',
-);
+const REACTION_TOKEN_REGEX = /^[A-Za-z0-9_-]{22}$/;
 
 export class AddReactionDto {
   @IsNumber()
@@ -300,9 +284,7 @@ export class AddReactionDto {
 
   @IsString()
   @MaxLength(32)
-  @Matches(REACTION_VALUE_REGEX, {
-    message: 'emoji must be a single emoji grapheme or a reaction token',
-  })
+  @Matches(REACTION_TOKEN_REGEX, { message: 'emoji must be a reaction token' })
   emoji: string;
 }
 
@@ -313,8 +295,6 @@ export class RemoveReactionDto {
 
   @IsString()
   @MaxLength(32)
-  @Matches(REACTION_VALUE_REGEX, {
-    message: 'emoji must be a single emoji grapheme or a reaction token',
-  })
+  @Matches(REACTION_TOKEN_REGEX, { message: 'emoji must be a reaction token' })
   emoji: string;
 }

@@ -21,7 +21,7 @@
     "test:cov": "jest --config jest.config.json --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "lint:check": "eslint \"{src,apps,libs,test}/**/*.ts\"",
-    "knip": "knip --include files,dependencies"
+    "knip": "knip"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.28",
@@ -50,6 +50,7 @@
     "pg": "^8.22.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
+    "socket.io": "^4.8.3",
     "typeorm": "^1.1.0",
     "undici": "^7.29.0",
     "web-push": "^3.6.7"

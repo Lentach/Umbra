@@ -81,7 +81,12 @@ export const RECOVERY_LOCKOUT_MS = 60 * 60 * 1000;
  * starts, at the full delay. Refusing would break the lost-device path, and
  * spending would burn the user's key for nothing.
  */
-export const RECOVERY_MIN_AGE_MS = RESET_DELAY_MS;
+//
+// Its own literal, not an alias of RESET_DELAY_MS: the two are separate
+// policies that happen to coincide today, and the spec pins the equality
+// ("the reset delay is 6 hours and the age floor equals it") so a drift is a
+// deliberate, tested decision rather than a silent side effect.
+export const RECOVERY_MIN_AGE_MS = 6 * 60 * 60 * 1000;
 
 /**
  * Argon2id parameters for the recovery-key verifier. Memory-hard on purpose:

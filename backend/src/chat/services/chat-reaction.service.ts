@@ -109,8 +109,8 @@ export class ChatReactionService {
 
     // `data.emoji` is validated on the wire but deliberately not passed: a
     // user has at most one reaction per message, so removal is "drop this
-    // user", independent of whether their reaction was stored as a blinded
-    // token or as a legacy plain emoji.
+    // user", independent of the key that holds it — so a row written during
+    // the pre-D10 emoji compat window is still removable by a token client.
     const updated = await this.messagesService.removeReaction(
       data.messageId,
       userId,

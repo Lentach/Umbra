@@ -131,19 +131,19 @@ peer's reaction silently invisible, which is the class of bug `(lxxxiv)`/(D28) k
 Render the count with a neutral placeholder glyph and no emoji, and re-render when the key lands.
 This is also the newly-linked-device path, so it will be seen in practice.
 
-### 3.3 Rollout and legacy clients
+### 3.3 Rollout and legacy clients — window CLOSED 2026-09-19
 
-There is no auto-update: an APK floor exists (`versionCode 20047`) and PWAs update on relaunch, so
-plaintext-emoji clients will be live for weeks.
+There was no auto-update while the window ran (APK floor `versionCode 20047`, PWAs update on
+relaunch), so plaintext-emoji clients stayed live for two days, not weeks: the fleet was the owner's
+phone (0.2.51) and the PWA (0.2.50), both ≥ 0.2.49, the first token-capable build.
 
-- `AddReactionDto` / `RemoveReactionDto` accept **either** a single emoji (legacy) or a token
-  (`^[A-Za-z0-9_-]{22}$`), for one explicit compat window.
-- A row may therefore hold both shapes. Clients render a legacy plaintext key directly and a token
-  through the map — the two are distinguishable by shape, and a token can never be a valid emoji.
-- Backend first (it must accept tokens before any client sends one), then clients, then a follow-up
-  that **removes** the emoji branch and refuses legacy with a stable code. That removal is the
-  commit that actually closes D10; until then the hole is narrowed, not closed. Write it down as
-  owed work, not as done.
+- During the window `AddReactionDto` / `RemoveReactionDto` accepted **either** a single emoji or a
+  token (`^[A-Za-z0-9_-]{22}$`), and a row could hold both shapes.
+- **Since 2026-09-19 the DTOs accept the token ONLY.** A legacy emoji is refused by validation
+  (`error { message }`, as for any malformed payload) and never written. That commit is what closed
+  D10. Rows written during the window may still carry a plaintext key; clients keep rendering such a
+  key directly and `removeReaction` stays key-agnostic, so the old shape is readable and removable
+  but no longer producible.
 
 ### 3.4 Existing plaintext rows
 
@@ -163,7 +163,7 @@ note. Owner call — this is the only user-visible data loss in the design.
 | 5 | Client: key create/upload via the EXISTING `_resolveFanOut`→`ensureSession`→`encrypt` path, pull-on-miss, **persist `K_react` through the content-key store (§3, the one-shot decryption fact)**, in-memory HMAC map, picker → token, chip reverse lookup, placeholder render | L |
 | 6 | Client: re-upload on `deviceListChanged`, rotate on revoke — **NOT DONE (owner ruling: out of scope for the token cutover).** The server accepts both shapes; no client sends them. Consequence, stated plainly: a device linked after the key was distributed renders placeholder chips for that conversation INDEFINITELY. It is not waiting for a mechanism that exists. **The "self-heal by re-keying at `epoch + 1` when the local key is gone" this row used to promise is DELIBERATELY not built either** (owner ruling 2026-09-17): re-keying blanks the chips of every device that can still read those messages, and a device that cannot read pre-link history loses nothing by showing placeholders, so `ReactionKeyService` mints a key at epoch 0 ONLY. | M |
 | 7 | Tests: token determinism, one-emoji-per-user through tokens, placeholder render, epoch race refusal, legacy-shape compat, pull-on-miss, and re-launch readability (the regression the old "nothing at rest" claim would have shipped) | M |
-| 8 | Follow-up: remove the emoji branch, refuse legacy | S |
+| 8 | Follow-up: remove the emoji branch, refuse legacy — **DONE 2026-09-19** (§3.3) | S |
 
 ## 5. Falsifications to drive the implementation
 

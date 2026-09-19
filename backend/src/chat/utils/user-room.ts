@@ -36,25 +36,6 @@ export function deviceRoom(userId: number, deviceId: number): string {
 }
 
 /**
- * Every live socket for `userId` (one per open tab/device).
- *
- * Only for callers that must inspect socket STATE — currently just push
- * suppression, which reads `client.data.pushClientState`. To merely deliver
- * an event use `server.to(userRoom(id)).emit(...)`, which reaches every tab
- * and is a no-op when the user is offline.
- */
-export function socketsForUser(server: Server, userId: number): Socket[] {
-  const socketIds = server.sockets?.adapter?.rooms?.get(userRoom(userId));
-  if (!socketIds) return [];
-  const sockets: Socket[] = [];
-  for (const socketId of socketIds) {
-    const socket = server.sockets?.sockets?.get(socketId);
-    if (socket) sockets.push(socket);
-  }
-  return sockets;
-}
-
-/**
  * Is this user connected on at least one socket?
  *
  * Replaces the old `onlineUsers.has(id)` presence check. Room occupancy is
