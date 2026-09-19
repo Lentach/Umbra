@@ -105,7 +105,7 @@ export class ChatProvisioningService {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(`openProvisioning failed userId=${userId}: ${message}`);
+      this.logger.error(`openProvisioning failed: ${message}`);
       client.emit('provisioningOpened', {
         success: false,
         error: 'open_failed',
@@ -182,9 +182,7 @@ export class ChatProvisioningService {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(
-        `provisioningHello failed userId=${userId}: ${message}`,
-      );
+      this.logger.error(`provisioningHello failed: ${message}`);
       client.emit('provisioningHelloAck', {
         success: false,
         error: 'hello_failed',
@@ -285,7 +283,7 @@ export class ChatProvisioningService {
         })
       ) {
         this.logger.warn(
-          `[provisioning] REFUSED stage with invalid list signature userId=${userId}`,
+          `[provisioning] REFUSED stage with invalid list signature`,
         );
         client.emit('provisionDeviceAck', {
           success: false,
@@ -296,7 +294,7 @@ export class ChatProvisioningService {
       const added = this.addedEntry(stored, staged, stage);
       if (!added) {
         this.logger.warn(
-          `[provisioning] REFUSED stage whose diff is not exactly the memoized device userId=${userId} deviceId=${stage.deviceId}`,
+          `[provisioning] REFUSED stage whose diff is not exactly the memoized device deviceId=${stage.deviceId}`,
         );
         client.emit('provisionDeviceAck', {
           success: false,
@@ -316,7 +314,7 @@ export class ChatProvisioningService {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(`provisionDevice failed userId=${userId}: ${message}`);
+      this.logger.error(`provisionDevice failed: ${message}`);
       client.emit('provisionDeviceAck', {
         success: false,
         error: 'stage_failed',
@@ -363,9 +361,7 @@ export class ChatProvisioningService {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(
-        `fetchProvisioningBlob failed userId=${userId}: ${message}`,
-      );
+      this.logger.error(`fetchProvisioningBlob failed: ${message}`);
       client.emit('provisioningBlob', {
         success: false,
         error: 'fetch_failed',
@@ -489,9 +485,7 @@ export class ChatProvisioningService {
           return;
         }
         const message = error instanceof Error ? error.message : String(error);
-        this.logger.error(
-          `provisioningComplete commit failed userId=${userId}: ${message}`,
-        );
+        this.logger.error(`provisioningComplete commit failed: ${message}`);
         client.emit('provisioningCompleted', {
           success: false,
           error: 'commit_failed',
@@ -509,7 +503,7 @@ export class ChatProvisioningService {
       });
       this.stages.retire(stage.provisioningId);
       this.logger.log(
-        `[provisioning] committed userId=${userId} deviceId=${stage.deviceId} version=${listVersion}`,
+        `[provisioning] committed deviceId=${stage.deviceId} version=${listVersion}`,
       );
       client.emit('provisioningCompleted', {
         success: true,
@@ -522,9 +516,7 @@ export class ChatProvisioningService {
         .emit('deviceListChanged', { userId, listVersion });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(
-        `provisioningComplete failed userId=${userId}: ${message}`,
-      );
+      this.logger.error(`provisioningComplete failed: ${message}`);
       client.emit('provisioningCompleted', {
         success: false,
         error: 'complete_failed',
@@ -575,9 +567,7 @@ export class ChatProvisioningService {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(
-        `cancelProvisioning failed userId=${userId}: ${message}`,
-      );
+      this.logger.error(`cancelProvisioning failed: ${message}`);
       client.emit('provisioningCancelled', {
         success: false,
         error: 'cancel_failed',

@@ -262,7 +262,7 @@ export class ChatReactionKeyService {
     reason: ReactionKeyRefusal,
   ): void {
     this.logger.warn(
-      `[reaction-key] REFUSED upload userId=${userId} conversationId=${conversationId} reason=${reason}`,
+      `[reaction-key] REFUSED upload conversationId=${conversationId} reason=${reason}`,
     );
   }
 }

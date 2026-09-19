@@ -208,8 +208,7 @@ export class WsThrottlerGuard extends ThrottlerGuard {
       const [name, payload] = answer
         ? answer(context.switchToWs().getData(), retryAfterMs)
         : ['error', { message: RATE_LIMITED, event, retryAfterMs }];
-      const userId = (client.data?.user as { id?: number } | undefined)?.id;
-      const line = `[throttle] REFUSED event=${event ?? 'unknown'} userId=${userId ?? 'anon'} answeredWith=${name} retryAfterMs=${retryAfterMs}`;
+      const line = `[throttle] REFUSED event=${event ?? 'unknown'} answeredWith=${name} retryAfterMs=${retryAfterMs}`;
       const logKey = `${detail.tracker}:${event ?? 'unknown'}`;
       const now = Date.now();
       const lastLogged = this.lastRefusalLog.get(logKey) ?? 0;

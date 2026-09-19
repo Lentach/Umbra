@@ -84,7 +84,7 @@ export class RefreshTokensService {
     }
     if (new Date(row.expiresAt).getTime() <= Date.now()) {
       this.logger.warn(
-        `[auth-session-end] reason=refresh_expired source=refresh_endpoint userId=${row.userId}`,
+        `[auth-session-end] reason=refresh_expired source=refresh_endpoint`,
       );
       await this.refreshRepo.remove(row);
       throw new UnauthorizedException('Refresh token expired');

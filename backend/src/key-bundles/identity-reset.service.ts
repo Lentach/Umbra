@@ -235,7 +235,7 @@ export class IdentityResetService {
       })) !== null;
     if (!enrolled) {
       this.logger.warn(
-        `[identity-reset] request refused: account not enrolled userId=${userId}`,
+        `[identity-reset] request refused: account not enrolled`,
       );
       return {
         status: 'not_enrolled',
@@ -269,7 +269,7 @@ export class IdentityResetService {
       .getOne();
     if (recentCancel) {
       this.logger.warn(
-        `[identity-reset] request refused by post-cancel cooldown userId=${userId}`,
+        `[identity-reset] request refused by post-cancel cooldown`,
       );
       return {
         status: 'cooldown',
@@ -323,7 +323,7 @@ export class IdentityResetService {
           throw new PendingResetConflict(error);
         }
         this.logger.warn(
-          `[identity-reset] ceremony started userId=${userId} shortened=${shortened} phraseTooNew=${phraseTooNew} deadlineAt=${deadlineAt.toISOString()}`,
+          `[identity-reset] ceremony started shortened=${shortened} phraseTooNew=${phraseTooNew} deadlineAt=${deadlineAt.toISOString()}`,
         );
         return {
           status: 'pending' as const,
@@ -389,7 +389,7 @@ export class IdentityResetService {
     const ageMs = Date.now() - row.createdAt.getTime();
     if (ageMs < RECOVERY_MIN_AGE_MS) {
       this.logger.warn(
-        `[identity-reset] recovery phrase too new to shorten userId=${userId} ageMs=${ageMs} requiredMs=${RECOVERY_MIN_AGE_MS}`,
+        `[identity-reset] recovery phrase too new to shorten ageMs=${ageMs} requiredMs=${RECOVERY_MIN_AGE_MS}`,
       );
       return 'too_new';
     }
@@ -441,7 +441,7 @@ export class IdentityResetService {
       .catch((error: unknown) => {
         // A malformed stored hash must never authorize anything.
         this.logger.error(
-          `[identity-reset] recovery verify failed userId=${row.userId}: ${
+          `[identity-reset] recovery verify failed: ${
             error instanceof Error ? error.message : String(error)
           }`,
         );
@@ -501,7 +501,7 @@ export class IdentityResetService {
       .execute();
     const cancelled = (result.affected ?? 0) > 0;
     if (cancelled) {
-      this.logger.warn(`[identity-reset] ceremony cancelled userId=${userId}`);
+      this.logger.warn(`[identity-reset] ceremony cancelled`);
     }
     return cancelled;
   }
@@ -526,7 +526,7 @@ export class IdentityResetService {
     const consumed = (result.affected ?? 0) > 0;
     if (consumed) {
       this.logger.warn(
-        `[identity-reset] completed ceremony consumed by identity upload userId=${userId}`,
+        `[identity-reset] completed ceremony consumed by identity upload`,
       );
     }
     return consumed;
@@ -710,11 +710,9 @@ export class IdentityResetService {
           .where('"userId" IN (:...userIds)', { userIds })
           .andWhere('"usedAt" IS NULL')
           .execute();
-        for (const userId of userIds) {
-          this.logger.warn(
-            `[identity-reset] delay elapsed, identity replacement authorized userId=${userId}`,
-          );
-        }
+        this.logger.warn(
+          `[identity-reset] delay elapsed, identity replacement authorized count=${userIds.length}`,
+        );
       });
     } catch (error) {
       // A failed sweep must never kill the scheduler; the next minute retries.

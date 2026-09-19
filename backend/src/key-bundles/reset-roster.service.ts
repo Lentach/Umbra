@@ -133,7 +133,7 @@ export class ResetRosterService {
     });
 
     this.logger.warn(
-      `[reset-roster] userId=${userId} recoveringDeviceId=${deviceId} movedFrom=${uploadedUnderDeviceId} revoked=[${revokedDeviceIds.join(',')}] nextListVersion=${nextListVersion}`,
+      `[reset-roster] recoveringDeviceId=${deviceId} movedFrom=${uploadedUnderDeviceId} revoked=[${revokedDeviceIds.join(',')}] nextListVersion=${nextListVersion}`,
     );
     return {
       deviceId,

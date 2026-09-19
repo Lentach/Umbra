@@ -396,9 +396,7 @@ export class ChatFriendRequestService {
     // Step 1: Accept the friend request (CRITICAL - if this fails, entire operation fails)
     let friendRequest: FriendRequest;
     try {
-      this.logger.debug(
-        `acceptFriendRequest: requestId=${dto.requestId}, userId=${userId}`,
-      );
+      this.logger.debug(`acceptFriendRequest: requestId=${dto.requestId}`);
       friendRequest = await this.friendsService.acceptRequest(
         dto.requestId,
         userId,

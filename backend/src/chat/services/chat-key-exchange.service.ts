@@ -114,7 +114,7 @@ export class ChatKeyExchangeService {
       await this.webPushSubscriptionsService.removeByUserId(userId);
     } catch (error) {
       this.logger.error(
-        `[reset-roster] push teardown FAILED userId=${userId}: ${errorMessage(error)}`,
+        `[reset-roster] push teardown FAILED: ${errorMessage(error)}`,
       );
     }
   }
@@ -182,12 +182,12 @@ export class ChatKeyExchangeService {
         }
       } catch (error) {
         this.logger.error(
-          `[reset-roster] eviction FAILED userId=${userId} deviceId=${revokedDeviceId}: ${errorMessage(error)}`,
+          `[reset-roster] eviction FAILED deviceId=${revokedDeviceId}: ${errorMessage(error)}`,
         );
       }
     }
     this.logger.log(
-      `[reset-roster] evicted userId=${userId} devices=[${revokedDeviceIds.join(',')}] kickedSockets=${kicked}`,
+      `[reset-roster] evicted devices=[${revokedDeviceIds.join(',')}] kickedSockets=${kicked}`,
     );
   }
 
@@ -254,7 +254,7 @@ export class ChatKeyExchangeService {
         !(await this.devicesService.isActive(userId, deviceId))
       ) {
         this.logger.warn(
-          `uploadKeyBundle refused for never-activated deviceId=${deviceId} userId=${userId}`,
+          `uploadKeyBundle refused: never-activated deviceId=${deviceId}`,
         );
         client.emit('keyBundleUploaded', {
           success: false,
@@ -321,7 +321,7 @@ export class ChatKeyExchangeService {
         }
         if (restored) {
           this.logger.log(
-            `[identity-restore] userId=${userId} from=${deviceId} to=${roster.deviceId}`,
+            `[identity-restore] from=${deviceId} to=${roster.deviceId}`,
           );
         }
       }
@@ -436,9 +436,7 @@ export class ChatKeyExchangeService {
       if (error instanceof IdentityLockedError) {
         // Not a failure to report as an error: the lock did its job. The client
         // reads this as "go through the reset ceremony", never as "retry".
-        this.logger.warn(
-          `uploadKeyBundle refused by registration lock userId=${userId}`,
-        );
+        this.logger.warn(`uploadKeyBundle refused by registration lock`);
         client.emit('keyBundleUploaded', {
           success: false,
           error: 'identity_locked',
@@ -450,9 +448,7 @@ export class ChatKeyExchangeService {
         // write into a namespace whose material it does not hold (the
         // revoked-device-signs-back-in shape). Never a retry; the device's
         // route forward is the §5.1 link ceremony.
-        this.logger.warn(
-          `uploadKeyBundle refused by device material guard userId=${userId}`,
-        );
+        this.logger.warn(`uploadKeyBundle refused by device material guard`);
         client.emit('keyBundleUploaded', {
           success: false,
           error: 'device_material_conflict',
@@ -463,18 +459,14 @@ export class ChatKeyExchangeService {
         // (lxxviii) clause 2: the restore proof did not verify under the
         // stored identity key. Nothing was written; the phrase (and the blob
         // it unsealed) is not this account's. Never a retry.
-        this.logger.warn(
-          `uploadKeyBundle refused invalid restore proof userId=${userId}`,
-        );
+        this.logger.warn(`uploadKeyBundle refused invalid restore proof`);
         client.emit('keyBundleUploaded', {
           success: false,
           error: 'restore_refused',
         });
         return;
       }
-      this.logger.error(
-        `uploadKeyBundle failed userId=${userId}: ${error.message}`,
-      );
+      this.logger.error(`uploadKeyBundle failed: ${error.message}`);
       client.emit('error', {
         message: error?.message || 'Failed to upload key bundle',
       });
@@ -520,9 +512,7 @@ export class ChatKeyExchangeService {
       await pushPromise;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(
-        `identity-changed notify failed userId=${userId}: ${message}`,
-      );
+      this.logger.error(`identity-changed notify failed: ${message}`);
     }
   }
 
@@ -557,7 +547,7 @@ export class ChatKeyExchangeService {
         !(await this.devicesService.isActive(userId, deviceId))
       ) {
         this.logger.warn(
-          `uploadOneTimePreKeys refused for never-activated deviceId=${deviceId} userId=${userId}`,
+          `uploadOneTimePreKeys refused: never-activated deviceId=${deviceId}`,
         );
         client.emit('error', { message: 'device_not_active' });
         return;
@@ -575,19 +565,15 @@ export class ChatKeyExchangeService {
         // The lock did its job, so this is not a server fault: the caller's
         // identity is not the one this account publishes. Same vocabulary as
         // the bundle refusal — the route forward is the reset ceremony.
-        this.logger.warn(
-          `uploadOneTimePreKeys refused by registration lock userId=${userId}`,
-        );
+        this.logger.warn(`uploadOneTimePreKeys refused by registration lock`);
       } else if (error instanceof DeviceMaterialConflictError) {
         // (lxiv) clause 1, OTP half: a foreign install may not deposit OTPs
         // into a pool it does not own. The emitted message carries the code.
         this.logger.warn(
-          `uploadOneTimePreKeys refused by device material guard userId=${userId}`,
+          `uploadOneTimePreKeys refused by device material guard`,
         );
       } else {
-        this.logger.error(
-          `uploadOneTimePreKeys failed userId=${userId}: ${error.message}`,
-        );
+        this.logger.error(`uploadOneTimePreKeys failed: ${error.message}`);
       }
       client.emit('error', {
         message: error?.message || 'Failed to upload one-time pre-keys',
@@ -666,9 +652,7 @@ export class ChatKeyExchangeService {
       });
     } catch (error) {
       // Silence is fail-closed on the client: it treats no status as UNKNOWN.
-      this.logger.error(
-        `checkOwnKeyBundle failed userId=${userId}: ${error.message}`,
-      );
+      this.logger.error(`checkOwnKeyBundle failed: ${error.message}`);
     }
   }
 
@@ -717,9 +701,7 @@ export class ChatKeyExchangeService {
         );
       }
     } catch (error) {
-      this.logger.error(
-        `resetIdentityRequest failed userId=${userId}: ${errorMessage(error)}`,
-      );
+      this.logger.error(`resetIdentityRequest failed: ${errorMessage(error)}`);
       client.emit('error', {
         message: errorMessage(error) || 'Failed to start identity reset',
       });
@@ -752,9 +734,7 @@ export class ChatKeyExchangeService {
           .catch(() => this.logger.warn('identity-reset cancel push failed'));
       }
     } catch (error) {
-      this.logger.error(
-        `resetIdentityCancel failed userId=${userId}: ${errorMessage(error)}`,
-      );
+      this.logger.error(`resetIdentityCancel failed: ${errorMessage(error)}`);
       client.emit('error', {
         message: errorMessage(error) || 'Failed to cancel identity reset',
       });
@@ -785,9 +765,7 @@ export class ChatKeyExchangeService {
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(
-        `identity-reset notify failed userId=${userId}: ${message}`,
-      );
+      this.logger.error(`identity-reset notify failed: ${message}`);
     }
   }
 
@@ -825,9 +803,7 @@ export class ChatKeyExchangeService {
       client.emit('recoveryKeySet', { success: true });
       void this.notifyRecoveryKeyEnrolled(userId, replaced, server);
     } catch (error) {
-      this.logger.error(
-        `setRecoveryKey failed userId=${userId}: ${errorMessage(error)}`,
-      );
+      this.logger.error(`setRecoveryKey failed: ${errorMessage(error)}`);
       client.emit('recoveryKeySet', { success: false });
     }
   }
@@ -857,9 +833,7 @@ export class ChatKeyExchangeService {
           : {}),
       });
     } catch (error) {
-      this.logger.error(
-        `getIdentityBackup failed userId=${userId}: ${errorMessage(error)}`,
-      );
+      this.logger.error(`getIdentityBackup failed: ${errorMessage(error)}`);
       // Same fail-closed convention as the bundle status: the client treats a
       // missing answer as UNKNOWN, never as "no backup exists".
       client.emit('identityBackup', { exists: false, error: 'backup_failed' });
@@ -893,7 +867,7 @@ export class ChatKeyExchangeService {
       );
     } catch (error) {
       this.logger.error(
-        `recovery-key enrolment notify failed userId=${userId}: ${errorMessage(error)}`,
+        `recovery-key enrolment notify failed: ${errorMessage(error)}`,
       );
     }
   }

@@ -108,9 +108,7 @@ export class ProvisioningStagesService implements OnModuleDestroy {
       consumed: false,
     };
     this.stages.set(stage.provisioningId, stage);
-    this.logger.log(
-      `[provisioning] stage opened userId=${userId} deviceId=${deviceId}`,
-    );
+    this.logger.log(`[provisioning] stage opened deviceId=${deviceId}`);
     return stage;
   }
 
@@ -189,7 +187,7 @@ export class ProvisioningStagesService implements OnModuleDestroy {
     }
     if (discarded > 0) {
       this.logger.log(
-        `[provisioning] ${discarded} stage(s) preempted by revocation userId=${userId}`,
+        `[provisioning] ${discarded} stage(s) preempted by revocation`,
       );
     }
     return discarded;

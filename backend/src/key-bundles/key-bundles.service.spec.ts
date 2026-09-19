@@ -166,7 +166,7 @@ describe('KeyBundlesService', () => {
       expect(warnSpy).toHaveBeenCalledWith(
         // `via` names the authorization: a RESET is the moment the §6.2 roster
         // teardown runs, a signature is a plain rotation (amendment (xxviii)).
-        '[identity-churn] userId=9 deviceId=1 via=reset oldIdentityPrefix=old-identity newIdentityPrefix=new-identity',
+        '[identity-churn] deviceId=1 via=reset oldIdentityPrefix=old-identity newIdentityPrefix=new-identity',
       );
       // Phase 0a: the churn is durable — a full audit row, not just a log line.
       expect(auditRepo.insert).toHaveBeenCalledTimes(1);

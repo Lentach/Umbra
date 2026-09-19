@@ -111,7 +111,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       if (!user) {
         this.logger.debug(
-          `[auth-access-reject] reason=user_missing source=socket_connect userId=${payload.sub}`,
+          `[auth-access-reject] reason=user_missing source=socket_connect`,
         );
         client.disconnect();
         return;
@@ -127,7 +127,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
           payload.iat <= changedAtSeconds
         ) {
           this.logger.debug(
-            `[auth-access-reject] reason=password_changed source=socket_connect userId=${user.id}`,
+            `[auth-access-reject] reason=password_changed source=socket_connect`,
           );
           client.disconnect();
           return;
@@ -149,7 +149,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         )
       ) {
         this.logger.warn(
-          `[auth-access-reject] reason=device_revoked source=socket_connect userId=${user.id} deviceId=${payload.deviceId ?? DEFAULT_DEVICE_ID}`,
+          `[auth-access-reject] reason=device_revoked source=socket_connect deviceId=${payload.deviceId ?? DEFAULT_DEVICE_ID}`,
         );
         // Told, then dropped (amendment (xxvi)): a device that reconnects
         // after being kicked learns WHY instead of showing the generic

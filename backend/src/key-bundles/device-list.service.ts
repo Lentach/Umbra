@@ -152,7 +152,7 @@ export class DeviceListService {
    * round-trip to the same bytes (a non-canonical base64 form would break the
    * byte-exact serve).
    */
-  private decodeCanonical(listCanonical: string, userId: number): Buffer {
+  private decodeCanonical(listCanonical: string): Buffer {
     let canonical: Buffer;
     try {
       canonical = Buffer.from(listCanonical, 'base64');
@@ -163,7 +163,7 @@ export class DeviceListService {
     } catch (error) {
       if (error instanceof CanonicalDeviceListError) {
         this.logger.warn(
-          `[device-list] canonical rejected at parse userId=${userId}: ${error.reason}`,
+          `[device-list] canonical rejected at parse: ${error.reason}`,
         );
         throw new DeviceListRejectedError('invalid_canonical');
       }
@@ -200,12 +200,12 @@ export class DeviceListService {
       })
     ) {
       this.logger.warn(
-        `[device-list] REFUSED enrollment with invalid E signature userId=${userId}`,
+        `[device-list] REFUSED enrollment with invalid E signature`,
       );
       throw new DeviceListRejectedError('invalid_enrollment_signature');
     }
 
-    const canonical = this.decodeCanonical(input.listCanonical, userId);
+    const canonical = this.decodeCanonical(input.listCanonical);
     const list = parseCanonicalDeviceList(canonical);
     if (list.userId !== userId) {
       throw new DeviceListRejectedError('canonical_user_mismatch');
@@ -228,7 +228,7 @@ export class DeviceListService {
       })
     ) {
       this.logger.warn(
-        `[device-list] REFUSED enrollment with invalid list signature userId=${userId}`,
+        `[device-list] REFUSED enrollment with invalid list signature`,
       );
       throw new DeviceListRejectedError('invalid_list_signature');
     }
@@ -250,13 +250,13 @@ export class DeviceListService {
       });
       if (storedStillValid) {
         this.logger.warn(
-          `[device-list] REFUSED second enrollment (first-write-wins) userId=${userId}`,
+          `[device-list] REFUSED second enrollment (first-write-wins)`,
         );
         throw new DeviceListRejectedError('already_enrolled');
       }
       if (list.version <= stored.listVersion) {
         this.logger.warn(
-          `[device-list] REFUSED replacement enrollment at a non-advancing version userId=${userId} version=${list.version} stored=${stored.listVersion}`,
+          `[device-list] REFUSED replacement enrollment at a non-advancing version version=${list.version} stored=${stored.listVersion}`,
         );
         throw new DeviceListRejectedError('stale_version');
       }
@@ -285,7 +285,7 @@ export class DeviceListService {
         throw new DeviceListRejectedError('stale_version');
       }
       this.logger.warn(
-        `[device-list] REPLACED orphaned enrollment after an identity change userId=${userId} version=${list.version}`,
+        `[device-list] REPLACED orphaned enrollment after an identity change version=${list.version}`,
       );
       return;
     }
@@ -305,13 +305,13 @@ export class DeviceListService {
     } catch (error) {
       if (isUniqueViolation(error)) {
         this.logger.warn(
-          `[device-list] REFUSED second enrollment (first-write-wins) userId=${userId}`,
+          `[device-list] REFUSED second enrollment (first-write-wins)`,
         );
         throw new DeviceListRejectedError('already_enrolled');
       }
       throw error;
     }
-    this.logger.log(`[device-list] enrolled userId=${userId} version=1`);
+    this.logger.log(`[device-list] enrolled version=1`);
   }
 
   /**
@@ -341,7 +341,7 @@ export class DeviceListService {
       throw new DeviceListRejectedError('not_enrolled');
     }
 
-    const canonical = this.decodeCanonical(input.listCanonical, userId);
+    const canonical = this.decodeCanonical(input.listCanonical);
     const list = parseCanonicalDeviceList(canonical);
     if (list.userId !== userId) {
       throw new DeviceListRejectedError('canonical_user_mismatch');
@@ -355,14 +355,14 @@ export class DeviceListService {
       })
     ) {
       this.logger.warn(
-        `[device-list] REFUSED mutation with invalid list signature userId=${userId} version=${list.version}`,
+        `[device-list] REFUSED mutation with invalid list signature version=${list.version}`,
       );
       throw new DeviceListRejectedError('invalid_list_signature');
     }
 
     if (list.version <= stored.listVersion) {
       this.logger.warn(
-        `[device-list] REFUSED stale/rollback mutation userId=${userId} version=${list.version} stored=${stored.listVersion}`,
+        `[device-list] REFUSED stale/rollback mutation version=${list.version} stored=${stored.listVersion}`,
       );
       throw new DeviceListRejectedError('stale_version');
     }
@@ -380,13 +380,11 @@ export class DeviceListService {
     );
     if (rowCount !== 1) {
       this.logger.warn(
-        `[device-list] REFUSED concurrent stale mutation userId=${userId} version=${list.version}`,
+        `[device-list] REFUSED concurrent stale mutation version=${list.version}`,
       );
       throw new DeviceListRejectedError('stale_version');
     }
-    this.logger.log(
-      `[device-list] updated userId=${userId} version=${list.version}`,
-    );
+    this.logger.log(`[device-list] updated version=${list.version}`);
     return list.version;
   }
 

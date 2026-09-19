@@ -208,7 +208,7 @@ export class KeyBundlesService {
           // replacement attempt on an ENROLLED account is exactly the event
           // this lock exists to stop.
           this.logger.warn(
-            `[identity-lock] REFUSED unauthorized identity replacement userId=${userId} deviceId=${deviceId} storedPrefix=${existingBundle.identityPublicKey.slice(0, 12)} attemptedPrefix=${data.identityPublicKey.slice(0, 12)}`,
+            `[identity-lock] REFUSED unauthorized identity replacement deviceId=${deviceId} storedPrefix=${existingBundle.identityPublicKey.slice(0, 12)} attemptedPrefix=${data.identityPublicKey.slice(0, 12)}`,
           );
           throw new IdentityLockedError();
         }
@@ -219,7 +219,7 @@ export class KeyBundlesService {
         authorizedBy = 'unlocked';
       }
       this.logger.warn(
-        `[identity-churn] userId=${userId} deviceId=${deviceId} via=${authorizedBy} oldIdentityPrefix=${existingBundle.identityPublicKey.slice(0, 12)} newIdentityPrefix=${data.identityPublicKey.slice(0, 12)}`,
+        `[identity-churn] deviceId=${deviceId} via=${authorizedBy} oldIdentityPrefix=${existingBundle.identityPublicKey.slice(0, 12)} newIdentityPrefix=${data.identityPublicKey.slice(0, 12)}`,
       );
     }
     // Amendment (lxxviii) clause 2 — restore proof, valid ONLY when the
@@ -246,14 +246,12 @@ export class KeyBundlesService {
       });
       if (!proofValid) {
         this.logger.warn(
-          `[identity-restore] REFUSED invalid restore proof userId=${userId} deviceId=${deviceId} storedPrefix=${existingBundle.identityPublicKey.slice(0, 12)}`,
+          `[identity-restore] REFUSED invalid restore proof deviceId=${deviceId} storedPrefix=${existingBundle.identityPublicKey.slice(0, 12)}`,
         );
         throw new IdentityRestoreRefusedError();
       }
       authorizedBy = 'restore';
-      this.logger.log(
-        `[identity-restore] proof verified userId=${userId} deviceId=${deviceId}`,
-      );
+      this.logger.log(`[identity-restore] proof verified deviceId=${deviceId}`);
     }
     // (lxiv) clause 1 — refuse a foreign install's write BEFORE any mutation.
     // The account-first row above answers "did the ACCOUNT's identity move";
@@ -273,7 +271,7 @@ export class KeyBundlesService {
       ownRow.registrationId !== data.registrationId
     ) {
       this.logger.warn(
-        `[device-material-conflict] REFUSED same-identity upload with foreign registrationId userId=${userId} deviceId=${deviceId} stored=${ownRow.registrationId} attempted=${data.registrationId}`,
+        `[device-material-conflict] REFUSED same-identity upload with foreign registrationId deviceId=${deviceId} stored=${ownRow.registrationId} attempted=${data.registrationId}`,
       );
       throw new DeviceMaterialConflictError();
     }
@@ -333,14 +331,12 @@ export class KeyBundlesService {
         });
       } catch (err) {
         this.logger.error(
-          `[identity-churn] audit row insert FAILED userId=${userId}`,
+          `[identity-churn] audit row insert FAILED`,
           err instanceof Error ? err.stack : String(err),
         );
       }
     }
-    this.logger.debug(
-      `Key bundle upserted for userId=${userId} deviceId=${deviceId}`,
-    );
+    this.logger.debug(`Key bundle upserted deviceId=${deviceId}`);
     return {
       identityChanged,
       authorizedBy,
@@ -378,7 +374,7 @@ export class KeyBundlesService {
       .execute();
     if ((removed.affected ?? 0) > 0) {
       this.logger.warn(
-        `[identity-churn] dropped ${removed.affected} superseded device bundle(s) userId=${userId} keptDeviceId=${keepDeviceId}`,
+        `[identity-churn] dropped ${removed.affected} superseded device bundle(s) keptDeviceId=${keepDeviceId}`,
       );
     }
   }
@@ -410,9 +406,7 @@ export class KeyBundlesService {
       : this.otpRepo;
     await bundleRepo.delete({ userId, deviceId });
     await otpRepo.delete({ userId, deviceId });
-    this.logger.log(
-      `[devices] purged key material userId=${userId} deviceId=${deviceId}`,
-    );
+    this.logger.log(`[devices] purged key material deviceId=${deviceId}`);
   }
 
   /**
@@ -430,7 +424,7 @@ export class KeyBundlesService {
   ): Promise<void> {
     const removed = await this.otpRepo.delete({ userId, deviceId });
     this.logger.log(
-      `[identity-restore] purged ${removed.affected ?? 0} one-time pre-key(s) userId=${userId} deviceId=${deviceId}`,
+      `[identity-restore] purged ${removed.affected ?? 0} one-time pre-key(s) deviceId=${deviceId}`,
     );
   }
 
@@ -470,7 +464,7 @@ export class KeyBundlesService {
   ): Promise<IdentityChangeAuthorization> {
     if (enrolled && proof?.signature && proof?.nonce) {
       this.logger.warn(
-        `[identity-lock] (liv) signature path REFUSED for an enrolled account userId=${userId} — a linked device holds ikPriv, so only a §6.2 ceremony authorizes an identity change`,
+        `[identity-lock] (liv) signature path REFUSED for an enrolled account — a linked device holds ikPriv, so only a §6.2 ceremony authorizes an identity change`,
       );
     }
     if (!enrolled && proof?.signature && proof?.nonce) {
@@ -565,7 +559,7 @@ export class KeyBundlesService {
     // account identity, creating a false {current identity, stale OTP} pair.
     if (!identityPublicKey) {
       this.logger.warn(
-        `Rejected untagged one-time pre-keys userId=${userId} reason=identity_epoch_required`,
+        `Rejected untagged one-time pre-keys reason=identity_epoch_required`,
       );
       throw new Error('identity_epoch_required');
     }
@@ -606,7 +600,7 @@ export class KeyBundlesService {
       // for no gain.
       if (reset?.status !== 'completed' && (await this.isEnrolled(userId))) {
         this.logger.warn(
-          `[identity-lock] REFUSED one-time pre-keys under an unpublished identity userId=${userId} deviceId=${deviceId} publishedPrefix=${published.identityPublicKey.slice(0, 12)} attemptedPrefix=${identityPublicKey.slice(0, 12)}`,
+          `[identity-lock] REFUSED one-time pre-keys under an unpublished identity deviceId=${deviceId} publishedPrefix=${published.identityPublicKey.slice(0, 12)} attemptedPrefix=${identityPublicKey.slice(0, 12)}`,
         );
         throw new IdentityLockedError();
       }
@@ -629,7 +623,7 @@ export class KeyBundlesService {
         ownRow.registrationId !== registrationId
       ) {
         this.logger.warn(
-          `[device-material-conflict] REFUSED one-time pre-keys from foreign install userId=${userId} deviceId=${deviceId} stored=${ownRow.registrationId} attempted=${registrationId}`,
+          `[device-material-conflict] REFUSED one-time pre-keys from foreign install deviceId=${deviceId} stored=${ownRow.registrationId} attempted=${registrationId}`,
         );
         throw new DeviceMaterialConflictError();
       }
@@ -651,7 +645,7 @@ export class KeyBundlesService {
       { conflictPaths: ['userId', 'deviceId', 'keyId'] },
     );
     this.logger.debug(
-      `Uploaded ${keys.length} one-time pre-keys for userId=${userId} deviceId=${deviceId}`,
+      `Uploaded ${keys.length} one-time pre-keys deviceId=${deviceId}`,
     );
   }
 
@@ -702,7 +696,7 @@ export class KeyBundlesService {
 
     if (!otp) {
       this.logger.warn(
-        `OTP exhausted for userId=${userId} deviceId=${deviceId}: serving bundle without one-time pre-key`,
+        `OTP exhausted deviceId=${deviceId}: serving bundle without one-time pre-key`,
       );
     }
 
@@ -742,6 +736,6 @@ export class KeyBundlesService {
   async deleteByUserId(userId: number): Promise<void> {
     await this.otpRepo.delete({ userId });
     await this.keyBundleRepo.delete({ userId });
-    this.logger.log(`Deleted all key data for userId=${userId}`);
+    this.logger.log(`Deleted all key data`);
   }
 }

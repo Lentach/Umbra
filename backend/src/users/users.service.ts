@@ -301,7 +301,7 @@ export class UsersService {
       throw new UnauthorizedException('Invalid old password');
     }
     await this.setPassword(userId, newPassword, user);
-    this.auditLogger.log(`resetPassword success userId=${userId}`);
+    this.auditLogger.log(`resetPassword success`);
   }
 
   /**
@@ -414,8 +414,6 @@ export class UsersService {
       mediaUrls.map((url) => this.mediaCleanup.deleteMediaFile(url)),
     );
 
-    this.auditLogger.log(
-      `deleteAccount success userId=${userId} username=${user.username}`,
-    );
+    this.auditLogger.log(`deleteAccount success`);
   }
 }

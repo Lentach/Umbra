@@ -91,6 +91,13 @@ jobs:
         working-directory: .
         run: node scripts/verify-claude-backend-test-counts.mjs --log backend/test-output.txt
 
+      # Metadata privacy: no backend source string may carry userId=/username=/
+      # identifier= — container stdout is the one server record that outlives the
+      # transient-queue cutover. Syntax-aware literal scan, spec files excluded.
+      - name: Verify no account identifiers in backend log strings
+        working-directory: .
+        run: node scripts/verify-no-user-logs.mjs
+
       # ESLint RATCHET, not a gate. `npm run lint` has been failing on master for months
       # (966 problems / 726 errors on 2026-07-08 -> 1603 / 1320 on 2026-07-27, ~+30/day)
       # precisely because nothing ran it. A plain eslint step would be red on day one and

@@ -180,7 +180,7 @@ export class ChatDeviceRevocationService {
       const refusal = await this.refuse(userId, callerDeviceId, dto);
       if (refusal) {
         this.logger.warn(
-          `[revoke] REFUSED userId=${userId} callerDeviceId=${callerDeviceId} targetDeviceId=${dto.deviceId} reason=${refusal}`,
+          `[revoke] REFUSED callerDeviceId=${callerDeviceId} targetDeviceId=${dto.deviceId} reason=${refusal}`,
         );
         client.emit('deviceRevocationCompleted', {
           success: false,
@@ -254,7 +254,7 @@ export class ChatDeviceRevocationService {
         );
       } catch (error) {
         this.logger.error(
-          `[revoke] push teardown FAILED userId=${userId} deviceId=${dto.deviceId}: ${
+          `[revoke] push teardown FAILED deviceId=${dto.deviceId}: ${
             error instanceof Error ? error.message : String(error)
           }`,
         );
@@ -275,7 +275,7 @@ export class ChatDeviceRevocationService {
       for (const socket of kicked) socket.disconnect();
 
       this.logger.log(
-        `[revoke] userId=${userId} deviceId=${dto.deviceId} version=${listVersion} kickedSockets=${kicked.length}`,
+        `[revoke] deviceId=${dto.deviceId} version=${listVersion} kickedSockets=${kicked.length}`,
       );
       client.emit('deviceRevocationCompleted', {
         success: true,
@@ -287,7 +287,7 @@ export class ChatDeviceRevocationService {
         .emit('deviceListChanged', { userId, listVersion });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(`revokeDevice failed userId=${userId}: ${message}`);
+      this.logger.error(`revokeDevice failed: ${message}`);
       client.emit('deviceRevocationCompleted', {
         success: false,
         error: 'revoke_failed',

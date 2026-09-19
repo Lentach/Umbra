@@ -295,7 +295,7 @@ describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', (
       await service.requestReset(7);
 
       expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('post-cancel cooldown userId=7'),
+        expect.stringContaining('post-cancel cooldown'),
       );
     });
 

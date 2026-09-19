@@ -68,7 +68,7 @@ export class DevicesService {
         .execute();
     } catch (error) {
       this.logger.warn(
-        `[devices] ensureRow failed userId=${userId} deviceId=${deviceId}: ${
+        `[devices] ensureRow failed deviceId=${deviceId}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );

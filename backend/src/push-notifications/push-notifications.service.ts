@@ -217,17 +217,17 @@ export class PushNotificationsService implements OnModuleInit {
       if (staleTokens.length) {
         await this.fcmTokensService.removeByTokens(staleTokens);
         this.logger.debug(
-          `FCM cleanup removed ${staleTokens.length} stale tokens for userId=${userId}`,
+          `FCM cleanup removed ${staleTokens.length} stale tokens`,
         );
       }
       this.logger.debug(
-        `FCM push attempted for userId=${userId}, tokens=${tokens.length}, success=${result.successCount}, failure=${result.failureCount}`,
+        `FCM push attempted tokens=${tokens.length}, success=${result.successCount}, failure=${result.failureCount}`,
       );
     } catch (err) {
       // BE-502: recipient userId must not reach prod logs (prod keeps error/warn/log).
       // Keep a non-identifying operational signal; the userId-bearing detail goes to debug.
       this.logger.warn('FCM multicast send failed');
-      this.logger.debug(`Failed to send push to userId=${userId}`, err);
+      this.logger.debug(`Failed to send push`, err);
     }
   }
 
@@ -300,18 +300,18 @@ export class PushNotificationsService implements OnModuleInit {
       }
       // BE-502: no recipient identifier above debug (prod keeps error/warn/log).
       this.logger.debug(
-        `Web Push delivery failed for userId=${userId}, status=${statusCode || 'unknown'}`,
+        `Web Push delivery failed status=${statusCode || 'unknown'}`,
       );
     });
 
     if (staleEndpoints.length) {
       await this.webPushSubscriptionsService.removeByEndpoints(staleEndpoints);
       this.logger.debug(
-        `Web Push cleanup removed ${staleEndpoints.length} stale subscriptions for userId=${userId}`,
+        `Web Push cleanup removed ${staleEndpoints.length} stale subscriptions`,
       );
     }
     this.logger.debug(
-      `Web Push attempted for userId=${userId}, subscriptions=${subscriptions.length}, stale=${staleEndpoints.length}`,
+      `Web Push attempted subscriptions=${subscriptions.length}, stale=${staleEndpoints.length}`,
     );
   }
 

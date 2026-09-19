@@ -170,9 +170,7 @@ export class ChatConversationService {
       return;
     }
 
-    this.logger.debug(
-      `handleGetConversations: userId=${userId}, username=${client.data.user?.username}`,
-    );
+    this.logger.debug(`handleGetConversations`);
     const [rawConversations, blockedIds, blockedByUserIds] = await Promise.all([
       this.conversationsService.findByUser(userId),
       this.blockedService.getBlockedUserIds(userId),
@@ -185,7 +183,7 @@ export class ChatConversationService {
       return !excludeSet.has(otherId);
     });
     this.logger.debug(
-      `handleGetConversations: found ${conversations.length} conversations for userId=${userId}`,
+      `handleGetConversations: found ${conversations.length} conversations`,
     );
 
     const list = await this.conversationsWithUnread(conversations, userId);

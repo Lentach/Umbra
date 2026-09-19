@@ -743,7 +743,7 @@ export class ChatMessageService {
       )
     ) {
       this.logger.warn(
-        `[revoke] SILENCE on getServedMessageIds userId=${userId} deviceId=${socketDeviceId(client) ?? DEFAULT_DEVICE_ID}`,
+        `[revoke] SILENCE on getServedMessageIds deviceId=${socketDeviceId(client) ?? DEFAULT_DEVICE_ID}`,
       );
       return;
     }
@@ -1215,7 +1215,7 @@ export class ChatMessageService {
       // same line, or a systemic DB problem under load looks like users editing
       // deleted messages. 23503 is Postgres' foreign_key_violation.
       const racedDelete = (error as { code?: string }).code === '23503';
-      const detail = `[edit] write failed messageId=${messageId} userId=${userId}: ${
+      const detail = `[edit] write failed messageId=${messageId}: ${
         (error as Error).message
       }`;
       if (racedDelete) {

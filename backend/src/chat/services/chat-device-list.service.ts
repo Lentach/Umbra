@@ -76,9 +76,7 @@ export class ChatDeviceListService {
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(
-        `enrollDeviceAuthority failed userId=${userId}: ${message}`,
-      );
+      this.logger.error(`enrollDeviceAuthority failed: ${message}`);
       client.emit('deviceAuthorityEnrolled', {
         success: false,
         error: 'enrollment_failed',
@@ -115,7 +113,7 @@ export class ChatDeviceListService {
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(`updateDeviceList failed userId=${userId}: ${message}`);
+      this.logger.error(`updateDeviceList failed: ${message}`);
       client.emit('deviceListUpdated', {
         success: false,
         error: 'update_failed',

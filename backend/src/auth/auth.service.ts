@@ -51,19 +51,17 @@ export class AuthService {
       // Constant-time guard: perform a real bcrypt compare so a missing user
       // is indistinguishable by timing from a wrong password.
       await bcrypt.compare(password, TIMING_SAFE_DUMMY_HASH);
-      this.auditLogger.log(`login failed identifier=${identifier}`);
+      this.auditLogger.log(`login failed`);
       throw new UnauthorizedException('Invalid credentials');
     }
 
     const passwordValid = await bcrypt.compare(password, user.password);
     if (!passwordValid) {
-      this.auditLogger.log(`login failed identifier=${identifier}`);
+      this.auditLogger.log(`login failed`);
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    this.auditLogger.log(
-      `login success userId=${user.id} username=${user.username}`,
-    );
+    this.auditLogger.log(`login success`);
     return this.issueSession(user);
   }
 
@@ -92,7 +90,7 @@ export class AuthService {
       await argon2
         .verify(TIMING_SAFE_DUMMY_VERIFIER, phrase)
         .catch(() => false);
-      this.auditLogger.log(`recoverPassword failed identifier=${identifier}`);
+      this.auditLogger.log(`recoverPassword failed`);
       throw new UnauthorizedException('Invalid credentials');
     }
     const verdict = await this.identityResetService.verifyRecoveryPhrase(
@@ -100,18 +98,16 @@ export class AuthService {
       phrase,
     );
     if (verdict === 'locked') {
-      this.auditLogger.log(`recoverPassword locked userId=${user.id}`);
+      this.auditLogger.log(`recoverPassword locked`);
       throw new HttpException('recovery_locked', HttpStatus.LOCKED);
     }
     if (verdict !== 'accepted') {
-      this.auditLogger.log(`recoverPassword failed userId=${user.id}`);
+      this.auditLogger.log(`recoverPassword failed`);
       throw new UnauthorizedException('Invalid credentials');
     }
 
     const changedAt = await this.usersService.setPassword(user.id, newPassword);
-    this.auditLogger.log(
-      `recoverPassword success userId=${user.id} username=${user.username}`,
-    );
+    this.auditLogger.log(`recoverPassword success`);
     // `JwtStrategy` and the socket handshake reject `iat <= passwordChangedAt`
     // in WHOLE SECONDS, and a JWT's `iat` is floored — a token signed in the
     // same second as the stamp is dead on arrival. Wait for the next second
@@ -140,9 +136,7 @@ export class AuthService {
     }
     const users = await this.usersService.findByUsername(identifier.trim());
     if (users.length > 1) {
-      this.auditLogger.log(
-        `login failed identifier=${identifier} (multiple users)`,
-      );
+      this.auditLogger.log(`login failed (multiple users)`);
     }
     return users.length === 1 ? users[0] : null;
   }

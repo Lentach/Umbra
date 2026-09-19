@@ -112,7 +112,7 @@ export class PushNotificationCoalescingService implements OnModuleDestroy {
       unreadConversationIds = summary.unreadConversationIds;
       unreadCount = summary.countByConversationId.get(conversationId) ?? 0;
     } catch (err) {
-      this.logger.warn(`Push coalesce: unread summary failed for userId=${recipientUserId}`, err);
+      this.logger.warn(`Push coalesce: unread summary failed`, err);
     }
 
     if (unreadCount != null && unreadTotal != null) {
