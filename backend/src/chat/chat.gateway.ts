@@ -139,7 +139,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // at the handlers: reconnecting is how a kicked device would otherwise
       // come straight back. Amendment (xxii) — deny ONLY on an explicit
       // `revokedAt`; a MISSING row must never deny, because every
-      // pre-Phase-1 account has no `devices` row until the `touch` below
+      // pre-Phase-1 account has no `devices` row until the `ensureRow` below
       // writes one (§8), and denying on absence would lock out every legacy
       // install.
       if (
@@ -178,9 +178,11 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // own envelope, so it needs its own room. Metadata keeps using the user
       // room above so every device still sees it.
       client.join(deviceRoom(user.id, payload.deviceId ?? DEFAULT_DEVICE_ID));
-      // Keep the account's device row alive (Phase 1, spec §4). Fire-and-
-      // forget: a failed write costs a `lastSeenAt`, never the session.
-      void this.devicesService.touch(
+      // Make sure the account's device-1 row exists (Phase 1, spec §4; the
+      // only creator for accounts that predate provisioning). Fire-and-
+      // forget: a failed write costs a missing row, never the session. No
+      // timestamp is written — the server keeps no "last online" clock.
+      void this.devicesService.ensureRow(
         user.id,
         payload.deviceId ?? DEFAULT_DEVICE_ID,
       );

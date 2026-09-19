@@ -128,9 +128,11 @@ mutate passed buffers — always pass copies of retained key/signature buffers.
 
 New/changed tables (numbered migrations, staging rehearsal mandatory — root `CLAUDE.md` §6):
 
-- **`devices`**: `(userId, deviceId)` PK, `name`, `platform`, `isPrimary`, `addedAt`, `revokedAt`,
-  `lastSeenAt`. `deviceId` per-account small int from 1 (existing accounts = device 1 implicitly,
-  §8).
+- **`devices`**: `(userId, deviceId)` PK, `name`, `platform`, `isPrimary`, `addedAt`, `revokedAt`.
+  `deviceId` per-account small int from 1 (existing accounts = device 1 implicitly, §8). No
+  `lastSeenAt`: dropped by migration 0019 (metadata privacy step 0, 2026-09-20) — the server keeps
+  no per-device "last online" clock; `ensureRow` creates device 1's row on first connect and
+  otherwise writes nothing.
 - **`account_authorizations`**: `userId` PK, `dakPub`, `enrollmentSig`, `listVersion`,
   `listSignature`, `listCanonical` (opaque bytes, §3), `updatedAt`.
 - **`key_bundles`**: UNIQUE becomes `(userId, deviceId)`. The **identity-epoch invariant is

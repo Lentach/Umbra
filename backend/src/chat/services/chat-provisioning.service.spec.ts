@@ -617,7 +617,6 @@ describe('ChatProvisioningService', () => {
         deviceId: 2,
         platform: 'web',
         isPrimary: false,
-        lastSeenAt: expect.any(Date) as unknown,
       });
       expect(deviceListService.applySignedListUpdate).toHaveBeenCalledWith(
         USER_ID,

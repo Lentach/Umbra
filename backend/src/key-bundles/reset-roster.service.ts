@@ -86,7 +86,6 @@ export class ResetRosterService {
         deviceId,
         isPrimary: true,
         platform: null,
-        lastSeenAt: new Date(),
       });
 
       // Carry the fresh material onto the new id. `(userId, deviceId)` is

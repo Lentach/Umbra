@@ -8,9 +8,10 @@ import { DevicesService } from './devices.service';
 /**
  * The account's device rows (Phase 1, multi-device spec §4).
  *
- * Two properties matter here: the row exists for every account that connects
- * (a table only a migration backfill ever wrote would be dead by the time
- * revocation needs it), and touching it can never break a connection.
+ * Three properties matter here: the row exists for every account that
+ * connects (a table only a migration backfill ever wrote would be dead by the
+ * time revocation needs it), ensuring it can never break a connection, and
+ * a connect leaves no "last online" clock behind (metadata privacy step 0).
  */
 describe('DevicesService', () => {
   let service: DevicesService;
@@ -39,61 +40,77 @@ describe('DevicesService', () => {
 
   afterEach(() => warnSpy.mockRestore());
 
-  it('creates the row on first sight and marks device 1 primary', async () => {
-    await service.touch(7);
+  describe('ensureRow', () => {
+    const insertBuilder = (execute: jest.Mock) => {
+      const chain: Record<string, jest.Mock> = {
+        insert: jest.fn(() => chain),
+        into: jest.fn(() => chain),
+        values: jest.fn(() => chain),
+        orIgnore: jest.fn(() => chain),
+        execute,
+      };
+      return chain;
+    };
 
-    expect(repo.insert).toHaveBeenCalledWith(
-      expect.objectContaining({
+    it('creates device 1 as primary on first sight, insert-or-ignore', async () => {
+      const chain = insertBuilder(jest.fn().mockResolvedValue({ raw: [] }));
+      repo.createQueryBuilder = jest.fn(() => chain);
+
+      await service.ensureRow(7, 1, 'android');
+
+      expect(chain.values).toHaveBeenCalledWith({
         userId: 7,
         deviceId: 1,
         isPrimary: true,
-        lastSeenAt: expect.any(Date) as unknown,
-      }),
-    );
-  });
+        platform: 'android',
+      });
+      // ON CONFLICT DO NOTHING is what leaves an existing row exactly as it
+      // is: rewriting isPrimary on every connect would undo a primary
+      // handover the moment the new primary reconnects, and rewriting
+      // platform would erase what the row already knows.
+      expect(chain.orIgnore).toHaveBeenCalledTimes(1);
+      expect(chain.execute).toHaveBeenCalledTimes(1);
+    });
 
-  it('never creates a row for a linked device id (amendment (b))', async () => {
-    // Rows for ids >= 2 are created SOLELY by the provisioning commit
-    // transaction: an auto-insert here would activate a deviceId no
-    // ceremony ever committed. The connect still refreshes lastSeenAt.
-    await service.touch(7, 2);
+    it('writes no timestamp: the row carries no "last online" clock', async () => {
+      const chain = insertBuilder(jest.fn().mockResolvedValue({ raw: [] }));
+      repo.createQueryBuilder = jest.fn(() => chain);
 
-    expect(repo.update).toHaveBeenCalledWith(
-      { userId: 7, deviceId: 2 },
-      { lastSeenAt: expect.any(Date) as unknown },
-    );
-    expect(repo.insert).not.toHaveBeenCalled();
-  });
+      await service.ensureRow(7);
 
-  it('a provisioned device row still gets its lastSeenAt refresh', async () => {
-    repo.update.mockResolvedValue({ affected: 1 });
+      const [values] = chain.values.mock.calls[0] as [Record<string, unknown>];
+      expect(Object.keys(values).sort()).toEqual([
+        'deviceId',
+        'isPrimary',
+        'platform',
+        'userId',
+      ]);
+      expect(repo.update).not.toHaveBeenCalled();
+    });
 
-    await service.touch(7, 2);
+    it('never creates a row for a linked device id (amendment (b))', async () => {
+      // Rows for ids >= 2 are created SOLELY by the provisioning commit
+      // transaction: an auto-insert here would activate a deviceId no
+      // ceremony ever committed. With no timestamp to refresh, a linked
+      // device's connect writes nothing at all.
+      repo.createQueryBuilder = jest.fn();
 
-    expect(repo.update).toHaveBeenCalledTimes(1);
-    expect(repo.insert).not.toHaveBeenCalled();
-  });
+      await service.ensureRow(7, 2);
 
-  it('an existing row is only touched, never re-primaried or re-platformed', async () => {
-    // Rewriting isPrimary on every connect would undo a primary handover the
-    // moment the new primary reconnects, and rewriting platform would erase
-    // what the row already knows.
-    repo.update.mockResolvedValue({ affected: 1 });
+      expect(repo.createQueryBuilder).not.toHaveBeenCalled();
+      expect(repo.insert).not.toHaveBeenCalled();
+      expect(repo.update).not.toHaveBeenCalled();
+    });
 
-    await service.touch(7, 1, 'android');
+    it('a write failure costs a missing row, never the connection', async () => {
+      const chain = insertBuilder(
+        jest.fn().mockRejectedValue(new Error('db down')),
+      );
+      repo.createQueryBuilder = jest.fn(() => chain);
 
-    expect(repo.update).toHaveBeenCalledWith(
-      { userId: 7, deviceId: 1 },
-      { lastSeenAt: expect.any(Date) as unknown },
-    );
-    expect(repo.insert).not.toHaveBeenCalled();
-  });
-
-  it('a write failure costs a lastSeenAt, never the connection', async () => {
-    repo.update.mockRejectedValue(new Error('db down'));
-
-    await expect(service.touch(7)).resolves.toBeUndefined();
-    expect(warnSpy).toHaveBeenCalledTimes(1);
+      await expect(service.ensureRow(7)).resolves.toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('isActive', () => {

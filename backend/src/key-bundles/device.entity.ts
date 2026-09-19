@@ -54,7 +54,4 @@ export class Device {
 
   @Column({ type: 'timestamp', nullable: true })
   revokedAt: Date | null;
-
-  @Column({ type: 'timestamp', nullable: true })
-  lastSeenAt: Date | null;
 }

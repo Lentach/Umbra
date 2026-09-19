@@ -37,7 +37,6 @@ describe('ChatDeviceRevocationService', () => {
       isPrimary: true,
       addedAt: new Date(ADDED_AT),
       revokedAt: null,
-      lastSeenAt: null,
       ...overrides,
     }) as Device;
 

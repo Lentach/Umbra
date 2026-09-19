@@ -454,7 +454,6 @@ export class ChatProvisioningService {
             deviceId: stage.deviceId,
             platform: stage.platform,
             isPrimary: false,
-            lastSeenAt: new Date(),
           });
           listVersion = await this.deviceListService.applySignedListUpdate(
             userId,

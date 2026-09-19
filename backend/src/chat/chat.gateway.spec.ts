@@ -16,12 +16,12 @@ function createGateway(): ChatGateway {
     deliverPendingSessionRebuilds: jest.fn(),
     handleCheckOwnKeyBundle: jest.fn(),
   } as any;
-  // The device row is touched on every connect (Phase 1, spec §4); it must
+  // The device-1 row is ensured on every connect (Phase 1, spec §4); it must
   // never be able to break the connection, so it is stubbed and ignored here.
   // `isRevoked` is the §5.5 connect gate: the default answer is "not revoked",
   // and the revocation suite drives the true case.
-  const devices: Pick<DevicesService, 'touch' | 'isRevoked'> = {
-    touch: jest.fn(),
+  const devices: Pick<DevicesService, 'ensureRow' | 'isRevoked'> = {
+    ensureRow: jest.fn(),
     isRevoked: jest.fn<Promise<boolean>, [number, number]>(() =>
       Promise.resolve(false),
     ),

@@ -1,0 +1,14 @@
+-- Metadata privacy, step 0 (owner-approved 2026-09-20): the server keeps no
+-- per-device "last online" clock. `devices.lastSeenAt` was refreshed on every
+-- socket connect (chat.gateway.ts -> DevicesService.touch), which made the
+-- `devices` table a presence log: one row per device, "online at <time>",
+-- readable by anyone with the DB. Nothing reads it (no DTO, no canonical
+-- device-list field, no client code), so the column goes, not just the write.
+--
+-- The row itself stays: device 1's row is still created on first connect for
+-- accounts that predate provisioning (§8), and `isRevoked` depends on it.
+--
+-- Inverse (only if a backend that still writes the column is redeployed; add
+-- it as the NEXT numbered file, never edit this one):
+--   ALTER TABLE public.devices ADD COLUMN "lastSeenAt" TIMESTAMP NULL;
+ALTER TABLE public.devices DROP COLUMN IF EXISTS "lastSeenAt";

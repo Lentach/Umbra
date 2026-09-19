@@ -23,48 +23,52 @@ export class DevicesService {
   ) {}
 
   /**
-   * Records that a device of this account is connected, creating its row on
-   * first sight.
+   * Creates device 1's row on first sight. This is the ONLY creator of a
+   * `devices` row for accounts that predate provisioning (§8), and
+   * `isRevoked` depends on the row existing.
    *
    * Device 1 is the account's primary until provisioning ships (invariant I2:
    * only a Keystore-capable device may be primary, and today there is exactly
    * one device). Called on every connect, so it must be cheap and must never
-   * break the connection: a failure here costs a `lastSeenAt`, not a session.
+   * break the connection: a failure here costs a missing row, not a session.
+   *
+   * The server keeps no "last online" clock (metadata privacy step 0): an
+   * existing row is left exactly as it is — rewriting `isPrimary` would undo
+   * a primary handover (§6.3) on the new primary's next connect, and
+   * rewriting `platform` would erase what the row already knows.
    */
-  async touch(
+  async ensureRow(
     userId: number,
     deviceId: number = DEFAULT_DEVICE_ID,
     platform?: string,
   ): Promise<void> {
+    if (deviceId !== DEFAULT_DEVICE_ID) {
+      // Rows for ids >= 2 are created SOLELY by the provisioning commit
+      // transaction (spec §12 Stage-0 amendment (b)): auto-inserting one
+      // here would activate a deviceId the ceremony never committed and
+      // reopen the never-activated-upload hole this ticket closes.
+      return;
+    }
     try {
-      // An existing row gets ONLY a fresh `lastSeenAt`. Rewriting `isPrimary`
-      // would undo a primary handover (§6.3) on the new primary's next
-      // connect, and rewriting `platform` would erase what the row already
-      // knows — this connect does not carry it.
-      const refreshed = await this.deviceRepo.update(
-        { userId, deviceId },
-        { lastSeenAt: new Date() },
-      );
-      if ((refreshed.affected ?? 0) > 0) return;
-      if (deviceId !== DEFAULT_DEVICE_ID) {
-        // Rows for ids >= 2 are created SOLELY by the provisioning commit
-        // transaction (spec §12 Stage-0 amendment (b)): auto-inserting one
-        // here would activate a deviceId the ceremony never committed and
-        // reopen the never-activated-upload hole this ticket closes.
-        return;
-      }
-      await this.deviceRepo.insert({
-        userId,
-        deviceId,
-        // First sight of device 1 IS the account's primary; a linked device
-        // never claims that for itself (invariant I2).
-        isPrimary: deviceId === DEFAULT_DEVICE_ID,
-        platform: platform ?? null,
-        lastSeenAt: new Date(),
-      });
+      await this.deviceRepo
+        .createQueryBuilder()
+        .insert()
+        .into(Device)
+        .values({
+          userId,
+          deviceId,
+          // First sight of device 1 IS the account's primary; a linked device
+          // never claims that for itself (invariant I2).
+          isPrimary: true,
+          platform: platform ?? null,
+        })
+        // ON CONFLICT DO NOTHING on the (userId, deviceId) PK: two concurrent
+        // first connects cannot race into a unique violation.
+        .orIgnore()
+        .execute();
     } catch (error) {
       this.logger.warn(
-        `[devices] touch failed userId=${userId} deviceId=${deviceId}: ${
+        `[devices] ensureRow failed userId=${userId} deviceId=${deviceId}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
