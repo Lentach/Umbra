@@ -533,13 +533,14 @@ void main() {
     );
 
     test(
-      'a legacy plaintext reaction still round-trips and clears on removal',
+      'a plaintext emoji reaction is refused; a token round-trips and clears on removal',
       () async {
-        // The compat window (design §3.3): the server accepts a plain emoji as
-        // a reaction key so clients that have not updated keep working. Driven
-        // on the RAW socket, because the app's own provider now blinds every
-        // reaction into a token — this case exists to prove the OLD shape is
-        // still served, so it must not go through the new client path.
+        // D10 closed 2026-09-19 (design §3.3): the compat window that let a
+        // not-yet-updated client react with a plain emoji is over, so the
+        // server must refuse the OLD shape and never store it in the clear.
+        // Driven on the RAW socket because the app's own provider only ever
+        // sends tokens — this case pins the server-side refusal, which no
+        // client path can exercise any more.
         final messageId = await roundTrip(
           alice,
           bob,
@@ -548,9 +549,26 @@ void main() {
           expectedWireType: 2,
         );
 
+        bob.events.discard('reactionUpdated');
         bob.socketService.socket!.emit('addReaction', {
           'messageId': messageId,
           'emoji': '🔥',
+        });
+        await bob.events.takeError(
+          'reaction token',
+          reason: 'plaintext emoji refused',
+        );
+        await alice.events.none(
+          'reactionUpdated',
+          within: const Duration(seconds: 2),
+          where: (p) => p is Map && p['messageId'] == messageId,
+          reason: 'a refused reaction must not fan out',
+        );
+
+        const token = 'AAAAAAAAAAAAAAAAAAAAAA';
+        bob.socketService.socket!.emit('addReaction', {
+          'messageId': messageId,
+          'emoji': token,
         });
         for (final client in [alice, bob]) {
           final updated =
@@ -561,16 +579,15 @@ void main() {
                   )
                   as Map;
           expect(updated['conversationId'], conversationId);
-          expect((updated['reactions'] as Map)['🔥'], [bob.userId]);
+          expect((updated['reactions'] as Map)[token], [bob.userId]);
         }
 
-        // Removal names a DIFFERENT key than the one stored, which is the
-        // real compat hazard: an updated client only knows its token. The
-        // server drops the user's single reaction regardless of the key, so
-        // the chip clears instead of staying lit forever.
+        // Removal names a DIFFERENT token than the one stored: the server
+        // drops the user's single reaction regardless of the key, so a chip
+        // never stays lit because the remover's key differs.
         bob.socketService.socket!.emit('removeReaction', {
           'messageId': messageId,
-          'emoji': 'AAAAAAAAAAAAAAAAAAAAAA',
+          'emoji': 'BBBBBBBBBBBBBBBBBBBBBB',
         });
         for (final client in [alice, bob]) {
           final updated =
