@@ -713,4 +713,9 @@ Add this to the friend-facing text:
   loopback proxy; API 28+ blocks that otherwise), with no `base-config`, so every other host keeps
   the platform block. The debug variant adds `10.0.2.2` for a local backend. Never widen this to
   `usesCleartextTraffic="true"`.
-- iOS: no Firebase app, no runner signing — out of scope until an iOS release is planned.
+- iOS: no Firebase app, no runner signing, no `Podfile` (never `pod install`ed) — out of scope until an
+  iOS release is planned. **When it is:** the bundle id is still the template's `com.rpgchat.frontend`
+  (`frontend/ios/Runner.xcodeproj/project.pbxproj:371,550,572` + three `RunnerTests` lines) — set it to
+  `com.fireplace.app` to mirror Android before the first build; store identities are permanent. Building
+  needs macOS + Xcode (or a cloud Mac such as Codemagic) and the $99/yr Apple Developer account; the Dart
+  tree is shared, nothing forks (owner decision 2026-09-19: Android first).

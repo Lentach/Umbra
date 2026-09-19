@@ -1,6 +1,6 @@
 # Composer, media, and platform gotchas — Umbra frontend
 
-**Moved verbatim from `frontend/CLAUDE.md` on 2026-09-10** (workflow 2.0 batch 4). Read BEFORE touching `chat_input_bar*`, `composer*`, `chat_action_tiles.dart`, `web_file_input.dart`, attachment/picker code, `**/media*`, `**/video*`, `**/voice*`, `**/image*`, the iOS viewport pin, or anything keyboard-adjacent in the chat screen. **The 2026-08-19 composer rule lives here: nothing ships in the composer without a green repro AND the owner's explicit OK.** Source beats this doc; fix the doc in the same commit.
+**Moved verbatim from `frontend/CLAUDE.md` on 2026-09-10** (workflow 2.0 batch 4). Read BEFORE touching `chat_input_bar*`, `composer*`, `chat_action_tiles.dart`, `web_file_input.dart`, attachment/picker code, `**/media*`, `**/video*`, `**/voice*`, `**/image*`, the iOS viewport pin, or anything keyboard-adjacent in the chat screen. **The 2026-08-19 ship freeze ("green repro AND owner's explicit OK") was lifted by the owner 2026-09-19** — keep a repro for behaviour changes, no approval gate. Still true for technical reasons: never `git revert 0cbf17b` (it also carries the 0.1.10 identity guard and the PeerIdentityChangedBanner removal, `2026-08-19-session-composer-regression.md:79-87`). Source beats this doc; fix the doc in the same commit.
 
 ## Composer, media, and platform gotchas
 

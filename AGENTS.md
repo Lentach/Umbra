@@ -20,8 +20,8 @@ Universal agent entrypoint. **In Oh-My-Pi this is the ONLY project file injected
 ## Non-negotiable (details in root `CLAUDE.md` §1, §4, §6)
 
 - Code wins over docs. When they disagree, fix the doc in the same commit. Re-verify volatile claims (branch, versions, CI, counts) with a command you ran THIS session.
-- **This checkout is on `feat/passcode-lock`; `master` lives in the `fireplace-0a` worktree.** `git fetch && git status -sb` first. Push as `git push origin HEAD:master`, then the branch. **The worktree is shared — stage by explicit path, never `git add -A`.**
-- Change only what was asked. Composer/attachment picker: nothing ships without a green repro AND the owner's explicit OK; never `git revert 0cbf17b`.
+- **This checkout is on `feat/passcode-lock`; `master` lives in the `fireplace-0a` worktree.** `git fetch && git status -sb` first. Push as `git push origin HEAD:master`, then the branch. **The worktree is shared — stage by explicit path, never `git add -A`; never `git revert 0cbf17b`** (carries the identity guard, see `traps.md`).
+- Change only what was asked. Composer/attachment picker: read `frontend/docs/composer-media.md` first, keep a repro for behaviour changes (the 2026-08-19 freeze was lifted by the owner 2026-09-19).
 - Pre-commit runs `gitleaks git --staged` and `scripts/verify-context-budget.mjs`. Never `--no-verify`. Never trim a fresh summary to fit — move detail out.
 - Prod: deploy is split (web from the PC, backend on the VM); CI must be green first — `gh api repos/Lentach/Umbra/commits/master/check-runs`, **never `gh run list`**. Never `docker compose down -v` / `volume rm` / bare `up -d` on prod. Never tell a user to clear site data.
 - Task end: dated summary ≤6 KB with the four sections, traps appended to `docs/agents/traps.md`, ≤900-char LATEST entry on top, oldest deleted. Skill: `umbra-session-end`.

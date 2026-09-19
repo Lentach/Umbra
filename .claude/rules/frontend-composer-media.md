@@ -9,4 +9,4 @@ paths:
 ---
 # Composer, media, platform gotchas
 
-Read **`frontend/docs/composer-media.md`** before the first edit (verbatim former `frontend/CLAUDE.md` §7). **2026-08-19 composer rule: nothing ships here without a green repro AND the owner's explicit OK; never `git revert 0cbf17b`.** Dependabot #174 (`file_picker` 11.0.3) is deliberately open for this reason.
+Read **`frontend/docs/composer-media.md`** before the first edit (verbatim former `frontend/CLAUDE.md` §7). Keep a repro for behaviour changes here — the 2026-08-19 ship freeze was lifted by the owner 2026-09-19. Dependabot #174 (`file_picker` 11.0.3) stays deliberately open (`web_file_input.dart` depends on 11.0.2 DOM behaviour).
