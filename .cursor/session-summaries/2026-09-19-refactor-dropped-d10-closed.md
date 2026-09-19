@@ -11,6 +11,7 @@
 
 ## Key files
 - Edited: `backend/src/chat/dto/chat.dto.ts`, `chat.dto.spec.ts`, `backend/src/chat/services/chat-reaction.service.{ts,spec.ts}`, `backend/src/chat/utils/user-room.ts`, `backend/src/key-bundles/identity-reset.service.ts`, `backend/package.json`, `backend/package-lock.json`, `backend/knip.json`, `scripts/lint-baseline.json`, `CLAUDE.md`, `docs/contracts/wire.md`, `docs/design/reaction-privacy.md`.
+- CI went RED on `84d9608d`: `e2e-wire` pinned the compat window on the raw socket (`test_e2e/full_stack_e2e_test.dart:535`, `addReaction {emoji:'🔥'}` expected to round-trip). Rewritten in `7caa1abb`: plain emoji → `takeError('reaction token')` + `none('reactionUpdated')` on the peer; a token round-trips; a removal naming a different token still clears. Driven locally against the dev stack: 35/35.
 - Untracked (by design): `.planning/refactor-godclasses/task_plan.md` (v3 + DROPPED banner), `findings.md` (+55 KB verification pass).
 - Read only (load-bearing): `frontend/lib/services/encryption_service.dart:149-247` (the seam), `frontend/lib/providers/connection_provider.dart:947-1313`, `backend/src/version/version.controller.ts`, `frontend/lib/services/apk_update_service.dart`.
 
