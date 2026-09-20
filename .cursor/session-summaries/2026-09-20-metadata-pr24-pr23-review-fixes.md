@@ -24,7 +24,7 @@
 - Live wire re-driven AFTER the atomicity rewrite: `GET` 404 → create rev 1 → no-op holds rev AND updatedAt → stale 409 `stale_backup` → 409 `salt_mismatch` → non-base64 400 (new DTO guard) → **two concurrent PUTs at one baseRev answer 200/409, exactly one winner** (both won before).
 - Body limit live: 1.5 MB → `/backup/contacts` **200**; 1.5 MB → `/auth/login` **413**; small `/auth/login` **401** (global parser intact). The sub-agent's negative control proved the named-wrapper requirement: with a bare `json()` mount, `/auth/login` accepted 1.5 MB and lost its body entirely.
 - 6 new regressions, each red without its fix: 409-keeps-the-wrap, 409-does-not-roll-the-graph-back, upload-refused-on-undetermined-rows, unchanged-graph-is-not-re-uploaded, blob-length-is-bucketed, crafted-file-cannot-plant-control-rows.
-- Commit `1cfdc7f2`, pushed. CI: see LATEST.
+- Commits `1cfdc7f2` (review fixes), `628411e8` (typed the query-builder mock; backend eslint floor 897→891), `3a6f25ad` (list `express` — knip). CI 7/7 green on `3a6f25ad`.
 - **NOT re-verified after these fixes:** the Pixel_7 device drive (last run was on `3915f4f8`; the restore path changed shape, so it is owed), web, the import half on a device, iOS, prod.
 
 ## Notes for next session
