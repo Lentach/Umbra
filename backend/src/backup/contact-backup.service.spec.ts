@@ -10,19 +10,30 @@ import { PutContactBackupDto } from './dto/contact-backup.dto';
  * The update path is a CONDITIONAL UPDATE, not `save`: the builder is mocked
  * chainably and handed back on the repo so a test can read what the guard
  * was actually compiled with.
+ *
+ * Typed explicitly rather than inferred — a bare object literal of `jest.fn`s
+ * returning itself infers as `any`, which costs the backend lint ratchet four
+ * `no-unsafe-*` errors it refuses to absorb.
  */
+interface MockBuilder {
+  update: jest.Mock;
+  set: jest.Mock;
+  where: jest.Mock;
+  execute: jest.Mock;
+}
+
 const mockRepo = () => {
-  const builder = {
-    update: jest.fn(() => builder),
-    set: jest.fn(() => builder),
-    where: jest.fn(() => builder),
+  const builder: MockBuilder = {
+    update: jest.fn((): MockBuilder => builder),
+    set: jest.fn((): MockBuilder => builder),
+    where: jest.fn((): MockBuilder => builder),
     execute: jest.fn(() => Promise.resolve({ affected: 1 })),
   };
   return {
     create: jest.fn(),
     save: jest.fn(),
     findOne: jest.fn(),
-    createQueryBuilder: jest.fn(() => builder),
+    createQueryBuilder: jest.fn((): MockBuilder => builder),
     builder,
   };
 };
