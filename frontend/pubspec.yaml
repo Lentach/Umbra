@@ -44,6 +44,11 @@ dependencies:
   image_picker: ^1.2.3
   file_picker: ^11.0.2
   cross_file: ^0.3.4
+  # PR2.3 history backup: the ONLY way an exported file reaches the user on
+  # Android 11+. `path_provider` can write it, but app-private storage is not
+  # reachable by a file manager, so a "saved" backup nobody can find is not a
+  # backup. Web does not use this — it takes the browser download path.
+  share_plus: ^12.0.0
   http_parser: ^4.0.2
 
   just_audio: ^0.10.6

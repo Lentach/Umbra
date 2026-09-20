@@ -268,6 +268,17 @@ class ContactRecord {
     'legacy': legacy.toJson(),
   };
 
+  /// The half of this record another device of the same account could hold —
+  /// the PR2.4 server backup's unit.
+  ///
+  /// [queues] is dropped because its private halves are THIS device's alone
+  /// and a restored device re-mints them anyway (the identity died with the
+  /// same storage); [legacy] because the server re-supplies those ids in the
+  /// first list, so a backed-up one could only outlive the row it names.
+  Map<String, dynamic> toBackupJson() => toJson()
+    ..remove('queues')
+    ..remove('legacy');
+
   UserModel toUser() => UserModel(
     id: userId,
     username: username,

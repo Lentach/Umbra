@@ -2260,7 +2260,18 @@ class EncryptionProvider extends ChangeNotifier {
       // the verifier in one transaction. Absent only on legacy callers.
       if (backup != null) 'backup': backup.toWire(),
     });
+    // PR2.4: this is the one moment the phrase exists in the process, so it
+    // is the only place a phrase wrap of the contact-backup content key can
+    // be minted. Announced rather than done here — the backup service hangs
+    // off AuthProvider, and a provider must not read another provider.
+    onRecoveryPhraseEnrolled?.call(phrase);
   }
+
+  /// Fired by [setRecoveryKey] with the phrase that was just enrolled (or
+  /// re-generated). Wired by `ConnectionProvider.setProviders`, like
+  /// [onPasscodeLockRevoke]. Optional by design: the contact backup's real
+  /// door is the password, and a phrase wrap is a second one.
+  void Function(String phrase)? onRecoveryPhraseEnrolled;
 
   /// Handler for `identityResetStatus` — the answer to our own request.
   void onIdentityResetStatus(dynamic data) {

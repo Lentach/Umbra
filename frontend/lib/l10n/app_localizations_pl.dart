@@ -2182,4 +2182,119 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get updateAvailableLater => 'Później';
+
+  @override
+  String get backupPassphraseCreateTitle => 'Ustaw hasło kopii';
+
+  @override
+  String get backupPassphraseCreateBody =>
+      'Plik kopii jest bezużyteczny bez tego hasła. Nikt go nie odzyska — ani serwer, ani autor aplikacji. Zapisz hasło w bezpiecznym miejscu.';
+
+  @override
+  String get backupPassphraseEnterTitle => 'Podaj hasło kopii';
+
+  @override
+  String get backupPassphraseEnterBody =>
+      'Wpisz hasło, którym zabezpieczono ten plik kopii.';
+
+  @override
+  String get backupPassphraseLabel => 'Hasło kopii';
+
+  @override
+  String get backupPassphraseRepeatLabel => 'Powtórz hasło';
+
+  @override
+  String get backupPassphraseReveal => 'Pokaż hasło';
+
+  @override
+  String get backupPassphraseHide => 'Ukryj hasło';
+
+  @override
+  String get backupPassphraseMismatch => 'Hasła nie są identyczne.';
+
+  @override
+  String backupPassphraseTooShort(int min) {
+    return 'Hasło musi mieć co najmniej $min znaków.';
+  }
+
+  @override
+  String get backupPassphraseRequired => 'Wpisz hasło.';
+
+  @override
+  String get backupPassphraseCreateAction => 'Zapisz kopię';
+
+  @override
+  String get backupPassphraseEnterAction => 'Przywróć';
+
+  @override
+  String get historyBackupTitle => 'Kopia historii wiadomości';
+
+  @override
+  String get historyBackupDescription =>
+      'Zapisuje do pliku odszyfrowaną historię wiadomości i listę kontaktów z tego urządzenia. Plik jest zaszyfrowany hasłem, które sam ustawisz.';
+
+  @override
+  String get historyBackupExportButton => 'Zapisz kopię do pliku';
+
+  @override
+  String get historyBackupImportTitle => 'Przywracanie z kopii';
+
+  @override
+  String get historyBackupImportDescription =>
+      'Wczytuje plik kopii z powrotem na to urządzenie. Wiadomości, które już tu są, zostają bez zmian.';
+
+  @override
+  String get historyBackupImportButton => 'Przywróć z pliku kopii';
+
+  @override
+  String snackbarHistoryBackupExported(int records, int contacts) {
+    return 'Zapisano kopię: $records wiadomości, $contacts kontaktów';
+  }
+
+  @override
+  String get snackbarHistoryBackupExportFailed =>
+      'Nie udało się zapisać kopii. Spróbuj ponownie.';
+
+  @override
+  String snackbarHistoryBackupImported(int records, int contacts) {
+    return 'Przywrócono z kopii: $records wiadomości, $contacts kontaktów';
+  }
+
+  @override
+  String get snackbarHistoryBackupImportFailed =>
+      'Nie udało się przywrócić z kopii. Spróbuj ponownie.';
+
+  @override
+  String get snackbarHistoryBackupWrongPassphrase =>
+      'Nieprawidłowe hasło kopii.';
+
+  @override
+  String get snackbarHistoryBackupCorrupt =>
+      'Ten plik jest uszkodzony albo nie jest kopią Umbry.';
+
+  @override
+  String get snackbarHistoryBackupForeignAccount =>
+      'Ta kopia należy do innego konta.';
+
+  @override
+  String get storageLossTitle =>
+      'Lokalna pamięć tego urządzenia została utracona';
+
+  @override
+  String get storageLossBody =>
+      'Nie udało się otworzyć lokalnego magazynu na tym urządzeniu, więc został utworzony od nowa. Historia wiadomości zapisana lokalnie zniknęła.';
+
+  @override
+  String get storageLossContactsNote =>
+      'Kontakty wrócą same — odtworzą się z kopii zapisanej na koncie.';
+
+  @override
+  String get storageLossHistoryNote =>
+      'Historia wiadomości może wrócić tylko z pliku kopii.';
+
+  @override
+  String get storageLossRestoreAction => 'Przywróć z kopii';
+
+  @override
+  String get storageLossContinueAction => 'Kontynuuj';
 }

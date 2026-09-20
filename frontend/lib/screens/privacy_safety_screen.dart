@@ -1,13 +1,19 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../l10n/app_localizations.dart';
+import '../providers/auth_provider.dart';
 import '../providers/encryption_provider.dart';
+import '../services/backup/history_backup.dart';
+import '../services/backup/history_backup_service.dart';
 import '../theme/rpg_theme.dart';
 import '../utils/e2e_diag_log.dart';
 import '../utils/e2e_persistent_diag.dart';
 import '../widgets/audio/playback_controller.dart';
+import '../widgets/dialogs/backup_passphrase_dialog.dart';
 import '../widgets/glass/glass_dialog.dart';
 import '../widgets/glass/glass_top_bar.dart';
 import '../widgets/settings_console.dart';
@@ -24,6 +30,8 @@ class _PrivacySafetyScreenState extends State<PrivacySafetyScreen> {
   String? _fingerprint;
   bool _loading = true;
   bool _deletingAllLocalHistory = false;
+  bool _exportingHistoryBackup = false;
+  bool _importingHistoryBackup = false;
   bool _diagLogUnlocked = false;
   String _diagFilter = 'current';
   String? _storageSetsSummary;
@@ -195,6 +203,7 @@ class _PrivacySafetyScreenState extends State<PrivacySafetyScreen> {
             _buildAntiQuantumNoteExplainer(context),
             SettingsSectionCaption(label: l10n.settingsSectionPreferences),
             _buildDeleteAllLocalHistoryCard(context),
+            _buildHistoryBackupCard(context),
             if (_loading || _fingerprint != null) ...[
               SettingsSectionCaption(label: l10n.yourIdentityFingerprint),
               if (!_loading && _fingerprint != null) ...[
@@ -417,6 +426,204 @@ class _PrivacySafetyScreenState extends State<PrivacySafetyScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  /// The constructive twin of [_buildDeleteAllLocalHistoryCard]: same console
+  /// grammar (explainer row, then one 48px button on the same rail), but the
+  /// primary palette, because nothing here destroys anything.
+  Widget _buildHistoryBackupCard(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ConsoleInfoRow(
+          glyph: ConsoleGlyph.cache,
+          title: l10n.historyBackupTitle,
+          body: l10n.historyBackupDescription,
+        ),
+        _buildBackupActionButton(
+          context,
+          label: l10n.historyBackupExportButton,
+          busy: _exportingHistoryBackup,
+          onPressed: _exportHistoryBackup,
+        ),
+        // Import is ABSENT on web, not disabled: `importSupported` is a scope
+        // line, not a transient condition, and a permanently dead tile reads
+        // as a broken build. The `webStorage` glyph it borrows can never
+        // collide with the web-key-storage row above, which renders only when
+        // this block does not.
+        if (HistoryBackupService.importSupported) ...[
+          ConsoleInfoRow(
+            glyph: ConsoleGlyph.webStorage,
+            title: l10n.historyBackupImportTitle,
+            body: l10n.historyBackupImportDescription,
+          ),
+          _buildBackupActionButton(
+            context,
+            label: l10n.historyBackupImportButton,
+            busy: _importingHistoryBackup,
+            onPressed: _importHistoryBackup,
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildBackupActionButton(
+    BuildContext context, {
+    required String label,
+    required bool busy,
+    required Future<void> Function() onPressed,
+  }) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        kConsoleHexLeft + kConsoleHexWidth + 12,
+        0,
+        16,
+        12,
+      ),
+      child: SizedBox(
+        height: 48,
+        child: OutlinedButton(
+          onPressed: busy ? null : () => unawaited(onPressed()),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: colorScheme.primary,
+            side: BorderSide(color: colorScheme.primary),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (busy) ...[
+                SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: colorScheme.primary,
+                  ),
+                ),
+                const SizedBox(width: 8),
+              ],
+              // Same guard the delete button needs: the PL labels are the
+              // longest strings on this rail and clip on a 412px viewport.
+              Flexible(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(label),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  HistoryBackupService _historyBackupService() {
+    // Captured now, not inside the closure: the closure runs after an await,
+    // and reading a provider off a disposed element would throw there.
+    final encryption = context.read<EncryptionProvider>();
+    return HistoryBackupService(
+      open: () => encryption.encryptionService.contentKv,
+    );
+  }
+
+  Future<void> _exportHistoryBackup() async {
+    final l10n = AppLocalizations.of(context);
+    final userId = context.read<AuthProvider>().currentUser?.id;
+    if (userId == null) return;
+    final service = _historyBackupService();
+
+    final passphrase = await showBackupPassphraseDialog(
+      context,
+      mode: BackupPassphraseMode.create,
+    );
+    if (!mounted || passphrase == null) return;
+
+    setState(() => _exportingHistoryBackup = true);
+    try {
+      final counts = await service.exportAndShare(
+        userId: userId,
+        passphrase: passphrase,
+      );
+      if (!mounted) return;
+      showTopSnackBar(
+        context,
+        l10n.snackbarHistoryBackupExported(counts.records, counts.contacts),
+      );
+    } on Object catch (_) {
+      if (!mounted) return;
+      showTopSnackBar(
+        context,
+        l10n.snackbarHistoryBackupExportFailed,
+        backgroundColor: Theme.of(context).colorScheme.error,
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _exportingHistoryBackup = false);
+      }
+    }
+  }
+
+  Future<void> _importHistoryBackup() async {
+    final l10n = AppLocalizations.of(context);
+    final userId = context.read<AuthProvider>().currentUser?.id;
+    if (userId == null) return;
+    final service = _historyBackupService();
+
+    final passphrase = await showBackupPassphraseDialog(
+      context,
+      mode: BackupPassphraseMode.enter,
+    );
+    if (!mounted || passphrase == null) return;
+
+    setState(() => _importingHistoryBackup = true);
+    try {
+      final counts = await service.pickAndImport(
+        userId: userId,
+        passphrase: passphrase,
+      );
+      if (!mounted) return;
+      showTopSnackBar(
+        context,
+        l10n.snackbarHistoryBackupImported(counts.records, counts.contacts),
+      );
+    } on HistoryBackupWrongPassphrase {
+      // The ONLY branch allowed to say "wrong passphrase". A damaged file
+      // reaching this message would teach the user to retype a passphrase
+      // that was never wrong.
+      _reportImportFailure(l10n.snackbarHistoryBackupWrongPassphrase);
+    } on HistoryBackupCorrupt {
+      _reportImportFailure(l10n.snackbarHistoryBackupCorrupt);
+    } on HistoryBackupForeignAccount {
+      _reportImportFailure(l10n.snackbarHistoryBackupForeignAccount);
+      // `avoid_catching_errors` is waived here: `pickAndImport` documents
+      // `StateError('cancelled')` as its cancellation channel, so this is a
+      // contract the caller must honour, not a swallowed bug.
+      // ignore: avoid_catching_errors
+    } on StateError {
+      // The picker was dismissed. The user already knows what they did;
+      // anything shown here would read as a failure they caused by accident.
+    } on Object catch (_) {
+      _reportImportFailure(l10n.snackbarHistoryBackupImportFailed);
+    } finally {
+      if (mounted) {
+        setState(() => _importingHistoryBackup = false);
+      }
+    }
+  }
+
+  void _reportImportFailure(String message) {
+    if (!mounted) return;
+    showTopSnackBar(
+      context,
+      message,
+      backgroundColor: Theme.of(context).colorScheme.error,
     );
   }
 

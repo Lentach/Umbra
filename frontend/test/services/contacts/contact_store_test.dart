@@ -303,4 +303,29 @@ void main() {
     expect(store.all, isEmpty);
     expect(store.self, isNull);
   });
+
+  test('onChanged fires for a real change and stays silent for a no-op', () async {
+    await store.open(7);
+    var fired = 0;
+    store.onChanged = () => fired++;
+
+    await store.update(42, (_) => _friend(42, name: 'bob'));
+    expect(fired, 1);
+
+    // The reconnect shape: the same server list, written through again.
+    await store.reconcile([42], (_, _) => _friend(42, name: 'bob'));
+    expect(
+      fired,
+      1,
+      reason: 'an unchanged reconcile must not schedule a backup upload',
+    );
+
+    await store.update(42, (_) => _friend(42, name: 'robert'));
+    expect(fired, 2);
+
+    await store.setSelf(UserModel(id: 7, username: 'me', tag: '0007'));
+    expect(fired, 3);
+    await store.setSelf(UserModel(id: 7, username: 'me', tag: '0007'));
+    expect(fired, 3);
+  });
 }

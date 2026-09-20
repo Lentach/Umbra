@@ -88,6 +88,16 @@ class ContactStore {
   /// tell the sessions apart.
   int _generation = 0;
 
+  /// Fired once after any mutation that actually CHANGED a row on disk —
+  /// never for a reconcile that found everything already equal, which is
+  /// what most reconnects are.
+  ///
+  /// PR2.4's backup upload hangs off this: making the upload change-driven
+  /// rather than timer-driven is what stops an empty or unopened store from
+  /// ever overwriting a good server row, because a store nobody wrote to
+  /// emits nothing.
+  void Function()? onChanged;
+
   bool get isOpen => _kv != null;
   int? get userId => _userId;
 
@@ -235,9 +245,12 @@ class ContactStore {
 
         Future<void> write(int peerId, String key, ContactRecord next) async {
           final encoded = jsonEncode(next.toJson());
-          if (encoded != rows[key] && !await kv.setString(key, encoded)) {
-            ok = false;
-            return;
+          if (encoded != rows[key]) {
+            if (!await kv.setString(key, encoded)) {
+              ok = false;
+              return;
+            }
+            _mutated = true;
           }
           if (_generation == generation) _records[peerId] = next;
         }
@@ -247,6 +260,7 @@ class ContactStore {
             ok = false;
             return;
           }
+          _mutated = true;
           if (_generation == generation) _records.remove(peerId);
         }
 
@@ -287,6 +301,7 @@ class ContactStore {
       () => _lock(lockName(userId), () async {
         if (_generation != generation) return false;
         final ok = await kv.remove(recordKey(userId, peerUserId));
+        if (ok) _mutated = true;
         if (ok && _generation == generation) _records.remove(peerUserId);
         return ok;
       }),
@@ -306,8 +321,9 @@ class ContactStore {
         if (_generation != generation) return false;
         final key = selfKey(userId);
         final encoded = jsonEncode(_userToJson(user));
-        if (kv.getString(key) != encoded && !await kv.setString(key, encoded)) {
-          return false;
+        if (kv.getString(key) != encoded) {
+          if (!await kv.setString(key, encoded)) return false;
+          _mutated = true;
         }
         if (_generation == generation) _self = user;
         return true;
@@ -324,7 +340,10 @@ class ContactStore {
   /// async error and the store would go stale without a trace.
   Future<bool> _serial(Future<bool> Function() action) {
     final run = _queue
-        .then((_) => action())
+        .then((_) {
+          _mutated = false;
+          return action();
+        })
         .then<bool>(
           (ok) => ok,
           onError: (Object e) {
@@ -333,10 +352,29 @@ class ContactStore {
             });
             return false;
           },
-        );
+        )
+        .then<bool>((ok) {
+          // AFTER the queue slot's work, so a listener that reads the store
+          // (the backup upload does) sees the committed view, and a listener
+          // that throws cannot poison the mutation's own result.
+          if (_mutated) {
+            _mutated = false;
+            try {
+              onChanged?.call();
+            } on Object {
+              // A backup scheduler must never be able to fail a write.
+            }
+          }
+          return ok;
+        });
     _queue = run.then<void>((_) {});
     return run;
   }
+
+  /// Set by the mutators when a row actually changed on disk; read and reset
+  /// by [_serial]. Safe as one field because [_serial] is the only runner and
+  /// it is strictly serial.
+  bool _mutated = false;
 
   /// Every row under this account's contact prefix, from GROUND TRUTH where the
   /// backend has a stale-able cache (web) and from the loaded view elsewhere.

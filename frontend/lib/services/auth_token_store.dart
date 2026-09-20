@@ -46,6 +46,30 @@ class AuthTokenStore {
   static const String _accessKey = 'jwt_token';
   static const String _refreshKey = 'refresh_token';
 
+  /// The PR2.4 contact-backup content key, stored BESIDE the session and
+  /// never in the `e2e_<uid>_` namespace.
+  ///
+  /// Why here: CK's lifetime is the session's. A device holding CK keeps
+  /// uploading through a password change made on another device (only the
+  /// WRAP moves), and losing CK costs nothing — the next password login
+  /// unwraps it again from the server row. Eviction therefore takes the
+  /// session and CK together, which is exactly the coupling we want.
+  ///
+  /// Deliberately NOT part of [_migrateFromPrefs]'s trigger: that branch
+  /// fires on "no tokens in secure storage", and a missing CK must never be
+  /// read as a missing session.
+  ///
+  /// Value is `<userId>.<ckId>.<base64url(ck)>` — the account is pinned so a
+  /// login that skipped a logout cannot inherit the previous account's key,
+  /// and `ckId` lets the caller tell "I hold the row's CK" from "I hold a
+  /// CK" without a trial decryption.
+  ///
+  /// Web caveat, recorded in `docs/METADATA.md`: on web this is cleartext
+  /// localStorage, so a browser profile plus a DB dump reads the graph.
+  /// Weaker than the §10a promise elsewhere, and the price of a PWA that
+  /// survives its own eviction.
+  static const String _contactBackupKeyKey = 'contact_backup_ck';
+
   /// Retry cadence for [read]: storage plugins fail transiently (Android
   /// Keystore after OS updates/backup restores; browser storage under early
   /// boot contention). Three quick attempts before conceding.
@@ -136,6 +160,7 @@ class AuthTokenStore {
   }
 
   Future<void> clear() async {
+    await clearContactBackupKey();
     if (!_useSecure) {
       try {
         final prefs = await SharedPreferences.getInstance();
@@ -149,6 +174,66 @@ class AuthTokenStore {
       await _secure.delete(_refreshKey);
     } catch (_) {}
     await _removePrefsCopies();
+  }
+
+  /// The cached contact-backup content key for [userId], or null when there
+  /// is none, it belongs to another account, or storage refused.
+  ///
+  /// A failure answers null on purpose — unlike [read], "do not decide" has
+  /// no meaning here: the only cost of a missed CK is one PBKDF2 at the next
+  /// password login, and the caller never deletes anything in response.
+  Future<({String ckId, String ck})?> readContactBackupKey(int userId) async {
+    final String? raw;
+    try {
+      raw = _useSecure
+          ? await _secure.read(_contactBackupKeyKey)
+          : (await SharedPreferences.getInstance()).getString(
+              _contactBackupKeyKey,
+            );
+    } on Object {
+      return null;
+    }
+    if (raw == null) return null;
+    final parts = raw.split('.');
+    if (parts.length != 3) return null;
+    if (int.tryParse(parts[0]) != userId) return null;
+    if (parts[1].isEmpty || parts[2].isEmpty) return null;
+    return (ckId: parts[1], ck: parts[2]);
+  }
+
+  Future<void> writeContactBackupKey({
+    required int userId,
+    required String ckId,
+    required String ck,
+  }) async {
+    final value = '$userId.$ckId.$ck';
+    try {
+      if (_useSecure) {
+        await _secure.write(_contactBackupKeyKey, value);
+      } else {
+        await (await SharedPreferences.getInstance()).setString(
+          _contactBackupKeyKey,
+          value,
+        );
+      }
+    } on Object {
+      // A refused write costs one PBKDF2 at the next login; the CK in RAM
+      // keeps this session uploading. Nothing to escalate.
+    }
+  }
+
+  Future<void> clearContactBackupKey() async {
+    try {
+      if (_useSecure) {
+        await _secure.delete(_contactBackupKeyKey);
+      } else {
+        await (await SharedPreferences.getInstance()).remove(
+          _contactBackupKeyKey,
+        );
+      }
+    } on Object {
+      // Same: a refused delete leaves a key the next login overwrites.
+    }
   }
 
   /// One-time move of a pre-Phase-2 install's tokens into secure storage.

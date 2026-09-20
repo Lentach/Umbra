@@ -78,6 +78,9 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
           open: () => enc.encryptionService.contentKv,
           selfProfile: () => auth.currentUser,
         ),
+        // PR2.4: owned by AuthProvider (the password lives only there);
+        // handed here so the connect path can restore before the socket.
+        contactBackup: auth.contactBackup,
       );
 
       // Wire MessagingProvider dependencies

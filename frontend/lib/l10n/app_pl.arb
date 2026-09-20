@@ -845,5 +845,64 @@
   "updateAvailableLater": "Później",
   "@updateAvailableLater": {
     "description": "Dismisses the offer for this exact build; a later build still prompts."
-  }
+  },
+  "backupPassphraseCreateTitle": "Ustaw hasło kopii",
+  "backupPassphraseCreateBody": "Plik kopii jest bezużyteczny bez tego hasła. Nikt go nie odzyska — ani serwer, ani autor aplikacji. Zapisz hasło w bezpiecznym miejscu.",
+  "backupPassphraseEnterTitle": "Podaj hasło kopii",
+  "backupPassphraseEnterBody": "Wpisz hasło, którym zabezpieczono ten plik kopii.",
+  "backupPassphraseLabel": "Hasło kopii",
+  "backupPassphraseRepeatLabel": "Powtórz hasło",
+  "backupPassphraseReveal": "Pokaż hasło",
+  "backupPassphraseHide": "Ukryj hasło",
+  "backupPassphraseMismatch": "Hasła nie są identyczne.",
+  "backupPassphraseTooShort": "Hasło musi mieć co najmniej {min} znaków.",
+  "@backupPassphraseTooShort": {
+    "description": "Inline error under the passphrase fields when the chosen passphrase is below the floor.",
+    "placeholders": { "min": { "type": "int" } }
+  },
+  "backupPassphraseRequired": "Wpisz hasło.",
+  "backupPassphraseCreateAction": "Zapisz kopię",
+  "backupPassphraseEnterAction": "Przywróć",
+  "historyBackupTitle": "Kopia historii wiadomości",
+  "historyBackupDescription": "Zapisuje do pliku odszyfrowaną historię wiadomości i listę kontaktów z tego urządzenia. Plik jest zaszyfrowany hasłem, które sam ustawisz.",
+  "historyBackupExportButton": "Zapisz kopię do pliku",
+  "historyBackupImportTitle": "Przywracanie z kopii",
+  "historyBackupImportDescription": "Wczytuje plik kopii z powrotem na to urządzenie. Wiadomości, które już tu są, zostają bez zmian.",
+  "historyBackupImportButton": "Przywróć z pliku kopii",
+  "snackbarHistoryBackupExported": "Zapisano kopię: {records} wiadomości, {contacts} kontaktów",
+  "@snackbarHistoryBackupExported": {
+    "description": "Success toast after a backup file was handed to the platform. Names what went in so the user can judge whether it looks complete.",
+    "placeholders": {
+      "records": { "type": "int" },
+      "contacts": { "type": "int" }
+    }
+  },
+  "snackbarHistoryBackupExportFailed": "Nie udało się zapisać kopii. Spróbuj ponownie.",
+  "snackbarHistoryBackupImported": "Przywrócono z kopii: {records} wiadomości, {contacts} kontaktów",
+  "@snackbarHistoryBackupImported": {
+    "description": "Success toast after an import. Counts are what was written back, not what the file held.",
+    "placeholders": {
+      "records": { "type": "int" },
+      "contacts": { "type": "int" }
+    }
+  },
+  "snackbarHistoryBackupImportFailed": "Nie udało się przywrócić z kopii. Spróbuj ponownie.",
+  "@snackbarHistoryBackupImportFailed": {
+    "description": "Last-resort toast for an import that failed for a reason the codec taxonomy does not name — a store write that could not complete, say. Deliberately blames nothing: the three named causes have their own messages, and reusing one of them here would be the exact conflation the taxonomy exists to prevent."
+  },
+  "snackbarHistoryBackupWrongPassphrase": "Nieprawidłowe hasło kopii.",
+  "@snackbarHistoryBackupWrongPassphrase": {
+    "description": "Shown ONLY for a failed passphrase check. Never for a damaged file — blaming the user for file damage is the failure the codec's exception taxonomy exists to prevent."
+  },
+  "snackbarHistoryBackupCorrupt": "Ten plik jest uszkodzony albo nie jest kopią Umbry.",
+  "@snackbarHistoryBackupCorrupt": {
+    "description": "Shown ONLY for a structurally broken or foreign file. Never for a wrong passphrase."
+  },
+  "snackbarHistoryBackupForeignAccount": "Ta kopia należy do innego konta.",
+  "storageLossTitle": "Lokalna pamięć tego urządzenia została utracona",
+  "storageLossBody": "Nie udało się otworzyć lokalnego magazynu na tym urządzeniu, więc został utworzony od nowa. Historia wiadomości zapisana lokalnie zniknęła.",
+  "storageLossContactsNote": "Kontakty wrócą same — odtworzą się z kopii zapisanej na koncie.",
+  "storageLossHistoryNote": "Historia wiadomości może wrócić tylko z pliku kopii.",
+  "storageLossRestoreAction": "Przywróć z kopii",
+  "storageLossContinueAction": "Kontynuuj"
 }

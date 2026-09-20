@@ -4,6 +4,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../utils/e2e_persistent_diag.dart';
+import '../backup/storage_loss.dart';
 import '../secure_kv.dart';
 import 'audio_reseal.dart';
 import 'content_db.dart';
@@ -113,10 +114,12 @@ Future<DriftRecordDb> _openDb(DbKeyResult dbKey) async {
     final deleted = await DriftRecordDb.deleteDatabaseFiles();
     if (!deleted) rethrow;
     E2ePersistentDiag.record('CONTENT_DB_RECREATED', {});
-    // The contact list lived in that file too (`ContactStore`). Until the
-    // PR2.4 server-held backup restores it, this is the durable trace that
-    // "no contacts" here is loss, not an empty account.
+    // The contact list lived in that file too (`ContactStore`). PR2.4's
+    // server-held backup brings that half back on its own at the next
+    // login; the decrypted message history has no server copy and can only
+    // come back from a PR2.3 file, which is what the loss screen offers.
     E2ePersistentDiag.record('CONTACTS_DESTROYED', {'stage': 'db-recreate'});
+    StorageLoss.record('db-recreate');
     return DriftRecordDb.open(dbKeyHex: dbKey.hex);
   }
 }

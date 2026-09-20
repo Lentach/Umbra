@@ -43,6 +43,8 @@ import { Device } from './key-bundles/device.entity';
 import { AccountAuthorization } from './key-bundles/account-authorization.entity';
 import { MessageEnvelope } from './messages/message-envelope.entity';
 import { ReactionKey } from './reaction-keys/reaction-key.entity';
+import { ContactBackup } from './backup/contact-backup.entity';
+import { BackupModule } from './backup/backup.module';
 @Module({
   imports: [
     // Load and validate environment variables
@@ -93,6 +95,7 @@ import { ReactionKey } from './reaction-keys/reaction-key.entity';
           ConversationNotificationPreference,
           ProfilePhoto,
           ReactionKey,
+          ContactBackup,
         ],
         synchronize: process.env.NODE_ENV !== 'production',
       }),
@@ -107,6 +110,7 @@ import { ReactionKey } from './reaction-keys/reaction-key.entity';
     FcmTokensModule,
     WebPushSubscriptionsModule,
     KeyBundlesModule,
+    BackupModule,
     PushNotificationsModule,
     ChatModule,
     ConversationNotificationPreferencesModule,

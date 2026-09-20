@@ -611,6 +611,62 @@ class ApiService {
     return jsonDecode(response.body) as Map<String, dynamic>;
   }
 
+  /// The account's contact backup row (metadata-privacy PR2.4), or null when
+  /// the account has never uploaded one.
+  ///
+  /// A 404 is the ANSWER, not a failure: it is what tells the first client to
+  /// mint the salt and the content key. Every other non-200 throws, because
+  /// treating a 502 as "no backup" would let a device mint a second salt and
+  /// orphan every other device's wrap.
+  Future<Map<String, dynamic>?> fetchContactBackup(String token) async {
+    final response = await _httpClient
+        .get(
+          Uri.parse('$baseUrl/backup/contacts'),
+          headers: {'Authorization': 'Bearer $token'},
+        )
+        .timeout(_kDefaultTimeout);
+    if (response.statusCode == 404) return null;
+    if (response.statusCode != 200) {
+      _fail(response, 'contact backup fetch failed', 'GET /backup/contacts');
+    }
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
+  /// Writes the row. [baseRev] is the rev this client read (0 = "I expect no
+  /// row"); a mismatch answers 409 and writes NOTHING, which is what makes a
+  /// new blob beside another device's wraps impossible. The caller re-reads
+  /// and retries; it must never "force" a write.
+  Future<Map<String, dynamic>> putContactBackup(
+    String token, {
+    required int baseRev,
+    required String salt,
+    required String ckId,
+    required List<Map<String, dynamic>> wraps,
+    required String blob,
+  }) async {
+    final response = await _httpClient
+        .put(
+          Uri.parse('$baseUrl/backup/contacts'),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $token',
+          },
+          body: jsonEncode({
+            'v': 1,
+            'baseRev': baseRev,
+            'salt': salt,
+            'ckId': ckId,
+            'wraps': wraps,
+            'blob': blob,
+          }),
+        )
+        .timeout(_kDefaultTimeout);
+    if (response.statusCode != 200 && response.statusCode != 201) {
+      _fail(response, 'contact backup upload failed', 'PUT /backup/contacts');
+    }
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
 }
 
 /// Rewrites a loopback (`localhost` / `127.0.0.1`) media host to [baseUrl]'s

@@ -1,6 +1,8 @@
 ---
 paths:
   - "frontend/lib/services/encryption/**"
+  - "frontend/lib/services/backup/**"
+  - "frontend/lib/services/contacts/**"
   - "frontend/lib/services/encryption_service.dart"
   - "frontend/lib/services/device_list/**"
   - "frontend/lib/services/device_link/**"

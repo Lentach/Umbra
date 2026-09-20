@@ -2148,4 +2148,117 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get updateAvailableLater => 'Later';
+
+  @override
+  String get backupPassphraseCreateTitle => 'Set a backup passphrase';
+
+  @override
+  String get backupPassphraseCreateBody =>
+      'The backup file is useless without this passphrase. Nobody can recover it — not the server, not the app\'s author. Write it down somewhere safe.';
+
+  @override
+  String get backupPassphraseEnterTitle => 'Enter the backup passphrase';
+
+  @override
+  String get backupPassphraseEnterBody =>
+      'Type the passphrase this backup file was sealed with.';
+
+  @override
+  String get backupPassphraseLabel => 'Backup passphrase';
+
+  @override
+  String get backupPassphraseRepeatLabel => 'Repeat passphrase';
+
+  @override
+  String get backupPassphraseReveal => 'Show passphrase';
+
+  @override
+  String get backupPassphraseHide => 'Hide passphrase';
+
+  @override
+  String get backupPassphraseMismatch => 'The passphrases are not identical.';
+
+  @override
+  String backupPassphraseTooShort(int min) {
+    return 'The passphrase must be at least $min characters long.';
+  }
+
+  @override
+  String get backupPassphraseRequired => 'Enter the passphrase.';
+
+  @override
+  String get backupPassphraseCreateAction => 'Save backup';
+
+  @override
+  String get backupPassphraseEnterAction => 'Restore';
+
+  @override
+  String get historyBackupTitle => 'Message history backup';
+
+  @override
+  String get historyBackupDescription =>
+      'Saves this device\'s decrypted message history and contact list to a file. The file is encrypted with a passphrase you choose yourself.';
+
+  @override
+  String get historyBackupExportButton => 'Save backup to a file';
+
+  @override
+  String get historyBackupImportTitle => 'Restoring from a backup';
+
+  @override
+  String get historyBackupImportDescription =>
+      'Reads a backup file back onto this device. Messages already here are left untouched.';
+
+  @override
+  String get historyBackupImportButton => 'Restore from a backup file';
+
+  @override
+  String snackbarHistoryBackupExported(int records, int contacts) {
+    return 'Backup saved: $records messages, $contacts contacts';
+  }
+
+  @override
+  String get snackbarHistoryBackupExportFailed =>
+      'Could not save the backup. Try again.';
+
+  @override
+  String snackbarHistoryBackupImported(int records, int contacts) {
+    return 'Restored from backup: $records messages, $contacts contacts';
+  }
+
+  @override
+  String get snackbarHistoryBackupImportFailed =>
+      'Could not restore from the backup. Try again.';
+
+  @override
+  String get snackbarHistoryBackupWrongPassphrase => 'Wrong backup passphrase.';
+
+  @override
+  String get snackbarHistoryBackupCorrupt =>
+      'This file is damaged, or it is not an Umbra backup.';
+
+  @override
+  String get snackbarHistoryBackupForeignAccount =>
+      'This backup belongs to a different account.';
+
+  @override
+  String get storageLossTitle => 'This device\'s local storage was lost';
+
+  @override
+  String get storageLossBody =>
+      'The local store on this device could not be opened, so it was created from scratch. Message history saved locally is gone.';
+
+  @override
+  String get storageLossContactsNote =>
+      'Contacts will come back on their own — they rebuild from the backup kept on your account.';
+
+  @override
+  String get storageLossHistoryNote =>
+      'Message history can only come back from a backup file.';
+
+  @override
+  String get storageLossRestoreAction => 'Restore from a backup';
+
+  @override
+  String get storageLossContinueAction => 'Continue';
 }

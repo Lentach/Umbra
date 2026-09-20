@@ -4,6 +4,8 @@ import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/passcode_provider.dart';
 import '../screens/passcode_unlock_screen.dart';
+import '../screens/storage_loss_screen.dart';
+import '../services/backup/storage_loss.dart';
 import '../services/local_data_eraser.dart';
 import '../utils/privacy_curtain.dart';
 import 'input/composer_keyboard_signals.dart';
@@ -77,6 +79,16 @@ class PasscodeGate extends StatelessWidget {
     return Stack(
       children: [
         Positioned.fill(child: Offstage(offstage: covered, child: child)),
+        // BELOW the lock layers, and Offstage under the same `covered` flag
+        // that hides the app. Paint order alone would already keep it behind
+        // an opaque lock screen; the Offstage is the second half, so a locked
+        // device cannot leak this surface through a hit test, a semantics
+        // walk, or a lock layer that is ever less than fully opaque. The
+        // storage-loss notice names what this account lost — it is content,
+        // and content lives behind the passcode.
+        Positioned.fill(
+          child: Offstage(offstage: covered, child: const _StorageLossLayer()),
+        ),
         if (covered)
           Positioned.fill(
             child: state == PasscodeLockState.unknown
@@ -104,4 +116,33 @@ class PasscodeGate extends StatelessWidget {
     await auth.logout();
     return report;
   }
+}
+
+/// Holds the storage-loss surface on screen for exactly as long as the boot
+/// latch stands, and only for a signed-in account.
+///
+/// A [ValueListenableBuilder] rather than a per-build read of a static: the
+/// latch is set while the content store opens, which is strictly AFTER this
+/// layer first mounts, and a widget that read a false static registered no
+/// dependency on anything — nothing would ever ask it to look again, and a
+/// `const` instance is not even rebuilt when its parent is.
+class _StorageLossLayer extends StatelessWidget {
+  const _StorageLossLayer();
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<bool>(
+    valueListenable: StorageLoss.listenable,
+    builder: (context, lost, _) {
+      if (!lost) return const SizedBox.shrink();
+      // No account, nothing to name a loss against: a signed-out user is
+      // looking at a login screen, and a full-screen accusation there is
+      // about a device state they cannot act on yet. Watched, not read, so
+      // the surface appears the moment they do sign in.
+      final userId = context.watch<AuthProvider>().currentUser?.id;
+      if (userId == null) return const SizedBox.shrink();
+      // `acknowledge()` writes the same notifier, so the dismiss needs no
+      // callback of its own — the builder simply runs again with false.
+      return StorageLossScreen(userId: userId, onDismiss: () {});
+    },
+  );
 }

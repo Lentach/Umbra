@@ -6,6 +6,8 @@ import 'package:flutter/foundation.dart';
 import '../config/app_config.dart';
 import '../constants/app_constants.dart';
 import '../services/api_service.dart';
+import '../services/contacts/contact_backup.dart';
+import '../services/contacts/contact_backup_service.dart';
 import '../services/contacts/contact_store.dart';
 import '../services/push_service.dart';
 import '../services/device_link/dak_store.dart';
@@ -97,6 +99,11 @@ class ConnectionProvider extends ChangeNotifier {
   /// still lists its contacts; null when the owning widget wired none.
   ContactStore? _contactStore;
 
+  /// The server-held mirror of that store (PR2.4), owned by `AuthProvider`
+  /// because only a credential door ever holds the password. Null when the
+  /// owning widget wired none.
+  ContactBackupService? _contactBackup;
+
   /// Why the contact store could not open this session, or null when it did
   /// (or none is wired). Surfaced by the loss screen (PR2.3).
   String? _contactStoreUnavailable;
@@ -136,8 +143,11 @@ class ConnectionProvider extends ChangeNotifier {
     required ConversationsProvider conversations,
     required MessagingProvider messaging,
     ContactStore? contactStore,
+    ContactBackupService? contactBackup,
   }) {
     _contactStore = contactStore;
+    _contactBackup = contactBackup;
+    if (contactStore != null) contactBackup?.attach(contactStore);
     friends.contactStore = contactStore;
     conversations.contactStore = contactStore;
     _encryptionProvider = encryption;
@@ -183,6 +193,20 @@ class ConnectionProvider extends ChangeNotifier {
         // lists are re-applied as the freshest truth.
         _friendsProvider?.rewriteStore();
         _conversationsProvider?.rewriteStore();
+      }
+      // PR2.4: a phrase the user just enrolled gets a second wrap of the
+      // contact-backup content key, so a device that lost its storage AND
+      // its password can still open the backup. Fire-and-forget and
+      // deliberately unreported: the password wrap already opens it, and a
+      // refusal here must not colour the phrase ceremony's own result.
+      ..onRecoveryPhraseEnrolled = (phrase) {
+        unawaited(
+          contactBackup?.addWrap(
+                kind: ContactWrapKind.phrase,
+                secret: phrase,
+              ) ??
+              Future<bool>.value(false),
+        );
       };
   }
 
@@ -229,6 +253,17 @@ class ConnectionProvider extends ChangeNotifier {
   /// operation — but shorter, because here the cost of waiting is a delayed
   /// socket, not a lockout.
   static const Duration kContactStoreOpenBudget = Duration(seconds: 4);
+
+  /// How long [connect] waits for the PR2.4 backup resolve before starting
+  /// the socket — and ONLY when the local store came up empty, which is the
+  /// state the backup exists to repair.
+  ///
+  /// Longer than [kContactStoreOpenBudget] on purpose: that budget bounds a
+  /// local open, this one covers a network GET plus a PBKDF2-600k unwrap
+  /// (1-2 s on a phone). Overshooting costs a few seconds of skeleton on a
+  /// device that just lost everything; undershooting shows that device "no
+  /// contacts", which is the outcome this whole PR exists to prevent.
+  static const Duration kContactBackupRestoreBudget = Duration(seconds: 8);
 
   /// Bumped by every [connect] that gets past the cooldown; a connect that
   /// suspended on the store open compares it afterwards and yields to any
@@ -346,6 +381,48 @@ class ConnectionProvider extends ChangeNotifier {
       }
       _friendsProvider?.hydrateFromStore();
       _conversationsProvider?.hydrateFromStore();
+    }
+
+    // 4c. PR2.4: the server-held backup, for the one case it exists for —
+    // a device whose local store came up EMPTY (a browser that evicted its
+    // origin storage, a reinstall, a `pm clear`). The wait is spent ONLY
+    // then: an ordinary launch finds contacts on disk and lets the restore
+    // land whenever it lands, so the socket is never delayed by a PBKDF2
+    // the common path does not even run.
+    final backup = _contactBackup;
+    final store = _contactStore;
+    if (backup != null && store != null) {
+      if (store.isOpen && store.all.isEmpty) {
+        final inTime = await _withinBudget(
+          backup.ready,
+          kContactBackupRestoreBudget,
+        );
+        if (_connectGeneration != generation) return;
+        if (inTime) {
+          if (await backup.applyRestore() > 0) {
+            if (_connectGeneration != generation) return;
+            _friendsProvider?.hydrateFromStore();
+            _conversationsProvider?.hydrateFromStore();
+          }
+        } else {
+          E2ePersistentDiag.record('CONTACT_BACKUP_RESTORE_TIMEOUT', {
+            'budgetMs': kContactBackupRestoreBudget.inMilliseconds,
+          });
+        }
+      }
+      // Whatever the budget decided, a late resolve still restores: the
+      // server lists are authoritative anyway while the legacy path exists,
+      // so a record that arrives after them is pruned, not duplicated.
+      unawaited(
+        backup.ready.then((_) async {
+          if (_connectGeneration != generation) return;
+          if (await backup.applyRestore() > 0) {
+            if (_connectGeneration != generation) return;
+            _friendsProvider?.hydrateFromStore();
+            _conversationsProvider?.hydrateFromStore();
+          }
+        }),
+      );
     }
 
     // 5. Set up emit callbacks so sub-providers can send socket events

@@ -3787,6 +3787,198 @@ abstract class AppLocalizations {
   /// In pl, this message translates to:
   /// **'Później'**
   String get updateAvailableLater;
+
+  /// No description provided for @backupPassphraseCreateTitle.
+  ///
+  /// In pl, this message translates to:
+  /// **'Ustaw hasło kopii'**
+  String get backupPassphraseCreateTitle;
+
+  /// No description provided for @backupPassphraseCreateBody.
+  ///
+  /// In pl, this message translates to:
+  /// **'Plik kopii jest bezużyteczny bez tego hasła. Nikt go nie odzyska — ani serwer, ani autor aplikacji. Zapisz hasło w bezpiecznym miejscu.'**
+  String get backupPassphraseCreateBody;
+
+  /// No description provided for @backupPassphraseEnterTitle.
+  ///
+  /// In pl, this message translates to:
+  /// **'Podaj hasło kopii'**
+  String get backupPassphraseEnterTitle;
+
+  /// No description provided for @backupPassphraseEnterBody.
+  ///
+  /// In pl, this message translates to:
+  /// **'Wpisz hasło, którym zabezpieczono ten plik kopii.'**
+  String get backupPassphraseEnterBody;
+
+  /// No description provided for @backupPassphraseLabel.
+  ///
+  /// In pl, this message translates to:
+  /// **'Hasło kopii'**
+  String get backupPassphraseLabel;
+
+  /// No description provided for @backupPassphraseRepeatLabel.
+  ///
+  /// In pl, this message translates to:
+  /// **'Powtórz hasło'**
+  String get backupPassphraseRepeatLabel;
+
+  /// No description provided for @backupPassphraseReveal.
+  ///
+  /// In pl, this message translates to:
+  /// **'Pokaż hasło'**
+  String get backupPassphraseReveal;
+
+  /// No description provided for @backupPassphraseHide.
+  ///
+  /// In pl, this message translates to:
+  /// **'Ukryj hasło'**
+  String get backupPassphraseHide;
+
+  /// No description provided for @backupPassphraseMismatch.
+  ///
+  /// In pl, this message translates to:
+  /// **'Hasła nie są identyczne.'**
+  String get backupPassphraseMismatch;
+
+  /// Inline error under the passphrase fields when the chosen passphrase is below the floor.
+  ///
+  /// In pl, this message translates to:
+  /// **'Hasło musi mieć co najmniej {min} znaków.'**
+  String backupPassphraseTooShort(int min);
+
+  /// No description provided for @backupPassphraseRequired.
+  ///
+  /// In pl, this message translates to:
+  /// **'Wpisz hasło.'**
+  String get backupPassphraseRequired;
+
+  /// No description provided for @backupPassphraseCreateAction.
+  ///
+  /// In pl, this message translates to:
+  /// **'Zapisz kopię'**
+  String get backupPassphraseCreateAction;
+
+  /// No description provided for @backupPassphraseEnterAction.
+  ///
+  /// In pl, this message translates to:
+  /// **'Przywróć'**
+  String get backupPassphraseEnterAction;
+
+  /// No description provided for @historyBackupTitle.
+  ///
+  /// In pl, this message translates to:
+  /// **'Kopia historii wiadomości'**
+  String get historyBackupTitle;
+
+  /// No description provided for @historyBackupDescription.
+  ///
+  /// In pl, this message translates to:
+  /// **'Zapisuje do pliku odszyfrowaną historię wiadomości i listę kontaktów z tego urządzenia. Plik jest zaszyfrowany hasłem, które sam ustawisz.'**
+  String get historyBackupDescription;
+
+  /// No description provided for @historyBackupExportButton.
+  ///
+  /// In pl, this message translates to:
+  /// **'Zapisz kopię do pliku'**
+  String get historyBackupExportButton;
+
+  /// No description provided for @historyBackupImportTitle.
+  ///
+  /// In pl, this message translates to:
+  /// **'Przywracanie z kopii'**
+  String get historyBackupImportTitle;
+
+  /// No description provided for @historyBackupImportDescription.
+  ///
+  /// In pl, this message translates to:
+  /// **'Wczytuje plik kopii z powrotem na to urządzenie. Wiadomości, które już tu są, zostają bez zmian.'**
+  String get historyBackupImportDescription;
+
+  /// No description provided for @historyBackupImportButton.
+  ///
+  /// In pl, this message translates to:
+  /// **'Przywróć z pliku kopii'**
+  String get historyBackupImportButton;
+
+  /// Success toast after a backup file was handed to the platform. Names what went in so the user can judge whether it looks complete.
+  ///
+  /// In pl, this message translates to:
+  /// **'Zapisano kopię: {records} wiadomości, {contacts} kontaktów'**
+  String snackbarHistoryBackupExported(int records, int contacts);
+
+  /// No description provided for @snackbarHistoryBackupExportFailed.
+  ///
+  /// In pl, this message translates to:
+  /// **'Nie udało się zapisać kopii. Spróbuj ponownie.'**
+  String get snackbarHistoryBackupExportFailed;
+
+  /// Success toast after an import. Counts are what was written back, not what the file held.
+  ///
+  /// In pl, this message translates to:
+  /// **'Przywrócono z kopii: {records} wiadomości, {contacts} kontaktów'**
+  String snackbarHistoryBackupImported(int records, int contacts);
+
+  /// Last-resort toast for an import that failed for a reason the codec taxonomy does not name — a store write that could not complete, say. Deliberately blames nothing: the three named causes have their own messages, and reusing one of them here would be the exact conflation the taxonomy exists to prevent.
+  ///
+  /// In pl, this message translates to:
+  /// **'Nie udało się przywrócić z kopii. Spróbuj ponownie.'**
+  String get snackbarHistoryBackupImportFailed;
+
+  /// Shown ONLY for a failed passphrase check. Never for a damaged file — blaming the user for file damage is the failure the codec's exception taxonomy exists to prevent.
+  ///
+  /// In pl, this message translates to:
+  /// **'Nieprawidłowe hasło kopii.'**
+  String get snackbarHistoryBackupWrongPassphrase;
+
+  /// Shown ONLY for a structurally broken or foreign file. Never for a wrong passphrase.
+  ///
+  /// In pl, this message translates to:
+  /// **'Ten plik jest uszkodzony albo nie jest kopią Umbry.'**
+  String get snackbarHistoryBackupCorrupt;
+
+  /// No description provided for @snackbarHistoryBackupForeignAccount.
+  ///
+  /// In pl, this message translates to:
+  /// **'Ta kopia należy do innego konta.'**
+  String get snackbarHistoryBackupForeignAccount;
+
+  /// No description provided for @storageLossTitle.
+  ///
+  /// In pl, this message translates to:
+  /// **'Lokalna pamięć tego urządzenia została utracona'**
+  String get storageLossTitle;
+
+  /// No description provided for @storageLossBody.
+  ///
+  /// In pl, this message translates to:
+  /// **'Nie udało się otworzyć lokalnego magazynu na tym urządzeniu, więc został utworzony od nowa. Historia wiadomości zapisana lokalnie zniknęła.'**
+  String get storageLossBody;
+
+  /// No description provided for @storageLossContactsNote.
+  ///
+  /// In pl, this message translates to:
+  /// **'Kontakty wrócą same — odtworzą się z kopii zapisanej na koncie.'**
+  String get storageLossContactsNote;
+
+  /// No description provided for @storageLossHistoryNote.
+  ///
+  /// In pl, this message translates to:
+  /// **'Historia wiadomości może wrócić tylko z pliku kopii.'**
+  String get storageLossHistoryNote;
+
+  /// No description provided for @storageLossRestoreAction.
+  ///
+  /// In pl, this message translates to:
+  /// **'Przywróć z kopii'**
+  String get storageLossRestoreAction;
+
+  /// No description provided for @storageLossContinueAction.
+  ///
+  /// In pl, this message translates to:
+  /// **'Kontynuuj'**
+  String get storageLossContinueAction;
 }
 
 class _AppLocalizationsDelegate

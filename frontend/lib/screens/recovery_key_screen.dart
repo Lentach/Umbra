@@ -131,6 +131,9 @@ class _RecoveryKeyScreenState extends State<RecoveryKeyScreen> {
 
     if (result == true) {
       encryption.clearRecoveryKeySetResult();
+      // The PR2.4 phrase wrap of the contact-backup key is minted from
+      // `EncryptionProvider.setRecoveryKey` (above), not here: this screen
+      // must not acquire a dependency on the auth layer for a side effect.
       setState(() => _words = null);
       showTopSnackBar(context, l10n.recoveryKeySaved);
       Navigator.of(context).pop(true);

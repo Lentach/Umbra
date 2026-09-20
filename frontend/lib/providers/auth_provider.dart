@@ -8,6 +8,8 @@ import '../models/user_model.dart';
 import '../services/auth_token_store.dart';
 import '../services/api_service.dart';
 import '../services/api_exception.dart';
+import '../services/contacts/contact_backup.dart';
+import '../services/contacts/contact_backup_service.dart';
 import '../services/pwa_app_badge_clear.dart';
 import '../services/push_service.dart';
 import '../services/session_refresh_exception.dart';
@@ -135,12 +137,16 @@ class AuthProvider extends ChangeNotifier {
     ApiService? api,
     AuthTokenStore? tokenStore,
     List<Duration>? tokenReadRetryDelays,
+    ContactBackupService? contactBackup,
   }) : _api = api ?? ApiService(baseUrl: AppConfig.baseUrl),
        _tokenReadRetryDelays =
            tokenReadRetryDelays ??
            const [Duration(seconds: 2), Duration(seconds: 5)],
        _tokens = tokenStore ?? AuthTokenStore() {
     _pushService = PushService(_api);
+    _contactBackup =
+        contactBackup ??
+        ContactBackupService(api: _api, tokens: _tokens);
     _loadSavedToken();
   }
 
@@ -151,6 +157,16 @@ class AuthProvider extends ChangeNotifier {
   final ApiService _api;
   final AuthTokenStore _tokens;
   late final PushService _pushService;
+
+  /// The server-held contact backup (metadata-privacy PR2.4). It lives here
+  /// and nowhere else because the account PASSWORD is its door, and the
+  /// password exists for exactly the duration of one credential call — this
+  /// provider's methods are the only place it is ever in hand.
+  late final ContactBackupService _contactBackup;
+
+  /// Handed to `ConnectionProvider.setProviders`, which owns the contact
+  /// store the backup mirrors.
+  ContactBackupService get contactBackup => _contactBackup;
 
   String? _token;
   String? _refreshToken;
@@ -265,6 +281,10 @@ class AuthProvider extends ChangeNotifier {
     await _tokens.write(access: access, refresh: refresh);
     _restoreUserFromAccessJwt(access);
     onAccessTokenChanged?.call(access);
+    // A fresher token for the SAME account: enough to flush an upload a 401
+    // parked. A new account arrives through `_adoptSession`, which resolves
+    // the row from scratch.
+    _contactBackup.onToken(access);
     notifyListeners();
   }
 
@@ -398,6 +418,11 @@ class AuthProvider extends ChangeNotifier {
     _statusCode = null;
     _isError = false;
     if (wipeStoredTokens) {
+      // A logout that wipes the store wipes the content key with it, by
+      // design: the next password login unwraps it again from the server
+      // row. A TRANSIENT session drop (`wipeStoredTokens: false`) leaves
+      // both alone — the store is intact and the next boot reuses them.
+      await _contactBackup.clear();
       await _tokens.clear();
     }
     await clearPwaAppBadgeOnLogout();
@@ -514,6 +539,16 @@ class AuthProvider extends ChangeNotifier {
       // Phase 2: hydrate the current user (one refresh retry on a 401).
       if (await _hydrateCurrentUserOnBoot()) return;
 
+      // PR2.4: no password on this door, so this resolve can only succeed
+      // through the CACHED content key — which is the point. It costs one
+      // GET and no derivation, and it is what keeps uploads alive across
+      // every cold start that never touches a credential form.
+      final restored = _currentUser;
+      if (restored != null) {
+        unawaited(
+          _contactBackup.onSession(userId: restored.id, token: _token!),
+        );
+      }
       _startSessionRefreshTimer();
       if (savedAccessUsable) {
         _scheduleBackgroundSessionSlide();
@@ -738,6 +773,8 @@ class AuthProvider extends ChangeNotifier {
     try {
       await _adoptSession(
         await _api.recoverPassword(identifier, phrase, newPassword),
+        password: newPassword,
+        phrase: phrase,
       );
       return null;
     } catch (e) {
@@ -758,7 +795,10 @@ class AuthProvider extends ChangeNotifier {
   /// Null when signed in (session persisted, user loaded), else why not.
   Future<AuthStatusCode?> _signIn(String identifier, String password) async {
     try {
-      await _adoptSession(await _api.login(identifier, password));
+      await _adoptSession(
+        await _api.login(identifier, password),
+        password: password,
+      );
       return null;
     } catch (e) {
       return classifyAuthFailure(e, attempt: AuthAttempt.login);
@@ -767,7 +807,11 @@ class AuthProvider extends ChangeNotifier {
 
   /// Persists the tokens a credential door answered with, loads the user, and
   /// clears every status: from here the shell takes over.
-  Future<void> _adoptSession(Map<String, dynamic> body) async {
+  Future<void> _adoptSession(
+    Map<String, dynamic> body, {
+    String? password,
+    String? phrase,
+  }) async {
     await _persistTokens(body);
     final userData = await _api.fetchMe(_token!);
     _currentUser = UserModel.fromJson(userData);
@@ -777,6 +821,18 @@ class AuthProvider extends ChangeNotifier {
     _recoverableUsername = null;
     _isError = false;
     _startSessionRefreshTimer();
+    // PR2.4: the ONLY moment the account password exists in this process.
+    // Deliberately not awaited — PBKDF2-600k is 1-2 s on a phone and the
+    // shell must not wait for it; `ConnectionProvider.connect()` awaits
+    // `ContactBackupService.ready` inside its own budget before the socket.
+    unawaited(
+      _contactBackup.onSession(
+        userId: _currentUser!.id,
+        token: _token!,
+        password: password,
+        phrase: phrase,
+      ),
+    );
     notifyListeners();
   }
 
@@ -888,6 +944,15 @@ class AuthProvider extends ChangeNotifier {
     if (_token == null) {
       throw Exception('Not authenticated');
     }
+    // PR2.4, and the ORDER is the whole point: `setPassword` revokes every
+    // token server-side, so a wrap uploaded after it would have no session
+    // to ride. Additive — the old wrap stays until each device proves the
+    // new one at its next login — and a refusal only costs the backup one
+    // password change, never the graph.
+    await _contactBackup.addWrap(
+      kind: ContactWrapKind.password,
+      secret: newPassword,
+    );
     await _api.resetPassword(_token!, oldPassword, newPassword);
     await _clearLocalAuthState('password_changed', source: 'resetPassword');
   }

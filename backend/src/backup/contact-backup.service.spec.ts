@@ -1,0 +1,210 @@
+// backend/src/backup/contact-backup.service.spec.ts
+import { Test } from '@nestjs/testing';
+import { ConflictException, NotFoundException } from '@nestjs/common';
+import { getRepositoryToken } from '@nestjs/typeorm';
+import { ContactBackupService } from './contact-backup.service';
+import { ContactBackup } from './contact-backup.entity';
+import { PutContactBackupDto } from './dto/contact-backup.dto';
+
+const mockRepo = () => ({
+  create: jest.fn(),
+  save: jest.fn(),
+  findOne: jest.fn(),
+});
+
+const SALT = 'c2FsdC1zYWx0LXNhbHQtc2FsdA';
+const CK_ID = 'AAAAAAAAAAAAAAAAAAAAAA';
+const OTHER_CK_ID = 'BBBBBBBBBBBBBBBBBBBBBB';
+const STORED_WRAPS = JSON.stringify([{ kind: 'password', ct: 'wrap-pw' }]);
+const STORED_AT = new Date('2026-09-01T10:00:00.000Z');
+
+const storedRow = (): ContactBackup =>
+  ({
+    id: 7,
+    userId: 42,
+    version: 1,
+    rev: 3,
+    salt: SALT,
+    ckId: CK_ID,
+    wraps: STORED_WRAPS,
+    blob: 'sealed-contacts',
+    updatedAt: STORED_AT,
+  }) as ContactBackup;
+
+const putDto = (
+  over: Partial<PutContactBackupDto> = {},
+): PutContactBackupDto => ({
+  v: 1,
+  baseRev: 3,
+  salt: SALT,
+  ckId: CK_ID,
+  wraps: [{ kind: 'password', ct: 'wrap-pw' }],
+  blob: 'sealed-contacts',
+  ...over,
+});
+
+describe('ContactBackupService', () => {
+  let service: ContactBackupService;
+  let repo: ReturnType<typeof mockRepo>;
+
+  beforeEach(async () => {
+    const module = await Test.createTestingModule({
+      providers: [
+        ContactBackupService,
+        { provide: getRepositoryToken(ContactBackup), useFactory: mockRepo },
+      ],
+    }).compile();
+
+    service = module.get(ContactBackupService);
+    repo = module.get(getRepositoryToken(ContactBackup));
+  });
+
+  describe('get', () => {
+    it('404s when the account has no row so the client mints a salt', async () => {
+      repo.findOne.mockResolvedValue(null);
+
+      await expect(service.get(42)).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('returns the stored triple with its rev and stamp', async () => {
+      repo.findOne.mockResolvedValue(storedRow());
+
+      await expect(service.get(42)).resolves.toEqual({
+        v: 1,
+        rev: 3,
+        salt: SALT,
+        ckId: CK_ID,
+        wraps: [{ kind: 'password', ct: 'wrap-pw' }],
+        blob: 'sealed-contacts',
+        updatedAt: STORED_AT,
+      });
+    });
+  });
+
+  describe('put', () => {
+    it('creates the row at rev 1 when the account is empty and baseRev is 0', async () => {
+      repo.findOne.mockResolvedValue(null);
+      repo.create.mockImplementation((v: Partial<ContactBackup>) => v);
+      repo.save.mockImplementation((v: ContactBackup) => Promise.resolve(v));
+
+      const result = await service.put(42, putDto({ baseRev: 0 }));
+
+      expect(result.rev).toBe(1);
+      expect(repo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 42,
+          version: 1,
+          rev: 1,
+          salt: SALT,
+          ckId: CK_ID,
+          wraps: STORED_WRAPS,
+          blob: 'sealed-contacts',
+        }),
+      );
+    });
+
+    it('rejects baseRev 0 when a row already exists, writing nothing', async () => {
+      repo.findOne.mockResolvedValue(storedRow());
+
+      // Without this the second device's "I am the first" upload would
+      // overwrite an existing backup sealed under a key it never saw.
+      await expect(
+        service.put(42, putDto({ baseRev: 0 })),
+      ).rejects.toMatchObject({ response: { error: 'stale_backup', rev: 3 } });
+      expect(repo.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects a stale baseRev with the server rev, writing nothing', async () => {
+      repo.findOne.mockResolvedValue(storedRow());
+
+      const error: unknown = await service
+        .put(42, putDto({ baseRev: 2, blob: 'newer' }))
+        .catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(ConflictException);
+      expect((error as ConflictException).getResponse()).toEqual({
+        error: 'stale_backup',
+        rev: 3,
+      });
+      expect(repo.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects a changed salt, writing nothing', async () => {
+      repo.findOne.mockResolvedValue(storedRow());
+
+      // A salt that could change would orphan every device that already
+      // derived its password key under the stored one.
+      const error: unknown = await service
+        .put(42, putDto({ salt: 'ZGlmZmVyZW50LXNhbHQtaGVyZQ' }))
+        .catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(ConflictException);
+      expect((error as ConflictException).getResponse()).toEqual({
+        error: 'salt_mismatch',
+      });
+      expect(repo.save).not.toHaveBeenCalled();
+    });
+
+    it('bumps rev and moves updatedAt when only the blob changes', async () => {
+      const row = storedRow();
+      repo.findOne.mockResolvedValue(row);
+      repo.save.mockResolvedValue(row);
+
+      const result = await service.put(
+        42,
+        putDto({ blob: 'sealed-contacts-2' }),
+      );
+
+      expect(result.rev).toBe(4);
+      expect(result.updatedAt.getTime()).toBeGreaterThan(STORED_AT.getTime());
+      expect(repo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ rev: 4, blob: 'sealed-contacts-2' }),
+      );
+    });
+
+    it('accepts a re-minted ckId with new wraps at the current rev', async () => {
+      const row = storedRow();
+      repo.findOne.mockResolvedValue(row);
+      repo.save.mockResolvedValue(row);
+
+      // Phrase restore: the client re-wraps a fresh content key for both
+      // secrets and re-seals the blob under it, all in one write.
+      const result = await service.put(
+        42,
+        putDto({
+          ckId: OTHER_CK_ID,
+          wraps: [
+            { kind: 'password', ct: 'wrap-pw-2' },
+            { kind: 'phrase', ct: 'wrap-phrase' },
+          ],
+          blob: 'resealed',
+        }),
+      );
+
+      expect(result.rev).toBe(4);
+      expect(repo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          rev: 4,
+          ckId: OTHER_CK_ID,
+          wraps: JSON.stringify([
+            { kind: 'password', ct: 'wrap-pw-2' },
+            { kind: 'phrase', ct: 'wrap-phrase' },
+          ]),
+          blob: 'resealed',
+        }),
+      );
+    });
+
+    it('writes nothing and re-stamps nothing for an unchanged re-upload', async () => {
+      repo.findOne.mockResolvedValue(storedRow());
+
+      // The presence-clock guard (docs/agents/traps.md): if this check goes,
+      // updatedAt becomes "this account was online at <time>" — exactly what
+      // key_bundles.updatedAt became, and what this PR series removes.
+      const result = await service.put(42, putDto());
+
+      expect(result).toEqual({ rev: 3, updatedAt: STORED_AT });
+      expect(repo.save).not.toHaveBeenCalled();
+    });
+  });
+});

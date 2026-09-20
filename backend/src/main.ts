@@ -29,6 +29,13 @@ async function bootstrap() {
   // Security headers (X-Content-Type-Options, X-Frame-Options, etc.)
   app.use(helmet());
 
+  // Express's default JSON body limit is 100 kb. The contact-backup PUT
+  // (backup/contact-backup.controller.ts) carries an opaque blob capped at
+  // 2,000,000 chars by its DTO, so the default would 413 exactly the accounts
+  // with the largest contact graphs — a failure only heavy users ever see.
+  // 4 mb leaves headroom for the base64/JSON envelope around that cap.
+  app.useBodyParser('json', { limit: '4mb' });
+
   // ValidationPipe validates DTOs (e.g. checks if email is valid).
   // whitelist: true — strips properties not defined in the DTO (security).
   app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
