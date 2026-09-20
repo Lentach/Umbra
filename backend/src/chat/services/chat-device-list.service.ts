@@ -156,9 +156,7 @@ export class ChatDeviceListService {
     try {
       const dto = validateDto(GetDeviceListDto, data);
       if (!(await this.mayReadDeviceList(requesterId, dto.userId))) {
-        this.logger.warn(
-          `[device-list] REFUSED requesterId=${requesterId} targetUserId=${dto.userId} reason=not_entitled`,
-        );
+        this.logger.warn(`[device-list] REFUSED reason=not_entitled`);
         return;
       }
       const row = await this.deviceListService.getAuthorization(dto.userId);
@@ -193,7 +191,7 @@ export class ChatDeviceListService {
         // to a visible send failure until the recovering device re-enrolls
         // ((xlv) clause 1).
         this.logger.warn(
-          `[device-list] REFUSED targetUserId=${dto.userId} reason=no_addressable_device (replacement enrollment owed — post-reset or post-rotation; enrolled=${row != null})`,
+          `[device-list] REFUSED reason=no_addressable_device (replacement enrollment owed — post-reset or post-rotation; enrolled=${row != null})`,
         );
         return;
       }
@@ -214,9 +212,7 @@ export class ChatDeviceListService {
       // Silence is fail-closed on the client (I5: an unanswered fetch means
       // "cannot verify", never "no devices").
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(
-        `getDeviceList failed requesterId=${requesterId}: ${message}`,
-      );
+      this.logger.error(`getDeviceList failed: ${message}`);
     }
   }
 

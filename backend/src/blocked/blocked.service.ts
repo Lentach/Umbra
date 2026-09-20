@@ -43,7 +43,7 @@ export class BlockedService {
     });
     await this.blockedRepo.save(record);
     await this.tearDownRelationship(blockerId, blockedId);
-    this.logger.debug(`User ${blockerId} blocked user ${blockedId}`);
+    this.logger.debug(`block recorded`);
     return record;
   }
 
@@ -83,16 +83,14 @@ export class BlockedService {
           ),
         );
         await this.conversationsService.delete(conv.id);
-        this.logger.debug(
-          `Block: deleted conversation id=${conv.id} between ${blockerId} and ${blockedId}`,
-        );
+        this.logger.debug(`Block: deleted conversation id=${conv.id}`);
       }
     } catch (err) {
       // BE-103: loud + reconcilable. The friendship rows are already gone; a
       // swallowed failure here orphans the conversation and its encrypted
       // messages, so log both user ids to allow reconciliation by hand.
       this.logger.error(
-        `Block: failed to delete conversation between ${blockerId} and ${blockedId} (conversation/messages may be orphaned): ${(err as Error)?.message}`,
+        `Block: failed to delete conversation (conversation/messages may be orphaned): ${(err as Error)?.message}`,
         (err as Error)?.stack,
       );
     }
@@ -104,7 +102,7 @@ export class BlockedService {
       blocked: { id: blockedId },
     });
     if (result.affected && result.affected > 0) {
-      this.logger.debug(`User ${blockerId} unblocked user ${blockedId}`);
+      this.logger.debug(`unblock recorded`);
       return true;
     }
     return false;

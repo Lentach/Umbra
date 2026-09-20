@@ -86,7 +86,7 @@ export class UsersController {
       file.mimetype,
     );
 
-    this.logger.debug(`User ${userId} uploaded profile picture`);
+    this.logger.debug('Profile picture uploaded');
 
     try {
       const photos = await this.usersService.addProfilePhoto(
@@ -223,7 +223,7 @@ export class UsersController {
   async resetPassword(@Body() dto: ResetPasswordDto, @Request() req) {
     const userId = req.user.id;
 
-    this.logger.debug(`User ${userId} requesting password reset`);
+    this.logger.debug('Password reset requested');
 
     await this.usersService.resetPassword(
       userId,
@@ -240,7 +240,7 @@ export class UsersController {
   async deleteAccount(@Body() dto: DeleteAccountDto, @Request() req) {
     const userId = req.user.id;
 
-    this.logger.debug(`User ${userId} requesting account deletion`);
+    this.logger.debug('Account deletion requested');
 
     await this.usersService.deleteAccount(userId, dto.password);
 

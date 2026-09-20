@@ -924,9 +924,7 @@ export class ChatKeyExchangeService {
         }
       }
     } catch (error) {
-      this.logger.error(
-        `fetchPreKeyBundle failed requesterId=${requesterId}: ${error.message}`,
-      );
+      this.logger.error(`fetchPreKeyBundle failed: ${error.message}`);
       client.emit('error', {
         message: error?.message || 'Failed to fetch pre-key bundle',
       });
@@ -1076,9 +1074,7 @@ export class ChatKeyExchangeService {
         fromUserId: requesterId,
       });
     } catch (error) {
-      this.logger.error(
-        `requestSessionRebuild failed requesterId=${requesterId}: ${error.message}`,
-      );
+      this.logger.error(`requestSessionRebuild failed: ${error.message}`);
       client.emit('error', {
         message: error?.message || 'Failed to request session rebuild',
       });

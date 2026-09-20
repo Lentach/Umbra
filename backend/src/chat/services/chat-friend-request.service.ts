@@ -281,9 +281,7 @@ export class ChatFriendRequestService {
     let friendRequest: any;
     let payload: any;
     try {
-      this.logger.debug(
-        `sendFriendRequest: sender=${sender.username} (id=${sender.id}), recipient=${recipient.username} (id=${recipient.id})`,
-      );
+      this.logger.debug(`sendFriendRequest: resolved sender and recipient`);
       friendRequest = await this.friendsService.sendRequest(sender, recipient);
       this.logger.debug(
         `sendFriendRequest: created request id=${friendRequest.id}, status=${friendRequest.status}`,
@@ -311,16 +309,14 @@ export class ChatFriendRequestService {
 
     // Check if it was auto-accepted (mutual request scenario)
     if (friendRequest.status === FriendRequestStatus.ACCEPTED) {
-      this.logger.debug(
-        `Auto-accept: ${sender.username} <-> ${recipient.username}`,
-      );
+      this.logger.debug(`Auto-accept: mutual request`);
       await this.emitAutoAcceptFlow(client, server, sender, recipient, payload);
     } else {
       // Normal pending request flow
       // Step 4a: Notify sender (important but not critical)
       try {
         this.logger.debug(
-          `sendFriendRequest: emitting friendRequestSent to sender ${sender.username}`,
+          `sendFriendRequest: emitting friendRequestSent to sender`,
         );
         client.emit('friendRequestSent', payload);
         const sentRequests =
@@ -344,7 +340,7 @@ export class ChatFriendRequestService {
       try {
         const recipientOnline = isUserOnline(server, recipient.id);
         this.logger.debug(
-          `sendFriendRequest: recipient ${recipient.username} (id=${recipient.id}) online=${recipientOnline}`,
+          `sendFriendRequest: recipient online=${recipientOnline}`,
         );
         server.to(userRoom(recipient.id)).emit('newFriendRequest', payload);
         if (recipientOnline) {
@@ -401,9 +397,7 @@ export class ChatFriendRequestService {
         dto.requestId,
         userId,
       );
-      this.logger.debug(
-        `acceptFriendRequest: accepted, sender=${friendRequest.sender.id} (${friendRequest.sender.username}), receiver=${friendRequest.receiver.id} (${friendRequest.receiver.username})`,
-      );
+      this.logger.debug(`acceptFriendRequest: accepted`);
     } catch (error) {
       this.logger.error(
         'acceptFriendRequest: Failed to accept request:',
@@ -739,9 +733,7 @@ export class ChatFriendRequestService {
       return;
     }
 
-    this.logger.debug(
-      `handleUnfriend: currentUserId=${currentUserId}, targetUserId=${peerId}`,
-    );
+    this.logger.debug(`handleUnfriend`);
 
     // Step 1: Delete the friend relationship (CRITICAL - if this fails, operation fails)
     try {
@@ -778,7 +770,7 @@ export class ChatFriendRequestService {
       // failure here orphans the conversation and its encrypted messages. Log
       // both user ids so the orphaned rows can be reconciled by hand.
       this.logger.error(
-        `handleUnfriend: Failed to delete conversation between ${currentUserId} and ${peerId} (conversation/messages may be orphaned):`,
+        `handleUnfriend: Failed to delete conversation (conversation/messages may be orphaned):`,
         error,
       );
       // Continue - users are unfriended even if conversation deletion failed

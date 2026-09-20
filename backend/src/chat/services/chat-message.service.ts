@@ -404,9 +404,7 @@ export class ChatMessageService {
     // bounces nothing at all and commits straight to the revoked device 1.
     const owed = await this.replacementOwedRefusal(senderId, send.recipientId);
     if (owed) {
-      this.logger.warn(
-        `[send] REFUSED replacement owed senderId=${senderId} recipientId=${send.recipientId} reason=${owed}`,
-      );
+      this.logger.warn(`[send] REFUSED replacement owed reason=${owed}`);
       client.emit('error', { message: owed });
       return;
     }
@@ -423,8 +421,8 @@ export class ChatMessageService {
       const stale = await this.staleLists(send, senderId, isNewModel);
       if (stale.length > 0) {
         this.logger.warn(
-          `[send] REFUSED ${isNewModel ? 'stale device list' : 'legacy send to an enrolled party'} senderId=${senderId} recipientId=${send.recipientId} stale=${stale
-            .map((entry) => `${entry.userId}@v${entry.version}`)
+          `[send] REFUSED ${isNewModel ? 'stale device list' : 'legacy send to an enrolled party'} staleVersions=${stale
+            .map((entry) => `v${entry.version}`)
             .join(',')}`,
         );
         client.emit('deviceListStale', {
@@ -551,8 +549,8 @@ export class ChatMessageService {
     }
     this.logger.debug(
       deliveredToRecipient
-        ? `[sendMessage] newMessage emitted to recipient ${recipientId}`
-        : `[sendMessage] Recipient ${recipientId} NOT ONLINE - newMessage not emitted`,
+        ? `[sendMessage] newMessage emitted to recipient`
+        : `[sendMessage] Recipient NOT ONLINE - newMessage not emitted`,
     );
 
     // Coalesced push: minimized tabs stay connected via WS but still need a
@@ -760,7 +758,7 @@ export class ChatMessageService {
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
       this.logger.error(
-        `Failed to resolve served message ids for user ${userId}: ${err.message}`,
+        `Failed to resolve served message ids: ${err.message}`,
         err.stack,
       );
       // No reply on purpose — see above.
@@ -841,7 +839,7 @@ export class ChatMessageService {
       conversation.userTwo.id !== readerId
     ) {
       this.logger.warn(
-        `handleMarkConversationRead: user ${readerId} is not a member of conv ${conversationId}`,
+        `handleMarkConversationRead: caller is not a member of conv ${conversationId}`,
       );
       return;
     }
@@ -934,7 +932,7 @@ export class ChatMessageService {
       .emit('chatHistoryCleared', payload);
 
     this.logger.debug(
-      `User ${userId} cleared chat history for conversation ${data.conversationId}`,
+      `Cleared chat history for conversation ${data.conversationId}`,
     );
   }
 
@@ -995,7 +993,7 @@ export class ChatMessageService {
         conversationId,
         forEveryone: false,
       });
-      this.logger.debug(`User ${userId} hid message ${messageId} for self`);
+      this.logger.debug(`Hid message ${messageId} for self`);
       return;
     }
 
@@ -1050,9 +1048,7 @@ export class ChatMessageService {
           conversationId,
           forEveryone: true,
         });
-      this.logger.debug(
-        `User ${userId} deleted message ${messageId} for everyone`,
-      );
+      this.logger.debug(`Deleted message ${messageId} for everyone`);
     }
   }
 
@@ -1160,7 +1156,7 @@ export class ChatMessageService {
     const owed = await this.replacementOwedRefusal(userId, otherUserId);
     if (owed) {
       this.logger.warn(
-        `[edit] REFUSED replacement owed senderId=${userId} otherUserId=${otherUserId} messageId=${messageId} reason=${owed}`,
+        `[edit] REFUSED replacement owed messageId=${messageId} reason=${owed}`,
       );
       client.emit('editMessageFailed', { messageId, reason: owed });
       return;
@@ -1170,8 +1166,8 @@ export class ChatMessageService {
       const stale = await this.staleLists(carrier, userId, isNewModel);
       if (stale.length > 0) {
         this.logger.warn(
-          `[edit] REFUSED ${isNewModel ? 'stale device list' : 'legacy edit to an enrolled party'} senderId=${userId} messageId=${messageId} stale=${stale
-            .map((entry) => `${entry.userId}@v${entry.version}`)
+          `[edit] REFUSED ${isNewModel ? 'stale device list' : 'legacy edit to an enrolled party'} messageId=${messageId} staleVersions=${stale
+            .map((entry) => `v${entry.version}`)
             .join(',')}`,
         );
         client.emit('deviceListStale', {
@@ -1270,7 +1266,7 @@ export class ChatMessageService {
       );
     }
     this.logger.debug(
-      `User ${userId} edited message ${messageId} deviceId=${editingDeviceId} envelopes=${envelopes.length}`,
+      `Edited message ${messageId} deviceId=${editingDeviceId} envelopes=${envelopes.length}`,
     );
   }
 

@@ -644,7 +644,7 @@ that is the designed outcome).
     off the JWT deviceId on the socket — a bundle uploaded before rebind would land on
     device 1 and overwrite the primary's). `uploadKeyBundle`/`uploadOneTimePreKeys` for a
     never-activated deviceId are rejected (§7 row already says so; this names it a T3
-    deliverable — today `DevicesService.touch` auto-inserts any presented id).
+    deliverable — `DevicesService.ensureRow` creates only device 1's row and returns for any other id).
   - **(c) §5.1 ephPubN is QR-only.** `ephPubN` MUST NEVER transit the server: not echoed in
     the `openProvisioning` response, not in any relayed frame, not logged. The
     no-commitment-round SAS soundness argument rests on the QR channel giving BOTH
@@ -2924,7 +2924,7 @@ that is the designed outcome).
     and minting a phrase already requires holding the identity (the primary), i.e. owning the
     account. On success, in this order: revoke every refresh session, then store the bcrypt hash
     and stamp `passwordChangedAt` (the (existing) `resetPassword` ordering, for the same stolen-
-    refresh-token reason), audit-log `recoverPassword success userId=`, and answer with the
+    refresh-token reason), audit-log `recoverPassword success` (no account id in any log line since metadata privacy step 0), and answer with the
     ordinary login tokens for the live primary device — the door proved ownership, so a second
     round-trip to sign in would be ceremony. Refusals: unknown identifier, wrong phrase, no
     phrase enrolled → 401 `Invalid credentials` (one wording, no enumeration); lockout → 423

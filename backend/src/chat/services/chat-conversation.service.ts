@@ -266,7 +266,7 @@ export class ChatConversationService {
     }
 
     this.logger.debug(
-      `Conversation ${dto.conversationId} deleted by user ${userId}. Friend relationship preserved.`,
+      `Conversation ${dto.conversationId} deleted. Friend relationship preserved.`,
     );
 
     // NOTE: friend_request is NOT deleted - remains ACCEPTED
@@ -334,7 +334,7 @@ export class ChatConversationService {
       .emit('disappearingTimerUpdated', payload);
 
     this.logger.debug(
-      `User ${userId} set disappearing timer to ${data.seconds}s for conversation ${data.conversationId}`,
+      `Disappearing timer set to ${data.seconds}s for conversation ${data.conversationId}`,
     );
   }
 
@@ -409,7 +409,7 @@ export class ChatConversationService {
       .emit('messagePinned', payload);
 
     this.logger.debug(
-      `User ${userId} pinned message ${dto.messageId} in conversation ${dto.conversationId}`,
+      `Pinned message ${dto.messageId} in conversation ${dto.conversationId}`,
     );
   }
 
@@ -454,9 +454,7 @@ export class ChatConversationService {
       .to(userRoom(otherUserId))
       .emit('messageUnpinned', payload);
 
-    this.logger.debug(
-      `User ${userId} unpinned conversation ${dto.conversationId}`,
-    );
+    this.logger.debug(`Unpinned conversation ${dto.conversationId}`);
   }
 
   async handleSetConversationMute(

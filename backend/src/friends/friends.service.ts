@@ -400,7 +400,7 @@ export class FriendsService {
     });
 
     this.logger.debug(
-      `unfriend: found ${friendships.length} ACCEPTED records between users ${userId1} and ${userId2}`,
+      `unfriend: found ${friendships.length} ACCEPTED records for the pair`,
     );
 
     if (friendships.length === 0) {

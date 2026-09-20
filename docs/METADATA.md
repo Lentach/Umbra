@@ -35,11 +35,12 @@ The server needs certain metadata to deliver messages and manage conversations.
 ## Retention & Logging
 
 - **Disappearing messages:** Expired rows are checked every minute. If they reference self-hosted media, the media file is deleted before the message row is removed.
-- **Secret notes:** Notes are one-shot. Expired unread notes are also purged daily so ciphertext is not retained indefinitely.
+- **Secret notes:** Notes are one-shot. Expired unread notes are also purged every minute so ciphertext is not retained indefinitely.
 - **Media cleanup:** Conversation deletion, clear history, unfriend, block, and account deletion delete known self-hosted message media where possible. A daily media cleanup removes orphaned or expired `msgs/*.bin` files that remain after crashes or legacy paths.
 - **Local plaintext cache:** The client may cache decrypted message fields locally for recovery/performance. The cache is capped per user and can be cleared from Privacy & Safety without deleting Signal keys or server history.
 - **Data retention:** General metadata is stored only while the account, relationship, conversation, or message exists. `METADATA_RETENTION_DAYS` is still reserved for a future global auto-purge policy and is not a broad server-side deletion switch today.
 - **Logging:** Production logs should avoid raw tokens, keys, ciphertext, message content, and unnecessary user/conversation/message identifiers. Use operational error messages and narrow identifiers only when needed for debugging or security investigation.
+- **Server-side activity records, status 2026-09-20 (metadata privacy step 0):** closed = the per-device `devices.lastSeenAt` connect clock, `secret_notes.creatorId`, every account id/username in backend log strings (CI-guarded by `scripts/verify-no-user-logs.mjs`), and the every-connect re-stamp of `key_bundles.updatedAt`. Still present and NOT presence-free: `refresh_tokens.expires_at` (slid on every refresh, so it encodes last-active to ~a day) and `created_at`, `one_time_pre_keys.createdAt/used`, `message_envelopes.deliveredAt/readAt`, `messages.createdAt/editedAt`, `identity_change_audit`, `identity_reset_requests` and `recovery_keys` timestamps, `devices.addedAt/revokedAt`, push-subscription rows, `users.createdAt/passwordChangedAt`, `conversations`/`friend_requests` timestamps. These fall with the transient-queue cutover (`.planning`), not with step 0.
 
 ## Key Storage (E2E)
 

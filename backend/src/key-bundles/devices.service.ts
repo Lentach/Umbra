@@ -213,7 +213,7 @@ export class DevicesService {
       [userId],
     );
     if (rows.length === 0) {
-      throw new Error(`allocateDeviceId: user ${userId} not found`);
+      throw new Error('allocateDeviceId: user not found');
     }
     return rows[0].allocatedId;
   }

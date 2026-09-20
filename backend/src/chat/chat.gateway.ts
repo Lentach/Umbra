@@ -188,9 +188,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       );
       this.chatKeyExchangeService.deliverPendingSessionRebuilds(client);
 
-      this.logger.debug(
-        `User connected: ${user.username} (socket: ${client.id})`,
-      );
+      this.logger.debug(`User connected (socket: ${client.id})`);
       // Auth is complete — client may safely emit authenticated WS events.
       // `serverTime` is the client's only trustworthy clock reference. It
       // gates destroying expired message plaintext, which is irreversible:
@@ -238,9 +236,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     // OLD socket lingers to ping-timeout (~20s) — with a single-socket map that
     // stale disconnect could evict the live socket and silently drop peers'
     // newMessage emits to push. Room membership has no such failure mode.
-    this.logger.debug(
-      `User disconnected: ${user.username} (socket: ${client.id})`,
-    );
+    this.logger.debug(`User disconnected (socket: ${client.id})`);
   }
 
   // ========== MESSAGE HANDLERS ==========

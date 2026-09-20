@@ -90,7 +90,7 @@ export class AuthService {
       await argon2
         .verify(TIMING_SAFE_DUMMY_VERIFIER, phrase)
         .catch(() => false);
-      this.auditLogger.log(`recoverPassword failed`);
+      this.auditLogger.log(`recoverPassword failed reason=unknown_account`);
       throw new UnauthorizedException('Invalid credentials');
     }
     const verdict = await this.identityResetService.verifyRecoveryPhrase(
@@ -102,7 +102,7 @@ export class AuthService {
       throw new HttpException('recovery_locked', HttpStatus.LOCKED);
     }
     if (verdict !== 'accepted') {
-      this.auditLogger.log(`recoverPassword failed`);
+      this.auditLogger.log(`recoverPassword failed reason=wrong_phrase`);
       throw new UnauthorizedException('Invalid credentials');
     }
 

@@ -277,9 +277,17 @@ export class KeyBundlesService {
     }
     // Atomic upsert — handles concurrent connections from the same device
     // (e.g. two tabs), and keeps other devices' bundles untouched.
+    // `skipUpdateIfNoValuesChanged`: this runs on EVERY connect with the same
+    // bundle, and a plain ON CONFLICT DO UPDATE would re-stamp `updatedAt`
+    // each time — a per-device "last online" clock through the back door
+    // (metadata privacy step 0). With it, an identical re-upload is a no-op
+    // and the stamp moves only when the material actually changes.
     await this.keyBundleRepo.upsert(
       { userId, deviceId, ...data },
-      { conflictPaths: ['userId', 'deviceId'] },
+      {
+        conflictPaths: ['userId', 'deviceId'],
+        skipUpdateIfNoValuesChanged: true,
+      },
     );
     if (identityChanged) {
       // The account identity moved, so every OTHER device still publishes keys

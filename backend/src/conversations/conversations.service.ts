@@ -43,9 +43,7 @@ export class ConversationsService {
         ],
       });
       if (race) return race;
-      throw new Error(
-        `Failed to find or create conversation between ${userOne.id} and ${userTwo.id}`,
-      );
+      throw new Error(`Failed to find or create conversation`);
     }
   }
 

@@ -136,7 +136,10 @@ describe('KeyBundlesService', () => {
       // second device's upload overwrite the first device's bundle.
       expect(keyBundleRepo.upsert).toHaveBeenCalledWith(
         { userId: 1, deviceId: 1, ...mockKeyBundleData },
-        { conflictPaths: ['userId', 'deviceId'] },
+        {
+          conflictPaths: ['userId', 'deviceId'],
+          skipUpdateIfNoValuesChanged: true,
+        },
       );
       expect(keyBundleRepo.save).not.toHaveBeenCalled();
     });
@@ -280,7 +283,10 @@ describe('KeyBundlesService', () => {
       expect(keyBundleRepo.delete).not.toHaveBeenCalled();
       expect(keyBundleRepo.upsert).toHaveBeenCalledWith(
         expect.objectContaining({ userId: 11, deviceId: 2 }),
-        { conflictPaths: ['userId', 'deviceId'] },
+        {
+          conflictPaths: ['userId', 'deviceId'],
+          skipUpdateIfNoValuesChanged: true,
+        },
       );
       warnSpy.mockRestore();
     });
@@ -336,7 +342,10 @@ describe('KeyBundlesService', () => {
         expect(result.identityChanged).toBe(false);
         expect(keyBundleRepo.upsert).toHaveBeenCalledWith(
           expect.objectContaining({ userId: 12, deviceId: 3 }),
-          { conflictPaths: ['userId', 'deviceId'] },
+          {
+            conflictPaths: ['userId', 'deviceId'],
+            skipUpdateIfNoValuesChanged: true,
+          },
         );
       });
 

@@ -302,7 +302,7 @@ describe('DevicesService', () => {
       repo.query.mockResolvedValue([[], 0]);
 
       await expect(service.allocateDeviceId(999)).rejects.toThrow(
-        /user.*999.*not found|not found.*999/i,
+        /user not found/,
       );
     });
 
