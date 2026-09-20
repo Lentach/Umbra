@@ -43,6 +43,16 @@ Future<void> revokePlatformContentKv() async {
   _memo = null;
 }
 
+/// Whether `ContactStore` may keep the contact graph in [kv]. On Android
+/// only the SQLCipher store qualifies: the prefs fallback the message cache
+/// tolerates for one session is cleartext XML, and a contact list there is
+/// exactly the metadata this store exists to keep off disk in the clear. Off
+/// Android (desktop dev hosts, the flutter_test VM) prefs is the only
+/// backend and stays acceptable. Lives behind the conditional import because
+/// naming [NativeContentStore] from web code would pull drift into the build.
+bool contactStoreAccepts(ContentKv kv) =>
+    !Platform.isAndroid || kv is NativeContentStore;
+
 Future<ContentKv> _open() async {
   var stage = 'unknown';
   try {
@@ -103,6 +113,10 @@ Future<DriftRecordDb> _openDb(DbKeyResult dbKey) async {
     final deleted = await DriftRecordDb.deleteDatabaseFiles();
     if (!deleted) rethrow;
     E2ePersistentDiag.record('CONTENT_DB_RECREATED', {});
+    // The contact list lived in that file too (`ContactStore`). Until the
+    // PR2.4 server-held backup restores it, this is the durable trace that
+    // "no contacts" here is loss, not an empty account.
+    E2ePersistentDiag.record('CONTACTS_DESTROYED', {'stage': 'db-recreate'});
     return DriftRecordDb.open(dbKeyHex: dbKey.hex);
   }
 }

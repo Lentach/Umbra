@@ -13,6 +13,7 @@ import '../providers/friends_provider.dart';
 import '../providers/messaging_provider.dart';
 import '../providers/passcode_provider.dart';
 import '../providers/settings_provider.dart';
+import '../services/contacts/contact_store.dart';
 import '../theme/rpg_theme.dart';
 import '../widgets/avatar_circle.dart';
 import '../widgets/chat_honeycomb_picker.dart';
@@ -65,12 +66,18 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       final msg = context.read<MessagingProvider>();
       final settings = context.read<SettingsProvider>();
 
-      // Wire all sub-providers into ConnectionProvider
+      // Wire all sub-providers into ConnectionProvider. The contact store
+      // borrows the encryption layer's content store (one opener per
+      // process; see `EncryptionService.contentKv`).
       conn.setProviders(
         encryption: enc,
         friends: friends,
         conversations: convs,
         messaging: msg,
+        contactStore: ContactStore(
+          open: () => enc.encryptionService.contentKv,
+          selfProfile: () => auth.currentUser,
+        ),
       );
 
       // Wire MessagingProvider dependencies
@@ -447,9 +454,13 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         : EdgeInsets.fromLTRB(8, 8, 8, media.bottom + 8);
 
     // Show the loading skeleton only while the first fetch is plausibly in
-    // flight; on a known connection error fall through to the empty state so it
-    // never shimmers forever.
+    // flight AND nothing local can be shown: contact-store hydration fills
+    // the list before the socket, and a cold start with no network must
+    // paint it, not shimmer through ~31 s of reconnect backoff. On a known
+    // connection error fall through to the empty state so it never shimmers
+    // forever.
     if (!convs.hasLoadedConversationsOnce &&
+        conversations.isEmpty &&
         context.watch<ConnectionProvider>().errorMessage == null) {
       return ConversationListSkeleton(padding: listPadding);
     }

@@ -2829,20 +2829,36 @@ class EncryptionProvider extends ChangeNotifier {
     _decryptedLedger.clear();
     _forceSessionRebuild.clear();
     _cancelPendingFetches();
+    onPasscodeLockRevoke?.call();
     await _encryptionService.revokeForPasscodeLock();
     notifyListeners();
   }
 
+  /// The contact store (`ConnectionProvider`) holds a second in-RAM copy of
+  /// the contact graph and a reference to the very store the re-lock revokes;
+  /// it must forget both in the same teardown, and re-open after the unlock
+  /// or every later write-through would silently stop. Wired by
+  /// `ConnectionProvider.setProviders`, like [sessionRebuildPeers].
+  void Function()? onPasscodeLockRevoke;
+  Future<void> Function()? onPasscodeLockRestore;
+
   /// The passcode was accepted and the process did NOT restart (native, or a
   /// web reload the platform refused). Brings E2E back for the same user.
   ///
-  /// A no-op when E2E was never up this session: the boot path owns that case
-  /// and is already waiting on [PasscodeUnlockGate].
+  /// A no-op for E2E when it was never up this session: the boot path owns
+  /// that case and is already waiting on [PasscodeUnlockGate]. The contact
+  /// store hook runs REGARDLESS of that guard — it is the mirror of the close
+  /// in [revokeForPasscodeLock], and an E2E init that arrived by another
+  /// route (a reconnect released by the gate) must not leave the store shut
+  /// for the rest of the session.
   Future<void> restoreAfterPasscodeUnlock() async {
     final userId = _currentUserId;
-    if (userId == null || _e2eInitialized) return;
-    _e2eFlowLog('E2E_RESTORE_UNLOCK', {'userId': userId});
-    await initializeE2E(userId);
+    if (userId == null) return;
+    if (!_e2eInitialized) {
+      _e2eFlowLog('E2E_RESTORE_UNLOCK', {'userId': userId});
+      await initializeE2E(userId);
+    }
+    await onPasscodeLockRestore?.call();
   }
 
   /// Identity key fingerprint for display in Privacy & Safety screen.

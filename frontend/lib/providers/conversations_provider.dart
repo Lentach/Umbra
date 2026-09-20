@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart';
 
 import '../models/conversation_model.dart';
 import '../models/message_model.dart';
+import '../services/contacts/contact_record.dart';
+import '../services/contacts/contact_store.dart';
 import '../utils/e2e_diag_log.dart';
 import '../utils/message_expiry.dart';
 import '../utils/reply_preview_helper.dart';
@@ -43,6 +45,144 @@ class ConversationsProvider extends ChangeNotifier {
   bool _conversationsListReceivedOnce = false;
 
   int? _currentUserId;
+
+  /// The client-owned contact list, when this session could open it. The
+  /// conversation row's settings (timer, mute, pin) and its legacy server id
+  /// live on the peer's record; see [hydrateFromStore].
+  ContactStore? contactStore;
+
+  ContactStore? get _store {
+    final store = contactStore;
+    if (store == null || !store.isOpen || store.userId != _currentUserId) {
+      return null;
+    }
+    return store;
+  }
+
+  /// Rebuilds the conversation list from the contact store when no server
+  /// snapshot has arrived this session. One row per FRIEND record that still
+  /// carries a legacy `conversationId` — the id the rest of the app addresses
+  /// messages by until Phase 4 — with this account as `userOne`. Idempotent;
+  /// a no-op once [onConversationsList] ran or while the store is closed.
+  void hydrateFromStore() {
+    final store = _store;
+    if (store == null) return;
+    if (_conversationsListReceivedOnce || _conversations.isNotEmpty) return;
+    final self = store.self;
+    if (self == null) return;
+    final rows = <ConversationModel>[
+      for (final r in store.all)
+        if (r.state == ContactState.friend && r.legacy.conversationId != null)
+          ConversationModel(
+            id: r.legacy.conversationId!,
+            userOne: self,
+            userTwo: r.toUser(),
+            createdAt: r.legacy.conversationCreatedAt ??
+                DateTime.fromMillisecondsSinceEpoch(0),
+            disappearingTimer: r.settings.disappearingTimer,
+            pinnedMessageId: r.settings.pinnedMessageId,
+            muted: r.settings.muted,
+            mutedUntil: r.settings.mutedUntil,
+          ),
+    ];
+    if (rows.isEmpty) return;
+    _conversations = rows;
+    notifyListeners();
+  }
+
+  /// Store write for one settled conversation event: finds the peer by
+  /// legacy id in the CURRENT list and rewrites the settings half of the
+  /// record. Membership is never changed here — that is the friends path.
+  void _storeSettings(
+    int conversationId,
+    ContactSettings Function(ContactSettings current) mutate,
+  ) {
+    final store = _store;
+    if (store == null) return;
+    final index = _conversations.indexWhere((c) => c.id == conversationId);
+    if (index == -1) return;
+    final peerId = getOtherUserId(_conversations[index]);
+    unawaited(
+      store.update(
+        peerId,
+        (record) =>
+            record?.copyWith(settings: mutate(record.settings)),
+      ),
+    );
+  }
+
+  /// Store write for a conversation the server dropped (delete, unfriend,
+  /// block): the legacy id and its settings go, the contact stays — whether
+  /// the RELATIONSHIP survives is the friends path's call. A peer with no
+  /// record (removed by a queued sweep meanwhile) is left alone.
+  void _storeConversationGone(Iterable<int> peers) {
+    final store = _store;
+    if (store == null) return;
+    unawaited(store.reconcile(peers, (_, record) => _withoutChat(record)));
+  }
+
+  static ContactRecord? _withoutChat(ContactRecord? record) {
+    if (record == null || record.legacy.conversationId == null) return null;
+    return record.copyWith(
+      settings: const ContactSettings(),
+      legacy: record.legacy.copyWith(clearConversation: true),
+    );
+  }
+
+  /// Store write for a server `conversationsList`: this account's own profile
+  /// (the list is the one place the server names us), then per row the
+  /// peer's settings + legacy id. A peer with no record yet is created as a
+  /// friend — the server serves a conversation only between friends who have
+  /// not blocked each other (`handleGetConversations` filters both
+  /// directions), and the friends list that follows corrects the state
+  /// either way. In the SAME lock, decided on disk state, every record whose
+  /// chat the NON-EMPTY list no longer carries loses its legacy id, exactly
+  /// as the RAM list drops it; an empty list changes the store not at all.
+  void _storeConversationsList(List<ConversationModel> convs) {
+    final store = _store;
+    if (store == null) return;
+    final byPeer = <int, ConversationModel>{};
+    UserModel? self;
+    for (final c in convs) {
+      self ??= c.userOne.id == _currentUserId ? c.userOne : c.userTwo;
+      byPeer[getOtherUserId(c)] = c;
+    }
+    if (self != null) unawaited(store.setSelf(self));
+    unawaited(
+      store.reconcile(
+        byPeer.keys,
+        (peerId, record) {
+          final c = byPeer[peerId]!;
+          final peer = getOtherUser(c)!;
+          final base =
+              record ?? ContactRecord.fromUser(peer, ContactState.friend);
+          return base.withProfile(peer).copyWith(
+                settings: ContactSettings(
+                  disappearingTimer: c.disappearingTimer,
+                  muted: c.muted,
+                  mutedUntil: c.mutedUntil,
+                  pinnedMessageId: c.pinnedMessageId,
+                ),
+                legacy: base.legacy.copyWith(
+                  conversationId: c.id,
+                  conversationCreatedAt: c.createdAt,
+                ),
+              );
+        },
+        sweep: convs.isEmpty ? null : (r) => _withoutChat(r) ?? r,
+      ),
+    );
+  }
+
+  /// Re-applies the current server snapshot to a store that was closed and
+  /// re-opened underneath a live socket (passcode re-lock → unlock): events
+  /// that arrived while it was closed were not written through, so the RAM
+  /// list is the freshest truth. A no-op before the first snapshot — the RAM
+  /// list is then the store's own hydration.
+  void rewriteStore() {
+    if (!_conversationsListReceivedOnce) return;
+    _storeConversationsList(_conversations);
+  }
 
   final _notificationCleaner = createNotificationCleaner();
 
@@ -190,6 +330,7 @@ class ConversationsProvider extends ChangeNotifier {
   /// Handle 'conversationsList' event from backend.
   void onConversationsList(dynamic data) {
     final list = data as List<dynamic>;
+    final firstSnapshot = !_conversationsListReceivedOnce;
     _conversationsListReceivedOnce = true;
     final newConvs = list
         .map((c) => ConversationModel.fromJson(c as Map<String, dynamic>))
@@ -197,7 +338,10 @@ class ConversationsProvider extends ChangeNotifier {
 
     // Reconnect / network handoff: ignore empty snapshots that would wipe a populated
     // local list (stale response, throttled handler, or race before auth was ready).
-    if (newConvs.isEmpty && _conversations.isNotEmpty) {
+    // The FIRST snapshot of a session is exempt: before it the list can only
+    // hold contact-store hydration, and an empty first answer is the server's
+    // truth (every conversation deleted from another device), not a hiccup.
+    if (newConvs.isEmpty && _conversations.isNotEmpty && !firstSnapshot) {
       E2eDiagLog.add('CONV_LIST', {
         'count': 0,
         'ignoredEmpty': true,
@@ -217,6 +361,7 @@ class ConversationsProvider extends ChangeNotifier {
     }
 
     _conversations = newConvs;
+    _storeConversationsList(newConvs);
     _unreadCounts.clear();
     // The server list is AUTHORITATIVE over any optimistic pin still waiting
     // for its answer, so every pre-pin snapshot is now superseded. Keeping one
@@ -284,6 +429,10 @@ class ConversationsProvider extends ChangeNotifier {
   /// Handle 'conversationDeleted' event — remove from list, handle active.
   void onConversationDeleted(dynamic data) {
     final convId = data['conversationId'] as int;
+    _storeConversationGone([
+      for (final c in _conversations)
+        if (c.id == convId) getOtherUserId(c),
+    ]);
     _removeConversationById(convId);
     notifyListeners();
   }
@@ -305,6 +454,13 @@ class ConversationsProvider extends ChangeNotifier {
     // Settled authoritatively: nothing left to undo, and keeping the snapshot
     // would let a LATER unrelated refusal revert to stale state.
     _preDisappearingTimerState.remove(conversationId);
+    _storeSettings(
+      conversationId,
+      (s) => s.copyWith(
+        disappearingTimer: seconds,
+        clearDisappearingTimer: seconds == null,
+      ),
+    );
 
     notifyListeners();
   }
@@ -439,6 +595,13 @@ class ConversationsProvider extends ChangeNotifier {
     // Settled authoritatively: the snapshot has nothing left to undo, and
     // keeping it would let a LATER unrelated refusal revert to stale state.
     _prePinState.remove(conversationId);
+    _storeSettings(
+      conversationId,
+      (s) => s.copyWith(
+        pinnedMessageId: pinnedMessageId,
+        clearPinnedMessageId: pinnedMessageId == null,
+      ),
+    );
     notifyListeners();
   }
 
@@ -455,6 +618,7 @@ class ConversationsProvider extends ChangeNotifier {
       );
     }
     _prePinState.remove(conversationId);
+    _storeSettings(conversationId, (s) => s.copyWith(clearPinnedMessageId: true));
     notifyListeners();
   }
 
@@ -529,6 +693,14 @@ class ConversationsProvider extends ChangeNotifier {
       mutedUntil: mutedUntil,
       clearMutedUntil: mutedUntil == null,
     );
+    _storeSettings(
+      conversationId,
+      (s) => s.copyWith(
+        muted: muted,
+        mutedUntil: mutedUntil,
+        clearMutedUntil: mutedUntil == null,
+      ),
+    );
     notifyListeners();
   }
 
@@ -599,14 +771,19 @@ class ConversationsProvider extends ChangeNotifier {
   /// conversations went away, not just that some did.
   Set<int> removeConversationsForUser(int userId, {Set<int>? blockedIds}) {
     final removed = <int>{};
+    final gone = <ConversationModel>[];
     _conversations.removeWhere((c) {
       final matches = userId == -1 && blockedIds != null
           ? blockedIds.contains(c.userOne.id) ||
                 blockedIds.contains(c.userTwo.id)
           : c.userOne.id == userId || c.userTwo.id == userId;
-      if (matches) removed.add(c.id);
+      if (matches) {
+        removed.add(c.id);
+        gone.add(c);
+      }
       return matches;
     });
+    _storeConversationGone(gone.map(getOtherUserId));
     _clearActiveIfRemoved();
     notifyListeners();
     _emitPushClientState();

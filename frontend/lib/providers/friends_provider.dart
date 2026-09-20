@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import '../models/friend_request_model.dart';
 import '../models/user_model.dart';
 import '../models/invitation_state.dart';
+import '../services/contacts/contact_record.dart';
+import '../services/contacts/contact_store.dart';
 
 /// FriendsProvider — owns all friends, friend requests, blocking, and
 /// user search state. [ConnectionProvider] coordinates; this provider holds friends/requests/blocked/search.
@@ -23,6 +25,14 @@ class FriendsProvider extends ChangeNotifier {
   PendingFriendAccepted? _pendingFriendAccepted;
   bool _hasIncomingSnapshot = false;
   bool _hasSentSnapshot = false;
+
+  /// True once a server `friendsList` was applied this session. Before that
+  /// the list may hold [ContactStore] hydration, which the FIRST server list
+  /// — even an empty one — must replace: an empty first list is the server's
+  /// truth for an account whose last friend was removed elsewhere, while the
+  /// empty-snapshot guard in [onFriendsList] exists only for reconnects.
+  bool _hasFriendsSnapshot = false;
+  bool _hasBlockedSnapshot = false;
   static int _nextInvitationSessionNonce =
       DateTime.now().microsecondsSinceEpoch & 0xffffffff;
   final String _invitationSessionNonce =
@@ -41,6 +51,146 @@ class FriendsProvider extends ChangeNotifier {
   List<UserModel>? _searchResults;
 
   int? _currentUserId;
+
+  /// The client-owned contact list, when this session could open it. Read at
+  /// connect ([hydrateFromStore]) and written through by every list/event
+  /// handler below; the server lists stay authoritative for the UI while the
+  /// legacy path exists.
+  ContactStore? contactStore;
+
+  ContactStore? get _store {
+    final store = contactStore;
+    if (store == null || !store.isOpen || store.userId != _currentUserId) {
+      return null;
+    }
+    return store;
+  }
+
+  /// Fills each list the server has not filled yet this session from the
+  /// contact store. Idempotent; a no-op after the server lists arrived, and a
+  /// no-op while the store is closed or belongs to another account.
+  void hydrateFromStore() {
+    final store = _store;
+    if (store == null) return;
+    final self = store.self;
+    var changed = false;
+    if (_friends.isEmpty && !_hasFriendsSnapshot) {
+      _friends = [
+        for (final r in store.all)
+          if (r.state == ContactState.friend) r.toUser(),
+      ];
+      changed |= _friends.isNotEmpty;
+    }
+    if (_friendRequests.isEmpty && !_hasIncomingSnapshot && self != null) {
+      _friendRequests = [
+        for (final r in store.all)
+          if (r.state == ContactState.pendingIn && r.legacy.requestId != null)
+            _requestFromRecord(r, sender: r.toUser(), receiver: self),
+      ];
+      changed |= _friendRequests.isNotEmpty;
+    }
+    if (_sentRequests.isEmpty && !_hasSentSnapshot && self != null) {
+      _sentRequests = [
+        for (final r in store.all)
+          if (r.state == ContactState.pendingOut && r.legacy.requestId != null)
+            _requestFromRecord(r, sender: self, receiver: r.toUser()),
+      ];
+      changed |= _sentRequests.isNotEmpty;
+    }
+    if (_blockedUsers.isEmpty) {
+      _blockedUsers = [
+        for (final r in store.all)
+          if (r.state == ContactState.blocked) r.toUser(),
+      ];
+      changed |= _blockedUsers.isNotEmpty;
+    }
+    if (changed) notifyListeners();
+  }
+
+  static FriendRequestModel _requestFromRecord(
+    ContactRecord record, {
+    required UserModel sender,
+    required UserModel receiver,
+  }) =>
+      FriendRequestModel(
+        id: record.legacy.requestId!,
+        sender: sender,
+        receiver: receiver,
+        status: 'pending',
+        createdAt: record.legacy.requestCreatedAt ??
+            DateTime.fromMillisecondsSinceEpoch(0),
+      );
+
+  /// Store write for a server list: every listed peer is upserted into
+  /// [state], and — in the SAME lock, decided on disk state — every record
+  /// in [state] that the list omits is removed. That state ONLY: a
+  /// `friendRequestsList` never touches a friend and a `blockedList` never
+  /// touches a pending request.
+  void _storeList(
+    ContactState state,
+    List<UserModel> peers, {
+    Map<int, FriendRequestModel> requests = const {},
+    bool prune = true,
+  }) {
+    final store = _store;
+    if (store == null) return;
+    final byId = {for (final p in peers) p.id: p};
+    unawaited(
+      store.reconcile(
+        byId.keys,
+        (id, current) {
+          final peer = byId[id]!;
+          final request = requests[id];
+          final base = (current ?? ContactRecord.fromUser(peer, state))
+              .withProfile(peer)
+              .copyWith(state: state);
+          return request == null
+              ? base
+              : base.copyWith(
+                  legacy: base.legacy.copyWith(
+                    requestId: request.id,
+                    requestCreatedAt: request.createdAt,
+                  ),
+                );
+        },
+        sweep: prune ? (r) => r.state == state ? null : r : null,
+      ),
+    );
+  }
+
+  void _storeRequest(FriendRequestModel request, ContactState state) {
+    final peer = state == ContactState.pendingIn
+        ? request.sender
+        : request.receiver;
+    _storeList(state, [peer], requests: {peer.id: request}, prune: false);
+  }
+
+  /// Re-applies the current server snapshots to a store that was closed and
+  /// re-opened underneath a live socket (passcode re-lock → unlock): events
+  /// that arrived while it was closed were not written through, so the RAM
+  /// lists are the freshest truth. Each list is re-applied only once the
+  /// server actually sent it — before that the RAM list IS the store's own
+  /// hydration and a rewrite would prune nothing and prove nothing.
+  void rewriteStore() {
+    if (_hasFriendsSnapshot) {
+      _storeList(ContactState.friend, _friends, prune: _friends.isNotEmpty);
+    }
+    if (_hasIncomingSnapshot) {
+      _storeList(
+        ContactState.pendingIn,
+        [for (final r in _friendRequests) r.sender],
+        requests: {for (final r in _friendRequests) r.sender.id: r},
+      );
+    }
+    if (_hasSentSnapshot) {
+      _storeList(
+        ContactState.pendingOut,
+        [for (final r in _sentRequests) r.receiver],
+        requests: {for (final r in _sentRequests) r.receiver.id: r},
+      );
+    }
+    _storeList(ContactState.blocked, _blockedUsers, prune: _hasBlockedSnapshot);
+  }
 
   // ---------- Emit Callback ----------
 
@@ -95,6 +245,11 @@ class FriendsProvider extends ChangeNotifier {
   bool get hasLoadedInvitationsOnce =>
       _hasIncomingSnapshot && _hasSentSnapshot;
 
+  /// Whether a server `friendsList` was applied this session. The list can be
+  /// non-empty BEFORE that (contact-store hydration), so "is it empty" no
+  /// longer answers "has the server spoken".
+  bool get hasFriendsSnapshot => _hasFriendsSnapshot;
+
   InvitationFailure? consumeInvitationFailure() {
     final failure = _lastInvitationFailure;
     _lastInvitationFailure = null;
@@ -123,6 +278,11 @@ class FriendsProvider extends ChangeNotifier {
         .map((r) => FriendRequestModel.fromJson(r as Map<String, dynamic>))
         .toList();
     _hasIncomingSnapshot = true;
+    _storeList(
+      ContactState.pendingIn,
+      [for (final r in _friendRequests) r.sender],
+      requests: {for (final r in _friendRequests) r.sender.id: r},
+    );
     notifyListeners();
   }
 
@@ -132,6 +292,11 @@ class FriendsProvider extends ChangeNotifier {
         .map((r) => FriendRequestModel.fromJson(r as Map<String, dynamic>))
         .toList();
     _hasSentSnapshot = true;
+    _storeList(
+      ContactState.pendingOut,
+      [for (final r in _sentRequests) r.receiver],
+      requests: {for (final r in _sentRequests) r.receiver.id: r},
+    );
     notifyListeners();
   }
 
@@ -141,6 +306,7 @@ class FriendsProvider extends ChangeNotifier {
     // add a duplicate incoming row until the next full snapshot.
     _friendRequests.removeWhere((existing) => existing.id == request.id);
     _friendRequests.insert(0, request);
+    _storeRequest(request, ContactState.pendingIn);
     notifyListeners();
   }
 
@@ -149,6 +315,7 @@ class FriendsProvider extends ChangeNotifier {
     _clearSendAction(request.receiver.id);
     _sentRequests.removeWhere((existing) => existing.id == request.id);
     _sentRequests.insert(0, request);
+    _storeRequest(request, ContactState.pendingOut);
     notifyListeners();
   }
 
@@ -211,6 +378,22 @@ class FriendsProvider extends ChangeNotifier {
         chatReady: chatReady,
       );
     }
+    final store = _store;
+    if (store != null) {
+      unawaited(
+        store.update(peer.id, (current) {
+          final base =
+              current ?? ContactRecord.fromUser(peer, ContactState.friend);
+          return base.withProfile(peer).copyWith(
+                state: ContactState.friend,
+                legacy: base.legacy.copyWith(
+                  clearRequest: true,
+                  conversationId: conversationId,
+                ),
+              );
+        }),
+      );
+    }
     notifyListeners();
   }
 
@@ -218,6 +401,18 @@ class FriendsProvider extends ChangeNotifier {
     final request = FriendRequestModel.fromJson(data as Map<String, dynamic>);
     _clearRequestAction(request.id);
     _friendRequests.removeWhere((pending) => pending.id == request.id);
+    // A declined request leaves no relationship: drop the pending record.
+    // A friend record (the id collided with a live friendship) is kept.
+    final store = _store;
+    if (store != null) {
+      final peerId = request.sender.id == _currentUserId
+          ? request.receiver.id
+          : request.sender.id;
+      final current = store.byUserId(peerId);
+      if (current != null && current.state != ContactState.friend) {
+        unawaited(store.remove(peerId));
+      }
+    }
     notifyListeners();
   }
 
@@ -299,16 +494,23 @@ class FriendsProvider extends ChangeNotifier {
     final incoming = list
         .map((u) => UserModel.fromJson(u as Map<String, dynamic>))
         .toList();
-    if (incoming.isEmpty && _friends.isNotEmpty) {
+    if (incoming.isEmpty && _friends.isNotEmpty && _hasFriendsSnapshot) {
       debugPrint(
         '[FriendsProvider] Ignoring empty friendsList (${_friends.length} local friends preserved)',
       );
       return;
     }
     _friends = incoming;
+    _hasFriendsSnapshot = true;
     // If someone is in our friends list, they cannot be blocking us — clear them from blockedByUserIds
     // so that after unblock + re-add we can write again (no stale "can't message" state).
     _blockedByUserIds.removeWhere((id) => _friends.any((f) => f.id == id));
+    // The store mirrors a NON-EMPTY list's membership (a friend the server
+    // no longer lists was removed from another device while this one was
+    // offline, and no `unfriended` will ever arrive here). An empty list
+    // changes the store not at all: it is far more often a hiccup than a
+    // last-friend removal, and a wiped store would flow into the backup.
+    _storeList(ContactState.friend, incoming, prune: incoming.isNotEmpty);
     notifyListeners();
   }
 
@@ -334,6 +536,8 @@ class FriendsProvider extends ChangeNotifier {
       (r) => r.sender.id == unfriendUserId || r.receiver.id == unfriendUserId,
     );
     onRemoveConversationsForUser?.call(unfriendUserId);
+    final store = _store;
+    if (store != null) unawaited(store.remove(unfriendUserId));
     notifyListeners();
   }
 
@@ -342,9 +546,11 @@ class FriendsProvider extends ChangeNotifier {
     _blockedUsers = list
         .map((u) => UserModel.fromJson(u as Map<String, dynamic>))
         .toList();
+    _hasBlockedSnapshot = true;
     final blockedIds = _blockedUsers.map((u) => u.id).toSet();
     _friends.removeWhere((f) => blockedIds.contains(f.id));
     onRemoveConversationsForUser?.call(-1); // signal handled externally
+    _storeList(ContactState.blocked, _blockedUsers);
     notifyListeners();
   }
 
@@ -353,6 +559,11 @@ class FriendsProvider extends ChangeNotifier {
     _blockedByUserIds.add(blockerId);
     _friends.removeWhere((f) => f.id == blockerId);
     onRemoveConversationsForUser?.call(blockerId);
+    // The server drops the blocker from every list it will ever send us
+    // (`friendsList` excludes both block directions), so the record would
+    // otherwise outlive the friendship and hydrate a chat with them.
+    final store = _store;
+    if (store != null) unawaited(store.remove(blockerId));
     notifyListeners();
   }
 
@@ -524,6 +735,8 @@ class FriendsProvider extends ChangeNotifier {
       _acceptedOutcomes.clear();
       _hasIncomingSnapshot = false;
       _hasSentSnapshot = false;
+      _hasFriendsSnapshot = false;
+      _hasBlockedSnapshot = false;
     } else {
       _acceptedOutcomes.updateAll(
         (_, outcome) => outcome.copyWith(retryToken: null, retrying: false),
@@ -558,6 +771,8 @@ class FriendsProvider extends ChangeNotifier {
     _pendingFriendAccepted = null;
     _hasIncomingSnapshot = false;
     _hasSentSnapshot = false;
+    _hasFriendsSnapshot = false;
+    _hasBlockedSnapshot = false;
     _searchResults = null;
     _currentUserId = null;
     notifyListeners();

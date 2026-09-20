@@ -59,8 +59,14 @@ class SealedWebContentKv implements ContentKv {
   /// shared across accounts on the device, like the Android meta row.
   static const String activeKidKey = 'fp_content_active_kid_v1';
 
+  /// `contact_v1_` (the client-owned contact list, `services/contacts/`) is
+  /// sealed like the message families: the contact graph is the metadata the
+  /// whole design exists to keep off the server, so it must not sit in clear
+  /// localStorage either. It carries no message id, so [_retireIdKey] never
+  /// matches it and a lost-kid contact row is served as its raw envelope
+  /// (present, undecodable) — `ContactStore` counts it and moves on.
   static final RegExp _familyKey = RegExp(
-    r'^e2e_\d+_(decrypted_|decrypt_raw_v1_|pendsend_v1_)',
+    r'^e2e_\d+_(decrypted_|decrypt_raw_v1_|pendsend_v1_|contact_v1_)',
   );
   static final RegExp _retireIdKey = RegExp(
     r'^e2e_(\d+)_(?:decrypted_|decrypt_raw_v1_)(\d+)$',

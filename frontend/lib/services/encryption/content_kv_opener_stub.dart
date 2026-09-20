@@ -46,6 +46,12 @@ Future<void> revokePlatformContentKv() async {
   }
 }
 
+/// Web twin of the native gate: every backend the opener can hand out here
+/// is acceptable. The sealed store wraps `contact_v1_` rows like the message
+/// families; the prefs fallback is parity with the `sig_` Signal keys, which
+/// already sit in the same localStorage.
+bool contactStoreAccepts(ContentKv kv) => true;
+
 Future<ContentKv> _open() async {
   try {
     final prefs = await SharedPreferences.getInstance();

@@ -175,6 +175,12 @@ class EncryptionService {
     }
   }
 
+  /// The same store, for `ContactStore` (`services/contacts/`). One opener per
+  /// process: a second `openPlatformContentKv()` call from the contact layer
+  /// would bypass the rejected-open retry above and the test seams below, and
+  /// on Android could race a second SQLCipher handle onto the same file.
+  Future<ContentKv> get contentKv => _sharedPrefs;
+
   Future<void> _reloadPrefsForCrossContext(ContentKv prefs) => prefs.reload();
 
   /// Test-only seam: pin the content-store backend (e.g. a SealedWebContentKv

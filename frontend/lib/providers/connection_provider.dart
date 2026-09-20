@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import '../config/app_config.dart';
 import '../constants/app_constants.dart';
 import '../services/api_service.dart';
+import '../services/contacts/contact_store.dart';
 import '../services/push_service.dart';
 import '../services/device_link/dak_store.dart';
 import '../services/device_link/link_ceremony_controller.dart'
@@ -91,6 +92,16 @@ class ConnectionProvider extends ChangeNotifier {
   ConversationsProvider? _conversationsProvider;
   MessagingProvider? _messagingProvider;
 
+  /// The client-owned contact list (`services/contacts/`). Opened for the
+  /// account inside [connect] BEFORE the socket, so a device with no network
+  /// still lists its contacts; null when the owning widget wired none.
+  ContactStore? _contactStore;
+
+  /// Why the contact store could not open this session, or null when it did
+  /// (or none is wired). Surfaced by the loss screen (PR2.3).
+  String? _contactStoreUnavailable;
+  String? get contactStoreUnavailableStage => _contactStoreUnavailable;
+
   ProvisioningEventSink? _provisioningSink;
 
   /// Invoked when the server reports that THIS device was revoked (spec §5.5).
@@ -124,7 +135,11 @@ class ConnectionProvider extends ChangeNotifier {
     required FriendsProvider friends,
     required ConversationsProvider conversations,
     required MessagingProvider messaging,
+    ContactStore? contactStore,
   }) {
+    _contactStore = contactStore;
+    friends.contactStore = contactStore;
+    conversations.contactStore = contactStore;
     _encryptionProvider = encryption;
     _friendsProvider = friends;
     _conversationsProvider = conversations;
@@ -147,8 +162,78 @@ class ConnectionProvider extends ChangeNotifier {
       // was offline during the delete is still holding them in memory.
       ..onStoredPlaintextOrphaned = (ids) {
         _messagingProvider?.onStoredPlaintextOrphaned(ids);
+      }
+      // A mid-session passcode re-lock revokes the content store; the contact
+      // store holds a reference to it plus a plaintext copy of the graph, so
+      // it forgets both in the same teardown and re-opens after the unlock
+      // (without which every later write-through would silently return false).
+      ..onPasscodeLockRevoke = () {
+        _contactStore?.close();
+      }
+      ..onPasscodeLockRestore = () async {
+        final uid = _currentUserId;
+        final store = _contactStore;
+        // Only a store the revoke closed is re-opened: Android never revokes
+        // (wrapping is web-only), so the restore finds it open and does no
+        // redundant re-read.
+        if (uid == null || store == null || store.isOpen) return;
+        await _openContactStore(uid);
+        // The socket stayed up across the re-lock: every event that landed
+        // while the store was closed was not written through, so the RAM
+        // lists are re-applied as the freshest truth.
+        _friendsProvider?.rewriteStore();
+        _conversationsProvider?.rewriteStore();
       };
   }
+
+  /// Opens the contact store for [userId], diagnosing and surviving a
+  /// refusal: the server lists still fill the UI while the legacy path
+  /// exists. Retried on every connect (a locked web vault opens after the
+  /// unlock); the durable diag is written once per distinct stage so
+  /// reconnect churn cannot flood the 80-entry ring.
+  Future<void> _openContactStore(int userId) async {
+    final store = _contactStore;
+    if (store == null) return;
+    try {
+      await store.open(userId);
+      _contactStoreUnavailable = null;
+    } on ContactStoreUnavailable catch (e) {
+      if (e.stage != _contactStoreUnavailable) {
+        E2ePersistentDiag.record('CONTACT_STORE_UNAVAILABLE', {
+          'stage': e.stage,
+        });
+      }
+      _contactStoreUnavailable = e.stage;
+    }
+  }
+
+  /// True when [work] settles within [budget]; the timer is cancelled the
+  /// moment it does, so a prompt open leaves no pending timer behind.
+  static Future<bool> _withinBudget(Future<void> work, Duration budget) {
+    final done = Completer<bool>();
+    final timer = Timer(budget, () {
+      if (!done.isCompleted) done.complete(false);
+    });
+    unawaited(
+      work.whenComplete(() {
+        timer.cancel();
+        if (!done.isCompleted) done.complete(true);
+      }),
+    );
+    return done.future;
+  }
+
+  /// How long [connect] waits for the contact store before connecting the
+  /// socket regardless. Same order as the passcode store's 6 s read budget
+  /// (`passcode-lock.md` §10b) — a Keystore first-read is not a 250 ms
+  /// operation — but shorter, because here the cost of waiting is a delayed
+  /// socket, not a lockout.
+  static const Duration kContactStoreOpenBudget = Duration(seconds: 4);
+
+  /// Bumped by every [connect] that gets past the cooldown; a connect that
+  /// suspended on the store open compares it afterwards and yields to any
+  /// newer call — SAME user included, which `_currentUserId` cannot tell.
+  int _connectGeneration = 0;
 
   /// Registers the screen-scoped §5.1 ceremony controller as the receiver of
   /// provisioning + device-list events. ONE sink at a time by design — the
@@ -200,6 +285,7 @@ class ConnectionProvider extends ChangeNotifier {
     }
     _debouncedConnectTimer?.cancel();
     _lastConnectStartedAt = now;
+    final generation = ++_connectGeneration;
 
     // 1. Cancel any pending reconnect timer
     _reconnectManager.cancel();
@@ -228,6 +314,39 @@ class ConnectionProvider extends ChangeNotifier {
     _messagingProvider?.onConnect(isReconnect);
     _messagingProvider?.setCurrentUserId(userId);
     _messagingProvider?.setToken(token);
+
+    // 4b. Local contacts BEFORE the socket: the lists were just cleared (a
+    // fresh account) and the server's answers are seconds away at best,
+    // never at worst. Waited for ONLY up to [kContactStoreOpenBudget] — the
+    // open chain (Keystore read, SQLCipher open, web inventory + arm) has no
+    // timeout of its own, and a store that hangs must not take the socket
+    // down with it; a late open still hydrates if no server list beat it.
+    // A reconnect finds the store already open and its lists populated.
+    if (_contactStore != null) {
+      if (_contactStore!.userId != userId) {
+        final opened = _openContactStore(userId);
+        final inTime = await _withinBudget(opened, kContactStoreOpenBudget);
+        // A newer connect() ran while we waited — another account, a §6.2
+        // rebind with `immediate: true`, or a plain same-user re-entry; it
+        // owns the socket now, so this call must not replace it with an
+        // older token.
+        if (_connectGeneration != generation) return;
+        if (!inTime) {
+          E2ePersistentDiag.record('CONTACT_STORE_OPEN_TIMEOUT', {
+            'budgetMs': kContactStoreOpenBudget.inMilliseconds,
+          });
+          unawaited(
+            opened.then((_) {
+              if (_connectGeneration != generation) return;
+              _friendsProvider?.hydrateFromStore();
+              _conversationsProvider?.hydrateFromStore();
+            }),
+          );
+        }
+      }
+      _friendsProvider?.hydrateFromStore();
+      _conversationsProvider?.hydrateFromStore();
+    }
 
     // 5. Set up emit callbacks so sub-providers can send socket events
     _encryptionProvider?.setEmitCallback((event, data) => emit(event, data));
@@ -421,11 +540,14 @@ class ConnectionProvider extends ChangeNotifier {
       );
     }
 
+    // "Still empty" used to mean "the first answer was lost"; the contact
+    // store fills both lists before the socket, so the retry asks the
+    // providers whether the SERVER has spoken instead.
     Future.delayed(AppConstants.conversationsRefreshDelay, () {
-      if (_conversationsProvider?.conversations.isEmpty == true) {
+      if (_conversationsProvider?.hasLoadedConversationsOnce == false) {
         _socketService.getConversations();
       }
-      if (_friendsProvider?.friends.isEmpty == true) {
+      if (_friendsProvider?.hasFriendsSnapshot == false) {
         _socketService.getFriends();
       }
     });
@@ -636,6 +758,7 @@ class ConnectionProvider extends ChangeNotifier {
       _friendsProvider?.clearAll();
       _conversationsProvider?.clearAll();
       _messagingProvider?.clearAll();
+      _contactStore?.close();
     }
 
     notifyListeners();
