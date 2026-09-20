@@ -1,0 +1,29 @@
+# Phase 2a re-driven on the post-review build: contact restore, offline hydrate, history export→wipe→import and the locked-vault path all hold on device AND web
+
+**Date:** 2026-09-21 · **Version:** unchanged (0.2.51 backend / 0.2.50 web on prod; branch only) · **Tiers deployed:** none
+
+## What was done
+- No code changed. The **owed G2 drive** (owed since `3915f4f8`, because `applyRestore` and the connect-time restore gate both changed in `1cfdc7f2`) was run end to end on branch tip `27edf4f1`, plus the three surfaces the last handoff listed as never verified: **web**, the **history-import half on a device**, and **passcode re-lock against the backup**.
+- Android (`Pixel_7`, debug APK, `--dart-define=BASE_URL=http://10.0.2.2:3000`) and a second client (managed Chromium against `flutter run -d chrome --web-port=5599`) were both driven against the local stack; the owner seeded `tester1#4741` (web, id 114) and `tester2#5563` (device, id 115) as friends.
+- Confirmed the backend under test is the branch source, not a stale image: `docker-compose.yml:56-58` bind-mounts `./backend` and runs `start:dev`; `schema_migrations` top = `0021_contact_backups.sql`.
+- One pre-existing local account booted `CONTACT_BACKUP_BLOB_UNREADABLE {reason: frame}` → `locked`: its row was written before `1cfdc7f2` added the `uint32be(len)` pad frame, so `_unpad` (`contact_backup.dart:355-359`) refuses it and `_adopt` (`:589`) correctly declines to overwrite. Pre-release format only; nothing shipped. Its data was wiped before the drive.
+
+## Key files
+- Edited: none (this session is verification only) — plus the three handoff files.
+- Read only (load-bearing): `frontend/lib/services/backup/history_backup_service.dart:107-166` (upgrade-only import), `frontend/lib/services/contacts/contact_backup_service.dart:556-596` (`_adopt` lock branch), `.planning/metadata-privacy/task_plan.md` §2/§5.
+
+## Verification
+- **Backend is post-review:** 1.5 MB → `/auth/login` **413**, small `/auth/login` **400** (Nest's global parser intact behind the named `json()` wrapper), `/backup/contacts` unauth **401**.
+- **Device restore (the owed assertion):** `pm clear` → login `tester2` → durable diag `01:18:50.795 CONTACT_BACKUP_RESTORED {count: 1}` **before** `01:18:52.298 IDENTITY_MINTED {userId: 115}`; the `tester1` chat is listed. (count is 1, not 2 — the seeded device account had one friend; the 2-record case landed on web.)
+- **Offline hydrate:** airplane mode + cold start → chat list still renders `tester1` from SQLCipher, no server.
+- **History backup, full loop on device:** export → `umbra-115-2026-09-21.umbrabak` (931 B; cleartext envelope `{fp:"umbra-history-backup",v:1,salt,iterations:600000,blob}`) → `pm clear` → import → `HISTORY_BACKUP_IMPORTED {records: 2, contacts: 0}` and both messages render again. `contacts: 0` is the upgrade-only skip — the contact row already came back from the server backup.
+- **Web (fresh browser profile, `tester1`):** `01:26:00 CONTACT_BACKUP_RESTORED {count: 2}` before `01:26:01 IDENTITY_MINTED {userId: 114}`. Contact rows are in the sealed family (`flutter.e2e_114_contact_v1_115 = "fps1:k…:-:…"`); the CK cache sits in cleartext localStorage (`flutter.contact_backup_ck = "114.<ckId>.<b64ck>"`) exactly as `docs/METADATA.md` warns.
+- **Padding holds live:** a 2-contact account (114) and a 1-contact account (115) both store `length(blob) = 5500` — no record count readable from a dump.
+- **No-op stays silent:** a web reload and a native cold start moved neither `rev` nor `updatedAt` (114 at rev 6, 115 at rev 3) — the `key_bundles.updatedAt` presence clock is not rebuilt in the real app, not just under curl.
+- **Passcode re-lock vs the backup (web):** `PASSCODE_WRAP_ENABLED {keys: 2}` → reload → `CONTENT_STORE_LOCKED` + `CONTACT_STORE_UNAVAILABLE {stage: locked}`, contact list not emptied, row **untouched at rev 6**. After unlock, a mute change re-sealed `contact_v1_115` (289 → 361 chars) and uploaded rev 6 → 7 under the **same `ckId`** — write-through recovers, no re-key, no clobber.
+- **NOT verified:** iOS, prod, web *import* (export-only by design), password-change / recovery-phrase re-wrap on a real device (unit + live-curl only), concurrent PUT from two real clients (curl only).
+
+## Notes for next session
+- **G2 is still owner-owed** and now has its full proof ladder: Phase 2a → `master` + backend deploy. Nothing later depends on it being live.
+- Still open from the review round: `contact_backups.updatedAt` is stored and returned but no client reads it (owner call to drop the column); a stolen 24 h token can PUT under a new `ckId` and lock honest devices (fix = keep one previous row generation).
+- Traps (also in `docs/agents/traps.md`): `exec-out screencap` hands back stale frames on this AVD; a pre-padding blob locks the session permanently; the `share_plus` export lives in `cache/share_plus` and dies with `pm clear`.
