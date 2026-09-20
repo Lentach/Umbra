@@ -161,7 +161,7 @@ export class ChatMessageService {
   ): Promise<string | null> {
     const seen = new Set<string>();
     for (const envelope of envelopes) {
-      const key = `${envelope.userId}:${envelope.deviceId}`;
+      const key = `${envelope.userId}:${envelope.deviceId}`; // log-guard: key
       // Two ciphertexts for one device would consume the same message key
       // twice — Signal decryption is not idempotent, so last-wins would brick
       // that device's ratchet. Refuse instead.

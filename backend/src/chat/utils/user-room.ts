@@ -18,7 +18,7 @@ import { Server, Socket } from 'socket.io';
  * container has its own rooms, so horizontal scale would need one.
  */
 export function userRoom(userId: number): string {
-  return `user:${userId}`;
+  return `user:${userId}`; // log-guard: key
 }
 
 /**
@@ -32,7 +32,7 @@ export function userRoom(userId: number): string {
  * and for anything else that is true of one device only.
  */
 export function deviceRoom(userId: number, deviceId: number): string {
-  return `device:${userId}:${deviceId}`;
+  return `device:${userId}:${deviceId}`; // log-guard: key
 }
 
 /**

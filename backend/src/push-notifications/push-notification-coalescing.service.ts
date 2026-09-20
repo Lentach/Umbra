@@ -56,7 +56,7 @@ export class PushNotificationCoalescingService implements OnModuleDestroy {
     conversationId: number,
     senderName?: string,
   ): Promise<void> {
-    const key = `${recipientUserId}:${conversationId}`;
+    const key = `${recipientUserId}:${conversationId}`; // log-guard: key
     const existing = this.pending.get(key);
 
     if (existing) {

@@ -752,7 +752,7 @@ export class MessagesService {
         const hidden = m.hiddenByUserIds ?? '';
         if (hidden.length > 0) {
           const padded = `,${hidden},`;
-          if (padded.includes(`,${hiddenByUserId},`)) {
+          if (padded.includes(`,${hiddenByUserId},`)) { // log-guard: key
             map.set(convId, null);
             continue;
           }

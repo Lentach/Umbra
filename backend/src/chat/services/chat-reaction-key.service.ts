@@ -241,7 +241,7 @@ export class ChatReactionKeyService {
   ): ReactionKeyRefusal | null {
     const seen = new Set<string>();
     for (const envelope of envelopes) {
-      const key = `${envelope.userId}:${envelope.deviceId}`;
+      const key = `${envelope.userId}:${envelope.deviceId}`; // log-guard: key
       // One row per device: the primary key would otherwise make an upload's
       // own duplicates fight each other for the same slot, and only one of
       // two ciphertexts would survive at random.

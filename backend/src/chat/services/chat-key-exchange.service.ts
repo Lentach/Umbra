@@ -946,7 +946,7 @@ export class ChatKeyExchangeService {
   ): boolean {
     const now = Date.now();
     this.cleanupPreKeyFetchTracker(now);
-    const key = `${requesterId}:${recipientId}:${recipientDeviceId}`;
+    const key = `${requesterId}:${recipientId}:${recipientDeviceId}`; // log-guard: key
     const lastSeen = this.lastPreKeyFetchByPair.get(key);
     if (
       lastSeen !== undefined &&

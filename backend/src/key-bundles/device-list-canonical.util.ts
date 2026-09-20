@@ -148,7 +148,7 @@ export function encodeCanonicalDeviceList(list: ParsedDeviceList): Buffer {
 
   const body = list.devices.map(writeEntry).join(',');
   return Buffer.from(
-    `{"userId":${list.userId},"version":${list.version},"devices":[${body}]}`,
+    `{"userId":${list.userId},"version":${list.version},"devices":[${body}]}`, // log-guard: key
     'utf8',
   );
 }

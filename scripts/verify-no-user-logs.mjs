@@ -15,7 +15,9 @@
  * included (prod-silent is one `main.ts` edit away from a leak). Regex
  * literals are skipped so a quote inside `/"/g` cannot flip the scan.
  *
- * Two forms are flagged (both case-insensitive):
+ * A non-log literal (Map key, socket room, canonical wire format) opts out
+ * with `// log-guard: key` on its line. Two forms are flagged (both
+ * case-insensitive):
  *   1. a LABEL: `userId=`, `senderId:`, `targetUserId =`, `username=`,
  *      `identifier=`, `user 7`-style `user ${…}` / `users ${…}`
  *   2. an INTERPOLATION of an account field: `${userId}`, `${user.id}`,
@@ -99,11 +101,14 @@ export function* literals(text) {
 export function findViolations(text) {
   const out = [];
   for (const [start, literal] of literals(text)) {
-    // Map keys, room names and wire formats (`${a}:${b}`, `user:${id}`,
-    // `{"userId":${id},...}`) carry no prose; a log line always does.
+    // A literal that is not a log line (Map key, room name, wire format)
+    // opts out EXPLICITLY with `// log-guard: key` on its line; there is no
+    // shape heuristic, so a bare `${userId}` in a log is still caught.
+    const eol = text.indexOf('\n', start);
+    const lineTail = text.slice(start, eol < 0 ? text.length : eol);
     const hit =
       literal.match(LABEL) ??
-      (/\s/.test(literal.slice(1, -1)) ? literal.match(INTERPOLATION) : null);
+      (lineTail.includes('// log-guard: key') ? null : literal.match(INTERPOLATION));
     if (!hit) continue;
     out.push({ line: text.slice(0, start).split('\n').length, hit: hit[0] });
   }
@@ -120,6 +125,8 @@ function selfTest() {
     'throw new Error(`allocateDeviceId: user ${userId} not found`)',
     "const l = 'targetUserId: ' + x",
     'logger.log(`${recipientId} online`)',
+    'logger.warn(`${userId}`)',
+    'const key = `${requesterId}:${recipientId}`; // a key without the marker',
     // a regex with quotes BEFORE the string must not hide it
     `s.replace(/"/g, '\\\\"'); logger.log(\`userId=\${id}\`)`,
   ];
@@ -128,9 +135,8 @@ function selfTest() {
     'logger.log(`committed count=${rows.length}`)',
     "const re = /userId=/; // a regex, not a string",
     '// userId=${x} in a comment',
-    'const key = `${requesterId}:${recipientId}:${deviceId}`',
-    'return `user:${userId}`',
-    'const c = `{"userId":${list.userId},"version":${v}}`',
+    'const key = `${requesterId}:${recipientId}:${deviceId}`; // log-guard: key',
+    'return `user:${userId}`; // log-guard: key',
     'where(\'"userId" = :userId\', { userId })',
     'logger.log(`messageId=${messageId} conversationId=${c}`)',
     'logger.warn(`REFUSED callerDeviceId=${callerDeviceId} targetDeviceId=${d}`)',
