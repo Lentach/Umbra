@@ -6,16 +6,33 @@ import { ContactBackupService } from './contact-backup.service';
 import { ContactBackup } from './contact-backup.entity';
 import { PutContactBackupDto } from './dto/contact-backup.dto';
 
-const mockRepo = () => ({
-  create: jest.fn(),
-  save: jest.fn(),
-  findOne: jest.fn(),
-});
+/**
+ * The update path is a CONDITIONAL UPDATE, not `save`: the builder is mocked
+ * chainably and handed back on the repo so a test can read what the guard
+ * was actually compiled with.
+ */
+const mockRepo = () => {
+  const builder = {
+    update: jest.fn(() => builder),
+    set: jest.fn(() => builder),
+    where: jest.fn(() => builder),
+    execute: jest.fn(() => Promise.resolve({ affected: 1 })),
+  };
+  return {
+    create: jest.fn(),
+    save: jest.fn(),
+    findOne: jest.fn(),
+    createQueryBuilder: jest.fn(() => builder),
+    builder,
+  };
+};
 
 const SALT = 'c2FsdC1zYWx0LXNhbHQtc2FsdA';
 const CK_ID = 'AAAAAAAAAAAAAAAAAAAAAA';
 const OTHER_CK_ID = 'BBBBBBBBBBBBBBBBBBBBBB';
-const STORED_WRAPS = JSON.stringify([{ kind: 'password', ct: 'wrap-pw' }]);
+// Opaque fixtures stay inside the base64 charset the DTO enforces, so no
+// fixture here describes a body the endpoint would have refused.
+const STORED_WRAPS = JSON.stringify([{ kind: 'password', ct: 'wrapPw' }]);
 const STORED_AT = new Date('2026-09-01T10:00:00.000Z');
 
 const storedRow = (): ContactBackup =>
@@ -27,7 +44,7 @@ const storedRow = (): ContactBackup =>
     salt: SALT,
     ckId: CK_ID,
     wraps: STORED_WRAPS,
-    blob: 'sealed-contacts',
+    blob: 'sealedContacts',
     updatedAt: STORED_AT,
   }) as ContactBackup;
 
@@ -38,8 +55,8 @@ const putDto = (
   baseRev: 3,
   salt: SALT,
   ckId: CK_ID,
-  wraps: [{ kind: 'password', ct: 'wrap-pw' }],
-  blob: 'sealed-contacts',
+  wraps: [{ kind: 'password', ct: 'wrapPw' }],
+  blob: 'sealedContacts',
   ...over,
 });
 
@@ -74,8 +91,8 @@ describe('ContactBackupService', () => {
         rev: 3,
         salt: SALT,
         ckId: CK_ID,
-        wraps: [{ kind: 'password', ct: 'wrap-pw' }],
-        blob: 'sealed-contacts',
+        wraps: [{ kind: 'password', ct: 'wrapPw' }],
+        blob: 'sealedContacts',
         updatedAt: STORED_AT,
       });
     });
@@ -98,7 +115,7 @@ describe('ContactBackupService', () => {
           salt: SALT,
           ckId: CK_ID,
           wraps: STORED_WRAPS,
-          blob: 'sealed-contacts',
+          blob: 'sealedContacts',
         }),
       );
     });
@@ -146,26 +163,74 @@ describe('ContactBackupService', () => {
     });
 
     it('bumps rev and moves updatedAt when only the blob changes', async () => {
-      const row = storedRow();
-      repo.findOne.mockResolvedValue(row);
-      repo.save.mockResolvedValue(row);
+      repo.findOne.mockResolvedValue(storedRow());
 
-      const result = await service.put(
-        42,
-        putDto({ blob: 'sealed-contacts-2' }),
-      );
+      const result = await service.put(42, putDto({ blob: 'sealedContacts2' }));
 
       expect(result.rev).toBe(4);
       expect(result.updatedAt.getTime()).toBeGreaterThan(STORED_AT.getTime());
-      expect(repo.save).toHaveBeenCalledWith(
-        expect.objectContaining({ rev: 4, blob: 'sealed-contacts-2' }),
+      expect(repo.builder.set).toHaveBeenCalledWith(
+        expect.objectContaining({ blob: 'sealedContacts2' }),
       );
     });
 
+    it('guards the write on the rev it read, in the statement itself', async () => {
+      repo.findOne.mockResolvedValue(storedRow());
+
+      // Check-then-save would let two PUTs at the same baseRev both land, and
+      // a lost WRAP upload is unrecoverable: resetPassword publishes the new
+      // password's wrap and then changes the password, so no later session
+      // holds a secret that could re-merge the loser back in.
+      await service.put(42, putDto({ blob: 'sealedContacts2' }));
+
+      expect(repo.builder.where).toHaveBeenCalledWith(
+        '"userId" = :userId AND "rev" = :baseRev',
+        { userId: 42, baseRev: 3 },
+      );
+    });
+
+    it('refuses with the fresh rev when the guarded update matches no row', async () => {
+      // Someone committed between the read and the statement: the row is at a
+      // rev this write was not based on, so it must not be reported as stored.
+      repo.findOne
+        .mockResolvedValueOnce(storedRow())
+        .mockResolvedValueOnce({ ...storedRow(), rev: 9 });
+      repo.builder.execute.mockResolvedValue({ affected: 0 });
+
+      const error: unknown = await service
+        .put(42, putDto({ blob: 'sealedContacts2' }))
+        .catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(ConflictException);
+      expect((error as ConflictException).getResponse()).toEqual({
+        error: 'stale_backup',
+        rev: 9,
+      });
+    });
+
+    it('answers 409, not 500, when another device inserted the row first', async () => {
+      // The unique userId constraint fires between the findOne and the save.
+      // A 500 would look like a server fault the client cannot act on; 409
+      // puts it back on the re-read-and-retry path it already implements.
+      repo.findOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ ...storedRow(), rev: 1 });
+      repo.create.mockImplementation((v: Partial<ContactBackup>) => v);
+      repo.save.mockRejectedValue(new Error('duplicate key value'));
+
+      const error: unknown = await service
+        .put(42, putDto({ baseRev: 0 }))
+        .catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(ConflictException);
+      expect((error as ConflictException).getResponse()).toEqual({
+        error: 'stale_backup',
+        rev: 1,
+      });
+    });
+
     it('accepts a re-minted ckId with new wraps at the current rev', async () => {
-      const row = storedRow();
-      repo.findOne.mockResolvedValue(row);
-      repo.save.mockResolvedValue(row);
+      repo.findOne.mockResolvedValue(storedRow());
 
       // Phrase restore: the client re-wraps a fresh content key for both
       // secrets and re-seals the blob under it, all in one write.
@@ -174,21 +239,20 @@ describe('ContactBackupService', () => {
         putDto({
           ckId: OTHER_CK_ID,
           wraps: [
-            { kind: 'password', ct: 'wrap-pw-2' },
-            { kind: 'phrase', ct: 'wrap-phrase' },
+            { kind: 'password', ct: 'wrapPw2' },
+            { kind: 'phrase', ct: 'wrapPhrase' },
           ],
           blob: 'resealed',
         }),
       );
 
       expect(result.rev).toBe(4);
-      expect(repo.save).toHaveBeenCalledWith(
+      expect(repo.builder.set).toHaveBeenCalledWith(
         expect.objectContaining({
-          rev: 4,
           ckId: OTHER_CK_ID,
           wraps: JSON.stringify([
-            { kind: 'password', ct: 'wrap-pw-2' },
-            { kind: 'phrase', ct: 'wrap-phrase' },
+            { kind: 'password', ct: 'wrapPw2' },
+            { kind: 'phrase', ct: 'wrapPhrase' },
           ]),
           blob: 'resealed',
         }),

@@ -138,9 +138,19 @@ class HistoryBackupService {
     final existing = (await _readAll(kv)).keys.toSet();
     var records = 0;
     var contacts = 0;
+    // EXACTLY the two prefixes `exportAndShare` produces — never the rest of
+    // the `e2e_<uid>_` namespace. Signal key material, the identity and the
+    // passcode verifier live there too and are out of scope by contract; the
+    // device this path targets has a store that was just destroyed, so
+    // `existing` is empty and nothing else would stop a crafted file from
+    // planting them.
+    final recordPre = recordPrefix(userId);
+    final rawPre = rawRecordPrefix(userId);
     for (final entry in payload.records.entries) {
       if (existing.contains(entry.key)) continue;
-      if (!entry.key.startsWith('e2e_${userId}_')) continue;
+      if (!entry.key.startsWith(recordPre) && !entry.key.startsWith(rawPre)) {
+        continue;
+      }
       if (await kv.setString(entry.key, entry.value)) records++;
     }
     for (final entry in payload.contacts.entries) {

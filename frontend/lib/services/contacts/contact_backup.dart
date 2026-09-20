@@ -44,6 +44,14 @@ const int kContactBackupKdfIterations = 600000;
 /// Blob format version. A reader MUST refuse a higher one rather than guess.
 const int kContactBackupVersion = 1;
 
+/// Plaintext padding bucket, bytes. AES-GCM is length-preserving, so without
+/// this the ciphertext length is a contact counter anyone with a database
+/// dump can read. 4 KiB is the smallest bucket that hides the difference
+/// between "a handful of contacts" and "dozens" while keeping a typical
+/// account's blob to one or two blocks; the design gives the Phase 1 queue
+/// seal the same treatment at 16 KiB.
+const int kContactBackupPadBlock = 4096;
+
 /// Domain separator inside the sealed payload. Belt and braces against a blob
 /// from another feature ever being fed to this opener.
 const String kContactBackupDomain = 'fp-contacts';
@@ -306,14 +314,51 @@ class ContactBackupCodec {
     return ck;
   }
 
-  /// Seals [payload] under [ck].
+  /// Seals [payload] under [ck], PADDED to a fixed bucket.
+  ///
+  /// AES-GCM is length-preserving, so an unpadded blob's byte length divided
+  /// by the ~200-400 bytes a contact record costs is a direct estimate of
+  /// how many contacts the account has — readable from a `pg_dump` with no
+  /// key at all, and visibly growing or shrinking across two dumps. That is
+  /// exactly the metadata this PR series exists to remove, so the plaintext
+  /// is padded to a multiple of [kContactBackupPadBlock] first. The same
+  /// 16 KiB discipline the design gives the Phase 1 queue seal.
+  ///
+  /// Framing: a 4-byte big-endian length inside the SEALED region, then the
+  /// JSON, then zeros. The length rides under the GCM tag, so a truncated or
+  /// tampered frame fails authentication rather than mis-parsing.
   Future<String> sealPayload(Uint8List ck, ContactBackupPayload payload) async {
-    final sealed = await _sealer.seal(
-      ck,
-      Uint8List.fromList(utf8.encode(jsonEncode(payload.toJson()))),
-    );
+    final json = utf8.encode(jsonEncode(payload.toJson()));
+    final framed = _pad(Uint8List.fromList(json));
+    final sealed = await _sealer.seal(ck, framed);
     if (sealed == null) throw ContactBackupCorrupt('seal_failed');
     return base64Encode(sealed);
+  }
+
+  /// `uint32be(length) || body || zero padding` to the next whole block.
+  static Uint8List _pad(Uint8List body) {
+    final total = 4 + body.length;
+    final blocks = (total + kContactBackupPadBlock - 1) ~/
+        kContactBackupPadBlock;
+    final out = Uint8List(blocks * kContactBackupPadBlock);
+    out[0] = (body.length >> 24) & 0xff;
+    out[1] = (body.length >> 16) & 0xff;
+    out[2] = (body.length >> 8) & 0xff;
+    out[3] = body.length & 0xff;
+    out.setRange(4, 4 + body.length, body);
+    return out;
+  }
+
+  /// Inverse of [_pad]. A length that does not fit the frame is damage, not
+  /// a wrong key — GCM already authenticated these bytes.
+  static Uint8List _unpad(Uint8List framed) {
+    if (framed.length < 4) throw ContactBackupCorrupt('frame');
+    final length =
+        (framed[0] << 24) | (framed[1] << 16) | (framed[2] << 8) | framed[3];
+    if (length < 0 || 4 + length > framed.length) {
+      throw ContactBackupCorrupt('frame');
+    }
+    return Uint8List.sublistView(framed, 4, 4 + length);
   }
 
   /// Opens [blob] with [ck]. Throws [ContactBackupCorrupt] — including when
@@ -331,7 +376,9 @@ class ContactBackupCodec {
     if (plain == null) throw ContactBackupCorrupt('blob_auth');
     final Object? decoded;
     try {
-      decoded = jsonDecode(utf8.decode(plain));
+      decoded = jsonDecode(utf8.decode(_unpad(plain)));
+    } on ContactBackupCorrupt {
+      rethrow;
     } on Object {
       throw ContactBackupCorrupt('blob_json');
     }

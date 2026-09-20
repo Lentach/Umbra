@@ -392,37 +392,37 @@ class ConnectionProvider extends ChangeNotifier {
     final backup = _contactBackup;
     final store = _contactStore;
     if (backup != null && store != null) {
+      // ONLY the case the restore exists for: a store that came up EMPTY.
+      // On any other connect a server list has already decided membership,
+      // and writing records back after it would resurrect the very peers the
+      // non-empty `friendsList` just swept — for the rest of the session,
+      // since nothing re-prunes until the next list event.
       if (store.isOpen && store.all.isEmpty) {
         final inTime = await _withinBudget(
           backup.ready,
           kContactBackupRestoreBudget,
         );
         if (_connectGeneration != generation) return;
-        if (inTime) {
-          if (await backup.applyRestore() > 0) {
-            if (_connectGeneration != generation) return;
-            _friendsProvider?.hydrateFromStore();
-            _conversationsProvider?.hydrateFromStore();
-          }
-        } else {
+        if (!inTime) {
           E2ePersistentDiag.record('CONTACT_BACKUP_RESTORE_TIMEOUT', {
             'budgetMs': kContactBackupRestoreBudget.inMilliseconds,
           });
         }
-      }
-      // Whatever the budget decided, a late resolve still restores: the
-      // server lists are authoritative anyway while the legacy path exists,
-      // so a record that arrives after them is pruned, not duplicated.
-      unawaited(
-        backup.ready.then((_) async {
-          if (_connectGeneration != generation) return;
-          if (await backup.applyRestore() > 0) {
+        // In time or not, the restore still runs — it is the whole point of
+        // this branch. Overshooting the budget only means the socket started
+        // first; a record landing after the first list is pruned by the next
+        // one, and on THIS device there was nothing to prune against.
+        unawaited(
+          backup.ready.then((_) async {
             if (_connectGeneration != generation) return;
-            _friendsProvider?.hydrateFromStore();
-            _conversationsProvider?.hydrateFromStore();
-          }
-        }),
-      );
+            if (await backup.applyRestore() > 0) {
+              if (_connectGeneration != generation) return;
+              _friendsProvider?.hydrateFromStore();
+              _conversationsProvider?.hydrateFromStore();
+            }
+          }),
+        );
+      }
     }
 
     // 5. Set up emit callbacks so sub-providers can send socket events

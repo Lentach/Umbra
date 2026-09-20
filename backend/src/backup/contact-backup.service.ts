@@ -53,10 +53,13 @@ export class ContactBackupService {
    * did not also upload. Every accepted write replaces the whole triple, so
    * the row is never internally inconsistent.
    *
-   * A truly simultaneous pair of PUTs from two devices at the same baseRev is
-   * a last-writer-wins lost update (check-then-save, not a conditional
-   * UPDATE); the surviving row is still a complete, openable triple and the
-   * loser's next GET/merge repairs it.
+   * The guard is a CONDITIONAL UPDATE (`WHERE rev = :baseRev`), not
+   * check-then-save. Two PUTs at the same baseRev would both pass a
+   * read-then-compare and both save, and for a WRAP upload that lost update
+   * is unrecoverable: `resetPassword` publishes the new password's wrap and
+   * then immediately changes the password, so no later session holds a
+   * secret that could re-merge the loser back in. Postgres makes the guard
+   * free; the loser gets the 409 it already knows how to handle.
    */
   async put(
     userId: number,
@@ -86,7 +89,19 @@ export class ContactBackupService {
         blob: dto.blob,
         updatedAt,
       });
-      await this.repo.save(created);
+      try {
+        await this.repo.save(created);
+      } catch {
+        // Another device inserted between the findOne and here (the userId
+        // unique constraint). That is a stale baseRev, not a server fault:
+        // answering 409 puts the loser back on its re-read-and-retry path
+        // instead of a 500 it treats as an unexplained failure.
+        const now = await this.repo.findOne({ where: { userId } });
+        throw new ConflictException({
+          error: 'stale_backup',
+          rev: now?.rev ?? 0,
+        });
+      }
       return { rev: 1, updatedAt };
     }
 
@@ -113,13 +128,30 @@ export class ContactBackupService {
     }
 
     const updatedAt = new Date();
-    existing.version = dto.v;
-    existing.ckId = dto.ckId;
-    existing.wraps = wraps;
-    existing.blob = dto.blob;
-    existing.rev = existing.rev + 1;
-    existing.updatedAt = updatedAt;
-    await this.repo.save(existing);
-    return { rev: existing.rev, updatedAt };
+    const result = await this.repo
+      .createQueryBuilder()
+      .update(ContactBackup)
+      .set({
+        version: dto.v,
+        ckId: dto.ckId,
+        wraps,
+        blob: dto.blob,
+        rev: () => '"rev" + 1',
+        updatedAt,
+      })
+      .where('"userId" = :userId AND "rev" = :baseRev', {
+        userId,
+        baseRev: dto.baseRev,
+      })
+      .execute();
+    if (result.affected === 0) {
+      // Someone committed between the read above and this statement.
+      const now = await this.repo.findOne({ where: { userId } });
+      throw new ConflictException({
+        error: 'stale_backup',
+        rev: now?.rev ?? 0,
+      });
+    }
+    return { rev: existing.rev + 1, updatedAt };
   }
 }

@@ -947,13 +947,35 @@ class AuthProvider extends ChangeNotifier {
     // PR2.4, and the ORDER is the whole point: `setPassword` revokes every
     // token server-side, so a wrap uploaded after it would have no session
     // to ride. Additive — the old wrap stays until each device proves the
-    // new one at its next login — and a refusal only costs the backup one
-    // password change, never the graph.
-    await _contactBackup.addWrap(
+    // new one at its next login.
+    //
+    // A REFUSED re-wrap is not cosmetic. Once the server accepts the new
+    // password the old one is gone, and no later session can then produce a
+    // wrap that opens the existing row: the backup would be locked forever
+    // and the next storage loss would take the graph with it. So the change
+    // is ABORTED — but only when there is something to lose. With no row, or
+    // a row this session could not open anyway, the password change takes
+    // nothing away, and holding a security action hostage to a backup that
+    // does not exist would be the worse bug.
+    final rewrapped = await _contactBackup.addWrap(
       kind: ContactWrapKind.password,
       secret: newPassword,
     );
-    await _api.resetPassword(_token!, oldPassword, newPassword);
+    if (!rewrapped && _contactBackup.holdsOpenableBackup) {
+      throw ContactBackupRewrapRefused();
+    }
+    try {
+      await _api.resetPassword(_token!, oldPassword, newPassword);
+    } on Object {
+      // The server refused — almost always a wrong OLD password. The wrap we
+      // just published is derived from a string the server never accepted as
+      // this account's password, and leaving it live is a second door to the
+      // content key made of whatever the user typed. Retract it; a failure
+      // here changes nothing, because the next successful password login
+      // prunes every wrap that password does not open.
+      await _contactBackup.retractWrap(kind: ContactWrapKind.password);
+      rethrow;
+    }
     await _clearLocalAuthState('password_changed', source: 'resetPassword');
   }
 

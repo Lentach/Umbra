@@ -9,6 +9,19 @@ import '../auth_token_store.dart';
 import 'contact_backup.dart';
 import 'contact_store.dart';
 
+/// A password change was abandoned because the contact backup's re-wrap
+/// could not be published.
+///
+/// Thrown ONLY when the session holds a backup the change would orphan (see
+/// [ContactBackupService.holdsOpenableBackup]). The user loses nothing by
+/// retrying once the server is reachable; going ahead would lock the backup
+/// permanently, because the password that opens the stored row is exactly
+/// the one the change destroys.
+class ContactBackupRewrapRefused implements Exception {
+  @override
+  String toString() => 'ContactBackupRewrapRefused';
+}
+
 /// What this session can do with the server-held contact backup.
 enum ContactBackupState {
   /// Nothing resolved yet — no session, or the login resolve is in flight.
@@ -81,6 +94,18 @@ class ContactBackupService {
   /// re-sealing there would publish an empty graph.
   String? _blob;
 
+  /// The payload JSON this session last successfully published, verbatim.
+  ///
+  /// The upload's no-op gate compares against THIS rather than against the
+  /// ciphertext, because a fresh GCM IV makes every re-seal of an identical
+  /// graph different bytes. Null means "nothing published yet this session",
+  /// which correctly forces the first upload.
+  String? _uploadedPayload;
+
+  /// The wrap the last [addWrap] published, so [retractWrap] can take back
+  /// exactly that one when the operation it was staged for is then refused.
+  ContactBackupWrap? _lastAddedWrap;
+
   /// The opened blob, held between the login resolve and [applyRestore] —
   /// the store is not open yet at resolve time.
   ContactBackupPayload? _pendingRestore;
@@ -90,12 +115,15 @@ class ContactBackupService {
   Timer? _debounce;
   bool _dirty = false;
   bool _uploading = false;
-  int _restoredCount = 0;
 
   ContactBackupState get state => _state;
 
-  /// Records the last [applyRestore] wrote. Zero on every ordinary login.
-  int get restoredCount => _restoredCount;
+  /// Whether this session holds a content key that opens a row the server
+  /// already has — i.e. whether there is a backup a password change could
+  /// ORPHAN. False when no row exists, or when we could not open the one
+  /// that does: in both cases changing the password takes nothing away.
+  bool get holdsOpenableBackup =>
+      _state == ContactBackupState.ready && _ck != null && _blob != null;
 
   /// Settles when the in-flight login resolve finishes. Already-complete when
   /// none is running, so a caller may always await it.
@@ -168,7 +196,6 @@ class ContactBackupService {
     final payload = _pendingRestore;
     final store = _store;
     final userId = _userId;
-    _restoredCount = 0;
     if (payload == null || store == null || userId == null) return 0;
     if (!store.isOpen || store.userId != userId) return 0;
     if (payload.userId != userId) {
@@ -177,7 +204,6 @@ class ContactBackupService {
       E2ePersistentDiag.record('CONTACT_BACKUP_FOREIGN', const {});
       return 0;
     }
-    _pendingRestore = null;
 
     final missing = [
       for (final record in payload.contacts)
@@ -185,24 +211,35 @@ class ContactBackupService {
     ];
     if (missing.isNotEmpty) {
       final byId = {for (final r in missing) r.userId: r};
-      await store.reconcile(
+      final ok = await store.reconcile(
         byId.keys,
         // `current` is DISK truth read inside the lock, so a record that
         // landed between the check above and the lock still wins.
         (peerId, current) => current ?? byId[peerId],
       );
       await store.settled;
-      _restoredCount = missing.length;
+      if (!ok) {
+        // The rows are NOT on disk. `reconcile` answers false on a refused
+        // commit — the exact failure of the storage-flaky device that is the
+        // only one ever to reach here. KEEPING the payload keeps uploads
+        // blocked, so a store view that is missing those peers can never
+        // replace the server's complete one; the next login retries.
+        E2ePersistentDiag.record('CONTACT_BACKUP_RESTORE_FAILED', {
+          'missing': missing.length,
+        });
+        return 0;
+      }
     }
+    _pendingRestore = null;
     if (store.self == null && payload.self != null) {
       await store.setSelf(payload.self!);
     }
-    if (_restoredCount > 0) {
+    if (missing.isNotEmpty) {
       E2ePersistentDiag.record('CONTACT_BACKUP_RESTORED', {
-        'count': _restoredCount,
+        'count': missing.length,
       });
     }
-    return _restoredCount;
+    return missing.length;
   }
 
   /// Adds a wrap of the content key under [secret] WITHOUT re-sealing the
@@ -250,6 +287,35 @@ class ContactBackupService {
       }
     }
     _wraps = [...kept, fresh];
+    _lastAddedWrap = fresh;
+    return _putWraps();
+  }
+
+  /// Removes the wrap [addWrap] most recently published for [kind], if it is
+  /// still the one on the row.
+  ///
+  /// The caller is a password change the SERVER then refused: the wrap it
+  /// staged is derived from a string that is not this account's password,
+  /// and a live second door made of a user-typed (often reused) string is
+  /// not something to leave on a server row until the next login prunes it.
+  /// Best effort — a failure is harmless, since that next login prunes every
+  /// wrap the live password does not open.
+  Future<bool> retractWrap({required ContactWrapKind kind}) async {
+    final stray = _lastAddedWrap;
+    if (stray == null || stray.kind != kind) return false;
+    if (!_wraps.any((w) => w.kind == stray.kind && w.ct == stray.ct)) {
+      return false;
+    }
+    _wraps = [
+      for (final w in _wraps)
+        if (!(w.kind == stray.kind && w.ct == stray.ct)) w,
+    ];
+    _lastAddedWrap = null;
+    if (_wraps.isEmpty) {
+      // Never publish a row nobody can open; keep the stray rather than that.
+      _wraps = [stray];
+      return false;
+    }
     return _putWraps();
   }
 
@@ -268,15 +334,23 @@ class ContactBackupService {
 
   /// Writes the CURRENT wraps against the blob the server already holds.
   /// Used by every wrap-only change; never touches the graph.
+  ///
+  /// The blob is read PER ATTEMPT, not captured: a 409 means another device
+  /// published a newer blob, `_rereadForRetry` replaces `_blob` with it, and
+  /// republishing a pre-409 snapshot would delete that device's contacts
+  /// from the only server-side copy while answering `true`.
   Future<bool> _putWraps() async {
-    final blob = _blob;
-    if (blob == null) {
+    if (_blob == null) {
       // Nothing uploaded yet (a freshly minted row). The staged wraps ride
       // along with the first real upload.
       _dirty = true;
       return false;
     }
-    return _commit(() async => blob);
+    return _commit(() async {
+      final blob = _blob;
+      if (blob == null) throw ContactBackupCorrupt('blob_gone');
+      return blob;
+    });
   }
 
   /// Seals the store's current view and writes it. Returns whether the server
@@ -292,23 +366,50 @@ class ContactBackupService {
     // A store that is not open for THIS account has no view to publish, and
     // publishing "nothing" would destroy the row a wiped device needs.
     if (!store.isOpen || store.userId != userId) return false;
+    // A store that could not read every row on disk has a view SMALLER than
+    // the device holds, and this write is a FULL replacement: publishing it
+    // would delete peers that still exist locally from the only server copy,
+    // leaving the unreadable rows as their sole survivors.
+    if (store.undeterminedCount > 0) {
+      _dirty = true;
+      return false;
+    }
     // The restore has not been applied yet, so the store is missing rows the
     // blob still holds. Uploading here would delete them server-side.
     if (_pendingRestore != null) {
       _dirty = true;
       return false;
     }
-    return _commit(() async {
-      await store.settled;
-      return _codec.sealPayload(
-        _ck!,
-        ContactBackupPayload(
-          userId: userId,
-          self: store.self,
-          contacts: store.all,
-        ),
-      );
-    });
+    // The no-op decision is made HERE, on the PLAINTEXT, and the server's
+    // byte compare is only a backstop.
+    //
+    // It cannot be the other way round: `AesGcmContentSealer` draws a fresh
+    // IV per seal, so re-sealing an identical graph produces different bytes
+    // every time and `existing.blob === dto.blob` can never be true for this
+    // path. Deciding on the ciphertext would leave `updatedAt` moving on
+    // every upload — the `key_bundles.updatedAt` presence clock, rebuilt.
+    //
+    // Comparing the payload also fixes a leak the store cannot see: the blob
+    // carries `toBackupJson()`, which DROPS `queues` and `legacy`, while
+    // `ContactStore.onChanged` fires on any `toJson()` difference. A bare
+    // `legacy` change (a conversation id arriving from the server) would
+    // otherwise re-stamp the row and tell the server "this account was
+    // listed into a conversation at T" — data deliberately excluded from the
+    // backup in the first place.
+    await store.settled;
+    final payload = ContactBackupPayload(
+      userId: userId,
+      self: store.self,
+      contacts: store.all,
+    );
+    final fingerprint = jsonEncode(payload.toJson());
+    if (fingerprint == _uploadedPayload) {
+      _dirty = false;
+      return true;
+    }
+    final ok = await _commit(() async => _codec.sealPayload(_ck!, payload));
+    if (ok) _uploadedPayload = fingerprint;
+    return ok;
   }
 
   /// Logout: the content key dies with the session, by design. The next
@@ -334,9 +435,10 @@ class ContactBackupService {
     _rev = 0;
     _wraps = const [];
     _blob = null;
+    _uploadedPayload = null;
+    _lastAddedWrap = null;
     _pendingRestore = null;
     _dirty = false;
-    _restoredCount = 0;
     _state = ContactBackupState.idle;
   }
 
@@ -387,6 +489,14 @@ class ContactBackupService {
       final bytes = _decodeKey(cached.ck);
       if (bytes != null) {
         await _adopt(bytes, row, persist: false);
+        // The prune must not depend on the cache having been DESTROYED at
+        // the previous logout: a refused delete would otherwise leave a
+        // superseded password opening the backup forever. Costs one PBKDF2,
+        // and only when the row actually carries more than one password
+        // wrap — the ordinary login still pays nothing.
+        if (password != null && _state == ContactBackupState.ready) {
+          await _pruneSupersededPasswordWraps(password);
+        }
         return;
       }
     }
@@ -461,13 +571,25 @@ class ContactBackupService {
     try {
       _pendingRestore = await _codec.openPayload(ck, row.blob);
     } on ContactBackupCorrupt catch (e) {
-      // The wrap opened, so the key is right and the BLOB is damaged. The
-      // local graph is then the only truth; go ready so the next mutation
-      // replaces the blob rather than leaving a row nobody can use.
       _pendingRestore = null;
       E2ePersistentDiag.record('CONTACT_BACKUP_BLOB_UNREADABLE', {
         'reason': e.reason,
       });
+      // Only ONE reason earns the right to overwrite the row: a key this
+      // session PROVED against a wrap, whose GCM open still failed — that
+      // blob is genuinely broken and the local graph is the only truth.
+      //
+      // Everything else must lock instead. `payload_shape` is exactly what a
+      // NEWER blob version produces (`fromJson` refuses `v != 1`), so going
+      // ready here would let an older build destroy a backup a newer one
+      // still reads — the one case the version check exists to prevent. And
+      // on the CACHED-key branch (`persist == false`) nothing verified the
+      // key against a wrap at all; the `ckId` label alone is not proof, so a
+      // stale cache would re-seal the row under a key no wrap opens.
+      if (e.reason != 'blob_auth' || !persist) {
+        _state = ContactBackupState.locked;
+        return;
+      }
     }
     _state = ContactBackupState.ready;
     if (_dirty) scheduleUpload();
@@ -652,7 +774,25 @@ class ContactBackupService {
       return false;
     }
     _rev = row.rev;
-    _wraps = row.wraps;
+    // Another device published; whatever we last sent is no longer what the
+    // row holds, so the no-op gate must not short-circuit the next upload.
+    _uploadedPayload = null;
+    // Adopt the server's blob so a wrap-only retry publishes the NEWER graph
+    // rather than the one this attempt started with.
+    _blob = row.blob;
+    // Adopt the server's wrap set, but never LOSE a wrap this commit is
+    // carrying. `addWrap` and the prune reach `_commit` with a locally built
+    // set, and dropping it here would answer `true` after publishing the OLD
+    // wraps — for a password change that means the row ends up openable only
+    // by a password `resetPassword` is about to destroy, and the backup is
+    // gone for good.
+    final merged = [...row.wraps];
+    for (final mine in _wraps) {
+      if (!merged.any((w) => w.kind == mine.kind && w.ct == mine.ct)) {
+        merged.add(mine);
+      }
+    }
+    _wraps = merged;
     return true;
   }
 

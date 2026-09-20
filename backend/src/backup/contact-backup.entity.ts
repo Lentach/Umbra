@@ -12,14 +12,22 @@ import { User } from '../users/user.entity';
  * account: a browser-storage wipe on a PWA would otherwise take the whole
  * contact graph with it, and the server is not allowed to hold that graph.
  *
- * WHAT THE SERVER SEES: that this account has a backup, how big the opaque
- * strings are, and the `rev` it is at. Nothing else. `blob` is the sealed
- * contact list and `wraps[].ct` are the wrapped copies of the content key —
- * every one of them is ciphertext the server has no key for, and the server
- * never parses either. `salt` and `ckId` are public labels the client needs
- * back verbatim to derive its key and recognise the content key.
+ * WHAT THE SERVER SEES: that this account has a backup, the BUCKETED size of
+ * the opaque strings, the `rev` it is at and `updatedAt`. `blob` is the
+ * sealed contact list and `wraps[].ct` are the wrapped copies of the content
+ * key — every one of them is ciphertext the server has no key for, and the
+ * server never parses either. `salt` and `ckId` are public labels the client
+ * needs back verbatim to derive its key and recognise the content key.
  *
- * WHAT THE SERVER CANNOT SEE: any contact, any name, any handle, any count.
+ * WHAT THE SERVER CANNOT SEE: any contact, any name, any handle, any exact
+ * count.
+ *
+ * The size is bucketed, not hidden. AES-GCM is length-preserving, so a raw
+ * `length(blob)` would divide by the per-contact record size into a contact
+ * estimate readable straight out of a `pg_dump` with no key. The client pads
+ * the plaintext to whole 4 KiB blocks before sealing
+ * (`kContactBackupPadBlock`), so what survives here is the block count — an
+ * upper band, not a count of anything. See docs/METADATA.md.
  *
  * `rev` is optimistic concurrency over the WHOLE triple (ckId, wraps, blob).
  * A write carries the rev it was based on; a mismatch is rejected and nothing

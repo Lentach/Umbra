@@ -3,12 +3,19 @@
 -- not allowed to hold that graph in the clear — so it holds ONE opaque row
 -- per account that it can never open.
 --
--- What the server can see: that an account has a backup, the byte sizes of
--- the opaque strings, and the `rev` the row is at. `blob` is the sealed
--- contact list; `wraps` is a JSON array of `{kind, ct}` where every `ct` is
--- the content key wrapped under the password or the recovery phrase. Neither
--- is ever parsed here. `salt` and `ckId` are public labels the client needs
--- back verbatim. No contact, no name, no handle, no count is visible.
+-- What the server can see: that an account has a backup, the BUCKETED byte
+-- size of the opaque strings, the `rev` the row is at, and `updatedAt`.
+-- `blob` is the sealed contact list; `wraps` is a JSON array of `{kind, ct}`
+-- where every `ct` is the content key wrapped under the password or the
+-- recovery phrase. Neither is ever parsed here. `salt` and `ckId` are public
+-- labels the client needs back verbatim. No contact, no name, no handle and
+-- no exact count is visible.
+--
+-- The size is bucketed, not hidden. AES-GCM is length-preserving, so a raw
+-- length(blob) would divide by the per-contact record size into a contact
+-- estimate anyone with a pg_dump could read without a key. The client pads
+-- the plaintext to whole 4 KiB blocks before sealing, so this column leaks a
+-- block count — an upper band, not a count of anything. See docs/METADATA.md.
 --
 -- `rev` is optimistic concurrency over the WHOLE triple (ckId, wraps, blob):
 -- a PUT carries the rev it read, a mismatch is refused, and nothing is

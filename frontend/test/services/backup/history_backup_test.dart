@@ -215,6 +215,46 @@ void main() {
       expect(kv.containsKey('e2e_8_decrypted_1'), isFalse);
     });
 
+    test('a crafted file cannot plant anything but the two record families',
+        () async {
+      // The file format is documented and the attacker picks the passphrase
+      // they hand the victim with it. On the device this path targets — one
+      // whose store was just destroyed — nothing is present, so `existing`
+      // blocks none of it. Only the prefixes the EXPORT produces may land.
+      final bytes = await _codec().seal(
+        const HistoryBackupPayload(
+          userId: 7,
+          records: {
+            'e2e_7_decrypted_1': 'legitimate',
+            'e2e_7_decrypt_raw_v1_1': 'legitimate-raw',
+            // Control rows and identity state living in the same namespace.
+            'e2e_7_retired_v1': 'retire-everything',
+            'e2e_7_devicelist_pins_v1': 'pin-a-hostile-device-list',
+            'e2e_7_peer_identity_changed_v1': 'suppress-the-warning',
+            'e2e_7_pendsend_v1_abc': 'replay-me',
+          },
+          contacts: {},
+        ),
+        'pw',
+      );
+
+      final counts = await service.importBytes(
+        userId: 7,
+        bytes: bytes,
+        passphrase: 'pw',
+      );
+
+      expect(counts.records, 2);
+      for (final planted in [
+        'e2e_7_retired_v1',
+        'e2e_7_devicelist_pins_v1',
+        'e2e_7_peer_identity_changed_v1',
+        'e2e_7_pendsend_v1_abc',
+      ]) {
+        expect(kv.containsKey(planted), isFalse, reason: planted);
+      }
+    });
+
     test('the filename names the account and the day', () {
       expect(
         HistoryBackupService.filenameFor(7, DateTime.utc(2026, 9, 20)),

@@ -222,18 +222,35 @@ class AuthTokenStore {
     }
   }
 
+  /// Destroys the cached content key.
+  ///
+  /// Retried and RECORDED, unlike the original swallow: on web this value is
+  /// the raw AES-256 key to the account's contact graph sitting in cleartext
+  /// localStorage, so a delete that silently fails leaves it in a shared
+  /// browser profile after the user logged out. "The next login overwrites
+  /// it" is only true if there IS a next login on that device — which is
+  /// exactly what a logout makes uncertain. Same treatment [write] gives a
+  /// refused token write, for the same reason.
   Future<void> clearContactBackupKey() async {
-    try {
-      if (_useSecure) {
-        await _secure.delete(_contactBackupKeyKey);
-      } else {
-        await (await SharedPreferences.getInstance()).remove(
-          _contactBackupKeyKey,
-        );
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        if (_useSecure) {
+          await _secure.delete(_contactBackupKeyKey);
+        } else {
+          await (await SharedPreferences.getInstance()).remove(
+            _contactBackupKeyKey,
+          );
+        }
+        return;
+      } on Object {
+        if (attempt == 0) {
+          await Future<void>.delayed(const Duration(milliseconds: 150));
+        }
       }
-    } on Object {
-      // Same: a refused delete leaves a key the next login overwrites.
     }
+    E2ePersistentDiag.record('CONTACT_BACKUP_KEY_CLEAR_FAILED', {
+      'platform': _useSecure ? 'secure' : 'prefs',
+    });
   }
 
   /// One-time move of a pre-Phase-2 install's tokens into secure storage.

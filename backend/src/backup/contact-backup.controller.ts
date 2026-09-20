@@ -32,7 +32,11 @@ export class ContactBackupController {
   /** 409 `stale_backup` (with the server's rev) or `salt_mismatch` on refusal. */
   @UseGuards(JwtAuthGuard)
   @Put('contacts')
-  @Throttle({ default: { limit: 30, ttl: 60000 } })
+  // Tracks the client's 5 s upload debounce, not the global ceiling: do not
+  // raise it blindly. Every accepted PUT rewrites a 2 MB TOAST column, so a
+  // permissive limit buys an authenticated account cheap WAL and dead-tuple
+  // churn for nothing.
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   async putContacts(
     @Body() dto: PutContactBackupDto,
     @Request() req: { user: { id: number } },

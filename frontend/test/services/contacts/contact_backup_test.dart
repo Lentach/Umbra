@@ -72,9 +72,15 @@ void main() {
       );
 
       // Read the plaintext the codec produced, not the model: the promise is
-      // about the BYTES the server is handed.
+      // about the BYTES the server is handed. Strip the fake sealer's 4-byte
+      // key prefix, then the codec's own `uint32be(length)` pad frame.
       final blob = await codec.sealPayload(ck, payload);
-      final plain = utf8.decode(base64Decode(blob).sublist(4));
+      final framed = base64Decode(blob).sublist(4);
+      final length = (framed[0] << 24) |
+          (framed[1] << 16) |
+          (framed[2] << 8) |
+          framed[3];
+      final plain = utf8.decode(framed.sublist(4, 4 + length));
 
       expect(plain, isNot(contains('AUTHPRIV')));
       expect(plain, isNot(contains('SEALPRIV')));
@@ -88,6 +94,33 @@ void main() {
       final opened = await codec.openPayload(ck, blob);
       expect(opened.contacts.single.queues, isEmpty);
       expect(opened.contacts.single.legacy.conversationId, isNull);
+    });
+
+    test('the blob length is bucketed, so it is not a contact counter',
+        () async {
+      final codec = _codec();
+      final (ck, _) = ContactBackupCodec.mintContentKey();
+      Future<int> sealedLength(int peers) async => base64Decode(
+        await codec.sealPayload(
+          ck,
+          ContactBackupPayload(
+            userId: 7,
+            self: null,
+            contacts: [for (var i = 0; i < peers; i++) _record(100 + i)],
+          ),
+        ),
+      ).length;
+
+      // AES-GCM is length-preserving, so an unpadded blob's size divides
+      // straight into a contact count for anyone holding a database dump.
+      // One contact and ten must be indistinguishable by length.
+      expect(await sealedLength(1), await sealedLength(10));
+      // And every bucket is a whole number of blocks (+ the fake sealer's
+      // 4-byte prefix), never the payload's natural size.
+      expect((await sealedLength(1) - 4) % kContactBackupPadBlock, 0);
+      // A graph big enough to need a second block gets one, not a refusal.
+      expect(await sealedLength(200), greaterThan(await sealedLength(1)));
+      expect((await sealedLength(200) - 4) % kContactBackupPadBlock, 0);
     });
 
     test('a wrap opens under its own secret and refuses every other', () async {

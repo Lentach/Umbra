@@ -322,6 +322,92 @@ void main() {
     expect(backend.gets, greaterThan(1), reason: 'the retry must re-read');
   });
 
+  test('a 409 on a wrap upload KEEPS the wrap being added', () async {
+    // The password-change path: a wrap staged for the NEW password must
+    // survive the re-read, or the row stays openable only by the password
+    // `resetPassword` is about to destroy and the backup is gone for good.
+    await seedRow(password: 'old', contacts: [_friend(41)]);
+    final svc = await service();
+    svc.attach(store);
+    await svc.onSession(userId: 7, token: 'jwt', password: 'old');
+    await svc.applyRestore();
+
+    backend.nextPutIsStale = true;
+    expect(
+      await svc.addWrap(kind: ContactWrapKind.password, secret: 'new'),
+      isTrue,
+    );
+
+    // The proof that matters: the NEW password opens the row afterwards.
+    await tokens.clearContactBackupKey();
+    final next = await service();
+    await next.onSession(userId: 7, token: 'jwt', password: 'new');
+    expect(next.state, ContactBackupState.ready);
+  });
+
+  test('a 409 on a wrap upload does not republish the pre-409 blob', () async {
+    await seedRow(password: 'pw', contacts: [_friend(41)]);
+    final svc = await service();
+    svc.attach(store);
+    await svc.onSession(userId: 7, token: 'jwt', password: 'pw');
+    await svc.applyRestore();
+
+    // Another device publishes a NEWER graph while our wrap PUT is in flight.
+    final newer = Map<String, dynamic>.from(backend.row!);
+    newer['rev'] = 7;
+    newer['blob'] = 'bmV3ZXItZ3JhcGg=';
+    backend.row = newer;
+
+    await svc.addWrap(kind: ContactWrapKind.password, secret: 'second');
+
+    expect(
+      backend.row!['blob'],
+      'bmV3ZXItZ3JhcGg=',
+      reason: 'a wrap-only write must never roll the graph back',
+    );
+  });
+
+  test('an upload is refused while the store still holds unreadable rows',
+      () async {
+    // The store's RAM view is smaller than the disk, and the blob is a FULL
+    // replacement: publishing it would delete peers that still exist here.
+    await seedRow(password: 'pw');
+    await kv.setString('e2e_7_contact_v1_77', 'not json at all');
+    final reopened = ContactStore(
+      open: () async => kv,
+      lock: <T>(_, action) => action(),
+      accepts: (_) => true,
+    );
+    await reopened.open(7);
+    expect(reopened.undeterminedCount, 1);
+
+    final svc = await service();
+    svc.attach(reopened);
+    await svc.onSession(userId: 7, token: 'jwt', password: 'pw');
+    await svc.applyRestore();
+
+    expect(await svc.uploadNow(), isFalse);
+    expect(backend.puts, isEmpty);
+  });
+
+  test('an unchanged graph is not re-uploaded, so no clock moves', () async {
+    await seedRow(password: 'pw');
+    final svc = await service();
+    svc.attach(store);
+    await svc.onSession(userId: 7, token: 'jwt', password: 'pw');
+    await svc.applyRestore();
+    await store.update(41, (_) => _friend(41));
+    await store.settled;
+
+    expect(await svc.uploadNow(), isTrue);
+    final after = backend.puts.length;
+
+    // A fresh GCM IV makes every re-seal different bytes, so the SERVER's
+    // byte compare can never catch this — the gate has to be here.
+    expect(await svc.uploadNow(), isTrue);
+    expect(backend.puts.length, after, reason: 'no PUT for an unchanged graph');
+  });
+
   test('a row re-keyed behind our back LOCKS the session instead of clobbering',
       () async {
     await seedRow(password: 'pw');
