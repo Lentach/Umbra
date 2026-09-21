@@ -146,6 +146,36 @@ try {
   fail("static security headers", e.message);
 }
 
+// 5b. Every API route must actually REACH the backend. nginx answers an
+// unproxied path with the Flutter index.html at HTTP 200 (never a 404), so a
+// missing `location` block is invisible to status-code checks and to any
+// container/DB-side verification. `/backup/contacts` shipped exactly that way
+// on 2026-09-21: 200 text/html, so the client JSON-decoded a web page, parked
+// in `unreachable`, and every password change would have been refused.
+// Judge the CONTENT TYPE, and require the backend's own auth refusal.
+try {
+  const guarded = ["/backup/contacts"];
+  const broken = [];
+  for (const path of guarded) {
+    const res = await fetch(`${BASE}${path}`, { cache: "no-store" });
+    const type = res.headers.get("content-type") ?? "";
+    // Unauthenticated: the backend answers 401 JSON. HTML of any status means
+    // the request never left nginx.
+    if (type.includes("text/html") || res.status !== 401) {
+      broken.push(`${path} -> ${res.status} ${type || "(no type)"}`);
+    }
+  }
+  broken.length === 0
+    ? ok("api routes reach the backend", `${guarded.length} guarded route(s) answer 401 JSON`)
+    : fail(
+        "api routes reach the backend",
+        `served by the SPA instead of the API: ${broken.join(", ")} — add a ` +
+          `location block to infra/nginx/fireplace.conf and reload nginx`,
+      );
+} catch (e) {
+  fail("api routes reach the backend", e.message);
+}
+
 // 6. browser boot (fresh profile — no service worker cache involved)
 try {
   const { chromium } = await import("playwright");
