@@ -161,12 +161,20 @@ try {
   //
   // `want` is what the BACKEND answers unauthenticated. Only the content type
   // is load-bearing: any `text/html` means the request never left nginx.
+  //
+  // `/notes` covers the secret-notes controller. `/note/<token>` is covered by
+  // it and deliberately NOT probed on its own: that route legitimately RENDERS
+  // HTML from the backend (the "Anti-Quantum Note" reveal page, 1114 bytes,
+  // `text/html; charset=utf-8`), so the text/html rule would false-fail on a
+  // perfectly healthy deploy. Measured 2026-09-21 — the SPA shell is 10724
+  // bytes with no charset, which is why status+type alone cannot separate them.
   const probes = [
     { path: "/backup/contacts", want: [401] },
     { path: "/users/me", want: [401] },
     { path: "/messages/link-preview", want: [401, 404, 405] },
     { path: "/auth/refresh", want: [400, 401, 404, 405] },
     { path: "/media/msgs/probe.bin", want: [401, 404] },
+    { path: "/notes", want: [401, 404] },
     { path: "/health", want: [200] },
     { path: "/version", want: [200] },
   ];
