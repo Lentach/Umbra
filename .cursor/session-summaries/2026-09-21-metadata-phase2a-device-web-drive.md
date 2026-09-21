@@ -1,16 +1,18 @@
-# Phase 2a re-driven on the post-review build: contact restore, offline hydrate, history export→wipe→import and the locked-vault path all hold on device AND web
+# The Phase 2a re-drive passed on device AND web, and turned up two leaks the review missed: a per-restore `updatedAt` clock and the account id in the export filename
 
 **Date:** 2026-09-21 · **Version:** unchanged (0.2.51 backend / 0.2.50 web on prod; branch only) · **Tiers deployed:** none
 
 ## What was done
-- No code changed. The **owed G2 drive** (owed since `3915f4f8`, because `applyRestore` and the connect-time restore gate both changed in `1cfdc7f2`) was run end to end on branch tip `27edf4f1`, plus the three surfaces the last handoff listed as never verified: **web**, the **history-import half on a device**, and **passcode re-lock against the backup**.
+- The **owed G2 drive** (owed since `3915f4f8`, because `applyRestore` and the connect-time restore gate both changed in `1cfdc7f2`) ran end to end on branch tip `27edf4f1`, plus the three surfaces the last handoff listed as never verified: **web**, the **history-import half on a device**, and **passcode re-lock against the backup**. All pass.
+- **FIXED — a pure restore re-stamped the row.** `_uploadedPayload` (`contact_backup_service.dart:405-411`) starts null and was never seeded from the blob `_adopt` had just opened, so `applyRestore`'s own writes published a byte-identical graph: `rev` + `updatedAt` moved on every storage-loss restore. That is a "this account lost its storage at T" clock — the same class the plaintext no-op guard exists to close, one wipe later. `_adopt` now seeds the fingerprint from the opened payload, and `ContactBackupPayload.toJson` sorts contacts by `userId` so the comparison survives a differing insertion order (two devices also seal the same bytes now).
+- **FIXED — the export filename named the account.** `HistoryBackupService.filenameFor` produced `umbra-115-2026-09-21.umbrabak` and hands that string to the share sheet (Drive/Gmail/Downloads sync) in cleartext, next to a payload that is sealed precisely so the server learns nothing. Now `umbra-backup-<date>.umbrabak`; the id still rides INSIDE the payload, which is what `importBytes` checks.
 - Android (`Pixel_7`, debug APK, `--dart-define=BASE_URL=http://10.0.2.2:3000`) and a second client (managed Chromium against `flutter run -d chrome --web-port=5599`) were both driven against the local stack; the owner seeded `tester1#4741` (web, id 114) and `tester2#5563` (device, id 115) as friends.
 - Confirmed the backend under test is the branch source, not a stale image: `docker-compose.yml:56-58` bind-mounts `./backend` and runs `start:dev`; `schema_migrations` top = `0021_contact_backups.sql`.
 - One pre-existing local account booted `CONTACT_BACKUP_BLOB_UNREADABLE {reason: frame}` → `locked`: its row was written before `1cfdc7f2` added the `uint32be(len)` pad frame, so `_unpad` (`contact_backup.dart:355-359`) refuses it and `_adopt` (`:589`) correctly declines to overwrite. Pre-release format only; nothing shipped. Its data was wiped before the drive.
 
 ## Key files
-- Edited: none (this session is verification only) — plus the three handoff files.
-- Read only (load-bearing): `frontend/lib/services/backup/history_backup_service.dart:107-166` (upgrade-only import), `frontend/lib/services/contacts/contact_backup_service.dart:556-596` (`_adopt` lock branch), `.planning/metadata-privacy/task_plan.md` §2/§5.
+- Edited: `frontend/lib/services/contacts/contact_backup{,_service}.dart`, `frontend/lib/services/backup/history_backup_service.dart`, `frontend/test/services/contacts/contact_backup_service_test.dart` (+1 regression), `frontend/test/services/backup/history_backup_test.dart` (re-pinned), `CLAUDE.md` (2287 → 2288).
+- Read only (load-bearing): `history_backup_service.dart:107-166` (upgrade-only import), `contact_backup_service.dart:556-596` (`_adopt`), `.planning/metadata-privacy/task_plan.md` §2/§5.
 
 ## Verification
 - **Backend is post-review:** 1.5 MB → `/auth/login` **413**, small `/auth/login` **400** (Nest's global parser intact behind the named `json()` wrapper), `/backup/contacts` unauth **401**.
@@ -21,6 +23,9 @@
 - **Padding holds live:** a 2-contact account (114) and a 1-contact account (115) both store `length(blob) = 5500` — no record count readable from a dump.
 - **No-op stays silent:** a web reload and a native cold start moved neither `rev` nor `updatedAt` (114 at rev 6, 115 at rev 3) — the `key_bundles.updatedAt` presence clock is not rebuilt in the real app, not just under curl.
 - **Passcode re-lock vs the backup (web):** `PASSCODE_WRAP_ENABLED {keys: 2}` → reload → `CONTENT_STORE_LOCKED` + `CONTACT_STORE_UNAVAILABLE {stage: locked}`, contact list not emptied, row **untouched at rev 6**. After unlock, a mute change re-sealed `contact_v1_115` (289 → 361 chars) and uploaded rev 6 → 7 under the **same `ckId`** — write-through recovers, no re-key, no clobber.
+- **The restore clock, found and closed with live evidence on both ends.** Observed first: device `rev` 2 → 3 at 23:18:57 right after the restore, web 5 → 6 at 23:26:09. Isolated with a throwaway probe on the real service + fake backend (`puts=1`, `rev` 3 → 4 on a restore of the identical graph), then the regression `a pure RESTORE publishes nothing` — **red without the `_adopt` seed** (`puts` = 1, "a storage-loss restore must not re-stamp updatedAt"), green with it. Re-driven on device with the fixed APK: same wipe + login, `CONTACT_BACKUP_RESTORED {count: 1}` before mint, chat listed, and the row **stayed at rev 3 / 23:18:57**.
+- Blob decrypted out-of-band to read the plaintext rather than infer it (CK from `flutter.contact_backup_ck`, `GET /backup/contacts`, AES-GCM `iv||ct`, unpad): `{v:1, domain:"fp-contacts", userId:114, self:{…}, contacts:[100, 115 with its mute settings]}` — confirms the blob carries the graph and nothing device-local.
+- `flutter test` **2288 / 14 skipped** (was 2287/14; `CLAUDE.md` count updated in the same commit). `flutter analyze --no-fatal-infos` **3166** — the dart ratchet floor, held.
 - **NOT verified:** iOS, prod, web *import* (export-only by design), password-change / recovery-phrase re-wrap on a real device (unit + live-curl only), concurrent PUT from two real clients (curl only).
 
 ## Notes for next session

@@ -408,6 +408,31 @@ void main() {
     expect(backend.puts.length, after, reason: 'no PUT for an unchanged graph');
   });
 
+  test('a pure RESTORE publishes nothing — the wipe itself is not a clock',
+      () async {
+    await seedRow(password: 'pw', contacts: [_friend(42), _friend(41)]);
+    final svc = await service();
+    svc.attach(store);
+    await svc.onSession(userId: 7, token: 'jwt', password: 'pw');
+
+    expect(await svc.applyRestore(), 2);
+    await store.settled;
+    // `applyRestore`'s own writes fire `onChanged`; the graph they produce is
+    // the one the server already holds, seeded as this session's fingerprint
+    // when the blob was opened — including the reversed order it was sealed
+    // in, which a non-canonical encoding would read as a change.
+    expect(await svc.uploadNow(), isTrue);
+    expect(backend.puts, isEmpty,
+        reason: 'a storage-loss restore must not re-stamp updatedAt');
+    expect(backend.row!['rev'], 3);
+
+    // A real change after the restore still publishes.
+    await store.update(43, (_) => _friend(43));
+    await store.settled;
+    expect(await svc.uploadNow(), isTrue);
+    expect(backend.puts, hasLength(1));
+  });
+
   test('a row re-keyed behind our back LOCKS the session instead of clobbering',
       () async {
     await seedRow(password: 'pw');

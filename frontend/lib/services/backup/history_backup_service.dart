@@ -55,9 +55,15 @@ class HistoryBackupService {
   static String rawRecordPrefix(int userId) => 'e2e_${userId}_decrypt_raw_v1_';
   static String contactPrefix(int userId) => 'e2e_${userId}_contact_v1_';
 
-  static String filenameFor(int userId, DateTime at) {
+  /// The share-sheet filename. It carries NO account identifier: the file
+  /// leaves the device through Drive/Gmail/Downloads sync, where the name is
+  /// cleartext even though the payload is not, and the server-assigned
+  /// `userId` is exactly the metadata this phase removes elsewhere. The id
+  /// still rides INSIDE the sealed payload, which is what `importBytes`
+  /// checks — the name was never load-bearing.
+  static String filenameFor(DateTime at) {
     final stamp = at.toIso8601String().substring(0, 10);
-    return 'umbra-$userId-$stamp.$kHistoryBackupFileExtension';
+    return 'umbra-backup-$stamp.$kHistoryBackupFileExtension';
   }
 
   /// Seals everything this device holds for [userId] and hands the file to
@@ -96,7 +102,7 @@ class HistoryBackupService {
       ),
       passphrase,
     );
-    await _emit(bytes, filenameFor(userId, DateTime.now()));
+    await _emit(bytes, filenameFor(DateTime.now()));
     E2ePersistentDiag.record('HISTORY_BACKUP_EXPORTED', {
       'records': records.length,
       'contacts': contacts.length,

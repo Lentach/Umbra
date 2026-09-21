@@ -255,11 +255,12 @@ void main() {
       }
     });
 
-    test('the filename names the account and the day', () {
-      expect(
-        HistoryBackupService.filenameFor(7, DateTime.utc(2026, 9, 20)),
-        'umbra-7-2026-09-20.$kHistoryBackupFileExtension',
-      );
+    test('the filename names the day and NEVER the account', () {
+      final name = HistoryBackupService.filenameFor(DateTime.utc(2026, 9, 20));
+      expect(name, 'umbra-backup-2026-09-20.$kHistoryBackupFileExtension');
+      // The share sheet hands this string to Drive/Gmail/Downloads in
+      // cleartext; an account id there undoes the sealing it sits next to.
+      expect(name, isNot(contains('7')));
     });
   });
 }

@@ -569,7 +569,17 @@ class ContactBackupService {
       );
     }
     try {
-      _pendingRestore = await _codec.openPayload(ck, row.blob);
+      final opened = await _codec.openPayload(ck, row.blob);
+      _pendingRestore = opened;
+      // The server's view IS an upload this session would otherwise repeat.
+      // Without seeding it, `uploadNow`'s fingerprint starts null, so the
+      // restore's own writes (`applyRestore` → `onChanged` → `scheduleUpload`)
+      // publish a byte-identical graph and move `rev` + `updatedAt` — a
+      // per-restore clock telling the server "this account lost its storage
+      // at T". Same leak class the plaintext no-op guard exists to close,
+      // one wipe later. Canonical ordering (`toJson` sorts by `userId`) is
+      // what makes this comparison survive a differing insertion order.
+      _uploadedPayload = jsonEncode(opened.toJson());
     } on ContactBackupCorrupt catch (e) {
       _pendingRestore = null;
       E2ePersistentDiag.record('CONTACT_BACKUP_BLOB_UNREADABLE', {

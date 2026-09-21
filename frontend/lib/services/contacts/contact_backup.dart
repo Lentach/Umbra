@@ -177,12 +177,21 @@ class ContactBackupPayload {
   final UserModel? self;
   final List<ContactRecord> contacts;
 
+  /// Contacts are a SET, not a sequence: they are emitted sorted by
+  /// `userId` so two devices holding the same graph in a different insertion
+  /// order seal the same plaintext. The no-op guard in
+  /// `ContactBackupService.uploadNow` compares this encoding against the
+  /// blob the session opened, and an order-dependent encoding would make
+  /// every restore look like a change.
   Map<String, dynamic> toJson() => {
     'v': kContactBackupVersion,
     'domain': kContactBackupDomain,
     'userId': userId,
     if (self != null) 'self': _userToJson(self!),
-    'contacts': [for (final c in contacts) c.toBackupJson()],
+    'contacts': [
+      for (final c in [...contacts]..sort((a, b) => a.userId - b.userId))
+        c.toBackupJson(),
+    ],
   };
 
   static Map<String, dynamic> _userToJson(UserModel user) => {
