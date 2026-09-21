@@ -346,6 +346,14 @@ void main() {
               headers: {'Content-Type': 'application/json'},
             );
           }
+          // This account has no contact backup. Modelled explicitly: an
+          // unanswered GET here means "row status UNKNOWN", and a password
+          // change then aborts rather than orphaning a row it never saw
+          // (`rowStatusUnknown`, G2 review M1). A 404 is the server saying
+          // there is nothing to lose, which is what this session test means.
+          if (request.url.path == '/backup/contacts') {
+            return http.Response('{}', 404);
+          }
           if (request.url.path == '/users/reset-password') {
             expect(request.headers['Authorization'], 'Bearer $_validAccessJwt');
             return http.Response('{}', 200);

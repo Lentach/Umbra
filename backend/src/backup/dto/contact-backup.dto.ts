@@ -54,8 +54,15 @@ export class PutContactBackupDto {
   @Min(0)
   baseRev: number;
 
+  /**
+   * Opaque KDF salt label, echoed back verbatim. Charset-pinned for parity
+   * with every other opaque field here (G2 review T1): the client always
+   * sends `base64Encode(16 bytes)`, so without it an account could park 64
+   * arbitrary bytes — control characters included — in its own row.
+   */
   @IsString()
   @Length(16, 64)
+  @Matches(/^[A-Za-z0-9+/]+={0,2}$/)
   salt: string;
 
   /** Content-key label: 22 chars of base64url (a 16-byte id). */

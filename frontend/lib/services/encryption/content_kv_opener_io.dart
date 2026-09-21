@@ -44,15 +44,20 @@ Future<void> revokePlatformContentKv() async {
   _memo = null;
 }
 
-/// Whether `ContactStore` may keep the contact graph in [kv]. On Android
-/// only the SQLCipher store qualifies: the prefs fallback the message cache
-/// tolerates for one session is cleartext XML, and a contact list there is
-/// exactly the metadata this store exists to keep off disk in the clear. Off
-/// Android (desktop dev hosts, the flutter_test VM) prefs is the only
+/// Whether `ContactStore` may keep the contact graph in [kv]. On a real
+/// PHONE only the SQLCipher store qualifies: the prefs fallback the message
+/// cache tolerates for one session is cleartext XML, and a contact list there
+/// is exactly the metadata this store exists to keep off disk in the clear.
+/// Off-device (desktop dev hosts, the flutter_test VM) prefs is the only
 /// backend and stays acceptable. Lives behind the conditional import because
 /// naming [NativeContentStore] from web code would pull drift into the build.
+///
+/// iOS is named explicitly even though it does not ship yet (G2 review T2,
+/// 2026-09-21): an `isAndroid`-only test FAILS OPEN, so the first iOS build
+/// would have written the graph into cleartext prefs on any opener fault —
+/// silently, on the one platform the plan lists as unverified.
 bool contactStoreAccepts(ContentKv kv) =>
-    !Platform.isAndroid || kv is NativeContentStore;
+    (!Platform.isAndroid && !Platform.isIOS) || kv is NativeContentStore;
 
 Future<ContentKv> _open() async {
   var stage = 'unknown';

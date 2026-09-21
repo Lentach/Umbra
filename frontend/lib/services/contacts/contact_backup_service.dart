@@ -116,6 +116,23 @@ class ContactBackupService {
   bool _dirty = false;
   bool _uploading = false;
 
+  /// Set only when the server ANSWERED that this account has no row (a 404).
+  /// Defaults false, so an unresolved or failed session reads as "unknown"
+  /// rather than "nothing to lose" — the fail-safe direction for
+  /// [rowStatusUnknown].
+  bool _rowAbsent = false;
+
+  /// Wraps this session has deliberately DROPPED, keyed `kind:ct`.
+  ///
+  /// [_rereadForRetry] re-reads the server's wrap set on a 409 so a wrap being
+  /// ADDED is never lost. The same merge silently reverted every REMOVAL —
+  /// republishing the superseded password the prune exists to kill, or the
+  /// stray wrap [retractWrap] just took off, while answering `true`. Recording
+  /// the intent is what makes a removal survive one lost race (G2 review M2,
+  /// 2026-09-21). Cleared once the removal is published, and on a fresh
+  /// resolve, where a previous session's intent means nothing.
+  final Set<String> _retracted = <String>{};
+
   ContactBackupState get state => _state;
 
   /// Whether this session holds a content key that opens a row the server
@@ -124,6 +141,19 @@ class ContactBackupService {
   /// that does: in both cases changing the password takes nothing away.
   bool get holdsOpenableBackup =>
       _state == ContactBackupState.ready && _ck != null && _blob != null;
+
+  /// Whether this session genuinely does not know what the server holds.
+  ///
+  /// [ContactBackupState.unreachable] covers two very different causes: the
+  /// GET failed (we know nothing), and the GET answered 404 with no password
+  /// available to mint under (we know there is nothing). A password change
+  /// must be refused in the first case — once the server takes the new
+  /// password, no later session can produce a wrap for a row this one never
+  /// saw, so the backup would be locked forever — and must NOT be refused in
+  /// the second, or an account with no backup at all cannot change its
+  /// password from a restored session (G2 review M1, 2026-09-21).
+  bool get rowStatusUnknown =>
+      _state == ContactBackupState.unreachable && !_rowAbsent;
 
   /// Settles when the in-flight login resolve finishes. Already-complete when
   /// none is running, so a caller may always await it.
@@ -286,9 +316,24 @@ class ContactBackupService {
         );
       }
     }
-    _wraps = [...kept, fresh];
+    _setWraps([...kept, fresh]);
     _lastAddedWrap = fresh;
     return _putWraps();
+  }
+
+  static String _wrapKey(ContactBackupWrap w) => '${w.kind.name}:${w.ct}';
+
+  /// Assigns [next] as the wrap set, remembering every wrap that just
+  /// disappeared so a 409 retry cannot resurrect it. Every INTENTIONAL change
+  /// to `_wraps` goes through here; adoption of a server answer does not.
+  void _setWraps(List<ContactBackupWrap> next) {
+    final keep = next.map(_wrapKey).toSet();
+    for (final w in _wraps) {
+      final key = _wrapKey(w);
+      if (!keep.contains(key)) _retracted.add(key);
+    }
+    _retracted.removeAll(keep);
+    _wraps = next;
   }
 
   /// Removes the wrap [addWrap] most recently published for [kind], if it is
@@ -306,14 +351,14 @@ class ContactBackupService {
     if (!_wraps.any((w) => w.kind == stray.kind && w.ct == stray.ct)) {
       return false;
     }
-    _wraps = [
+    _setWraps([
       for (final w in _wraps)
         if (!(w.kind == stray.kind && w.ct == stray.ct)) w,
-    ];
+    ]);
     _lastAddedWrap = null;
     if (_wraps.isEmpty) {
       // Never publish a row nobody can open; keep the stray rather than that.
-      _wraps = [stray];
+      _setWraps([stray]);
       return false;
     }
     return _putWraps();
@@ -439,6 +484,8 @@ class ContactBackupService {
     _lastAddedWrap = null;
     _pendingRestore = null;
     _dirty = false;
+    _rowAbsent = false;
+    _retracted.clear();
     _state = ContactBackupState.idle;
   }
 
@@ -458,6 +505,9 @@ class ContactBackupService {
     }
 
     if (raw == null) {
+      // The server ANSWERED: this account has no row. That is knowledge, and
+      // `rowStatusUnknown` must not read it as ignorance.
+      _rowAbsent = true;
       // No row. Only a session that can also make a wrap may mint one — a
       // content key nobody can unwrap is worse than no backup at all.
       if (password == null) {
@@ -476,6 +526,8 @@ class ContactBackupService {
       E2ePersistentDiag.record('CONTACT_BACKUP_CORRUPT', {'reason': e.reason});
       return;
     }
+    _rowAbsent = false;
+    _retracted.clear();
     _rev = row.rev;
     _salt = row.salt;
     _ckId = row.ckId;
@@ -681,7 +733,7 @@ class ContactBackupService {
         }
       }
       if (live.length == _wraps.length) return;
-      _wraps = live;
+      _setWraps(live);
     } on ContactBackupCorrupt {
       return;
     }
@@ -732,6 +784,10 @@ class ContactBackupService {
           if (rev is int) _rev = rev;
           _blob = blob;
           _dirty = false;
+          // The removals this write carried are now the server's state, so
+          // the intent has been spent. A LATER 409 must not keep filtering
+          // them out of a set another device may legitimately have re-added.
+          _retracted.clear();
           return true;
         } on ApiException catch (e) {
           // 401: the access token expired mid-flight. Never a dropped
@@ -796,7 +852,10 @@ class ContactBackupService {
     // wraps — for a password change that means the row ends up openable only
     // by a password `resetPassword` is about to destroy, and the backup is
     // gone for good.
-    final merged = [...row.wraps];
+    final merged = [
+      for (final w in row.wraps)
+        if (!_retracted.contains(_wrapKey(w))) w,
+    ];
     for (final mine in _wraps) {
       if (!merged.any((w) => w.kind == mine.kind && w.ct == mine.ct)) {
         merged.add(mine);

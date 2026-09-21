@@ -383,21 +383,32 @@ class ConnectionProvider extends ChangeNotifier {
       _conversationsProvider?.hydrateFromStore();
     }
 
-    // 4c. PR2.4: the server-held backup, for the one case it exists for —
-    // a device whose local store came up EMPTY (a browser that evicted its
-    // origin storage, a reinstall, a `pm clear`). The wait is spent ONLY
-    // then: an ordinary launch finds contacts on disk and lets the restore
-    // land whenever it lands, so the socket is never delayed by a PBKDF2
-    // the common path does not even run.
+    // 4c. PR2.4: drain the server-held backup into the store. This runs on
+    // EVERY session with an open store, not only an empty one — `_adopt`
+    // latches `_pendingRestore` on every session that opens the blob, and
+    // `ContactBackupService.uploadNow` refuses to publish while that latch is
+    // set (it would delete rows the blob still holds). So skipping the drain
+    // on a populated store froze that account's backup for the whole session:
+    // every later graph change parked in `_dirty` and no PUT ever went out,
+    // silently, which is the one failure this PR exists to prevent (G2 review
+    // B1, 2026-09-21; the device drive missed it because every case it drove
+    // was a WIPED device, i.e. the only branch that used to reach here).
+    //
+    // The WAIT is still spent only on an empty store: an ordinary launch
+    // already has its contacts on disk, so the socket is never delayed by a
+    // PBKDF2 the common path does not even run.
+    //
+    // `applyRestore` is upgrade-only (it writes only peers the store has no
+    // record for) and this block still runs BEFORE the socket starts, so on a
+    // populated store it normally writes nothing at all. Residual, accepted:
+    // if the restore resolves after the first `friendsList` AND the blob is
+    // staler than that list, a swept peer can reappear until the next list
+    // event re-prunes it — a transient ghost card, against a permanent silent
+    // backup freeze.
     final backup = _contactBackup;
     final store = _contactStore;
-    if (backup != null && store != null) {
-      // ONLY the case the restore exists for: a store that came up EMPTY.
-      // On any other connect a server list has already decided membership,
-      // and writing records back after it would resurrect the very peers the
-      // non-empty `friendsList` just swept — for the rest of the session,
-      // since nothing re-prunes until the next list event.
-      if (store.isOpen && store.all.isEmpty) {
+    if (backup != null && store != null && store.isOpen) {
+      if (store.all.isEmpty) {
         final inTime = await _withinBudget(
           backup.ready,
           kContactBackupRestoreBudget,
@@ -408,21 +419,17 @@ class ConnectionProvider extends ChangeNotifier {
             'budgetMs': kContactBackupRestoreBudget.inMilliseconds,
           });
         }
-        // In time or not, the restore still runs — it is the whole point of
-        // this branch. Overshooting the budget only means the socket started
-        // first; a record landing after the first list is pruned by the next
-        // one, and on THIS device there was nothing to prune against.
-        unawaited(
-          backup.ready.then((_) async {
-            if (_connectGeneration != generation) return;
-            if (await backup.applyRestore() > 0) {
-              if (_connectGeneration != generation) return;
-              _friendsProvider?.hydrateFromStore();
-              _conversationsProvider?.hydrateFromStore();
-            }
-          }),
-        );
       }
+      unawaited(
+        backup.ready.then((_) async {
+          if (_connectGeneration != generation) return;
+          if (await backup.applyRestore() > 0) {
+            if (_connectGeneration != generation) return;
+            _friendsProvider?.hydrateFromStore();
+            _conversationsProvider?.hydrateFromStore();
+          }
+        }),
+      );
     }
 
     // 5. Set up emit callbacks so sub-providers can send socket events

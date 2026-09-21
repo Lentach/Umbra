@@ -102,6 +102,15 @@ AuthStatusCode classifyAuthFailure(
   Object error, {
   required AuthAttempt attempt,
 }) {
+  // The one refusal in the password-change door that is genuinely RETRYABLE:
+  // the server-held contact backup could not be re-wrapped, so the change was
+  // aborted rather than orphaning the row. `unexpectedError` would render it
+  // as a generic fault indistinguishable from a bug; `serverUnreachable`
+  // already says the true and actionable thing ("try again when you are
+  // online"). Classified before `ApiException` because it is not one.
+  if (error is ContactBackupRewrapRefused) {
+    return AuthStatusCode.serverUnreachable;
+  }
   if (error is ApiException) {
     final looksLikePassword = error.message.toLowerCase().contains('password');
     return switch (error.statusCode) {
@@ -953,15 +962,22 @@ class AuthProvider extends ChangeNotifier {
     // password the old one is gone, and no later session can then produce a
     // wrap that opens the existing row: the backup would be locked forever
     // and the next storage loss would take the graph with it. So the change
-    // is ABORTED — but only when there is something to lose. With no row, or
-    // a row this session could not open anyway, the password change takes
-    // nothing away, and holding a security action hostage to a backup that
-    // does not exist would be the worse bug.
+    // is ABORTED — but only when there is something to lose, or when we do
+    // not KNOW. With no row (the server answered 404), or a row this session
+    // could not open anyway, the password change takes nothing away, and
+    // holding a security action hostage to a backup that does not exist would
+    // be the worse bug. A GET that FAILED is the third case and was missed
+    // until the G2 review (M1, 2026-09-21): it is ignorance, not absence, so
+    // it aborts too — otherwise one transient 502 at login plus a password
+    // change in the same session locks the account's backup permanently,
+    // because `_clearLocalAuthState` then destroys the cached content key.
     final rewrapped = await _contactBackup.addWrap(
       kind: ContactWrapKind.password,
       secret: newPassword,
     );
-    if (!rewrapped && _contactBackup.holdsOpenableBackup) {
+    if (!rewrapped &&
+        (_contactBackup.holdsOpenableBackup ||
+            _contactBackup.rowStatusUnknown)) {
       throw ContactBackupRewrapRefused();
     }
     try {

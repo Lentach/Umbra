@@ -1,6 +1,11 @@
 import 'dart:convert';
 
 import 'package:fireplace/models/user_model.dart';
+import 'package:fireplace/providers/connection_provider.dart';
+import 'package:fireplace/providers/conversations_provider.dart';
+import 'package:fireplace/providers/encryption_provider.dart';
+import 'package:fireplace/providers/friends_provider.dart';
+import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/services/api_service.dart';
 import 'package:fireplace/services/auth_token_store.dart';
 import 'package:fireplace/services/contacts/contact_backup.dart';
@@ -8,12 +13,30 @@ import 'package:fireplace/services/contacts/contact_backup_service.dart';
 import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/services/contacts/contact_store.dart';
 import 'package:fireplace/services/encryption/content_kv.dart';
+import 'package:fireplace/services/socket_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../support/passcode_fakes.dart';
+
+/// `ConnectionProvider` without I/O: the regression below needs the real
+/// connect() sequence, not a socket.
+class _MuteSocket extends SocketService {
+  @override
+  bool get isConnected => false;
+  @override
+  void connect({required String baseUrl, required String token}) {}
+  @override
+  void disconnect() {}
+  @override
+  void on(String event, void Function(dynamic) callback) {}
+  @override
+  void onConnect(void Function() callback) {}
+  @override
+  void onDisconnect(void Function(dynamic) callback) {}
+}
 
 /// The server row, as a test drives it: one in-memory record with the same
 /// rev/salt semantics `backend/src/backup/contact-backup.service.ts` enforces.
@@ -26,12 +49,21 @@ class _FakeBackend {
   bool nextPutIsStale = false;
   int? nextPutStatus;
 
+  /// Forces the NEXT get to answer this status — the "we cannot tell what the
+  /// server holds" case, which is NOT the same as a 404.
+  int? nextGetStatus;
+
   http.Client client() => MockClient((request) async {
     if (request.url.path != '/backup/contacts') {
       return http.Response('not found', 404);
     }
     if (request.method == 'GET') {
       gets++;
+      final forcedGet = nextGetStatus;
+      if (forcedGet != null) {
+        nextGetStatus = null;
+        return http.Response('{"message":"bad gateway"}', forcedGet);
+      }
       final current = row;
       if (current == null) return http.Response('{}', 404);
       return http.Response(jsonEncode(current), 200,
@@ -307,6 +339,37 @@ void main() {
     expect(again.state, ContactBackupState.ready);
   });
 
+  // G2 regression (2026-09-21, review M2). The 409 re-read MERGES the
+  // server's wrap set so a wrap being ADDED is never lost — and that same
+  // merge used to revert every REMOVAL, republishing the superseded password
+  // while answering `true`.
+  test('a 409 does not resurrect the wrap a prune is removing', () async {
+    await seedRow(password: 'old', contacts: [_friend(41)]);
+    final changing = await service();
+    changing.attach(store);
+    await changing.onSession(userId: 7, token: 'jwt', password: 'old');
+    await changing.addWrap(kind: ContactWrapKind.password, secret: 'new');
+    expect((backend.row!['wraps'] as List).length, 2);
+
+    await tokens.clearContactBackupKey();
+    // The prune's PUT loses a race with another device, exactly once.
+    backend.nextPutIsStale = true;
+    final fresh = await service();
+    fresh.attach(store);
+    await fresh.onSession(userId: 7, token: 'jwt', password: 'new');
+
+    expect(
+      (backend.row!['wraps'] as List).length,
+      1,
+      reason: 'a superseded password must not survive a lost race',
+    );
+    // And the surviving wrap is the live one.
+    await tokens.clearContactBackupKey();
+    final again = await service();
+    await again.onSession(userId: 7, token: 'jwt', password: 'new');
+    expect(again.state, ContactBackupState.ready);
+  });
+
   test('a 409 is re-read and retried once, and the write lands', () async {
     await seedRow(password: 'pw');
     final svc = await service();
@@ -495,4 +558,106 @@ void main() {
     await svc.clear();
     expect(await tokens.readContactBackupKey(7), isNull);
   });
+
+  // G2 regression (2026-09-21, review M1). `unreachable` covers two causes
+  // that must NOT be treated alike: `resetPassword` aborts on ignorance (or
+  // one transient 502 at login plus a password change locks the backup for
+  // good) and must proceed on a known-absent row (or an account with no
+  // backup cannot change its password from a token-resumed session).
+  group('rowStatusUnknown', () {
+    test('a GET that FAILED is unknown', () async {
+      await seedRow(password: 'pw');
+      backend.nextGetStatus = 502;
+      final svc = await service();
+      await svc.onSession(userId: 7, token: 'jwt', password: 'pw');
+
+      expect(svc.state, ContactBackupState.unreachable);
+      expect(svc.holdsOpenableBackup, isFalse);
+      expect(svc.rowStatusUnknown, isTrue);
+    });
+
+    test('a 404 with no password to mint under is NOT unknown', () async {
+      final svc = await service();
+      // A session resumed from a stored token: no password was typed, so
+      // `onSession` is called without one and the 404 cannot be minted over.
+      await svc.onSession(userId: 7, token: 'jwt');
+
+      expect(svc.state, ContactBackupState.unreachable);
+      expect(
+        svc.rowStatusUnknown,
+        isFalse,
+        reason: 'the server ANSWERED that there is no row',
+      );
+    });
+
+    test('an opened row is neither unknown nor absent', () async {
+      await seedRow(password: 'pw');
+      final svc = await service();
+      await svc.onSession(userId: 7, token: 'jwt', password: 'pw');
+
+      expect(svc.state, ContactBackupState.ready);
+      expect(svc.rowStatusUnknown, isFalse);
+      expect(svc.holdsOpenableBackup, isTrue);
+    });
+  });
+
+  // G2 regression (2026-09-21). `_adopt` latches `_pendingRestore` on EVERY
+  // session that opens the blob, and `uploadNow` refuses while it is set. The
+  // only production caller of `applyRestore` lives in `ConnectionProvider`, so
+  // this drives the real provider rather than calling `applyRestore` by hand
+  // the way every test above does — that hand call is exactly what hid the
+  // freeze: a populated store never reached it and published nothing again for
+  // the life of the session.
+  test(
+    'an ordinary login on a POPULATED store still publishes later changes',
+    () async {
+      await seedRow(password: 'pw', contacts: [_friend(41)]);
+      // The device already holds the graph: this is every login after the first.
+      await store.update(41, (_) => _friend(41));
+      await store.settled;
+
+      final svc = await service();
+      final connection = ConnectionProvider(socketService: _MuteSocket())
+        ..setProviders(
+          encryption: EncryptionProvider(),
+          friends: FriendsProvider(),
+          conversations: ConversationsProvider(),
+          messaging: MessagingProvider(),
+          contactStore: store,
+          contactBackup: svc,
+        );
+      addTearDown(connection.disconnect);
+
+      await svc.onSession(userId: 7, token: 'jwt', password: 'pw');
+      await connection.connect(7, 'jwt', 'http://t');
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      final before = backend.puts.length;
+
+      // A new friend arrives mid-session — the graph changed and the server
+      // copy must follow it, or a later storage loss restores a stale list.
+      await store.update(42, (_) => _friend(42));
+      await store.settled;
+      final published = await svc.uploadNow();
+
+      expect(
+        published,
+        isTrue,
+        reason: 'a populated store must not freeze its own backup',
+      );
+      expect(backend.puts.length, greaterThan(before));
+      // `FakeContentSealer` is `key[0..4] || plaintext`, and the plaintext is
+      // the padded `uint32be(len) || json` frame, so the new peer is findable
+      // in the decoded bytes — this asserts WHAT was published, not just that
+      // a PUT happened.
+      final sealed = utf8.decode(
+        base64Decode(backend.puts.last['blob'] as String),
+        allowMalformed: true,
+      );
+      expect(
+        sealed.contains('peer42'),
+        isTrue,
+        reason: 'the published blob carries the new contact',
+      );
+    },
+  );
 }
