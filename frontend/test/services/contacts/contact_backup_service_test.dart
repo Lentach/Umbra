@@ -590,6 +590,27 @@ void main() {
       );
     });
 
+    // `onSession` skips `_resetSession` for the SAME account, so a 404
+    // answered earlier in the session must not make a LATER failed GET read
+    // as "there is nothing to lose" — another device may have minted a row in
+    // between, and a password change would then orphan it.
+    test('a later failed GET outranks a 404 from earlier in the session',
+        () async {
+      final svc = await service();
+      await svc.onSession(userId: 7, token: 'jwt');
+      expect(svc.rowStatusUnknown, isFalse, reason: 'the 404 is knowledge');
+
+      backend.nextGetStatus = 502;
+      await svc.onSession(userId: 7, token: 'jwt');
+
+      expect(svc.state, ContactBackupState.unreachable);
+      expect(
+        svc.rowStatusUnknown,
+        isTrue,
+        reason: 'ignorance must outrank the stale 404',
+      );
+    });
+
     test('an opened row is neither unknown nor absent', () async {
       await seedRow(password: 'pw');
       final svc = await service();

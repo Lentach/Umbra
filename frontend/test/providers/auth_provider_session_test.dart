@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:fireplace/providers/auth_provider.dart';
 import 'package:fireplace/services/api_service.dart';
+import 'package:fireplace/services/contacts/contact_backup_service.dart';
 
 /// Expired access JWT (exp 1516239022). Signature is not verified client-side.
 const _expiredAccessJwt =
@@ -373,6 +374,76 @@ void main() {
         expect(auth.lastSessionEndReason, 'password_changed');
         expect(prefs.getString('jwt_token'), isNull);
         expect(prefs.getString('refresh_token'), isNull);
+      },
+    );
+
+    // Mirror image of the test above, and the reason the M1 guard exists
+    // (G2 review, 2026-09-21). A FAILED contact-backup GET means the session
+    // does not know whether a row exists. Going ahead would let the server
+    // accept the new password while the stored row stays wrapped under the
+    // old one, which no later session can reproduce — the backup would be
+    // locked for good. So the change is ABORTED and the session survives.
+    test(
+      'password reset is refused while the contact backup is unreachable',
+      () async {
+        SharedPreferences.setMockInitialValues({
+          'jwt_token': _validAccessJwt,
+          'refresh_token': 'opaque_refresh',
+        });
+
+        var resetCalls = 0;
+        final mock = MockClient((request) async {
+          if (request.url.path == '/users/me') {
+            return http.Response(
+              jsonEncode({
+                'id': 1,
+                'username': 'test',
+                'tag': '0000',
+                'profilePictureUrl': null,
+              }),
+              200,
+              headers: {'Content-Type': 'application/json'},
+            );
+          }
+          // The server is there but cannot answer: NOT a 404.
+          if (request.url.path == '/backup/contacts') {
+            return http.Response('{"message":"bad gateway"}', 502);
+          }
+          if (request.url.path == '/users/reset-password') {
+            resetCalls++;
+            return http.Response('{}', 200);
+          }
+          throw Exception('Unexpected ${request.url.path}');
+        });
+
+        final auth = AuthProvider(
+          api: ApiService(baseUrl: base, httpClient: mock),
+        );
+        await _waitForAuthSettled(auth, expectLoggedIn: true);
+
+        await expectLater(
+          auth.resetPassword('old-password', 'new-password'),
+          throwsA(isA<ContactBackupRewrapRefused>()),
+        );
+
+        expect(
+          resetCalls,
+          0,
+          reason: 'the password must never reach the server here',
+        );
+        expect(
+          auth.isLoggedIn,
+          isTrue,
+          reason: 'an aborted change must not end the session',
+        );
+        expect(
+          classifyAuthFailure(
+            ContactBackupRewrapRefused(),
+            attempt: AuthAttempt.credentialChange,
+          ),
+          AuthStatusCode.serverUnreachable,
+          reason: 'the user is told to retry, not shown a generic fault',
+        );
       },
     );
 

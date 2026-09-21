@@ -12,9 +12,11 @@ import 'contact_store.dart';
 /// A password change was abandoned because the contact backup's re-wrap
 /// could not be published.
 ///
-/// Thrown ONLY when the session holds a backup the change would orphan (see
-/// [ContactBackupService.holdsOpenableBackup]). The user loses nothing by
-/// retrying once the server is reachable; going ahead would lock the backup
+/// Thrown when the change would ORPHAN the row: either this session holds a
+/// backup it could not re-wrap ([ContactBackupService.holdsOpenableBackup]),
+/// or it does not KNOW what the server holds
+/// ([ContactBackupService.rowStatusUnknown]). The user loses nothing by
+/// retrying once the server answers; going ahead would lock the backup
 /// permanently, because the password that opens the stored row is exactly
 /// the one the change destroys.
 class ContactBackupRewrapRefused implements Exception {
@@ -207,6 +209,11 @@ class ContactBackupService {
       // failed test and a release build turns into a silent zone error. A
       // refused primitive (webcrypto absent on a bare host, a Keystore
       // fault) is exactly that shape.
+      // Sticky-state hazard: `onSession` skips `_resetSession` for the SAME
+      // account, so a 404 earlier in this session left `_rowAbsent` true.
+      // Ignorance must outrank a stale answer, or a password change orphans a
+      // row another device minted in between.
+      _rowAbsent = false;
       _state = ContactBackupState.unreachable;
       E2ePersistentDiag.record('CONTACT_BACKUP_RESOLVE_FAILED', {
         'error': e.runtimeType.toString(),
@@ -499,6 +506,9 @@ class ContactBackupService {
     try {
       raw = await _api.fetchContactBackup(token);
     } on Object {
+      // A failed GET is ignorance, and it must OUTRANK a 404 answered earlier
+      // in the same session (`onSession` does not reset for the same account).
+      _rowAbsent = false;
       _state = ContactBackupState.unreachable;
       E2ePersistentDiag.record('CONTACT_BACKUP_UNREACHABLE', const {});
       return;
