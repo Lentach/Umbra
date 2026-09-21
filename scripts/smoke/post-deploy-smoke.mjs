@@ -154,19 +154,34 @@ try {
 // in `unreachable`, and every password change would have been refused.
 // Judge the CONTENT TYPE, and require the backend's own auth refusal.
 try {
-  const guarded = ["/backup/contacts"];
+  // One probe per @Controller prefix. Not `/backup`-specific on purpose: the
+  // defect is "new controller, forgot the nginx location", and Phase 1's box
+  // endpoints are the next ones to hit it. A /backup-only assertion would
+  // teach nothing the second time.
+  //
+  // `want` is what the BACKEND answers unauthenticated. Only the content type
+  // is load-bearing: any `text/html` means the request never left nginx.
+  const probes = [
+    { path: "/backup/contacts", want: [401] },
+    { path: "/users/me", want: [401] },
+    { path: "/messages/link-preview", want: [401, 404, 405] },
+    { path: "/auth/refresh", want: [400, 401, 404, 405] },
+    { path: "/media/msgs/probe.bin", want: [401, 404] },
+    { path: "/health", want: [200] },
+    { path: "/version", want: [200] },
+  ];
   const broken = [];
-  for (const path of guarded) {
+  for (const { path, want } of probes) {
     const res = await fetch(`${BASE}${path}`, { cache: "no-store" });
     const type = res.headers.get("content-type") ?? "";
-    // Unauthenticated: the backend answers 401 JSON. HTML of any status means
-    // the request never left nginx.
-    if (type.includes("text/html") || res.status !== 401) {
+    if (type.includes("text/html")) {
+      broken.push(`${path} -> ${res.status} text/html (SPA fallthrough)`);
+    } else if (!want.includes(res.status)) {
       broken.push(`${path} -> ${res.status} ${type || "(no type)"}`);
     }
   }
   broken.length === 0
-    ? ok("api routes reach the backend", `${guarded.length} guarded route(s) answer 401 JSON`)
+    ? ok("api routes reach the backend", `${probes.length} controller prefixes proxied, none served by the SPA`)
     : fail(
         "api routes reach the backend",
         `served by the SPA instead of the API: ${broken.join(", ")} — add a ` +
