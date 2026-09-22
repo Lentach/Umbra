@@ -630,8 +630,11 @@ class ConnectionProvider extends ChangeNotifier {
     // that can actually answer.
     _provisioningSink?.onSessionReady();
 
+    // A fresh server-side socket has no pushClientState; the server skips the
+    // push while the app is visible WHATEVER it shows (PR0.2), so re-send it
+    // with or without an open chat.
+    _conversationsProvider?.reemitPushClientState();
     if (activeConvId != null) {
-      _conversationsProvider?.reemitPushClientState();
       E2eDiagLog.add('ACTIVE_REASSERT', {
         'source': 'socketReady',
         'activeConvId': activeConvId,
@@ -905,8 +908,8 @@ class ConnectionProvider extends ChangeNotifier {
     final probeStart = _serverResponseCounter;
     final activeConvId = _conversationsProvider?.activeConversationId;
     _socketService.getConversations();
+    _conversationsProvider?.reemitPushClientState();
     if (activeConvId != null) {
-      _conversationsProvider?.reemitPushClientState();
       _socketService.getMessages(
         activeConvId,
         limit: AppConstants.messagePageSize,

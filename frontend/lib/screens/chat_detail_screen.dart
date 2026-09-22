@@ -370,7 +370,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     // Web/iOS: install the Web Audio gesture-unlock now so a ping that lands
     // later (outside any user gesture) can still produce sound. No-op native.
     primePingSound();
-    // Active id + pushClientState immediately; listener notify deferred (initState).
+    // Active id + push-SW post immediately; listener notify deferred (initState).
     _conversations.openConversation(widget.conversationId, notify: false);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;

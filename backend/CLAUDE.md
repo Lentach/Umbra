@@ -134,7 +134,7 @@ Gateway throttles are source-truth in `chat.gateway.ts`:
   - **Web Push** body is E2E-encrypted to the browser, so it may carry richer metadata (`type`, `conversationId`, `unreadCount`, `unreadTotal`, `unreadConversationIds`, `senderName`) — but sends NO `topic` header: a `conv-<id>` topic is cleartext to the relay (Mozilla/Apple/Google) and would leak per-conversation cadence. Never message text or keys.
 - FCM initializes from `FIREBASE_SERVICE_ACCOUNT`; absent means disabled. Web Push initializes from VAPID env; absent means disabled.
 - Coalescer buckets by `(recipientUserId, conversationId)`, debounce 2500 ms, max wait 10000 ms, latest `senderName` wins, and suppresses identical count repeat within 10000 ms.
-- Push scheduling is skipped only when recipient socket exists and `client.data.pushClientState` says client visible + active conversation matches.
+- Push scheduling is skipped only when EVERY delivered recipient device's newest socket reports `clientVisible` (any chat, or the list). The client never reports WHICH conversation is open (metadata privacy PR0.2); an older client's `activeConversationId` is dropped by `handlePushClientState`, never stored.
 - `pushClientState` is set by WS event and stored on `client.data`; frontend should set `clientVisible=false` on inactive/background.
 - Web Push subscriptions: `POST /users/web-push-subscription`, `DELETE /users/web-push-subscription`.
 - FCM token endpoints: `POST /users/fcm-token`, `DELETE /users/fcm-token`.

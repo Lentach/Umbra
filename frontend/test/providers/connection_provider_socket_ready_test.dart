@@ -296,12 +296,10 @@ void main() {
           .map((entry) => Map<String, dynamic>.from(entry.value as Map))
           .toList();
       expect(
-        pushStates.any((state) =>
-            state['activeConversationId'] == 10 &&
-            state['clientVisible'] == true),
-        isTrue,
+        pushStates,
+        contains(equals({'clientVisible': true})),
         reason:
-            'socketReady must reassert foreground open-chat state after reconnect; states=$pushStates',
+            'socketReady must reassert foreground visibility after reconnect; states=$pushStates',
       );
     });
 
@@ -330,18 +328,16 @@ void main() {
           .map((entry) => Map<String, dynamic>.from(entry.value as Map))
           .toList();
       expect(
-        pushStates.any((state) =>
-            state['activeConversationId'] == 10 &&
-            state['clientVisible'] == false),
-        isTrue,
+        pushStates,
+        contains(equals({'clientVisible': false})),
         reason:
             'socketReady must preserve background visibility; states=$pushStates',
       );
     });
 
     test(
-        'socketReady with no open conversation neither refetches messages nor '
-        'reasserts client state', () async {
+        'socketReady with no open conversation still re-sends visibility but '
+        'refetches no messages', () async {
       final conversations = ConversationsProvider()
         ..onConversationsList([_convJson(10)]);
       final messaging = MessagingProvider()
@@ -361,15 +357,18 @@ void main() {
 
       // Baseline authenticated fetches still fire...
       expect(fakeSocket.getConversationsCalls, 1);
-      // ...but the active-conversation reassert branch must stay dormant.
+      // ...and no chat is refetched...
       expect(fakeSocket.getMessagesConversationIds, isEmpty,
           reason: 'socketReady must not refetch messages when no chat is open');
+      // ...but the fresh socket still needs to know the app is on screen: the
+      // server skips the push while it is, whatever it shows (PR0.2).
       final pushStates = connection.emitted
           .where((entry) => entry.key == 'pushClientState')
+          .map((entry) => Map<String, dynamic>.from(entry.value as Map))
           .toList();
-      expect(pushStates, isEmpty,
-          reason:
-              'socketReady must not reassert client state when no chat is open');
+      expect(pushStates, [
+        {'clientVisible': true},
+      ]);
     });
   });
 

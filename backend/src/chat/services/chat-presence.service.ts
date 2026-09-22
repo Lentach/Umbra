@@ -48,10 +48,9 @@ export class ChatPresenceService {
     if (!userId) return;
     try {
       const dto = validateDto(PushClientStateDto, data);
-      client.data.pushClientState = {
-        activeConversationId: dto.activeConversationId ?? null,
-        clientVisible: dto.clientVisible,
-      };
+      // Picked field by field: validateDto does not strip extras, and a client
+      // that predates PR0.2 still sends activeConversationId — never store it.
+      client.data.pushClientState = { clientVisible: dto.clientVisible };
     } catch {
       return;
     }

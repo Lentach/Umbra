@@ -1,16 +1,12 @@
-import { IsBoolean, IsInt, IsOptional, Min, ValidateIf } from 'class-validator';
+import { IsBoolean } from 'class-validator';
 
 /**
- * Client reports foreground/tab visibility and which conversation is open so the server
- * can skip push when the user is already viewing that thread (socket still delivers newMessage).
+ * Client reports whether the app is on screen so the server can skip the push
+ * for a message the open socket already delivers. Deliberately NOT which
+ * conversation is open (metadata privacy PR0.2): a per-chat focus stream would
+ * tell the server, live, who reads whom.
  */
 export class PushClientStateDto {
-  @IsOptional()
-  @ValidateIf((_, v) => v !== undefined && v !== null)
-  @IsInt()
-  @Min(1)
-  activeConversationId?: number | null;
-
   @IsBoolean()
   clientVisible: boolean;
 }

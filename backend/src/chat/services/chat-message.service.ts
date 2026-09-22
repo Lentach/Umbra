@@ -555,22 +555,17 @@ export class ChatMessageService {
 
     // Coalesced push: minimized tabs stay connected via WS but still need a
     // wake-up. Suppression is PER DEVICE (spec §5.3): skip only when EVERY
-    // device that was delivered to has this conversation focused, so a second
-    // device that is not looking at the chat still gets its notification.
+    // device that was delivered to is on screen, so a second device in the
+    // background still gets its notification.
     const recipientDeviceIds = deliveryTargets
       .filter((target) => target.userId === recipientId)
       .map((target) => target.deviceId);
-    const everyRecipientDeviceFocused =
+    const everyRecipientDeviceVisible =
       recipientDeviceIds.length > 0 &&
       recipientDeviceIds.every((deviceId) =>
-        this.shouldSkipPushForFocusedRecipient(
-          server,
-          recipientId,
-          deviceId,
-          conversation.id,
-        ),
+        this.isRecipientDeviceVisible(server, recipientId, deviceId),
       );
-    if (!everyRecipientDeviceFocused) {
+    if (!everyRecipientDeviceVisible) {
       this.pushCoalescingService
         .scheduleMessagePush(recipientId, conversation.id, sender.username)
         .catch(() => {});
@@ -1271,28 +1266,23 @@ export class ChatMessageService {
   }
 
   /**
-   * When the socket that WILL RECEIVE the message reports foreground + this
-   * conversation active, WS already delivers `newMessage` — no push needed.
+   * When the socket that WILL RECEIVE the message reports the app on screen,
+   * WS already delivers `newMessage` — no push needed. Any chat, or the list:
+   * the client never says which conversation is open (metadata privacy PR0.2).
    *
    * Evaluated PER DEVICE (spec §5.3) against the SAME socket
-   * `emitToDeviceNewestSocket` delivers to, never "any focused tab". Polling
-   * every tab would let a focused tab A suppress the push while the ciphertext
+   * `emitToDeviceNewestSocket` delivers to, never "any visible tab". Polling
+   * every tab would let a visible tab A suppress the push while the ciphertext
    * went to background tab B, leaving the user with neither the live message
-   * nor a notification. Push is suppressed only when EVERY device that got an
-   * envelope is focused on this conversation — a second device that is not
-   * looking at the chat still deserves its notification.
+   * nor a notification.
    */
-  private shouldSkipPushForFocusedRecipient(
+  private isRecipientDeviceVisible(
     server: Server,
     recipientId: number,
     deviceId: number,
-    conversationId: number,
   ): boolean {
     const state = newestSocketForDevice(server, recipientId, deviceId)?.data
-      ?.pushClientState as
-      | { activeConversationId?: number | null; clientVisible?: boolean }
-      | undefined;
-    if (!state?.clientVisible) return false;
-    return state.activeConversationId === conversationId;
+      ?.pushClientState as { clientVisible?: boolean } | undefined;
+    return state?.clientVisible === true;
   }
 }

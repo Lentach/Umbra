@@ -11,7 +11,8 @@ import '../providers/messaging_provider.dart';
 /// (diagnosed via `E2eDiagLog` `ADD_TO_STATE appendedToOpenChat:false`), and recovery
 /// otherwise depends on a race in `_onSocketReady`. Re-asserting + refetching on
 /// resume restores the open chat deterministically instead of waiting for a manual
-/// reopen, and re-emits `pushClientState` so the server stops treating the client as away.
+/// reopen, and re-tells the push SW which chat is open. The server's visibility
+/// state is re-sent by the resume lifecycle / `socketReady`, never per chat.
 void reassertOpenConversationOnResume(
   ConversationsProvider conversations,
   MessagingProvider messaging,

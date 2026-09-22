@@ -213,27 +213,26 @@ class ConversationsProvider extends ChangeNotifier {
   void setClientVisible(bool visible) {
     if (_clientVisible == visible) return;
     _clientVisible = visible;
-    _emitPushClientState();
+    reemitPushClientState();
   }
 
-  /// Re-sends the current active/visibility tuple without changing state.
+  /// Re-sends the visibility (to the server) and the open chat (to the push
+  /// SW) without changing state.
   ///
   /// Socket.IO reconnects create a fresh server-side socket, so `client.data`
   /// loses the previous `pushClientState`. Use this after socketReady/resume
-  /// even when `_clientVisible` and `_activeConversationId` did not change.
+  /// even when nothing changed.
   void reemitPushClientState() {
-    _emitPushClientState();
+    _emit?.call('pushClientState', {'clientVisible': _clientVisible});
+    _postActiveConversationToSw();
   }
 
-  void _emitPushClientState() {
-    _emit?.call('pushClientState', {
-      'activeConversationId': _activeConversationId,
-      'clientVisible': _clientVisible,
-    });
-    // Defense-in-depth for the PWA: tell the push SW which chat is open so it
-    // suppresses a banner for a conversation the user is already viewing, even
-    // if the server-side skip races a socket reconnect. Backgrounded → null so
-    // notifications still show.
+  /// Defense-in-depth for the PWA: tell the push SW which chat is open so it
+  /// suppresses a banner for a conversation the user is already viewing, even
+  /// if the server-side skip races a socket reconnect. Backgrounded → null so
+  /// notifications still show. Device-local: the SERVER is never told which
+  /// chat is open (metadata privacy PR0.2) — only whether the app is visible.
+  void _postActiveConversationToSw() {
     _pushSwChannel.postMessage({
       'type': 'active-conversation',
       'conversationId': _clientVisible ? _activeConversationId : null,
@@ -310,7 +309,7 @@ class ConversationsProvider extends ChangeNotifier {
       _activeConversationDeletedByOther = false;
       _activeConversationId = null;
       notifyListeners();
-      _emitPushClientState();
+      _postActiveConversationToSw();
     }
   }
 
@@ -716,7 +715,7 @@ class ConversationsProvider extends ChangeNotifier {
     if (conversationId != null) {
       _unreadCounts[conversationId] = 0;
     }
-    _emitPushClientState();
+    _postActiveConversationToSw();
     if (notify) {
       notifyListeners();
     }
@@ -734,7 +733,7 @@ class ConversationsProvider extends ChangeNotifier {
     _activeConversationDeletedByOther = false;
     _unreadCounts[conversationId] = 0;
     notifyListeners();
-    _emitPushClientState();
+    _postActiveConversationToSw();
   }
 
   /// Clears the active conversation.
@@ -744,7 +743,7 @@ class ConversationsProvider extends ChangeNotifier {
   /// [openConversation]).
   void closeConversation({bool notify = true}) {
     _activeConversationId = null;
-    _emitPushClientState();
+    _postActiveConversationToSw();
     if (notify) {
       notifyListeners();
     }
@@ -786,7 +785,7 @@ class ConversationsProvider extends ChangeNotifier {
     _storeConversationGone(gone.map(getOtherUserId));
     _clearActiveIfRemoved();
     notifyListeners();
-    _emitPushClientState();
+    _postActiveConversationToSw();
     return removed;
   }
 
@@ -851,7 +850,7 @@ class ConversationsProvider extends ChangeNotifier {
       _errorMessage = null;
     }
     notifyListeners();
-    _emitPushClientState();
+    _postActiveConversationToSw();
   }
 
   /// Called on socket disconnect. Minimal cleanup.
@@ -877,7 +876,7 @@ class ConversationsProvider extends ChangeNotifier {
     // Clear all push notifications on logout.
     _notificationCleaner.sweepNotificationsKeepUnread(const {}, 0);
     notifyListeners();
-    _emitPushClientState();
+    _postActiveConversationToSw();
   }
 
   // ---------- Private Helpers ----------
@@ -890,7 +889,7 @@ class ConversationsProvider extends ChangeNotifier {
       _activeConversationId = null;
       _activeConversationDeletedByOther = false;
     }
-    _emitPushClientState();
+    _postActiveConversationToSw();
   }
 
   /// Clears active conversation if it was removed from the list.

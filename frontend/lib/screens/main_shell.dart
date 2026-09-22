@@ -225,7 +225,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
         // Treat inactive as background for push: iOS/Android often enter inactive
         // (app switcher, home gesture) before paused; leaving it true kept
         // pushClientState.clientVisible true so the server skipped pushes while
-        // the user was no longer looking at the chat.
+        // the user was no longer looking at the app.
         context.read<ConversationsProvider>().setClientVisible(false);
         // Owed shred rotation: fire now instead of waiting out the debounce —
         // background is the last CPU this process may ever get. No-op unless

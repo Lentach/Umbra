@@ -393,9 +393,11 @@ void main() {
 
           provider.setClientVisible(false);
 
-          expect(pushStates, hasLength(1));
-          expect(pushStates.single['clientVisible'], isFalse);
-          expect(pushStates.single['activeConversationId'], 42);
+          expect(
+            pushStates.single,
+            {'clientVisible': false},
+            reason: 'the server learns visibility, never which chat is open',
+          );
         },
       );
 
@@ -415,7 +417,7 @@ void main() {
       });
 
       test(
-        'closeConversation emits activeConversationId null for pushClientState',
+        'opening or closing a chat tells the server nothing (PR0.2)',
         () {
           final provider = ConversationsProvider();
           final pushStates = <Map<String, dynamic>>[];
@@ -425,14 +427,18 @@ void main() {
             }
           });
           provider.onConnect(false);
-          provider.openConversation(99);
           pushStates.clear();
 
-          provider.closeConversation();
+          provider
+            ..openConversation(99)
+            ..closeConversation();
 
-          expect(pushStates, hasLength(1));
-          expect(pushStates.single['activeConversationId'], isNull);
-          expect(pushStates.single['clientVisible'], isTrue);
+          expect(
+            pushStates,
+            isEmpty,
+            reason: "which chat is open is not the server's business, and "
+                'visibility did not change',
+          );
         },
       );
 

@@ -402,16 +402,13 @@ describe('ChatMessageService', () => {
       } as Message);
     };
 
-    const installRecipientSocket = (pushClientState: {
-      clientVisible: boolean;
-      activeConversationId: number | null;
-    }) => installSocket(mockServer, 2, 'socket-bob', { pushClientState });
-
-    it('does not schedule push when recipient is visible in the active conversation', async () => {
+    // Metadata privacy PR0.2: the client reports only whether the app is on
+    // screen, never which chat, so a visible app suppresses the push whatever
+    // it shows — the open socket already delivered newMessage.
+    it('does not schedule push while the recipient app is visible', async () => {
       arrangeSuccessfulTextMessageSend();
-      const bob = installRecipientSocket({
-        clientVisible: true,
-        activeConversationId: 10,
+      const bob = installSocket(mockServer, 2, 'socket-bob', {
+        pushClientState: { clientVisible: true },
       });
 
       await service.handleSendMessage(
@@ -424,44 +421,37 @@ describe('ChatMessageService', () => {
       expect(pushCoalescingService.scheduleMessagePush).not.toHaveBeenCalled();
     });
 
-    it.each([
-      ['hidden', { clientVisible: false, activeConversationId: 10 }],
-      [
-        'active on another conversation',
-        { clientVisible: true, activeConversationId: 11 },
-      ],
-    ])(
-      'schedules push when recipient socket is online but %s',
-      async (_caseName, pushClientState) => {
-        arrangeSuccessfulTextMessageSend();
-        const bob = installRecipientSocket(pushClientState);
-
-        await service.handleSendMessage(
-          mockClient as Socket,
-          { recipientId: 2, content: 'hello' },
-          mockServer as Server,
-        );
-
-        expect(bob.emit).toHaveBeenCalledWith('newMessage', expect.anything());
-        expect(pushCoalescingService.scheduleMessagePush).toHaveBeenCalledWith(
-          2,
-          10,
-          'alice',
-        );
-      },
-    );
-
-    it('does not suppress push when the focused tab is not the newest (BE-007 coherence)', async () => {
+    it('schedules push when the recipient socket is online but hidden', async () => {
       arrangeSuccessfulTextMessageSend();
-      // Older tab is visible+focused on the conversation; newer tab is not. Delivery
-      // AND suppression both resolve to the newest tab, so the older focused tab must
-      // not suppress the push — otherwise the message lands on a background tab while
-      // the push is dropped and the user sees neither (a regression that was backed out).
+      const bob = installSocket(mockServer, 2, 'socket-bob', {
+        pushClientState: { clientVisible: false },
+      });
+
+      await service.handleSendMessage(
+        mockClient as Socket,
+        { recipientId: 2, content: 'hello' },
+        mockServer as Server,
+      );
+
+      expect(bob.emit).toHaveBeenCalledWith('newMessage', expect.anything());
+      expect(pushCoalescingService.scheduleMessagePush).toHaveBeenCalledWith(
+        2,
+        10,
+        'alice',
+      );
+    });
+
+    it('does not suppress push when the visible tab is not the newest (BE-007 coherence)', async () => {
+      arrangeSuccessfulTextMessageSend();
+      // Older tab is visible; newer tab is not. Delivery AND suppression both
+      // resolve to the newest tab, so the older visible tab must not suppress
+      // the push — otherwise the message lands on a background tab while the
+      // push is dropped and the user sees neither (a regression that was backed out).
       installSocket(mockServer, 2, 'sock-old', {
-        pushClientState: { clientVisible: true, activeConversationId: 10 },
+        pushClientState: { clientVisible: true },
       });
       installSocket(mockServer, 2, 'sock-new', {
-        pushClientState: { clientVisible: false, activeConversationId: 10 },
+        pushClientState: { clientVisible: false },
       });
 
       await service.handleSendMessage(
@@ -1058,22 +1048,20 @@ describe('ChatMessageService', () => {
       );
     });
 
-    it('still pushes when only ONE of the recipient devices has the chat focused', async () => {
+    it('still pushes when only ONE of the recipient devices is visible', async () => {
       arrangeSend();
       installSocket(
         mockServer,
         2,
         'socket-bob-d1',
-        { pushClientState: { activeConversationId: 10, clientVisible: true } },
+        { pushClientState: { clientVisible: true } },
         1,
       );
       installSocket(
         mockServer,
         2,
         'socket-bob-d2',
-        {
-          pushClientState: { activeConversationId: null, clientVisible: false },
-        },
+        { pushClientState: { clientVisible: false } },
         2,
       );
 
@@ -1086,17 +1074,15 @@ describe('ChatMessageService', () => {
         ],
       });
 
-      // Device 2 is not looking at the chat, so it still deserves a wake-up.
+      // Device 2 is in the background, so it still deserves a wake-up.
       expect(schedulePushMock).toHaveBeenCalledWith(2, 10, 'alice');
     });
 
-    it('suppresses the push only when EVERY delivered device has the chat focused', async () => {
+    it('suppresses the push only when EVERY delivered device is visible', async () => {
       arrangeSend();
-      const focused = {
-        pushClientState: { activeConversationId: 10, clientVisible: true },
-      };
-      installSocket(mockServer, 2, 'socket-bob-d1', focused, 1);
-      installSocket(mockServer, 2, 'socket-bob-d2', focused, 2);
+      const visible = { pushClientState: { clientVisible: true } };
+      installSocket(mockServer, 2, 'socket-bob-d1', visible, 1);
+      installSocket(mockServer, 2, 'socket-bob-d2', visible, 2);
 
       await send({
         recipientId: 2,

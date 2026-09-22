@@ -1,3 +1,4 @@
+import { Socket } from 'socket.io';
 import { ChatPresenceService } from './chat-presence.service';
 
 describe('ChatPresenceService', () => {
@@ -183,47 +184,38 @@ describe('ChatPresenceService', () => {
   });
 
   describe('handlePushClientState', () => {
-    it('stores push prefs on client.data when valid', () => {
-      service.handlePushClientState(mockClient, {
-        activeConversationId: 7,
-        clientVisible: true,
-      });
+    it('stores only the visibility on client.data', () => {
+      service.handlePushClientState(mockClient, { clientVisible: true });
 
-      expect(mockClient.data.pushClientState).toEqual({
-        activeConversationId: 7,
-        clientVisible: true,
-      });
+      expect(mockClient.data.pushClientState).toEqual({ clientVisible: true });
     });
 
-    it('allows null activeConversationId', () => {
+    // Metadata privacy PR0.2: the server must never hold WHICH chat a user has
+    // open. A client that predates the change still sends the id; it is
+    // dropped here, never stored.
+    it("drops an older client's activeConversationId instead of storing it", () => {
       service.handlePushClientState(mockClient, {
-        activeConversationId: null,
+        activeConversationId: 7,
         clientVisible: false,
       });
 
-      expect(mockClient.data.pushClientState).toEqual({
-        activeConversationId: null,
-        clientVisible: false,
-      });
+      expect(mockClient.data.pushClientState).toEqual({ clientVisible: false });
     });
 
     it('no-op when payload invalid', () => {
-      service.handlePushClientState(mockClient, {
-        activeConversationId: -1,
-        clientVisible: true,
-      });
+      service.handlePushClientState(mockClient, {});
 
       expect(mockClient.data.pushClientState).toBeUndefined();
     });
 
     it('no-op when no user id', () => {
-      const bare = { data: {} };
-      service.handlePushClientState(bare as any, {
-        activeConversationId: 1,
+      const bare: { data: { pushClientState?: unknown } } = { data: {} };
+      // A socket whose handshake never authenticated: no user on client.data.
+      service.handlePushClientState(bare as unknown as Socket, {
         clientVisible: true,
       });
 
-      expect((bare as any).data.pushClientState).toBeUndefined();
+      expect(bare.data.pushClientState).toBeUndefined();
     });
   });
 });
