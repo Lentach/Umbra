@@ -161,9 +161,10 @@ String? sentinelPreviewText(BuildContext context, MessageModel message) {
     return AppLocalizations.of(context).messageUnreadableOnThisDevice;
   }
   // Deliberately the NEUTRAL label, not "can't be read on this device": a
-  // `[encrypted]` preview may still resolve — the decrypt/merge path calls
-  // `ConversationsProvider.updateLastMessage` and the row becomes plaintext —
-  // so a preview must not accuse a row that is merely waiting for the pass.
+  // `[encrypted]` preview may still resolve — the LIVE decrypt/merge path calls
+  // `ConversationsProvider.updateLastMessage` and the row becomes plaintext (the
+  // history decrypt pass never writes the preview) — so a preview must not
+  // accuse a row that is merely waiting for the pass.
   if (content == kEncryptedPlaceholderLabel) {
     return AppLocalizations.of(context).encryptedMessage;
   }

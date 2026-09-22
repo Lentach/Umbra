@@ -3141,7 +3141,15 @@ that is the designed outcome).
     re-filters an open thread when the audit row lands after its history. **Keys still do not match for such an
     account** — this closes the placeholder half of the requirement only; the key half needs
     linking ON (the (lxxviii) phrase door). Residual: a row a peer seals to the OLD identity AFTER
-    the instant (a peer that was offline at the change) still renders as unreadable.
+    the instant (a peer that was offline at the change) still renders as unreadable. The chat-list
+    preview never passes through this filter, and the history load and its decrypt pass never
+    write it: the server's `conversationsList` sets it, with the neutral `encryptedMessage` label
+    for an unreadable row. Only a live event writes it from the thread's own rows — a live receive
+    (normally stamped after the instant, so a failure there shows in the thread too), a live edit
+    of the previewed row whose decrypt fails, or a delete of the previewed row, which re-points the
+    preview to the newest LOADED row. Residual: the last two can surface a hidden pre-boundary row
+    in the list as "can't be read on this device" (none of these paths reads the boundary) until
+    the next `conversationsList` restores the neutral label.
     Falsification: (F54) drop the pre-identity term → the failed peer row and the own row render and
     the count stays 0; (F55) drop the usable-content exemption → a history-imported image is
     hidden; (F56) drop the callback wiring → the open thread is never notified; (F57) drop the
