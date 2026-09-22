@@ -786,4 +786,60 @@ void main() {
       reason: 'a resumed session must still publish graph changes',
     );
   });
+
+  // Pins a property the 2026-09-22 drive made load-bearing. `uploadNow` is
+  // the only thing that ever calls out, and the ONLY thing that calls IT is
+  // the debounce Timer in `scheduleUpload`. Backgrounding a PWA freezes or
+  // discards the page, so that timer can die with the change unpublished —
+  // and nothing retries a dead timer. What saves the graph is that the NEXT
+  // session republishes a local view already ahead of the blob, with no fresh
+  // mutation needed to arm another timer.
+  //
+  // GREEN on its first run, so this characterises behaviour rather than
+  // guarding a fix: it disproved the hypothesis that a lost debounce stranded
+  // the change forever. Kept because it pins the recovery, which gating
+  // uploads on "a mutation happened this session" would silently remove.
+  test('a local graph AHEAD of the blob is republished on login', () async {
+    // The server holds peer 41 unmuted...
+    await seedRow(password: 'pw', contacts: [_friend(41)]);
+    // ...while the device muted it and lost the upload to a dead timer.
+    await store.update(
+      41,
+      (_) => _friend(41).copyWith(settings: const ContactSettings(muted: true)),
+    );
+    await store.settled;
+
+    final svc = await service();
+    final connection = ConnectionProvider(socketService: _MuteSocket())
+      ..setProviders(
+        encryption: EncryptionProvider(),
+        friends: FriendsProvider(),
+        conversations: ConversationsProvider(),
+        messaging: MessagingProvider(),
+        contactStore: store,
+        contactBackup: svc,
+      );
+    addTearDown(connection.disconnect);
+
+    await svc.onSession(userId: 7, token: 'jwt', password: 'pw');
+    await connection.connect(7, 'jwt', 'http://t', immediate: true);
+    await pumpEventQueue();
+
+    // No mutation happens this session: the republish is the only thing that
+    // can carry the mute to the server.
+    expect(
+      backend.puts,
+      isNotEmpty,
+      reason: 'a change lost to a dead debounce must be republished on login',
+    );
+    final sealed = utf8.decode(
+      base64Decode(backend.puts.last['blob'] as String),
+      allowMalformed: true,
+    );
+    expect(
+      sealed.contains('muted'),
+      isTrue,
+      reason: 'the republished blob carries the local mute',
+    );
+  });
 }
