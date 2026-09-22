@@ -892,10 +892,12 @@ class EncryptionService {
   /// reported. A row ending at any OTHER key still alarms, which is what keeps
   /// this exactly as strong as before: republishing this identity needs its
   /// private half, and a §6.1 rotation or §6.2 ceremony by anyone else lands
-  /// on a different key. Deliberately NOT the one-shot
+  /// on a different key. Deliberately NOT decided by the one-shot
   /// [markOwnIdentityPublished] flag: an account with no audit row sends no
   /// instant, the early return below fires before the flag is consumed, and a
-  /// flag left armed in prefs would eat the next genuine replacement.
+  /// flag left armed in prefs would eat the next genuine replacement. That is
+  /// also why the own-key branch SPENDS an armed flag ((lxxxvii)): the report
+  /// it was armed for is this one, recognised by content instead.
   Future<void> recordOwnIdentityReplacedFromServer(
     String occurredAt, {
     String? replacedTo,
@@ -916,6 +918,12 @@ class EncryptionService {
         // (lxxxvi): the row that ended at our key is also the edge of what
         // this install can ever decrypt.
         await _advanceOwnIdentitySince(normalized);
+        // (lxxxvii): if our own publish armed the (li) one-shot, this report is
+        // the one it was armed for. Left armed, it would swallow the next
+        // FOREIGN replacement — the one an offline device learns only here.
+        if (_ownPublishUnacknowledged) {
+          await _clearOwnPublishUnacknowledged();
+        }
         // (lxxxi) clause 2: the SAME row may already be showing — it was
         // reported by the connect that preceded the restore, when this
         // install held no identity to compare against. It just proved to be

@@ -3116,7 +3116,8 @@ that is the designed outcome).
     offer is swallowed, which the test's second assertion catches (a still-held latch leaves the
     enrollment count at 1).
 
-- **Amendment 2026-09-22 ((lxxxvi), owner pick "(b) first" in the metadata-privacy session):**
+- **Amendment 2026-09-22 ((lxxxvi) owner pick "(b) first" in the metadata-privacy session;
+  (lxxxvii) no owner call needed — it closes a defect found while building (lxxxvi)):**
   - **(lxxxvi) — ROWS SEALED BEFORE THIS INSTALL'S IDENTITY JOIN THE (lxxxi) DIVIDER.** A storage
     loss on an account with linking OFF re-mints (`IDENTITY_MINTED {reason:
     server-bundle-unlocked-remint}`, (lxxiii) clause 2), and every row the server still serves from
@@ -3147,6 +3148,17 @@ that is the designed outcome).
     launch-time load → a relaunched service forgets the boundary; (F58) drop the post-upload re-ask
     → no `checkOwnKeyBundle` follows an identity-changing ack; (F59) drop the boundary from the
     view's cache key → a boundary that moved without a notification leaves the rows showing.
+  - **(lxxxvii) — THE OWN-KEY BRANCH SPENDS THE (li) ONE-SHOT.** An upload ack carrying
+    `identityChanged: true` arms `markOwnIdentityPublished` so the report of our own publish does
+    not alarm ((li) clause 2). Since (lxxx) clause 5 the server names the key a change ENDED at, and
+    a row ending at ours returned early — BEFORE the one-shot was consumed. So after every re-mint
+    and every §6.2 ceremony the flag stayed armed in prefs and silently ate the next FOREIGN
+    replacement report: the connect-time hydration, which is the only path an OFFLINE device has
+    (the live `ownIdentityReplaced` reaches connected sessions only) — i.e. the device a takeover
+    targets while its owner is away. Fix: the own-key branch spends an armed flag, because the
+    report it was armed for is this one, recognised by content. Falsification: (F60) remove the
+    spend → arming the flag, reporting our own row and then a foreign one raises no alarm
+    (measured red: `ownIdentityReplacedAt` null).
 
 - **Next gate:** T11 implementation review, then the T1–T11 merge decision. The T1–T8 phase
   gate itself is CLOSED 2026-08-22: three reviewers, verdicts SHIP / SHIP WITH FIXES ×2; the

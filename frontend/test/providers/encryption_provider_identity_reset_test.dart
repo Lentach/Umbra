@@ -710,6 +710,40 @@ void main() {
 
       expect(service.ownIdentityReplacedAt, isNotNull);
     });
+
+    // Amendment (lxxxvii). The upload ack arms the (li) one-shot for our own
+    // publish, but the (lxxx) own-key branch recognises that very report by
+    // CONTENT and returned without spending it — so the flag stayed armed and
+    // silently ate the next FOREIGN replacement, which an offline device only
+    // ever learns at reconnect. Every re-mint and every §6.2 ceremony armed it.
+    test('a takeover reported after our own re-mint still alarms', () async {
+      final service = EncryptionService();
+      await service.initialize(
+        97,
+        checkServerIdentity: () async =>
+            const ServerIdentityGuard(exists: false),
+      );
+      final own =
+          (await service.getKeyBundleForReupload())!['identityPublicKey']
+              as String;
+      final ours = DateTime.now().toUtc().subtract(const Duration(hours: 1));
+
+      await service.markOwnIdentityPublished();
+      await service.recordOwnIdentityReplacedFromServer(
+        ours.toIso8601String(),
+        replacedTo: own,
+      );
+      await service.recordOwnIdentityReplacedFromServer(
+        ours.add(const Duration(minutes: 30)).toIso8601String(),
+        replacedTo: 'BfOreignKeyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      );
+
+      expect(
+        service.ownIdentityReplacedAt,
+        isNotNull,
+        reason: 'the one-shot belonged to the report that ended at our key',
+      );
+    });
   });
 
   // Amendment (lxxxvi): the audit row that ENDS at our own key is also the
