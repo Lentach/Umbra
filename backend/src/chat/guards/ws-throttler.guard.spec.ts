@@ -234,6 +234,30 @@ describe('WsThrottlerGuard — which requests share a bucket', () => {
     // Another account behind the same IP (a shared NAT) has its own.
     expect(await admits(socket({ 'x-real-ip': '203.0.113.7' }, 43))).toBe(true);
   });
+
+  it('a lapsed block on one client never freezes the window of another', async () => {
+    // A lapsed block is followed by a reset of THAT tracker's record. In
+    // @nestjs/throttler 6.5.0 the reset cancelled the pending expiry of EVERY
+    // record under the same throttler name — every `@Throttle({ default })` in
+    // this app, HTTP and WS alike, share one storage — so another client's hits
+    // stopped expiring and it was refused inside a limit it never exceeded.
+    jest.useFakeTimers();
+    try {
+      const a = socket({ 'x-real-ip': '203.0.113.7' });
+      const b = socket({ 'x-real-ip': '198.51.100.9' });
+      expect(await admits(a)).toBe(true);
+      expect(await admits(a)).toBe(false); // A is blocked for one window.
+      jest.advanceTimersByTime(61_000);
+      expect(await admits(b)).toBe(true); // B's one hit expires at +60 s...
+      expect(await admits(a)).toBe(true); // ...and A's lapsed block resets A.
+      jest.advanceTimersByTime(61_000);
+      // B's earlier hit has expired: this is B's first request in its window.
+      expect(await admits(b)).toBe(true);
+    } finally {
+      storage.onApplicationShutdown();
+      jest.useRealTimers();
+    }
+  });
 });
 
 /**
