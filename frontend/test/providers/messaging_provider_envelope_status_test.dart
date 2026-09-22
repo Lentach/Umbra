@@ -53,6 +53,8 @@ Map<String, dynamic> _row({
   String? envelopeStatus,
   String? encryptedContent,
   int senderId = 2,
+  DateTime? createdAt,
+  String messageType = 'TEXT',
 }) => {
   'id': id,
   'senderId': senderId,
@@ -62,8 +64,8 @@ Map<String, dynamic> _row({
   'envelopeStatus': ?envelopeStatus,
   'conversationId': 10,
   'deliveryStatus': 'DELIVERED',
-  'messageType': 'TEXT',
-  'createdAt': DateTime.now().toUtc().toIso8601String(),
+  'messageType': messageType,
+  'createdAt': (createdAt ?? DateTime.now()).toUtc().toIso8601String(),
 };
 
 void main() {
@@ -285,6 +287,173 @@ void main() {
         'messages': [_row(id: 202, envelopeStatus: 'none_for_device')],
       });
       await pumpEventQueue(times: 200);
+
+      expect(provider.messages, isEmpty);
+      expect(provider.hiddenPreLinkCount, 1);
+    });
+  });
+
+  // Amendment (lxxxvi). A storage loss on an account with linking OFF re-mints
+  // the identity (`IDENTITY_MINTED {reason: server-bundle-unlocked-remint}`),
+  // and every row the server still holds from before was sealed to keys this
+  // install never had: the thread opened on a wall of "can't be read" bubbles.
+  // Those rows now join the (lxxxi) divider. The boundary is the SERVER's audit
+  // instant for the change that ended at this device's key — never a device
+  // clock ((li)).
+  //
+  // Falsification: drop the pre-identity term from the filter → the count
+  // stays 0 and the failed bubbles render; drop the provider callback → the
+  // open thread is never told to re-filter when the audit row lands late.
+  group('(lxxxvi) rows sealed before this identity existed', () {
+    late MessagingProvider provider;
+    late ConversationsProvider conversations;
+    late EncryptionService service;
+    late EncryptionProvider encryption;
+
+    setUp(() async {
+      FlutterSecureStorage.setMockInitialValues({});
+      SharedPreferences.setMockInitialValues({});
+
+      service = EncryptionService();
+      encryption = EncryptionProvider(service: service)
+        ..setEmitCallback((event, data) {
+          if (event == 'checkOwnKeyBundle') {
+            encryption.onOwnKeyBundleStatus({'exists': false});
+          }
+        });
+      await encryption.initializeE2E(1);
+      await pumpEventQueue(times: 200);
+
+      conversations = ConversationsProvider()
+        ..setCurrentUserId(1)
+        ..onConversationsList([_convJson()])
+        ..openConversation(10);
+      provider = MessagingProvider()
+        ..setConversationsProvider(conversations)
+        ..setEncryptionProvider(encryption)
+        ..setCurrentUserId(1)
+        ..setIncomingMessageSoundEnabledForTest(false)
+        ..onConnect(false)
+        ..setActiveConversationIdForTest(10)
+        ..setEmitCallback((event, data) {});
+    });
+
+    test('unreadable rows older than the audit instant join the divider; '
+        'readable rows and newer failures stay', () async {
+      final minted = DateTime.now().toUtc().subtract(
+        const Duration(minutes: 10),
+      );
+      // Pre-loss rows whose plaintext came back from a history FILE are
+      // readable, so their age must never hide them — including a keyed image,
+      // which keeps `[encrypted]` as its content by design.
+      await encryption.saveDecryptedContent(304, {
+        'content': 'imported from the backup file',
+        'messageType': 'TEXT',
+      }, conversationId: 10);
+      await encryption.saveDecryptedContent(305, {
+        'content': '[encrypted]',
+        'messageType': 'IMAGE',
+        'mediaUrl': 'http://localhost:3000/media/msgs/a.bin',
+        'mediaKey': 'a2V5',
+        'mediaIv': 'aXY=',
+      }, conversationId: 10);
+
+      await provider.onMessageHistory({
+        'conversationId': 10,
+        'messages': [
+          _row(
+            id: 304,
+            encryptedContent: '2:ct',
+            createdAt: minted.subtract(const Duration(hours: 2)),
+          ),
+          _row(
+            id: 305,
+            encryptedContent: '2:ct',
+            messageType: 'IMAGE',
+            createdAt: minted.subtract(const Duration(minutes: 90)),
+          ),
+          _row(
+            id: 300,
+            encryptedContent: '2:ct',
+            createdAt: minted.subtract(const Duration(hours: 1)),
+          ),
+          _row(
+            id: 301,
+            senderId: 1,
+            envelopeStatus: 'own_origin',
+            createdAt: minted.subtract(const Duration(minutes: 59)),
+          ),
+          _row(
+            id: 302,
+            encryptedContent: '2:ct',
+            createdAt: minted.add(const Duration(minutes: 1)),
+          ),
+        ],
+      });
+      await pumpEventQueue(times: 200);
+
+      // Before the server names the boundary nothing is hidden.
+      expect(
+        provider.messages.map((m) => m.id),
+        unorderedEquals([300, 301, 302, 304, 305]),
+      );
+      expect(provider.hiddenPreLinkCount, 0);
+
+      var notified = 0;
+      provider.addListener(() => notified++);
+      final own =
+          (await service.getKeyBundleForReupload())!['identityPublicKey']
+              as String;
+      encryption.onOwnKeyBundleStatus({
+        'exists': true,
+        'linkingEnabled': false,
+        'identityReplacedAt': minted.toIso8601String(),
+        'identityReplacedTo': own,
+      });
+      await pumpEventQueue(times: 50);
+
+      expect(
+        notified,
+        greaterThan(0),
+        reason: 'an open thread must re-filter when the audit row lands after '
+            'its history',
+      );
+      expect(
+        provider.messages.map((m) => m.id),
+        unorderedEquals([302, 304, 305]),
+        reason: '300 (failed peer row) and 301 (own row whose only copy died '
+            'with the old install) predate this identity',
+      );
+      expect(provider.hiddenPreLinkCount, 2);
+    });
+
+    test('a boundary that moved without a notification still applies on the '
+        'next read', () async {
+      // The launch-time load from storage moves the boundary with no callback;
+      // a view cached before it must not keep showing the failed rows.
+      final minted = DateTime.now().toUtc().subtract(
+        const Duration(minutes: 10),
+      );
+      await provider.onMessageHistory({
+        'conversationId': 10,
+        'messages': [
+          _row(
+            id: 310,
+            encryptedContent: '2:ct',
+            createdAt: minted.subtract(const Duration(hours: 1)),
+          ),
+        ],
+      });
+      await pumpEventQueue(times: 200);
+      expect(provider.messages.map((m) => m.id), [310]);
+
+      final own =
+          (await service.getKeyBundleForReupload())!['identityPublicKey']
+              as String;
+      await service.recordOwnIdentityReplacedFromServer(
+        minted.toIso8601String(),
+        replacedTo: own,
+      );
 
       expect(provider.messages, isEmpty);
       expect(provider.hiddenPreLinkCount, 1);

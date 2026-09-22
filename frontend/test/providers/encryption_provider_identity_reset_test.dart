@@ -712,6 +712,60 @@ void main() {
     });
   });
 
+  // Amendment (lxxxvi): the audit row that ENDS at our own key is also the
+  // edge of what this install can ever decrypt; MessagingProvider hides the
+  // unreadable rows before it behind the (lxxxi) divider.
+  group("the instant this identity became the account's", () {
+    test('is taken from a row ending at our own key, never a foreign one, '
+        'and the next launch still knows it', () async {
+      Future<EncryptionService> launch() async {
+        final service = EncryptionService();
+        await service.initialize(
+          96,
+          checkServerIdentity: () async =>
+              const ServerIdentityGuard(exists: false),
+        );
+        return service;
+      }
+
+      final at = DateTime.now()
+          .toUtc()
+          .subtract(const Duration(minutes: 5))
+          .toIso8601String();
+      final service = await launch();
+      final own =
+          (await service.getKeyBundleForReupload())!['identityPublicKey']
+              as String;
+
+      await service.recordOwnIdentityReplacedFromServer(
+        at,
+        replacedTo: 'BfOreignKeyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      );
+      expect(
+        service.ownIdentitySince,
+        isNull,
+        reason: "a change that ended at somebody else's key says nothing "
+            'about what THIS key can read',
+      );
+
+      await service.recordOwnIdentityReplacedFromServer(at, replacedTo: own);
+      expect(service.ownIdentitySince, DateTime.parse(at));
+
+      // A cold start renders history before any connect re-reports the row.
+      final relaunched = await launch();
+      expect(relaunched.ownIdentitySince, DateTime.parse(at));
+    });
+
+    test('the upload that replaced the identity asks for its audit row at '
+        'once', () {
+      // The minting session is the one the user reads first; the connect-time
+      // status it got was answered BEFORE this upload wrote the row.
+      provider.onKeyBundleUploaded({'success': true, 'identityChanged': true});
+
+      expect(emitted.map((e) => e.event), contains('checkOwnKeyBundle'));
+    });
+  });
+
   // A ceremony leaving 'pending' has NO server event: `completeDueResets`
   // deliberately fans out nothing, and `identityResetCancelled` covers only
   // cancels. The deadline was fetched once at `socketReady`, so a session that

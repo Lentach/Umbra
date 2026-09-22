@@ -103,6 +103,11 @@ class EncryptionProvider extends ChangeNotifier {
   /// Called after E2E init/re-upload completes so [MessagingProvider] can retry history decrypt.
   void Function()? onE2EReady;
 
+  /// Called when [ownIdentitySince] moves. Set by the `MessagingProvider`
+  /// whose visible rows depend on it, so an open thread re-filters when the
+  /// audit row lands after its history (amendment (lxxxvi)).
+  void Function()? onOwnIdentitySinceChanged;
+
   // ---------- Public Getters ----------
 
   /// Whether the E2E encryption layer has been initialized for the current user.
@@ -193,6 +198,11 @@ class EncryptionProvider extends ChangeNotifier {
   /// account's key bundle by ANOTHER session (Phase 0a takeover alarm), or
   /// null. Drives the account-level notice; persisted until dismissed.
   String? get ownIdentityReplacedAt => _encryptionService.ownIdentityReplacedAt;
+
+  /// Server instant at which the key this install holds became the account's
+  /// identity, or null (amendment (lxxxvi)). Unreadable rows stamped before it
+  /// can never be read here; `MessagingProvider.messages` hides them.
+  DateTime? get ownIdentitySince => _encryptionService.ownIdentitySince;
 
   /// The pending pre-key fetch completers, keyed by (userId, deviceId).
   Map<(int, int), Completer<Map<String, dynamic>>> get pendingPreKeyFetches =>
@@ -1600,6 +1610,11 @@ class EncryptionProvider extends ChangeNotifier {
     // all times and mute a genuine replacement by someone else.
     if (data is Map && data['identityChanged'] == true) {
       unawaited(_encryptionService.markOwnIdentityPublished());
+      // (lxxxvi): the audit row this upload just wrote is the edge of what the
+      // new identity can read. The connect-time status was answered before
+      // it existed, so ask now — the minting session is the one the user
+      // reads first.
+      refreshOwnAccountStatus();
     }
     debugPrint('[E2E] Key bundle uploaded to server');
     // The identity is published now, so its one-time pre-keys may follow.
@@ -2531,6 +2546,7 @@ class EncryptionProvider extends ChangeNotifier {
       // reported exactly as before.
       final replacedTo = data['identityReplacedTo'];
       if (replacedAt is String && replacedAt.isNotEmpty) {
+        final sinceBefore = ownIdentitySince;
         // Respects the user's dismissal watermark inside the service, and
         // ignores a row that merely ends at our OWN published identity.
         unawaited(
@@ -2541,7 +2557,12 @@ class EncryptionProvider extends ChangeNotifier {
                     ? replacedTo
                     : null,
               )
-              .then((_) => notifyListeners()),
+              .then((_) {
+                if (ownIdentitySince != sinceBefore) {
+                  onOwnIdentitySinceChanged?.call();
+                }
+                notifyListeners();
+              }),
         );
       }
     }

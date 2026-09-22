@@ -345,35 +345,44 @@ class MessagingProvider extends ChangeNotifier {
 
   // ---------- Public Getters ----------
 
-  /// The rows the UI shows. Pre-link rows (content == [kNotLinkedYetMessageLabel],
-  /// spec §12 amendment (lxxxi)) are omitted here and ONLY here: they stay in
-  /// [_messages] and in storage, are never destroyed on the marker, and the
-  /// decrypt/reconcile passes keep seeing them. The screen renders one divider
-  /// for the whole run instead ([hiddenPreLinkCount]).
+  /// The rows the UI shows. Rows that predate this device are omitted here and
+  /// ONLY here: pre-link rows (content == [kNotLinkedYetMessageLabel], spec §12
+  /// amendment (lxxxi)), and UNREADABLE rows the server stamped before this
+  /// install's identity became the account's (amendment (lxxxvi), boundary =
+  /// [EncryptionProvider.ownIdentitySince]). They stay in [_messages] and in
+  /// storage, are never destroyed on the marker, and the decrypt/reconcile
+  /// passes keep seeing them. The screen renders one divider for the whole run
+  /// instead ([hiddenPreLinkCount]).
   ///
   /// Rebuilt lazily after every [notifyListeners] — every mutation of
-  /// [_messages] ends in one, so a consumer never reads a stale view — and
-  /// returns [_messages] itself when nothing is hidden, so the common case
-  /// allocates nothing.
+  /// [_messages] ends in one, so a consumer never reads a stale view — or when
+  /// the boundary moved, and returns [_messages] itself when nothing is
+  /// hidden, so the common case allocates nothing.
   List<MessageModel> get messages {
+    final since = _encryptionProvider?.ownIdentitySince;
     final cached = _visibleMessages;
-    if (cached != null && identical(_visibleSource, _messages)) return cached;
+    if (cached != null &&
+        identical(_visibleSource, _messages) &&
+        _visibleSince == since) {
+      return cached;
+    }
     _visibleSource = _messages;
+    _visibleSince = since;
     var hidden = 0;
     for (final m in _messages) {
-      if (m.content == kNotLinkedYetMessageLabel) hidden++;
+      if (_predatesThisDevice(m, since)) hidden++;
     }
     _hiddenPreLinkCount = hidden;
     return _visibleMessages = hidden == 0
         ? _messages
         : List.unmodifiable(
-            _messages.where((m) => m.content != kNotLinkedYetMessageLabel),
+            _messages.where((m) => !_predatesThisDevice(m, since)),
           );
   }
 
   /// How many rows of the loaded history [messages] hides because they predate
-  /// this device's link. Non-zero → the thread shows one "history before this
-  /// device was linked" divider at its oldest end.
+  /// this device — its link, or its identity. Non-zero → the thread shows one
+  /// "history before this device was linked" divider at its oldest end.
   int get hiddenPreLinkCount {
     messages; // refresh the cache
     return _hiddenPreLinkCount;
@@ -381,6 +390,7 @@ class MessagingProvider extends ChangeNotifier {
 
   List<MessageModel>? _visibleMessages;
   List<MessageModel>? _visibleSource;
+  DateTime? _visibleSince;
   int _hiddenPreLinkCount = 0;
 
   @override
@@ -558,6 +568,11 @@ class MessagingProvider extends ChangeNotifier {
   /// Wire the EncryptionProvider for E2E operations.
   void setEncryptionProvider(EncryptionProvider ep) {
     _encryptionProvider = ep;
+    ep.onOwnIdentitySinceChanged = _onOwnIdentitySinceChanged;
+  }
+
+  void _onOwnIdentitySinceChanged() {
+    if (!_isDisposed) notifyListeners();
   }
 
   /// Wire the ConversationsProvider for lastMessage/unread updates.

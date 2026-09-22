@@ -3116,6 +3116,38 @@ that is the designed outcome).
     offer is swallowed, which the test's second assertion catches (a still-held latch leaves the
     enrollment count at 1).
 
+- **Amendment 2026-09-22 ((lxxxvi), owner pick "(b) first" in the metadata-privacy session):**
+  - **(lxxxvi) — ROWS SEALED BEFORE THIS INSTALL'S IDENTITY JOIN THE (lxxxi) DIVIDER.** A storage
+    loss on an account with linking OFF re-mints (`IDENTITY_MINTED {reason:
+    server-bundle-unlocked-remint}`, (lxxiii) clause 2), and every row the server still serves from
+    before was sealed to an identity this install never held: the thread opened on a wall of "Nie
+    można odczytać tej wiadomości… Klucze zniknęły". The owner's storage-loss requirement is that
+    neither side sees such placeholders. The boundary is the SERVER's audit instant for the change
+    that ENDED at this install's key — `ownKeyBundleStatus.identityReplacedAt` when
+    `identityReplacedTo` is our published key ((lxxx) clause 5) — never a device clock ((li)).
+    `EncryptionService.ownIdentitySince` advances forward-only on such a row and persists as
+    `e2e_<uid>_own_identity_since_v1` (a cold start renders history before any connect re-reports
+    it); an upload ack carrying `identityChanged: true` re-asks `checkOwnKeyBundle` at once, because
+    the connect-time answer predates the row that upload just wrote and the minting session is the
+    one the user reads first. `MessagingProvider.messages` then omits, besides the pre-link
+    sentinel, every row stamped before that instant whose content is `[Decryption failed]`, or
+    `[encrypted]` with no usable decrypted content — a keyed image restored from a history file IS
+    usable and stays — and `hiddenPreLinkCount` counts both kinds, so the same ONE divider stands in
+    for them. Display boundary only, exactly like (lxxxi): storage, the decrypt pass (so the
+    identity-reset `requestSessionRebuild` still fires) and reconcile are unchanged, and a readable
+    row is never hidden whatever its age. The view is keyed on the boundary as well as the list, and
+    `EncryptionProvider.onOwnIdentitySinceChanged` (set by `MessagingProvider`) re-filters an open
+    thread when the audit row lands after its history. **Keys still do not match for such an
+    account** — this closes the placeholder half of the requirement only; the key half needs
+    linking ON (the (lxxviii) phrase door). Residual: a row a peer seals to the OLD identity AFTER
+    the instant (a peer that was offline at the change) still renders as unreadable.
+    Falsification: (F54) drop the pre-identity term → the failed peer row and the own row render and
+    the count stays 0; (F55) drop the usable-content exemption → a history-imported image is
+    hidden; (F56) drop the callback wiring → the open thread is never notified; (F57) drop the
+    launch-time load → a relaunched service forgets the boundary; (F58) drop the post-upload re-ask
+    → no `checkOwnKeyBundle` follows an identity-changing ack; (F59) drop the boundary from the
+    view's cache key → a boundary that moved without a notification leaves the rows showing.
+
 - **Next gate:** T11 implementation review, then the T1–T11 merge decision. The T1–T8 phase
   gate itself is CLOSED 2026-08-22: three reviewers, verdicts SHIP / SHIP WITH FIXES ×2; the
   test-integrity findings are folded at `4c0e0bf`; the four security findings were T9. **T10 (xlv)

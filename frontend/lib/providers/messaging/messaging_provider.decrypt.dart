@@ -335,6 +335,22 @@ extension MessagingDecrypt on MessagingProvider {
     return true;
   }
 
+  /// Whether [messages] hides [msg] as predating this device.
+  ///
+  /// (lxxxi): the server marked it `none_for_device` — it predates the link.
+  /// (lxxxvi): it is UNREADABLE and the server stamped it before [since], the
+  /// instant this install's identity became the account's — it was sealed to
+  /// an identity this install does not hold, so no pass will ever open it.
+  /// A readable row is never hidden, whatever its age: plaintext restored from
+  /// a history file, or decrypted under an earlier device id, still renders.
+  bool _predatesThisDevice(MessageModel msg, DateTime? since) {
+    if (msg.content == kNotLinkedYetMessageLabel) return true;
+    if (since == null || !msg.createdAt.isBefore(since)) return false;
+    return msg.content == kDecryptionFailedLabel ||
+        (msg.content == kEncryptedPlaceholderLabel &&
+            !_hasUsableDecryptedContent(msg));
+  }
+
   bool _conversationHasUndecryptedInbound(int conversationId) {
     return _messages.any(
       (m) =>

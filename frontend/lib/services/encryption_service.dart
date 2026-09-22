@@ -828,6 +828,19 @@ class EncryptionService {
   String _ownPublishUnackKey(int userId) =>
       'e2e_${userId}_own_publish_unacked_v1';
 
+  /// Server instant at which the key THIS install holds became the account's
+  /// identity (amendment (lxxxvi)): the newest audit row that ENDED at our own
+  /// key. A row the server stamped earlier was sealed to whatever identity the
+  /// account published then, so if this install cannot read it now, it never
+  /// will — `MessagingProvider.messages` folds such rows into the (lxxxi)
+  /// divider. Null until such a row is reported: an account whose identity
+  /// never changed has none, and nothing to hide.
+  DateTime? _ownIdentitySince;
+  DateTime? get ownIdentitySince => _ownIdentitySince;
+
+  String _ownIdentitySinceKey(int userId) =>
+      'e2e_${userId}_own_identity_since_v1';
+
   /// How far ahead of us a server instant may legitimately sit. Generous on
   /// purpose: this bounds ABSURDITY (a `9999-…` suppressor), not clock skew.
   static const Duration _maxServerInstantSkew = Duration(days: 1);
@@ -900,6 +913,9 @@ class EncryptionService {
       final own = await _ownPublishedIdentityBase64();
       if (own != null && own == replacedTo) {
         E2ePersistentDiag.record('OWN_IDENTITY_REPLACED_IS_SELF', {});
+        // (lxxxvi): the row that ended at our key is also the edge of what
+        // this install can ever decrypt.
+        await _advanceOwnIdentitySince(normalized);
         // (lxxxi) clause 2: the SAME row may already be showing — it was
         // reported by the connect that preceded the restore, when this
         // install held no identity to compare against. It just proved to be
@@ -992,6 +1008,9 @@ class EncryptionService {
   }
 
   Future<void> _loadOwnIdentityReplaced(int userId) async {
+    // Reset first: a failed read must not leave the previous account's
+    // boundary hiding this account's rows.
+    _ownIdentitySince = null;
     try {
       final prefs = await _sharedPrefs;
       _ownIdentityReplacedAt = prefs.getString(_ownIdentityReplacedKey(userId));
@@ -1002,7 +1021,25 @@ class EncryptionService {
       // install right after a recovery is exactly when the false alarm fired.
       _ownPublishUnacknowledged =
           (prefs.getInt(_ownPublishUnackKey(userId)) ?? 0) == 1;
+      final since = prefs.getString(_ownIdentitySinceKey(userId));
+      _ownIdentitySince = since == null ? null : DateTime.tryParse(since);
     } catch (_) {}
+  }
+
+  /// Moves [ownIdentitySince] forward only: the server reports its LATEST
+  /// audit row, so an own-key row newer than the recorded one means this key
+  /// became the identity again, later (a foreign replacement in between).
+  Future<void> _advanceOwnIdentitySince(String normalized) async {
+    final at = DateTime.parse(normalized);
+    final current = _ownIdentitySince;
+    if (current != null && !at.isAfter(current)) return;
+    _ownIdentitySince = at;
+    final userId = _userId;
+    if (userId == null) return;
+    try {
+      final prefs = await _sharedPrefs;
+      await prefs.setString(_ownIdentitySinceKey(userId), normalized);
+    } on Object catch (_) {}
   }
 
   Future<void> _persistIdentityChanged() async {
