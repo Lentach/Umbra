@@ -161,6 +161,14 @@ describe('WsThrottlerGuard — which requests share a bucket', () => {
     };
   }
 
+  /** A socket that reached :3000 directly, not through nginx (dev). */
+  function direct(
+    address: string,
+    headers: Record<string, string | string[]>,
+  ): ProxiedSocket {
+    return { ...socket(headers), handshake: { headers, address } };
+  }
+
   /**
    * Served → true; refused by THIS limit → false. Any other throw is a broken
    * fixture and must fail the test, never read as a refusal.
@@ -222,6 +230,25 @@ describe('WsThrottlerGuard — which requests share a bucket', () => {
       expect(
         await admits(socket({ 'x-real-ip': duplicate('198.51.100.9') })),
       ).toBe(true);
+    },
+  );
+
+  const blank: Array<[string, string | string[]]> = [
+    ['empty', ''],
+    ['whitespace', '   '],
+    ['a comma-joined string', ', 203.0.113.7'],
+    ['a string[]', ['', '203.0.113.7']],
+  ];
+  it.each(blank)(
+    'reads a blank first hop of X-Real-IP (%s) as no address, never as one shared "" bucket',
+    async (_shape, value) => {
+      const a = direct('198.51.100.20', { 'x-real-ip': value });
+      const b = direct('198.51.100.21', { 'x-real-ip': value });
+      expect(await admits(a)).toBe(true);
+      expect(await admits(a)).toBe(false);
+      // Keyed on '', B would inherit A's spent bucket; read as no address,
+      // each falls back to its own connection address.
+      expect(await admits(b)).toBe(true);
     },
   );
 

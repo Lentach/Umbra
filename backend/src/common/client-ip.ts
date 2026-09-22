@@ -1,6 +1,7 @@
 /**
- * The client address our nginx reported, or `undefined` when the request did
- * not come through it (a direct hit on :3000 — dev only; prod binds 127.0.0.1).
+ * The client address our nginx reported, or `undefined` when there is none: the
+ * request did not come through nginx (a direct hit on :3000 — dev only; prod
+ * binds 127.0.0.1), or the header's first hop is blank.
  *
  * Reads ONLY `X-Real-IP`. Every proxied location sets it to `$remote_addr`
  * (`infra/nginx/fireplace.conf`), which REPLACES whatever the client sent, so
@@ -18,7 +19,8 @@ export function proxiedClientIp(
 ): string | undefined {
   const value = headers?.['x-real-ip'];
   // A duplicated header arrives comma-joined from Node, or as an array.
-  if (Array.isArray(value)) return value[0]?.trim();
-  if (typeof value === 'string') return value.split(',')[0]?.trim();
-  return undefined;
+  const hop = (Array.isArray(value) ? value[0] : value?.split(',')[0])?.trim();
+  // Blank is no address: returned as '', it would key ONE bucket that every
+  // caller sending a blank header shares.
+  return hop || undefined;
 }

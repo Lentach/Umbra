@@ -57,6 +57,14 @@ describe('HttpThrottlerGuard', () => {
     ).toBe('203.0.113.7');
   });
 
+  it('reads a blank X-Real-IP as no address and falls through to req.ip', async () => {
+    const guard = makeGuard() as unknown as TrackerGuard;
+    // Returned as '', it would be ONE bucket for every caller sending it blank.
+    expect(
+      await guard.getTracker({ headers: { 'x-real-ip': '' }, ip: '192.0.2.5' }),
+    ).toBe('192.0.2.5');
+  });
+
   it('returns "unknown" when no forwarding headers and no req.ip are present', async () => {
     const guard = makeGuard() as unknown as TrackerGuard;
     expect(await guard.getTracker({ headers: {} })).toBe('unknown');
