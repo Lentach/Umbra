@@ -3137,8 +3137,8 @@ that is the designed outcome).
     for them. Display boundary only, exactly like (lxxxi): storage, the decrypt pass (so the
     identity-reset `requestSessionRebuild` still fires) and reconcile are unchanged, and a readable
     row is never hidden whatever its age. The view is keyed on the boundary as well as the list, and
-    `EncryptionProvider.onOwnIdentitySinceChanged` (set by `MessagingProvider`) re-filters an open
-    thread when the audit row lands after its history. **Keys still do not match for such an
+    `EncryptionProvider.onOwnIdentitySinceChanged` (set by `ConnectionProvider.setProviders`)
+    re-filters an open thread when the audit row lands after its history. **Keys still do not match for such an
     account** — this closes the placeholder half of the requirement only; the key half needs
     linking ON (the (lxxviii) phrase door). Residual: a row a peer seals to the OLD identity AFTER
     the instant (a peer that was offline at the change) still renders as unreadable.

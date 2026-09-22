@@ -173,6 +173,12 @@ class ConnectionProvider extends ChangeNotifier {
       ..onStoredPlaintextOrphaned = (ids) {
         _messagingProvider?.onStoredPlaintextOrphaned(ids);
       }
+      // (lxxxvi): the own-identity boundary can land after an open thread's
+      // history; the rows it hides belong to MessagingProvider, so it is told
+      // to re-filter.
+      ..onOwnIdentitySinceChanged = () {
+        _messagingProvider?.onOwnIdentitySinceChanged();
+      }
       // A mid-session passcode re-lock revokes the content store; the contact
       // store holds a reference to it plus a plaintext copy of the graph, so
       // it forgets both in the same teardown and re-opens after the unlock

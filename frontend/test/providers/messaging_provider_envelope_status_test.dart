@@ -1,8 +1,11 @@
 import 'package:fireplace/models/message_model.dart';
+import 'package:fireplace/providers/connection_provider.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
+import 'package:fireplace/providers/friends_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/services/encryption_service.dart';
+import 'package:fireplace/services/socket_service.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -328,7 +331,16 @@ void main() {
         ..setCurrentUserId(1)
         ..onConversationsList([_convJson()])
         ..openConversation(10);
-      provider = MessagingProvider()
+      provider = MessagingProvider();
+      // Wired the way `ConversationsScreen` wires production, so the F56
+      // assertion below defends the real callback owner.
+      ConnectionProvider(socketService: SocketService()).setProviders(
+        encryption: encryption,
+        friends: FriendsProvider(),
+        conversations: conversations,
+        messaging: provider,
+      );
+      provider
         ..setConversationsProvider(conversations)
         ..setEncryptionProvider(encryption)
         ..setCurrentUserId(1)

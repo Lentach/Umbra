@@ -49,6 +49,11 @@ extension MessagingEvents on MessagingProvider {
     if (_messages.length != removedFromList) notifyListeners();
   }
 
+  /// The own-identity boundary moved: an open thread re-filters (amendment (lxxxvi)).
+  void onOwnIdentitySinceChanged() {
+    if (!_isDisposed) notifyListeners();
+  }
+
   void onMessageEdited(dynamic data) {
     _handleMessageEdited(data);
   }
@@ -92,7 +97,7 @@ extension MessagingEvents on MessagingProvider {
 
   void _handleIncomingMessage(dynamic data) {
     final dataMap = data as Map<String, dynamic>;
-    var msg = _withRenderableReactions(
+    final msg = _withRenderableReactions(
       _enrichReplyPreview(MessageModel.fromJson(dataMap)),
     );
     final activeConversationId = _effectiveActiveConversationId;

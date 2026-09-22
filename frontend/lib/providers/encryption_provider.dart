@@ -103,9 +103,10 @@ class EncryptionProvider extends ChangeNotifier {
   /// Called after E2E init/re-upload completes so [MessagingProvider] can retry history decrypt.
   void Function()? onE2EReady;
 
-  /// Called when [ownIdentitySince] moves. Set by the `MessagingProvider`
-  /// whose visible rows depend on it, so an open thread re-filters when the
-  /// audit row lands after its history (amendment (lxxxvi)).
+  /// Called when [ownIdentitySince] moves. Set by
+  /// `ConnectionProvider.setProviders`, which forwards it to the
+  /// `MessagingProvider` whose visible rows depend on it, so an open thread
+  /// re-filters when the audit row lands after its history (amendment (lxxxvi)).
   void Function()? onOwnIdentitySinceChanged;
 
   // ---------- Public Getters ----------

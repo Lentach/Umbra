@@ -568,11 +568,6 @@ class MessagingProvider extends ChangeNotifier {
   /// Wire the EncryptionProvider for E2E operations.
   void setEncryptionProvider(EncryptionProvider ep) {
     _encryptionProvider = ep;
-    ep.onOwnIdentitySinceChanged = _onOwnIdentitySinceChanged;
-  }
-
-  void _onOwnIdentitySinceChanged() {
-    if (!_isDisposed) notifyListeners();
   }
 
   /// Wire the ConversationsProvider for lastMessage/unread updates.
