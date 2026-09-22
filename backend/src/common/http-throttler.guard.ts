@@ -1,5 +1,6 @@
 import { ExecutionContext, Injectable } from '@nestjs/common';
 import { ThrottlerGuard } from '@nestjs/throttler';
+import { proxiedClientIp } from './client-ip';
 
 /**
  * HTTP-only rate-limit guard, registered globally via APP_GUARD.
@@ -38,15 +39,8 @@ export class HttpThrottlerGuard extends ThrottlerGuard {
       string,
       string | string[] | undefined
     >;
-    const firstHop = (
-      value: string | string[] | undefined,
-    ): string | undefined => {
-      if (Array.isArray(value)) return value[0]?.trim();
-      if (typeof value === 'string') return value.split(',')[0]?.trim();
-      return undefined;
-    };
     const tracker =
-      firstHop(headers['x-real-ip']) ??
+      proxiedClientIp(headers) ??
       (typeof req.ip === 'string' ? req.ip : undefined) ??
       'unknown';
     return Promise.resolve(tracker);

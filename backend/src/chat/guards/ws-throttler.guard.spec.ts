@@ -1,5 +1,10 @@
 import { ExecutionContext } from '@nestjs/common';
-import { ThrottlerLimitDetail } from '@nestjs/throttler';
+import { Reflector } from '@nestjs/core';
+import {
+  ThrottlerException,
+  ThrottlerLimitDetail,
+  ThrottlerStorageService,
+} from '@nestjs/throttler';
 import { MESSAGE_METADATA } from '@nestjs/websockets/constants';
 import { RATE_LIMITED, WsThrottlerGuard } from './ws-throttler.guard';
 
@@ -102,6 +107,132 @@ describe('WsThrottlerGuard', () => {
       const { req } = internals.getRequestResponse(context);
       expect(await internals.getTracker(req)).toBe('5.6.7.8');
     });
+  });
+});
+
+/**
+ * Whose flood is it? The tracker decides which requests share a bucket, and
+ * behind nginx every socket's `handshake.address` is the PROXY's. Keying a
+ * tokenless socket on it put every such client in ONE bucket, so one client's
+ * flood locked all of them out — on the unauthenticated `/box` namespace
+ * (metadata-privacy Phase 1) that would be a remote DoS. These drive the real
+ * `canActivate` over the real in-memory storage with a limit of ONE, so the
+ * only thing under test is who shares a bucket with whom.
+ */
+describe('WsThrottlerGuard — which requests share a bucket', () => {
+  /** Every socket reaches the backend through the proxy, as in prod. */
+  const NGINX = '127.0.0.1';
+
+  // The storage key is built from the gateway and handler NAMES.
+  class Gateway {}
+  function handler() {}
+
+  let storage: ThrottlerStorageService;
+  let guard: WsThrottlerGuard;
+
+  beforeEach(async () => {
+    storage = new ThrottlerStorageService();
+    guard = new WsThrottlerGuard(
+      { throttlers: [{ limit: 1, ttl: 60_000 }] },
+      storage,
+      new Reflector(),
+    );
+    await guard.onModuleInit();
+  });
+
+  // The storage arms one expiry timer per hit; leave none behind.
+  afterEach(() => storage.onApplicationShutdown());
+
+  /** A socket as the guard sees it behind the proxy. */
+  type ProxiedSocket = {
+    handshake: { headers: Record<string, string | string[]>; address: string };
+    data: { user?: { id: number } };
+    emit: jest.Mock;
+  };
+
+  function socket(
+    headers: Record<string, string | string[]>,
+    userId?: number,
+  ): ProxiedSocket {
+    return {
+      handshake: { headers, address: NGINX },
+      data: userId === undefined ? {} : { user: { id: userId } },
+      emit: jest.fn(),
+    };
+  }
+
+  /**
+   * Served → true; refused by THIS limit → false. Any other throw is a broken
+   * fixture and must fail the test, never read as a refusal.
+   */
+  async function admits(client: ProxiedSocket): Promise<boolean> {
+    const context = {
+      getClass: () => Gateway,
+      getHandler: () => handler,
+      switchToWs: () => ({ getClient: () => client, getData: () => ({}) }),
+    } as unknown as ExecutionContext;
+    try {
+      return await guard.canActivate(context);
+    } catch (error) {
+      if (error instanceof ThrottlerException) return false;
+      throw error;
+    }
+  }
+
+  it('gives two tokenless clients behind the same proxy a bucket each, keyed on X-Real-IP', async () => {
+    const a = socket({ 'x-real-ip': '203.0.113.7' });
+    const b = socket({ 'x-real-ip': '198.51.100.9' });
+
+    expect(await admits(a)).toBe(true);
+    // The control: the limit really bites, so B's answer is about WHOSE
+    // bucket it is, not about a limit that never engages.
+    expect(await admits(a)).toBe(false);
+    expect(await admits(b)).toBe(true);
+  });
+
+  it('never lets a spoofed X-Forwarded-For buy a fresh bucket', async () => {
+    // nginx REPLACES X-Real-IP but APPENDS to X-Forwarded-For, so XFF's first
+    // hop is whatever the client typed; rotating it must not reset the limit.
+    const first = socket({
+      'x-real-ip': '203.0.113.7',
+      'x-forwarded-for': '1.1.1.1, 203.0.113.7',
+    });
+    const rotated = socket({
+      'x-real-ip': '203.0.113.7',
+      'x-forwarded-for': '2.2.2.2, 203.0.113.7',
+    });
+
+    expect(await admits(first)).toBe(true);
+    expect(await admits(rotated)).toBe(false);
+  });
+
+  const duplicated: Array<[string, (ip: string) => string | string[]]> = [
+    ['a string[]', (ip) => [ip, '::1']],
+    ['a comma-joined string', (ip) => `${ip}, ::1`],
+  ];
+  it.each(duplicated)(
+    'keys a duplicated X-Real-IP (%s) on its first hop',
+    async (_shape, duplicate) => {
+      expect(
+        await admits(socket({ 'x-real-ip': duplicate('203.0.113.7') })),
+      ).toBe(true);
+      // The same first hop sent once is the same client: the same bucket.
+      expect(await admits(socket({ 'x-real-ip': '203.0.113.7' }))).toBe(false);
+      // The same LAST hop behind a different first one is a different client.
+      expect(
+        await admits(socket({ 'x-real-ip': duplicate('198.51.100.9') })),
+      ).toBe(true);
+    },
+  );
+
+  it('keeps an authenticated socket on its account, whatever IP it arrives from', async () => {
+    expect(await admits(socket({ 'x-real-ip': '203.0.113.7' }, 42))).toBe(true);
+    // The same account from another IP spends the same budget, not a new one.
+    expect(await admits(socket({ 'x-real-ip': '198.51.100.9' }, 42))).toBe(
+      false,
+    );
+    // Another account behind the same IP (a shared NAT) has its own.
+    expect(await admits(socket({ 'x-real-ip': '203.0.113.7' }, 43))).toBe(true);
   });
 });
 

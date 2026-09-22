@@ -100,7 +100,7 @@ Gateway throttles are source-truth in `chat.gateway.ts`:
 - Mutating chat actions like clear/delete/edit/pin/timer/start are mostly 60/15min.
 - Reactions: 120/15min. Search/friend/block/key-rebuild actions have lower limits.
 - `messageDelivered`, `markConversationRead`, typing, voice-recording, upload key bundle, accept/reject friend request, and unblock are not all throttled. Do not document a blanket “read events throttled” rule.
-- `WsThrottlerGuard` adapts Nest throttler to sockets with a no-op `res.header()` mock and user-id tracker.
+- `WsThrottlerGuard` adapts Nest throttler to sockets with a no-op `res.header()` mock. Tracker: the user id on an authenticated socket, from any IP; on a TOKENLESS one (today only an event racing `handleConnection`'s JWT check; the planned `/box` namespace is tokenless by design) the client IP nginx wrote into `X-Real-IP` (`common/client-ip.ts`, shared with `HttpThrottlerGuard`), else `handshake.address`. Never `handshake.address` first — behind nginx it is the proxy's address for EVERY client, one bucket that one flood empties for all (metadata-privacy PR1.0) — and never X-Forwarded-For: nginx appends to it, so its first hop is the caller's choice.
 
 ## 7. Messages, disappearing, edit, pin, reactions
 

@@ -2,6 +2,7 @@ import { ExecutionContext, Injectable, Logger } from '@nestjs/common';
 import { ThrottlerGuard, ThrottlerLimitDetail } from '@nestjs/throttler';
 import { MESSAGE_METADATA } from '@nestjs/websockets/constants';
 import { Socket } from 'socket.io';
+import { proxiedClientIp } from '../../common/client-ip';
 
 /** The stable refusal code every throttled handler answers with. */
 export const RATE_LIMITED = 'rate_limited';
@@ -152,9 +153,9 @@ export class WsThrottlerGuard extends ThrottlerGuard {
    *
    * Once a tracker crosses its limit, EVERY further request in the window is
    * refused — so logging each one at warn lets a flood amplify itself through
-   * our logs, and the tracker falls back to a handshake address when the socket
-   * is unauthenticated. The first refusal of a window is the interesting one;
-   * the rest are debug.
+   * our logs, and a tokenless socket is tracked by its client IP, so a flood
+   * from many addresses is many trackers (hence the size bound below). The
+   * first refusal of a window is the interesting one; the rest are debug.
    */
   private readonly lastRefusalLog = new Map<string, number>();
 
@@ -174,12 +175,25 @@ export class WsThrottlerGuard extends ThrottlerGuard {
     return { req, res: mockRes };
   }
 
-  protected async getTracker(req: Record<string, unknown>): Promise<string> {
+  /**
+   * Who a request is, for throttling. An authenticated socket is its ACCOUNT,
+   * whatever IP it arrives from. A tokenless one — today only an event racing
+   * `ChatGateway.handleConnection`'s JWT check; the planned `/box` namespace is
+   * tokenless by design —
+   * is its CLIENT IP as nginx reported it, never `handshake.address`: behind
+   * the proxy that is nginx's own upstream address for EVERY client, one
+   * bucket in which a single flood locks everyone out. `handshake.address` is
+   * only the fallback for a request that did not come through nginx (dev).
+   */
+  protected getTracker(req: Record<string, unknown>): Promise<string> {
     const socket = req as unknown as Socket;
-    return (
-      (socket.data?.user as { id?: number } | undefined)?.id?.toString() ??
-      socket.handshake?.address ??
-      'unknown'
+    // socket.io types `data` as `any`; ChatGateway.handleConnection writes `user`.
+    const data = socket.data as { user?: { id?: number } } | undefined;
+    return Promise.resolve(
+      data?.user?.id?.toString() ??
+        proxiedClientIp(socket.handshake?.headers) ??
+        socket.handshake?.address ??
+        'unknown',
     );
   }
 
