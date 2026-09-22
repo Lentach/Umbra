@@ -24,6 +24,7 @@ import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/providers/passcode_provider.dart';
 import 'package:fireplace/providers/settings_provider.dart';
 import 'package:fireplace/screens/device_link_gate_screen.dart';
+import 'package:fireplace/screens/link_restore_section.dart';
 import 'package:fireplace/screens/link_this_device_screen.dart'
     show LinkThisDeviceBody;
 import 'package:fireplace/screens/main_shell.dart';
@@ -356,4 +357,27 @@ void main() {
 
     await teardown(tester);
   });
+
+  testWidgets(
+    'the phrase door renders ABOVE the reset door: the option that keeps the '
+    'keys comes before the one that destroys them',
+    (tester) async {
+      // Pixel_7, 2026-09-22 (Run C): the restore section was the LAST item,
+      // below the fold and below "Rozpocznij reset", so a wiped user read
+      // "new keys after 6 h, old history lost" before finding the door that
+      // restores the same identity in seconds.
+      await tester.pumpWidget(gateHost(_FakeEncryption(incomplete: true)));
+      await pumpFrames(tester);
+
+      final restoreTop = tester
+          .getTopLeft(find.byType(LinkRestoreSection))
+          .dy;
+      final resetTop = tester
+          .getTopLeft(find.byKey(const Key('link-gate-start-reset')))
+          .dy;
+      expect(restoreTop, lessThan(resetTop));
+
+      await teardown(tester);
+    },
+  );
 }

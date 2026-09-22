@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/auth_provider.dart';
+import '../providers/encryption_provider.dart';
 import '../providers/passcode_provider.dart';
 import '../screens/passcode_unlock_screen.dart';
 import '../screens/storage_loss_screen.dart';
@@ -140,6 +141,19 @@ class _StorageLossLayer extends StatelessWidget {
       // the surface appears the moment they do sign in.
       final userId = context.watch<AuthProvider>().currentUser?.id;
       if (userId == null) return const SizedBox.shrink();
+      // The device-link gate outranks this notice. This layer sits above the
+      // WHOLE navigator — `AuthGate`'s gate included — and a Keystore-only
+      // loss takes the Signal identity down with the store, so the boot
+      // latches the loss and opens the gate in the same second (Pixel_7,
+      // 2026-09-22, Run C′). Painted first, this file-only screen covered the
+      // gate's phrase door — the ONE path that brings the account keys back —
+      // with copy that never mentioned the identity. The latch is process-
+      // scoped, so yielding costs nothing: the notice appears the moment the
+      // gate releases, which is exactly when history is the next question.
+      final gated = context.select<EncryptionProvider, bool>(
+        (e) => e.needsDeviceLink || e.identityCheckUnavailable,
+      );
+      if (gated) return const SizedBox.shrink();
       // `acknowledge()` writes the same notifier, so the dismiss needs no
       // callback of its own — the builder simply runs again with false.
       return StorageLossScreen(userId: userId, onDismiss: () {});

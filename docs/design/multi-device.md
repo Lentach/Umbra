@@ -2670,7 +2670,12 @@ that is the designed outcome).
     upload with proof → rebind (existing `onSessionRebound`) → OTP upload → DAK-signed list
     `nextListVersion` (old devices revoked, new device added; `updateDeviceList`, NOT a
     re-enrolment — E still verifies) → `requestSessionRebuild` to every conversation peer (so the
-    first message after restore is not lost) → shell. Clause 4 (enrolment order): "Włącz łączenie"
+    first message after restore is not lost) → shell. **Placement (2026-09-22, Run C on a Pixel 7):
+    the restore door renders ABOVE the reset section on every state** — it was the LAST item, below
+    the fold and under "Rozpocznij reset", so a wiped user read "new keys after 6 h, old history
+    lost" before finding the door that keeps the same identity; the option that preserves the keys
+    now comes before the one that destroys them (`device_link_gate_screen_test.dart` pins the order).
+    Clause 4 (enrolment order): "Włącz łączenie"
     = warning (web) → phrase generated → `RecoveryKeyScreen` MANDATORY with a random-word
     confirmation (`recoveryKeyConfirmPrompt`) → DAK minted → `setRecoveryKey` with the blob → ONLY
     THEN `enrollDeviceAuthority`; a failed backup upload aborts before enrolment
@@ -2752,7 +2757,7 @@ that is the designed outcome).
     pre-(lxxviii) recovery terms: `devicesEnableLinkingWebWarningBody` ("a reset: 72 hours, or 1
     hour with a recovery key" — said in the very dialog that is about to DEMAND a phrase whose whole
     point is that it restores immediately) and `linkGateResetHint` (the same "1 hour with a recovery
-    key", rendered on the gate directly above the instant restore door). Both now describe the reset
+    key", rendered on the gate next to the instant restore door). Both now describe the reset
     as the LAST resort and point at the phrase door. Three (lxxiii)-era keys carrying the same stale
     promise are DELETED, not reworded: `identityDamagedBody`, `identityUploadLockedBody` and
     `recoveryKeyExplainer` have had no reader since `DeviceLinkGateScreen` replaced the banners and

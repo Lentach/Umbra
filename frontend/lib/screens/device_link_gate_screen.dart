@@ -162,12 +162,20 @@ class _DeviceLinkGateScreenState extends State<DeviceLinkGateScreen> {
       children.addAll(_linkSection(context, encryption));
     }
 
-    // Footer: the reset door on every state EXCEPT reset-pending ((lxxii)'s
-    // two-buttons rule — a running ceremony already answers `existing`), and
-    // sign-out on every state (keys and history untouched).
+    // Footer, in the order the doors deserve: the (lxxviii) clause-3 phrase
+    // restore FIRST — it brings back the same identity in seconds — then the
+    // reset door on every state EXCEPT reset-pending ((lxxii)'s two-buttons
+    // rule — a running ceremony already answers `existing`), then sign-out
+    // on every state (keys and history untouched). The restore section used
+    // to be last: on a Pixel 7 it sat below the fold, under "Rozpocznij
+    // reset", so a wiped user read "new keys after 6 h, old history lost"
+    // before finding the door that keeps their keys (Run C, 2026-09-22).
     children.add(const SizedBox(height: 32));
+    children.add(const LinkRestoreSection());
+    children.add(const SizedBox(height: 16));
     if (!resetPending) {
       children.addAll([
+        const SizedBox(height: 16),
         Text(
           l10n.linkGateNoPrimaryQuestion,
           textAlign: TextAlign.center,
@@ -192,11 +200,6 @@ class _DeviceLinkGateScreenState extends State<DeviceLinkGateScreen> {
         const SizedBox(height: 16),
       ]);
     }
-    // (lxxviii) clause 3: the third door — restore the identity from the
-    // phrase-sealed server backup. Below the reset section on every state.
-    children.add(const SizedBox(height: 16));
-    children.add(const LinkRestoreSection());
-    children.add(const SizedBox(height: 16));
     children.add(
       TextButton(
         key: const Key('link-gate-logout'),
