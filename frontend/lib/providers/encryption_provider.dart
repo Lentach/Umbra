@@ -2694,6 +2694,12 @@ class EncryptionProvider extends ChangeNotifier {
     // wipes a session that encrypt() is about to use.
     // Legacy event — it predates devices, so it names the device-1 session.
     _forceSessionRebuild.add((fromUserId, 1));
+    // Peer wedged after a phrase restore, 2026-09-22: a peer whose identity
+    // moved to a NEW deviceId leaves us holding BOTH a dead session and the
+    // verified list that keeps pointing every send and every accept-gate
+    // check at the device it abandoned. Invalidate only — the next send
+    // (or inbound row) re-verifies through its own rate-limited refetch.
+    _deviceListCache.invalidate(fromUserId);
     _e2eFlowLog('SESSION_REBUILD_RECEIVED', {'fromUserId': fromUserId});
   }
 

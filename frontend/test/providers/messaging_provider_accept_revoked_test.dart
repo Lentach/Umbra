@@ -97,6 +97,13 @@ const _revoked2 = DeviceListEntry(
   addedAtMs: 10,
   revokedAtMs: 20,
 );
+const _live3 = DeviceListEntry(deviceId: 3, platform: 'web', addedAtMs: 30);
+const _revoked1 = DeviceListEntry(
+  deviceId: 1,
+  platform: 'test',
+  addedAtMs: 0,
+  revokedAtMs: 40,
+);
 
 Map<String, dynamic> _convJson() => {
   'id': 10,
@@ -283,6 +290,51 @@ void main() {
           );
         },
       );
+    });
+
+    group('a stale cache HIT is not a verdict either', () {
+      // Peer wedged after a phrase restore, 2026-09-22: the sender restored
+      // its identity, the server moved its bundle to a NEW device id and
+      // revoked the old one, and this client sat on the pre-restore list. The
+      // in-band `senderListInfo` that would refresh it rides INSIDE the E2E
+      // plaintext of the very row being withheld, so the cache could never
+      // heal itself — every inbound row stayed `[encrypted]` until a reload.
+      test(
+        'refetches once and accepts when the fresh list shows it live',
+        () async {
+          encryption
+            ..seed(2, _list(version: 1, devices: const [_live1]))
+            ..fetchAnswer = _list(
+              version: 2,
+              devices: const [_revoked1, _live3],
+            );
+
+          await receive(id: 8011, originDeviceId: 3);
+
+          expect(encryption.refreshes, [2]);
+          expect(encryption.decryptCalls, [(2, 3)]);
+        },
+      );
+
+      test('a fresh list still lacking the device withholds, once', () async {
+        encryption
+          ..seed(2, _list(version: 1, devices: const [_live1]))
+          ..fetchAnswer = _list(version: 2, devices: const [_live1]);
+
+        await receive(id: 8012, originDeviceId: 3);
+        expect(encryption.refreshes, [2]);
+        expect(encryption.decryptCalls, isEmpty);
+
+        await receive(id: 8013, originDeviceId: 3);
+        expect(
+          encryption.refreshes,
+          [2],
+          reason:
+              'one re-fetch per cooldown — a sender stuck on a device we do '
+              'not hold must not become a fetch storm',
+        );
+        expect(encryption.decryptCalls, isEmpty);
+      });
     });
 
     test(

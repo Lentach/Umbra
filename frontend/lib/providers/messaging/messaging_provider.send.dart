@@ -1633,6 +1633,9 @@ extension MessagingSend on MessagingProvider {
       final String userMsg = _userFriendlySendError(e, recipientId);
       _markMessageFailed(tempId, userMsg);
       if (_isKeyBundleOrTimeoutError(e)) {
+        if (_isMissingKeyBundleError(e)) {
+          _refreshRecipientDeviceListAfterDeadAddress(recipientId);
+        }
         _scheduleDelayedRetry(tempId);
       }
       return false;
@@ -1712,6 +1715,30 @@ extension MessagingSend on MessagingProvider {
         s.contains('timed out') ||
         s.contains('Timeout') ||
         e is TimeoutException;
+  }
+
+  /// The recipient has no key bundle at an address we just encrypted for — as
+  /// opposed to a timeout, which says nothing about WHICH devices exist.
+  bool _isMissingKeyBundleError(Object e) =>
+      e.toString().contains('no key bundle');
+
+  /// Peer wedged after a phrase restore, 2026-09-22: the recipient restored
+  /// its identity, the server moved its bundle to a NEW deviceId and revoked
+  /// the old one, and this client re-encrypted to the dead address off its
+  /// cached verified list every 4 s for over five minutes. Invalidating alone
+  /// would not heal it — a null cache makes [_resolveFanOut] fall back to the
+  /// legacy device 1, the same dead address — so the list is re-verified here,
+  /// before the retry re-resolves it. `forceRefresh` rather than invalidate +
+  /// fetch, so a failing round trip leaves the list we hold standing.
+  void _refreshRecipientDeviceListAfterDeadAddress(int recipientId) {
+    final enc = _encryptionProvider;
+    if (enc == null || !_listRefreshLimiter.tryBegin(recipientId)) return;
+    unawaited(
+      enc
+          .getVerifiedDeviceList(recipientId, forceRefresh: true)
+          .onError((_, _) => const VerifiedDeviceList.notEnrolled())
+          .whenComplete(() => _listRefreshLimiter.end(recipientId)),
+    );
   }
 
   void _cancelDelayedRetry(String? tempId) {

@@ -28,6 +28,13 @@ class _FanOutEncryption extends EncryptionProvider {
 
   final List<(int, int)> encryptCalls = [];
 
+  /// Every `getVerifiedDeviceList` call, in order.
+  final List<int> listFetches = [];
+
+  /// Addresses whose key bundle the server no longer serves — `ensureSession`
+  /// throws for exactly these, the way the real provider does.
+  final Set<(int, int)> missingKeyBundle = {};
+
   /// Every plaintext handed to [encrypt] — the E2E envelope JSON, which is
   /// where `senderListInfo` has to appear (spec §12 amendment (xv)).
   final List<String> encryptedPlaintexts = [];
@@ -54,6 +61,7 @@ class _FanOutEncryption extends EncryptionProvider {
     bool forceRefresh = false,
     Duration timeout = const Duration(seconds: 10),
   }) async {
+    listFetches.add(userId);
     final resolved = served[userId] ?? const VerifiedDeviceList.notEnrolled();
     _cache[userId] = resolved;
     return resolved;
@@ -72,7 +80,13 @@ class _FanOutEncryption extends EncryptionProvider {
   }
 
   @override
-  Future<void> ensureSession(int recipientId, {int deviceId = 1}) async {}
+  Future<void> ensureSession(int recipientId, {int deviceId = 1}) async {
+    if (missingKeyBundle.contains((recipientId, deviceId))) {
+      throw StateError(
+        'Recipient has no key bundle (userId=$recipientId deviceId=$deviceId)',
+      );
+    }
+  }
 
   @override
   Future<void> deleteSessionWithPeer(int peerUserId) async {}
@@ -320,6 +334,60 @@ void main() {
         // A retry carrying the same token re-acks the row the server already
         // committed instead of duplicating the message.
         expect(resent['sendToken'], token);
+      },
+    );
+
+    test(
+      'a send that dies on a dead address refetches the recipient list, and '
+      'the retry targets the live device',
+      () async {
+        // Peer wedged after a phrase restore, 2026-09-22: the recipient
+        // restored its identity, the server moved its bundle onto device 3 and
+        // revoked device 1, and this client kept re-encrypting to device 1 off
+        // its cached v1 list every 4 s for over five minutes.
+        encryption.served[2] = _enrolled(1, [1]);
+        await encryption.getVerifiedDeviceList(2);
+        encryption.listFetches.clear();
+        encryption.missingKeyBundle.add((2, 1));
+        encryption.served[2] = const VerifiedDeviceList.enrolled(
+          version: 2,
+          devices: [
+            DeviceListEntry(
+              deviceId: 1,
+              platform: 'test',
+              addedAtMs: 0,
+              revokedAtMs: 1,
+            ),
+            DeviceListEntry(deviceId: 3, platform: 'test', addedAtMs: 2),
+          ],
+        );
+
+        provider.sendMessage('hello');
+        await pump();
+
+        expect(sends(), isEmpty, reason: 'the dead address failed the send');
+        expect(
+          encryption.listFetches,
+          [2],
+          reason: 'the cache must be warm BEFORE the 4 s retry re-resolves it',
+        );
+
+        final tempId = provider.messages
+            .firstWhere((m) => m.content == 'hello')
+            .tempId!;
+        await provider.encryptAndSendForTest(
+          recipientId: 2,
+          content: 'hello',
+          tempId: tempId,
+        );
+        await pump();
+
+        final resent = sends().last;
+        final addresses = (resent['envelopes'] as List)
+            .cast<Map<String, dynamic>>()
+            .map((e) => (e['userId'], e['deviceId']))
+            .toList();
+        expect(addresses, [(2, 3)]);
       },
     );
 

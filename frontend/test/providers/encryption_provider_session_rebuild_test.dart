@@ -179,4 +179,35 @@ void main() {
       expect(await provider.decrypt(peerUserId, wire(msgB)), 'in-flight-B');
     },
   );
+
+  test(
+    "sessionRebuildNeeded also drops the sender's cached device list",
+    () async {
+      // Peer wedged after a phrase restore, 2026-09-22: the peer's bundle
+      // moved to a NEW device id, so the session we are told to rebuild is not
+      // the only stale thing we hold — the verified list naming the dead
+      // device is what keeps every send and every inbound row pointed at it.
+      FlutterSecureStorage.setMockInitialValues({});
+      SharedPreferences.setMockInitialValues({});
+
+      final provider = EncryptionProvider();
+      // `authorization: null` is the one answer that verifies without a chain
+      // — enough to prove a list is HELD, and then emptied.
+      await provider.adoptDeliveredDeviceList(114, null);
+      expect(provider.cachedDeviceList(114), isNotNull);
+
+      provider.onSessionRebuildNeeded({'fromUserId': 114});
+
+      expect(
+        provider.cachedDeviceList(114),
+        isNull,
+        reason: 'the next send or inbound row must refetch, not reuse it',
+      );
+      expect(
+        provider.needsSessionRebuild(114),
+        isTrue,
+        reason: 'the force-rebuild mark is additive, never replaced',
+      );
+    },
+  );
 }

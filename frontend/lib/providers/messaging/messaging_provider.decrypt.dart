@@ -97,7 +97,32 @@ extension MessagingDecrypt on MessagingProvider {
     final originDeviceId = m.originDeviceId ?? 1;
     final cached = enc.cachedDeviceList(m.senderId);
     if (cached != null) {
-      if (cached.isLiveDevice(originDeviceId)) {
+      var verified = cached;
+      // Peer wedged after a phrase restore, 2026-09-22: the sender restored
+      // its identity, the server moved its bundle to a NEW deviceId and
+      // revoked the old one, and we sat on the pre-restore list — withholding
+      // every row from the new device. The in-band `senderListInfo` that would
+      // refresh the list rides INSIDE the plaintext of the very row we refuse,
+      // so a cache HIT could never heal itself. ONE rate-limited re-verify
+      // before the refusal, and only when the device is ABSENT: a list that
+      // names it REVOKED is a verdict, not ignorance.
+      if (!verified.devices.any((d) => d.deviceId == originDeviceId) &&
+          _listRefreshLimiter.tryBegin(m.senderId)) {
+        try {
+          // forceRefresh, never invalidate-then-fetch: a FAILING refetch must
+          // leave the verified list we already hold standing, or this refusal
+          // would decay into the device-1 "list unavailable" acceptance below.
+          verified = await enc.getVerifiedDeviceList(
+            m.senderId,
+            forceRefresh: true,
+          );
+        } on Object catch (_) {
+          // Keep the cached verdict; the row stays retryable either way.
+        } finally {
+          _listRefreshLimiter.end(m.senderId);
+        }
+      }
+      if (verified.isLiveDevice(originDeviceId)) {
         _acceptGateWithheldIds.remove(m.id);
         return true;
       }
@@ -106,7 +131,7 @@ extension MessagingDecrypt on MessagingProvider {
         'msgId': m.id,
         'senderId': m.senderId,
         'originDeviceId': originDeviceId,
-        'listVersion': cached.version,
+        'listVersion': verified.version,
       });
       return false;
     }
