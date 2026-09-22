@@ -433,10 +433,97 @@ void main() {
       expect(
         provider.messages.map((m) => m.id),
         unorderedEquals([302, 304, 305]),
-        reason: '300 (failed peer row) and 301 (own row whose only copy died '
-            'with the old install) predate this identity',
+        reason: '300 (a peer row this install never opened, still '
+            '[encrypted]) and 301 (own row whose only copy died with the old '
+            'install) predate this identity',
       );
       expect(provider.hiddenPreLinkCount, 2);
+    });
+
+    test('after a restart a pre-boundary peer row still reading [encrypted] '
+        'joins the divider; the same shape after the instant stays', () async {
+      // The session that re-minted fails these rows as `[Decryption failed]`
+      // (identity-reset rule), but that verdict is never persisted. After a
+      // relaunch `hadIdentityReset` is false, a row with no session keeps
+      // `[encrypted]` and waits for a retry — so the SAME row comes back
+      // wearing the other placeholder. Seeded directly: no decrypt runs.
+      final minted = DateTime.now().toUtc().subtract(
+        const Duration(minutes: 10),
+      );
+      final own =
+          (await service.getKeyBundleForReupload())!['identityPublicKey']
+              as String;
+      await service.recordOwnIdentityReplacedFromServer(
+        minted.toIso8601String(),
+        replacedTo: own,
+      );
+      provider
+        ..seedCacheForTest(10, [
+          MessageModel.fromJson(
+            _row(
+              id: 320,
+              encryptedContent: '2:ct',
+              createdAt: minted.subtract(const Duration(hours: 1)),
+            ),
+          ),
+          MessageModel.fromJson(
+            _row(
+              id: 321,
+              encryptedContent: '2:ct',
+              createdAt: minted.add(const Duration(minutes: 1)),
+            ),
+          ),
+        ])
+        ..loadCachedMessages(10);
+
+      expect(
+        provider.loadedMessagesForTest.map((m) => m.content),
+        everyElement(kEncryptedPlaceholderLabel),
+      );
+      expect(provider.messages.map((m) => m.id), [321]);
+      expect(provider.hiddenPreLinkCount, 1);
+    });
+
+    test('in the re-minting session a pre-boundary peer row failed as '
+        '[Decryption failed] joins the divider; the same verdict after the '
+        'instant stays', () async {
+      // The identity-reset rule marks a row the minting session cannot open
+      // `[Decryption failed]`, in memory only. Seeded directly: no decrypt runs.
+      final minted = DateTime.now().toUtc().subtract(
+        const Duration(minutes: 10),
+      );
+      final own =
+          (await service.getKeyBundleForReupload())!['identityPublicKey']
+              as String;
+      await service.recordOwnIdentityReplacedFromServer(
+        minted.toIso8601String(),
+        replacedTo: own,
+      );
+      provider
+        ..seedCacheForTest(10, [
+          MessageModel.fromJson(
+            _row(
+              id: 330,
+              encryptedContent: '2:ct',
+              createdAt: minted.subtract(const Duration(hours: 1)),
+            ),
+          ).copyWith(content: kDecryptionFailedLabel),
+          MessageModel.fromJson(
+            _row(
+              id: 331,
+              encryptedContent: '2:ct',
+              createdAt: minted.add(const Duration(minutes: 1)),
+            ),
+          ).copyWith(content: kDecryptionFailedLabel),
+        ])
+        ..loadCachedMessages(10);
+
+      expect(
+        provider.loadedMessagesForTest.map((m) => m.content),
+        everyElement(kDecryptionFailedLabel),
+      );
+      expect(provider.messages.map((m) => m.id), [331]);
+      expect(provider.hiddenPreLinkCount, 1);
     });
 
     test('a boundary that moved without a notification still applies on the '

@@ -3147,7 +3147,10 @@ that is the designed outcome).
     hidden; (F56) drop the callback wiring → the open thread is never notified; (F57) drop the
     launch-time load → a relaunched service forgets the boundary; (F58) drop the post-upload re-ask
     → no `checkOwnKeyBundle` follows an identity-changing ack; (F59) drop the boundary from the
-    view's cache key → a boundary that moved without a notification leaves the rows showing.
+    view's cache key → a boundary that moved without a notification leaves the rows showing;
+    (F61) drop the `[Decryption failed]` term → a pre-boundary row the minting session failed
+    renders; (F62) drop the `[encrypted]`-without-usable-content term → the same row after a
+    restart, which comes back `[encrypted]` (the reset verdict is never persisted), renders.
   - **(lxxxvii) — THE OWN-KEY BRANCH SPENDS THE (li) ONE-SHOT.** An upload ack carrying
     `identityChanged: true` arms `markOwnIdentityPublished` so the report of our own publish does
     not alarm ((li) clause 2). Since (lxxx) clause 5 the server names the key a change ENDED at, and
