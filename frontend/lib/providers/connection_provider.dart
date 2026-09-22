@@ -407,6 +407,25 @@ class ConnectionProvider extends ChangeNotifier {
     // backup freeze.
     final backup = _contactBackup;
     final store = _contactStore;
+    // Re-arm the store hook on EVERY session, not just at wire-up.
+    // `AuthProvider.logout` calls `ContactBackupService.clear`, which drops
+    // `_store` and nulls `store.onChanged`; logging back in only calls
+    // `onSession`, and `attach` is otherwise reached ONLY from `setProviders`
+    // above, which runs once when the widget tree is built. So a logout ->
+    // login inside one app instance left the service holding no store:
+    // `uploadNow` bailed on its `store == null` guard and every mutation
+    // notified nobody, freezing that account's backup until the app was
+    // restarted. Same silent-freeze class as B1, on the ordinary path a user
+    // takes (found on the 2026-09-22 iOS drive: a mute published, then a
+    // logout, a login and an unmute published nothing).
+    //
+    // Deliberately OUTSIDE the `isOpen` gate below: `attach` only wires
+    // `onChanged`, it never reads the store, and a store that is still
+    // opening will notify through the same hook the moment it lands. Gating
+    // it would re-introduce the freeze on exactly the slow open the budget
+    // above already tolerates. `attach` is idempotent, so the common path
+    // pays one identity comparison.
+    if (backup != null && store != null) backup.attach(store);
     if (backup != null && store != null && store.isOpen) {
       if (store.all.isEmpty) {
         final inTime = await _withinBudget(

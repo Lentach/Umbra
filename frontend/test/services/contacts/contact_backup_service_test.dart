@@ -681,4 +681,109 @@ void main() {
       );
     },
   );
+
+  // G2 follow-up (2026-09-22), found on the iOS drive and invisible to every
+  // test above. `AuthProvider.logout` calls `ContactBackupService.clear`
+  // (auth_provider.dart:434), which nulls BOTH `_store` and
+  // `store.onChanged`. Logging in again only calls `onSession`
+  // (auth_provider.dart:838); `attach` is reachable ONLY from
+  // `ConnectionProvider.setProviders` (connection_provider.dart:150), which
+  // runs once at widget wire-up. So a logout -> login inside one app instance
+  // left the service holding no store at all: `uploadNow` bails on its
+  // `store == null` guard and every mutation notifies nobody, freezing that
+  // account's backup until the app is restarted. Same silent-freeze class as
+  // B1, reached by the ordinary "log out, log back in" path a user takes.
+  test('a re-login after logout still publishes later changes', () async {
+    await seedRow(password: 'pw', contacts: [_friend(41)]);
+    await store.update(41, (_) => _friend(41));
+    await store.settled;
+
+    final svc = await service();
+    final connection = ConnectionProvider(socketService: _MuteSocket())
+      ..setProviders(
+        encryption: EncryptionProvider(),
+        friends: FriendsProvider(),
+        conversations: ConversationsProvider(),
+        messaging: MessagingProvider(),
+        contactStore: store,
+        contactBackup: svc,
+      );
+    addTearDown(connection.disconnect);
+
+    await svc.onSession(userId: 7, token: 'jwt', password: 'pw');
+    await connection.connect(7, 'jwt', 'http://t');
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    // Log out exactly the way `AuthProvider.logout` does, then log in again in
+    // the SAME app instance — no second `setProviders`.
+    connection.disconnect(isLogout: true);
+    await svc.clear();
+    await svc.onSession(userId: 7, token: 'jwt', password: 'pw');
+    // `immediate` skips the reconnect COOLDOWN, which would otherwise defer
+    // this connect onto a timer and leave the session unstarted inside the
+    // test. A real login is minutes after the logout, so it never waits.
+    await connection.connect(7, 'jwt', 'http://t', immediate: true);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    final before = backend.puts.length;
+
+    // Asserted through the NOTIFICATION path, never `uploadNow()` by hand:
+    // the production symptom is that `clear()` nulled `store.onChanged`, so
+    // nothing scheduled an upload at all. A hand call would pass on a store
+    // that notifies nobody — the same shortcut that hid B1 (see :627).
+    await store.update(42, (_) => _friend(42));
+    await store.settled;
+    await pumpEventQueue();
+
+    expect(
+      backend.puts.length,
+      greaterThan(before),
+      reason: 'a re-login must not freeze the backup until the app restarts',
+    );
+  });
+
+  // A page reload / app relaunch resumes from the stored refresh token, so
+  // `AuthProvider` calls `onSession` with NO password
+  // (auth_provider.dart:558). That is the session shape a PWA spends most of
+  // its life in — on the 2026-09-22 drive every session after the first was
+  // one of these. If it cannot publish, the backup only ever tracks the graph
+  // immediately after a password login and silently misses everything else.
+  test('a token-resumed session (no password) still publishes', () async {
+    await seedRow(password: 'pw', contacts: [_friend(41)]);
+    await store.update(41, (_) => _friend(41));
+    await store.settled;
+
+    // First run of the app: a password login caches the content key.
+    final first = await service();
+    await first.onSession(userId: 7, token: 'jwt', password: 'pw');
+    expect(first.state, ContactBackupState.ready, reason: 'password session');
+
+    // Relaunch: a NEW service instance over the SAME persisted token store,
+    // resumed with a token and no password.
+    final resumed = await service();
+    final connection = ConnectionProvider(socketService: _MuteSocket())
+      ..setProviders(
+        encryption: EncryptionProvider(),
+        friends: FriendsProvider(),
+        conversations: ConversationsProvider(),
+        messaging: MessagingProvider(),
+        contactStore: store,
+        contactBackup: resumed,
+      );
+    addTearDown(connection.disconnect);
+
+    await resumed.onSession(userId: 7, token: 'jwt');
+    await connection.connect(7, 'jwt', 'http://t', immediate: true);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    final before = backend.puts.length;
+
+    await store.update(42, (_) => _friend(42));
+    await store.settled;
+    await pumpEventQueue();
+
+    expect(
+      backend.puts.length,
+      greaterThan(before),
+      reason: 'a resumed session must still publish graph changes',
+    );
+  });
 }
