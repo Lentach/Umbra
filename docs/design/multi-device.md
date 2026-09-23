@@ -3184,30 +3184,23 @@ that is the designed outcome).
       once per id after E2E is up, skipped when edit-stale) → the real text or media label; (2) otherwise a
       PEER row with `unreadCount > 0` this install can read → "Nowa wiadomość" (`newMessagePreview`, list
       only; reply quotes keep `encryptedMessage`); (3) otherwise NO preview text — a read row, an OWN row, a
-      row this install can never read (predates T with no usable content, or a hidden post-T row per A2), or
+      row this install can never read (predates T with no usable content), or
       a stored copy still being read. `ConversationsProvider` no longer relabels the server row to
       'Encrypted message' (the relabel made a dead row look readable).
-    - **A2 — thread.** With T set, `MessagingProvider.messages` omits a PEER row stamped at or after T whose
-      LAST decrypt attempt failed under the `noSession` rule or the `identityReset` rule (recorded per row at
-      the decrypt catch, `_deadSessionFailedIds`) and that has no usable content — `[Decryption failed]` or
-      the restart shape `[encrypted]`. It is NOT counted in `hiddenPreLinkCount`, and it is NEVER re-delivered
-      (Part C was dropped): the row is simply gone on this install. Every other failure class after T renders as before: Bad MAC (a session
-      this install holds; `hadSessionAtDecrypt` cannot attribute it to the dead install), duplicate, unknown —
-      T is permanent, so a blanket hide would mask genuine faults forever. A row merely queued for its first
-      decrypt keeps "Odszyfrowywanie…"; an edit's new ciphertext drops the old verdict; the set lives with the
-      conversation cache and is never persisted. T null: unchanged.
+    - **A2 — thread: REVERTED 2026-09-23 (owner).** Shipped in `f8a81f23` as a hide: with T set, a PEER row
+      stamped at or after T whose decrypt failed under the `noSession` or `identityReset` rule was omitted
+      from `MessagingProvider.messages`, on the premise that its sender would re-deliver it (Part C). Part C
+      was dropped, so the hide only lost the message silently (the sender saw it delivered). Owner's call:
+      show the error again. Such a row now renders like any other failure ("Nie można odczytać…"); only
+      pre-T unreadable rows join the divider. T null: unchanged.
     - **A3 — divider copy.** `historyBeforeDeviceLinked` → `historyNotOnThisDevice`: "Wcześniejsze wiadomości
       nie są dostępne na tym urządzeniu" / "Earlier messages aren't available on this device" — one neutral
       text for pre-link and pre-T rows (owner pick).
     Falsification (`messaging_provider_envelope_status_test.dart` group (lxxxviii),
     `conversations_list_preview_test.dart`): (A-F1) drop the unreadable term → a pre-T unread row claims
-    "Nowa wiadomość" / a pre-T failed row says "can't be read"; (A-F2) drop the post-T hide → the failed live
-    row renders; (A-F3) apply it with T null → a genuine failure on a normal install is hidden; (A-F4) count
-    post-T rows in the divider → the count is wrong; (A-F5) widen past the dead-session classes → a post-T
-    Bad-MAC/unknown failure disappears; (A-F6) drop the plaintext lookup → a read or own chat loses its text;
-    (A-F7) drop `unreadCount > 0` → a read row claims to be new. Residual: a contact's in-flight message sealed
-    to the dead session that arrives AFTER this install built a fresh session to that contact fails as Bad
-    MAC, stays visible, and is not re-delivered.
+    "Nowa wiadomość" / a pre-T failed row says "can't be read"; (A-F2′) hide a post-T dead-session failure
+    again → the row vanishes from the thread; (A-F6) drop the plaintext lookup → a read or own chat loses
+    its text; (A-F7) drop `unreadCount > 0` → a read row claims to be new.
 
 - **Next gate:** T11 implementation review, then the T1–T11 merge decision. The T1–T8 phase
   gate itself is CLOSED 2026-08-22: three reviewers, verdicts SHIP / SHIP WITH FIXES ×2; the

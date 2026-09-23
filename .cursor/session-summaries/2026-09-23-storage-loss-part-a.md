@@ -46,7 +46,7 @@
 
 ## Notes for next session
 - **UPDATE 2026-09-23 (later): the owner DROPPED Parts B and C** ("we dont really need this — leave A, drop B and C"). Nothing of them was committed; the worktree was reverted to `78e6719d`. The last state, incl. a new-account seal fix, is in the git-ignored `.planning/metadata-privacy/wip-partB-partC-2026-09-23.zip`. The dev DB still has the `0022_contact_backup_identity.sql` stamp from that work; PR1.1's migration is 0022 again (the runner keys on filename, so no clash).
-- **Consequence, stated plainly:** a wiped linking-OFF account still re-mints; contacts get the red pill and are refused on send until they compare fingerprints; and the first contact message sealed to the dead session is hidden for good by Part A (A2), not re-delivered.
+- **Consequence, stated plainly:** a wiped linking-OFF account still re-mints; contacts get the red pill and are refused on send until they compare fingerprints. The first contact message sealed to the dead session is lost; the owner chose to SHOW it as "Nie można odczytać" rather than hide it, so Part A's A2 hide is reverted (follow-up commit).
 - **Next:** the cold-start own-key self-alarm (a defect, independent of B), the softer pre-mint notice, then PR1.1.
 - **Unverified claim:** "the list read 'Wiadomość zaszyfrowana' on every chat after a restart" comes from code. Observe it on a pre-change build with a stable backend.
 - **Traps:** appended to `docs/agents/traps.md` (npm libc churn, dev reboot, hash-object LF, the own-key self-alarm, the peer anchor refusing a re-minted key, restore-ran-teardown).

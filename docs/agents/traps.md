@@ -171,7 +171,7 @@ Standing warnings that used to live in the `LATEST.md` banner and in rotated-out
 - **A contact's anchor refuses a re-minted peer key until a human compares fingerprints** — `AccountIdentityMismatch` + red pill by design ((xlvi)); only restoring the SAME identity keeps contacts sending after a wipe, and lever (d), which did that, was DROPPED by the owner 2026-09-23 (`2026-09-23-storage-loss-part-a.md`).
 - **Every `restore`-authorized upload runs the full §6.2 teardown (new device id, all tokens revoked), even un-enrolled** (`2026-09-23-storage-loss-part-a.md`).
 - **Session-rebuild requests live in server memory only** — a backend restart drops them; the replay clears on bundle fetch (`2026-09-23-storage-loss-part-a.md`).
-- **A wiped install HIDES a contact's post-wipe dead-session message for good** — Part A (lxxxviii) A2 omits it, and the re-delivery (Part C) was dropped, so the sender sees ✓✓ and the receiver never sees it (`2026-09-23-storage-loss-part-a.md`).
+- **A contact's post-wipe message sealed to the dead session is never re-delivered** — Part C was dropped; it renders "Nie można odczytać" (Part A's A2 hide was reverted for exactly this: hidden, it vanished while the sender saw ✓✓) (`2026-09-23-storage-loss-part-a.md`).
 ## Auth
 - A 409 the client could not SPEAK created a duplicate account — `ApiException` carries the STATUS, `classifyAuthFailure` maps per door, registration signs in and tries the typed credentials on 409 BEFORE refusing (`2026-09-06-session-register-409-diagnosis.md`).
 - iOS Safari freezes a tab's socket in the background; the first POST after resume hangs — "server error" reports from iPhone browser tabs are usually this (`2026-09-08-session-c8-register-ceremony.md`).

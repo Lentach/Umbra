@@ -205,16 +205,6 @@ class MessagingProvider extends ChangeNotifier {
   /// pass would ask the peer to re-key a session that is perfectly healthy.
   final Set<int> _acceptGateWithheldIds = {};
 
-  /// Inbound ids whose LAST decrypt attempt failed because the peer sealed the
-  /// row to a session this install never held: the `noSession` and
-  /// `identityReset` rules of `decideDecryptionFailure`, and no other class
-  /// (amendment (lxxxviii) A2). Rewritten by every failed attempt, dropped when
-  /// an edit supersedes the ciphertext, and cleared on logout together with
-  /// [_conversationCache], whose rows it describes. Never persisted, and it
-  /// need not be: neither rule persists its verdict, so a relaunch attempts
-  /// the row again and records it again.
-  final Set<int> _deadSessionFailedIds = {};
-
   /// tempIds whose `sendMessage` emit already happened — a second emit for the
   /// same optimistic message would advance the ratchet again and hand the
   /// recipient an undecryptable duplicate. Released on send failure (so user
@@ -364,11 +354,6 @@ class MessagingProvider extends ChangeNotifier {
   /// passes keep seeing them. The screen renders one divider for the whole run
   /// instead ([hiddenPreLinkCount]).
   ///
-  /// Also omitted, but NOT counted for the divider: a peer row stamped at or
-  /// after that boundary whose decrypt failed because it was sealed to a
-  /// session this install never held (amendment (lxxxviii) A2). It is not
-  /// history; it is waiting for its sender to re-deliver it.
-  ///
   /// Rebuilt lazily after every [notifyListeners] — every mutation of
   /// [_messages] ends in one, so a consumer never reads a stale view — or when
   /// the boundary moved, and returns [_messages] itself when nothing is
@@ -384,19 +369,14 @@ class MessagingProvider extends ChangeNotifier {
     _visibleSource = _messages;
     _visibleSince = since;
     var hidden = 0;
-    var awaiting = 0;
     for (final m in _messages) {
-      if (_predatesThisDevice(m, since)) {
-        hidden++;
-      } else if (_awaitsRedelivery(m, since)) {
-        awaiting++;
-      }
+      if (_predatesThisDevice(m, since)) hidden++;
     }
     _hiddenPreLinkCount = hidden;
-    return _visibleMessages = hidden + awaiting == 0
+    return _visibleMessages = hidden == 0
         ? _messages
         : List.unmodifiable(
-            _messages.where((m) => !_isUnreadableHere(m, since)),
+            _messages.where((m) => !_predatesThisDevice(m, since)),
           );
   }
 
@@ -425,7 +405,7 @@ class MessagingProvider extends ChangeNotifier {
     final since = _encryptionProvider?.ownIdentitySince;
     if (lastMessage.content != kEncryptedPlaceholderLabel ||
         _hasUsableDecryptedContent(lastMessage)) {
-      return _isUnreadableHere(lastMessage, since) ? null : lastMessage;
+      return _predatesThisDevice(lastMessage, since) ? null : lastMessage;
     }
     final cached = _encryptionProvider?.getCachedDecryption(lastMessage.id);
     if (cached != null &&
@@ -442,7 +422,7 @@ class MessagingProvider extends ChangeNotifier {
     final isNew =
         lastMessage.senderId != _currentUserId &&
         unreadCount > 0 &&
-        !_isUnreadableHere(lastMessage, since);
+        !_predatesThisDevice(lastMessage, since);
     return isNew ? lastMessage : null;
   }
 
@@ -1205,7 +1185,6 @@ class MessagingProvider extends ChangeNotifier {
     _liveDecryptRetryTimer?.cancel();
     _liveDecryptRetryTimer = null;
     _liveDecryptFailedPeers.clear();
-    _deadSessionFailedIds.clear();
     _listPlaintext.clear();
     _listPlaintextReads.clear();
     _identityResetRebuildNotified.clear();

@@ -594,20 +594,13 @@ void main() {
     });
   });
 
-  // Amendment (lxxxviii) A2. After a storage loss the install has a boundary
-  // `T` (its identity's server instant). A peer message stamped AFTER `T` can
-  // still be sealed to a session this install never held — the contact's
-  // ratchet from before the loss. Such a row is not history (it is awaiting
-  // re-delivery), so it is hidden WITHOUT joining the divider. Only the
-  // dead-session failure classes qualify (no session; the identity-reset
-  // rule): `T` persists for the life of the install, so hiding every failure
-  // after it would mask genuine bugs or tampering forever.
-  //
-  // Falsification: drop the post-`T` term → the failed live row renders
-  // (A-F2); apply it with `T == null` → a genuine failure on a normal install
-  // is hidden (A-F3); count it in the divider → the count is wrong (A-F4);
-  // widen it past the dead-session classes → a Bad-MAC/unknown failure after
-  // `T` disappears (A-F5).
+  // Amendment (lxxxviii), owner decision 2026-09-23 (after dropping the
+  // re-delivery, storage-loss Part C): a PEER row stamped AFTER the boundary
+  // `T` that failed because it was sealed to a session this install never
+  // held is SHOWN as a failure. Nothing will ever re-deliver it, so hiding it
+  // would drop the message silently while its sender sees it delivered.
+  // Falsification: hide the post-`T` dead-session failure again → the row
+  // vanishes from [messages].
   group('(lxxxviii) post-boundary rows sealed to a session never held', () {
     late MessagingProvider provider;
     final since = DateTime.now().toUtc().subtract(const Duration(minutes: 10));
@@ -636,11 +629,8 @@ void main() {
       await pumpEventQueue(times: 200);
     }
 
-    MessageModel loaded(int id) =>
-        provider.loadedMessagesForTest.firstWhere((m) => m.id == id);
-
-    test('a post-boundary no-session failure is hidden and not counted; a '
-        'readable post-boundary row and the pre-boundary divider stay', () async {
+    test('a post-boundary no-session failure is shown, not hidden; only the '
+        'pre-boundary row joins the divider', () async {
       final encryption = await wire(boundary: since);
       encryption.failures
         ..[500] = 'NoSessionException: no session for 2'
@@ -663,17 +653,14 @@ void main() {
         ),
       ]);
 
-      expect(loaded(500).content, kDecryptionFailedLabel);
-      expect(provider.messages.map((m) => m.id), [501]);
-      expect(provider.messages.single.content, 'readable 501');
       expect(
-        provider.hiddenPreLinkCount,
-        1,
-        reason: 'only 502 is history; 500 awaits re-delivery',
+        provider.messages.map((m) => (m.id, m.content)),
+        [(500, kDecryptionFailedLabel), (501, 'readable 501')],
       );
+      expect(provider.hiddenPreLinkCount, 1);
     });
 
-    test('the identity-reset rule after the boundary is hidden too', () async {
+    test('the identity-reset rule after the boundary is shown too', () async {
       final encryption = await wire(boundary: since)..identityReset = true;
       encryption.failures[510] = 'InvalidMessageException: no valid sessions';
       await loadHistory([
@@ -684,69 +671,7 @@ void main() {
         ),
       ]);
 
-      expect(loaded(510).content, kDecryptionFailedLabel);
-      expect(provider.messages, isEmpty);
-      expect(provider.hiddenPreLinkCount, 0);
-    });
-
-    test('a live row still reading [encrypted] after its no-session attempt '
-        'is hidden; the same row merely queued is not', () async {
-      final encryption = await wire(boundary: since);
-      encryption.failures[520] = 'NoSessionException: no session for 2';
-      provider.onNewMessage(
-        _row(
-          id: 520,
-          encryptedContent: '2:ct',
-          createdAt: since.add(const Duration(minutes: 1)),
-        ),
-      );
-      expect(
-        provider.messages.map((m) => m.id),
-        [520],
-        reason: 'queued for its first decrypt: nothing has failed yet',
-      );
-
-      await pumpEventQueue(times: 200);
-      provider.onDisconnect(); // stop the debounced live retry
-
-      expect(loaded(520).content, kEncryptedPlaceholderLabel);
-      expect(provider.messages, isEmpty);
-      expect(provider.hiddenPreLinkCount, 0);
-    });
-
-    test('with no boundary a no-session failure still renders', () async {
-      final encryption = await wire();
-      encryption.failures[530] = 'NoSessionException: no session for 2';
-      await loadHistory([
-        _row(id: 530, encryptedContent: '2:ct'),
-      ]);
-
       expect(provider.messages.map((m) => m.content), [kDecryptionFailedLabel]);
-      expect(provider.hiddenPreLinkCount, 0);
-    });
-
-    test('a post-boundary failure of any other class still renders', () async {
-      final encryption = await wire(boundary: since);
-      encryption.failures
-        ..[540] = 'InvalidMessageException: Bad Mac!'
-        ..[541] = 'InvalidMessageException: no valid sessions';
-      await loadHistory([
-        _row(
-          id: 540,
-          encryptedContent: '2:ct',
-          createdAt: since.add(const Duration(minutes: 1)),
-        ),
-        _row(
-          id: 541,
-          encryptedContent: '2:ct',
-          createdAt: since.add(const Duration(minutes: 2)),
-        ),
-      ]);
-
-      expect(
-        provider.messages.map((m) => (m.id, m.content)),
-        [(540, kDecryptionFailedLabel), (541, kDecryptionFailedLabel)],
-      );
       expect(provider.hiddenPreLinkCount, 0);
     });
   });

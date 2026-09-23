@@ -351,26 +351,6 @@ extension MessagingDecrypt on MessagingProvider {
             !_hasUsableDecryptedContent(msg));
   }
 
-  /// Whether [messages] hides [msg] while its sender is asked to re-deliver it
-  /// (amendment (lxxxviii) A2): a PEER row stamped at or after [since] whose
-  /// last decrypt attempt failed because it was sealed to a session this
-  /// install never held ([_deadSessionFailedIds]), and which has nothing
-  /// readable yet. It is not history, so [hiddenPreLinkCount] never counts it.
-  ///
-  /// Scoped to the dead-session classes on purpose: [since] persists for the
-  /// life of the install, so hiding every failure after it would mask a
-  /// genuine bug or tampering forever. Any other failure renders as before,
-  /// and a row merely queued for its first decrypt has no attempt recorded.
-  bool _awaitsRedelivery(MessageModel msg, DateTime? since) =>
-      since != null &&
-      msg.senderId != _currentUserId &&
-      !msg.createdAt.isBefore(since) &&
-      _deadSessionFailedIds.contains(msg.id) &&
-      !_hasUsableDecryptedContent(msg);
-
-  bool _isUnreadableHere(MessageModel msg, DateTime? since) =>
-      _predatesThisDevice(msg, since) || _awaitsRedelivery(msg, since);
-
   bool _conversationHasUndecryptedInbound(int conversationId) {
     return _messages.any(
       (m) =>
@@ -1570,19 +1550,6 @@ extension MessagingDecrypt on MessagingProvider {
         isHistory: _decryptingHistory,
       );
       _logDecryptionFailure(decision.rule, msg, e);
-      // (lxxxviii) A2: did THIS attempt fail on a session the install never
-      // held? Only these two rules say so. `noSession` means no session record
-      // exists at all; `identityReset` means this install re-minted, so every
-      // session sealed to it died. A Bad MAC or a duplicate is raised against
-      // a session this install DOES hold (so it cannot tell the dead install's
-      // ratchet from a genuine bug or tampering), and `unknown` names no
-      // cause — those keep rendering.
-      if (decision.rule == DecryptionFailureRule.noSession ||
-          decision.rule == DecryptionFailureRule.identityReset) {
-        _deadSessionFailedIds.add(msg.id);
-      } else {
-        _deadSessionFailedIds.remove(msg.id);
-      }
       // One line that fully explains the outcome of this failure: what the
       // error was classified as, which rule fired and with which inputs, and
       // exactly what the caller will do about it. Durably deduped on
