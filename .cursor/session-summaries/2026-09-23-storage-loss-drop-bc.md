@@ -7,7 +7,7 @@
 - `b57101e9` docs: (lxxxviii), traps, LATEST and the Part A summary now describe the code (no lever (d), no reseal; every restore runs the full teardown).
 - `5e931ad0` **owner's pick (ask): show the error again.** Removed `_deadSessionFailedIds` / `_awaitsRedelivery` / `_isUnreadableHere` (all 5 sites). A post-T noSession/identityReset failure renders "Nie można odczytać" instead of vanishing while the sender sees ✓✓. A1 (list preview) and A3 (divider copy) stay.
 - `ca018545` pins the list side: an unread post-T `[encrypted]` row whose attempt failed previews "Nowa wiadomość" (A-F8). The list must not blank a message the thread shows.
-- `917845eb` **(lxxxix) the cold-start self-alarm:** the connect-time status beat the keys, so the row ending at the install's OWN key was persisted as the red "Nowe klucze szyfrowania na Twoim koncie" and re-raised every reload. `EncryptionService.initialize` (loaded-keys path) now retracts an alarm whose instant equals `ownIdentitySince` via `_retractOwnRowAlarm`.
+- `917845eb` **(lxxxix) the cold-start self-alarm:** the row ending at the install's OWN key sat persisted as the red "Nowe klucze szyfrowania na Twoim koncie" and re-loaded every reload (how it got written is not reproduced). `EncryptionService.initialize` (loaded-keys path, after the load) now retracts an alarm whose instant equals `ownIdentitySince` via `_retractOwnRowAlarm`, whatever wrote it.
 - Owner dropped the rest of the follow-ups: softer pre-mint notice, the "Wiadomość zaszyfrowana" claim check, the `identity_restored` check, the live re-drive.
 - PR1.1 NOT started (owner: a fresh agent picks it up). A read-only seam scout was cancelled before reporting.
 
@@ -16,10 +16,11 @@
 - Local only (git-ignored): `.planning/metadata-privacy/{storage-loss-design,task_plan,HANDOFF-2026-09-23}.md` marked superseded/dropped.
 
 ## Verification
-- `5e931ad0`: new (lxxxviii) rows red on `f8a81f23`'s code (rows hidden), green after; flutter 2315/14 all passed; analyze 3163 (ratchet held); harness 46/14.
+- `5e931ad0`: new (lxxxviii) rows red on `f8a81f23`'s code (rows hidden), green after; flutter 2315/14 all passed; analyze 3163 (ratchet held); harness 46/14. It has NO CI run of its own (the `ca018545` push cancelled it); `ca018545` contains it.
 - `ca018545`: A-F8 row; mutant "blank post-T rows" (`since == null`) red, file restored byte-identical; flutter 2316/14. CI 7/7 on `ca018545`.
 - `917845eb`: 2 rows, red first (relaunch showed the alarm); mutants: no retraction → red, no instant match → red (the foreign alarm is swallowed); flutter 2318/14; ratchet 3163; harness 46/14 (after a backend restart: the first run hit the register 429 bucket).
-- **CI on `917845eb`: Backend tests FAILED** on `auth.service.spec.ts` "signs the token in a LATER second". The commit is frontend-only; the cause is below. The other jobs were still running at session end.
+- **CI on `917845eb`: 6/7** — Flutter, both E2E jobs, Web Lock, CodeQL green; **Backend tests RED** on `auth.service.spec.ts` "signs the token in a LATER second", a likely REAL `recoverPassword` race (below), not caused by this frontend-only commit.
+- (lxxxix)'s red test fabricates the persisted state (`recordOwnIdentityReplaced(at)`); how the real install got it is NOT reproduced, and the live proof on origin :5621 (serve the new build on port 5621, reload, expect no banner + diag `OWN_IDENTITY_REPLACED_IS_SELF {source: keys_loaded}`) was NOT run.
 - NOT verified: any live browser drive of Part A or of the alarm fix; iOS; Android; prod.
 
 ## Notes for next session

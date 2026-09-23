@@ -3185,7 +3185,7 @@ that is the designed outcome).
       PEER row with `unreadCount > 0` that does not predate T → "Nowa wiadomość" (`newMessagePreview`, list
       only; reply quotes keep `encryptedMessage`) — including a post-T row whose decrypt already failed on a
       dead session: the thread shows it as unreadable, and the list must not blank a message the thread shows
-      (owner, with the A2 revert); (3) otherwise NO preview text — a read row, an OWN row, a
+      (this follows from the owner's A2 revert; it was not asked of him separately); (3) otherwise NO preview text — a read row, an OWN row, a
       row this install can never read (predates T with no usable content), or
       a stored copy still being read. `ConversationsProvider` no longer relabels the server row to
       'Encrypted message' (the relabel made a dead row look readable).
@@ -3204,13 +3204,14 @@ that is the designed outcome).
     again → the row vanishes from the thread; (A-F8) blank the list for a post-T `[encrypted]` row whose
     attempt failed → an unread message the thread shows gets no preview; (A-F6) drop the plaintext lookup → a
     read or own chat loses its text; (A-F7) drop `unreadCount > 0` → a read row claims to be new.
-  - **(lxxxix) — THE OWN-ROW ALARM IS RETRACTED WHEN THE KEYS LOAD (2026-09-23, defect).** A re-minted
-    install's connect-time `ownKeyBundleStatus` can land BEFORE its keys load, and an unknown own key must
-    report ((lxxx) clause 5: silence is never the fail-open answer), so the audit row that ENDED at its own
-    key was persisted as the red "Nowe klucze szyfrowania na Twoim koncie" alarm; the (lxxxi) clause-2
-    retraction needs a later report, and every later cold start's report also beat the keys — observed on
-    origin :5621 as `own_identity_replaced_v1 == own_identity_since_v1`, re-raised on every reload. Now
-    `EncryptionService.initialize`, on the loaded-keys path, retracts a showing alarm whose instant equals
+  - **(lxxxix) — THE OWN-ROW ALARM IS RETRACTED WHEN THE KEYS LOAD (2026-09-23, defect).** Observed on origin
+    :5621: `own_identity_replaced_v1 == own_identity_since_v1`, i.e. the red "Nowe klucze szyfrowania na Twoim
+    koncie" alarm persisted for the audit row that ENDED at this install's own key, re-loaded on every cold
+    start. HOW that alarm got persisted is NOT reproduced (suspected: a connect-time `ownKeyBundleStatus`
+    reported while `_userId` was set but the keys were not yet loaded, since an unknown own key must report,
+    (lxxx) clause 5; a report with `_userId == null` cannot persist). The fix does not depend on it: now
+    `EncryptionService.initialize`, on the loaded-keys path (after `_loadOwnIdentityReplaced`), retracts a
+    showing alarm whose instant equals
     `ownIdentitySince` (set ONLY by a row proven to end at this install's key), exactly as the clause-2
     path does (dismissal watermark = that instant). An alarm for any other instant is a different row and
     stays. Falsification (`encryption_provider_identity_reset_test.dart`, group "the instant this identity
