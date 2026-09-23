@@ -96,6 +96,8 @@ describe('box wire parser (strict: exact keys, v:1, canonical fixed-length base6
     expect(
       parseSubscribe({ v: 1, subs: [{ ...sub(), extra: true }] }),
     ).toBeNull();
+    // The version belongs to the frame, never to an entry.
+    expect(parseSubscribe({ v: 1, subs: [{ ...sub(), v: 1 }] })).toBeNull();
   });
 
   it('refuses non-object payloads', () => {
@@ -167,6 +169,24 @@ describe('box wire parser (strict: exact keys, v:1, canonical fixed-length base6
       expect(
         step1(subscription('https://fcm.googleapis.com:8443/fcm/send/abc')),
       ).toBeNull();
+    });
+
+    it('refuses a subscription whose keys carry anything beyond p256dh and auth', () => {
+      const step1 = (keys: Record<string, string>) =>
+        parseRegisterNotifier({
+          v: 1,
+          nid: b64(16),
+          platform: 'webpush',
+          token: JSON.stringify({
+            endpoint: 'https://fcm.googleapis.com/fcm/send/abc',
+            keys,
+          }),
+          sig: b64(64),
+        });
+      const keys = { p256dh: b64(65), auth: b64(16) };
+      expect(step1(keys)).not.toBeNull();
+      expect(step1({ ...keys, extra: 'x' })).toBeNull();
+      expect(step1({ p256dh: keys.p256dh })).toBeNull();
     });
 
     it('refuses a token over 4096 chars', () => {

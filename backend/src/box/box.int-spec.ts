@@ -363,7 +363,7 @@ describeWithDb('box over real sockets and Postgres', () => {
   });
 
   describe('messages', () => {
-    it('delivers a sent blob to the subscribed recipient, and ack deletes it', async () => {
+    it('delivers a sent blob to the subscribed recipient, and ack deletes it for good', async () => {
       const bob = await connect();
       const alice = await connect();
       const queue = await createQueue(bob);
@@ -383,6 +383,15 @@ describeWithDb('box over real sockets and Postgres', () => {
       expect(await ackMessage(bob, queue, delivered.id)).toEqual({ ok: true });
       expect(await storedIds(queue.rid)).toEqual([]);
       expect((await queueRow(queue.rid)).msgCount).toBe(0);
+
+      // The ack frees the window slot and pumps the queue; that pass (and
+      // the next send's) must never push the acked id again.
+      const next = blob();
+      await call(alice, 'send', { v: 1, sid: queue.sid, blob: next });
+      await until(() => got.length >= 2);
+      await sleep(300);
+      expect(got.map((m) => m.blob)).toEqual([payload, next]);
+      expect(got[1].id).not.toBe(delivered.id);
     });
 
     it('holds messages for an offline recipient and delivers them after the ACK of a new subscribe; a signature from the old connection is refused', async () => {

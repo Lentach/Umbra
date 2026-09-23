@@ -229,9 +229,7 @@ export function parseWebPushSubscription(
   const subscription = parsed as Record<string, unknown>;
   const { endpoint, keys, ...rest } = subscription;
   if (Object.keys(rest).some((k) => k !== 'expirationTime')) return null;
-  if (typeof endpoint !== 'string' || typeof keys !== 'object' || !keys) {
-    return null;
-  }
+  if (typeof endpoint !== 'string') return null;
   let url: URL;
   try {
     url = new URL(endpoint);
@@ -243,9 +241,9 @@ export function parseWebPushSubscription(
     WEB_PUSH_HOSTS[host] === true ||
     WEB_PUSH_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix));
   if (url.protocol !== 'https:' || url.port !== '' || !knownHost) return null;
-  // `keys` is a non-null object (checked above).
-  const keyPair = keys as Record<string, unknown>;
-  const { p256dh, auth } = keyPair;
+  const keyPair = exactKeys(keys, ['p256dh', 'auth']);
+  const p256dh = keyPair?.p256dh;
+  const auth = keyPair?.auth;
   if (typeof p256dh !== 'string' || typeof auth !== 'string') return null;
   if (
     decodeLooseB64(p256dh)?.length !== 65 ||

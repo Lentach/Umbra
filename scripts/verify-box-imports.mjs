@@ -9,9 +9,12 @@
  * through `fcm-tokens/`, whose entity imports `users/user.entity`. A direct-
  * imports grep passes that; this walk fails it and prints the chain.
  *
- * Follows every relative specifier (`import … from`, `export … from`,
- * `import type`, `import()`, `require()`); package imports are outside the
- * tree and not followed.
+ * Follows every specifier (`import … from`, `export … from`, `import type`,
+ * `import()`, `require()`) that names a file in the tree: relative ones, and
+ * bare ones rooted at `backend/tsconfig.json`'s `baseUrl: "./"` — under it
+ * `from 'src/users/user.entity'` compiles, so a relative-only walk would miss
+ * it. A bare specifier that names no file there is a package and is not
+ * followed.
  *
  * Usage:  node scripts/verify-box-imports.mjs [--self-test]
  */
@@ -26,18 +29,20 @@ const FORBIDDEN = ['auth', 'users', 'chat'];
 const SPECIFIER =
   /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|\bimport\s+)['"]([^'"]+)['"]/g;
 
-/** Relative specifiers of one source file. */
-function relativeImports(source) {
-  const found = [];
-  for (const match of source.matchAll(SPECIFIER)) {
-    if (match[1].startsWith('.')) found.push(match[1]);
-  }
-  return found;
+/** Every module specifier of one source file. */
+function specifiers(source) {
+  return [...source.matchAll(SPECIFIER)].map((match) => match[1]);
 }
 
-/** The .ts file a relative specifier names, or null (json, missing). */
-function resolveTs(fromFile, specifier, exists) {
-  const base = resolve(dirname(fromFile), specifier);
+/**
+ * The .ts file a specifier names, or null (json, missing, a package).
+ * Relative specifiers resolve from the importing file, bare ones from
+ * `baseUrl` — TypeScript tries `baseUrl` before `node_modules`.
+ */
+function resolveTs(fromFile, specifier, baseUrl, exists) {
+  const base = specifier.startsWith('.')
+    ? resolve(dirname(fromFile), specifier)
+    : resolve(baseUrl, specifier);
   for (const candidate of [`${base}.ts`, join(base, 'index.ts'), base]) {
     if (candidate.endsWith('.ts') && exists(candidate)) return candidate;
   }
@@ -48,7 +53,7 @@ function resolveTs(fromFile, specifier, exists) {
  * Every chain from an entry file to a file under a forbidden top-level
  * directory of `src`. Breadth-first, so each reported chain is a shortest one.
  */
-function forbiddenChains({ entries, src, read, exists }) {
+function forbiddenChains({ entries, src, baseUrl, read, exists }) {
   const parent = new Map(entries.map((file) => [file, null]));
   const queue = [...entries];
   const chains = [];
@@ -63,8 +68,8 @@ function forbiddenChains({ entries, src, read, exists }) {
       chains.push(chain);
       continue;
     }
-    for (const specifier of relativeImports(read(file))) {
-      const target = resolveTs(file, specifier, exists);
+    for (const specifier of specifiers(read(file))) {
+      const target = resolveTs(file, specifier, baseUrl, exists);
       if (target && !parent.has(target)) {
         parent.set(target, file);
         queue.push(target);
@@ -85,27 +90,36 @@ function listTs(dir) {
 }
 
 function selfTest() {
-  const src = resolve('/virtual/src');
+  const baseUrl = resolve('/virtual');
+  const src = join(baseUrl, 'src');
   const files = {
     [join(src, 'box', 'a.ts')]: "import { x } from '../common/x';\n",
     [join(src, 'box', 'b.ts')]: "import type { C } from './c';\n",
     [join(src, 'box', 'c.ts')]: "export { P } from '../push/p';\n",
+    [join(src, 'box', 'd.ts')]: "import { G } from 'src/chat/chat.gateway';\n",
     [join(src, 'push', 'p.ts')]: "import { U } from '../users/user.entity';\n",
     [join(src, 'users', 'user.entity.ts')]: 'export class U {}\n',
+    [join(src, 'chat', 'chat.gateway.ts')]: 'export class G {}\n',
     [join(src, 'common', 'x.ts')]: "import { json } from 'express';\n",
   };
   const chains = forbiddenChains({
-    entries: [join(src, 'box', 'a.ts'), join(src, 'box', 'b.ts')],
+    entries: ['a.ts', 'b.ts', 'd.ts'].map((name) => join(src, 'box', name)),
     src,
+    baseUrl,
     read: (f) => files[f],
     exists: (f) => f in files,
   });
-  const expected = [['box/b.ts', 'box/c.ts', 'push/p.ts', 'users/user.entity.ts']];
+  const expected = [
+    ['box/d.ts', 'chat/chat.gateway.ts'],
+    ['box/b.ts', 'box/c.ts', 'push/p.ts', 'users/user.entity.ts'],
+  ];
   if (JSON.stringify(chains) !== JSON.stringify(expected)) {
     console.error(`self-test FAILED: ${JSON.stringify(chains)}`);
     process.exit(1);
   }
-  console.log('self-test OK: a transitive users/ import is caught, common/ passes');
+  console.log(
+    'self-test OK: a transitive users/ import and a baseUrl src/chat/ import are caught, common/ and packages pass',
+  );
 }
 
 if (process.argv.includes('--self-test')) {
@@ -119,6 +133,7 @@ if (process.argv.includes('--self-test')) {
   const chains = forbiddenChains({
     entries: listTs(boxRoot),
     src: srcRoot,
+    baseUrl: join(root, 'backend'),
     read: (f) => readFileSync(f, 'utf8'),
     exists: existsSync,
   });
