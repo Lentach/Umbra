@@ -49,6 +49,7 @@ class _FakeEnc extends EncryptionProvider {
     DateTime? createdAt,
     DateTime? expiresAt,
     int? disappearAfterSeconds,
+    String? wireId,
   }) async {
     persisted[id] = data;
   }

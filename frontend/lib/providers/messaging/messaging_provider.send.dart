@@ -1504,6 +1504,12 @@ extension MessagingSend on MessagingProvider {
       final fanOut = resolved.fanOut;
       final targets = resolved.targets;
       final senderListInfo = resolved.senderListInfo;
+      // Minted once per tempId and reused by every retry (see
+      // [_sendTokenFor]), so a resend carries the same wire id as the first
+      // attempt. It rides inside the plaintext as `msgId` (PR2.1): the server
+      // echoes the token only to this device, so it is how every OTHER device
+      // learns the message's wire id.
+      final sendToken = _sendTokenFor(tempId);
       final envelopeJson = jsonEncode(
         E2eEnvelope.build(
           content,
@@ -1517,6 +1523,7 @@ extension MessagingSend on MessagingProvider {
           mediaThumbHash: mediaThumbHash,
           linkPreview: linkPreview,
           senderListInfo: senderListInfo.toJson(),
+          msgId: sendToken,
         ),
       );
 
@@ -1570,8 +1577,8 @@ extension MessagingSend on MessagingProvider {
       // ciphertext key, which is what its own row echoes back. The token is
       // minted per tempId and REUSED by a retry of the same send, so a retry
       // reconciles to the same row either way. Fire-and-forget: the send is
-      // never delayed or failed by this.
-      final sendToken = _sendTokenFor(tempId);
+      // never delayed or failed by this. (The token itself was minted above,
+      // before the envelope that carries it.)
       final pendingSnapshot = _pendingSendContent[tempId];
       if (pendingSnapshot != null) {
         _encryptionProvider!
@@ -1831,8 +1838,7 @@ extension MessagingSend on MessagingProvider {
     // out-of-band fingerprint comparison. The catch-all below told the user to
     // ask the recipient to open an app they already have open, which is why
     // this state read as an unexplained permanent outage.
-    if (e is AccountIdentityMismatch ||
-        s.contains('AccountIdentityMismatch')) {
+    if (e is AccountIdentityMismatch || s.contains('AccountIdentityMismatch')) {
       return 'Cannot send: this contact\'s security keys changed and could not '
           'be verified. Open the security warning for this chat and compare '
           'their safety number before sending.';

@@ -177,6 +177,9 @@ extension MessagingHistory on MessagingProvider {
       linkPreviewTitle: local.linkPreviewTitle ?? server.linkPreviewTitle,
       linkPreviewImageUrl:
           local.linkPreviewImageUrl ?? server.linkPreviewImageUrl,
+      // A server snapshot never carries a PEER row's wire id; only the local
+      // copy learned it at decrypt, so the local one survives the merge.
+      wireId: local.wireId ?? server.wireId,
     );
   }
 
@@ -605,7 +608,14 @@ extension MessagingHistory on MessagingProvider {
           if (savedData?['linkPreviewImageUrl'] != null)
             'linkPreviewImageUrl': savedData!['linkPreviewImageUrl'],
         };
-        _encryptionProvider?.saveDecryptedContent(msg.id, persistData).ignore();
+        _encryptionProvider
+            ?.saveDecryptedContent(
+              msg.id,
+              persistData,
+              // Our own token, echoed on the ack (`MessageModel.fromJson`).
+              wireId: msg.wireId,
+            )
+            .ignore();
       }
       // Ack arrived — the pending-send record served its purpose; consume it
       // so normal sends keep the reconcile store self-cleaning. Same

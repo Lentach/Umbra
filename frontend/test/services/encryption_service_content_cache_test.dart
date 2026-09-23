@@ -458,4 +458,106 @@ void main() {
       expect(prefs.containsKey('e2e_42_purge_pending_v1'), isFalse);
     });
   });
+
+  // metadata-privacy PR2.1: the `_wid` stamp and the `wireId -> localId`
+  // index. Nothing in the app reads the index yet; the box path (PR3.1) will
+  // dedup at-least-once deliveries against it, so a miss there re-shows a
+  // message and a wrong hit swallows one.
+  group('EncryptionService wire id', () {
+    late EncryptionService service;
+
+    setUp(() async {
+      FlutterSecureStorage.setMockInitialValues({});
+      SharedPreferences.setMockInitialValues({});
+      service = EncryptionService();
+      await service.initialize(42, checkServerIdentity: () async => const ServerIdentityGuard(exists: false));
+    });
+
+    test('a later write that names no wire id keeps the stamp', () async {
+      await service.saveDecryptedContent(
+        5001,
+        {'content': 'hi'},
+        conversationId: 7,
+        wireId: 'temp_1758700000000_1-abc',
+      );
+      // An edit re-persists the row with new text and no wire id of its own.
+      await service.saveDecryptedContent(5001, {'content': 'hi, edited'});
+
+      expect(await service.wireIdIndex(), {'temp_1758700000000_1-abc': 5001});
+    });
+
+    test('a later write cannot move the stamp to another wire id', () async {
+      await service.saveDecryptedContent(
+        5002,
+        {'content': 'hi'},
+        wireId: 'original-wire-id',
+      );
+      // An edit envelope is peer-controlled; one claiming a new wire id must
+      // not re-point the row.
+      await service.saveDecryptedContent(
+        5002,
+        {'content': 'hi, edited'},
+        wireId: 'hijacked-wire-id',
+      );
+
+      expect(await service.wireIdIndex(), {'original-wire-id': 5002});
+    });
+
+    test('the index spans the content store and the legacy secure store',
+        () async {
+      await const FlutterSecureStorage().write(
+        key: 'e2e_42_decrypted_4001',
+        value: jsonEncode({'content': 'old', '_wid': 'legacy-wire-0001'}),
+      );
+      await service.saveDecryptedContent(
+        4002,
+        {'content': 'new'},
+        wireId: 'fresh-wire-0002',
+      );
+      await service.saveDecryptedContent(4003, {'content': 'no wire id'});
+
+      expect(await service.wireIdIndex(), {
+        'legacy-wire-0001': 4001,
+        'fresh-wire-0002': 4002,
+      });
+    });
+
+    test('the content store wins over a legacy copy of the same record',
+        () async {
+      await const FlutterSecureStorage().write(
+        key: 'e2e_42_decrypted_4010',
+        value: jsonEncode({'content': 'stale', '_wid': 'stale-wire-0010'}),
+      );
+      await service.saveDecryptedContent(
+        4010,
+        {'content': 'live'},
+        wireId: 'live-wire-0010',
+      );
+
+      expect(await service.wireIdIndex(), {'live-wire-0010': 4010});
+    });
+
+    test('a wire id claimed by two records resolves to neither', () async {
+      // A peer can replay a wire id it saw (our own sends carry theirs in
+      // plaintext), so a claim is only trusted when exactly one record holds
+      // it — the sendToken law (multi-device spec §12 (ix)).
+      await service.saveDecryptedContent(
+        4020,
+        {'content': 'mine'},
+        wireId: 'shared-wire-id',
+      );
+      await service.saveDecryptedContent(
+        4021,
+        {'content': 'replayed'},
+        wireId: 'shared-wire-id',
+      );
+      await service.saveDecryptedContent(
+        4022,
+        {'content': 'unrelated'},
+        wireId: 'other-wire-id',
+      );
+
+      expect(await service.wireIdIndex(), {'other-wire-id': 4022});
+    });
+  });
 }

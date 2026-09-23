@@ -96,12 +96,18 @@ class PlaintextRecordCodec {
   static const String expiresAtKey = '_expiresAt';
   static const String disappearAfterKey = '_disappearAfter';
 
+  /// The message's wire id (metadata-privacy PR2.1, `E2eEnvelope.msgId`).
+  /// Metadata like the rest: the `wireId -> localId` index selects on it
+  /// without reading a payload.
+  static const String wireIdKey = '_wid';
+
   static const Set<String> metadataKeys = {
     conversationIdKey,
     savedAtKey,
     createdAtKey,
     expiresAtKey,
     disappearAfterKey,
+    wireIdKey,
   };
 
   static const Set<String> _envelopeKeys = {

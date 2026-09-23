@@ -110,6 +110,7 @@ class _LedgerEncryption extends EncryptionProvider {
     DateTime? createdAt,
     DateTime? expiresAt,
     int? disappearAfterSeconds,
+    String? wireId,
   }) async {
     persisted[messageId] = Map<String, dynamic>.from(data);
   }

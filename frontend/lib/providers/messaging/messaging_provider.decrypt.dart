@@ -440,6 +440,7 @@ extension MessagingDecrypt on MessagingProvider {
         createdAt: decrypted.createdAt,
         expiresAt: decrypted.expiresAt,
         disappearAfterSeconds: decrypted.disappearAfterSeconds,
+        wireId: decrypted.wireId,
       );
     } catch (_) {}
   }
@@ -615,6 +616,7 @@ extension MessagingDecrypt on MessagingProvider {
       linkPreviewUrl: payload['linkPreviewUrl'] as String?,
       linkPreviewTitle: payload['linkPreviewTitle'] as String?,
       linkPreviewImageUrl: validImage,
+      wireId: payload[PlaintextRecordCodec.wireIdKey] as String?,
     );
   }
 
@@ -803,8 +805,7 @@ extension MessagingDecrypt on MessagingProvider {
           if (cached.content == kDecryptionFailedLabel) {
             // Terminal failure cached — restore and skip without live decrypt.
             final idx = _messages.indexWhere((m) => m.id == msg.id);
-            if (idx != -1 &&
-                _messages[idx].content != kDecryptionFailedLabel) {
+            if (idx != -1 && _messages[idx].content != kDecryptionFailedLabel) {
               _messages[idx] = _messages[idx].copyWith(
                 content: kDecryptionFailedLabel,
               );
@@ -850,8 +851,7 @@ extension MessagingDecrypt on MessagingProvider {
           if (pContent == kDecryptionFailedLabel) {
             // Terminal failure persisted — restore and skip without live decrypt.
             final idx = _messages.indexWhere((m) => m.id == msg.id);
-            if (idx != -1 &&
-                _messages[idx].content != kDecryptionFailedLabel) {
+            if (idx != -1 && _messages[idx].content != kDecryptionFailedLabel) {
               _messages[idx] = _messages[idx].copyWith(
                 content: kDecryptionFailedLabel,
               );
@@ -958,6 +958,7 @@ extension MessagingDecrypt on MessagingProvider {
             linkPreviewUrl: stored?['linkPreviewUrl'] as String?,
             linkPreviewTitle: stored?['linkPreviewTitle'] as String?,
             linkPreviewImageUrl: safeImageUrl,
+            wireId: stored?[PlaintextRecordCodec.wireIdKey] as String?,
           );
           final idx = _messages.indexWhere((m) => m.id == msg.id);
           if (idx != -1) {
@@ -1046,28 +1047,35 @@ extension MessagingDecrypt on MessagingProvider {
               linkPreviewImageUrl: pending['linkPreviewImageUrl'] as String?,
             );
             // peek → persist → verify → take:
-            await _encryptionProvider!.saveDecryptedContent(msg.id, {
-              'content': pendingContent,
-              if (pending['messageType'] != null)
-                'messageType': pending['messageType'],
-              if (pending['mediaUrl'] != null) 'mediaUrl': pending['mediaUrl'],
-              if (pending['mediaDuration'] != null)
-                'mediaDuration': pending['mediaDuration'],
-              if (pending['mediaKey'] != null) 'mediaKey': pending['mediaKey'],
-              if (pending['mediaIv'] != null) 'mediaIv': pending['mediaIv'],
-              if (pending['mediaWidth'] != null)
-                'mediaWidth': pending['mediaWidth'],
-              if (pending['mediaHeight'] != null)
-                'mediaHeight': pending['mediaHeight'],
-              if (pending['mediaThumbHash'] != null)
-                'mediaThumbHash': pending['mediaThumbHash'],
-              if (pending['linkPreviewUrl'] != null)
-                'linkPreviewUrl': pending['linkPreviewUrl'],
-              if (pending['linkPreviewTitle'] != null)
-                'linkPreviewTitle': pending['linkPreviewTitle'],
-              if (pending['linkPreviewImageUrl'] != null)
-                'linkPreviewImageUrl': pending['linkPreviewImageUrl'],
-            });
+            await _encryptionProvider!.saveDecryptedContent(
+              msg.id,
+              {
+                'content': pendingContent,
+                if (pending['messageType'] != null)
+                  'messageType': pending['messageType'],
+                if (pending['mediaUrl'] != null)
+                  'mediaUrl': pending['mediaUrl'],
+                if (pending['mediaDuration'] != null)
+                  'mediaDuration': pending['mediaDuration'],
+                if (pending['mediaKey'] != null)
+                  'mediaKey': pending['mediaKey'],
+                if (pending['mediaIv'] != null) 'mediaIv': pending['mediaIv'],
+                if (pending['mediaWidth'] != null)
+                  'mediaWidth': pending['mediaWidth'],
+                if (pending['mediaHeight'] != null)
+                  'mediaHeight': pending['mediaHeight'],
+                if (pending['mediaThumbHash'] != null)
+                  'mediaThumbHash': pending['mediaThumbHash'],
+                if (pending['linkPreviewUrl'] != null)
+                  'linkPreviewUrl': pending['linkPreviewUrl'],
+                if (pending['linkPreviewTitle'] != null)
+                  'linkPreviewTitle': pending['linkPreviewTitle'],
+                if (pending['linkPreviewImageUrl'] != null)
+                  'linkPreviewImageUrl': pending['linkPreviewImageUrl'],
+              },
+              // Our own token, echoed back on the row (`MessageModel.fromJson`).
+              wireId: msg.wireId,
+            );
             final persisted = await _encryptionProvider!.getDecryptedContent(
               msg.id,
             );
@@ -1465,6 +1473,9 @@ extension MessagingDecrypt on MessagingProvider {
           linkPreviewUrl: parsed.linkPreviewUrl,
           linkPreviewTitle: parsed.linkPreviewTitle,
           linkPreviewImageUrl: safeImageUrl,
+          // The sender's wire id (PR2.1). A row that already has one keeps
+          // it: an edit re-decrypts through here with a peer-built envelope.
+          wireId: msg.wireId ?? parsed.msgId,
         );
         // Trigger ping effect for recipient when decrypted type is PING.
         // `_pingEffectFiredIds.add` returns false if already fired, so a
@@ -1530,6 +1541,7 @@ extension MessagingDecrypt on MessagingProvider {
           linkPreviewUrl: persisted['linkPreviewUrl'] as String?,
           linkPreviewTitle: persisted['linkPreviewTitle'] as String?,
           linkPreviewImageUrl: safeImageUrl,
+          wireId: persisted[PlaintextRecordCodec.wireIdKey] as String?,
         );
         if (_hasUsableDecryptedContent(restored)) {
           _encryptionProvider?.cacheDecryption(msg.id, restored);

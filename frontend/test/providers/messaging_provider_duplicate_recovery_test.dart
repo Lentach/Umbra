@@ -73,6 +73,7 @@ class _ThrowingEncryption extends EncryptionProvider {
     DateTime? createdAt,
     DateTime? expiresAt,
     int? disappearAfterSeconds,
+    String? wireId,
   }) async {
     final copy = Map<String, dynamic>.from(data);
     durableWrites.add(MapEntry(messageId, copy));

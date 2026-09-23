@@ -2818,6 +2818,7 @@ class EncryptionService {
   static const String _metaExpiresAt = PlaintextRecordCodec.expiresAtKey;
   static const String _metaDisappearAfter =
       PlaintextRecordCodec.disappearAfterKey;
+  static const String _metaWireId = PlaintextRecordCodec.wireIdKey;
 
   /// Content values that are UI PLACEHOLDERS, never real message text.
   ///
@@ -2867,6 +2868,7 @@ class EncryptionService {
     DateTime? createdAt,
     DateTime? expiresAt,
     int? disappearAfterSeconds,
+    String? wireId,
   }) async {
     final userId = _userId;
     if (userId == null) return;
@@ -2944,6 +2946,15 @@ class EncryptionService {
           _metaExpiresAt: expiresAt.toUtc().millisecondsSinceEpoch
         else if (existing?[_metaExpiresAt] != null)
           _metaExpiresAt: existing![_metaExpiresAt],
+        // The message's wire id (PR2.1). FIRST WRITE WINS, unlike the stamps
+        // above: a row's wire id never legitimately changes, while a later
+        // write is exactly where a peer could try to move it (an edit is a
+        // fresh envelope the peer controls). An edit re-persists WITHOUT one,
+        // so carrying it forward also keeps the record in [wireIdIndex].
+        if (existing?[_metaWireId] != null)
+          _metaWireId: existing![_metaWireId]
+        else
+          _metaWireId: ?wireId,
       };
       final payload = jsonEncode(record);
       // A dropped write is how a decrypted message later re-decrypts, throws
@@ -3492,6 +3503,67 @@ class EncryptionService {
     } catch (_) {
       return <int>{};
     }
+  }
+
+  /// `wireId -> localId` over every persisted plaintext record
+  /// (metadata-privacy PR2.1): the `_wid` stamp of each `_decrypted_` record,
+  /// keyed back to the id its key names. Nothing reads it yet; the box path
+  /// (PR3.1) dedups its at-least-once deliveries against it.
+  ///
+  /// Both record stores, as [getDecryptedContent] reads them: the content
+  /// store, then — mobile only — the legacy secure store for keys the content
+  /// store does not hold, so a stale legacy copy never outvotes the live one.
+  ///
+  /// The AUTHORITATIVE view, like the history read path: the caller will
+  /// treat a miss as "never seen", and a reload-clobbered cache would hand it
+  /// exactly that for a message this device already holds.
+  ///
+  /// A wire id claimed by more than one record maps to NOTHING. A peer sees
+  /// the wire ids of our own sends in plaintext and can replay one, so a
+  /// claim is trusted only when it resolves to exactly one record — the
+  /// sendToken law (multi-device spec §12 (ix)). A record that cannot be
+  /// decoded claims nothing. Null means the stores could not be enumerated,
+  /// which is not the same answer as an empty index.
+  Future<Map<String, int>?> wireIdIndex() async {
+    final userId = _userId;
+    if (userId == null) return null;
+    final prefix = _decryptedContentPrefix(userId);
+    final claims = <String, Set<int>>{};
+    void claim(String key, String? raw) {
+      final id = int.tryParse(key.substring(prefix.length));
+      if (id == null || raw == null) return;
+      try {
+        if (jsonDecode(raw) case {_metaWireId: final String wireId}) {
+          (claims[wireId] ??= <int>{}).add(id);
+        }
+      } on FormatException catch (_) {}
+    }
+
+    try {
+      final prefs = await _sharedPrefs;
+      final snapshot = await _authoritativeSnapshot();
+      if (snapshot == null) await _reloadPrefsForCrossContext(prefs);
+      final storeKeys = _recordKeys(snapshot, prefs, prefix).toSet();
+      for (final key in storeKeys) {
+        claim(key, _rawRecord(snapshot, prefs, key));
+      }
+      if (!kIsWeb) {
+        final legacy = await _storage.readAll();
+        for (final MapEntry(:key, :value) in legacy.entries) {
+          if (key.startsWith(prefix) && !storeKeys.contains(key)) {
+            claim(key, value);
+          }
+        }
+      }
+      // Any store failure — Keystore, SQLCipher, a web reload — means the
+      // stores were not enumerated, which must not read as an empty index.
+    } on Object catch (_) {
+      return null;
+    }
+    return {
+      for (final MapEntry(key: wireId, value: ids) in claims.entries)
+        if (ids.length == 1) wireId: ids.single,
+    };
   }
 
   // ── Server reconciliation ────────────────────────────────────────────────

@@ -188,5 +188,51 @@ void main() {
       expect(result.linkPreviewTitle, isNull);
       expect(result.linkPreviewImageUrl, isNull);
     });
+
+    group('msgId (metadata-privacy PR2.1 wire id)', () {
+      test('survives a build -> parse round trip', () {
+        final built = E2eEnvelope.build(
+          'hi',
+          msgId: 'temp_1758700000000_7-m3x9k2a1',
+        );
+        final result = E2eEnvelope.parse(jsonEncode(built));
+        expect(result.msgId, 'temp_1758700000000_7-m3x9k2a1');
+      });
+
+      test('is absent from an envelope built without one', () {
+        expect(E2eEnvelope.build('hi'), isNot(contains('msgId')));
+        expect(E2eEnvelope.parse(jsonEncode({'content': 'hi'})).msgId, isNull);
+      });
+
+      // The value comes from a PEER and lands on this device's disk as a
+      // record stamp; anything outside the sender's own minting shape (the
+      // server's sendToken bound, 8..64 of [A-Za-z0-9_-]) is refused.
+      test('parses to null when the peer sent a malformed one', () {
+        final malformed = <Object?>[
+          42,
+          'short',
+          'x' * 65,
+          'has space in it',
+          'semi;colon-token',
+          <String, Object?>{'nested': true},
+        ];
+        for (final value in malformed) {
+          final result = E2eEnvelope.parse(
+            jsonEncode({'content': 'hi', 'msgId': value}),
+          );
+          expect(result.msgId, isNull, reason: 'msgId $value');
+          expect(result.content, 'hi', reason: 'the message still arrives');
+        }
+      });
+
+      test('accepts both ends of the length bound', () {
+        for (final value in ['a' * 8, 'Z' * 64]) {
+          final result = E2eEnvelope.parse(
+            jsonEncode({'content': 'hi', 'msgId': value}),
+          );
+          expect(result.msgId, value);
+        }
+      });
+    });
   });
 }

@@ -68,6 +68,7 @@ class _RealStoreEncryption extends EncryptionProvider {
     DateTime? createdAt,
     DateTime? expiresAt,
     int? disappearAfterSeconds,
+    String? wireId,
   }) async {
     if (dropNextSaveDecryptedContent) {
       dropNextSaveDecryptedContent = false;

@@ -36,6 +36,7 @@ class _PlainEncryption extends EncryptionProvider {
     DateTime? createdAt,
     DateTime? expiresAt,
     int? disappearAfterSeconds,
+    String? wireId,
   }) async {}
 
   @override

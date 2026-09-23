@@ -82,6 +82,15 @@ class MessageModel {
   /// carries no ciphertext this device could match on.
   final String? sendToken;
 
+  /// The message's WIRE id (metadata-privacy PR2.1): the sender's `sendToken`
+  /// for this send, which names the message independently of the server's
+  /// row id. An own row gets it from the server's echo of our token
+  /// ([MessageModel.fromJson] — origin device only); every other row gets it
+  /// from `E2eEnvelope.msgId` at decrypt, or from the persisted record's
+  /// `_wid` stamp. Null for rows sent by a client that predates it. Nothing
+  /// reads it yet.
+  final String? wireId;
+
   /// True when the server explicitly said this device has no ciphertext for
   /// this row. Such a row must never enter the decrypt pass.
   bool get hasNoEnvelopeForThisDevice => envelopeStatus != null;
@@ -178,6 +187,7 @@ class MessageModel {
     this.envelopeStatus,
     this.originDeviceId,
     this.sendToken,
+    this.wireId,
     this.mediaKey,
     this.mediaIv,
     this.editedAt,
@@ -220,6 +230,10 @@ class MessageModel {
       envelopeStatus: json['envelopeStatus'] as String?,
       originDeviceId: json['originDeviceId'] as int?,
       sendToken: json['sendToken'] as String?,
+      // The server's echo of OUR token is our own wire id for the row; the
+      // server never serves a wire id to anyone else, so every other row
+      // reads null here and learns it from the envelope at decrypt.
+      wireId: json['sendToken'] as String?,
       editedAt: json['editedAt'] != null
           ? DateTime.parse(json['editedAt'] as String)
           : null,
@@ -292,6 +306,7 @@ class MessageModel {
     String? envelopeStatus,
     int? originDeviceId,
     String? sendToken,
+    String? wireId,
     String? mediaKey,
     String? mediaIv,
     DateTime? editedAt,
@@ -327,6 +342,7 @@ class MessageModel {
       envelopeStatus: envelopeStatus ?? this.envelopeStatus,
       originDeviceId: originDeviceId ?? this.originDeviceId,
       sendToken: sendToken ?? this.sendToken,
+      wireId: wireId ?? this.wireId,
       mediaKey: mediaKey ?? this.mediaKey,
       mediaIv: mediaIv ?? this.mediaIv,
       editedAt: editedAt ?? this.editedAt,

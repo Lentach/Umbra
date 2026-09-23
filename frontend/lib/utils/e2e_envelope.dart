@@ -25,6 +25,18 @@ class E2eEnvelope {
   /// precedent, root `CLAUDE.md` §7).
   static const String _keySenderListInfo = 'senderListInfo';
 
+  /// The message's WIRE id (metadata-privacy PR2.1): the sender's `sendToken`
+  /// for this send, carried inside the E2E plaintext so every receiving
+  /// device learns it — the server withholds the token from everyone but the
+  /// origin device. It names the message independently of any server row id,
+  /// which the box path (PR3.1) will not have. An edit never carries one: it
+  /// re-encrypts an existing message and must not claim a wire identity.
+  static const String _keyMsgId = 'msgId';
+
+  /// The sender's own minting shape (`_sendTokenFor`), which is also the
+  /// server's `sendToken` bound (`@MinLength(8) @MaxLength(64)`).
+  static final RegExp _msgIdShape = RegExp(r'^[A-Za-z0-9_-]{8,64}$');
+
   static Map<String, dynamic> build(
     String content, {
     String messageType = 'TEXT',
@@ -37,6 +49,7 @@ class E2eEnvelope {
     String? mediaThumbHash,
     Map<String, String?>? linkPreview,
     Map<String, dynamic>? senderListInfo,
+    String? msgId,
   }) {
     final envelope = <String, dynamic>{_keyContent: content};
     if (messageType != 'TEXT') envelope[_keyMessageType] = messageType;
@@ -55,6 +68,7 @@ class E2eEnvelope {
     if (senderListInfo != null && senderListInfo.isNotEmpty) {
       envelope[_keySenderListInfo] = senderListInfo;
     }
+    if (msgId != null) envelope[_keyMsgId] = msgId;
     return envelope;
   }
 
@@ -72,6 +86,7 @@ class E2eEnvelope {
     String? linkPreviewTitle,
     String? linkPreviewImageUrl,
     Object? senderListInfo,
+    String? msgId,
   })
   parse(String jsonStr) {
     final envelope = jsonDecode(jsonStr) as Map<String, dynamic>;
@@ -86,6 +101,9 @@ class E2eEnvelope {
     final rawThumbHash = envelope[_keyMediaThumbHash];
     final mediaThumbHash = rawThumbHash is String ? rawThumbHash : null;
     final lp = envelope[_keyLinkPreview] as Map<String, dynamic>?;
+    // Peer data bound for this device's disk (the `_wid` record stamp):
+    // anything outside the minting shape is dropped, never the message.
+    final rawMsgId = envelope[_keyMsgId];
     return (
       content: content,
       messageType: messageType,
@@ -103,6 +121,9 @@ class E2eEnvelope {
       linkPreviewTitle: lp?[_keyTitle] as String?,
       linkPreviewImageUrl: lp?[_keyImageUrl] as String?,
       senderListInfo: envelope[_keySenderListInfo],
+      msgId: rawMsgId is String && _msgIdShape.hasMatch(rawMsgId)
+          ? rawMsgId
+          : null,
     );
   }
 
