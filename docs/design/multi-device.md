@@ -3175,7 +3175,8 @@ that is the designed outcome).
     `.planning/metadata-privacy/storage-loss-design.md` Part A).** The owner's requirement: a PWA user whose
     browser storage is cleared must never see a `[Decryption failed]` or `[encrypted]` placeholder, and old
     history is not needed. Boundary T = `EncryptionService.ownIdentitySince` (SERVER time, persisted,
-    forward-only): the (lxxxvi) re-mint audit instant, or the restore instant of lever (d) ((lxxxix)).
+    forward-only): the (lxxxvi) re-mint audit instant. (Lever (d), a restore instant, and the reseal re-delivery
+    were designed as Parts B/C and DROPPED by the owner on 2026-09-23 before landing.)
     - **A1 — chat list.** The server's `conversationsList` serves every E2E last message as `[encrypted]` and
       only a live event replaces it, so after ANY restart the list resolves each row through
       `MessagingProvider.listPreviewFor(lastMessage, unreadCount)`, wired in `ConversationsScreen`:
@@ -3189,8 +3190,8 @@ that is the designed outcome).
     - **A2 — thread.** With T set, `MessagingProvider.messages` omits a PEER row stamped at or after T whose
       LAST decrypt attempt failed under the `noSession` rule or the `identityReset` rule (recorded per row at
       the decrypt catch, `_deadSessionFailedIds`) and that has no usable content — `[Decryption failed]` or
-      the restart shape `[encrypted]`. It is NOT counted in `hiddenPreLinkCount`: it awaits re-delivery
-      (reseal), it is not history. Every other failure class after T renders as before: Bad MAC (a session
+      the restart shape `[encrypted]`. It is NOT counted in `hiddenPreLinkCount`, and it is NEVER re-delivered
+      (Part C was dropped): the row is simply gone on this install. Every other failure class after T renders as before: Bad MAC (a session
       this install holds; `hadSessionAtDecrypt` cannot attribute it to the dead install), duplicate, unknown —
       T is permanent, so a blanket hide would mask genuine faults forever. A row merely queued for its first
       decrypt keeps "Odszyfrowywanie…"; an edit's new ciphertext drops the old verdict; the set lives with the

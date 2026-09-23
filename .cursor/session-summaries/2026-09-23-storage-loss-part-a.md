@@ -1,4 +1,4 @@
-# A wiped PWA shows no unreadable placeholders (Part A shipped on the branch); PR1.0 + throttler fix; lever (d) and reseal built, uncommitted
+# A wiped PWA shows no unreadable placeholders (Part A shipped on the branch); PR1.0 + throttler fix; lever (d) and reseal built, then dropped by the owner
 
 **Date:** 2026-09-23 · **Version:** unchanged · **Tiers deployed:** none (owner: no deploys until the programme ends)
 
@@ -45,13 +45,8 @@
 - **NOT verified:** Parts B/C under full suites, the harness, and a live re-drive; iOS; prod.
 
 ## Notes for next session
-- **Next, in order:**
-  1. Verify and commit Part B, then Part C backend. They share `chat-key-exchange.service.ts` and its spec: split the hunks, or land one backend commit and say so.
-  2. Build the wave-2 client: reseal (recipient names the ids, sender reseals from the origin device, recipient applies it only to a hidden row, and on a history ciphertext change).
-  3. The one-time password prompt: check the password (unwrap the password-wrapped CK) BEFORE sealing.
-  4. Fix the cold-start own-key self-alarm.
-  5. The softer pre-mint notice.
-  6. A live two-browser re-drive, then PR1.1 (migration 0023).
-- **Owner-owed:** the server sees the login password, so the operator could open `identityBlob`. Tell him plainly.
+- **UPDATE 2026-09-23 (later): the owner DROPPED Parts B and C** ("we dont really need this — leave A, drop B and C"). Nothing of them was committed; the worktree was reverted to `78e6719d`. The last state, incl. a new-account seal fix, is in the git-ignored `.planning/metadata-privacy/wip-partB-partC-2026-09-23.zip`. The dev DB still has the `0022_contact_backup_identity.sql` stamp from that work; PR1.1's migration is 0022 again (the runner keys on filename, so no clash).
+- **Consequence, stated plainly:** a wiped linking-OFF account still re-mints; contacts get the red pill and are refused on send until they compare fingerprints; and the first contact message sealed to the dead session is hidden for good by Part A (A2), not re-delivered.
+- **Next:** the cold-start own-key self-alarm (a defect, independent of B), the softer pre-mint notice, then PR1.1.
 - **Unverified claim:** "the list read 'Wiadomość zaszyfrowana' on every chat after a restart" comes from code. Observe it on a pre-change build with a stable backend.
 - **Traps:** appended to `docs/agents/traps.md` (npm libc churn, dev reboot, hash-object LF, the own-key self-alarm, the peer anchor refusing a re-minted key, restore-ran-teardown).
