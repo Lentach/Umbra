@@ -79,6 +79,11 @@ services:
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:?set ALLOWED_ORIGINS in ~/fireplace/.env (e.g. https://fireplace.ignorelist.com)}
       MEDIA_BASE_URL: ${MEDIA_BASE_URL:?set MEDIA_BASE_URL in ~/fireplace/.env (e.g. https://fireplace.ignorelist.com)}
       MEDIA_DIR: /app/media
+      # The box stays OFF in production (G4, 2026-09-23): it has no global
+      # storage ceiling yet, so anyone could fill the disk Postgres shares.
+      # Pinned here, not read from .env, so turning it on is a reviewed change
+      # (PR3.1, with the ceiling and nginx `location /box/`), never a .env edit.
+      BOX_ENABLED: 'false'
       FIREBASE_SERVICE_ACCOUNT: ${FIREBASE_SERVICE_ACCOUNT:-}
       WEB_PUSH_VAPID_PUBLIC_KEY: ${WEB_PUSH_VAPID_PUBLIC_KEY:?set WEB_PUSH_VAPID_PUBLIC_KEY in ~/fireplace/.env}
       WEB_PUSH_VAPID_PRIVATE_KEY: ${WEB_PUSH_VAPID_PRIVATE_KEY:?set WEB_PUSH_VAPID_PRIVATE_KEY in ~/fireplace/.env}

@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ConditionalModule, ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
 import { AuthModule } from './auth/auth.module';
@@ -121,7 +121,15 @@ import { BoxModule, BOX_ENTITIES } from './box/box.module';
     VersionModule,
     // Shares ChatGateway's engine.io server; both pass the same options
     // (`common/socket-cors.ts`), so module order does not matter.
-    BoxModule,
+    // Registered ONLY when BOX_ENABLED=true: the box has per-queue limits but
+    // no global storage ceiling yet, and anyone can mint a queue, so an
+    // exposed box could fill the host disk Postgres shares (G4 review,
+    // 2026-09-23). Prod leaves it unset until that ceiling lands (PR3.1
+    // prerequisite); the dev compose, and so CI's e2e stacks, set it.
+    ConditionalModule.registerWhen(
+      BoxModule,
+      (env: NodeJS.ProcessEnv) => env.BOX_ENABLED === 'true',
+    ),
   ],
   providers: [
     // Activates HTTP @Throttle limits with per-client-IP tracking (behind nginx);

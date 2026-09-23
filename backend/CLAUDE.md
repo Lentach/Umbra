@@ -28,12 +28,12 @@ cd ~/fireplace
 
 ## 2. Runtime architecture
 
-- `AppModule` imports Config, Schedule, Throttler, TypeORM, and domain modules: auth, media, users, conversations, messages, friends, blocked, FCM tokens, web push subscriptions, key bundles, push notifications, chat, conversation notification preferences, secret notes, health, version, and the **box** (`src/box/`: `/box` namespace + `/box/media`, metadata-privacy PR1.1, dark until a client speaks it). The box has NO account on its path: it imports nothing from `auth/`, `users/`, `chat/`, even transitively (I1, `scripts/verify-box-imports.mjs`, CI); contract `docs/contracts/wire.md` "Box"; suite `npm run test:int` (real sockets + Postgres, `BOX_IT_DATABASE_URL`).
+- `AppModule` imports Config, Schedule, Throttler, TypeORM, and domain modules: auth, media, users, conversations, messages, friends, blocked, FCM tokens, web push subscriptions, key bundles, push notifications, chat, conversation notification preferences, secret notes, health, version, and the **box** (`src/box/`: `/box` namespace + `/box/media`, metadata-privacy PR1.1, dark until a client speaks it). **The box is registered only when `BOX_ENABLED=true`** (`ConditionalModule`; dev compose sets it, prod does not until a global storage ceiling lands). The box has NO account on its path: it imports nothing from `auth/`, `users/`, `chat/`, even transitively (I1, `scripts/verify-box-imports.mjs`, CI); contract `docs/contracts/wire.md` "Box"; suite `npm run test:int` (real sockets + Postgres, `BOX_IT_DATABASE_URL`).
 - `main.ts` sets trust proxy, helmet, global `ValidationPipe({ whitelist:true })`, CORS, and listens on `PORT || 3000` at `0.0.0.0`.
 - Production logger omits debug/verbose. Production CORS is restricted to `ALLOWED_ORIGINS`; dev allows localhost/127.0.0.1/192.168/10.*.
 - `ChatGateway` authenticates Socket.IO with `handshake.auth.token`, rejects stale JWTs after password change, joins `user:<id>` AND `device:<userId>:<deviceId>` rooms, emits `socketReady`, and delegates event handlers. Presence is room occupancy (`isUserOnline` in `chat/utils/user-room.ts`); the old `onlineUsers: Map<userId, socketId>` is retired.
 - Chat service map: `chat-message`, `chat-friend-request`, `chat-conversation`, `chat-key-exchange`, `chat-presence`, `chat-block`, `chat-search`, `chat-reaction`, `chat-reaction-key`, `chat-link-preview`, `chat-device-list`, `chat-device-revocation`, `chat-provisioning`; shared `ChatValidationService` lives in `ChatValidationModule`.
-- DTO validation uses `validateDto()` and class-validator decorators. Do not bypass it with ad hoc object checks.
+- DTO validation uses `validateDto()` and class-validator decorators. Do not bypass it with ad hoc object checks. Exception: `src/box/` parses its frames with the strict exact-key parsers in `box-wire.ts` (`validateDto` keeps extras; I1).
 
 ## 3. Docker and environment
 

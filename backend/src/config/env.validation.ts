@@ -1,6 +1,7 @@
 import { plainToInstance } from 'class-transformer';
 import {
   IsEnum,
+  IsIn,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -50,6 +51,15 @@ export class EnvironmentVariables {
   @IsOptional()
   @IsString()
   MEDIA_BASE_URL?: string;
+
+  /**
+   * `true` registers the box (`/box` namespace, `/box/media`); unset or
+   * `false` leaves it out. Any other value fails boot, so a `1` or `yes`
+   * cannot silently read as off.
+   */
+  @IsOptional()
+  @IsIn(['true', 'false'])
+  BOX_ENABLED?: string;
 
   @IsOptional()
   @IsString()

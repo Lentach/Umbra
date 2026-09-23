@@ -1733,12 +1733,10 @@ extension MessagingSend on MessagingProvider {
   void _refreshRecipientDeviceListAfterDeadAddress(int recipientId) {
     final enc = _encryptionProvider;
     if (enc == null || !_listRefreshLimiter.tryBegin(recipientId)) return;
-    unawaited(
-      enc
-          .getVerifiedDeviceList(recipientId, forceRefresh: true)
-          .onError((_, _) => const VerifiedDeviceList.notEnrolled())
-          .whenComplete(() => _listRefreshLimiter.end(recipientId)),
-    );
+    enc
+        .getVerifiedDeviceList(recipientId, forceRefresh: true)
+        .whenComplete(() => _listRefreshLimiter.end(recipientId))
+        .ignore();
   }
 
   void _cancelDelayedRetry(String? tempId) {
