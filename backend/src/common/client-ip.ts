@@ -11,8 +11,8 @@
  * `1.2.3.4, <real-client>`, so its first hop is the caller's choice and a
  * limit keyed on it is bypassed with one header.
  *
- * Shared by `HttpThrottlerGuard` and `WsThrottlerGuard` so both transports
- * agree on who a client is.
+ * Shared by `HttpThrottlerGuard`, `WsThrottlerGuard` and `BoxThrottlerGuard`
+ * so every transport agrees on who a client is.
  */
 export function proxiedClientIp(
   headers: Record<string, string | string[] | undefined> | undefined,

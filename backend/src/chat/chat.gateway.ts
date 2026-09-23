@@ -28,35 +28,8 @@ import { ChatDeviceRevocationService } from './services/chat-device-revocation.s
 import { deviceRoom, userRoom } from './utils/user-room';
 import { DEFAULT_DEVICE_ID } from '../key-bundles/key-bundles.service';
 import { DevicesService } from '../key-bundles/devices.service';
+import { buildCorsOrigin } from '../common/socket-cors';
 
-// CORS: In production only ALLOWED_ORIGINS. In dev also allow localhost + LAN (phone).
-function buildCorsOrigin() {
-  const allowed = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000')
-    .split(',')
-    .map((o) => o.trim());
-  const isProd = process.env.NODE_ENV === 'production';
-  return (origin: string, cb: (err: Error | null, allow?: boolean) => void) => {
-    if (!origin) {
-      cb(null, true);
-      return;
-    }
-    if (allowed.includes(origin)) {
-      cb(null, true);
-      return;
-    }
-    if (
-      !isProd &&
-      (origin.startsWith('http://localhost:') ||
-        origin.startsWith('http://127.0.0.1:') ||
-        origin.startsWith('http://192.168.') ||
-        origin.startsWith('http://10.'))
-    ) {
-      cb(null, true);
-      return;
-    }
-    cb(new Error('Not allowed by CORS'), false);
-  };
-}
 @WebSocketGateway({
   cors: { origin: buildCorsOrigin() },
 })

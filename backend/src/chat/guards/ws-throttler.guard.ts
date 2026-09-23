@@ -177,9 +177,9 @@ export class WsThrottlerGuard extends ThrottlerGuard {
 
   /**
    * Who a request is, for throttling. An authenticated socket is its ACCOUNT,
-   * whatever IP it arrives from. A tokenless one — today only an event racing
-   * `ChatGateway.handleConnection`'s JWT check; the planned `/box` namespace is
-   * tokenless by design —
+   * whatever IP it arrives from. A tokenless one — only an event racing
+   * `ChatGateway.handleConnection`'s JWT check (the tokenless `/box`
+   * namespace has its own `BoxThrottlerGuard`) —
    * is its CLIENT IP as nginx reported it, never `handshake.address`: behind
    * the proxy that is nginx's own upstream address for EVERY client, one
    * bucket in which a single flood locks everyone out. `handshake.address` is

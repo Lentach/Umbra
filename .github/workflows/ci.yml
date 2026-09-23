@@ -60,6 +60,22 @@ jobs:
     name: Backend tests
     runs-on: ubuntu-latest
 
+    # A real Postgres for the box integration suite (metadata-privacy PR1.1). The
+    # suite creates and drops its own database here, migrated 0001 … latest.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
     defaults:
       run:
         working-directory: backend
@@ -90,6 +106,21 @@ jobs:
       - name: Verify CLAUDE.md backend test counts
         working-directory: .
         run: node scripts/verify-claude-backend-test-counts.mjs --log backend/test-output.txt
+
+      # Invariant I1: nothing under backend/src/box may reach auth/, users/ or
+      # chat/ — transitively, so a one-hop leak (box -> push -> fcm-tokens ->
+      # users) fails too. The self-test proves the walker catches exactly that.
+      - name: Verify box imports (I1)
+        working-directory: .
+        run: node scripts/verify-box-imports.mjs --self-test && node scripts/verify-box-imports.mjs
+
+      # The box end to end: real socket.io + HTTP against the real module on a
+      # fresh database. Without BOX_IT_DATABASE_URL the suite FAILS when CI is
+      # set (it never skips), so this step cannot go silently dark.
+      - name: Box integration suite (real sockets + Postgres)
+        env:
+          BOX_IT_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+        run: npm run test:int
 
       # Metadata privacy: no backend source string may carry userId=/username=/
       # identifier= — container stdout is the one server record that outlives the

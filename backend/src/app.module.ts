@@ -45,6 +45,7 @@ import { MessageEnvelope } from './messages/message-envelope.entity';
 import { ReactionKey } from './reaction-keys/reaction-key.entity';
 import { ContactBackup } from './backup/contact-backup.entity';
 import { BackupModule } from './backup/backup.module';
+import { BoxModule, BOX_ENTITIES } from './box/box.module';
 @Module({
   imports: [
     // Load and validate environment variables
@@ -96,6 +97,7 @@ import { BackupModule } from './backup/backup.module';
           ProfilePhoto,
           ReactionKey,
           ContactBackup,
+          ...BOX_ENTITIES,
         ],
         synchronize: process.env.NODE_ENV !== 'production',
       }),
@@ -117,6 +119,9 @@ import { BackupModule } from './backup/backup.module';
     SecretNotesModule,
     HealthModule,
     VersionModule,
+    // Shares ChatGateway's engine.io server; both pass the same options
+    // (`common/socket-cors.ts`), so module order does not matter.
+    BoxModule,
   ],
   providers: [
     // Activates HTTP @Throttle limits with per-client-IP tracking (behind nginx);
