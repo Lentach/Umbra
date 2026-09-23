@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:ed25519_edwards/ed25519_edwards.dart' as ed;
@@ -80,12 +81,26 @@ void main() {
     };
 
     for (final entry in _vectors.entries) {
-      test('${entry.key}: message and signature', () {
+      test('${entry.key}: message and signature', () async {
         final message = built[entry.key]!;
         expect(_toHex(message), entry.value.msg);
-        expect(_toHex(signer.sign(key, message)), entry.value.sig);
+        expect(_toHex(await signer.sign(key, message)), entry.value.sig);
       });
     }
+
+    test(
+      'the platform signer lets queued work run before each signature, and '
+      'still signs the same bytes',
+      () async {
+        // A reconnect re-signs up to 256 queues; signing them back to back
+        // on the UI thread froze the web app for ~2 s.
+        var queuedWorkRan = false;
+        Timer.run(() => queuedWorkRan = true);
+        final signature = await boxSigner.sign(key, built['subscribe']!);
+        expect(queuedWorkRan, isTrue);
+        expect(_toHex(signature), _vectors['subscribe']!.sig);
+      },
+    );
   });
 
   group('boxB64Decode accepts only the canonical fixed-length spelling', () {

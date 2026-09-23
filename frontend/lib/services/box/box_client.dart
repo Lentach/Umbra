@@ -141,13 +141,13 @@ class _Pending {
 class BoxClient {
   BoxClient({
     required String baseUrl,
-    BoxSigner signer = const Ed25519BoxSigner(),
+    BoxSigner? signer,
     Duration timeout = const Duration(seconds: 15),
     Duration mediaTimeout = const Duration(minutes: 2),
     BoxSocketFactory? socketFactory,
     http.Client? httpClient,
   }) : _baseUrl = baseUrl,
-       _signer = signer,
+       _signer = signer ?? boxSigner,
        _timeout = timeout,
        _mediaTimeout = mediaTimeout,
        _socketFactory = socketFactory ?? IoBoxSocket.new,
@@ -296,15 +296,23 @@ class BoxClient {
   }
 
   /// One event, one ack. [frame] is built from the id of the socket it goes
-  /// out on, at the moment it goes out.
+  /// out on. Signing is asynchronous, so the socket is checked again once the
+  /// frame is built: a frame signed over an id that is gone never goes out.
   Future<BoxResult<Map<String, Object?>>> _call(
     String event,
-    Map<String, Object?> Function(String sockId) frame,
-  ) {
+    FutureOr<Map<String, Object?>> Function(String sockId) frame,
+  ) async {
     final socket = _socket;
     final sockId = socket?.id;
     if (socket == null || !socket.connected || sockId == null) {
-      return Future.value(const BoxUnknown(BoxUnknownReason.offline));
+      return const BoxUnknown(BoxUnknownReason.offline);
+    }
+    final built = frame(sockId);
+    final body = built is Future<Map<String, Object?>> ? await built : built;
+    if (!identical(_socket, socket) ||
+        !socket.connected ||
+        socket.id != sockId) {
+      return const BoxUnknown(BoxUnknownReason.disconnected);
     }
     final pending = _Pending();
     _pending.add(pending);
@@ -314,7 +322,7 @@ class BoxClient {
     );
     socket.emitWithAck(
       event,
-      frame(sockId),
+      body,
       (answer) => _settle(pending, _readAnswer(answer)),
     );
     return pending.completer.future;
@@ -332,12 +340,13 @@ class BoxClient {
     );
   }
 
-  String _sig(
+  Future<String> _sig(
     BoxAuthKey key,
     BoxSignedVerb verb,
     String sockId,
     List<int> fields,
-  ) => boxB64(_signer.sign(key, boxSignedMessage(verb, sockId, fields)));
+  ) async =>
+      boxB64(await _signer.sign(key, boxSignedMessage(verb, sockId, fields)));
 
   /// Creates a queue owned by [key]. Idempotent per key: a retry after a lost
   /// answer gets the same address back, so retry with the SAME key.
@@ -347,11 +356,11 @@ class BoxClient {
   ) async {
     final result = await _call(
       'createQueue',
-      (sockId) => {
+      (sockId) async => {
         'v': 1,
         'kind': kind.name,
         'authPub': boxB64(key.publicKey),
-        'sig': _sig(
+        'sig': await _sig(
           key,
           BoxSignedVerb.createQueue,
           sockId,
@@ -418,15 +427,20 @@ class BoxClient {
       final chunk = queues.sublist(start, end);
       final result = await _call(
         'subscribe',
-        (sockId) => {
-          'v': 1,
-          'subs': [
+        (sockId) async {
+          // Started together: WebCrypto signs them in parallel, the pure-Dart
+          // signer one per event-loop turn (see [BoxSigner]).
+          final sigs = await Future.wait([
             for (final q in chunk)
-              {
-                'rid': boxB64(q.rid),
-                'sig': _sig(q.key, BoxSignedVerb.subscribe, sockId, q.rid),
-              },
-          ],
+              _sig(q.key, BoxSignedVerb.subscribe, sockId, q.rid),
+          ]);
+          return {
+            'v': 1,
+            'subs': [
+              for (var i = 0; i < chunk.length; i++)
+                {'rid': boxB64(chunk[i].rid), 'sig': sigs[i]},
+            ],
+          };
         },
       );
       switch (result) {
@@ -462,11 +476,11 @@ class BoxClient {
     _requireLength(id, kBoxMsgIdBytes, 'id');
     final result = await _call(
       'ack',
-      (sockId) => {
+      (sockId) async => {
         'v': 1,
         'rid': boxB64(queue.rid),
         'id': boxB64(id),
-        'sig': _sig(
+        'sig': await _sig(
           queue.key,
           BoxSignedVerb.ack,
           sockId,
@@ -483,10 +497,10 @@ class BoxClient {
   Future<BoxResult<void>> deleteQueue(BoxQueueAuth queue) async {
     final result = await _call(
       'deleteQueue',
-      (sockId) => {
+      (sockId) async => {
         'v': 1,
         'rid': boxB64(queue.rid),
-        'sig': _sig(queue.key, BoxSignedVerb.deleteQueue, sockId, queue.rid),
+        'sig': await _sig(queue.key, BoxSignedVerb.deleteQueue, sockId, queue.rid),
       },
     );
     if (result case BoxOk() || BoxRefused(code: BoxCode.authFailed)) {
@@ -507,12 +521,12 @@ class BoxClient {
     _requireLength(nid, kBoxNidBytes, 'nid');
     final result = await _call(
       'registerNotifier',
-      (sockId) => {
+      (sockId) async => {
         'v': 1,
         'nid': boxB64(nid),
         'platform': platform.name,
         'token': token,
-        'sig': _sig(
+        'sig': await _sig(
           queue.key,
           BoxSignedVerb.registerNotifier,
           sockId,
@@ -533,11 +547,11 @@ class BoxClient {
     _requireLength(code, kBoxCodeBytes, 'code');
     final result = await _call(
       'registerNotifier',
-      (sockId) => {
+      (sockId) async => {
         'v': 1,
         'nid': boxB64(nid),
         'code': boxB64(code),
-        'sig': _sig(
+        'sig': await _sig(
           queue.key,
           BoxSignedVerb.registerNotifier,
           sockId,

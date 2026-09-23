@@ -15,6 +15,21 @@ import '../../support/box_fakes.dart';
 
 const _signer = Ed25519BoxSigner();
 
+/// Signs only once [gate] completes: a signature still being made while the
+/// connection changes.
+class _GatedSigner implements BoxSigner {
+  final Completer<void> gate = Completer<void>();
+
+  @override
+  BoxAuthKey mint() => _signer.mint();
+
+  @override
+  Future<Uint8List> sign(BoxAuthKey key, List<int> message) async {
+    await gate.future;
+    return _signer.sign(key, message);
+  }
+}
+
 Uint8List _bytes(int length, int fill) => Uint8List(length)..fillRange(0, length, fill);
 
 /// A queue whose rid is [n] repeated (n < 256), with its own key.
@@ -47,11 +62,13 @@ Map<String, Object?> _subscribed([List<Uint8List> refused = const []]) => _ok({
 void main() {
   late FakeBoxSockets sockets;
 
-  BoxClient client({http.Client? httpClient}) => BoxClient(
-    baseUrl: 'http://box.test',
-    socketFactory: sockets.call,
-    httpClient: httpClient,
-  );
+  BoxClient client({http.Client? httpClient, BoxSigner signer = _signer}) =>
+      BoxClient(
+        baseUrl: 'http://box.test',
+        signer: signer,
+        socketFactory: sockets.call,
+        httpClient: httpClient,
+      );
 
   setUp(() => sockets = FakeBoxSockets());
 
@@ -126,6 +143,7 @@ void main() {
       final socket = sockets.last..serverConnect('S1');
       final sent = box.send(_bytes(32, 9), _bytes(kBoxBlobBytes, 7));
       final acked = box.ack(_queue(4), _bytes(16, 5));
+      await pumpEventQueue();
       expect(socket.emitted.map((f) => f.event), ['send', 'ack']);
 
       socket.serverDrop();
@@ -140,6 +158,41 @@ void main() {
       expect(await acked, isA<BoxUnknown<void>>());
       expect(box.state, BoxState.offline);
       socket.emitted.first.answer(_ok());
+    },
+  );
+
+  test(
+    'a frame signed while its connection dropped never goes out, on either connection',
+    () {
+      fakeAsync((clock) {
+        final signer = _GatedSigner();
+        final box = client(signer: signer)..connect();
+        final first = sockets.last..serverConnect('S1');
+        clock.flushMicrotasks();
+        BoxResult<void>? result;
+        unawaited(box.ack(_queue(4), _bytes(16, 5)).then((r) => result = r));
+        clock.flushMicrotasks();
+
+        first.serverDrop();
+        clock.elapse(const Duration(seconds: 3));
+        final second = sockets.last..serverConnect('S2');
+        clock.flushMicrotasks();
+        expect(second, isNot(same(first)));
+
+        // The signature over S1 is ready only now, with S2 live.
+        signer.gate.complete();
+        clock.flushMicrotasks();
+        expect(
+          result,
+          isA<BoxUnknown<void>>().having(
+            (u) => u.reason,
+            'reason',
+            BoxUnknownReason.disconnected,
+          ),
+        );
+        expect(first.emitted, isEmpty);
+        expect(second.emitted, isEmpty);
+      });
     },
   );
 

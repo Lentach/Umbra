@@ -18,6 +18,11 @@
   - The row check now reads bytea columns (UTF-8 hex of username/token), with a `convert_to()` control row.
   - Dropped the dead `box_notifiers` read and the always-true acked-id comparison.
 
+- Box signing no longer freezes the web UI (owner picked "built-in browser crypto + fallback"). `BoxSigner.sign` is now async and the platform `boxSigner` is selected by conditional import:
+  - web: `WebCryptoBoxSigner` (`box_signer_web.dart`, PKCS#8 import, one cached key per queue); if the first import fails (no Ed25519, or no `crypto.subtle` in an insecure context) the session falls back to pure Dart;
+  - elsewhere, and as that fallback: `Ed25519BoxSigner(yields: true)`, one event-loop turn per signature.
+  - `BoxClient` signs a subscribe chunk with `Future.wait`, then builds the frame. If the socket changed while it was signing, the call answers `disconnected` and nothing is sent.
+
 ## Key files
 - New: `frontend/test_e2e/box_roundtrip_test.dart`.
 - Edited:
@@ -33,33 +38,25 @@
 
 ## Verification
 - Probe on the dev stack: 2/2 at `2536cb88`, 2/2 again after the review fixes.
-- Suites: flutter 2349 passed / 14 skipped (verifier OK). Dart infos 3163 held, 0 errors/warnings. Shared harness 46 passed / 16 skipped (+2 gated).
+- Suites at `11027e3a`: flutter 2349 passed / 14 skipped (verifier OK). Dart infos 3163 held, 0 errors/warnings. Shared harness 46 passed / 16 skipped (+2 gated).
 - CI: `ea0eae45` 7/7; `2536cb88` 7/7, including `E2E isolated probes` running the box step.
-- Mutants, run by a throwaway runner (outside the repo); every file restored and sha256-checked, `git status` clean:
-  - B1 (box tracker ignores X-Real-IP): KILLED — the other address was refused.
-  - B2 (ack deletes nothing): KILLED — the row was still stored.
-  - C1 (tracker = `socket.id`): same-connection check PASSED; the fresh-connection check KILLED it.
-  - H1 (row check blind to bytea): KILLED at the bytea control.
-  - F1a (account Manager put in the io cache, box without forceNew): KILLED — Alice's box engine == Bob's account engine.
-  - F1b (the same, WITH forceNew): PASSES, so forceNew is the defence.
-  - F1 (forceNew dropped from BOTH sockets): INVALID — both accounts end up on one socket and `setUpAll` times out.
-- dart2js signing, retried after `flutter test --platform chrome` hung at `loading` for 14+ min. This time: `dart compile js` of a throwaway entrypoint, run in the managed Chromium 153 (the `verify-session-lock-probe.mjs` pattern).
-  - CORRECT: the public key a seed derives and all 4 server-produced vectors match.
-  - SLOW: 256 signatures take 1970–2374 ms at `-O4` (≈ 8–9 ms each) and 2678–2867 ms at `-O2`. The Dart VM does the same in 187–248 ms. One 256-queue subscribe chunk blocks the web UI for about 2 s.
-- Real Web Push notifier, driven once. The managed Chromium subscribed to Web Push with the dev VAPID key and got a real `fcm.googleapis.com` endpoint. With the real `BoxClient` (throwaway test):
-  - challenge → `challenged`; the code arrived through FCM into the service worker;
-  - a wrong code → refused; the pushed code → `active`;
-  - a send while nobody was subscribed → a `{type:'new_message'}` wake-up 2.8 s later;
-  - deleteQueue → ok.
+- Mutants (throwaway runner, files restored + sha256-checked): B1 X-Real-IP ignored, B2 ack deletes nothing, C1 tracker = `socket.id`, H1 row check blind to bytea, F1a box joins the account Manager — all KILLED; F1b (same, forceNew kept) passes; F1 (forceNew off BOTH sockets) invalid. Detail: `.planning/metadata-privacy/findings.md` §2026-09-23 PR1.3.
+- dart2js signing (`dart compile js` page in Chromium 153; `flutter test --platform chrome` hung 14+ min): correct — 4/4 server vectors; ≈ 8–9 ms/signature at `-O4` vs < 1 ms on the VM.
+- Real Web Push notifier, driven once (managed Chromium, real `fcm.googleapis.com` endpoint, dev VAPID, real `BoxClient`): challenge → code pushed into the service worker → wrong code refused, pushed code `active` → a send while unsubscribed woke it 2.8 s later → deleteQueue ok.
+- Freeze fix, measured on a dart2js `-O4` page in Chromium 153 (Long Tasks API + rAF frame gaps; throwaway, deleted). 256 signatures started as `BoxClient` starts them:
+  - before: one 2571 ms long task, frame gap 2567 ms;
+  - WebCrypto: 40 ms cold, 21 ms warm, 0 long tasks, frame gap ≤ 38 ms;
+  - fallback (insecure LAN origin, no `crypto.subtle`): 2.5 s wall, 0 long tasks, 90 frames drawn, frame gap ≤ 50 ms;
+  - all three: vectors 4/4.
+- Freeze fix, tests and suites: mutants Y1 (stub stops yielding), Y2 (signer ignores `yields`) and R1 (no re-check after signing) all KILLED by the 2 new tests. Box probe 2/2 on the dev stack, flutter 2351 passed / 14 skipped, Dart infos 3163 held.
 - NOT verified: FCM (Android) notifiers (the dev stack has no `FIREBASE_SERVICE_ACCOUNT`), nginx `/box/`, prod.
 
 ## Notes for next session
 - Next: gate G4, which needs the owner's OK. At the gate:
   - nginx `location /box/` with `X-Real-IP` (VM);
   - rebuild LATEST as the newest-5 union during the gate rebase. It stays master's verbatim copy until then (owner's pick), so there is no entry this session.
-- Before PR3.1 resubscribes on web: `sign()` costs ≈ 8–9 ms under dart2js, so `BoxClient._subscribeChunks` must not sign 256 in one go on the UI thread. Options: yield between signatures, a worker, or WebCrypto Ed25519. This is a PR3.1 design call.
 - Owner-owed:
   - the 16 MiB box per-file cap;
   - an OK for `deleteQueue` → `auth_failed` meaning "gone";
   - I2b, the push-token overlap in release N.
-- Traps → `docs/agents/traps.md` (2 lines, this file).
+- Traps → `docs/agents/traps.md` (5 lines, this file).
