@@ -6,7 +6,7 @@ Rewritten 2026-09-14 after the audit. One rule to remember: **`.claude/skills/` 
 
 | Layer | File | Effect |
 |---|---|---|
-| The set | `.claude/skills/*/SKILL.md` | 22 skills (19 listed + 3 `/skill:`-only). Tracked → every worktree gets them |
+| The set | `.claude/skills/*/SKILL.md` | 23 skills (20 listed + 3 `/skill:`-only). Tracked → every worktree gets them |
 | The gate | `.omp/config.yml` → `skills.enableAgentsUser: false` | Mutes the machine-wide `~/.agents/skills` tree **for this repo only**; other repos on the box keep it. Project config is merged over global (`omp://settings.md` § Precedence) and is loaded from the CWD's `.omp/` — **always start `omp` at the repo root** |
 | Tracked-ness | `.gitignore` → `!.omp/config.yml` | Without this negation the gate is machine-local and `fireplace-0a` / future worktrees silently differ. `git check-ignore -v .omp/config.yml` must print the `!` line |
 | Routing | `.omp/rules/*.md` (+ `.claude/rules/*.md`) | Edit-time triggers: the rule fires when a matching file is edited and names the skill to read |
@@ -44,6 +44,7 @@ Verified after the change: a fresh headless session (`omp -p --tools read`) list
 | `qa`, `request-refactor-plan` | Turning a conversation into GitHub issues via `gh` | Pocock |
 | `triage`, `to-spec`, `to-tickets` | **`/skill:` only** (hidden). Prerequisites verified present: `docs/agents/issue-tracker.md`, `docs/agents/triage-labels.md`, and all five labels (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`) exist in `Lentach/Umbra` | Pocock |
 | `umbra-session-end` | Task end — the handoff the pre-commit gate enforces | repo-authored |
+| `umbra-session-start` | Fresh session on existing work — reads the per-worktree `NEXT.md` baton `umbra-session-end` step 6 leaves (falls back to LATEST), checks drift, reports, waits. OMP `/handoff` is the in-conversation alternative | repo-authored |
 
 Licenses travel with the copies: `.claude/skills/LICENSE.dash_skills.txt` (Apache-2.0), `.claude/skills/LICENSE.mattpocock-skills.txt` (MIT). Provenance, SHAs and the not-vendored list: `.claude/skills/VENDORED.md`.
 

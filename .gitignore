@@ -69,6 +69,8 @@ frontend/android/key.properties
 # credentials and third-party PII out regardless of visibility.
 docs/superpowers/
 .planning/
+# Session baton (umbra-session-end step 6 / umbra-session-start): per-worktree, disposable.
+.cursor/session-summaries/NEXT*.md
 .tmp/
 # Ad-hoc drive/QA scratch: screenshots, probe pages, throwaway notes. Never a
 # release artifact — `git add -A` swept 51 of these into a staged release once.
