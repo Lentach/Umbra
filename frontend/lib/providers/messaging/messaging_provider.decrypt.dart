@@ -805,7 +805,8 @@ extension MessagingDecrypt on MessagingProvider {
           if (cached.content == kDecryptionFailedLabel) {
             // Terminal failure cached — restore and skip without live decrypt.
             final idx = _messages.indexWhere((m) => m.id == msg.id);
-            if (idx != -1 && _messages[idx].content != kDecryptionFailedLabel) {
+            if (idx != -1 &&
+                _messages[idx].content != kDecryptionFailedLabel) {
               _messages[idx] = _messages[idx].copyWith(
                 content: kDecryptionFailedLabel,
               );
@@ -851,7 +852,8 @@ extension MessagingDecrypt on MessagingProvider {
           if (pContent == kDecryptionFailedLabel) {
             // Terminal failure persisted — restore and skip without live decrypt.
             final idx = _messages.indexWhere((m) => m.id == msg.id);
-            if (idx != -1 && _messages[idx].content != kDecryptionFailedLabel) {
+            if (idx != -1 &&
+                _messages[idx].content != kDecryptionFailedLabel) {
               _messages[idx] = _messages[idx].copyWith(
                 content: kDecryptionFailedLabel,
               );
@@ -1045,6 +1047,9 @@ extension MessagingDecrypt on MessagingProvider {
               linkPreviewUrl: pending['linkPreviewUrl'] as String?,
               linkPreviewTitle: pending['linkPreviewTitle'] as String?,
               linkPreviewImageUrl: pending['linkPreviewImageUrl'] as String?,
+              // Origin-scoped (a record key exists only for our own send), so
+              // the echoed token is OUR wire id — see `_addMessageToState`.
+              wireId: msg.sendToken,
             );
             // peek → persist → verify → take:
             await _encryptionProvider!.saveDecryptedContent(
@@ -1073,8 +1078,7 @@ extension MessagingDecrypt on MessagingProvider {
                 if (pending['linkPreviewImageUrl'] != null)
                   'linkPreviewImageUrl': pending['linkPreviewImageUrl'],
               },
-              // Our own token, echoed back on the row (`MessageModel.fromJson`).
-              wireId: msg.wireId,
+              wireId: msg.sendToken,
             );
             final persisted = await _encryptionProvider!.getDecryptedContent(
               msg.id,

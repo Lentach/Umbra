@@ -97,8 +97,9 @@ class PlaintextRecordCodec {
   static const String disappearAfterKey = '_disappearAfter';
 
   /// The message's wire id (metadata-privacy PR2.1, `E2eEnvelope.msgId`).
-  /// Metadata like the rest: the `wireId -> localId` index selects on it
-  /// without reading a payload.
+  /// Listed as metadata so the codec's legacy/sealed split keeps it beside
+  /// `_cid`; note `EncryptionService.wireIdIndex` decodes the WHOLE record
+  /// (on web: unseals it), so it does not rely on that split.
   static const String wireIdKey = '_wid';
 
   static const Set<String> metadataKeys = {

@@ -33,8 +33,8 @@ class E2eEnvelope {
   /// re-encrypts an existing message and must not claim a wire identity.
   static const String _keyMsgId = 'msgId';
 
-  /// The sender's own minting shape (`_sendTokenFor`), which is also the
-  /// server's `sendToken` bound (`@MinLength(8) @MaxLength(64)`).
+  /// The sender's own minting shape (`_sendTokenFor`): its charset is the
+  /// client's, its length the server's `sendToken` bound (8..64).
   static final RegExp _msgIdShape = RegExp(r'^[A-Za-z0-9_-]{8,64}$');
 
   static Map<String, dynamic> build(

@@ -583,6 +583,11 @@ extension MessagingHistory on MessagingProvider {
           linkPreviewUrl: savedData?['linkPreviewUrl'] as String?,
           linkPreviewTitle: savedData?['linkPreviewTitle'] as String?,
           linkPreviewImageUrl: savedData?['linkPreviewImageUrl'] as String?,
+          // This branch is origin-scoped (a tempId exists only on the device
+          // that minted it), so the echoed token is OUR wire id for the row.
+          // Taken here, never in `MessageModel.fromJson`, where a server
+          // could plant one on a peer's row.
+          wireId: msg.sendToken,
         );
         final persistData = <String, dynamic>{
           'content': plaintextContent,
@@ -612,7 +617,6 @@ extension MessagingHistory on MessagingProvider {
             ?.saveDecryptedContent(
               msg.id,
               persistData,
-              // Our own token, echoed on the ack (`MessageModel.fromJson`).
               wireId: msg.wireId,
             )
             .ignore();

@@ -1838,7 +1838,8 @@ extension MessagingSend on MessagingProvider {
     // out-of-band fingerprint comparison. The catch-all below told the user to
     // ask the recipient to open an app they already have open, which is why
     // this state read as an unexplained permanent outage.
-    if (e is AccountIdentityMismatch || s.contains('AccountIdentityMismatch')) {
+    if (e is AccountIdentityMismatch ||
+        s.contains('AccountIdentityMismatch')) {
       return 'Cannot send: this contact\'s security keys changed and could not '
           'be verified. Open the security warning for this chat and compare '
           'their safety number before sending.';

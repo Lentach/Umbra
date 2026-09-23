@@ -239,4 +239,34 @@ void main() {
       expect(await encryption.service.wireIdIndex(), {peerWireId: 9001});
     },
   );
+
+  // Review finding (PR2.1): the server is not trusted with a PEER row's wire
+  // id. A server that stamps a `sendToken` on bob's row must not outvote the
+  // Signal-authenticated envelope, because `_wid` is first-write-wins.
+  test('a server-supplied token on a peer row never becomes its wire id',
+      () async {
+    const peerWireId = 'temp_1758700000000_2-peerwire';
+    encryption.inboundEnvelope = jsonEncode(
+      E2eEnvelope.build('hello from bob', msgId: peerWireId),
+    );
+
+    provider.onNewMessage({
+      'id': 9002,
+      'senderId': 2,
+      'senderUsername': 'bob',
+      'content': '[encrypted]',
+      'encryptedContent': '2:peer-ciphertext',
+      'sendToken': 'planted-by-the-server',
+      'originDeviceId': 1,
+      'conversationId': 10,
+      'deliveryStatus': 'DELIVERED',
+      'messageType': 'TEXT',
+      'createdAt': DateTime.now().toUtc().toIso8601String(),
+    });
+    await pump();
+
+    final row = provider.messages.firstWhere((m) => m.id == 9002);
+    expect(row.wireId, peerWireId);
+    expect(await encryption.service.wireIdIndex(), {peerWireId: 9002});
+  });
 }

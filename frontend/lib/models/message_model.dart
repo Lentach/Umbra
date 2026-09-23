@@ -84,11 +84,11 @@ class MessageModel {
 
   /// The message's WIRE id (metadata-privacy PR2.1): the sender's `sendToken`
   /// for this send, which names the message independently of the server's
-  /// row id. An own row gets it from the server's echo of our token
-  /// ([MessageModel.fromJson] — origin device only); every other row gets it
-  /// from `E2eEnvelope.msgId` at decrypt, or from the persisted record's
-  /// `_wid` stamp. Null for rows sent by a client that predates it. Nothing
-  /// reads it yet.
+  /// row id. Never read from the server: an own row gets it from our echoed
+  /// token only on the origin-scoped ack / lost-ack paths, every other row
+  /// from `E2eEnvelope.msgId` at decrypt (Signal-authenticated), and any row
+  /// from the persisted record's `_wid` stamp. Null for rows sent by a client
+  /// that predates it. Nothing reads it yet.
   final String? wireId;
 
   /// True when the server explicitly said this device has no ciphertext for
@@ -230,10 +230,6 @@ class MessageModel {
       envelopeStatus: json['envelopeStatus'] as String?,
       originDeviceId: json['originDeviceId'] as int?,
       sendToken: json['sendToken'] as String?,
-      // The server's echo of OUR token is our own wire id for the row; the
-      // server never serves a wire id to anyone else, so every other row
-      // reads null here and learns it from the envelope at decrypt.
-      wireId: json['sendToken'] as String?,
       editedAt: json['editedAt'] != null
           ? DateTime.parse(json['editedAt'] as String)
           : null,

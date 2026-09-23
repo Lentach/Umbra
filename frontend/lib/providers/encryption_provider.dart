@@ -168,7 +168,8 @@ class EncryptionProvider extends ChangeNotifier {
   /// setting: a refusal blocks sending, so it must always have a visible
   /// door to the ceremony. Change notifications ride the service's
   /// onPeerIdentityChanged wire, same as the warning set.
-  Set<int> get peersRefusedIdentity => _encryptionService.peersRefusedIdentity;
+  Set<int> get peersRefusedIdentity =>
+      _encryptionService.peersRefusedIdentity;
 
   /// One-shot muted key-change notes (amendment (lxxix)): peerId → ISO-8601
   /// instant of the auto-acknowledged change. Rendered as a calm system line
@@ -1697,7 +1698,6 @@ class EncryptionProvider extends ChangeNotifier {
 
   IdentityRestoreStage _restoreStage = IdentityRestoreStage.idle;
   IdentityRestoreFailure? _restoreFailure;
-
   /// (lxxx) clause 7: true from the moment `adoptRestoredIdentity` returned
   /// until `done`. This — not the stage — is what holds the gate: before it,
   /// nothing is half-done; after it, the install holds an identity whose
@@ -2540,9 +2540,7 @@ class EncryptionProvider extends ChangeNotifier {
     // guards key minting and must not claim enrolment for copy.
     final uid = _currentUserId;
     if (uid != null && data is Map && data['linkingEnabled'] is bool) {
-      unawaited(
-        AccountEnrolledHint.write(userId: uid, enrolled: linkingEnabled),
-      );
+      unawaited(AccountEnrolledHint.write(userId: uid, enrolled: linkingEnabled));
     }
     if (data is Map) {
       _hydrateIdentityResetState(data);
