@@ -51,6 +51,6 @@
 
 ## Notes for next session
 - Next: PR1.3 (`test_e2e/support/box_client.dart` + `box_roundtrip_test.dart`, `task_plan.md` PR1.2/PR1.3), then gate G4. PR1.3 can reuse `BoxClient` rather than a raw `io.io` copy — decide there.
-- Owner-owed: OK `deleteQueue` → `auth_failed` (G3 §1 said `ok`); I2b push-token overlap in release N. The budget is DECIDED: 1 GiB/day.
+- Owner-owed: OK `deleteQueue` → `auth_failed` (G3 §1 said `ok`); I2b push-token overlap in release N; **the per-file cap drops to 16 MiB of CIPHERTEXT on the box** (top rung, `box.constants.ts:58`) vs 20 MiB plaintext today (`media_crypto_service.dart:19`, server 21 MiB `media.controller.ts:38`) until the 32 MiB rung + nginx `client_max_body_size` land (Phase 5) — accept the gap, or pull that rung forward. The budget is DECIDED: 1 GiB/day.
 - `LATEST.md` still master's verbatim (owner's pick): no entry for this session; rebuild as the newest-5 union at the gate rebase.
-- Traps → `docs/agents/traps.md` (6 lines, this file).
+- Traps → `docs/agents/traps.md` (6 lines + 1 owner-owed, this file).
