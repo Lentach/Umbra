@@ -20,7 +20,7 @@
 
 - Box signing no longer freezes the web UI (owner picked "built-in browser crypto + fallback"). `BoxSigner.sign` is now async and the platform `boxSigner` is selected by conditional import:
   - web: `WebCryptoBoxSigner` (`box_signer_web.dart`, PKCS#8 import, one cached key per queue); if the first import fails (no Ed25519, or no `crypto.subtle` in an insecure context) the session falls back to pure Dart;
-  - elsewhere, and as that fallback: `Ed25519BoxSigner(yields: true)`, one event-loop turn per signature.
+  - elsewhere, and as that fallback: `Ed25519BoxSigner(yields: true)`. It signs one at a time, each after one event-loop turn, so a Dart timer or frame that arrives mid-burst waits at most one signature.
   - `BoxClient` signs a subscribe chunk with `Future.wait`, then builds the frame. If the socket changed while it was signing, the call answers `disconnected` and nothing is sent.
 
 ## Key files
@@ -43,18 +43,21 @@
 - Mutants (throwaway runner, files restored + sha256-checked): B1 X-Real-IP ignored, B2 ack deletes nothing, C1 tracker = `socket.id`, H1 row check blind to bytea, F1a box joins the account Manager — all KILLED; F1b (same, forceNew kept) passes; F1 (forceNew off BOTH sockets) invalid. Detail: `.planning/metadata-privacy/findings.md` §2026-09-23 PR1.3.
 - dart2js signing (`dart compile js` page in Chromium 153; `flutter test --platform chrome` hung 14+ min): correct — 4/4 server vectors; ≈ 8–9 ms/signature at `-O4` vs < 1 ms on the VM.
 - Real Web Push notifier, driven once (managed Chromium, real `fcm.googleapis.com` endpoint, dev VAPID, real `BoxClient`): challenge → code pushed into the service worker → wrong code refused, pushed code `active` → a send while unsubscribed woke it 2.8 s later → deleteQueue ok.
-- Freeze fix, measured on a dart2js `-O4` page in Chromium 153 (Long Tasks API + rAF frame gaps; throwaway, deleted). 256 signatures started as `BoxClient` starts them:
+- Freeze fix, dart2js `-O4` page in Chromium 153 (Long Tasks, rAF gaps, a mid-burst timer), 256 signatures started as `BoxClient` starts them:
   - before: one 2571 ms long task, frame gap 2567 ms;
   - WebCrypto: 40 ms cold, 21 ms warm, 0 long tasks, frame gap ≤ 38 ms;
-  - fallback (insecure LAN origin, no `crypto.subtle`): 2.5 s wall, 0 long tasks, 90 frames drawn, frame gap ≤ 50 ms;
+  - fallback (insecure origin, no `crypto.subtle`): 3.1 s wall, 0 long tasks, frame gap ≤ 13 ms, a timer set mid-burst 9–10 ms late (first cut `1167a6fa`, all turns queued at once: that timer ~2.5 s late; `findings.md`);
   - all three: vectors 4/4.
-- Freeze fix, tests and suites: mutants Y1 (stub stops yielding), Y2 (signer ignores `yields`) and R1 (no re-check after signing) all KILLED by the 2 new tests. Box probe 2/2 on the dev stack, flutter 2351 passed / 14 skipped, Dart infos 3163 held.
+- Freeze fix, tests and suites: mutants Y1 (stub stops yielding), Y2 (signer ignores `yields`), P1 (yields queued in parallel again) and R1 (no re-check after signing) all KILLED by the 2 new tests. Box probe 2/2 on the dev stack, flutter 2351 passed / 14 skipped, Dart infos 3163 held.
 - NOT verified: FCM (Android) notifiers (the dev stack has no `FIREBASE_SERVICE_ACCOUNT`), nginx `/box/`, prod.
 
 ## Notes for next session
 - Next: gate G4, which needs the owner's OK. At the gate:
   - nginx `location /box/` with `X-Real-IP` (VM);
   - rebuild LATEST as the newest-5 union during the gate rebase. It stays master's verbatim copy until then (owner's pick), so there is no entry this session.
+- Residue of the freeze fix:
+  - old or insecure-context browsers still wait ~3 s after a reconnect before the box is `ready`, without freezing;
+  - `WebCryptoBoxSigner` keeps one imported key per queue key it has signed with, and nothing prunes it on `deleteQueue` (session memory only).
 - Owner-owed:
   - the 16 MiB box per-file cap;
   - an OK for `deleteQueue` → `auth_failed` meaning "gone";

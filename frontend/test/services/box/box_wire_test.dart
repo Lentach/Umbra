@@ -89,16 +89,28 @@ void main() {
     }
 
     test(
-      'the platform signer lets queued work run before each signature, and '
-      'still signs the same bytes',
+      'the platform signer takes one event-loop turn per signature, one '
+      'signature at a time, and still signs the same bytes',
       () async {
-        // A reconnect re-signs up to 256 queues; signing them back to back
-        // on the UI thread froze the web app for ~2 s.
-        var queuedWorkRan = false;
-        Timer.run(() => queuedWorkRan = true);
-        final signature = await boxSigner.sign(key, built['subscribe']!);
-        expect(queuedWorkRan, isTrue);
-        expect(_toHex(signature), _vectors['subscribe']!.sig);
+        // A reconnect starts up to 256 signatures at once. Back to back on
+        // the UI thread they froze the web app for ~2.6 s; with every turn
+        // queued up front they held each later timer until the last one.
+        var completed = 0;
+        final burst = Future.wait([
+          for (var i = 0; i < 3; i++)
+            boxSigner.sign(key, built['subscribe']!).then((signature) {
+              completed++;
+              return signature;
+            }),
+        ]);
+        int? completedWhenLaterWorkRan;
+        Timer.run(() => completedWhenLaterWorkRan = completed);
+        final signatures = await burst;
+        expect(completedWhenLaterWorkRan, lessThan(signatures.length));
+        expect(
+          signatures.map(_toHex),
+          everyElement(_vectors['subscribe']!.sig),
+        );
       },
     );
   });

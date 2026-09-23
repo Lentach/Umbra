@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:ed25519_edwards/ed25519_edwards.dart' as ed;
@@ -50,22 +51,37 @@ abstract interface class BoxSigner {
 final BoxSigner boxSigner = platform.platformBoxSigner();
 
 class Ed25519BoxSigner implements BoxSigner {
-  /// [yields]: wait one event-loop turn before each signature, so a caller
-  /// that starts a burst together (`Future.wait`) gets one signature per
-  /// turn and the UI keeps drawing between them.
+  /// [yields]: every signature waits for the one before it, then for one
+  /// event-loop turn. Only one turn is ever pending, so work that arrives
+  /// during a burst (a Dart timer, a frame) runs after at most one more
+  /// signature. Queued all at once, 256 turns would all run ahead of it.
   const Ed25519BoxSigner({this.yields = false});
 
   final bool yields;
+
+  /// The last yielding signature asked for; the next one starts after it.
+  static Future<void> _last = Future<void>.value();
 
   @override
   BoxAuthKey mint() => BoxAuthKey.fromBytes(ed.generateKey().privateKey.bytes);
 
   @override
   Future<Uint8List> sign(BoxAuthKey key, List<int> message) async {
-    if (yields) await Future<void>.delayed(Duration.zero);
-    return ed.sign(
-      ed.PrivateKey(Uint8List.fromList(key.bytes)),
-      Uint8List.fromList(message),
-    );
+    if (!yields) return _sign(key, message);
+    final previous = _last;
+    final done = Completer<void>();
+    _last = done.future;
+    try {
+      await previous;
+      await Future<void>.delayed(Duration.zero);
+      return _sign(key, message);
+    } finally {
+      done.complete();
+    }
   }
+
+  static Uint8List _sign(BoxAuthKey key, List<int> message) => ed.sign(
+    ed.PrivateKey(Uint8List.fromList(key.bytes)),
+    Uint8List.fromList(message),
+  );
 }
