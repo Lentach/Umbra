@@ -42,7 +42,10 @@ MessageModel _row(
   mediaKey: mediaKey,
 );
 
-Future<void> _pumpTile(WidgetTester tester, MessageModel last) async {
+Future<AppLocalizations> _pumpTile(
+  WidgetTester tester,
+  MessageModel last,
+) async {
   await tester.pumpWidget(
     _wrap(
       ConversationTile(
@@ -55,6 +58,7 @@ Future<void> _pumpTile(WidgetTester tester, MessageModel last) async {
     ),
   );
   await tester.pump();
+  return AppLocalizations.of(tester.element(find.byType(ConversationTile)));
 }
 
 void main() {
@@ -64,12 +68,16 @@ void main() {
   // `displayAsEncryptedPlaceholder` predicate missed it and the raw sentinel
   // reached the screen. Measured on a freshly linked phone (2026-09-13): the
   // whole chat list read '[encrypted]'.
-  testWidgets('a no-ciphertext [encrypted] row previews as encrypted, not raw', (
+  //
+  // (lxxxviii) A1: such a row has simply not been opened yet, so the list says
+  // "New message" — never "Encrypted message", which read as a fault.
+  testWidgets('a no-ciphertext [encrypted] row previews as a new message', (
     tester,
   ) async {
-    await _pumpTile(tester, _row(kEncryptedPlaceholderLabel));
+    final l10n = await _pumpTile(tester, _row(kEncryptedPlaceholderLabel));
 
-    expect(find.text('Encrypted message', findRichText: true), findsOneWidget);
+    expect(find.text(l10n.newMessagePreview, findRichText: true), findsOneWidget);
+    expect(find.text(l10n.encryptedMessage, findRichText: true), findsNothing);
     expect(
       find.textContaining(kEncryptedPlaceholderLabel, findRichText: true),
       findsNothing,
@@ -92,10 +100,10 @@ void main() {
   });
 
   testWidgets('a pre-link row previews as pre-link history', (tester) async {
-    await _pumpTile(tester, _row(kNotLinkedYetMessageLabel));
+    final l10n = await _pumpTile(tester, _row(kNotLinkedYetMessageLabel));
 
     expect(
-      find.textContaining('before this device was linked', findRichText: true),
+      find.text(l10n.historyNotOnThisDevice, findRichText: true),
       findsOneWidget,
     );
     expect(
@@ -123,7 +131,7 @@ void main() {
   testWidgets('a keyed image row still previews as an attachment', (
     tester,
   ) async {
-    await _pumpTile(
+    final l10n = await _pumpTile(
       tester,
       _row(
         kEncryptedPlaceholderLabel,
@@ -134,7 +142,7 @@ void main() {
     );
 
     expect(find.text('Attachment', findRichText: true), findsOneWidget);
-    expect(find.text('Encrypted message', findRichText: true), findsNothing);
+    expect(find.text(l10n.newMessagePreview, findRichText: true), findsNothing);
   });
 
   testWidgets('real plaintext is never relabelled', (tester) async {

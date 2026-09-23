@@ -529,8 +529,10 @@ extension MessagingEvents on MessagingProvider {
       // an edit THIS device issued, so it must not be consumed here.
     }
 
-    // The new ciphertext supersedes the cached plaintext.
+    // The new ciphertext supersedes the cached plaintext, and any verdict the
+    // old ciphertext earned: the new one is only queued, never attempted.
     _encryptionProvider?.invalidateDecryptionCache(messageId);
+    _deadSessionFailedIds.remove(messageId);
     final candidate = existing.copyWith(
       encryptedContent: newCipher,
       content: kEncryptedPlaceholderLabel,

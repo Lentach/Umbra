@@ -480,6 +480,9 @@ class AppLocalizationsPl extends AppLocalizations {
   String get encryptedMessage => 'Wiadomość zaszyfrowana';
 
   @override
+  String get newMessagePreview => 'Nowa wiadomość';
+
+  @override
   String get decryptingMessage => 'Odszyfrowywanie…';
 
   @override
@@ -499,8 +502,8 @@ class AppLocalizationsPl extends AppLocalizations {
       'Twoja jedyna kopia była na urządzeniu wysyłającym.';
 
   @override
-  String get historyBeforeDeviceLinked =>
-      'Historia sprzed połączenia tego urządzenia';
+  String get historyNotOnThisDevice =>
+      'Wcześniejsze wiadomości nie są dostępne na tym urządzeniu';
 
   @override
   String get devicesSyncingNote => 'Synchronizowanie urządzeń…';

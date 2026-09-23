@@ -26,6 +26,17 @@ class ConversationTile extends StatelessWidget {
   final UserModel? otherUser;
   final bool isTyping;
 
+  /// The row the preview line is drawn from when it is not [lastMessage]
+  /// itself: the plaintext this install holds for that message id (amendment
+  /// (lxxxviii) A1). [lastMessage] still supplies the time and the metadata.
+  final MessageModel? previewMessage;
+
+  /// No preview text at all (amendment (lxxxviii) A1): the row keeps its name
+  /// and time. Decided by the screen from `MessagingProvider.listPreviewFor` —
+  /// a row this install can never read, a read or own row it holds no
+  /// plaintext for, or a stored copy still being read.
+  final bool hidePreview;
+
   const ConversationTile({
     super.key,
     required this.conversationId,
@@ -38,6 +49,8 @@ class ConversationTile extends StatelessWidget {
     required this.onDelete,
     this.otherUser,
     this.isTyping = false,
+    this.previewMessage,
+    this.hidePreview = false,
   });
 
   String _formatTime(DateTime dt) {
@@ -51,6 +64,9 @@ class ConversationTile extends StatelessWidget {
   }
 
   String _lastMessagePreview(BuildContext context, MessageModel lastMessage) {
+    // FIRST, above the media labels: "Photo" for a photo that will never open
+    // is as misleading as a placeholder.
+    if (hidePreview) return '';
     final l10n = AppLocalizations.of(context);
     if (lastMessage.messageType == MessageType.ping) return 'PING!';
     if (lastMessage.messageType == MessageType.voice) return l10n.voiceMessage;
@@ -70,10 +86,6 @@ class ConversationTile extends StatelessWidget {
     // unreadable row.
     final sentinel = sentinelPreviewText(context, lastMessage);
     if (sentinel != null) return sentinel;
-    if (lastMessage.displayAsEncryptedPlaceholder ||
-        lastMessage.content == 'Encrypted message') {
-      return l10n.encryptedMessage;
-    }
     if (isAntiQuantumNoteUrl(lastMessage.content)) {
       return l10n.antiQuantumNoteTitle;
     }
@@ -394,7 +406,10 @@ class ConversationTile extends StatelessWidget {
                           Text.rich(
                             TextSpan(
                               children: buildInlineEmojiSpans(
-                                _lastMessagePreview(context, lastMessage!),
+                                _lastMessagePreview(
+                                  context,
+                                  previewMessage ?? lastMessage!,
+                                ),
                                 textStyle: RpgTheme.bodyFont(
                                   fontSize: cold ? 12 : 13,
                                   color: live

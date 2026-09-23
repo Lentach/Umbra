@@ -631,7 +631,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   /// row, rendered at the oldest end of the list and in the all-hidden empty
   /// state — both sites, one builder, one key.
   Widget _preLinkDivider(BuildContext context) => MessageDateSeparator.label(
-    AppLocalizations.of(context).historyBeforeDeviceLinked,
+    AppLocalizations.of(context).historyNotOnThisDevice,
     key: const Key('pre-link-history-divider'),
   );
 

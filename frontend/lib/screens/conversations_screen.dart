@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../constants/app_constants.dart';
 import '../config/app_config.dart';
 import '../l10n/app_localizations.dart';
+import '../models/message_model.dart';
 import '../providers/auth_provider.dart';
 import '../providers/connection_provider.dart';
 import '../providers/conversations_provider.dart';
@@ -502,33 +503,54 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
     // Rows carry their own spacing and rounded surface now (live rows are
     // tinted, cold rows shrink); hairline dividers fought that hierarchy.
-    return ListView.builder(
-      padding: listPadding,
-      itemCount: conversations.length,
-      itemBuilder: (context, index) {
-        final conv = conversations[index];
-        final otherUser = convs.getOtherUser(conv);
-        final displayName = convs.getOtherUserUsername(conv);
-        final lastMsg = convs.lastMessages[conv.id];
-        return Selector<MessagingProvider, bool>(
-          selector: (_, messaging) => messaging.isPartnerTyping(conv.id),
-          builder: (context, isTyping, _) {
-            return ConversationTile(
-              key: ValueKey<int>(conv.id),
-              conversationId: conv.id,
-              displayName: displayName,
-              lastMessage: lastMsg,
-              isActive: conv.id == convs.activeConversationId,
-              unreadCount: convs.getUnreadCount(conv.id),
-              isMuted: conv.isNotificationMuted,
-              onTap: () => _openChat(conv.id),
-              onDelete: () => _deleteConversation(conv.id),
-              otherUser: otherUser,
-              isTyping: isTyping,
-            );
-          },
-        );
-      },
+    // (lxxxviii) A1: a last message's stored plaintext can only be read once
+    // the E2E layer is up, so the rows ask again when it comes up.
+    return Selector<EncryptionProvider, bool>(
+      selector: (_, encryption) => encryption.isE2EReady,
+      builder: (context, _, _) => ListView.builder(
+        padding: listPadding,
+        itemCount: conversations.length,
+        itemBuilder: (context, index) {
+          final conv = conversations[index];
+          final otherUser = convs.getOtherUser(conv);
+          final displayName = convs.getOtherUserUsername(conv);
+          final lastMsg = convs.lastMessages[conv.id];
+          final unreadCount = convs.getUnreadCount(conv.id);
+          // (lxxxviii) A1: messaging resolves what the preview line may say —
+          // the plaintext this install holds, "New message" for an unread
+          // peer row, or nothing — and re-notifies when a stored copy is
+          // read, the identity boundary moves, or a decrypt verdict lands.
+          return Selector<MessagingProvider, (bool, MessageModel?)>(
+            selector: (_, messaging) => (
+              messaging.isPartnerTyping(conv.id),
+              lastMsg == null
+                  ? null
+                  : messaging.listPreviewFor(
+                      lastMsg,
+                      unreadCount: unreadCount,
+                    ),
+            ),
+            builder: (context, state, _) {
+              final (isTyping, preview) = state;
+              return ConversationTile(
+                key: ValueKey<int>(conv.id),
+                conversationId: conv.id,
+                displayName: displayName,
+                lastMessage: lastMsg,
+                isActive: conv.id == convs.activeConversationId,
+                unreadCount: unreadCount,
+                isMuted: conv.isNotificationMuted,
+                onTap: () => _openChat(conv.id),
+                onDelete: () => _deleteConversation(conv.id),
+                otherUser: otherUser,
+                isTyping: isTyping,
+                previewMessage: preview,
+                hidePreview: lastMsg != null && preview == null,
+              );
+            },
+          );
+        },
+      ),
     );
   }
 }

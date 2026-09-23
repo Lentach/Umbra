@@ -932,6 +932,12 @@ abstract class AppLocalizations {
   /// **'Wiadomość zaszyfrowana'**
   String get encryptedMessage;
 
+  /// Chat-list preview ONLY, for a last message this install has not decrypted yet (it will resolve when the chat is opened). Every other surface (reply quotes, reply bar) keeps encryptedMessage.
+  ///
+  /// In pl, this message translates to:
+  /// **'Nowa wiadomość'**
+  String get newMessagePreview;
+
   /// No description provided for @decryptingMessage.
   ///
   /// In pl, this message translates to:
@@ -962,11 +968,11 @@ abstract class AppLocalizations {
   /// **'Twoja jedyna kopia była na urządzeniu wysyłającym.'**
   String get messageUnreadableReasonOwnCopyGone;
 
-  /// One pill at the oldest end of a thread, standing in for every row that predates this device's link (multi-device spec amendment (lxxxi)).
+  /// One pill at the oldest end of a thread, standing in for every row this install can never read: rows that predate this device's link (multi-device spec amendment (lxxxi)), or rows sealed before a storage loss replaced or restored this install's keys (amendments (lxxxvi)/(lxxxviii)). One neutral sentence for both causes.
   ///
   /// In pl, this message translates to:
-  /// **'Historia sprzed połączenia tego urządzenia'**
-  String get historyBeforeDeviceLinked;
+  /// **'Wcześniejsze wiadomości nie są dostępne na tym urządzeniu'**
+  String get historyNotOnThisDevice;
 
   /// No description provided for @devicesSyncingNote.
   ///

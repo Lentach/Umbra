@@ -571,8 +571,8 @@ the other's), and the comparison code is a **6-digit number, not words**. Use EX
 > direction works. Both screens then show **the same 6-digit number**: check they match, then
 > approve on the primary.
 >
-> Your old messages stay where they are — the phone starts from "History from before this device
-> was linked" and receives everything sent from then on. Up to three devices per account.
+> Your old messages stay where they are — the phone starts from "Earlier messages aren't available
+> on this device" and receives everything sent from then on. Up to three devices per account.
 > **Never delete your account, never clear site data, and on the phone never uninstall or use
 > "Clear storage"** — that destroys that device's history. iPhone: keep using the web app as-is.
 >

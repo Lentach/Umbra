@@ -477,6 +477,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get encryptedMessage => 'Encrypted message';
 
   @override
+  String get newMessagePreview => 'New message';
+
+  @override
   String get decryptingMessage => 'Decrypting…';
 
   @override
@@ -496,8 +499,8 @@ class AppLocalizationsEn extends AppLocalizations {
       'Your only copy was on the sending device.';
 
   @override
-  String get historyBeforeDeviceLinked =>
-      'History from before this device was linked';
+  String get historyNotOnThisDevice =>
+      'Earlier messages aren\'t available on this device';
 
   @override
   String get devicesSyncingNote => 'Syncing your devices…';

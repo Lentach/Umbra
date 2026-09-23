@@ -385,17 +385,16 @@ class ConversationsProvider extends ChangeNotifier {
           ? 0
           : serverUnread;
 
-      // Update last message from backend data
+      // Update last message from backend data. An E2E row keeps its
+      // `[encrypted]` sentinel: the list decides how to show it (amendment
+      // (lxxxviii) A1), and relabelling it here made a row this install can
+      // never read look readable to that decision.
       final lastMsgData = m['lastMessage'];
       if (lastMsgData != null) {
         try {
-          var lastMsg = MessageModel.fromJson(
+          _lastMessages[convId] = MessageModel.fromJson(
             lastMsgData as Map<String, dynamic>,
           );
-          if (lastMsg.displayAsEncryptedPlaceholder) {
-            lastMsg = lastMsg.copyWith(content: 'Encrypted message');
-          }
-          _lastMessages[convId] = lastMsg;
         } catch (e) {
           debugPrint(
             '[ConversationsProvider] Failed to parse lastMessage for conversation $convId: $e',

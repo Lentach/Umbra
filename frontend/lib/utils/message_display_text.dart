@@ -149,7 +149,7 @@ String? sentinelPreviewText(BuildContext context, MessageModel message) {
   final content = message.content;
   if (content.isEmpty) return null;
   if (content == kNotLinkedYetMessageLabel) {
-    return AppLocalizations.of(context).historyBeforeDeviceLinked;
+    return AppLocalizations.of(context).historyNotOnThisDevice;
   }
   if (content == kRetiredMessageLabel) {
     return AppLocalizations.of(context).messageNoLongerStoredOnThisDevice;
@@ -160,13 +160,14 @@ String? sentinelPreviewText(BuildContext context, MessageModel message) {
   if (content == kDecryptionFailedLabel) {
     return AppLocalizations.of(context).messageUnreadableOnThisDevice;
   }
-  // Deliberately the NEUTRAL label, not "can't be read on this device": a
-  // `[encrypted]` preview may still resolve — the LIVE decrypt/merge path calls
-  // `ConversationsProvider.updateLastMessage` and the row becomes plaintext (the
-  // history decrypt pass never writes the preview) — so a preview must not
-  // accuse a row that is merely waiting for the pass.
+  // "New message", not "can't be read" and not "Encrypted message" (amendment
+  // (lxxxviii) A1). By the time an `[encrypted]` row reaches this mapping the
+  // list has already resolved it (`MessagingProvider.listPreviewFor`): this
+  // install holds no plaintext for it, and it is an unread PEER row it can
+  // read — i.e. not opened yet. A read, own or never-readable row without
+  // plaintext gets no preview line at all and never gets here.
   if (content == kEncryptedPlaceholderLabel) {
-    return AppLocalizations.of(context).encryptedMessage;
+    return AppLocalizations.of(context).newMessagePreview;
   }
   return null;
 }

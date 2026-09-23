@@ -119,7 +119,7 @@ void main() {
     final pl = await _pumpChat(tester, preLinkRows: 4, realRows: 2);
 
     expect(find.byKey(divider), findsOneWidget);
-    expect(find.text(pl.historyBeforeDeviceLinked), findsOneWidget);
+    expect(find.text(pl.historyNotOnThisDevice), findsOneWidget);
     expect(find.textContaining('note 2000', findRichText: true), findsOneWidget);
     expect(find.textContaining('note 2001', findRichText: true), findsOneWidget);
     expect(

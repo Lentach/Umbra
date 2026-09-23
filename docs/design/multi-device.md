@@ -2856,7 +2856,8 @@ that is the designed outcome).
     on the marker. The change is confined to the DISPLAY boundary: `MessagingProvider.messages`
     (the only list the UI reads) omits rows whose content is the pre-link sentinel, and exposes
     `hiddenPreLinkCount`; `ChatDetailScreen` renders ONE muted divider at the oldest end while that
-    count is non-zero ("Historia sprzed połączenia tego urządzenia"), so the user still learns
+    count is non-zero ("Wcześniejsze wiadomości nie są dostępne na tym urządzeniu", key
+    `historyNotOnThisDevice` since (lxxxviii) A3), so the user still learns
     WHY the thread starts where it does. Rows are contiguous at the oldest end (a row predates the
     link or it does not), so a page of hidden rows adds nothing visible and the scroll-anchored
     pagination simply asks for the next page on the next nudge — no auto-continue, because an
@@ -3170,6 +3171,42 @@ that is the designed outcome).
     report it was armed for is this one, recognised by content. Falsification: (F60) remove the
     spend → arming the flag, reporting our own row and then a foreign one raises no alarm
     (measured red: `ownIdentityReplacedAt` null).
+  - **(lxxxviii) — STORAGE LOSS WITHOUT PLACEHOLDERS: DISPLAY (2026-09-23, owner priority; design
+    `.planning/metadata-privacy/storage-loss-design.md` Part A).** The owner's requirement: a PWA user whose
+    browser storage is cleared must never see a `[Decryption failed]` or `[encrypted]` placeholder, and old
+    history is not needed. Boundary T = `EncryptionService.ownIdentitySince` (SERVER time, persisted,
+    forward-only): the (lxxxvi) re-mint audit instant, or the restore instant of lever (d) ((lxxxix)).
+    - **A1 — chat list.** The server's `conversationsList` serves every E2E last message as `[encrypted]` and
+      only a live event replaces it, so after ANY restart the list resolves each row through
+      `MessagingProvider.listPreviewFor(lastMessage, unreadCount)`, wired in `ConversationsScreen`:
+      (1) plaintext this install holds for that id (RAM decrypt cache, else the persisted copy, read lazily
+      once per id after E2E is up, skipped when edit-stale) → the real text or media label; (2) otherwise a
+      PEER row with `unreadCount > 0` this install can read → "Nowa wiadomość" (`newMessagePreview`, list
+      only; reply quotes keep `encryptedMessage`); (3) otherwise NO preview text — a read row, an OWN row, a
+      row this install can never read (predates T with no usable content, or a hidden post-T row per A2), or
+      a stored copy still being read. `ConversationsProvider` no longer relabels the server row to
+      'Encrypted message' (the relabel made a dead row look readable).
+    - **A2 — thread.** With T set, `MessagingProvider.messages` omits a PEER row stamped at or after T whose
+      LAST decrypt attempt failed under the `noSession` rule or the `identityReset` rule (recorded per row at
+      the decrypt catch, `_deadSessionFailedIds`) and that has no usable content — `[Decryption failed]` or
+      the restart shape `[encrypted]`. It is NOT counted in `hiddenPreLinkCount`: it awaits re-delivery
+      (reseal), it is not history. Every other failure class after T renders as before: Bad MAC (a session
+      this install holds; `hadSessionAtDecrypt` cannot attribute it to the dead install), duplicate, unknown —
+      T is permanent, so a blanket hide would mask genuine faults forever. A row merely queued for its first
+      decrypt keeps "Odszyfrowywanie…"; an edit's new ciphertext drops the old verdict; the set lives with the
+      conversation cache and is never persisted. T null: unchanged.
+    - **A3 — divider copy.** `historyBeforeDeviceLinked` → `historyNotOnThisDevice`: "Wcześniejsze wiadomości
+      nie są dostępne na tym urządzeniu" / "Earlier messages aren't available on this device" — one neutral
+      text for pre-link and pre-T rows (owner pick).
+    Falsification (`messaging_provider_envelope_status_test.dart` group (lxxxviii),
+    `conversations_list_preview_test.dart`): (A-F1) drop the unreadable term → a pre-T unread row claims
+    "Nowa wiadomość" / a pre-T failed row says "can't be read"; (A-F2) drop the post-T hide → the failed live
+    row renders; (A-F3) apply it with T null → a genuine failure on a normal install is hidden; (A-F4) count
+    post-T rows in the divider → the count is wrong; (A-F5) widen past the dead-session classes → a post-T
+    Bad-MAC/unknown failure disappears; (A-F6) drop the plaintext lookup → a read or own chat loses its text;
+    (A-F7) drop `unreadCount > 0` → a read row claims to be new. Residual: a contact's in-flight message sealed
+    to the dead session that arrives AFTER this install built a fresh session to that contact fails as Bad
+    MAC, stays visible, and is not re-delivered.
 
 - **Next gate:** T11 implementation review, then the T1–T11 merge decision. The T1–T8 phase
   gate itself is CLOSED 2026-08-22: three reviewers, verdicts SHIP / SHIP WITH FIXES ×2; the

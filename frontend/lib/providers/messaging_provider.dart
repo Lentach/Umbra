@@ -205,6 +205,16 @@ class MessagingProvider extends ChangeNotifier {
   /// pass would ask the peer to re-key a session that is perfectly healthy.
   final Set<int> _acceptGateWithheldIds = {};
 
+  /// Inbound ids whose LAST decrypt attempt failed because the peer sealed the
+  /// row to a session this install never held: the `noSession` and
+  /// `identityReset` rules of `decideDecryptionFailure`, and no other class
+  /// (amendment (lxxxviii) A2). Rewritten by every failed attempt, dropped when
+  /// an edit supersedes the ciphertext, and cleared on logout together with
+  /// [_conversationCache], whose rows it describes. Never persisted, and it
+  /// need not be: neither rule persists its verdict, so a relaunch attempts
+  /// the row again and records it again.
+  final Set<int> _deadSessionFailedIds = {};
+
   /// tempIds whose `sendMessage` emit already happened — a second emit for the
   /// same optimistic message would advance the ratchet again and hand the
   /// recipient an undecryptable duplicate. Released on send failure (so user
@@ -354,6 +364,11 @@ class MessagingProvider extends ChangeNotifier {
   /// passes keep seeing them. The screen renders one divider for the whole run
   /// instead ([hiddenPreLinkCount]).
   ///
+  /// Also omitted, but NOT counted for the divider: a peer row stamped at or
+  /// after that boundary whose decrypt failed because it was sealed to a
+  /// session this install never held (amendment (lxxxviii) A2). It is not
+  /// history; it is waiting for its sender to re-deliver it.
+  ///
   /// Rebuilt lazily after every [notifyListeners] — every mutation of
   /// [_messages] ends in one, so a consumer never reads a stale view — or when
   /// the boundary moved, and returns [_messages] itself when nothing is
@@ -369,20 +384,111 @@ class MessagingProvider extends ChangeNotifier {
     _visibleSource = _messages;
     _visibleSince = since;
     var hidden = 0;
+    var awaiting = 0;
     for (final m in _messages) {
-      if (_predatesThisDevice(m, since)) hidden++;
+      if (_predatesThisDevice(m, since)) {
+        hidden++;
+      } else if (_awaitsRedelivery(m, since)) {
+        awaiting++;
+      }
     }
     _hiddenPreLinkCount = hidden;
-    return _visibleMessages = hidden == 0
+    return _visibleMessages = hidden + awaiting == 0
         ? _messages
         : List.unmodifiable(
-            _messages.where((m) => !_predatesThisDevice(m, since)),
+            _messages.where((m) => !_isUnreadableHere(m, since)),
           );
+  }
+
+  /// The row the chat list draws [lastMessage]'s preview from, or null for NO
+  /// preview text (amendment (lxxxviii) A1).
+  ///
+  /// The server's `conversationsList` serves every E2E row as `[encrypted]`
+  /// and only a LIVE event replaces it, so after any restart every chat's last
+  /// message arrives that way. For such a row:
+  ///   1. the plaintext this install holds for that id (the decrypt cache, else
+  ///      the persisted copy) → that row, so the real text or media label;
+  ///   2. else a PEER row that is still unread ([unreadCount] > 0) and that
+  ///      this install can read → [lastMessage] itself, which the tile shows
+  ///      as "New message";
+  ///   3. else null: a read row, an OWN row, or a row this install can never
+  ///      read must not claim to be new.
+  /// While the persisted copy is still being read the answer is null too — an
+  /// empty line, never a false "New message" over a chat already read.
+  ///
+  /// Any other row keeps its own content unless this install can never read
+  /// it (the verdict [messages] hides a row on), which gets no text either.
+  MessageModel? listPreviewFor(
+    MessageModel lastMessage, {
+    required int unreadCount,
+  }) {
+    final since = _encryptionProvider?.ownIdentitySince;
+    if (lastMessage.content != kEncryptedPlaceholderLabel ||
+        _hasUsableDecryptedContent(lastMessage)) {
+      return _isUnreadableHere(lastMessage, since) ? null : lastMessage;
+    }
+    final cached = _encryptionProvider?.getCachedDecryption(lastMessage.id);
+    if (cached != null &&
+        _hasUsableDecryptedContent(cached) &&
+        !_isEditStale(lastMessage.editedAt, cached.editedAt)) {
+      return cached;
+    }
+    if (!_listPlaintext.containsKey(lastMessage.id)) {
+      _readListPlaintext(lastMessage).ignore();
+      return null;
+    }
+    final stored = _listPlaintext[lastMessage.id];
+    if (stored != null) return stored;
+    final isNew =
+        lastMessage.senderId != _currentUserId &&
+        unreadCount > 0 &&
+        !_isUnreadableHere(lastMessage, since);
+    return isNew ? lastMessage : null;
+  }
+
+  /// The persisted plaintext looked up for [listPreviewFor], by message id:
+  /// the restored row, or null when this install holds none. An absent key
+  /// means "not answered yet". Cleared on logout.
+  final Map<int, MessageModel?> _listPlaintext = {};
+
+  /// Ids whose [_listPlaintext] read is in flight, so a list rebuilt while it
+  /// runs does not start a second one.
+  final Set<int> _listPlaintextReads = {};
+
+  /// Reads the persisted plaintext for a chat-list row, then re-notifies so
+  /// the list redraws. Waits for the E2E layer: before it is up the store is
+  /// not bound to the user and every read would look like a miss. The screen
+  /// rebuilds the list when it comes up, which asks again.
+  Future<void> _readListPlaintext(MessageModel row) async {
+    final enc = _encryptionProvider;
+    if (enc == null || !enc.isE2EReady || !_listPlaintextReads.add(row.id)) {
+      return;
+    }
+    final user = _currentUserId;
+    MessageModel? held;
+    try {
+      final payload = await enc.getDecryptedContent(row.id);
+      final storedEditedAt = DateTime.tryParse(
+        payload?['editedAt'] as String? ?? '',
+      );
+      if (payload != null &&
+          payload['content'] != kDecryptionFailedLabel &&
+          !_isEditStale(row.editedAt, storedEditedAt)) {
+        final restored = _restoreFromPersistedPayload(row, payload);
+        if (_hasUsableDecryptedContent(restored)) held = restored;
+      }
+    } finally {
+      _listPlaintextReads.remove(row.id);
+    }
+    if (_isDisposed || user != _currentUserId) return;
+    _listPlaintext[row.id] = held;
+    notifyListeners();
   }
 
   /// How many rows of the loaded history [messages] hides because they predate
   /// this device — its link, or its identity. Non-zero → the thread shows one
-  /// "history before this device was linked" divider at its oldest end.
+  /// "earlier messages aren't available on this device" divider at its oldest
+  /// end. Rows awaiting re-delivery are hidden too but never counted here.
   int get hiddenPreLinkCount {
     messages; // refresh the cache
     return _hiddenPreLinkCount;
@@ -1099,6 +1205,9 @@ class MessagingProvider extends ChangeNotifier {
     _liveDecryptRetryTimer?.cancel();
     _liveDecryptRetryTimer = null;
     _liveDecryptFailedPeers.clear();
+    _deadSessionFailedIds.clear();
+    _listPlaintext.clear();
+    _listPlaintextReads.clear();
     _identityResetRebuildNotified.clear();
     _rebuildRequestedPeers.clear();
     _pingEffectFiredIds.clear();
