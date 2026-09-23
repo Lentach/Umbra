@@ -9,14 +9,15 @@
 //
 //   1. round trip: createQueue → the sid handed over (in-test; the app uses
 //      Signal) → send while the owner is away → subscribe delivers it → ack
-//      deletes it at rest → a fresh connection re-subscribes and gets only
-//      what came after → deleteQueue removes the queue;
+//      deletes it at rest → a fresh connection re-subscribes and gets what
+//      came after → deleteQueue removes the queue;
 //      the box connections are their own engine.io sessions, never the
 //      account sockets' (design §4.6), and no box row the round trip wrote
 //      carries either account;
 //   2. createQueue is throttled per client address: a throttled address is
-//      refused on the ack while another address still proceeds (PR1.0's
-//      `X-Real-IP` resolution, through the real stack).
+//      refused on the ack — also on a fresh connection — while another
+//      address still proceeds (PR1.0's `X-Real-IP` resolution, through the
+//      real stack).
 //
 // Opt-in, and it MUST stay that way: it registers two accounts, and
 // `/auth/register` is 10 per HOUR per IP with an in-memory counter that the
@@ -100,16 +101,23 @@ Future<List<Map<String, Object?>>> _rows(
   ];
 }
 
-/// Whether [row] names [client]'s account: its id as a value, or its
-/// username or session token inside one.
-bool _carriesAccount(Map<String, Object?> row, E2eClient client) =>
-    row.values.any(
-      (v) =>
-          v == client.userId ||
-          v == '${client.userId}' ||
-          (v is String &&
-              (v.contains(client.username) || v.contains(client.accessToken))),
-    );
+/// Whether [row] names [client]'s account: its id as a JSON value, or its
+/// username or session token inside a text value or — as UTF-8 — inside a
+/// bytea one (`to_jsonb` renders bytea as `\x<hex>`; every box column that
+/// could smuggle an identifier is bytea). The id is not searched as bytes:
+/// a 2–3 byte needle turns up by chance in a 16 KiB random blob.
+bool _carriesAccount(Map<String, Object?> row, E2eClient client) {
+  final needles = [client.username, client.accessToken];
+  final hexNeedles = [for (final n in needles) _hex(utf8.encode(n))];
+  return row.values.any(
+    (v) =>
+        v == client.userId ||
+        v == '${client.userId}' ||
+        (v is String &&
+            (needles.any(v.contains) ||
+                (v.startsWith(r'\x') && hexNeedles.any(v.contains)))),
+  );
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -227,25 +235,31 @@ void main() {
 
           // Nothing the box holds for this queue names either account. The
           // queue row is read after the ack, so its counters are back to 0 and
-          // cannot collide with a user id. The users row is the control: the
-          // same check finds an account where one IS stored.
-          final users = await e2eSql(
-            'SELECT to_jsonb(u)::text FROM public.users u '
-            'WHERE u.id = ${alice.userId}',
-          );
-          expect(
-            _carriesAccount(
-              (jsonDecode(users.single.join('|')) as Map)
-                  .cast<String, Object?>(),
-              alice,
-            ),
-            isTrue,
-            reason: 'the check must be able to see an account at all',
-          );
+          // cannot collide with a user id. The controls: the same check finds
+          // the account in the users row, and in a bytea value rendered by
+          // the same `to_jsonb` path.
+          final usersRow =
+              'SELECT to_jsonb(u)::text FROM public.users u '
+              'WHERE u.id = ${alice.userId}';
+          final bytesRow =
+              'SELECT to_jsonb(t)::text FROM (SELECT '
+              "convert_to('${alice.username}', 'UTF8') AS b) t";
+          for (final control in [usersRow, bytesRow]) {
+            final row = (await e2eSql(control)).single.join('|');
+            expect(
+              _carriesAccount(
+                (jsonDecode(row) as Map).cast<String, Object?>(),
+                alice,
+              ),
+              isTrue,
+              reason: 'the check must be able to see an account: $control',
+            );
+          }
+          // The round trip writes no notifier row: the harness has no push
+          // transport, so `box_notifiers` is outside this check.
           final boxRows = [
             ...stored,
             ...await _rows('box_queues', 'rid', address.rid),
-            ...await _rows('box_notifiers', 'nid', address.nid),
           ];
           expect(boxRows, hasLength(2));
           for (final row in boxRows) {
@@ -253,8 +267,8 @@ void main() {
             expect(_carriesAccount(row, bob), isFalse, reason: '$row');
           }
 
-          // A fresh connection re-subscribes the set over its own socket id;
-          // the acked message must not come back with the backlog.
+          // A fresh connection re-signs the whole set over its own socket id;
+          // without that, nothing sent after the reconnect would arrive.
           aliceBox.close();
           got.clear();
           await _ready(aliceBox);
@@ -263,7 +277,6 @@ void main() {
           await _until(() => got.isNotEmpty, 'the message sent after the ack');
           await Future<void>.delayed(const Duration(milliseconds: 300));
           expect(got.map((d) => d.blob), [next]);
-          expect(got.single.id, isNot(delivered.id));
           expect(await aliceBox.ack(queue, got.single.id), isA<BoxOk<void>>());
 
           expect(await aliceBox.deleteQueue(queue), isA<BoxOk<void>>());
@@ -327,6 +340,18 @@ void main() {
           expect(
             await throttled.createQueue(QueueKind.normal, throttledKey),
             isA<BoxRefused<QueueAddress>>(),
+          );
+          // The bucket belongs to the ADDRESS, not the connection: a fresh
+          // socket from it is still refused (else reconnecting resets it).
+          final reconnected = box(ip: throttledIp);
+          await _ready(reconnected);
+          expect(
+            await reconnected.createQueue(QueueKind.normal, signer.mint()),
+            isA<BoxRefused<QueueAddress>>().having(
+              (r) => r.code,
+              'code',
+              BoxCode.rateLimited,
+            ),
           );
 
           // Leave no queue behind on a shared dev database.
