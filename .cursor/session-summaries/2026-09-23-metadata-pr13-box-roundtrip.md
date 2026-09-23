@@ -43,16 +43,21 @@
   - F1a (account Manager put in the io cache, box without forceNew): KILLED — Alice's box engine == Bob's account engine.
   - F1b (the same, WITH forceNew): PASSES, so forceNew is the defence.
   - F1 (forceNew dropped from BOTH sockets): INVALID — both accounts end up on one socket and `setUpAll` times out.
-- NOT verified:
-  - `ed25519_edwards` signing under dart2js: `flutter test --platform chrome` sat at `loading` for 14+ min and was killed, so there is no number.
-  - A real push notifier (no `box_notifiers` row is written here).
-  - nginx `/box/`, prod.
+- dart2js signing, retried after `flutter test --platform chrome` hung at `loading` for 14+ min. This time: `dart compile js` of a throwaway entrypoint, run in the managed Chromium 153 (the `verify-session-lock-probe.mjs` pattern).
+  - CORRECT: the public key a seed derives and all 4 server-produced vectors match.
+  - SLOW: 256 signatures take 1970–2374 ms at `-O4` (≈ 8–9 ms each) and 2678–2867 ms at `-O2`. The Dart VM does the same in 187–248 ms. One 256-queue subscribe chunk blocks the web UI for about 2 s.
+- Real Web Push notifier, driven once. The managed Chromium subscribed to Web Push with the dev VAPID key and got a real `fcm.googleapis.com` endpoint. With the real `BoxClient` (throwaway test):
+  - challenge → `challenged`; the code arrived through FCM into the service worker;
+  - a wrong code → refused; the pushed code → `active`;
+  - a send while nobody was subscribed → a `{type:'new_message'}` wake-up 2.8 s later;
+  - deleteQueue → ok.
+- NOT verified: FCM (Android) notifiers (the dev stack has no `FIREBASE_SERVICE_ACCOUNT`), nginx `/box/`, prod.
 
 ## Notes for next session
 - Next: gate G4, which needs the owner's OK. At the gate:
   - nginx `location /box/` with `X-Real-IP` (VM);
   - rebuild LATEST as the newest-5 union during the gate rebase. It stays master's verbatim copy until then (owner's pick), so there is no entry this session.
-- Before PR3.1 resubscribes on web: get the dart2js `sign()` timing. First find out why the chrome runner hangs on this box (CI's `session-lock` job does run chrome).
+- Before PR3.1 resubscribes on web: `sign()` costs ≈ 8–9 ms under dart2js, so `BoxClient._subscribeChunks` must not sign 256 in one go on the UI thread. Options: yield between signatures, a worker, or WebCrypto Ed25519. This is a PR3.1 design call.
 - Owner-owed:
   - the 16 MiB box per-file cap;
   - an OK for `deleteQueue` → `auth_failed` meaning "gone";
