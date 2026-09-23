@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:http/http.dart' as http;
 import 'package:socket_io_client/socket_io_client.dart' as io;
 
@@ -48,11 +49,21 @@ typedef BoxSocketFactory = BoxSocket Function(String url);
 /// its path), and NO library reconnection: a reconnect is a new instance
 /// driven by [BoxClient]'s own [ChatReconnectManager].
 class IoBoxSocket implements BoxSocket {
-  IoBoxSocket(String url)
+  IoBoxSocket(String url) : this._(url, const {});
+
+  /// [headers] ride the WebSocket handshake: the wire harness's stand-in for
+  /// the proxy's `X-Real-IP`, the address the box throttles on. Native only —
+  /// a browser cannot set handshake headers.
+  @visibleForTesting
+  IoBoxSocket.withHeaders(String url, Map<String, String> headers)
+    : this._(url, headers);
+
+  IoBoxSocket._(String url, Map<String, String> headers)
     : _socket = io.io(
         url,
         io.OptionBuilder()
             .setTransports(['websocket'])
+            .setExtraHeaders(headers)
             .disableAutoConnect()
             .enableForceNew()
             .disableReconnection()
@@ -60,6 +71,11 @@ class IoBoxSocket implements BoxSocket {
       );
 
   final io.Socket _socket;
+
+  /// The engine.io session under this socket, null until connected. The wire
+  /// harness asserts it is never the account socket's (design §4.6).
+  @visibleForTesting
+  String? get engineId => _socket.io.engine?.id;
 
   @override
   String? get id => _socket.id;

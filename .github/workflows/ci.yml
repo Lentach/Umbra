@@ -341,8 +341,13 @@ jobs:
   #    `full_stack_e2e_test.dart`'s `setUpAll` because that suite happened to run
   #    last, which is why it read as a defect in an untouched file. Moved here.
   #
+  #  * The box round trip (`box_roundtrip_test.dart`, metadata-privacy PR1.3)
+  #    drives the real box client beside two logged-in accounts, because "the
+  #    box never learns the account" means nothing without an account to leak.
+  #    Those 2 registrations have no room in the shared run either.
+  #
   # Budget on THIS stack: reset probe 2 + lock probe 2 + encryption proof 2
-  # = 6 of 10.
+  # + box round trip 2 = 8 of 10.
   # Both probes are also destructive or state-heavy (the ceremony replaces the
   # account identity, revokes every device and burns a device id forward), so
   # they need accounts nothing else depends on. A dedicated stack gives them that.
@@ -441,6 +446,21 @@ jobs:
             --dart-define=ENCRYPTION_PROOF=true | tee encryption-proof.log
           if ! grep -Eq '(^|[^0-9])[1-9][0-9]* tests? passed|\+[1-9][0-9]*[ :].*All tests passed' encryption-proof.log; then
             echo "::error::the encryption proof reported no PASSING test — the ENCRYPTION_PROOF define is not taking effect, so nothing about at-rest ciphertext is proven"
+            exit 1
+          fi
+
+      # Same skip-gate, same silent-green hazard: the group is gated on
+      # bool.fromEnvironment('BOX_PROBE') with its hooks inside it, so a default
+      # run registers nothing and a dropped define would report green.
+      - name: Run the box round trip (metadata-privacy PR1.3)
+        working-directory: frontend
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter test test_e2e/box_roundtrip_test.dart \
+            --dart-define=BOX_PROBE=true | tee box-probe.log
+          if ! grep -Eq '(^|[^0-9])[1-9][0-9]* tests? passed|\+[1-9][0-9]*[ :].*All tests passed' box-probe.log; then
+            echo "::error::the box probe reported no PASSING test — the BOX_PROBE define is not taking effect, so the box round trip is unproven"
             exit 1
           fi
 
