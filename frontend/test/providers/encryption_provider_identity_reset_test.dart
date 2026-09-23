@@ -790,6 +790,75 @@ void main() {
       expect(relaunched.ownIdentitySince, DateTime.parse(at));
     });
 
+    // The cold-start self-alarm (found 2026-09-23 on origin :5621). The
+    // connect-time status can reach a relaunched install BEFORE its keys are
+    // loaded, and an unknown own key must report — so the row that ENDED at
+    // our own key was persisted as a red "new keys on your account" alarm,
+    // and every later cold start re-raised it: its instant equals
+    // `ownIdentitySince`, and no later report retracted it. An install that
+    // proved an instant is its own (that is the only way `ownIdentitySince`
+    // is set) retracts the alarm for exactly that instant once its keys load.
+    // Falsification: drop the retraction → the relaunch shows the alarm.
+    test('an alarm for the instant this install proved its own is retracted '
+        'when its keys load, and stays gone on the next launch', () async {
+      Future<EncryptionService> launch() async {
+        final service = EncryptionService();
+        await service.initialize(
+          98,
+          checkServerIdentity: () async =>
+              const ServerIdentityGuard(exists: false),
+        );
+        return service;
+      }
+
+      final at = DateTime.now()
+          .toUtc()
+          .subtract(const Duration(minutes: 5))
+          .toIso8601String();
+      final service = await launch();
+      final own =
+          (await service.getKeyBundleForReupload())!['identityPublicKey']
+              as String;
+      await service.recordOwnIdentityReplacedFromServer(at, replacedTo: own);
+      // What the pre-key-load report leaves behind: the alarm persisted for
+      // our own row, exactly the observed `replaced_v1 == since_v1`.
+      await service.recordOwnIdentityReplaced(at);
+
+      final relaunched = await launch();
+      expect(relaunched.ownIdentitySince, DateTime.parse(at));
+      expect(relaunched.ownIdentityReplacedAt, isNull);
+      expect((await launch()).ownIdentityReplacedAt, isNull);
+    });
+
+    test('an alarm for any OTHER instant survives the keys loading', () async {
+      Future<EncryptionService> launch() async {
+        final service = EncryptionService();
+        await service.initialize(
+          99,
+          checkServerIdentity: () async =>
+              const ServerIdentityGuard(exists: false),
+        );
+        return service;
+      }
+
+      final ours = DateTime.now().toUtc().subtract(const Duration(hours: 1));
+      final service = await launch();
+      final own =
+          (await service.getKeyBundleForReupload())!['identityPublicKey']
+              as String;
+      await service.recordOwnIdentityReplacedFromServer(
+        ours.toIso8601String(),
+        replacedTo: own,
+      );
+      final foreign = ours.add(const Duration(minutes: 30)).toIso8601String();
+      await service.recordOwnIdentityReplacedFromServer(
+        foreign,
+        replacedTo: 'BfOreignKeyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      );
+
+      expect((await launch()).ownIdentityReplacedAt, foreign);
+    });
+
     test('the upload that replaced the identity asks for its audit row at '
         'once', () {
       // The minting session is the one the user reads first; the connect-time

@@ -3204,6 +3204,18 @@ that is the designed outcome).
     again → the row vanishes from the thread; (A-F8) blank the list for a post-T `[encrypted]` row whose
     attempt failed → an unread message the thread shows gets no preview; (A-F6) drop the plaintext lookup → a
     read or own chat loses its text; (A-F7) drop `unreadCount > 0` → a read row claims to be new.
+  - **(lxxxix) — THE OWN-ROW ALARM IS RETRACTED WHEN THE KEYS LOAD (2026-09-23, defect).** A re-minted
+    install's connect-time `ownKeyBundleStatus` can land BEFORE its keys load, and an unknown own key must
+    report ((lxxx) clause 5: silence is never the fail-open answer), so the audit row that ENDED at its own
+    key was persisted as the red "Nowe klucze szyfrowania na Twoim koncie" alarm; the (lxxxi) clause-2
+    retraction needs a later report, and every later cold start's report also beat the keys — observed on
+    origin :5621 as `own_identity_replaced_v1 == own_identity_since_v1`, re-raised on every reload. Now
+    `EncryptionService.initialize`, on the loaded-keys path, retracts a showing alarm whose instant equals
+    `ownIdentitySince` (set ONLY by a row proven to end at this install's key), exactly as the clause-2
+    path does (dismissal watermark = that instant). An alarm for any other instant is a different row and
+    stays. Falsification (`encryption_provider_identity_reset_test.dart`, group "the instant this identity
+    became the account's"): drop the retraction → the relaunch shows the alarm; drop the instant match →
+    a foreign replacement's alarm is swallowed.
 
 - **Next gate:** T11 implementation review, then the T1–T11 merge decision. The T1–T8 phase
   gate itself is CLOSED 2026-08-22: three reviewers, verdicts SHIP / SHIP WITH FIXES ×2; the

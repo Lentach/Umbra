@@ -1050,6 +1050,25 @@ class EncryptionService {
     } on Object catch (_) {}
   }
 
+  /// Retracts a showing alarm for the one instant this install PROVED is its
+  /// own: [ownIdentitySince] is set only by a row that ended at the key this
+  /// install holds. The connect-time status can arrive before the keys load,
+  /// and an unknown own key must report, so that very row became a persisted
+  /// red alarm that every cold start re-raised and no later report retracted
+  /// (every one of them also beat the keys). Called once the keys ARE loaded.
+  /// An alarm for any other instant is a different row and stays.
+  Future<void> _retractOwnRowAlarm() async {
+    final since = _ownIdentitySince;
+    final showing = _ownIdentityReplacedAt;
+    if (since == null || showing == null) return;
+    final at = DateTime.tryParse(showing);
+    if (at == null || !at.isAtSameMomentAs(since)) return;
+    E2ePersistentDiag.record('OWN_IDENTITY_REPLACED_IS_SELF', {
+      'source': 'keys_loaded',
+    });
+    await dismissOwnIdentityReplaced();
+  }
+
   Future<void> _persistIdentityChanged() async {
     final userId = _userId;
     if (userId == null) return;
@@ -1363,6 +1382,7 @@ class EncryptionService {
       // preKeysLow bounce.
       needsKeyUpload = _keysForUpload != null;
       _initialized = true;
+      await _retractOwnRowAlarm();
       return;
     }
 
