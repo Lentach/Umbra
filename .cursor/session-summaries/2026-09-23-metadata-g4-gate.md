@@ -19,6 +19,8 @@
   - `backend/CLAUDE.md` §2 names the box's strict parsers as the `validateDto` exception.
   - The wire.md box bullet lists the PR3.1 prerequisites.
 - `14c1f22d`: merged `origin/master` (3 docs commits, clean), then pushed `HEAD:master` + the branch (`git ls-remote`: both at `14c1f22d`).
+- Deployed: backup `chatdb-20260923T190351Z.dump.gpg` first, then `./deploy-backend.sh`. `0022_box.sql` applied at boot. `.planning/metadata-privacy/task_plan.md` §5 has the G4 block with the 5 PR3.1 prerequisites.
+- **Owner, after the deploy: BRANCH UNTIL RELEASE N.** PR2.1/PR3.2/PR3.1 stay on the branch until the box cutover works end to end. G4 failed the plan's own standalone test for the box (dark, no user value) and used a merge commit against §5's linear-history rule. Owner kept the deploy.
 
 ## Key files
 - Edited: `backend/src/app.module.ts`, `backend/src/config/env.validation.ts`, `docker-compose.prod.yml`, `docker-compose.yml`, `backend/CLAUDE.md`, `docs/contracts/wire.md`, `frontend/lib/providers/messaging/messaging_provider.send.dart`
@@ -50,7 +52,15 @@
   - `wss …/socket.io` `40/box,` → `44/box {"Invalid namespace"}`. `POST /box/media` → nginx 405 (never reaches Nest).
   - 0 error lines since boot. Disk: 9.4 GB free.
   - Smoke 8/8 PASS with `--commit d37e2dcc`, run from the `fireplace` checkout, because mp has no playwright.
-- NOT verified: a real message push on prod after the deploy (it needs the owner's device); FCM box notifier; iOS.
+- **Old client (what users run) vs the new backend, after the deploy.** Throwaway worktree at `d37e2dcc` (web 0.2.50) against staging with the prod image (`ec69e7a5`, same code as `14c1f22d`):
+  - The old client's own `test_e2e`: 44 passed, 14 skipped, 2 failed. Both failures are its "legacy plaintext emoji reaction" test and the error event that test causes. The server has refused plain emoji since `84d9608d` (2026-09-19, D10), which was already on prod in `9e621f63`. `chat.dto.ts` and the reaction service are identical between the two, so this is not from today.
+  - Browser: the old web build served on :8090/:8091, two accounts. A message went through, decrypted and got a reply, with ✓✓ read receipts. 0 server errors during the drive.
+  - PR0.2 push behaviour with a real Web Push subscription (FCM endpoint, staging VAPID):
+    - App visible on the chat list: badge only, no notification.
+    - App closed (page left): notification "g4alice | 4 new messages".
+    - App backgrounded (`visibilitychange` → hidden): notification "5 new messages".
+    - Control: a direct `web-push` send from the container showed up in the SW.
+- NOT verified: a real message push on PROD (needs the owner's device); Android push (dev/staging have no FCM service account, and the APK is built for prod only); the FCM box notifier; iOS.
 
 ## Notes for next session
 - **Owner-owed:**
@@ -64,4 +74,4 @@
   4. nginx `location /box/`, tracked conf first.
   5. A decision on the media-quota liveness oracle.
 - Review items left as judgement calls: the e2e user-id row check skips `box_media`/`box_notifiers`; duplicated `BoxResult` re-typing; the copied throttler adapter; the module-global refusal map; the `'no key bundle'` string match.
-- Traps → `docs/agents/traps.md` (4 lines, this file).
+- Traps → `docs/agents/traps.md` (8 lines, this file).
