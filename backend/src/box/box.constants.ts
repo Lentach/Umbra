@@ -59,13 +59,17 @@ export const BOX_MEDIA_LADDER: ReadonlyArray<{
 ];
 
 /**
- * Media bytes one NORMAL queue may receive per UTC day. The budget bounds disk
- * use by whoever holds a sid (a revoked peer keeps it until rotation, design
- * §4.2): 16 top-rung files a day, ≤ 3.5 GiB per queue over the 14-day TTL.
+ * Media bytes one NORMAL queue may receive per UTC day, charged at the RUNG
+ * size (a 4.1 MiB file costs 16 MiB). The budget bounds disk use by whoever
+ * holds a sid (a revoked peer keeps it until rotation, design §4.2): 64
+ * top-rung files a day, ≤ 14 GiB per queue over the 14-day TTL. Owner's
+ * number (2026-09-23; 256 MiB was 16 videos a day). `mediaBytesToday` is an
+ * `integer`: budget + the top rung must stay below 2^31, so anything from
+ * 2 GiB up needs that column widened first.
  * Request queues take no media — first contact never carries a file, and a
  * request sid is served to anyone who can search.
  */
-export const BOX_MEDIA_DAILY_BUDGET_BYTES = 256 * 1024 * 1024;
+export const BOX_MEDIA_DAILY_BUDGET_BYTES = 1024 * 1024 * 1024;
 
 /**
  * Push coalescing per notifier, the existing tuning (design §4.5): wait this
