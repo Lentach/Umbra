@@ -222,6 +222,39 @@ void main() {
       },
     );
 
+    test(
+      'a friend the list omits is KEPT as former while it holds queue '
+      'material, and the next list that names it restores it',
+      () async {
+        await seedOnlineSession();
+        const queue = ContactQueue(
+          rid: 'RID',
+          sid: 'SID',
+          nid: 'NID',
+          authPriv: 'AUTH',
+          sealPriv: 'SEALPRIV',
+          sealPub: 'SEALPUB',
+        );
+        await store.update(3, (r) => r!.copyWith(queues: const [queue]));
+        final friends = friendsOver(store)..onFriendsList([_user(2, 'bob')]);
+        await _settle();
+
+        final carol = store.byUserId(3)!;
+        expect(carol.state, ContactState.former);
+        expect(carol.queues.single.rid, 'RID');
+        expect(
+          (friendsOver(store)..hydrateFromStore()).friends.map((u) => u.id),
+          [2],
+          reason: "a former record hydrates as nobody's friend",
+        );
+
+        friends.onFriendsList([_user(2, 'bob'), _user(3, 'carol')]);
+        await _settle();
+        expect(store.byUserId(3)?.state, ContactState.friend);
+        expect(store.byUserId(3)?.queues.single.rid, 'RID');
+      },
+    );
+
     test('being blocked by a peer drops their record', () async {
       await seedOnlineSession();
       friendsOver(store).onYouWereBlocked({'userId': 2});

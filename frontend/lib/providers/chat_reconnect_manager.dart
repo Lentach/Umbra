@@ -4,11 +4,22 @@ import '../constants/app_constants.dart';
 
 /// Encapsulates WebSocket reconnection state and exponential backoff scheduling.
 /// Used by [ConnectionProvider] to reconnect after disconnect (unless intentional or max attempts reached).
+///
+/// [requiresToken] is true for the account socket, which cannot reconnect
+/// without a JWT. The box (`services/box/box_client.dart`) has no account on
+/// its path, so it runs its OWN instance with `requiresToken: false` — one
+/// instance holds one timer, so the two sockets can never share it.
 class ChatReconnectManager {
+  ChatReconnectManager({this.requiresToken = true});
+
+  final bool requiresToken;
   bool intentionalDisconnect = false;
   String? tokenForReconnect;
   int reconnectAttempts = 0;
   Timer? _timer;
+
+  bool get _blocked =>
+      intentionalDisconnect || (requiresToken && tokenForReconnect == null);
 
   DateTime? _lastReconnectFireAt;
 
@@ -16,7 +27,7 @@ class ChatReconnectManager {
   void scheduleReconnectAfter(Duration delay, void Function() onConnect) {
     _timer?.cancel();
     _timer = Timer(delay, () {
-      if (intentionalDisconnect || tokenForReconnect == null) return;
+      if (_blocked) return;
       _lastReconnectFireAt = DateTime.now();
       onConnect();
     });
@@ -50,7 +61,7 @@ class ChatReconnectManager {
 
   /// Called when socket disconnects. Returns true if reconnect was scheduled, false otherwise.
   bool onDisconnect(void Function() onConnect, void Function(String) onMaxAttemptsReached) {
-    if (intentionalDisconnect || tokenForReconnect == null) return false;
+    if (_blocked) return false;
     if (reconnectAttempts >= AppConstants.reconnectMaxAttempts) {
       onMaxAttemptsReached('Connection lost. Please refresh the page.');
       return false;

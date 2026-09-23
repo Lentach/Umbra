@@ -123,9 +123,10 @@ class FriendsProvider extends ChangeNotifier {
 
   /// Store write for a server list: every listed peer is upserted into
   /// [state], and — in the SAME lock, decided on disk state — every record
-  /// in [state] that the list omits is removed. That state ONLY: a
-  /// `friendRequestsList` never touches a friend and a `blockedList` never
-  /// touches a pending request.
+  /// in [state] that the list omits is swept ([_unlisted]). That state ONLY:
+  /// a `friendRequestsList` never touches a friend and a `blockedList` never
+  /// touches a pending request. A `former` record the list names again takes
+  /// the listed state and keeps its queues.
   void _storeList(
     ContactState state,
     List<UserModel> peers, {
@@ -153,10 +154,21 @@ class FriendsProvider extends ChangeNotifier {
                   ),
                 );
         },
-        sweep: prune ? (r) => r.state == state ? null : r : null,
+        sweep: prune ? (r) => r.state == state ? _unlisted(r) : r : null,
       ),
     );
   }
+
+  /// A record a server list stopped naming. Absence from a list is INFERRED,
+  /// not an event (only `unfriended`, `youWereBlocked` and a decline are):
+  /// the list may be wrong, and a record holding queue material no server can
+  /// re-supply — this device's queue keys, the peer's send addresses — must
+  /// survive that, so it is kept as [ContactState.former]. Anything else is
+  /// removed.
+  static ContactRecord? _unlisted(ContactRecord record) =>
+      record.queues.isEmpty && record.outbound.isEmpty
+          ? null
+          : record.copyWith(state: ContactState.former);
 
   void _storeRequest(FriendRequestModel request, ContactState state) {
     final peer = state == ContactState.pendingIn

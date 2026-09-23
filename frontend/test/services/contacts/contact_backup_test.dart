@@ -24,6 +24,7 @@ ContactRecord _record(int id) => ContactRecord(
     ContactQueue(
       rid: 'RID',
       sid: 'MYSID',
+      nid: 'MYNID',
       authPriv: 'AUTHPRIV',
       sealPriv: 'SEALPRIV',
       sealPub: 'SEALPUB',

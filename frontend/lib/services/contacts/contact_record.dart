@@ -1,18 +1,30 @@
 import '../../models/user_model.dart';
 
 /// Where a peer stands with this account. Exactly one per record.
-enum ContactState { friend, pendingIn, pendingOut, blocked }
+///
+/// [former]: a server list stopped naming the peer, but the record holds
+/// queue material no server can re-supply ([ContactRecord.queues] private
+/// halves, [ContactRecord.outbound] send addresses). Absence from a list is
+/// INFERRED, not an event, so the record is kept, hidden from every list, and
+/// becomes whatever the next list names it again. A build older than
+/// metadata-privacy PR1.2 cannot read this state: it counts the row
+/// undetermined (and its contact backup then refuses to upload).
+enum ContactState { friend, pendingIn, pendingOut, blocked, former }
 
 /// An inbound queue THIS device owns for the peer (design §4.2): the peer's
 /// devices send into it, this device alone can subscribe / ack / delete it.
 /// Private halves never leave the device — this record is the only copy.
 ///
-/// Binary fields are base64url, no padding. Frozen: PR2.3/PR2.4 back these
+/// Binary fields are base64url, no padding: [rid]/[sid] 32 B and [nid] 16 B
+/// as the box answered `createQueue`; [authPriv] the Ed25519 key as
+/// seed(32) ‖ public(32) (`BoxAuthKey.bytes`); [sealPriv]/[sealPub] raw
+/// 32-byte X25519 halves (`QueueSealKeyPair`). Frozen: PR2.3 backs these
 /// bytes up verbatim, so a representation change is a backup-format break.
 class ContactQueue {
   const ContactQueue({
     required this.rid,
     required this.sid,
+    required this.nid,
     required this.authPriv,
     required this.sealPriv,
     required this.sealPub,
@@ -21,6 +33,7 @@ class ContactQueue {
   factory ContactQueue.fromJson(Map<String, dynamic> j) => ContactQueue(
     rid: j['rid'] as String,
     sid: j['sid'] as String,
+    nid: j['nid'] as String,
     authPriv: j['authPriv'] as String,
     sealPriv: j['sealPriv'] as String,
     sealPub: j['sealPub'] as String,
@@ -28,6 +41,7 @@ class ContactQueue {
 
   final String rid;
   final String sid;
+  final String nid;
   final String authPriv;
   final String sealPriv;
   final String sealPub;
@@ -35,6 +49,7 @@ class ContactQueue {
   Map<String, dynamic> toJson() => {
     'rid': rid,
     'sid': sid,
+    'nid': nid,
     'authPriv': authPriv,
     'sealPriv': sealPriv,
     'sealPub': sealPub,

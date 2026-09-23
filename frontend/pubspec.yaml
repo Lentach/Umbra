@@ -96,6 +96,11 @@ dependencies:
   # pointycastle as a dev dep), so this is promotion, not a new pin.
   crypto: ^3.0.0
   pointycastle: ^4.0.0
+  # Metadata-privacy PR1.2 (the box client): pure Ed25519 (RFC 8032), the ONE
+  # signature the box's node `crypto.verify` checks — libsignal's XEdDSA is a
+  # different scheme. Already resolved in the lock through libsignal, so this
+  # is promotion, not a new pin (same move as `crypto`/`pointycastle`).
+  ed25519_edwards: ^0.3.1
   qr_flutter: ^4.1.0
   # (lxxvii) clause 3: native QR scanning (CameraX/ML Kit on Android). Web
   # deliberately does NOT use this package's scanner — its web impl fetches
