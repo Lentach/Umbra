@@ -54,7 +54,10 @@
   - Smoke 8/8 PASS with `--commit d37e2dcc`, run from the `fireplace` checkout, because mp has no playwright.
 - **Old client (what users run) vs the new backend, after the deploy.** Throwaway worktree at `d37e2dcc` (web 0.2.50) against staging with the prod image (`ec69e7a5`, same code as `14c1f22d`):
   - The old client's own `test_e2e`: 44 passed, 14 skipped, 2 failed. Both failures are its "legacy plaintext emoji reaction" test and the error event that test causes. The server has refused plain emoji since `84d9608d` (2026-09-19, D10), which was already on prod in `9e621f63`. `chat.dto.ts` and the reaction service are identical between the two, so this is not from today.
-  - Browser: the old web build served on :8090/:8091, two accounts. A message went through, decrypted and got a reply, with ✓✓ read receipts. 0 server errors during the drive. The staging warn lines from the harness run, and two rig artifacts that looked like failures, are attributed in `findings.md` §2026-09-23 G4 follow-up; none is from today.
+  - Browser: the old web build served on :8090/:8091, two accounts. A message went through, decrypted and got a reply, with ✓✓ read receipts. 0 server errors during the drive. Warn lines during the harness run were:
+    - its own negative cases (refused revokes, `device_revoked`, `invalid_signature` on `/users/me`);
+    - a first-connect OTP race (`identity_epoch_required`, a guard since `caa322b9`, 0.0.109).
+    - None is from today. Two rig artifacts: see traps.md "released by a" and "Headless Chrome".
   - PR0.2 push behaviour with a real Web Push subscription (FCM endpoint, staging VAPID):
     - App visible on the chat list: badge only, no notification.
     - App closed (page left): notification "g4alice | 4 new messages".
@@ -65,7 +68,7 @@
 ## Notes for next session
 - **Owner-owed:**
   - On prod: background the app, wait a minute, then send one message, to confirm the push still arrives.
-  - PR0.2 edge: if an app dies without `visibilitychange` (crash, OS kill, network loss), that device misses pushes for EVERY chat until its socket times out; before PR0.2, only the open chat. There is also no in-app sound for other chats while the app is visible. An in-app cue is the natural follow-up.
+  - PR0.2 edges (stale "visible" after a crash suppresses pushes for every chat; no in-app sound for other chats): see traps.md "Since PR0.2". An in-app cue is the natural follow-up.
   - The next `deploy-web.ps1` from master ships ALL the undeployed frontend work (Phase 2a + storage-loss Part A + PR0.2 client + dark box client). It needs its own gate and the ordinary-login device re-drive (task_plan G2 note).
   - Still open: the 16 MiB box file cap; `deleteQueue` → `auth_failed` meaning "gone"; I2b.
 - **PR3.1 prerequisites before `BOX_ENABLED` flips on prod** (task_plan §5 G4 block):
