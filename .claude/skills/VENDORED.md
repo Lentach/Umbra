@@ -58,6 +58,8 @@ OMP's own `task`/`hub` fan-out, or stubs from a pipeline we don't run), and `pla
 
 `umbra-session-end` — the handoff contract enforced by `scripts/verify-context-budget.mjs`.
 
+`umbra-session-start` — the reader of the `NEXT.md` baton `umbra-session-end` writes; owns the baton format.
+
 `flutter-frontend-design` — authored locally on this box (mtime 2026-07-14) and absent from
 `~/.agents/.skill-lock.json`, so from neither `mattpocock/skills` nor `dash_skills`; origin otherwise
 unrecorded and it carries no upstream license note. It was stranded in `~/.claude/skills/`, which OMP does
