@@ -388,11 +388,12 @@ class MessagingProvider extends ChangeNotifier {
   /// message arrives that way. For such a row:
   ///   1. the plaintext this install holds for that id (the decrypt cache, else
   ///      the persisted copy) → that row, so the real text or media label;
-  ///   2. else a PEER row that is still unread ([unreadCount] > 0) and that
-  ///      this install can read → [lastMessage] itself, which the tile shows
-  ///      as "New message";
-  ///   3. else null: a read row, an OWN row, or a row this install can never
-  ///      read must not claim to be new.
+  ///   2. else a PEER row that is still unread ([unreadCount] > 0) and does
+  ///      not predate this device → [lastMessage] itself, which the tile shows
+  ///      as "New message" — even when its decrypt failed here, because the
+  ///      thread shows that row and the list must not blank it;
+  ///   3. else null: a read row, an OWN row, or a row that predates this
+  ///      device must not claim to be new.
   /// While the persisted copy is still being read the answer is null too — an
   /// empty line, never a false "New message" over a chat already read.
   ///
@@ -468,7 +469,7 @@ class MessagingProvider extends ChangeNotifier {
   /// How many rows of the loaded history [messages] hides because they predate
   /// this device — its link, or its identity. Non-zero → the thread shows one
   /// "earlier messages aren't available on this device" divider at its oldest
-  /// end. Rows awaiting re-delivery are hidden too but never counted here.
+  /// end.
   int get hiddenPreLinkCount {
     messages; // refresh the cache
     return _hiddenPreLinkCount;

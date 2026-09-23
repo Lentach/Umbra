@@ -3182,8 +3182,10 @@ that is the designed outcome).
       `MessagingProvider.listPreviewFor(lastMessage, unreadCount)`, wired in `ConversationsScreen`:
       (1) plaintext this install holds for that id (RAM decrypt cache, else the persisted copy, read lazily
       once per id after E2E is up, skipped when edit-stale) → the real text or media label; (2) otherwise a
-      PEER row with `unreadCount > 0` this install can read → "Nowa wiadomość" (`newMessagePreview`, list
-      only; reply quotes keep `encryptedMessage`); (3) otherwise NO preview text — a read row, an OWN row, a
+      PEER row with `unreadCount > 0` that does not predate T → "Nowa wiadomość" (`newMessagePreview`, list
+      only; reply quotes keep `encryptedMessage`) — including a post-T row whose decrypt already failed on a
+      dead session: the thread shows it as unreadable, and the list must not blank a message the thread shows
+      (owner, with the A2 revert); (3) otherwise NO preview text — a read row, an OWN row, a
       row this install can never read (predates T with no usable content), or
       a stored copy still being read. `ConversationsProvider` no longer relabels the server row to
       'Encrypted message' (the relabel made a dead row look readable).
@@ -3199,8 +3201,9 @@ that is the designed outcome).
     Falsification (`messaging_provider_envelope_status_test.dart` group (lxxxviii),
     `conversations_list_preview_test.dart`): (A-F1) drop the unreadable term → a pre-T unread row claims
     "Nowa wiadomość" / a pre-T failed row says "can't be read"; (A-F2′) hide a post-T dead-session failure
-    again → the row vanishes from the thread; (A-F6) drop the plaintext lookup → a read or own chat loses
-    its text; (A-F7) drop `unreadCount > 0` → a read row claims to be new.
+    again → the row vanishes from the thread; (A-F8) blank the list for a post-T `[encrypted]` row whose
+    attempt failed → an unread message the thread shows gets no preview; (A-F6) drop the plaintext lookup → a
+    read or own chat loses its text; (A-F7) drop `unreadCount > 0` → a read row claims to be new.
 
 - **Next gate:** T11 implementation review, then the T1–T11 merge decision. The T1–T8 phase
   gate itself is CLOSED 2026-08-22: three reviewers, verdicts SHIP / SHIP WITH FIXES ×2; the

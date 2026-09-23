@@ -63,6 +63,12 @@ class _BoundaryEncryption extends EncryptionProvider {
   @override
   Future<void> ensureSession(int recipientId, {int deviceId = 1}) async {}
 
+  /// Nothing was ever persisted: a failed row has no stored plaintext, so the
+  /// chat list's lazy lookup answers "none held" instead of never answering.
+  @override
+  Future<Map<String, dynamic>?> getDecryptedContent(int messageId) async =>
+      null;
+
   @override
   Future<String> decrypt(
     int senderId,
@@ -673,6 +679,43 @@ void main() {
 
       expect(provider.messages.map((m) => m.content), [kDecryptionFailedLabel]);
       expect(provider.hiddenPreLinkCount, 0);
+    });
+
+    // A1 follows the same choice: the chat list must not blank a message the
+    // thread shows. A live post-boundary row still in the restart shape
+    // (`[encrypted]`, its no-session attempt already failed) that is unread
+    // previews as "New message"; a pre-boundary row of the same shape is
+    // history and previews nothing.
+    test('an unread post-boundary row whose attempt failed is still new in '
+        'the list; the same row before the boundary is not', () async {
+      final encryption = await wire(boundary: since);
+      encryption.failures
+        ..[520] = 'NoSessionException: no session for 2'
+        ..[521] = 'NoSessionException: no session for 2';
+      for (final (id, at) in [
+        (520, since.add(const Duration(minutes: 1))),
+        (521, since.subtract(const Duration(hours: 1))),
+      ]) {
+        provider.onNewMessage(
+          _row(id: id, encryptedContent: '2:ct', createdAt: at),
+        );
+      }
+      await pumpEventQueue(times: 200);
+      provider.onDisconnect(); // stop the debounced live retry
+
+      MessageModel row(int id) =>
+          provider.loadedMessagesForTest.firstWhere((m) => m.id == id);
+      expect(row(520).content, kEncryptedPlaceholderLabel,
+          reason: 'precondition: the restart shape, attempt already failed');
+      expect(provider.messages.map((m) => m.id), [520]);
+      // The first ask starts the lazy stored-plaintext lookup; the answer
+      // (none held) lands on the next turn.
+      provider
+        ..listPreviewFor(row(520), unreadCount: 1)
+        ..listPreviewFor(row(521), unreadCount: 1);
+      await pumpEventQueue();
+      expect(provider.listPreviewFor(row(520), unreadCount: 1)?.id, 520);
+      expect(provider.listPreviewFor(row(521), unreadCount: 1), isNull);
     });
   });
 }
