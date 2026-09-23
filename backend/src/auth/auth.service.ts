@@ -112,10 +112,15 @@ export class AuthService {
     // in WHOLE SECONDS, and a JWT's `iat` is floored — a token signed in the
     // same second as the stamp is dead on arrival. Wait for the next second
     // (≤ 1 s) rather than back-dating the stamp, which would let a token
-    // stolen in that second survive the change.
+    // stolen in that second survive the change. Re-check after each wait:
+    // timers run on the monotonic clock and can fire ~1 ms before
+    // `Date.now()` reaches the target, which signed in the stamp's second.
     const nextSecondMs = (Math.floor(changedAt.getTime() / 1000) + 1) * 1000;
-    const waitMs = nextSecondMs - Date.now();
-    if (waitMs > 0) {
+    for (
+      let waitMs = nextSecondMs - Date.now();
+      waitMs > 0;
+      waitMs = nextSecondMs - Date.now()
+    ) {
       // Executor form on purpose: the tsconfig lib predates Promise.withResolvers.
       await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
     }

@@ -263,7 +263,21 @@ describe('AuthService', () => {
       });
     });
 
-    it('signs the token in a LATER second than passwordChangedAt, or JwtStrategy rejects it on arrival', async () => {
+    it('signs the token in a LATER second than passwordChangedAt even when the timer fires early, or JwtStrategy rejects it on arrival', async () => {
+      // Node timers run on the monotonic clock and may fire ~1 ms before
+      // Date.now() crosses the target (CI 917845eb: 1790127135 vs 1790127135).
+      // A virtual clock whose timer lands 1 ms short makes that deterministic.
+      let virtualMs = 1_790_127_135_400;
+      const nowSpy = jest
+        .spyOn(Date, 'now')
+        .mockImplementation(() => virtualMs);
+      const earlyTimer = (resolve: () => void, ms = 0) => {
+        virtualMs += ms > 1 ? ms - 1 : ms;
+        resolve();
+      };
+      const timerSpy = jest
+        .spyOn(global, 'setTimeout')
+        .mockImplementation(earlyTimer as unknown as typeof setTimeout);
       usersService.findByUsernameAndTag.mockResolvedValue(mockUser as User);
       identityResetService.verifyRecoveryPhrase.mockResolvedValue('accepted');
       let stamp = 0;
@@ -277,7 +291,12 @@ describe('AuthService', () => {
         return 'mock_jwt_token';
       });
 
-      await service.recoverPassword('testuser#0427', phrase, 'NewPass1x');
+      try {
+        await service.recoverPassword('testuser#0427', phrase, 'NewPass1x');
+      } finally {
+        timerSpy.mockRestore();
+        nowSpy.mockRestore();
+      }
 
       // `iat` is floored to the second and refused when <= the stamp's second.
       expect(Math.floor(signedAt / 1000)).toBeGreaterThan(
