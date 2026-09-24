@@ -38,6 +38,12 @@ class _SendEncryption extends EncryptionProvider {
   /// Users whose list cannot be verified (the fetch fails closed).
   final Set<int> unverifiable = {};
 
+  /// When set, every forced fetch waits for it: a lookup still in flight.
+  Completer<void>? fetchHold;
+
+  /// Per-user holds, taking precedence over [fetchHold].
+  final Map<int, Completer<void>> holdFor = {};
+
   /// Peer devices whose Signal message comes out longer than one frame.
   final Set<int> oversize = {};
 
@@ -61,11 +67,16 @@ class _SendEncryption extends EncryptionProvider {
     bool forceRefresh = false,
     Duration timeout = const Duration(seconds: 10),
   }) async {
-    if (unverifiable.contains(userId)) throw StateError('chain refused');
     if (forceRefresh) {
       forcedFetches.add(userId);
-      final fresh = served[userId];
-      if (fresh != null) lists[userId] = fresh;
+      await (holdFor[userId] ?? fetchHold)?.future;
+    }
+    if (unverifiable.contains(userId)) throw StateError('chain refused');
+    if (forceRefresh) {
+      // Like the real cache: a verified answer is held, a non-enrolled one
+      // included.
+      lists[userId] =
+          served[userId] ?? lists[userId] ?? const VerifiedDeviceList.notEnrolled();
     }
     return lists[userId] ?? const VerifiedDeviceList.notEnrolled();
   }
@@ -111,6 +122,12 @@ class _Outbox implements BoxOutbox {
   @override
   Map<int, ContactOutbound> addressesFor(int peerUserId) =>
       addresses[peerUserId] ?? const {};
+
+  @override
+  Iterable<int> coveredPeers() => [
+    for (final MapEntry(:key, :value) in addresses.entries)
+      if (value.isNotEmpty) key,
+  ];
 
   @override
   Future<bool> deliver(ContactOutbound to, Uint8List body) async {
@@ -201,11 +218,18 @@ void main() {
   }
 
   /// Bob (2) on devices [live]; every one of [addressed] handed us a queue.
-  void bob(List<int> live, {List<int>? addressed, List<int> revoked = const []}) {
+  /// [connected]: the connect's list refresh has run since (E2E ready).
+  void bob(
+    List<int> live, {
+    List<int>? addressed,
+    List<int> revoked = const [],
+    bool connected = true,
+  }) {
     encryption.lists[2] = _enrolled(live, revoked: revoked);
     outbox.addresses[2] = {
       for (final d in addressed ?? live) d: _address(d),
     };
+    if (connected) provider.refreshBoxDeviceLists();
   }
 
   Future<MessageModel> send(String text) async {
@@ -322,22 +346,30 @@ void main() {
   );
 
   test(
-    'a covered peer whose list cannot be verified (a fetch timeout after a '
-    'reconnect) FAILS the row — never the old path, whose emit a web socket '
-    'buffers offline and replays as a server row',
+    'a covered peer whose list the connect could not verify FAILS the row '
+    'with no lookup of its own — never the old path, whose emit a web socket '
+    'buffers offline and replays as a server row (decision 21)',
     () async {
-      bob([1]);
       encryption.unverifiable.add(2);
+      bob([1]);
       final row = await send('unverified');
 
       expect(row.deliveryStatus, MessageDeliveryStatus.failed);
       expect(outbox.delivered, isEmpty);
       expect(emitted, isNot(contains('sendMessage')));
+      expect(encryption.forcedFetches, [1, 2], reason: 'the connect only');
 
       encryption.unverifiable.clear();
       await provider.retryFailedMessage(row.tempId!);
       await pump();
+      expect(outbox.delivered, isEmpty, reason: 'a retry fetches nothing');
+      expect(encryption.forcedFetches, [1, 2]);
+
+      provider.refreshBoxDeviceLists();
+      await provider.retryFailedMessage(row.tempId!);
+      await pump();
       expect(outbox.delivered, hasLength(1));
+      expect(encryption.forcedFetches, [1, 2, 2]);
     },
   );
 
@@ -384,7 +416,9 @@ void main() {
       final failed = await send('after a reconnect');
       final firstWire = envelopeOf(outbox.delivered.first.$2)['msgId'];
 
-      provider.onConnect(true);
+      provider
+        ..onConnect(true)
+        ..refreshBoxDeviceLists();
       outbox
         ..refuse.clear()
         ..delivered.clear();
@@ -469,31 +503,167 @@ void main() {
   );
 
   test(
-    'a peer device linked since the list was cached is found before the '
-    "session's first box send — it has no address, so the old path",
+    'a send while the connect is still verifying the peer waits for that '
+    'lookup and makes none of its own (decision 21)',
+    () async {
+      final hold = encryption.fetchHold = Completer<void>();
+      bob([1]);
+      provider.sendMessage('early');
+      await pump();
+      expect(outbox.delivered, isEmpty);
+      expect(provider.messages.last.deliveryStatus,
+          MessageDeliveryStatus.sending);
+
+      hold.complete();
+      await pump();
+      expect(outbox.delivered, hasLength(1));
+      expect(encryption.forcedFetches, [1, 2]);
+    },
+  );
+
+  test(
+    'a covered peer no connect has verified yet fails the row: no lookup, no '
+    'sendMessage',
+    () async {
+      bob([1], connected: false);
+      final row = await send('too soon');
+
+      expect(row.deliveryStatus, MessageDeliveryStatus.failed);
+      expect(encryption.forcedFetches, isEmpty);
+      expect(outbox.delivered, isEmpty);
+      expect(emitted, isNot(contains('sendMessage')));
+    },
+  );
+
+  test(
+    "the peer's list is re-verified once per connect, never per message — a "
+    'lookup per send would hand the server the pair and every send time; a '
+    'device linked mid-session is seen at the next connect',
     () async {
       bob([1]);
+      await pump();
       encryption.served[2] = _enrolled([1, 2]);
-      await send('to both devices');
+      await send('one');
+      await send('two');
+      expect(encryption.forcedFetches, [1, 2]);
+      expect(outbox.delivered, hasLength(2));
 
-      expect(encryption.forcedFetches, [2]);
-      expect(outbox.delivered, isEmpty);
+      provider
+        ..onConnect(true)
+        ..refreshBoxDeviceLists();
+      await send('three');
+      expect(encryption.forcedFetches, [1, 2, 1, 2]);
+      expect(outbox.delivered, hasLength(2), reason: 'device 2 has no address');
       expect(emitted, contains('sendMessage'));
     },
   );
 
   test(
-    "the peer's list is re-verified once per connect, not per message — a "
-    'lookup per send would hand the server the pair and every send time',
+    'a peer device revoked since the last connect gets nothing once that '
+    "connect's lookup has verified the list",
+    () async {
+      bob([1, 2]);
+      await send('both');
+      expect(outbox.delivered, hasLength(2));
+
+      encryption.served[2] = _enrolled([1], revoked: [2]);
+      provider
+        ..onConnect(true)
+        ..refreshBoxDeviceLists();
+      outbox.delivered.clear();
+      await send('only one');
+      expect([for (final (to, _) in outbox.delivered) to.peerDeviceId], [1]);
+    },
+  );
+
+  test(
+    'a peer list the E2E layer dropped is looked up again by the refresh, '
+    'not by the send',
     () async {
       bob([1]);
+      await pump();
+      encryption.lists.remove(2);
+      encryption.served[2] = _enrolled([1]);
+      provider.onDeviceListInvalidated(2);
+      await send('after a rebuild request');
+
+      expect(outbox.delivered, hasLength(1));
+      expect(encryption.forcedFetches, [1, 2, 2]);
+    },
+  );
+
+  test(
+    'a peer list gone from the cache fails the send rather than fetch it',
+    () async {
+      bob([1]);
+      await pump();
+      encryption.lists.remove(2);
+      final row = await send('no list');
+
+      expect(row.deliveryStatus, MessageDeliveryStatus.failed);
+      expect(encryption.forcedFetches, [1, 2]);
+      expect(emitted, isNot(contains('sendMessage')));
+    },
+  );
+
+  test(
+    'our OWN list is looked up by the connect too and never by a send — a '
+    'lookup timed by the send names the sender at the moment of the box '
+    'frame',
+    () async {
+      bob([1]);
+      await pump();
+      encryption.forcedFetches.clear();
       await send('one');
       await send('two');
-      expect(encryption.forcedFetches, [2]);
 
-      provider.onConnect(true);
-      await send('three');
-      expect(encryption.forcedFetches, [2, 2]);
+      expect(outbox.delivered, hasLength(2));
+      expect(encryption.forcedFetches, isEmpty);
+    },
+  );
+
+  test(
+    'an account the box covers no peer of looks nothing up at connect — '
+    'not even its own list',
+    () async {
+      bob([1], addressed: []);
+      await pump();
+      expect(encryption.forcedFetches, isEmpty);
+    },
+  );
+
+  test(
+    "a send waits for our own list's lookup as well as the peer's",
+    () async {
+      final own = encryption.holdFor[1] = Completer<void>();
+      bob([1]);
+      provider.sendMessage('mine first');
+      await pump();
+      expect(outbox.delivered, isEmpty);
+      expect(provider.messages.last.deliveryStatus,
+          MessageDeliveryStatus.sending);
+
+      own.complete();
+      await pump();
+      expect(outbox.delivered, hasLength(1));
+    },
+  );
+
+  test(
+    'our own list dropped since the connect (deviceListChanged) is looked '
+    'up again by the refresh; with none held the send fails, never fetches',
+    () async {
+      bob([1]);
+      await pump();
+      encryption.lists.remove(1);
+      final row = await send('own list gone');
+      expect(row.deliveryStatus, MessageDeliveryStatus.failed);
+      expect(encryption.forcedFetches, [1, 2]);
+
+      provider.onDeviceListInvalidated(1);
+      await send('own list back');
+      expect(outbox.delivered, hasLength(1));
+      expect(encryption.forcedFetches, [1, 2, 1]);
     },
   );
 

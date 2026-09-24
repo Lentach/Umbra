@@ -1,9 +1,5 @@
 part of '../messaging_provider.dart';
 
-/// How long a peer's verified device list may route box sends before it is
-/// fetched again (slice (c); see `_boxRoute`).
-const Duration _kBoxListMaxAge = Duration(minutes: 10);
-
 /// A box send's plan (slice (c)): one address per live peer device.
 typedef _BoxRoute = ({
   BoxOutbox outbox,
@@ -314,7 +310,10 @@ extension MessagingBox on MessagingProvider {
   ///
   /// Both lists come from the verified cache (the peer path of
   /// `getDeviceList` stays until PR4.1): unlike the old path, the box has no
-  /// server bounce to catch a device we did not know about.
+  /// server bounce to catch a device we did not know about. Both are the
+  /// ones THIS connect verified ([refreshBoxDeviceLists], decision 21); a
+  /// send never looks one up, which would hand the server the pair (the
+  /// peer's list) or the sender (the own list) at the time of the message.
   Future<_BoxRoute?> _boxRoute(
     int recipientId,
     BoxOutbox outbox,
@@ -337,22 +336,28 @@ extension MessagingBox on MessagingProvider {
     }
     final VerifiedDeviceList peer;
     final VerifiedDeviceList own;
-    // The box has no server bounce for a stale list (the old path's
-    // `deviceListStale`), so the peer's list is re-verified once per connect
-    // and then at most every [_kBoxListMaxAge] — never per message, which
-    // would hand the server the pair and the time of every send. The
-    // E2E device announcements (slice (e)) replace this.
-    final checked = _boxListCheckedAt[recipientId];
-    final stale =
-        checked == null || DateTime.now().difference(checked) > _kBoxListMaxAge;
     try {
-      peer = await enc.getVerifiedDeviceList(recipientId, forceRefresh: stale);
-      own = await enc.getVerifiedDeviceList(ownUserId);
+      final peerLookup = _boxLists.readyFor(recipientId);
+      if (peerLookup == null) {
+        throw StateError('peer list not looked up this connect');
+      }
+      await peerLookup;
+      // The refresh that looked the peer up looked our own list up too.
+      await _boxLists.readyFor(ownUserId);
+      // Dropped since the lookup (a rebuild request, an identity change,
+      // `deviceListChanged`): the refresh looks it up again; this send fails
+      // for a retry.
+      final heldPeer = enc.cachedDeviceList(recipientId);
+      final heldOwn = enc.cachedDeviceList(ownUserId);
+      if (heldPeer == null || heldOwn == null) {
+        throw StateError('device list dropped');
+      }
+      peer = heldPeer;
+      own = heldOwn;
     } on Object {
       _e2eFlowLog('BOX_ROUTE_UNVERIFIED', {'peer': recipientId});
       rethrow;
     }
-    if (stale) _boxListCheckedAt[recipientId] = DateTime.now();
     if (own.liveDeviceIds.any((d) => d != enc.ownDeviceId)) {
       declined('own_devices');
       return null;

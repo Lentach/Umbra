@@ -12,6 +12,7 @@ import '../config/app_config.dart';
 import '../models/conversation_model.dart';
 import '../models/message_model.dart';
 import '../services/api_service.dart';
+import '../services/box/box_device_list_refresh.dart';
 import '../services/box/box_envelope.dart';
 import '../services/box/box_frame.dart';
 import '../services/box/box_outbox.dart';
@@ -268,9 +269,34 @@ class MessagingProvider extends ChangeNotifier {
   /// them until the box has answered.
   final Set<String> _boxInFlight = {};
 
-  /// When each peer's device list was last re-verified for a box send.
-  /// Cleared on every connect, so each session fetches it once.
-  final Map<int, DateTime> _boxListCheckedAt = {};
+  /// This connect's lookups of every device list a box send reads (decision
+  /// 21): each box-covered peer's, plus the account's own once any peer is
+  /// covered. Run by [refreshBoxDeviceLists], only awaited by a box send.
+  /// Reset on every connect and on logout.
+  late final BoxDeviceListRefresh _boxLists = BoxDeviceListRefresh(
+    users: () {
+      final covered = boxOutbox?.coveredPeers().toList() ?? const <int>[];
+      final own = _currentUserId;
+      return [if (covered.isNotEmpty && own != null) own, ...covered];
+    },
+    fetch: (user) async {
+      final enc = _encryptionProvider;
+      if (enc == null) throw StateError('no encryption provider');
+      await enc.getVerifiedDeviceList(user, forceRefresh: true);
+    },
+  );
+
+  /// Looks up every device list a box send reads, unless this connect
+  /// already verified it. Called when E2E or the account socket becomes
+  /// ready and when the contact store opens late — never by a send
+  /// (decision 21). A lookup before E2E is ready fails locally, emits
+  /// nothing, and is looked up again when E2E-ready calls this.
+  void refreshBoxDeviceLists() => _boxLists.refresh();
+
+  /// The E2E layer dropped [userId]'s verified list (a rebuild request, an
+  /// identity change, the own account's `deviceListChanged`): a box send
+  /// that reads it waits for a fresh lookup.
+  void onDeviceListInvalidated(int userId) => _boxLists.invalidate(userId);
 
   /// Stale-list resend attempts per tempId (spec §5.2 cap of 3, then a
   /// surfaced failure). Cleared with [_pendingSendContent].
@@ -1129,7 +1155,7 @@ class MessagingProvider extends ChangeNotifier {
       _identityRefusedSendTempIds.clear();
       _sendTokenByTempId.clear();
       _boxTempIds.clear();
-      _boxListCheckedAt.clear();
+      _boxLists.reset();
       _staleResendAttempts.clear();
       _staleResendTempIds.clear();
       _incomingMessageQueue.clear();
@@ -1171,7 +1197,7 @@ class MessagingProvider extends ChangeNotifier {
       _sendTokenByTempId.removeWhere(
         (tempId, _) => !_boxTempIds.contains(tempId),
       );
-      _boxListCheckedAt.clear();
+      _boxLists.reset();
       _staleResendAttempts.clear();
       _staleResendTempIds.clear();
       // Same user, so the codecs stay valid — but every conversation gets
@@ -1244,7 +1270,7 @@ class MessagingProvider extends ChangeNotifier {
     _identityRefusedSendTempIds.clear();
     _sendTokenByTempId.clear();
     _boxTempIds.clear();
-    _boxListCheckedAt.clear();
+    _boxLists.reset();
     _staleResendAttempts.clear();
     _staleResendTempIds.clear();
     // Logout: `K_react` for every visited conversation is in RAM here.
@@ -1280,6 +1306,7 @@ class MessagingProvider extends ChangeNotifier {
     // live-decrypt-retry timer would fire past super.dispose() and notify a
     // disposed ChangeNotifier.
     onDisconnect();
+    _boxLists.reset();
     _incomingSound.dispose();
     countdownTickNotifier.dispose();
     super.dispose();

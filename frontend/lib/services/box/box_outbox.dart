@@ -13,6 +13,10 @@ abstract interface class BoxOutbox {
   /// peer is not a friend.
   Map<int, ContactOutbound> addressesFor(int peerUserId);
 
+  /// Every friend with at least one box address: the peers whose device
+  /// lists the connect re-verifies (decision 21).
+  Iterable<int> coveredPeers();
+
   /// Seals [body] (a `BoxFrame`) to [to] and sends it. True only when the
   /// box answered ok; a refusal, no answer and a seal that failed are all
   /// false.

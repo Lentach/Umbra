@@ -339,6 +339,30 @@ void main() {
     });
 
     test(
+      'the peers whose lists a connect re-verifies are exactly the friends '
+      'holding an address — no lookup for anyone else (decision 21)',
+      () async {
+        await friend();
+        for (final (id, state, outbound) in [
+          (43, ContactState.blocked, [address]),
+          (44, ContactState.friend, <ContactOutbound>[]),
+        ]) {
+          await store.update(
+            id,
+            (_) => ContactRecord(
+              userId: id,
+              username: 'peer$id',
+              tag: '0001',
+              state: state,
+              outbound: outbound,
+            ),
+          );
+        }
+        expect(session.coveredPeers(), [42]);
+      },
+    );
+
+    test(
       'deliver seals the body to that address: the blob goes to its sid and '
       "opens under its queue's key",
       () async {

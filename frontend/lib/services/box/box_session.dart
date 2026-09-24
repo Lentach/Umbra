@@ -158,6 +158,15 @@ class BoxSession implements BoxOutbox {
   }
 
   @override
+  Iterable<int> coveredPeers() => _disposed
+      ? const []
+      : [
+          for (final peer in _store.all)
+            if (peer.state == ContactState.friend && peer.outbound.isNotEmpty)
+              peer.userId,
+        ];
+
+  @override
   Future<bool> deliver(ContactOutbound to, Uint8List body) async {
     final sid = boxB64Decode(to.sid, kBoxSidBytes);
     final sealPub = boxB64Decode(to.sealPub, 32);

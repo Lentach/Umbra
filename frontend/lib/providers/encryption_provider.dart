@@ -110,6 +110,13 @@ class EncryptionProvider extends ChangeNotifier {
   /// re-filters when the audit row lands after its history (amendment (lxxxvi)).
   void Function()? onOwnIdentitySinceChanged;
 
+  /// Called when a verified device list is dropped here and nothing here
+  /// fetches it again (a rebuild request, an adopted identity, the own
+  /// account's `deviceListChanged`). Set by `ConnectionProvider`: a box send
+  /// never looks a list up (metadata-privacy decision 21), so the box's
+  /// connect-time refresh looks it up again instead.
+  void Function(int userId)? onDeviceListInvalidated;
+
   // ---------- Public Getters ----------
 
   /// Whether the E2E encryption layer has been initialized for the current user.
@@ -678,7 +685,9 @@ class EncryptionProvider extends ChangeNotifier {
   /// cached own list so the next send re-fetches and re-verifies.
   void onDeviceListChanged(dynamic data) {
     if (data is! Map || data['userId'] is! int) return;
-    _deviceListCache.invalidate(data['userId'] as int);
+    final userId = data['userId'] as int;
+    _deviceListCache.invalidate(userId);
+    onDeviceListInvalidated?.call(userId);
   }
 
   /// Whether a Signal session exists with [peerUserId]. Diagnostic + policy
@@ -2740,9 +2749,11 @@ class EncryptionProvider extends ChangeNotifier {
     // Peer wedged after a phrase restore, 2026-09-22: a peer whose identity
     // moved to a NEW deviceId leaves us holding BOTH a dead session and the
     // verified list that keeps pointing every send and every accept-gate
-    // check at the device it abandoned. Invalidate only — the next send
-    // (or inbound row) re-verifies through its own rate-limited refetch.
+    // check at the device it abandoned. Invalidate only — the next old-path
+    // send (or inbound row) re-verifies through its own rate-limited
+    // refetch; a box-covered peer's list is looked up by the box refresh.
     _deviceListCache.invalidate(fromUserId);
+    onDeviceListInvalidated?.call(fromUserId);
     _e2eFlowLog('SESSION_REBUILD_RECEIVED', {'fromUserId': fromUserId});
   }
 
@@ -2992,6 +3003,7 @@ class EncryptionProvider extends ChangeNotifier {
     );
     if (advanced) {
       _deviceListCache.invalidate(peerId);
+      onDeviceListInvalidated?.call(peerId);
       for (final deviceId in addresses) {
         markSessionRebuild(peerId, deviceId: deviceId);
       }

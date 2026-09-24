@@ -115,6 +115,11 @@ class ConnectionProvider extends ChangeNotifier {
   BoxSession? _box;
   int? _boxUserId;
 
+  /// Whether this connect's account socket has seen `socketReady`. The box
+  /// device-list refresh (decision 21) waits for it: a `getDeviceList` sent
+  /// before the server finished auth is never answered.
+  bool _accountReady = false;
+
   /// Why the contact store could not open this session, or null when it did
   /// (or none is wired). Surfaced by the loss screen (PR2.3).
   String? _contactStoreUnavailable;
@@ -214,6 +219,7 @@ class ConnectionProvider extends ChangeNotifier {
         _conversationsProvider?.rewriteStore();
         // A vault that booted locked left the box without a request queue.
         _box?.storeOpened();
+        _refreshBoxDeviceLists();
       }
       // PR2.4: a phrase the user just enrolled gets a second wrap of the
       // contact-backup content key, so a device that lost its storage AND
@@ -361,6 +367,8 @@ class ConnectionProvider extends ChangeNotifier {
       _messagingProvider?.clearAll();
     }
 
+    _accountReady = false;
+
     // 4. Notify sub-providers of connect lifecycle
     _encryptionProvider?.onConnect(isReconnect);
     _friendsProvider?.onConnect(isReconnect);
@@ -397,6 +405,7 @@ class ConnectionProvider extends ChangeNotifier {
               _friendsProvider?.hydrateFromStore();
               _conversationsProvider?.hydrateFromStore();
               _box?.storeOpened();
+              _refreshBoxDeviceLists();
             }),
           );
         }
@@ -513,7 +522,12 @@ class ConnectionProvider extends ChangeNotifier {
       // A box delivery refused because E2E was not ready waits in the
       // journal; nothing else would offer it again before a reconnect.
       _box?.drainInbox();
+      // Decision 21: the device lists a box send reads are looked up here,
+      // once per connect — never by a send.
+      _refreshBoxDeviceLists();
     };
+    _encryptionProvider?.onDeviceListInvalidated = (userId) =>
+        _messagingProvider?.onDeviceListInvalidated(userId);
     // The old path may hold the PreKey message that creates the session a
     // waiting box message needs; its history pass is when that lands.
     _messagingProvider?.onHistoryDecryptPassFinished = () => _box?.drainInbox();
@@ -570,6 +584,8 @@ class ConnectionProvider extends ChangeNotifier {
       }
       _onSocketReady();
       _box?.accountReady(readyDeviceId is int ? readyDeviceId : null);
+      _accountReady = true;
+      _refreshBoxDeviceLists();
     });
 
     // 10. On 'disconnect': handle reconnect
@@ -578,6 +594,7 @@ class ConnectionProvider extends ChangeNotifier {
         'intentional': _intentionalDisconnect,
       });
       _isConnected = false;
+      _accountReady = false;
       _box?.accountLost();
       notifyListeners();
 
@@ -590,6 +607,12 @@ class ConnectionProvider extends ChangeNotifier {
       _socketReadyWatchdog?.cancel();
       _socketReadyWatchdog = null;
     });
+  }
+
+  /// Looks up the device lists a box send reads once E2E AND the account
+  /// socket are both ready this connect — whichever comes last triggers it.
+  void _refreshBoxDeviceLists() {
+    if (_accountReady) _messagingProvider?.refreshBoxDeviceLists();
   }
 
   void _scheduleReconnect() {
