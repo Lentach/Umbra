@@ -23,7 +23,7 @@
 - Browser drive (release web, peer 264): open chat, closed-chat badge, reload — box acked, 0 server rows, sealed record. Detail: `findings.md`.
 - Emulator drive (Pixel_7, user 262 + peer 266): same three, force-stop + relaunch from SQLCipher. Detail: `findings.md`.
 - Re-drive of the REVIEWED build (browser, peer 267): same three, and no journal or replay rows left. Detail: `findings.md`.
-- NOT verified: the sound rule (decision 11) on a device — web never plays it (`kIsWeb`) and the Android drive did not observe it, so only the unit test proves it; iOS; prod (box OFF there); a real peer SENDING through app code (slice (c)). CI runs on the pushed SHA through draft PR #185 (mergeable at push time).
+- NOT verified: the sound rule (decision 11) on a device — web never plays it (`kIsWeb`) and the Android drive did not observe it, so only the unit test proves it; iOS; prod (box OFF there); a real peer SENDING through app code (slice (c)). CI 7/7 green on `279a1c25` via draft PR #185.
 
 ## Notes for next session
 - Next: slice (c) — send via ContactStore addresses, with a hard refusal for a body over `BoxFrame.maxSignalBytes`.
