@@ -544,6 +544,24 @@ void main() {
     },
   );
 
+  test(
+    'a TEXT that carries a mediaUrl stays on the old path — the box '
+    'envelope would drop the media silently',
+    () async {
+      bob([1]);
+      await provider.encryptAndSendForTest(
+        recipientId: 2,
+        content: 'with media',
+        tempId: 'temp_text_media',
+        mediaUrl: '/media/x.bin',
+      );
+      await pump();
+
+      expect(outbox.delivered, isEmpty);
+      expect(emitted, contains('sendMessage'));
+    },
+  );
+
   test('media stays on the old path', () async {
     bob([1]);
     await provider.encryptAndSendForTest(

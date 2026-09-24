@@ -18,13 +18,14 @@
 
 ## Verification
 - TDD for the slice: 6/13 send tests RED on behaviour before the route existed; frame-fit test RED at 46 214 Signal B under the old 45 000 limit, GREEN at 14 000 (real libsignal PreKey = 15 220 B ≤ 16 315; plaintext 15 072, overhead 148).
-- Mutants: 33 unique (M1–M33), 30 killed; 3 survivors — M15 + M19 dead conditions, deleted (`mediaUrl == null` under the TEXT check; the store-open check before `byUserId`); M23 timing-only, accepted (an extra turn before `_boxRoute` for a box-capable peer). Files hash-identical after every run.
+- Mutants: 33 unique (M1–M33), 30 killed; 3 survivors — M19 dead condition deleted (the store-open check before `byUserId`), M15 (`mediaUrl == null`) restored as a guard and killed by a new test (M15b); M23 timing-only, accepted (an extra turn before `_boxRoute` for a box-capable peer). Files hash-identical after every run.
 - Review `Pr31cReview` REQUEST_CHANGES (P1 stale cached peer list, P2 in-flight retry duplicate, P2 unbounded link preview, P3 pin before any frame) + advisor blocker (a READY-gated `addressesFor` leaked covered peers to the old path while the box was down): all fixed code-first, each proven by a new test and a killed mutant (M24–M33).
 - `flutter analyze` 0 errors/warnings; lint ratchet held at 3163; full `flutter test` 2490 passed / 14 skipped (root `CLAUDE.md` count updated, `verify-claude-frontend-test-counts.mjs` OK).
 - Drive 1, PRE-review build (mp stack, `BOX_ENABLED=true`): release web `localhost:8080` as alice 268 ↔ Pixel_7 AVD debug APK as bob 269, befriended over the socket, addresses traded through a throwaway `BOX_DRIVE` SharedPreferences scaffold (deleted; `box_session.dart` restored by sha256). Web → Android and Android → web: shown, single ✓, server `messages` 0, `box_msgs` unchanged (acked); web reload and Android force-stop + relaunch → both back, own rows ✓.
 - Drive 2, the final code (`6b5f4e7b` + the unverified-list fix, same scaffold; alice 270 web ↔ bob 271 AVD): both directions over the box, server `messages` 0. First try at an offline send found the leak path (list fetch over a dead account socket → old path; CDP offline set on a throwaway session persisted, so the tab never came back online). Fixed build, puppeteer `setOfflineMode`: offline send → `Ponów`, 0 server rows after reconnect; the automatic timeout retry sent it once back online; bob shows it ONCE.
 - CI 7/7 on `6b5f4e7b` (backend, flutter, e2e wire, isolated probes, Web Lock, CodeQL ×2).
-- NOT verified: a box refusal live (queue_full — unit only), a peer linking a device mid-session live, iOS.
+- Live refusal: bob's queue filled to `queue_full` → alice's send and its retry both `Ponów`, 0 server rows.
+- NOT verified: a peer linking a device mid-session live, iOS.
 
 ## Notes for next session
 - Next slice: sibling queues (a sender with a second live device stays on the old path until then), then box push registration — no app code calls `challengeNotifier`/`activateNotifier`, so a box-only message wakes no closed app. Both before release N.

@@ -1496,6 +1496,9 @@ extension MessagingSend on MessagingProvider {
       if (outbox != null &&
           addresses.isNotEmpty &&
           messageType == 'TEXT' &&
+          // The box envelope carries no media fields: a TEXT that ever did
+          // carry a `mediaUrl` would lose it silently.
+          mediaUrl == null &&
           effectiveReplyToId == null &&
           (effectiveExpiresIn ?? 0) <= 0) {
         final route = await _boxRoute(recipientId, outbox, addresses);
