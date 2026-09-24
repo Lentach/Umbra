@@ -10,7 +10,7 @@
 - `SealedWebContentKv._familyKey` + `boxreq_v1` (sealed on web).
 - `ConnectionProvider`: `setProviders(boxClient:)`; step 4d creates one `BoxSession` per account (resume on same-account connect); `socketReady` → `accountReady(deviceId)`; disconnect → `accountLost`/`close`; logout + `dispose` → dispose; `requestQueueSet` routed; `onPasscodeLockRestore` and the 4b late-open path call `storeOpened()`. `ConversationsScreen` wires `BoxClient(baseUrl:)`.
 - `BoxClient._lostConnection` (emulator-found): past `reconnectMaxAttempts` the box keeps retrying at `reconnectMaxDelay` until `close()` — before, a server outage > ~31 s left it dead until an app restart.
-- Docs: `wire.md` "First contact" (client speaks it; no notifier rule) + "The box" Client bullet; `e2e-invariants.md` boxreq bullet; `frontend/CLAUDE.md`; root `CLAUDE.md` flutter 2393/14.
+- Docs: `wire.md` "First contact" (client speaks it; no notifier rule) + "The box" Client bullet; `e2e-invariants.md` boxreq bullet; `frontend/CLAUDE.md`; root `CLAUDE.md` flutter 2395/14.
 
 ## Key files
 - New: `frontend/lib/services/box/box_session.dart`, `frontend/test/services/box/box_session_test.dart`, `frontend/test/providers/connection_provider_box_test.dart`.
