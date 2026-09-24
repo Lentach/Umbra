@@ -35,6 +35,10 @@ class _SendEncryption extends EncryptionProvider {
   /// Every `forceRefresh` fetch, by user id.
   final List<int> forcedFetches = [];
 
+  /// Every `getVerifiedDeviceList` call, forced or not — a cache miss would
+  /// fetch in the real provider.
+  final List<int> fetches = [];
+
   /// Users whose list cannot be verified (the fetch fails closed).
   final Set<int> unverifiable = {};
 
@@ -67,6 +71,7 @@ class _SendEncryption extends EncryptionProvider {
     bool forceRefresh = false,
     Duration timeout = const Duration(seconds: 10),
   }) async {
+    fetches.add(userId);
     if (forceRefresh) {
       forcedFetches.add(userId);
       await (holdFor[userId] ?? fetchHold)?.future;
@@ -601,7 +606,7 @@ void main() {
       final row = await send('no list');
 
       expect(row.deliveryStatus, MessageDeliveryStatus.failed);
-      expect(encryption.forcedFetches, [1, 2]);
+      expect(encryption.fetches, [1, 2]);
       expect(emitted, isNot(contains('sendMessage')));
     },
   );
@@ -613,12 +618,12 @@ void main() {
     () async {
       bob([1]);
       await pump();
-      encryption.forcedFetches.clear();
+      encryption.fetches.clear();
       await send('one');
       await send('two');
 
       expect(outbox.delivered, hasLength(2));
-      expect(encryption.forcedFetches, isEmpty);
+      expect(encryption.fetches, isEmpty);
     },
   );
 
@@ -658,7 +663,7 @@ void main() {
       encryption.lists.remove(1);
       final row = await send('own list gone');
       expect(row.deliveryStatus, MessageDeliveryStatus.failed);
-      expect(encryption.forcedFetches, [1, 2]);
+      expect(encryption.fetches, [1, 2]);
 
       provider.onDeviceListInvalidated(1);
       await send('own list back');

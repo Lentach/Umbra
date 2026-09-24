@@ -110,11 +110,11 @@ class EncryptionProvider extends ChangeNotifier {
   /// re-filters when the audit row lands after its history (amendment (lxxxvi)).
   void Function()? onOwnIdentitySinceChanged;
 
-  /// Called when a verified device list is dropped here and nothing here
-  /// fetches it again (a rebuild request, an adopted identity, the own
-  /// account's `deviceListChanged`). Set by `ConnectionProvider`: a box send
-  /// never looks a list up (metadata-privacy decision 21), so the box's
-  /// connect-time refresh looks it up again instead.
+  /// Called whenever a verified device list is dropped
+  /// ([invalidateDeviceList]: a rebuild request, an adopted identity, the
+  /// own `deviceListChanged`, a restore, a decrypt-time recheck). Set by
+  /// `ConnectionProvider`: a box send never looks a list up
+  /// (metadata-privacy decision 21), so the box refresh looks it up again.
   void Function(int userId)? onDeviceListInvalidated;
 
   // ---------- Public Getters ----------
@@ -538,9 +538,14 @@ class EncryptionProvider extends ChangeNotifier {
   VerifiedDeviceList? cachedDeviceList(int userId) =>
       _deviceListCache.cached(userId);
 
-  /// Drop the cached list so the next send refetches (e.g. on
+  /// Drop the cached list so the next old-path send refetches (e.g. on
   /// `deviceListChanged` for the own account). The rollback pin survives.
-  void invalidateDeviceList(int userId) => _deviceListCache.invalidate(userId);
+  /// Every drop goes through here so [onDeviceListInvalidated] sees it: a box
+  /// send never refetches, so the box refresh must.
+  void invalidateDeviceList(int userId) {
+    _deviceListCache.invalidate(userId);
+    onDeviceListInvalidated?.call(userId);
+  }
 
   /// The verified device list for [userId] — cached, else fetched via
   /// `getDeviceList`, I7-verified BEFORE anything is trusted, and cached.
@@ -686,8 +691,7 @@ class EncryptionProvider extends ChangeNotifier {
   void onDeviceListChanged(dynamic data) {
     if (data is! Map || data['userId'] is! int) return;
     final userId = data['userId'] as int;
-    _deviceListCache.invalidate(userId);
-    onDeviceListInvalidated?.call(userId);
+    invalidateDeviceList(userId);
   }
 
   /// Whether a Signal session exists with [peerUserId]. Diagnostic + policy
@@ -2752,8 +2756,7 @@ class EncryptionProvider extends ChangeNotifier {
     // check at the device it abandoned. Invalidate only — the next old-path
     // send (or inbound row) re-verifies through its own rate-limited
     // refetch; a box-covered peer's list is looked up by the box refresh.
-    _deviceListCache.invalidate(fromUserId);
-    onDeviceListInvalidated?.call(fromUserId);
+    invalidateDeviceList(fromUserId);
     _e2eFlowLog('SESSION_REBUILD_RECEIVED', {'fromUserId': fromUserId});
   }
 
@@ -3002,8 +3005,7 @@ class EncryptionProvider extends ChangeNotifier {
       adoptIdentityBase64: adoptIdentityBase64,
     );
     if (advanced) {
-      _deviceListCache.invalidate(peerId);
-      onDeviceListInvalidated?.call(peerId);
+      invalidateDeviceList(peerId);
       for (final deviceId in addresses) {
         markSessionRebuild(peerId, deviceId: deviceId);
       }

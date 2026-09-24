@@ -338,12 +338,14 @@ extension MessagingBox on MessagingProvider {
     final VerifiedDeviceList own;
     try {
       final peerLookup = _boxLists.readyFor(recipientId);
-      if (peerLookup == null) {
-        throw StateError('peer list not looked up this connect');
+      final ownLookup = _boxLists.readyFor(ownUserId);
+      // Fail closed on both: an own list some other path cached is not one
+      // this connect verified.
+      if (peerLookup == null || ownLookup == null) {
+        throw StateError('device list not looked up this connect');
       }
       await peerLookup;
-      // The refresh that looked the peer up looked our own list up too.
-      await _boxLists.readyFor(ownUserId);
+      await ownLookup;
       // Dropped since the lookup (a rebuild request, an identity change,
       // `deviceListChanged`): the refresh looks it up again; this send fails
       // for a retry.

@@ -8,6 +8,7 @@
 - `_boxRoute` awaits `readyFor(peer)` and `readyFor(own)`, then reads BOTH lists from `cachedDeviceList`. A lookup that is missing, failed or dropped since → `BOX_ROUTE_UNVERIFIED` → failed row. `_kBoxListMaxAge`, `_boxListCheckedAt` and the send-time `forceRefresh` are deleted.
 - `ConnectionProvider._refreshBoxDeviceLists` runs once E2E-ready AND `socketReady` have both happened (the `_accountReady` gate): a `getDeviceList` sent before auth is silently dropped by the server. It is also called after a late store open and after a passcode unlock.
 - `EncryptionProvider.onDeviceListInvalidated` fires on a rebuild request, an adopted identity and the own `deviceListChanged`, so the box refresh re-fetches that list; a send never does.
+- Follow-up commit: every list drop goes through `EncryptionProvider.invalidateDeviceList`, which fires the hook (this covers the restore path and the decrypt-time rechecks as well). The `ownLookup == null` guard is back so the route fails closed (an equivalent mutant, kept on purpose). The test fake records every `getVerifiedDeviceList` call (`fetches`), not only forced ones.
 - `BoxSession.coveredPeers()`. Root `CLAUDE.md` count updated to 2509. Earlier commit `66af4501`: count 2491, which fixed the red Flutter job on `c0ed515a`.
 
 ## Key files
@@ -37,6 +38,7 @@
 
 ## Notes for next session
 - Slice (d) must call `refreshBoxDeviceLists()` when it stores a peer address. Otherwise that peer fails every send until the next connect.
+- OWED before slice (d): the connect lookup is one `getDeviceList` per contact, sent in parallel (there is no batch endpoint). It spends the shared 300/15 min throttle on every reconnect; about 50 box contacts exhaust it in about 6 reconnects. Fix (an owner call on freshness): on a same-user reconnect, skip lists verified less than N minutes ago. Details in task_plan decision 21.
 - In the first second after a reconnect, the box socket is usually still down, so a send shows "Ponów" (decision 19; the auto-retry or the user resends). This is not caused by decision 21.
 - Next per decision (23): the sibling-queue slice, with the live link-mid-session drive (24). Its design questions go to the owner before any test.
 - Traps (also in `traps.md`): never a send-time list lookup, own list included; a `getDeviceList` sent before `socketReady` is dropped; slice (d) owes a refresh call.
