@@ -333,6 +333,33 @@ void main() {
   });
 
   test(
+    'a server outage longer than the fast backoff never ends the box: it keeps '
+    'retrying until close() (device-found 2026-09-24: a 195 s backend restart '
+    'left the app with no box until it was restarted)',
+    () {
+      fakeAsync((clock) {
+        final box = client()..connect();
+        // Every attempt refused, well past AppConstants.reconnectMaxAttempts.
+        for (var i = 0; i < 12; i++) {
+          sockets.last.refuseConnection();
+          clock.elapse(const Duration(seconds: 31));
+        }
+        final attempts = sockets.sockets.length;
+        expect(attempts, greaterThan(6), reason: 'still retrying');
+
+        sockets.respond = (_, f) => _subscribed();
+        sockets.last.serverConnect('S-back');
+        clock.flushMicrotasks();
+        expect(box.state, BoxState.ready);
+
+        box.close();
+        clock.elapse(const Duration(minutes: 5));
+        expect(sockets.sockets, hasLength(attempts), reason: 'close() stops it');
+      });
+    },
+  );
+
+  test(
     'deleteQueue reads auth_failed as already gone, and the rid leaves the set',
     () async {
       final box = client();

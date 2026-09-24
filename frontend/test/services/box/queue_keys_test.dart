@@ -278,6 +278,39 @@ void main() {
       },
     );
 
+    test(
+      'only a refusal of THIS rid drops the stored queue: a rate-limited '
+      'subscribe, or a refusal of another rid, keeps the keys and creates '
+      'nothing',
+      () async {
+        final first = (await keys.ensureRequest())!;
+        final row = kv.getString(ContactStore.requestQueueKey(1));
+        final creates = sent('createQueue').length;
+
+        for (final answer in <Object? Function(EmittedFrame)>[
+          (_) => {'ok': false, 'code': 'rate_limited', 'retryAfterMs': 1000},
+          (_) => {
+            'ok': true,
+            'refused': [
+              {'rid': boxB64(_bytes(32, 0x5a)), 'code': 'auth_failed'},
+            ],
+          },
+        ]) {
+          sockets.respond = (_, f) =>
+              f.event == 'subscribe' ? answer(f) : {'ok': true};
+          final reopened = newStore();
+          await reopened.open(1);
+          final kept = await QueueKeys(
+            box: box,
+            store: reopened,
+          ).ensureRequest();
+          expect(kept?.rid, first.rid);
+          expect(kv.getString(ContactStore.requestQueueKey(1)), row);
+        }
+        expect(sent('createQueue'), hasLength(creates));
+      },
+    );
+
     test('a row a newer build wrote is left alone; nothing is created', () async {
       final future = jsonEncode({'v': 2, 'queue': foreignQueue().toJson()});
       await kv.setString(ContactStore.requestQueueKey(1), future);

@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:http/http.dart' as http;
 import 'package:socket_io_client/socket_io_client.dart' as io;
 
+import '../../constants/app_constants.dart';
 import '../../providers/chat_reconnect_manager.dart';
 import 'box_signer.dart';
 import 'box_wire.dart';
@@ -250,9 +251,18 @@ class BoxClient {
   void _lostConnection() {
     _drop();
     if (!_wanted) return;
-    _reconnect.onDisconnect(() {
+    void reopen() {
       if (_wanted && _socket == null) _open();
-    }, (_) {});
+    }
+
+    // The shared manager stops after `reconnectMaxAttempts`; the box must
+    // not ([connect]'s contract: "until close"). Past the fast attempts it
+    // keeps retrying at the manager's ceiling — nothing else would ever
+    // reopen it once the account socket recovers on its own (device-found
+    // 2026-09-24: a 195 s backend restart left the app with no box).
+    if (!_reconnect.onDisconnect(reopen, (_) {})) {
+      _reconnect.scheduleReconnectAfter(AppConstants.reconnectMaxDelay, reopen);
+    }
   }
 
   /// A fresh connection: re-sign the whole set over its id. Any chunk that
