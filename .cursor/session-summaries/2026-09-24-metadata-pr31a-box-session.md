@@ -27,5 +27,5 @@
 ## Notes for next session
 - Next: slice (b) — one envelope dispatcher: subscribe the contacts' inbound queues at boot and consume + ack `BoxDelivery` (at-least-once, dedup on `WireKey`). Remember decision 9: the 32 MiB rung + nginx body size land before the slice that moves media into the box.
 - With `BOX_ENABLED=false` (prod today) every client retries `/box` up to `reconnectMaxAttempts` per account connect, then waits for the next one — harmless, and the branch ships with release N which enables the box.
-- Decision 3 (OTP drain) is PENDING RE-CONFIRM: the owner chose "keep" on a wrong "same risk" premise; the drain is 200/15 min.
+- Decision 3 (OTP drain) re-asked with the corrected fact (200/15 min, double the old limit): owner kept it.
 - Traps (also in `docs/agents/traps.md`): subagents default to the MAIN checkout — name the worktree path; `hub start` `bash` resolves to WSL on this PC — use `cmd /c`; `ChatReconnectManager` stops after 5 attempts; AVD airplane mode does not cut 10.0.2.2; never leave a capped context file near its cap.
