@@ -42,7 +42,8 @@
   - no new registrations.
 - A rolled-back psql probe on the dev DB matched the SQL semantics before the integration spec existed.
 - One independent reviewer: APPROVE with 2 findings, both fixed (search throttle; a committed guard for the SQL semantics).
-- NOT verified: no client speaks either verb until PR3.1 (backend only); CI on the pushed tip (see LATEST / the next session); `flutter test` (unit) not re-run, since no `lib/` or `test/` file changed.
+- CI **7/7 green** on `28bcbe0f` (feature `0e245dc2` + handoff; draft PR #185).
+- NOT verified: no client speaks either verb until PR3.1 (backend only); `flutter test` (unit) not re-run locally, since no `lib/` or `test/` file changed (CI's Flutter job ran it green).
 
 ## Notes for next session
 - NEXT: PR3.1 frontend (`task_plan.md` "PR3.1"). The request queue is published through `setRequestQueue` at boot. First contact seals into each device's request sid. Dedup on `WireKey`. The old path keeps using peer `getDeviceList` until PR4.1/PR4.2.
