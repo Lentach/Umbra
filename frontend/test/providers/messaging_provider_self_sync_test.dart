@@ -89,7 +89,7 @@ class _SelfSyncEncryption extends EncryptionProvider {
     DateTime? createdAt,
     DateTime? expiresAt,
     int? disappearAfterSeconds,
-    String? wireId,
+    WireKey? wire,
   }) => service.saveDecryptedContent(messageId, data);
 
   @override

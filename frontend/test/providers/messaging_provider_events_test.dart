@@ -130,7 +130,7 @@ class _WorkingEncryption extends EncryptionProvider {
     DateTime? createdAt,
     DateTime? expiresAt,
     int? disappearAfterSeconds,
-    String? wireId,
+    WireKey? wire,
   }) async {}
 
   @override

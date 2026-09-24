@@ -734,7 +734,7 @@ class EncryptionProvider extends ChangeNotifier {
     DateTime? createdAt,
     DateTime? expiresAt,
     int? disappearAfterSeconds,
-    String? wireId,
+    WireKey? wire,
   }) async {
     await _encryptionService.saveDecryptedContent(
       messageId,
@@ -743,7 +743,7 @@ class EncryptionProvider extends ChangeNotifier {
       createdAt: createdAt,
       expiresAt: expiresAt,
       disappearAfterSeconds: disappearAfterSeconds,
-      wireId: wireId,
+      wire: wire,
     );
   }
 

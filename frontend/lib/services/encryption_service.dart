@@ -89,6 +89,14 @@ class AccountIdentityMismatch implements Exception {
       'deviceId=$deviceId carries an identity key that is not the account\'s';
 }
 
+/// A message's wire identity (metadata-privacy PR2.1): the sender's wire id
+/// (`E2eEnvelope.msgId`) is unique only per SENDER — the server enforces
+/// `UNIQUE(senderId, sendToken)` and nothing more — so it never identifies a
+/// message without the account that sent it. `senderId` must come from an
+/// authenticated source: the peer whose Signal session decrypted the message,
+/// or our own account for our own sends. Never a bare server field.
+typedef WireKey = ({int senderId, String wireId});
+
 class EncryptionService {
   EncryptionService({
     int decryptedContentCacheLimit = 2000,
@@ -2819,6 +2827,7 @@ class EncryptionService {
   static const String _metaDisappearAfter =
       PlaintextRecordCodec.disappearAfterKey;
   static const String _metaWireId = PlaintextRecordCodec.wireIdKey;
+  static const String _metaWireSender = PlaintextRecordCodec.wireSenderKey;
 
   /// Content values that are UI PLACEHOLDERS, never real message text.
   ///
@@ -2868,7 +2877,7 @@ class EncryptionService {
     DateTime? createdAt,
     DateTime? expiresAt,
     int? disappearAfterSeconds,
-    String? wireId,
+    WireKey? wire,
   }) async {
     final userId = _userId;
     if (userId == null) return;
@@ -2946,15 +2955,21 @@ class EncryptionService {
           _metaExpiresAt: expiresAt.toUtc().millisecondsSinceEpoch
         else if (existing?[_metaExpiresAt] != null)
           _metaExpiresAt: existing![_metaExpiresAt],
-        // The message's wire id (PR2.1). FIRST WRITE WINS, unlike the stamps
-        // above: a row's wire id never legitimately changes, while a later
-        // write is exactly where a peer could try to move it (an edit is a
-        // fresh envelope the peer controls). An edit re-persists WITHOUT one,
-        // so carrying it forward also keeps the record in [wireIdIndex].
-        if (existing?[_metaWireId] != null)
-          _metaWireId: existing![_metaWireId]
-        else
-          _metaWireId: ?wireId,
+        // The message's wire identity (PR2.1), written as ONE stamp: FIRST
+        // WRITE WINS, unlike the stamps above. A row's wire identity never
+        // legitimately changes, while a later write is exactly where a peer
+        // could try to move it (an edit is a fresh envelope the peer
+        // controls). An edit re-persists WITHOUT one, so carrying it forward
+        // also keeps the record in [wireIdIndex]. Carried as a pair, so a
+        // later write can never supply the sender of a `_wid` stamped without
+        // one.
+        if (existing?[_metaWireId] != null) ...{
+          _metaWireId: existing![_metaWireId],
+          _metaWireSender: ?existing[_metaWireSender],
+        } else if (wire != null) ...{
+          _metaWireId: wire.wireId,
+          _metaWireSender: wire.senderId,
+        },
       };
       final payload = jsonEncode(record);
       // A dropped write is how a decrypted message later re-decrypts, throws
@@ -3505,10 +3520,10 @@ class EncryptionService {
     }
   }
 
-  /// `wireId -> localId` over every persisted plaintext record
-  /// (metadata-privacy PR2.1): the `_wid` stamp of each `_decrypted_` record,
-  /// keyed back to the id its key names. Nothing reads it yet; the box path
-  /// (PR3.1) dedups its at-least-once deliveries against it.
+  /// `(senderId, wireId) -> localId` over every persisted plaintext record
+  /// (metadata-privacy PR2.1): the `_wid`/`_wsid` stamp of each `_decrypted_`
+  /// record, keyed back to the id its key names. Nothing reads it yet; the
+  /// box path (PR3.1) dedups its at-least-once deliveries against it.
   ///
   /// Both record stores, as [getDecryptedContent] reads them: the content
   /// store, then — mobile only — the legacy secure store for keys the content
@@ -3518,23 +3533,29 @@ class EncryptionService {
   /// treat a miss as "never seen", and a reload-clobbered cache would hand it
   /// exactly that for a message this device already holds.
   ///
-  /// A wire id claimed by more than one record maps to NOTHING. A peer sees
-  /// the wire ids of our own sends in plaintext and can replay one, so a
-  /// claim is trusted only when it resolves to exactly one record — the
-  /// sendToken law (multi-device spec §12 (ix)). A record that cannot be
-  /// decoded claims nothing. Null means the stores could not be enumerated,
-  /// which is not the same answer as an empty index.
-  Future<Map<String, int>?> wireIdIndex() async {
+  /// Keyed by SENDER as well as wire id ([WireKey]). A peer sees the wire ids
+  /// of our own sends in plaintext and can stamp one on a message of its
+  /// own; scoped, that claim sits under the peer's name and can never shadow
+  /// ours — even when it lands first, before our copy exists to contradict
+  /// it. A `_wid` stamped without its sender claims nothing. Two records
+  /// holding one sender's wire id contradict `UNIQUE(senderId, sendToken)`,
+  /// so that key maps to NOTHING rather than to a guess. A record that cannot
+  /// be decoded claims nothing. Null means the stores could not be
+  /// enumerated, which is not the same answer as an empty index.
+  Future<Map<WireKey, int>?> wireIdIndex() async {
     final userId = _userId;
     if (userId == null) return null;
     final prefix = _decryptedContentPrefix(userId);
-    final claims = <String, Set<int>>{};
+    final claims = <WireKey, Set<int>>{};
     void claim(String key, String? raw) {
       final id = int.tryParse(key.substring(prefix.length));
       if (id == null || raw == null) return;
       try {
-        if (jsonDecode(raw) case {_metaWireId: final String wireId}) {
-          (claims[wireId] ??= <int>{}).add(id);
+        if (jsonDecode(raw) case {
+          _metaWireId: final String wireId,
+          _metaWireSender: final int senderId,
+        }) {
+          (claims[(senderId: senderId, wireId: wireId)] ??= <int>{}).add(id);
         }
       } on FormatException catch (_) {}
     }
@@ -3561,8 +3582,8 @@ class EncryptionService {
       return null;
     }
     return {
-      for (final MapEntry(key: wireId, value: ids) in claims.entries)
-        if (ids.length == 1) wireId: ids.single,
+      for (final MapEntry(key: wire, value: ids) in claims.entries)
+        if (ids.length == 1) wire: ids.single,
     };
   }
 

@@ -10,8 +10,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Metadata-privacy PR2.1: every message this device persists is findable by
-/// its WIRE id, whichever way it arrived. The observable end state is the
-/// real store's `wireIdIndex()` — what the box path (PR3.1) will dedup
+/// its SENDER and WIRE id, whichever way it arrived. The observable end state
+/// is the real store's `wireIdIndex()` — what the box path (PR3.1) will dedup
 /// against — so the persistence runs on a REAL [EncryptionService]; only the
 /// Signal handshake is faked.
 class _RealStoreEncryption extends EncryptionProvider {
@@ -70,7 +70,7 @@ class _RealStoreEncryption extends EncryptionProvider {
     DateTime? createdAt,
     DateTime? expiresAt,
     int? disappearAfterSeconds,
-    String? wireId,
+    WireKey? wire,
   }) => service.saveDecryptedContent(
     messageId,
     data,
@@ -78,7 +78,7 @@ class _RealStoreEncryption extends EncryptionProvider {
     createdAt: createdAt,
     expiresAt: expiresAt,
     disappearAfterSeconds: disappearAfterSeconds,
-    wireId: wireId,
+    wire: wire,
   );
 
   @override
@@ -96,11 +96,14 @@ Map<String, dynamic> _convJson() => {
   'lastMessage': null,
 };
 
+/// A row for one of OUR sends. The origin device sees the echoed `sendToken`;
+/// any other device of ours sees a self-sync copy without it.
 Map<String, dynamic> _ownRow({
   required int id,
   required String encryptedContent,
-  required String sendToken,
+  String? sendToken,
   String? tempId,
+  int? originDeviceId,
 }) => {
   'id': id,
   'senderId': 1,
@@ -108,8 +111,9 @@ Map<String, dynamic> _ownRow({
   'content': '[encrypted]',
   'encryptedContent': encryptedContent,
   // Echoed to the ORIGIN device only (spec §12 amendment (ix)).
-  'sendToken': sendToken,
+  'sendToken': ?sendToken,
   'tempId': ?tempId,
+  'originDeviceId': ?originDeviceId,
   'conversationId': 10,
   'deliveryStatus': 'SENT',
   'messageType': 'TEXT',
@@ -188,7 +192,9 @@ void main() {
     );
     await pump();
 
-    expect(await encryption.service.wireIdIndex(), {token: 501});
+    expect(await encryption.service.wireIdIndex(), {
+      (senderId: 1, wireId: token): 501,
+    });
   });
 
   test('a lost ack reconciled from history is indexed too', () async {
@@ -208,7 +214,9 @@ void main() {
     });
     await pump();
 
-    expect(await encryption.service.wireIdIndex(), {token: 502});
+    expect(await encryption.service.wireIdIndex(), {
+      (senderId: 1, wireId: token): 502,
+    });
   });
 
   test(
@@ -236,7 +244,9 @@ void main() {
       final row = provider.messages.firstWhere((m) => m.id == 9001);
       expect(row.content, 'hello from bob');
       expect(row.wireId, peerWireId);
-      expect(await encryption.service.wireIdIndex(), {peerWireId: 9001});
+      expect(await encryption.service.wireIdIndex(), {
+        (senderId: 2, wireId: peerWireId): 9001,
+      });
     },
   );
 
@@ -267,6 +277,53 @@ void main() {
 
     final row = provider.messages.firstWhere((m) => m.id == 9002);
     expect(row.wireId, peerWireId);
-    expect(await encryption.service.wireIdIndex(), {peerWireId: 9002});
+    expect(await encryption.service.wireIdIndex(), {
+      (senderId: 2, wireId: peerWireId): 9002,
+    });
+  });
+
+  // Review finding A2 (PR2.1): a wire id is unique only per sender. Bob saw
+  // our wire id in plaintext and stamps it on a message of his own, which
+  // reaches our OTHER device before our self-sync copy does. Unscoped, his
+  // claim is the only one when it lands and would stand in for ours.
+  test("a peer replaying our wire id first never takes our copy's place",
+      () async {
+    const ourWireId = 'temp_1758700000000_1-ourwire';
+    encryption
+      ..setOwnDeviceId(2)
+      ..inboundEnvelope = jsonEncode(
+        E2eEnvelope.build('bob replays it', msgId: ourWireId),
+      );
+    provider.onNewMessage({
+      'id': 9010,
+      'senderId': 2,
+      'senderUsername': 'bob',
+      'content': '[encrypted]',
+      'encryptedContent': '2:bob-replay',
+      'originDeviceId': 1,
+      'conversationId': 10,
+      'deliveryStatus': 'DELIVERED',
+      'messageType': 'TEXT',
+      'createdAt': DateTime.now().toUtc().toIso8601String(),
+    });
+    await pump();
+
+    // Our own send, as device 1 made it, arriving here as a self-sync copy.
+    encryption.inboundEnvelope = jsonEncode(
+      E2eEnvelope.build('ours', msgId: ourWireId),
+    );
+    await provider.onMessageHistory({
+      'conversationId': 10,
+      'messages': [
+        _ownRow(id: 7010, encryptedContent: '3:selfsync', originDeviceId: 1),
+      ],
+    });
+    await pump();
+
+    expect(provider.messages.firstWhere((m) => m.id == 7010).content, 'ours');
+    expect(await encryption.service.wireIdIndex(), {
+      (senderId: 2, wireId: ourWireId): 9010,
+      (senderId: 1, wireId: ourWireId): 7010,
+    });
   });
 }

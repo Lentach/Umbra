@@ -1,6 +1,7 @@
 import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
+import 'package:fireplace/services/encryption_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Regression for the backgrounded-PWA false read receipt (field bug, users
@@ -36,7 +37,7 @@ class _PlainEncryption extends EncryptionProvider {
     DateTime? createdAt,
     DateTime? expiresAt,
     int? disappearAfterSeconds,
-    String? wireId,
+    WireKey? wire,
   }) async {}
 
   @override

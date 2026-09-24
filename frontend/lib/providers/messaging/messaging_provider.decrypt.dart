@@ -388,6 +388,13 @@ extension MessagingDecrypt on MessagingProvider {
     }
   }
 
+  /// [wireId] scoped to the account that sent it (PR2.1; see [WireKey]).
+  /// [senderId] must be authenticated, never a bare server field: our own
+  /// account for our own sends, or the sender whose pairwise session
+  /// decrypted the row.
+  WireKey? _wireKey(int senderId, String? wireId) =>
+      wireId == null ? null : (senderId: senderId, wireId: wireId);
+
   Future<void> _persistDecryptedContent(MessageModel decrypted) async {
     if (decrypted.content == kDecryptionFailedLabel ||
         decrypted.content == '[Encryption not initialized]' ||
@@ -440,7 +447,11 @@ extension MessagingDecrypt on MessagingProvider {
         createdAt: decrypted.createdAt,
         expiresAt: decrypted.expiresAt,
         disappearAfterSeconds: decrypted.disappearAfterSeconds,
-        wireId: decrypted.wireId,
+        // `senderId` is authenticated here: every wire id on a row comes from
+        // an envelope that decrypted under the pairwise session KEYED by it
+        // (a relabelled row fails decrypt), or is our own echoed token on a
+        // row whose sender is this account.
+        wire: _wireKey(decrypted.senderId, decrypted.wireId),
       );
     } catch (_) {}
   }
@@ -1078,7 +1089,7 @@ extension MessagingDecrypt on MessagingProvider {
                 if (pending['linkPreviewImageUrl'] != null)
                   'linkPreviewImageUrl': pending['linkPreviewImageUrl'],
               },
-              wireId: msg.sendToken,
+              wire: _wireKey(_currentUserId!, msg.sendToken),
             );
             final persisted = await _encryptionProvider!.getDecryptedContent(
               msg.id,

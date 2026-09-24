@@ -617,7 +617,7 @@ extension MessagingHistory on MessagingProvider {
             ?.saveDecryptedContent(
               msg.id,
               persistData,
-              wireId: msg.wireId,
+              wire: _wireKey(_currentUserId!, msg.wireId),
             )
             .ignore();
       }

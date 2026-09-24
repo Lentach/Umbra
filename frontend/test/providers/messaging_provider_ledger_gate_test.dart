@@ -2,6 +2,7 @@ import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
+import 'package:fireplace/services/encryption_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// The decrypt ledger's GATE, driven through the real MessagingProvider path.
@@ -110,7 +111,7 @@ class _LedgerEncryption extends EncryptionProvider {
     DateTime? createdAt,
     DateTime? expiresAt,
     int? disappearAfterSeconds,
-    String? wireId,
+    WireKey? wire,
   }) async {
     persisted[messageId] = Map<String, dynamic>.from(data);
   }
