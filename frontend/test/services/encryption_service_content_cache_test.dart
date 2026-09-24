@@ -616,5 +616,25 @@ void main() {
         (senderId: 77, wireId: 'scoped-wire-0041'): 4041,
       });
     });
+
+    test('a later write never supplies the sender of a senderless stamp',
+        () async {
+      // A `_wid` stamped before `_wsid` existed. A row restored from disk is
+      // re-persisted under the SERVER row's senderId, so a later write that
+      // filled the gap would index an unauthenticated sender.
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        'e2e_42_decrypted_4050',
+        jsonEncode({'content': 'old', '_wid': 'bare-wire-0050'}),
+      );
+      await service.saveDecryptedContent(
+        4050,
+        {'content': 'old, edited'},
+        wire: (senderId: 77, wireId: 'bare-wire-0050'),
+      );
+
+      expect(await service.getDecryptedContent(4050), isNotNull);
+      expect(await service.wireIdIndex(), isEmpty);
+    });
   });
 }

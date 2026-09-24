@@ -219,6 +219,50 @@ void main() {
     });
   });
 
+  // Review finding (A2 fold): the echoed `sendToken` is a SERVER field. A
+  // server that echoes another of our tokens (say, one our other device sent)
+  // must not stamp it on this row: it would claim that message's wire id
+  // under our own name before its self-sync copy lands here.
+  test('an ack echoing a different token keeps the one this device sent',
+      () async {
+    final send = await sendAndCapture('hi');
+
+    provider.onMessageSent(
+      _ownRow(
+        id: 503,
+        encryptedContent: send['encryptedContent'] as String,
+        sendToken: 'temp_1758700000000_1-sibling',
+        tempId: send['tempId'] as String,
+      ),
+    );
+    await pump();
+
+    expect(await encryption.service.wireIdIndex(), {
+      (senderId: 1, wireId: send['sendToken'] as String): 503,
+    });
+  });
+
+  test('a lost ack echoing a different token keeps the one this device sent',
+      () async {
+    final send = await sendAndCapture('hi');
+
+    await provider.onMessageHistory({
+      'conversationId': 10,
+      'messages': [
+        _ownRow(
+          id: 504,
+          encryptedContent: send['encryptedContent'] as String,
+          sendToken: 'temp_1758700000000_1-sibling',
+        ),
+      ],
+    });
+    await pump();
+
+    expect(await encryption.service.wireIdIndex(), {
+      (senderId: 1, wireId: send['sendToken'] as String): 504,
+    });
+  });
+
   test(
     'a received message is indexed under the msgId its sender sent',
     () async {

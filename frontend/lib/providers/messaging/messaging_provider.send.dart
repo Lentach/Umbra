@@ -1584,7 +1584,9 @@ extension MessagingSend on MessagingProvider {
         _encryptionProvider!
             .savePendingSendRecord(
               fanOut ? sendToken : legacyCiphertext!,
-              Map<String, dynamic>.from(pendingSnapshot),
+              // The minted token rides along so a lost-ack reconcile stamps
+              // OUR wire id, never the server's echo of it.
+              {...pendingSnapshot, PlaintextRecordCodec.wireIdKey: sendToken},
             )
             .ignore();
       }

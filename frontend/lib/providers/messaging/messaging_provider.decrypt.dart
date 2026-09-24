@@ -447,10 +447,13 @@ extension MessagingDecrypt on MessagingProvider {
         createdAt: decrypted.createdAt,
         expiresAt: decrypted.expiresAt,
         disappearAfterSeconds: decrypted.disappearAfterSeconds,
-        // `senderId` is authenticated here: every wire id on a row comes from
-        // an envelope that decrypted under the pairwise session KEYED by it
-        // (a relabelled row fails decrypt), or is our own echoed token on a
-        // row whose sender is this account.
+        // A NEW pair is only ever stamped from an authenticated sender: a
+        // wire id first reaches a row from an envelope that decrypted under
+        // the pairwise session KEYED by `senderId` (a relabelled row fails
+        // decrypt), or from our own minted token. A row RESTORED from disk
+        // carries its stored `_wid` beside the server row's `senderId`, which
+        // is safe only because the store keeps an existing pair (first write
+        // wins) and never lets a later write fill in a missing sender.
         wire: _wireKey(decrypted.senderId, decrypted.wireId),
       );
     } catch (_) {}
@@ -1045,6 +1048,11 @@ extension MessagingDecrypt on MessagingProvider {
               pending['messageType'] as String?,
             );
             final pendingContent = pending['content'] as String? ?? '';
+            // The token THIS device minted, saved with the record — never the
+            // server's echo (see `_addMessageToState`). A record saved before
+            // it carried one has no wire id: fail closed.
+            final ownWireId = pending[PlaintextRecordCodec.wireIdKey];
+            final wireId = ownWireId is String ? ownWireId : null;
             final restored = msg.copyWith(
               content: pendingContent.isNotEmpty ? pendingContent : null,
               messageType: restoredType,
@@ -1058,9 +1066,7 @@ extension MessagingDecrypt on MessagingProvider {
               linkPreviewUrl: pending['linkPreviewUrl'] as String?,
               linkPreviewTitle: pending['linkPreviewTitle'] as String?,
               linkPreviewImageUrl: pending['linkPreviewImageUrl'] as String?,
-              // Origin-scoped (a record key exists only for our own send), so
-              // the echoed token is OUR wire id — see `_addMessageToState`.
-              wireId: msg.sendToken,
+              wireId: wireId,
             );
             // peek → persist → verify → take:
             await _encryptionProvider!.saveDecryptedContent(
@@ -1089,7 +1095,7 @@ extension MessagingDecrypt on MessagingProvider {
                 if (pending['linkPreviewImageUrl'] != null)
                   'linkPreviewImageUrl': pending['linkPreviewImageUrl'],
               },
-              wire: _wireKey(_currentUserId!, msg.sendToken),
+              wire: _wireKey(_currentUserId!, wireId),
             );
             final persisted = await _encryptionProvider!.getDecryptedContent(
               msg.id,
