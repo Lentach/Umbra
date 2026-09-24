@@ -1,6 +1,6 @@
 ---
 name: umbra-session-start
-description: Start-of-session pickup for Umbra/Fireplace — read the baton (NEXT.md) the last session left, check branch/HEAD drift, load the traps for the area, and report where the work stands before touching anything. Use when the user says "session start" / "pick up" / "continue from the handoff", or opens a fresh session on existing work.
+description: Start-of-session pickup for Umbra/Fireplace — read the baton (NEXT.md) the last session left, check branch/HEAD drift, load the traps for the area, and report where the work stands before touching anything. Use when the user says "session start" / "pick up" / "continue from the handoff", or opens a fresh session on existing work. Also the briefing for a helper agent: when delegating a slice, point it at the baton (§6) instead of retyping context.
 ---
 
 # Umbra session start
@@ -45,6 +45,15 @@ Then stop for the go-ahead, unless the user's message already said to continue. 
 ## 5. Consume
 
 Rename `NEXT.md` → `NEXT.consumed.md` (overwrite). Both are gitignored. The next fresh session falls back to LATEST instead of replaying this baton, and the consumed copy stays readable if this session dies early.
+
+## 6. Handing a slice to a helper agent
+
+The baton is also the briefing for subagents: the task points at it instead of retyping context.
+
+- Give the **absolute** path of this worktree's live baton — `NEXT.consumed.md` after step 5, or `NEXT.md` once this session has written a fresh one. Subagents start in the main checkout, not in this worktree, so a relative path hands them another worktree's baton (or none).
+- Tell the helper to do steps 2–3 only, from that worktree: read the baton, its `Read first` paths, and `grep docs/agents/traps.md` for its `Area` keywords. A helper never runs steps 1, 4 or 5: it does not report-and-wait, rename or rewrite the baton.
+- The task text then carries only what the baton does not: the slice (files, symbols, non-goals), decisions made since the baton was written, and the acceptance check.
+- Refresh a baton the session has outgrown (the next action moved on) before delegating: the helper trusts it.
 
 ## The baton — format (≤ 2 KB)
 

@@ -1,6 +1,6 @@
 # AGENTS.md — Fireplace (Umbra)
 
-Universal agent entrypoint. **In Oh-My-Pi this is the ONLY project file injected automatically** (it shadows root `CLAUDE.md` at the same depth — `omp://context-files.md` "one project context file per directory depth"). Everything below is therefore load-bearing; everything else is a deliberate read.
+Universal agent entrypoint. **In Oh-My-Pi this is the ONLY project file injected automatically** (it shadows root `CLAUDE.md` at the same depth — `omp://context-files.md`). Everything below is therefore load-bearing; everything else is a deliberate read.
 
 ## Read, in order
 
@@ -13,9 +13,9 @@ Universal agent entrypoint. **In Oh-My-Pi this is the ONLY project file injected
    - `frontend/docs/composer-media.md` — `chat_input_bar*`, `composer*`, `chat_action_tiles.dart`, `web_file_input.dart`, `widgets/message/**`
    - `frontend/docs/passcode-lock.md` — `**/passcode*`, `privacy_curtain*`, `content_key_wrap.dart`, `web/index.html`
    - `skill://flutter-frontend-design` — any visual Flutter change: `frontend/lib/{widgets,screens,theme}/`
-5. Skills: **`.claude/skills/` IS the set** — `.omp/config.yml` mutes the machine-wide `~/.agents` tree, so nothing depends on a home directory and every worktree inherits it. Add skills there. Map + MCP: `docs/agents/skills-and-mcp.md`.
+5. Skills: **`.claude/skills/` IS the set** — `.omp/config.yml` mutes `~/.agents`, so every worktree inherits the same set. Add skills there. Map + MCP: `docs/agents/skills-and-mcp.md`.
    - By trigger: broken/slow → `diagnosing-bugs` · "review since X" → `code-review` · stress-test a plan → `grilling` · module shape → `codebase-design`, `design-an-interface` · docs/API facts → `research` · open design question → `prototype` · merge/rebase → `resolving-merge-conflicts` · file it → `qa`, `request-refactor-plan` · `/skill:` only → `triage`, `to-spec`, `to-tickets`. Flutter visuals, Dart idioms and tests fire from `.omp/rules/`.
-6. Delegating? Subagents inherit nothing: name the files above in the task.
+6. Delegating? Subagents start blank, in the main checkout: give the ABSOLUTE path of this worktree's baton + its traps (`umbra-session-start` §6), then only the slice.
 
 ## Non-negotiable (details in root `CLAUDE.md` §1, §4, §6)
 
