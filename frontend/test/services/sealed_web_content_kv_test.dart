@@ -588,6 +588,18 @@ void main() {
       expect(prefs.getInt('e2e_37_retention_epoch_v1'), 123);
     });
 
+    test("this device's request-queue keys are sealed, never cleartext",
+        () async {
+      // The row holds the queue's private auth + seal halves (PR3.1).
+      final kv = await openStore();
+      await kv.setString('e2e_37_boxreq_v1', '{"v":1,"queue":{}}');
+      expect(
+        SealedWebEnvelope.isEnvelope(prefs.getString('e2e_37_boxreq_v1')!),
+        isTrue,
+      );
+      expect(kv.getString('e2e_37_boxreq_v1'), '{"v":1,"queue":{}}');
+    });
+
     test('remove drops the row and the view', () async {
       final kv = await openStore();
       await kv.setString('e2e_37_decrypted_43', '{"c":"x"}');

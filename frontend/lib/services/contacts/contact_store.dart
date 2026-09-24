@@ -75,10 +75,22 @@ class ContactStore {
   static String selfKey(int userId) => '${keyPrefix(userId)}self';
   static String lockName(int userId) => 'fireplace-contacts-$userId';
 
+  /// This DEVICE's box request queue (metadata-privacy PR3.1, design §4.4).
+  /// Deliberately OUTSIDE [keyPrefix]: every `contact_v1_` row is copied
+  /// verbatim by the history file backup and read as a peer by the sweeps,
+  /// and this row holds per-device private halves — a second install of the
+  /// account importing it would take over this device's request queue.
+  /// Inside `e2e_<uid>_`, so account deletion's `clearAllKeys` sweeps it; a
+  /// sealed family on web (`SealedWebContentKv`).
+  static String requestQueueKey(int userId) => 'e2e_${userId}_boxreq_v1';
+  static const int requestQueueVersion = 1;
+
   int? _userId;
   ContentKv? _kv;
   final Map<int, ContactRecord> _records = <int, ContactRecord>{};
   UserModel? _self;
+  ContactQueue? _requestQueue;
+  bool _requestQueueUnsupported = false;
   int _undetermined = 0;
   Future<void> _queue = Future<void>.value();
 
@@ -118,6 +130,13 @@ class ContactStore {
 
   ContactRecord? byUserId(int peerUserId) => _records[peerUserId];
 
+  /// This device's request queue as last read or claimed; null when there is
+  /// none, or the stored row is unreadable (replaceable) or a newer build's.
+  ContactQueue? get requestQueue => _requestQueue;
+
+  /// A NEWER build wrote the request-queue row: it is never overwritten.
+  bool get requestQueueUnsupported => _requestQueueUnsupported;
+
   /// Opens the store for [userId] and loads every readable record. Throws
   /// [ContactStoreUnavailable]; a thrown open leaves the store closed. An
   /// open that a [close] (re-lock, logout) overtakes while it is awaiting
@@ -137,7 +156,11 @@ class ContactStore {
 
     final Map<String, Object?> rows;
     try {
-      rows = await _readNamespace(kv, userId);
+      rows = await _readWhere(
+        kv,
+        (key) =>
+            key.startsWith(keyPrefix(userId)) || key == requestQueueKey(userId),
+      );
     } on Object {
       throw const ContactStoreUnavailable('read');
     }
@@ -146,6 +169,7 @@ class ContactStore {
     final self = selfKey(userId);
     var undetermined = 0;
     final loaded = <int, ContactRecord>{};
+    final request = _decodeRequest(rows.remove(requestQueueKey(userId)));
     UserModel? selfUser;
     for (final entry in rows.entries) {
       final key = entry.key;
@@ -178,6 +202,8 @@ class ContactStore {
     _userId = userId;
     _kv = kv;
     _self = selfUser;
+    _requestQueue = request.queue;
+    _requestQueueUnsupported = request.unsupported;
     _undetermined = undetermined;
     _records
       ..clear()
@@ -195,6 +221,8 @@ class ContactStore {
     _userId = null;
     _kv = null;
     _self = null;
+    _requestQueue = null;
+    _requestQueueUnsupported = false;
     _undetermined = 0;
     _records.clear();
   }
@@ -331,6 +359,68 @@ class ContactStore {
     );
   }
 
+  /// Stores [candidate] as this device's request queue UNLESS a readable one
+  /// is already on disk — another tab of this device claimed first — in
+  /// which case that one is kept and returned; the caller deletes its own
+  /// from the box, so exactly one queue is ever published per device. Null
+  /// when nothing could be decided: the store is closed, the write did not
+  /// commit, or a newer build owns the row.
+  ///
+  /// Never fires [onChanged]: the contact backup does not carry this row.
+  Future<ContactQueue?> claimRequestQueue(ContactQueue candidate) {
+    final kv = _kv;
+    final userId = _userId;
+    if (kv == null || userId == null) return Future.value();
+    final generation = _generation;
+    ContactQueue? kept;
+    return _serial(
+      () => _lock(lockName(userId), () async {
+        if (_generation != generation) return false;
+        final key = requestQueueKey(userId);
+        final current = _decodeRequest(
+          (await _readWhere(kv, (k) => k == key))[key],
+        );
+        if (current.unsupported) return false;
+        final onDisk = current.queue;
+        if (onDisk == null) {
+          final encoded = jsonEncode({
+            'v': requestQueueVersion,
+            'queue': candidate.toJson(),
+          });
+          if (!await kv.setString(key, encoded)) return false;
+        }
+        kept = onDisk ?? candidate;
+        if (_generation == generation) _requestQueue = kept;
+        return true;
+      }),
+    ).then((ok) => ok ? kept : null);
+  }
+
+  /// Forgets the request queue [rid] — the box refused it (deleted or
+  /// reaped), so its sid must never be published again. A row holding a
+  /// DIFFERENT queue (another tab already replaced it) is left alone.
+  Future<bool> dropRequestQueue(String rid) {
+    final kv = _kv;
+    final userId = _userId;
+    if (kv == null || userId == null) return Future.value(false);
+    final generation = _generation;
+    return _serial(
+      () => _lock(lockName(userId), () async {
+        if (_generation != generation) return false;
+        final key = requestQueueKey(userId);
+        final current = _decodeRequest(
+          (await _readWhere(kv, (k) => k == key))[key],
+        );
+        if (current.unsupported) return false;
+        if (current.queue?.rid == rid && !await kv.remove(key)) return false;
+        if (_generation == generation && _requestQueue?.rid == rid) {
+          _requestQueue = null;
+        }
+        return true;
+      }),
+    );
+  }
+
   /// In-process serialization: the native lock runner is a pass-through, and
   /// two overlapping list events (friends + conversations at connect) must not
   /// interleave their read-then-write on the same rows. A mutation that
@@ -383,19 +473,47 @@ class ContactStore {
   static Future<Map<String, Object?>> _readNamespace(
     ContentKv kv,
     int userId,
+  ) => _readWhere(kv, (key) => key.startsWith(keyPrefix(userId)));
+
+  static Future<Map<String, Object?>> _readWhere(
+    ContentKv kv,
+    bool Function(String key) wanted,
   ) async {
-    final prefix = keyPrefix(userId);
     final snapshot = await kv.authoritativeSnapshot();
     if (snapshot != null) {
       return <String, Object?>{
         for (final e in snapshot.entries)
-          if (e.key.startsWith(prefix)) e.key: e.value,
+          if (wanted(e.key)) e.key: e.value,
       };
     }
     return <String, Object?>{
       for (final key in kv.getKeys())
-        if (key.startsWith(prefix)) key: kv.getString(key),
+        if (wanted(key)) key: kv.getString(key),
     };
+  }
+
+  /// The request-queue row: `queue` null with `unsupported` false = absent
+  /// or unreadable (garbage, a web row whose seal key was lost) — replaceable,
+  /// because a fresh queue plus a re-publish loses at most the requests
+  /// waiting in the old one. `unsupported` = a newer build's row, off limits.
+  static ({ContactQueue? queue, bool unsupported}) _decodeRequest(Object? raw) {
+    if (raw is! String) return (queue: null, unsupported: false);
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) {
+        return (queue: null, unsupported: false);
+      }
+      final v = decoded['v'];
+      if (v is int && v > requestQueueVersion) {
+        return (queue: null, unsupported: true);
+      }
+      final queue = ContactQueue.fromJson(
+        decoded['queue'] as Map<String, dynamic>,
+      );
+      return (queue: queue, unsupported: false);
+    } on Object {
+      return (queue: null, unsupported: false);
+    }
   }
 
   /// A row as this build sees it. `unsupported` = a newer build wrote it (or

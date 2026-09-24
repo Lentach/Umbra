@@ -6,6 +6,8 @@ import 'package:flutter/foundation.dart';
 import '../config/app_config.dart';
 import '../constants/app_constants.dart';
 import '../services/api_service.dart';
+import '../services/box/box_client.dart';
+import '../services/box/box_session.dart';
 import '../services/contacts/contact_backup.dart';
 import '../services/contacts/contact_backup_service.dart';
 import '../services/contacts/contact_store.dart';
@@ -104,6 +106,15 @@ class ConnectionProvider extends ChangeNotifier {
   /// owning widget wired none.
   ContactBackupService? _contactBackup;
 
+  /// Builds the box client for a server's base URL (metadata-privacy PR3.1).
+  /// Null when the owning widget wired none — then no box is ever opened.
+  BoxClient Function(String baseUrl)? _boxClient;
+
+  /// The box link of the signed-in account's session; replaced when another
+  /// account connects, disposed on logout.
+  BoxSession? _box;
+  int? _boxUserId;
+
   /// Why the contact store could not open this session, or null when it did
   /// (or none is wired). Surfaced by the loss screen (PR2.3).
   String? _contactStoreUnavailable;
@@ -144,9 +155,11 @@ class ConnectionProvider extends ChangeNotifier {
     required MessagingProvider messaging,
     ContactStore? contactStore,
     ContactBackupService? contactBackup,
+    BoxClient Function(String baseUrl)? boxClient,
   }) {
     _contactStore = contactStore;
     _contactBackup = contactBackup;
+    _boxClient = boxClient;
     if (contactStore != null) contactBackup?.attach(contactStore);
     friends.contactStore = contactStore;
     conversations.contactStore = contactStore;
@@ -199,6 +212,8 @@ class ConnectionProvider extends ChangeNotifier {
         // lists are re-applied as the freshest truth.
         _friendsProvider?.rewriteStore();
         _conversationsProvider?.rewriteStore();
+        // A vault that booted locked left the box without a request queue.
+        _box?.storeOpened();
       }
       // PR2.4: a phrase the user just enrolled gets a second wrap of the
       // contact-backup content key, so a device that lost its storage AND
@@ -381,6 +396,7 @@ class ConnectionProvider extends ChangeNotifier {
               if (_connectGeneration != generation) return;
               _friendsProvider?.hydrateFromStore();
               _conversationsProvider?.hydrateFromStore();
+              _box?.storeOpened();
             }),
           );
         }
@@ -457,6 +473,25 @@ class ConnectionProvider extends ChangeNotifier {
       );
     }
 
+    // 4d. The box (PR3.1): its own socket, no account on its path. One
+    // session per account — a reconnect of the same account only resumes it,
+    // so its published request queue and subscriptions carry over.
+    final boxClient = _boxClient;
+    final contacts = _contactStore;
+    if (boxClient != null && contacts != null) {
+      if (_box == null || _boxUserId != userId) {
+        _box?.dispose();
+        _boxUserId = userId;
+        _box = BoxSession(
+          box: boxClient(baseUrl),
+          store: contacts,
+          emit: emit,
+        )..start();
+      } else {
+        _box!.resume();
+      }
+    }
+
     // 5. Set up emit callbacks so sub-providers can send socket events
     _encryptionProvider?.setEmitCallback((event, data) => emit(event, data));
     _friendsProvider?.setEmitCallback((event, data) => emit(event, data));
@@ -516,6 +551,7 @@ class ConnectionProvider extends ChangeNotifier {
         _encryptionProvider?.setOwnDeviceId(readyDeviceId);
       }
       _onSocketReady();
+      _box?.accountReady(readyDeviceId is int ? readyDeviceId : null);
     });
 
     // 10. On 'disconnect': handle reconnect
@@ -524,6 +560,7 @@ class ConnectionProvider extends ChangeNotifier {
         'intentional': _intentionalDisconnect,
       });
       _isConnected = false;
+      _box?.accountLost();
       notifyListeners();
 
       if (!_intentionalDisconnect) {
@@ -851,6 +888,7 @@ class ConnectionProvider extends ChangeNotifier {
 
     // Socket cleanup
     _socketService.disconnect();
+    _box?.close();
     _isConnected = false;
     _errorMessage = null;
 
@@ -871,6 +909,9 @@ class ConnectionProvider extends ChangeNotifier {
       _conversationsProvider?.clearAll();
       _messagingProvider?.clearAll();
       _contactStore?.close();
+      _box?.dispose();
+      _box = null;
+      _boxUserId = null;
     }
 
     notifyListeners();
@@ -1528,7 +1569,10 @@ class ConnectionProvider extends ChangeNotifier {
       _messagingProvider?.onPartnerRecordingVoice(data);
     });
     _socketService.on('servedMessageIds', _onServedMessageIds);
-    _socketService.on('serverTime', _onServerTime);
+    _socketService
+      ..on('serverTime', _onServerTime)
+      // PR3.1: the answer to the box request-queue publish (`BoxSession`).
+      ..on('requestQueueSet', (data) => _box?.onRequestQueueSet(data));
 
     // --- Error event ---
     _socketService.on('error', (err) {
@@ -1573,6 +1617,7 @@ class ConnectionProvider extends ChangeNotifier {
     _socketReadyWatchdog?.cancel();
     _reconnectManager.cancel();
     _socketService.disconnect();
+    _box?.dispose();
     super.dispose();
   }
 }

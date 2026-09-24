@@ -65,8 +65,11 @@ class SealedWebContentKv implements ContentKv {
   /// localStorage either. It carries no message id, so [_retireIdKey] never
   /// matches it and a lost-kid contact row is served as its raw envelope
   /// (present, undecodable) — `ContactStore` counts it and moves on.
+  /// `boxreq_v1` (this device's box request queue, `ContactStore
+  /// .requestQueueKey`) holds the queue's private auth + seal halves; a
+  /// lost-kid row reads undecodable and `ContactStore` replaces it.
   static final RegExp _familyKey = RegExp(
-    r'^e2e_\d+_(decrypted_|decrypt_raw_v1_|pendsend_v1_|contact_v1_)',
+    r'^e2e_\d+_(decrypted_|decrypt_raw_v1_|pendsend_v1_|contact_v1_|boxreq_v1)',
   );
   static final RegExp _retireIdKey = RegExp(
     r'^e2e_(\d+)_(?:decrypted_|decrypt_raw_v1_)(\d+)$',

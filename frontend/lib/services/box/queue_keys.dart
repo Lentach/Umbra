@@ -66,14 +66,7 @@ class QueueKeys {
       return InboundQueueNotCreated(created);
     }
     final address = created.value;
-    final queue = ContactQueue(
-      rid: boxB64(address.rid),
-      sid: boxB64(address.sid),
-      nid: boxB64(address.nid),
-      authPriv: boxB64(auth.bytes),
-      sealPriv: boxB64(seal.privateKey),
-      sealPub: boxB64(seal.publicKey),
-    );
+    final queue = _material(address, auth, seal);
     var attached = false;
     final committed = await _store.update(peerUserId, (current) {
       if (current == null) return null;
@@ -88,6 +81,67 @@ class QueueKeys {
     await _box.subscribe([owned]);
     return InboundQueueCreated(queue);
   }
+
+  /// This DEVICE's request queue (design §4.4; wire.md "First contact"): the
+  /// one a stranger who searched this account seals a friend request into.
+  /// Loaded from the store, or created, stored and only then subscribed, the
+  /// [createInbound] order. A stored queue the box refuses on subscribe
+  /// (deleted, or reaped after 90 unsubscribed days) is dropped and replaced
+  /// once: its sid is public, and publishing a queue nobody reads loses every
+  /// request sent to it.
+  ///
+  /// No push notifier is ever registered on it (owner, 2026-09-24): the
+  /// device's one push token would link this public queue to the device's
+  /// normal queues in a dump, so a friend request waits for the next open.
+  ///
+  /// Null when it cannot be known now: the store is closed, a newer build
+  /// owns the row, the box did not answer, or the write did not commit. A
+  /// row the store could not rule on is never minted over.
+  Future<ContactQueue?> ensureRequest() async {
+    for (var attempt = 0; attempt < 2; attempt++) {
+      if (!_store.isOpen || _store.requestQueueUnsupported) return null;
+      final queue = _store.requestQueue ?? await _createRequest();
+      if (queue == null) return null;
+      final owned = authOf(queue);
+      if (owned != null) {
+        final answer = await _box.subscribe([owned]);
+        final gone =
+            answer is BoxOk<List<BoxRefusal>> &&
+            answer.value.any((r) => boxB64(r.rid) == queue.rid);
+        if (!gone) return queue;
+      }
+      if (!await _store.dropRequestQueue(queue.rid)) return null;
+    }
+    return null;
+  }
+
+  Future<ContactQueue?> _createRequest() async {
+    final auth = _signer.mint();
+    final seal = QueueSeal.mintKeyPair();
+    final created = await _box.createQueue(QueueKind.request, auth);
+    if (created is! BoxOk<QueueAddress>) return null;
+    final mine = _material(created.value, auth, seal);
+    final kept = await _store.claimRequestQueue(mine);
+    if (kept?.rid != mine.rid) {
+      // Another tab of this device claimed first, or nothing was stored:
+      // this queue's sid is never published, so nobody may keep it alive.
+      await _box.deleteQueue(BoxQueueAuth(rid: created.value.rid, key: auth));
+    }
+    return kept;
+  }
+
+  static ContactQueue _material(
+    QueueAddress address,
+    BoxAuthKey auth,
+    QueueSealKeyPair seal,
+  ) => ContactQueue(
+    rid: boxB64(address.rid),
+    sid: boxB64(address.sid),
+    nid: boxB64(address.nid),
+    authPriv: boxB64(auth.bytes),
+    sealPriv: boxB64(seal.privateKey),
+    sealPub: boxB64(seal.publicKey),
+  );
 
   /// How to prove [queue] to the box; null for a stored shape this build
   /// cannot read (never guessed around: a wrong key only earns auth_failed).
