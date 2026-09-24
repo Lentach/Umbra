@@ -302,15 +302,19 @@ extension MessagingBox on MessagingProvider {
   /// device of ours has a box address — one message is never split across
   /// the two paths, because an old-path copy is a server row naming the
   /// pair that the box devices would then be served as `none_for_device`.
-  /// Null = the old path, exactly as before.
+  /// Null = the old path, and ONLY on evidence: a verified list naming a
+  /// device with no address, or a second live device of ours. A list that
+  /// cannot be verified THROWS (the caller fails the row for a retry): the
+  /// peer is box-covered as far as we know, and on web socket.io would
+  /// replay an old-path emit buffered while offline as a server row.
   ///
   /// [addresses] is the outbox's answer for the peer, taken by the caller
   /// WITHOUT an await, so a peer with none (every chat until the handoff
   /// slice) reaches the old path's emit on exactly the turns it always did.
   ///
-  /// Both lists come from the verified cache, fetched when absent (the peer
-  /// path of `getDeviceList` stays until PR4.1): unlike the old path, the
-  /// box has no server bounce to catch a device we did not know about.
+  /// Both lists come from the verified cache (the peer path of
+  /// `getDeviceList` stays until PR4.1): unlike the old path, the box has no
+  /// server bounce to catch a device we did not know about.
   Future<_BoxRoute?> _boxRoute(
     int recipientId,
     BoxOutbox outbox,
@@ -345,8 +349,8 @@ extension MessagingBox on MessagingProvider {
       peer = await enc.getVerifiedDeviceList(recipientId, forceRefresh: stale);
       own = await enc.getVerifiedDeviceList(ownUserId);
     } on Object {
-      declined('list_unverified');
-      return null;
+      _e2eFlowLog('BOX_ROUTE_UNVERIFIED', {'peer': recipientId});
+      rethrow;
     }
     if (stale) _boxListCheckedAt[recipientId] = DateTime.now();
     if (own.liveDeviceIds.any((d) => d != enc.ownDeviceId)) {

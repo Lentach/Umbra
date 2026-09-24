@@ -321,14 +321,25 @@ void main() {
     },
   );
 
-  test('a peer list that cannot be verified keeps the old path', () async {
-    bob([1]);
-    encryption.unverifiable.add(2);
-    await send('unverified');
+  test(
+    'a covered peer whose list cannot be verified (a fetch timeout after a '
+    'reconnect) FAILS the row — never the old path, whose emit a web socket '
+    'buffers offline and replays as a server row',
+    () async {
+      bob([1]);
+      encryption.unverifiable.add(2);
+      final row = await send('unverified');
 
-    expect(outbox.delivered, isEmpty);
-    expect(emitted, contains('sendMessage'));
-  });
+      expect(row.deliveryStatus, MessageDeliveryStatus.failed);
+      expect(outbox.delivered, isEmpty);
+      expect(emitted, isNot(contains('sendMessage')));
+
+      encryption.unverifiable.clear();
+      await provider.retryFailedMessage(row.tempId!);
+      await pump();
+      expect(outbox.delivered, hasLength(1));
+    },
+  );
 
   test(
     'a box refusal on ANY device fails the row (retry), stores nothing, and '
