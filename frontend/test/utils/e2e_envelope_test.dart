@@ -234,5 +234,42 @@ void main() {
         }
       });
     });
+
+    group('t / ts (metadata-privacy PR3.1 box envelope, decision 13)', () {
+      test('an envelope without t is a chat message — every old-path one', () {
+        expect(E2eEnvelope.parse(jsonEncode({'content': 'hi'})).type, 'msg');
+        expect(E2eEnvelope.build('hi'), isNot(contains('t')));
+      });
+
+      test('t and ts survive a build -> parse round trip', () {
+        final sentAt = DateTime.utc(2026, 9, 24, 12, 30, 5, 123);
+        final built = E2eEnvelope.build('hi', type: 'goodbye', sentAt: sentAt);
+        expect(built['t'], 'goodbye');
+        expect(built['ts'], sentAt.millisecondsSinceEpoch);
+        final parsed = E2eEnvelope.parse(jsonEncode(built));
+        expect(parsed.type, 'goodbye');
+        expect(parsed.sentAt, sentAt);
+        expect(parsed.sentAt!.isUtc, isTrue);
+      });
+
+      test('a t that is not a string matches no type, never a message', () {
+        for (final value in <Object>[1, true, <String>[], <String, Object>{}]) {
+          final parsed = E2eEnvelope.parse(
+            jsonEncode({'content': 'hi', 't': value}),
+          );
+          expect(parsed.type, isNot('msg'), reason: '$value');
+        }
+      });
+
+      test('a ts that is not a positive whole ms is absent, never a date', () {
+        for (final value in <Object>[0, -1, 1.5, '1758700000000', 1 << 53]) {
+          final parsed = E2eEnvelope.parse(
+            jsonEncode({'content': 'hi', 'ts': value}),
+          );
+          expect(parsed.sentAt, isNull, reason: '$value');
+        }
+        expect(E2eEnvelope.parse(jsonEncode({'content': 'hi'})).sentAt, isNull);
+      });
+    });
   });
 }

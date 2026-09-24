@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../l10n/app_localizations.dart';
+import '../../utils/message_ids.dart';
 import '../glass/glass_dialog.dart';
 
 Future<void> showMessageDeleteDialog({
@@ -10,7 +11,7 @@ Future<void> showMessageDeleteDialog({
   required VoidCallback onDeleteForEveryone,
 }) {
   final l10n = AppLocalizations.of(context);
-  final showForEveryone = isMine && messageId > 0;
+  final showForEveryone = isMine && isServerMessageId(messageId);
   return showDialog<void>(
     context: context,
     builder: (ctx) => GlassDialog(

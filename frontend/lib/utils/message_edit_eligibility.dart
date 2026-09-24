@@ -1,4 +1,5 @@
 import '../models/message_model.dart';
+import 'message_ids.dart';
 
 /// Client-side edit window. Mirrors the server's `EDIT_WINDOW_MS` (15 min); the
 /// server is the authoritative enforcer, this only decides whether to show the
@@ -6,7 +7,7 @@ import '../models/message_model.dart';
 const Duration kMessageEditWindow = Duration(minutes: 15);
 
 /// True when [message] may be edited by the current user from the context menu:
-/// own + TEXT + real plaintext + a confirmed server id (positive) + a delivered
+/// own + TEXT + real plaintext + a server row ([isServerMessageId]) + a delivered
 /// state (never an optimistic/failed row) + within the edit window. The client
 /// gate is never the sole enforcer — the server re-checks sender + window.
 bool messageEditEligible(
@@ -16,7 +17,8 @@ bool messageEditEligible(
 }) {
   if (!isMine) return false;
   if (message.messageType != MessageType.text) return false;
-  if (message.id <= 0) return false; // optimistic/unsent row — no server row yet
+  // An optimistic/unsent row, or a box message (decision 14): no server row.
+  if (!isServerMessageId(message.id)) return false;
   if (!message.hasCopyablePlaintext) return false; // placeholder/terminal labels
   switch (message.deliveryStatus) {
     case MessageDeliveryStatus.sent:

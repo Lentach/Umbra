@@ -1603,7 +1603,9 @@ extension MessagingSend on MessagingProvider {
         'sendToken': sendToken,
         'expiresIn': effectiveExpiresIn,
         'tempId': tempId,
-        'replyToMessageId': effectiveReplyToId,
+        // A box message's LOCAL id names no server row (decision 14).
+        if (effectiveReplyToId != null && isServerMessageId(effectiveReplyToId))
+          'replyToMessageId': effectiveReplyToId,
       };
       if (fanOut && recipientList?.version != null) {
         emitPayload['recipientListVersion'] = recipientList!.version;

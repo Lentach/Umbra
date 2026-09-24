@@ -306,6 +306,7 @@ class MessageModel {
     String? mediaKey,
     String? mediaIv,
     DateTime? editedAt,
+    DateTime? createdAt,
   }) {
     return MessageModel(
       id: id,
@@ -313,7 +314,7 @@ class MessageModel {
       senderId: senderId,
       senderUsername: senderUsername,
       conversationId: conversationId,
-      createdAt: createdAt,
+      createdAt: createdAt ?? this.createdAt,
       deliveryStatus: deliveryStatus ?? this.deliveryStatus,
       expiresAt: expiresAt ?? this.expiresAt,
       disappearAfterSeconds:

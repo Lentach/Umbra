@@ -149,11 +149,7 @@ class ChatMessageBubble extends StatelessWidget {
       onEdit: messageEditEligible(message, isMine: isMine)
           ? () => messaging.beginEditMessage(message)
           : null,
-      onPin: () {
-        if (message.id > 0) {
-          messaging.pinMessage(message.conversationId, message.id);
-        }
-      },
+      onPin: () => messaging.pinMessage(message.conversationId, message.id),
       onDelete: () {
         showMessageDeleteDialog(
           context: context,

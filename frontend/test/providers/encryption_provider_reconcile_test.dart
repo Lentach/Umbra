@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/services/encryption_service.dart';
+import 'package:fireplace/utils/message_ids.dart';
 
 /// Server reconciliation: destroy the local plaintext of every stored message
 /// the server no longer serves.
@@ -68,6 +69,22 @@ void main() {
           reason: 'the server dropped it, so nothing will ever return it',
         );
         expect(await stored(3), isTrue);
+      },
+    );
+
+    test(
+      'never asks about, or destroys, a box message: it has no server row',
+      () async {
+        // Decision 14: a box-delivered message lives under a LOCAL id; the
+        // server has never heard of it, so its "not served" is no evidence.
+        const local = kFirstLocalMessageId + 7;
+        await seed([1, local]);
+
+        await provider.reconcileStoredPlaintext(serverWithout(const {}));
+
+        expect(asked.expand((b) => b), isNot(contains(local)));
+        expect(asked.expand((b) => b), contains(1));
+        expect(await stored(local), isTrue);
       },
     );
 

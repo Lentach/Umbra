@@ -20,6 +20,7 @@ import '../services/server_clock.dart';
 import '../utils/e2e_diag_log.dart';
 import '../utils/e2e_persistent_diag.dart';
 import '../utils/message_expiry.dart' show kExpiryPurgeGrace;
+import '../utils/message_ids.dart';
 import '../utils/storage_persist.dart';
 import '../utils/boot_markers.dart';
 
@@ -986,7 +987,12 @@ class EncryptionProvider extends ChangeNotifier {
       }
     }
 
-    final stored = await _encryptionService.storedMessageIds();
+    // A box message (a LOCAL id, decision 14) has no server row: the server
+    // would answer "not served" for it, and that answer would destroy the
+    // only copy. Only server ids are the server's to rule on.
+    final stored = (await _encryptionService.storedMessageIds())
+        .where(isServerMessageId)
+        .toSet();
     if (stored.isEmpty) {
       await _encryptionService.markReconciledAt(nowMs);
       return;
@@ -1069,6 +1075,19 @@ class EncryptionProvider extends ChangeNotifier {
   ) async {
     return _encryptionService.getDecryptedContentMany(messageIds);
   }
+
+  /// Delegates to [EncryptionService.wireHeldByOther] (box dedup).
+  Future<bool?> wireHeldByOther(WireKey wire, int messageId) =>
+      _encryptionService.wireHeldByOther(wire, messageId);
+
+  /// Delegates to [EncryptionService.localMessageRecords].
+  Future<Map<int, Map<String, dynamic>>> localMessageRecords(
+    int conversationId,
+  ) => _encryptionService.localMessageRecords(conversationId);
+
+  /// Delegates to [EncryptionService.removeRawReplay].
+  Future<void> removeRawReplay(int messageId) =>
+      _encryptionService.removeRawReplay(messageId);
 
   /// Record an emitted send for lost-ack reconciliation (keyed by the exact
   /// emitted ciphertext). Delegates to [EncryptionService.savePendingSendRecord].

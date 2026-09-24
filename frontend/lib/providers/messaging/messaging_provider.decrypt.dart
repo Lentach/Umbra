@@ -395,6 +395,44 @@ extension MessagingDecrypt on MessagingProvider {
   WireKey? _wireKey(int senderId, String? wireId) =>
       wireId == null ? null : (senderId: senderId, wireId: wireId);
 
+  /// [msg] carrying the decrypted [parsed] envelope. Also evaluates the
+  /// sender's `senderListInfo` claim (§5.2 layer 2): every decrypt path that
+  /// reads an envelope must, or a stale-list signal is silently lost.
+  MessageModel _withEnvelope(MessageModel msg, E2eEnvelopeFields parsed) {
+    // §5.2 layer 2 (amendment (xv)/(xvi)): the sender told us which
+    // device-list versions it addressed this message from. Evaluate it
+    // against DAK-verified data we already hold. A bare claim NEVER alarms
+    // and NEVER changes trust (I7) — it can only make us re-check.
+    _evaluateSenderListInfo(msg.senderId, parsed.senderListInfo);
+    // SSRF: validate imageUrl before storing
+    final safeImageUrl =
+        parsed.linkPreviewImageUrl != null &&
+            parsed.linkPreviewUrl != null &&
+            LinkPreviewService.isSafeImageUrl(
+              parsed.linkPreviewImageUrl,
+              parsed.linkPreviewUrl,
+            )
+        ? parsed.linkPreviewImageUrl
+        : null;
+    return msg.copyWith(
+      content: parsed.content,
+      messageType: _parseMessageTypeString(parsed.messageType),
+      mediaUrl: parsed.mediaUrl,
+      mediaDuration: parsed.mediaDuration,
+      mediaKey: parsed.mediaKey,
+      mediaIv: parsed.mediaIv,
+      mediaWidth: parsed.mediaWidth,
+      mediaHeight: parsed.mediaHeight,
+      mediaThumbHash: parsed.mediaThumbHash,
+      linkPreviewUrl: parsed.linkPreviewUrl,
+      linkPreviewTitle: parsed.linkPreviewTitle,
+      linkPreviewImageUrl: safeImageUrl,
+      // The sender's wire id (PR2.1). A row that already has one keeps
+      // it: an edit re-decrypts through here with a peer-built envelope.
+      wireId: msg.wireId ?? parsed.msgId,
+    );
+  }
+
   Future<void> _persistDecryptedContent(MessageModel decrypted) async {
     if (decrypted.content == kDecryptionFailedLabel ||
         decrypted.content == '[Encryption not initialized]' ||
@@ -418,6 +456,9 @@ extension MessagingDecrypt on MessagingProvider {
         : null;
     final data = <String, dynamic>{
       'content': decrypted.content,
+      // A box message has no server row to name its sender on the next
+      // launch (decision 14): the record is the only place it survives.
+      if (!isServerMessageId(decrypted.id)) 'senderId': decrypted.senderId,
       if (decrypted.editedAt != null)
         'editedAt': decrypted.editedAt!.toIso8601String(),
       if (decrypted.messageType != MessageType.text)
@@ -545,6 +586,28 @@ extension MessagingDecrypt on MessagingProvider {
       'peerId': peerId,
       'trigger': trigger,
     });
+  }
+
+  /// The peer side of a [DecryptionFailureDecision]: asks [senderId] to re-key
+  /// on its next send when the decision says so. Shared by the server-row and
+  /// the box decrypt paths so both heal a stale session the same way.
+  void _askPeerToRekey(DecryptionFailureDecision decision, int senderId) {
+    if (!decision.notifyPeerRebuild) return;
+    if (decision.rule == DecryptionFailureRule.identityReset) {
+      if (_identityResetRebuildNotified.add(senderId)) {
+        // Identity reset: tell the peer to re-key on their next send. No
+        // local state is touched (there is none to protect — the old
+        // identity is gone); without this the peer keeps sending
+        // undecryptable messages until we happen to reply.
+        _emit?.call('requestSessionRebuild', {'recipientId': senderId});
+        _e2eFlowLog('IDENTITY_RESET_REBUILD_REQUESTED', {'peerId': senderId});
+      }
+    } else if (decision.rule == DecryptionFailureRule.badMac) {
+      // The failed row is unrecoverable, but a Bad MAC on a fresh type-2
+      // message is evidence the peer is encrypting from a stale sender
+      // ratchet. Ask them to build over their session on the next send.
+      _requestSessionRebuildForPeer(senderId, trigger: 'badMac');
+    }
   }
 
   /// Drop peers whose inbound rows are all resolved or terminal — nothing a
@@ -1465,39 +1528,8 @@ extension MessagingDecrypt on MessagingProvider {
           'msgId': msg.id,
           'contentLength': parsed.content.length,
         });
-        // §5.2 layer 2 (amendment (xv)/(xvi)): the sender told us which
-        // device-list versions it addressed this message from. Evaluate it
-        // against DAK-verified data we already hold. A bare claim NEVER alarms
-        // and NEVER changes trust (I7) — it can only make us re-check.
-        _evaluateSenderListInfo(msg.senderId, parsed.senderListInfo);
-        // SSRF: validate imageUrl before storing
-        final safeImageUrl =
-            parsed.linkPreviewImageUrl != null &&
-                parsed.linkPreviewUrl != null &&
-                LinkPreviewService.isSafeImageUrl(
-                  parsed.linkPreviewImageUrl,
-                  parsed.linkPreviewUrl,
-                )
-            ? parsed.linkPreviewImageUrl
-            : null;
-        final parsedType = _parseMessageTypeString(parsed.messageType);
-        final decryptedMsg = msg.copyWith(
-          content: parsed.content,
-          messageType: parsedType,
-          mediaUrl: parsed.mediaUrl,
-          mediaDuration: parsed.mediaDuration,
-          mediaKey: parsed.mediaKey,
-          mediaIv: parsed.mediaIv,
-          mediaWidth: parsed.mediaWidth,
-          mediaHeight: parsed.mediaHeight,
-          mediaThumbHash: parsed.mediaThumbHash,
-          linkPreviewUrl: parsed.linkPreviewUrl,
-          linkPreviewTitle: parsed.linkPreviewTitle,
-          linkPreviewImageUrl: safeImageUrl,
-          // The sender's wire id (PR2.1). A row that already has one keeps
-          // it: an edit re-decrypts through here with a peer-built envelope.
-          wireId: msg.wireId ?? parsed.msgId,
-        );
+        final decryptedMsg = _withEnvelope(msg, parsed);
+        final parsedType = decryptedMsg.messageType;
         // Trigger ping effect for recipient when decrypted type is PING.
         // `_pingEffectFiredIds.add` returns false if already fired, so a
         // duplicate/redelivered ping that reaches live decrypt cannot re-fire
@@ -1626,25 +1658,7 @@ extension MessagingDecrypt on MessagingProvider {
           'content': kDecryptionFailedLabel,
         });
       }
-      if (decision.notifyPeerRebuild) {
-        if (decision.rule == DecryptionFailureRule.identityReset) {
-          if (_identityResetRebuildNotified.add(msg.senderId)) {
-            // Identity reset: tell the peer to re-key on their next send. No
-            // local state is touched (there is none to protect — the old
-            // identity is gone); without this the peer keeps sending
-            // undecryptable messages until we happen to reply.
-            _emit?.call('requestSessionRebuild', {'recipientId': msg.senderId});
-            _e2eFlowLog('IDENTITY_RESET_REBUILD_REQUESTED', {
-              'peerId': msg.senderId,
-            });
-          }
-        } else if (decision.rule == DecryptionFailureRule.badMac) {
-          // The failed row is unrecoverable, but a Bad MAC on a fresh type-2
-          // message is evidence the peer is encrypting from a stale sender
-          // ratchet. Ask them to build over their session on the next send.
-          _requestSessionRebuildForPeer(msg.senderId, trigger: 'badMac');
-        }
-      }
+      _askPeerToRekey(decision, msg.senderId);
       switch (decision.retryAction) {
         case DecryptionRetryAction.markHistoryPeerForRetry:
           // Keep [encrypted] until retry + session reset finish (see

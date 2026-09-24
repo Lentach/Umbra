@@ -9,8 +9,11 @@ import '../utils/file_utils_stub.dart'
     as file_utils;
 
 import '../config/app_config.dart';
+import '../models/conversation_model.dart';
 import '../models/message_model.dart';
 import '../services/api_service.dart';
+import '../services/contacts/contact_record.dart';
+import '../services/contacts/contact_store.dart';
 import '../services/device_list/device_list_cache.dart';
 import '../services/device_list/sender_list_info.dart';
 import '../services/media_crypto_service.dart';
@@ -28,11 +31,13 @@ import '../utils/e2e_envelope.dart';
 import '../utils/media_preview_metadata.dart';
 import '../utils/e2e_persistent_diag.dart';
 import '../utils/message_expiry.dart';
+import '../utils/message_ids.dart';
 import '../utils/reply_preview_helper.dart';
 import 'conversation_helpers.dart' as conv_helpers;
 import 'conversations_provider.dart';
 import 'encryption_provider.dart';
 
+part 'messaging/messaging_provider.box.dart';
 part 'messaging/messaging_provider.history.dart';
 part 'messaging/messaging_provider.events.dart';
 part 'messaging/messaging_provider.send.dart';
@@ -321,6 +326,15 @@ class MessagingProvider extends ChangeNotifier {
   /// so this guarantees the effect flips at most once per id. Cleared on
   /// disconnect/fresh-connect with the rest of the transient decrypt state.
   final Set<int> _pingEffectFiredIds = {};
+
+  /// Box messages shown whose plaintext record has not been PROVEN stored
+  /// yet, by local id (`messaging_provider.box.dart`): the only copy until
+  /// the journal's next offer stores it.
+  final Map<int, MessageModel> _boxUnsaved = {};
+
+  /// Fired after every history decrypt pass (`ConnectionProvider` drains the
+  /// box journal): a box message refused for "no session" may decrypt now.
+  void Function()? onHistoryDecryptPassFinished;
 
   /// Set in [dispose]; lets the overlay's dispose-scheduled onComplete
   /// microtask no-op instead of notifying a disposed ChangeNotifier.
@@ -637,6 +651,9 @@ class MessagingProvider extends ChangeNotifier {
   void setIncomingMessageSoundEnabledForTest(bool enabled) {
     _incomingSound.setEnabledForTest(enabled);
   }
+
+  @visibleForTesting
+  int get incomingSoundRequestsForTest => _incomingSound.requests;
 
   bool isPartnerTyping(int conversationId) =>
       _typingStatus[conversationId] ?? false;
@@ -1098,6 +1115,9 @@ class MessagingProvider extends ChangeNotifier {
       // Fresh connect / user switch: forget which pings already fired.
       // (Reconnect deliberately KEEPS it so resync redelivery stays silent.)
       _pingEffectFiredIds.clear();
+      // Local ids restart at the same base for every account: an unsaved
+      // row of the previous session must never be stored into this one.
+      _boxUnsaved.clear();
       // A different user (or the same user, freshly signed in) must not
       // inherit either the cached `K_react` codecs or the per-conversation
       // "already asked" latch: the codecs are key material for an account
@@ -1191,6 +1211,7 @@ class MessagingProvider extends ChangeNotifier {
     _identityResetRebuildNotified.clear();
     _rebuildRequestedPeers.clear();
     _pingEffectFiredIds.clear();
+    _boxUnsaved.clear();
     _emittedSendTempIds.clear();
     _identityRefusedSendTempIds.clear();
     _sendTokenByTempId.clear();

@@ -14,6 +14,13 @@ class IncomingMessageSoundService {
   @visibleForTesting
   bool get enabled => _enabled;
 
+  int _requests = 0;
+
+  /// How many times [play] was asked for, enabled or not — what a test can
+  /// observe of the "which messages sound" rule. Not `@visibleForTesting`
+  /// for the [setEnabledForTest] reason: the provider's test hook reads it.
+  int get requests => _requests;
+
   /// Toggles the incoming-sound effect. Named `...ForTest` because the only
   /// caller is `MessagingProvider.setIncomingMessageSoundEnabledForTest`, the
   /// provider's test hook — so it is not annotated `@visibleForTesting`
@@ -23,6 +30,7 @@ class IncomingMessageSoundService {
   }
 
   Future<void> play() async {
+    _requests++;
     if (kIsWeb || !_enabled) return;
     try {
       _player ??= AudioPlayer();

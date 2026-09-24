@@ -26,6 +26,17 @@ extension MessagingActions on MessagingProvider {
   }
 
   void deleteMessage(int messageId, {required bool forEveryone}) {
+    if (isLocalMessageId(messageId)) {
+      // A box message (decision 14) has no server row to delete: "for me"
+      // is this device's copy, and "for everyone" returns over E2E later.
+      final conversationId = messageById(messageId)?.conversationId;
+      if (forEveryone || conversationId == null) return;
+      _handleMessageDeleted({
+        'messageId': messageId,
+        'conversationId': conversationId,
+      });
+      return;
+    }
     _emit?.call('deleteMessage', {
       'messageId': messageId,
       'mode': forEveryone ? 'for_everyone' : 'for_me',
@@ -34,7 +45,7 @@ extension MessagingActions on MessagingProvider {
 
   /// Optimistically apply a TEXT edit to a sent message, then encrypt the new
   /// plaintext over the existing Signal session and emit `editMessage`.
-  /// Only own, TEXT, server-confirmed (positive id) rows are editable.
+  /// Only own, TEXT, server-row rows are editable.
   void editMessage(int messageId, String newContent) {
     final trimmed = newContent.trim();
     if (trimmed.isEmpty || _currentUserId == null) return;
@@ -50,7 +61,7 @@ extension MessagingActions on MessagingProvider {
     if (idx == -1) return;
     final original = _messages[idx];
     if (original.senderId != _currentUserId ||
-        messageId <= 0 ||
+        !isServerMessageId(messageId) ||
         original.messageType != MessageType.text ||
         DateTime.now().difference(original.createdAt) >=
             const Duration(minutes: 15)) {
@@ -204,6 +215,7 @@ extension MessagingActions on MessagingProvider {
   }
 
   void pinMessage(int conversationId, int messageId) {
+    if (!isServerMessageId(messageId)) return;
     final local = messageById(messageId);
     if (local != null) {
       _conversationsProvider?.setPinnedPreviewOptimistic(
@@ -241,7 +253,7 @@ extension MessagingActions on MessagingProvider {
   /// this closes.
   Future<bool> _emitReaction(String event, int messageId, String emoji) async {
     final emit = _emit;
-    if (emit == null) return false;
+    if (emit == null || !isServerMessageId(messageId)) return false;
     final conversationId =
         messageById(messageId)?.conversationId ??
         _effectiveActiveConversationId;

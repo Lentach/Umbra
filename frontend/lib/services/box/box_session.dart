@@ -3,8 +3,10 @@ import 'dart:async';
 import '../contacts/contact_record.dart';
 import '../contacts/contact_store.dart';
 import 'box_client.dart';
+import 'box_inbox.dart';
 import 'box_wire.dart';
 import 'queue_keys.dart';
+import 'queue_seal.dart';
 
 /// One account session's link to the box (metadata-privacy PR3.1 slice (a)):
 /// owns the [BoxClient] and keeps this device's REQUEST queue published on
@@ -21,17 +23,26 @@ import 'queue_keys.dart';
 /// A new device id — a §6.2 reset re-homes the account — or a replaced queue
 /// publishes again; a refused or unanswered publish is re-sent on the next
 /// ready, a rate-limited one after `retryAfterMs`.
+///
+/// It also RECEIVES (slice (b)): once the box is ready and the store is
+/// open, every contact's inbound queue is subscribed, and its [BoxInbox]
+/// journals, acks and offers each delivery to [consumer].
 class BoxSession {
   BoxSession({
     required BoxClient box,
     required ContactStore store,
     required void Function(String event, Object? data) emit,
+    QueueSeal? seal,
   }) : _box = box,
+       _store = store,
        _keys = QueueKeys(box: box, store: store),
+       _inbox = BoxInbox(box: box, store: store, seal: seal),
        _emit = emit;
 
   final BoxClient _box;
+  final ContactStore _store;
   final QueueKeys _keys;
+  final BoxInbox _inbox;
   final void Function(String event, Object? data) _emit;
 
   final List<StreamSubscription<Object?>> _subscriptions = [];
@@ -46,12 +57,30 @@ class BoxSession {
   Timer? _retry;
   bool _disposed = false;
 
+  /// The app's reader of box deliveries (`MessagingProvider`). Wiring one
+  /// offers it everything that landed in the journal meanwhile.
+  BoxInboxConsumer? get consumer => _inbox.consumer;
+
+  set consumer(BoxInboxConsumer? read) {
+    _inbox.consumer = read;
+    if (read != null) unawaited(_inbox.drain());
+  }
+
+  /// Offers the journal again — the reader may be able to read what it
+  /// refused (E2E just became ready).
+  void drainInbox() {
+    if (!_disposed) unawaited(_inbox.drain());
+  }
+
   /// Connects the box and starts following it.
   void start() {
+    _inbox.start();
     _subscriptions
       ..add(
         _box.states.listen((state) {
-          if (state == BoxState.ready && _request == null) unawaited(_ensure());
+          if (state != BoxState.ready) return;
+          if (_request == null) unawaited(_ensure());
+          unawaited(_receive());
         }),
       )
       ..add(_box.lostQueues.listen(_onLost));
@@ -82,6 +111,7 @@ class BoxSession {
   /// found it closed, and neither socket will say "ready" again on its own.
   void storeOpened() {
     if (_request == null) unawaited(_ensure());
+    unawaited(_receive());
   }
 
   /// The account socket dropped: an answer still owed will never come.
@@ -114,7 +144,22 @@ class BoxSession {
     for (final s in _subscriptions) {
       unawaited(s.cancel());
     }
+    _inbox.dispose();
     _box.dispose();
+  }
+
+  /// Subscribes every contact queue the box is not already following, then
+  /// offers what the journal holds. The box keeps the set and re-signs it on
+  /// every reconnect, so each queue is subscribed here once per session.
+  Future<void> _receive() async {
+    if (_disposed || _box.state != BoxState.ready || !_store.isOpen) return;
+    final following = {for (final rid in _box.subscribed) boxB64(rid)};
+    final missing = [
+      for (final queue in _keys.inbound())
+        if (!following.contains(boxB64(queue.rid))) queue,
+    ];
+    if (missing.isNotEmpty) await _box.subscribe(missing);
+    if (!_disposed) await _inbox.drain();
   }
 
   Future<void> _ensure() async {

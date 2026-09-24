@@ -481,6 +481,11 @@ class BoxClient {
   /// Drops [rid] from the resubscribe set. Local only.
   void forget(Uint8List rid) => _set.remove(boxB64(rid));
 
+  /// How this client proves [rid] — held for every queue it subscribed —
+  /// or null. Lets a reader ack a delivery on a queue its owner record no
+  /// longer holds, so it does not keep one of the 16 window slots.
+  BoxQueueAuth? authFor(Uint8List rid) => _set[boxB64(rid)];
+
   /// Deletes delivered message [id] from [queue]. Acking a gone id is ok.
   Future<BoxResult<void>> ack(BoxQueueAuth queue, Uint8List id) async {
     _requireLength(id, kBoxMsgIdBytes, 'id');

@@ -3,12 +3,15 @@ import 'dart:convert';
 
 import '../../models/user_model.dart';
 import '../../utils/e2e_persistent_diag.dart';
+import '../../utils/message_ids.dart';
 import '../encryption/content_kv.dart';
 import '../encryption/content_kv_opener_stub.dart'
     if (dart.library.io) '../encryption/content_kv_opener_io.dart'
     show contactStoreAccepts;
 import '../encryption/session_cross_context_lock.dart';
 import 'contact_record.dart';
+
+part 'contact_store_inbox.dart';
 
 /// The store could not be opened for this session. [stage] names the first
 /// check that failed; the caller records it and runs WITHOUT local contacts
@@ -92,6 +95,9 @@ class ContactStore {
   ContactQueue? _requestQueue;
   bool _requestQueueUnsupported = false;
   int _undetermined = 0;
+
+  /// The box delivery journal ([BoxInboxEntry]), keyed `rid.id`.
+  final Map<String, BoxInboxEntry> _inbox = <String, BoxInboxEntry>{};
   Future<void> _queue = Future<void>.value();
 
   /// Bumped by [open] and [close]. A queued mutation captures it and refuses
@@ -159,7 +165,9 @@ class ContactStore {
       rows = await _readWhere(
         kv,
         (key) =>
-            key.startsWith(keyPrefix(userId)) || key == requestQueueKey(userId),
+            key.startsWith(keyPrefix(userId)) ||
+            key == requestQueueKey(userId) ||
+            key.startsWith(_inboxPrefix(userId)),
       );
     } on Object {
       throw const ContactStoreUnavailable('read');
@@ -170,6 +178,7 @@ class ContactStore {
     var undetermined = 0;
     final loaded = <int, ContactRecord>{};
     final request = _decodeRequest(rows.remove(requestQueueKey(userId)));
+    final inbox = _takeInbox(rows, userId);
     UserModel? selfUser;
     for (final entry in rows.entries) {
       final key = entry.key;
@@ -205,6 +214,9 @@ class ContactStore {
     _requestQueue = request.queue;
     _requestQueueUnsupported = request.unsupported;
     _undetermined = undetermined;
+    _inbox
+      ..clear()
+      ..addAll(inbox);
     _records
       ..clear()
       ..addAll(loaded);
@@ -225,6 +237,7 @@ class ContactStore {
     _requestQueueUnsupported = false;
     _undetermined = 0;
     _records.clear();
+    _inbox.clear();
   }
 
   /// Read-modify-write of one record. [mutate] sees the record as it is ON

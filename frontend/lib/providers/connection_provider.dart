@@ -487,6 +487,15 @@ class ConnectionProvider extends ChangeNotifier {
           store: contacts,
           emit: emit,
         )..start();
+        // Slice (b): every box delivery is read by the messaging provider,
+        // which knows the peer only through the contact record.
+        final messaging = _messagingProvider;
+        if (messaging != null) {
+          _box!.consumer = (entry) => messaging.consumeBoxEntry(
+            entry,
+            contacts.byUserId(entry.peerUserId),
+          );
+        }
       } else {
         _box!.resume();
       }
@@ -497,8 +506,15 @@ class ConnectionProvider extends ChangeNotifier {
     _friendsProvider?.setEmitCallback((event, data) => emit(event, data));
     _conversationsProvider?.setEmitCallback((event, data) => emit(event, data));
     _messagingProvider?.setEmitCallback((event, data) => emit(event, data));
-    _encryptionProvider?.onE2EReady = () =>
-        _messagingProvider?.retryDecryptActiveConversation();
+    _encryptionProvider?.onE2EReady = () {
+      unawaited(_messagingProvider?.retryDecryptActiveConversation());
+      // A box delivery refused because E2E was not ready waits in the
+      // journal; nothing else would offer it again before a reconnect.
+      _box?.drainInbox();
+    };
+    // The old path may hold the PreKey message that creates the session a
+    // waiting box message needs; its history pass is when that lands.
+    _messagingProvider?.onHistoryDecryptPassFinished = () => _box?.drainInbox();
 
     // 6. Wire cross-provider callbacks (friends -> conversations)
     _friendsProvider?.onRemoveConversationsForUser = (uid) {

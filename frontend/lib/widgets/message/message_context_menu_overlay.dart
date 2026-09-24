@@ -7,6 +7,7 @@ import '../../l10n/app_localizations.dart';
 import '../emoji/fireplace_emoji_picker.dart';
 import '../../models/message_model.dart';
 import '../../utils/jumbo_emoji.dart';
+import '../../utils/message_ids.dart';
 import '../top_snackbar.dart';
 import 'context_menu_bubble_anchor.dart';
 import 'message_action_panel.dart';
@@ -374,7 +375,7 @@ void openMessageContextMenu({
   final layoutRect = bubbleRectForContextMenuLayout(anchorRect);
   // Read MediaQuery from the overlay build context below, not here. Keyboard
   // and visual-viewport metrics can change while the overlay is open on iOS/PWA.
-  final canPinOrDeleteForEveryone = message.id > 0;
+  final canPinOrDeleteForEveryone = isServerMessageId(message.id);
   final bubblePreview = bubblePreviewBuilder?.call(context);
   var pickerExpanded = false;
 
@@ -520,7 +521,7 @@ void openMessageContextMenu({
                             },
                       onPin: () {
                         dismissMessageContextMenu();
-                        if (message.id <= 0) {
+                        if (!isServerMessageId(message.id)) {
                           showTopSnackBar(
                             context,
                             l10n.messagePinRequiresSentMessage,

@@ -10,6 +10,7 @@ import 'encryption/content_kv_opener_stub.dart'
 
 import '../utils/e2e_diag_log.dart';
 import '../utils/e2e_persistent_diag.dart';
+import '../utils/message_ids.dart';
 import 'plaintext_record_codec.dart';
 import 'encryption/signal_stores.dart';
 import 'device_link/identity_backup.dart';
@@ -2997,6 +2998,16 @@ class EncryptionService {
       // Ledger AFTER the confirmed commit, never before: recording an id whose
       // plaintext did not land would refuse the one decrypt that still works.
       _noteDecrypted(id, data);
+      final stamped = record[_metaWireId];
+      final stampedBy = record[_metaWireSender];
+      final claims = _wireClaims;
+      if (stamped is String &&
+          stampedBy is int &&
+          claims != null &&
+          claims.userId == userId) {
+        (claims.claims[(senderId: stampedBy, wireId: stamped)] ??= <int>{})
+            .add(id);
+      }
       await _pruneDecryptedContentCache(prefs, userId);
     } catch (_) {}
   }
@@ -3543,6 +3554,70 @@ class EncryptionService {
   /// be decoded claims nothing. Null means the stores could not be
   /// enumerated, which is not the same answer as an empty index.
   Future<Map<WireKey, int>?> wireIdIndex() async {
+    final claims = await _scanWireClaims();
+    if (claims == null) return null;
+    return {
+      for (final MapEntry(key: wire, value: ids) in claims.entries)
+        if (ids.length == 1) wire: ids.single,
+    };
+  }
+
+  /// Whether a record OTHER than [id] already holds [wire] — the box path's
+  /// dedup (metadata-privacy PR3.1 slice (b)): the same message may already
+  /// be here, delivered over the old path or journaled twice. Any claim
+  /// counts, ambiguous ones too: this asks "is it here", not "which row is
+  /// it" ([wireIdIndex]). Null when the stores could not be enumerated.
+  ///
+  /// Served from a per-account cache: the first call scans every record (on
+  /// web that unseals them), and [saveDecryptedContent] adds each new stamp.
+  /// A deleted record's claim is kept, which can only drop a later copy of
+  /// a message the user already deleted.
+  Future<bool?> wireHeldByOther(WireKey wire, int id) async {
+    final userId = _userId;
+    if (userId == null) return null;
+    var cache = _wireClaims;
+    if (cache == null || cache.userId != userId) {
+      final scanned = await _scanWireClaims();
+      if (scanned == null || _userId != userId) return null;
+      cache = (userId: userId, claims: scanned);
+      _wireClaims = cache;
+    }
+    return cache.claims[wire]?.any((other) => other != id) ?? false;
+  }
+
+  ({int userId, Map<WireKey, Set<int>> claims})? _wireClaims;
+
+  /// Every box message stored for [conversationId] — LOCAL ids (decision
+  /// 14), which no server history page will ever name — as id → record.
+  ///
+  /// Runs on every chat open, so it reads only the local-range records: the
+  /// cost follows the box messages held, not the whole store. The key view
+  /// is the cached one; a miss only defers a row to the next open.
+  Future<Map<int, Map<String, dynamic>>> localMessageRecords(
+    int conversationId,
+  ) async {
+    final userId = _userId;
+    if (userId == null) return {};
+    final prefix = _decryptedContentPrefix(userId);
+    final Set<int> ids;
+    try {
+      final prefs = await _sharedPrefs;
+      ids = {
+        for (final key in _recordKeys(null, prefs, prefix))
+          if (int.tryParse(key.substring(prefix.length)) case final id?
+              when id >= kFirstLocalMessageId)
+            id,
+      };
+    } on Object catch (_) {
+      return {};
+    }
+    if (ids.isEmpty) return {};
+    return (await getDecryptedContentMany(ids))
+      ..removeWhere((_, record) => record[_metaConversationId] != conversationId);
+  }
+
+  /// Every `(sender, wire id)` stamp → the record ids holding it.
+  Future<Map<WireKey, Set<int>>?> _scanWireClaims() async {
     final userId = _userId;
     if (userId == null) return null;
     final prefix = _decryptedContentPrefix(userId);
@@ -3581,10 +3656,7 @@ class EncryptionService {
     } on Object catch (_) {
       return null;
     }
-    return {
-      for (final MapEntry(key: wire, value: ids) in claims.entries)
-        if (ids.length == 1) wire: ids.single,
-    };
+    return claims;
   }
 
   // ── Server reconciliation ────────────────────────────────────────────────
@@ -4689,20 +4761,39 @@ class EncryptionService {
   String _rawDecryptedContentKey(int userId, int messageId) =>
       '${_rawDecryptedContentPrefix(userId)}$messageId';
 
+  /// Drops [messageId]'s raw replay row. The box reader calls it once a box
+  /// message's plaintext record is PROVEN stored: from then on the record, not
+  /// the replay row, answers for it (and the journal never offers it again).
+  Future<void> removeRawReplay(int messageId) async {
+    final userId = _userId;
+    if (userId == null) return;
+    try {
+      final prefs = await _sharedPrefs;
+      await prefs.remove(_rawDecryptedContentKey(userId, messageId));
+    } on Object catch (_) {}
+  }
+
+  /// Keeps the 40 HIGHEST ids of each range, server and local, counted
+  /// apart: a local (box) id is always higher than any server id, so ranking
+  /// them together would push every server row out once 40 box messages
+  /// landed. A box row normally goes as soon as its record is stored
+  /// ([removeRawReplay]); the local cap is the backstop for one that did not.
   Future<void> _pruneRawDecryptedContent(ContentKv prefs, int userId) async {
     final prefix = _rawDecryptedContentPrefix(userId);
-    final keys = prefs
-        .getKeys()
-        .where((key) => key.startsWith(prefix))
-        .toList();
-    if (keys.length <= _rawDecryptedContentCacheLimit) return;
-    keys.sort((a, b) {
-      final aId = int.tryParse(a.substring(prefix.length)) ?? 0;
-      final bId = int.tryParse(b.substring(prefix.length)) ?? 0;
-      return aId.compareTo(bId);
-    });
-    for (final key in keys.take(keys.length - _rawDecryptedContentCacheLimit)) {
-      await prefs.remove(key);
+    final server = <int, String>{};
+    final local = <int, String>{};
+    for (final key in prefs.getKeys()) {
+      if (!key.startsWith(prefix)) continue;
+      final id = int.tryParse(key.substring(prefix.length));
+      if (id == null) continue;
+      (isLocalMessageId(id) ? local : server)[id] = key;
+    }
+    for (final range in [server, local]) {
+      if (range.length <= _rawDecryptedContentCacheLimit) continue;
+      final ids = range.keys.toList()..sort();
+      for (final id in ids.take(ids.length - _rawDecryptedContentCacheLimit)) {
+        await prefs.remove(range[id]!);
+      }
     }
   }
 
@@ -4746,6 +4837,11 @@ class EncryptionService {
       return;
     }
 
+    // Lowest id first ("ids ascend with age"). Owed before release N+1: a box
+    // message's LOCAL id is higher than every server id, so once box records
+    // alone pass the cap this order evicts arriving server records first; the
+    // fix is a save-time order that does NOT unseal every record per save
+    // (at the cap this sweep runs on every write).
     keys.sort((a, b) {
       final aId = int.tryParse(a.substring(prefix.length)) ?? 0;
       final bId = int.tryParse(b.substring(prefix.length)) ?? 0;

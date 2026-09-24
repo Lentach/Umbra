@@ -261,6 +261,9 @@ extension MessagingHistory on MessagingProvider {
     _reEnrichAllReplyQuotes();
     notifyListeners();
     _processIncomingMessageQueue();
+    // The pass may have decrypted a peer's PreKey message that CREATES the
+    // session a waiting box message needs (release N runs both paths).
+    onHistoryDecryptPassFinished?.call();
   }
 
   void _patchMessageInCache(
@@ -486,6 +489,9 @@ extension MessagingHistory on MessagingProvider {
       markConversationRead(effectiveActive);
     }
 
+    // Box messages have no server row (decision 14), so no page names them.
+    if (convIdForMerge != null) unawaited(_mergeLocalBoxRows(convIdForMerge));
+
     // Decrypt history first so no live message advances the session before
     // we decrypt in order. Queue any incoming messages until done.
     final myConversationId =
@@ -674,7 +680,9 @@ extension MessagingHistory on MessagingProvider {
       if (msg.conversationId != activeConversationId) {
         _conversationsProvider?.incrementUnreadCount(msg.conversationId);
       }
-      _emit?.call('messageDelivered', {'messageId': msg.id});
+      if (isServerMessageId(msg.id)) {
+        _emit?.call('messageDelivered', {'messageId': msg.id});
+      }
       if (msg.conversationId == activeConversationId) {
         markConversationRead(msg.conversationId);
       }
