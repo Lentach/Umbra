@@ -31,6 +31,7 @@
 // E2E_BASE_URL at production.
 
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:fireplace/services/device_link/link_crypto.dart';
@@ -56,6 +57,11 @@ void main() {
   late E2eClient alice;
   late E2eClient bob;
   late int conversationId;
+  // PR3.2 first contact, captured in setUpAll while alice and bob are still
+  // strangers (a friend's search answers empty) and asserted in the group.
+  late List<dynamic> bobFirstContact;
+  late String bobRequestSid;
+  late String bobSealPub;
   // Shared by the T2 device-list group (which enrolls alice) and the T3
   // provisioning group (which signs later mutations): the DAK private key
   // exists ONLY inside this engine instance.
@@ -188,6 +194,32 @@ void main() {
     // 3. Signal identity + key bundle upload (WS, like EncryptionProvider).
     await alice.initializeAndUploadKeys();
     await bob.initializeAndUploadKeys();
+
+    // 3b. First contact (metadata-privacy PR3.2), while still strangers: bob
+    // publishes a request queue, alice finds him by handle. Captured here,
+    // asserted by the first test of the group.
+    String canonical32() => base64Url
+        .encode(List<int>.generate(32, (_) => Random.secure().nextInt(256)))
+        .replaceAll('=', '');
+    bobRequestSid = canonical32();
+    bobSealPub = canonical32();
+    bob.events.discard('requestQueueSet');
+    bob.socketService.socket!.emit('setRequestQueue', {
+      'sid': bobRequestSid,
+      'sealPub': bobSealPub,
+    });
+    expect(
+      await bob.events.next('requestQueueSet', reason: 'bob publishes'),
+      {'success': true},
+    );
+    alice.events.discard('searchUsersResult');
+    alice.socketService.searchUsers('${bob.username}#${bob.tag}');
+    bobFirstContact =
+        await alice.events.next(
+              'searchUsersResult',
+              reason: 'alice searches bob',
+            )
+            as List<dynamic>;
 
     // 4. Friendship: request over WS, accept on the receiving side.
     //
@@ -356,6 +388,33 @@ void main() {
   });
 
   group('full-stack E2E wire', () {
+    test('searchUsers hands a stranger each device with a live one-time '
+        'pre-key and the request queue it published (PR3.2)', () async {
+      expect(bobFirstContact, hasLength(1));
+      final found = bobFirstContact.single as Map;
+      expect(found['id'], bob.userId);
+      expect(found['authorization'], isNull, reason: 'bob never enrolled');
+      final devices = found['devices'] as List;
+      expect(devices, hasLength(1), reason: 'bob has exactly device 1');
+      final device = devices.single as Map;
+      expect(device['deviceId'], 1);
+      expect(device['requestSid'], bobRequestSid);
+      expect(device['sealPub'], bobSealPub);
+      final bundle = device['bundle'] as Map;
+      final otpId = bundle['oneTimePreKeyId'];
+      expect(otpId, isA<int>(), reason: 'design §4.4: bundle WITH an OTP');
+      // The claim hit the real pool: that one-time pre-key is spent, so no
+      // later fetch can hand it out a second time.
+      final spent = await e2eSql(
+        'SELECT used FROM public.one_time_pre_keys '
+        'WHERE "userId" = ${bob.userId} AND "deviceId" = 1 '
+        'AND "keyId" = $otpId;',
+      );
+      expect(spent, [
+        ['t'],
+      ]);
+    });
+
     test(
       'first message travels as PreKey (3:), server blind, peer decrypts',
       () async {

@@ -7,6 +7,7 @@ import {
   IdentityLockedError,
   IdentityRestoreRefusedError,
   KeyBundlesService,
+  PreKeyBundleResponse,
 } from '../../key-bundles/key-bundles.service';
 import { IdentityResetService } from '../../key-bundles/identity-reset.service';
 import { DevicesService } from '../../key-bundles/devices.service';
@@ -892,10 +893,7 @@ export class ChatKeyExchangeService {
         });
         return;
       }
-      const bundle = await this.keyBundlesService.fetchPreKeyBundle(
-        dto.userId,
-        targetDeviceId,
-      );
+      const bundle = await this.claimBundle(dto.userId, targetDeviceId, server);
       if (bundle) {
         this.clearPendingSessionRebuildRequest(requesterId, dto.userId);
       }
@@ -907,28 +905,47 @@ export class ChatKeyExchangeService {
         deviceId: targetDeviceId,
         bundle,
       });
-
-      // Notify the LOW DEVICE to replenish — counted per device since Phase 1,
-      // and now routed to that device's room too (spec §5.2, decision-record
-      // T4 rider): telling every device to mint keys for one device's empty
-      // pool is noise the other devices cannot act on.
-      if (bundle) {
-        const remaining = await this.keyBundlesService.countUnusedPreKeys(
-          dto.userId,
-          targetDeviceId,
-        );
-        if (remaining < PRE_KEY_LOW_THRESHOLD) {
-          server
-            .to(deviceRoom(dto.userId, targetDeviceId))
-            .emit('preKeysLow', { remaining });
-        }
-      }
     } catch (error) {
       this.logger.error(`fetchPreKeyBundle failed: ${error.message}`);
       client.emit('error', {
         message: error?.message || 'Failed to fetch pre-key bundle',
       });
     }
+  }
+
+  /**
+   * Claims one bundle of [userId]'s device [deviceId] — spending its next
+   * one-time pre-key — and tells THAT device to replenish when its pool runs
+   * low. The one door every bundle leaves through (`fetchPreKeyBundle`, and
+   * `searchUsers` since metadata-privacy PR3.2), so no path can drain a pool
+   * without the replenishment signal.
+   *
+   * `preKeysLow` is counted per device since Phase 1 and routed to that
+   * device's room (spec §5.2, decision-record T4 rider): telling every device
+   * to mint keys for one device's empty pool is noise the others cannot act
+   * on.
+   */
+  async claimBundle(
+    userId: number,
+    deviceId: number,
+    server: Server,
+  ): Promise<PreKeyBundleResponse | null> {
+    const bundle = await this.keyBundlesService.fetchPreKeyBundle(
+      userId,
+      deviceId,
+    );
+    if (bundle) {
+      const remaining = await this.keyBundlesService.countUnusedPreKeys(
+        userId,
+        deviceId,
+      );
+      if (remaining < PRE_KEY_LOW_THRESHOLD) {
+        server
+          .to(deviceRoom(userId, deviceId))
+          .emit('preKeysLow', { remaining });
+      }
+    }
+    return bundle;
   }
 
   /**
