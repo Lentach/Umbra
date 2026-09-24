@@ -1,9 +1,11 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:fireplace/constants/app_constants.dart';
 import 'package:fireplace/services/box/box_frame.dart';
 import 'package:fireplace/services/box/queue_seal.dart';
 import 'package:fireplace/utils/e2e_envelope.dart';
+import 'package:fireplace/utils/message_length.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:libsignal_protocol_dart/libsignal_protocol_dart.dart';
 
@@ -57,6 +59,30 @@ void main() {
     );
   });
 
+  test(
+    'what EncryptionService.encrypt answers becomes a frame of that kind, '
+    'from our device; anything else is no frame',
+    () {
+      final signal = _bytes(9);
+      for (final kind in BoxFrameKind.values) {
+        final frame = BoxFrame.fromSignalCiphertext(
+          '${kind.byte}:${base64Encode(signal)}',
+          senderDeviceId: 7,
+        )!;
+        expect(frame.kind, kind);
+        expect(frame.senderDeviceId, 7);
+        expect(frame.signal, signal);
+      }
+      for (final bad in ['1:AQID', '4:AQID', ':AQID', '3:', '3:!!', 'AQID']) {
+        expect(
+          BoxFrame.fromSignalCiphertext(bad, senderDeviceId: 1),
+          isNull,
+          reason: bad,
+        );
+      }
+    },
+  );
+
   test('a body carrying the most Signal bytes still fits one sealed blob', () {
     const most = BoxFrame.maxSignalBytes;
     final frame = BoxFrame(
@@ -76,9 +102,15 @@ void main() {
   });
 
   test(
-    'the longest message the app lets you type (5 000 three-byte characters) '
-    'with a link preview, as a first (PreKey) message, fits one frame',
+    'the longest message the composer accepts (isMessageWithinByteLimit), '
+    'with a link preview, as a first (PreKey) message, fits one frame — in '
+    'every chat, so no message the user may send is refused by the box',
     () async {
+      // The composer's boundary in 3-byte characters: `{"content":"…"}` is
+      // 14 bytes around the text, so this is the last length it takes.
+      final text = '界' * ((AppConstants.maxEnvelopeBytes - 14) ~/ 3);
+      expect(isMessageWithinByteLimit(text), isTrue);
+      expect(isMessageWithinByteLimit('$text界'), isFalse);
       // A REAL Signal first message: the PreKey header is the worst case.
       final bobIdentity = generateIdentityKeyPair();
       final bobPreKey = generatePreKeys(1, 1).single;
@@ -102,8 +134,7 @@ void main() {
       );
       final envelope = jsonEncode(
         E2eEnvelope.build(
-          // The send DTO's 5 000-character cap, all 3-byte UTF-8.
-          '界' * 5000,
+          text,
           linkPreview: {
             'url': 'https://example.com/${'a' * 200}',
             'title': '標題' * 50,

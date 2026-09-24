@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import '../contacts/contact_record.dart';
 import '../contacts/contact_store.dart';
 import 'box_client.dart';
 import 'box_inbox.dart';
+import 'box_outbox.dart';
 import 'box_wire.dart';
 import 'queue_keys.dart';
 import 'queue_seal.dart';
@@ -27,7 +29,10 @@ import 'queue_seal.dart';
 /// It also RECEIVES (slice (b)): once the box is ready and the store is
 /// open, every contact's inbound queue is subscribed, and its [BoxInbox]
 /// journals, acks and offers each delivery to [consumer].
-class BoxSession {
+///
+/// And it SENDS (slice (c)): as the [BoxOutbox], it hands the messaging send
+/// path a friend's addresses and seals each frame into its queue.
+class BoxSession implements BoxOutbox {
   BoxSession({
     required BoxClient box,
     required ContactStore store,
@@ -36,13 +41,16 @@ class BoxSession {
   }) : _box = box,
        _store = store,
        _keys = QueueKeys(box: box, store: store),
-       _inbox = BoxInbox(box: box, store: store, seal: seal),
-       _emit = emit;
+       _seal = seal ?? QueueSeal(),
+       _emit = emit {
+    _inbox = BoxInbox(box: box, store: store, seal: _seal);
+  }
 
   final BoxClient _box;
   final ContactStore _store;
   final QueueKeys _keys;
-  final BoxInbox _inbox;
+  final QueueSeal _seal;
+  late final BoxInbox _inbox;
   final void Function(String event, Object? data) _emit;
 
   final List<StreamSubscription<Object?>> _subscriptions = [];
@@ -136,6 +144,31 @@ class BoxSession {
       _retry = Timer(Duration(milliseconds: retryMs), _publish);
     }
   }
+
+  @override
+  Map<int, ContactOutbound> addressesFor(int peerUserId) {
+    // Answered whatever the box's state: a peer the box covers must FAIL a
+    // send while it is down (decision 19), never fall back to the old path
+    // and leave a server row naming the pair (decision 15). A closed store
+    // holds no records, so `byUserId` answers null below.
+    if (_disposed) return const {};
+    final peer = _store.byUserId(peerUserId);
+    if (peer == null || peer.state != ContactState.friend) return const {};
+    return {for (final to in peer.outbound) to.peerDeviceId: to};
+  }
+
+  @override
+  Future<bool> deliver(ContactOutbound to, Uint8List body) async {
+    final sid = boxB64Decode(to.sid, kBoxSidBytes);
+    final sealPub = boxB64Decode(to.sealPub, 32);
+    if (_disposed || sid == null || sealPub == null) return false;
+    final blob = await _seal.seal(sealPub, body);
+    if (blob == null || _disposed) return false;
+    return await _box.send(sid, blob) is BoxOk;
+  }
+
+  @override
+  Future<int?> nextLocalId() => _store.allocateLocalId();
 
   void dispose() {
     if (_disposed) return;

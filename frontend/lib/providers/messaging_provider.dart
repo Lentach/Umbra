@@ -12,6 +12,9 @@ import '../config/app_config.dart';
 import '../models/conversation_model.dart';
 import '../models/message_model.dart';
 import '../services/api_service.dart';
+import '../services/box/box_envelope.dart';
+import '../services/box/box_frame.dart';
+import '../services/box/box_outbox.dart';
 import '../services/contacts/contact_record.dart';
 import '../services/contacts/contact_store.dart';
 import '../services/device_list/device_list_cache.dart';
@@ -255,6 +258,20 @@ class MessagingProvider extends ChangeNotifier {
   /// [_pendingSendContent].
   final Map<String, String> _sendTokenByTempId = {};
 
+  /// TempIds a box send has handed at least one frame to (PR3.1 slice (c)).
+  /// Their wire id survives a same-user reconnect and a retry never falls
+  /// back to the old path: the box may already have delivered the message
+  /// to some devices, and only the box reader drops a copy by wire id.
+  final Set<String> _boxTempIds = {};
+
+  /// TempIds whose box send is running now: nothing else may fail or resend
+  /// them until the box has answered.
+  final Set<String> _boxInFlight = {};
+
+  /// When each peer's device list was last re-verified for a box send.
+  /// Cleared on every connect, so each session fetches it once.
+  final Map<int, DateTime> _boxListCheckedAt = {};
+
   /// Stale-list resend attempts per tempId (spec §5.2 cap of 3, then a
   /// surfaced failure). Cleared with [_pendingSendContent].
   final Map<String, int> _staleResendAttempts = {};
@@ -335,6 +352,10 @@ class MessagingProvider extends ChangeNotifier {
   /// Fired after every history decrypt pass (`ConnectionProvider` drains the
   /// box journal): a box message refused for "no session" may decrypt now.
   void Function()? onHistoryDecryptPassFinished;
+
+  /// Where a text goes when it can go over the box (PR3.1 slice (c));
+  /// `ConnectionProvider` wires the account session's one. Null = old path.
+  BoxOutbox? boxOutbox;
 
   /// Set in [dispose]; lets the overlay's dispose-scheduled onComplete
   /// microtask no-op instead of notifying a disposed ChangeNotifier.
@@ -1107,6 +1128,8 @@ class MessagingProvider extends ChangeNotifier {
       _emittedSendTempIds.clear();
       _identityRefusedSendTempIds.clear();
       _sendTokenByTempId.clear();
+      _boxTempIds.clear();
+      _boxListCheckedAt.clear();
       _staleResendAttempts.clear();
       _staleResendTempIds.clear();
       _incomingMessageQueue.clear();
@@ -1143,7 +1166,12 @@ class MessagingProvider extends ChangeNotifier {
           .clear(); // retry was cancelled; orphaned entries serve no purpose
       _emittedSendTempIds.clear();
       _identityRefusedSendTempIds.clear();
-      _sendTokenByTempId.clear();
+      // A box send's retry must reuse its wire id, or a device the failed
+      // attempt reached shows the message twice.
+      _sendTokenByTempId.removeWhere(
+        (tempId, _) => !_boxTempIds.contains(tempId),
+      );
+      _boxListCheckedAt.clear();
       _staleResendAttempts.clear();
       _staleResendTempIds.clear();
       // Same user, so the codecs stay valid — but every conversation gets
@@ -1215,6 +1243,8 @@ class MessagingProvider extends ChangeNotifier {
     _emittedSendTempIds.clear();
     _identityRefusedSendTempIds.clear();
     _sendTokenByTempId.clear();
+    _boxTempIds.clear();
+    _boxListCheckedAt.clear();
     _staleResendAttempts.clear();
     _staleResendTempIds.clear();
     // Logout: `K_react` for every visited conversation is in RAM here.

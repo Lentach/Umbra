@@ -194,6 +194,29 @@ extension ContactStoreInbox on ContactStore {
     ).then((ok) => ok ? journaled : null);
   }
 
+  /// A fresh local id for a message THIS device sends over the box (slice
+  /// (c)), from the same counter and under the same lock as
+  /// [journalDelivery], so a sent and a received message never share one.
+  /// Null when nothing committed (store closed, write refused).
+  Future<int?> allocateLocalId() {
+    final kv = _kv;
+    final userId = _userId;
+    if (kv == null || userId == null) return Future.value();
+    final generation = _generation;
+    int? allocated;
+    return _serial(
+      () => _lock(ContactStore.lockName(userId), () async {
+        if (_generation != generation) return false;
+        final counterKey = _localIdCounterKey(userId);
+        final rows = await ContactStore._readWhere(kv, (k) => k == counterKey);
+        final localId = _nextLocalId(kv, userId, rows[counterKey]);
+        if (!await kv.setString(counterKey, '${localId + 1}')) return false;
+        allocated = localId;
+        return true;
+      }),
+    ).then((ok) => ok ? allocated : null);
+  }
+
   /// The box confirmed the ack of [entry].
   Future<bool> markInboxAcked(BoxInboxEntry entry) =>
       _rewriteInbox(entry, (e) => e._with(acked: true));

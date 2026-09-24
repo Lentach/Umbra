@@ -8,6 +8,7 @@ import 'package:fireplace/services/box/queue_seal.dart';
 import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/services/contacts/contact_store.dart';
 import 'package:fireplace/services/encryption/content_kv.dart';
+import 'package:fireplace/utils/message_ids.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -31,10 +32,14 @@ void main() {
   late BoxSession session;
   late Map<String, String> address;
   late List<Map<String, Object?>> published;
+  final seal = QueueSeal(cipher: PointyGcmSealer());
 
   /// Answers the box like a server holding exactly the queues it created;
   /// [gone] rids are refused on subscribe, as a reaped queue is.
   final gone = <String>{};
+
+  /// What the box answers a `send`.
+  var sendAnswer = <String, Object?>{'ok': true};
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
@@ -47,6 +52,7 @@ void main() {
     await store.open(1);
     address = _address(0x10);
     gone.clear();
+    sendAnswer = {'ok': true};
     sockets = FakeBoxSockets()
       ..respond = (_, f) => switch (f.event) {
         'createQueue' => {'ok': true, ...address},
@@ -58,6 +64,7 @@ void main() {
                 {'rid': (s as Map)['rid'], 'code': 'auth_failed'},
           ],
         },
+        'send' => sendAnswer,
         _ => {'ok': true},
       };
     published = [];
@@ -69,6 +76,7 @@ void main() {
           published.add(Map<String, Object?>.from(data! as Map));
         }
       },
+      seal: seal,
     )..start();
   });
 
@@ -272,6 +280,133 @@ void main() {
       };
       await pumpEventQueue();
       expect(offered, ['2:AQ==']);
+    });
+  });
+
+  group('sending (slice (c))', () {
+    final sealKeys = QueueSeal.mintKeyPair();
+    final address = ContactOutbound(
+      peerDeviceId: 2,
+      sid: boxB64(_bytes(32, 0x70)),
+      sealPub: boxB64(sealKeys.publicKey),
+    );
+
+    Future<void> friend({ContactState state = ContactState.friend}) =>
+        store.update(
+          42,
+          (_) => ContactRecord(
+            userId: 42,
+            username: 'peer42',
+            tag: '0001',
+            state: state,
+            outbound: [address],
+          ),
+        );
+
+    List<EmittedFrame> sends() => [
+      for (final socket in sockets.sockets)
+        for (final f in socket.emitted)
+          if (f.event == 'send') f,
+    ];
+
+    test(
+      "a friend's addresses, per peer device — ALSO while the box is down, "
+      'so a covered peer fails the send instead of taking the old path '
+      '(decisions 15, 19)',
+      () async {
+        await friend();
+        expect(session.addressesFor(42).keys, [2], reason: 'box not up yet');
+        await boxUp('S1');
+        sockets.last.serverDrop();
+        await pumpEventQueue();
+        expect(session.addressesFor(42)[2]?.sid, address.sid);
+        expect(await session.deliver(address, Uint8List(4)), isFalse);
+        expect(session.addressesFor(7), isEmpty, reason: 'no record');
+      },
+    );
+
+    test('a contact who is not a friend has no address to send to', () async {
+      await friend(state: ContactState.blocked);
+      await boxUp('S1');
+      expect(session.addressesFor(42), isEmpty);
+    });
+
+    test('a closed contact store has no address to send to', () async {
+      await friend();
+      await boxUp('S1');
+      store.close();
+      expect(session.addressesFor(42), isEmpty);
+    });
+
+    test(
+      'deliver seals the body to that address: the blob goes to its sid and '
+      "opens under its queue's key",
+      () async {
+        await boxUp('S1');
+        final body = Uint8List.fromList([1, 3, 0, 1, 9, 9]);
+        expect(await session.deliver(address, body), isTrue);
+
+        final frame = sends().single.frame;
+        expect(frame['sid'], address.sid);
+        final blob = boxB64Decode(frame['blob'], kBoxBlobBytes)!;
+        expect(
+          await seal.open(sealKeys.privateKey, sealKeys.publicKey, blob),
+          body,
+        );
+      },
+    );
+
+    test('a refused send is false', () async {
+      await boxUp('S1');
+      sendAnswer = {'ok': false, 'code': 'queue_full'};
+      expect(await session.deliver(address, Uint8List(4)), isFalse);
+    });
+
+    test('a box that is not connected is false, and nothing is emitted', () async {
+      expect(await session.deliver(address, Uint8List(4)), isFalse);
+      expect(sends(), isEmpty);
+    });
+
+    test(
+      'an address that is not a canonical sid / 32-byte key is false, never '
+      'a throw',
+      () async {
+        await boxUp('S1');
+        for (final bad in [
+          ContactOutbound(peerDeviceId: 2, sid: 'short', sealPub: address.sealPub),
+          ContactOutbound(peerDeviceId: 2, sid: address.sid, sealPub: 'short'),
+        ]) {
+          expect(await session.deliver(bad, Uint8List(4)), isFalse);
+        }
+        expect(sends(), isEmpty);
+      },
+    );
+
+    test(
+      'local ids for sends come from the counter deliveries draw on: never '
+      'the same id twice',
+      () async {
+        final sent = await session.nextLocalId();
+        final journaled = await store.journalDelivery(
+          rid: 'r',
+          id: 'm',
+          peerUserId: 42,
+          senderDeviceId: 1,
+          signal: '2:AQ==',
+          receivedAt: DateTime.utc(2026, 9, 24),
+        );
+        final sentAgain = await session.nextLocalId();
+        expect(
+          {sent, journaled?.localId, sentAgain},
+          hasLength(3),
+        );
+        expect(sent, greaterThanOrEqualTo(kFirstLocalMessageId));
+      },
+    );
+
+    test('a closed store hands out no local id', () async {
+      store.close();
+      expect(await session.nextLocalId(), isNull);
     });
   });
 

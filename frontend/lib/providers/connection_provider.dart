@@ -488,13 +488,15 @@ class ConnectionProvider extends ChangeNotifier {
           emit: emit,
         )..start();
         // Slice (b): every box delivery is read by the messaging provider,
-        // which knows the peer only through the contact record.
+        // which knows the peer only through the contact record. Slice (c):
+        // it sends through the same session.
         final messaging = _messagingProvider;
         if (messaging != null) {
           _box!.consumer = (entry) => messaging.consumeBoxEntry(
             entry,
             contacts.byUserId(entry.peerUserId),
           );
+          messaging.boxOutbox = _box;
         }
       } else {
         _box!.resume();
@@ -927,6 +929,7 @@ class ConnectionProvider extends ChangeNotifier {
       _contactStore?.close();
       _box?.dispose();
       _box = null;
+      _messagingProvider?.boxOutbox = null;
       _boxUserId = null;
     }
 

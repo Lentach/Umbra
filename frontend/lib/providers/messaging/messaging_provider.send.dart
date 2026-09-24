@@ -1486,6 +1486,41 @@ extension MessagingSend on MessagingProvider {
         }
       }
 
+      // 2b. The box (metadata-privacy PR3.1 slice (c)). A plain text goes
+      // there — and ONLY there (decision 15) — when every live device on
+      // both sides has a box address; otherwise the old path below, as ever.
+      // Media, pings, replies and disappearing timers stay on the old path:
+      // the box envelope carries none of them yet.
+      final outbox = boxOutbox;
+      final addresses = outbox?.addressesFor(recipientId) ?? const {};
+      if (outbox != null &&
+          addresses.isNotEmpty &&
+          messageType == 'TEXT' &&
+          effectiveReplyToId == null &&
+          (effectiveExpiresIn ?? 0) <= 0) {
+        final route = await _boxRoute(recipientId, outbox, addresses);
+        if (route != null) {
+          // Awaited: a throw must reach this try's failure handling.
+          return await _sendOverBox(
+            route,
+            recipientId: recipientId,
+            content: content,
+            tempId: tempId,
+            sendToken: _sendTokenFor(tempId),
+            linkPreview: linkPreview,
+          );
+        }
+      }
+      if (_boxTempIds.contains(tempId)) {
+        // A retry of a box send whose route is gone (a peer device lost its
+        // address, ours gained a sibling): the box may already have handed
+        // it to some devices, and the old path's reader would show those a
+        // second copy. It stays failed; nothing goes to the server.
+        _e2eFlowLog('BOX_RETRY_NO_ROUTE', {'tempId': tempId});
+        _markMessageFailed(tempId, 'Could not send. Try again.');
+        return false;
+      }
+
       // 3. Resolve the addresses this send must reach (spec §5.2 + §12
       // amendment (x)).
       //
@@ -1700,10 +1735,16 @@ extension MessagingSend on MessagingProvider {
     notifyListeners();
   }
 
-  /// Mark any message currently in "sending" state as failed.
+  /// Mark any message currently in "sending" state as failed — except a box
+  /// send still waiting on the box: an account-socket error says nothing
+  /// about it, and a retry started now would store a second copy.
   void markSendingMessagesFailed(String errorMsg) {
     final sending = _messages
-        .where((m) => m.deliveryStatus == MessageDeliveryStatus.sending)
+        .where(
+          (m) =>
+              m.deliveryStatus == MessageDeliveryStatus.sending &&
+              !_boxInFlight.contains(m.tempId),
+        )
         .toList();
     if (sending.isEmpty) return;
     for (final msg in sending) {

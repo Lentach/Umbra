@@ -47,6 +47,33 @@ class BoxFrame {
   /// What `EncryptionService.decrypt` reads.
   String get signalCiphertext => '${kind.byte}:${base64Encode(signal)}';
 
+  /// The frame for `EncryptionService.encrypt`'s `"{type}:{base64}"` from
+  /// [senderDeviceId]; null for a type that is not a Signal message or
+  /// bytes that are not base64. Length is NOT checked here: a caller holding
+  /// more than [maxSignalBytes] must refuse the send, never truncate it.
+  static BoxFrame? fromSignalCiphertext(
+    String ciphertext, {
+    required int senderDeviceId,
+  }) {
+    final colon = ciphertext.indexOf(':');
+    if (colon < 1) return null;
+    final type = int.tryParse(ciphertext.substring(0, colon));
+    final kind = BoxFrameKind.values.where((k) => k.byte == type);
+    if (kind.isEmpty) return null;
+    final Uint8List signal;
+    try {
+      signal = base64Decode(ciphertext.substring(colon + 1));
+    } on FormatException {
+      return null;
+    }
+    if (signal.isEmpty) return null;
+    return BoxFrame(
+      kind: kind.single,
+      senderDeviceId: senderDeviceId,
+      signal: signal,
+    );
+  }
+
   /// Throws [ArgumentError] for a device id outside 1..100 or more than
   /// [maxSignalBytes]: caller bugs, never runtime conditions.
   Uint8List encode() {

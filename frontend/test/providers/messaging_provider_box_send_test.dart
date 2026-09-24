@@ -1,0 +1,559 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:fireplace/models/message_model.dart';
+import 'package:fireplace/providers/conversations_provider.dart';
+import 'package:fireplace/providers/encryption_provider.dart';
+import 'package:fireplace/providers/messaging_provider.dart';
+import 'package:fireplace/services/box/box_frame.dart';
+import 'package:fireplace/services/box/box_outbox.dart';
+import 'package:fireplace/services/contacts/contact_record.dart';
+import 'package:fireplace/services/device_list/device_list_cache.dart';
+import 'package:fireplace/services/device_list/device_list_canonical.dart';
+import 'package:fireplace/services/encryption_service.dart';
+import 'package:fireplace/utils/message_ids.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+/// The real plaintext store; Signal and the device-list round trip are
+/// faked. A "ciphertext" is `3:` + base64(the plaintext), so a frame the
+/// box was handed can be read back.
+class _SendEncryption extends EncryptionProvider {
+  _SendEncryption(this.store) : super(service: store);
+
+  final EncryptionService store;
+
+  /// Verified lists this client holds, by user id; absent = not enrolled
+  /// (single device 1).
+  final Map<int, VerifiedDeviceList> lists = {};
+
+  /// What a forced fetch finds on the server, when it differs from [lists].
+  final Map<int, VerifiedDeviceList> served = {};
+
+  /// Every `forceRefresh` fetch, by user id.
+  final List<int> forcedFetches = [];
+
+  /// Users whose list cannot be verified (the fetch fails closed).
+  final Set<int> unverifiable = {};
+
+  /// Peer devices whose Signal message comes out longer than one frame.
+  final Set<int> oversize = {};
+
+  final List<(int, int)> encryptCalls = [];
+
+  @override
+  bool get isE2EReady => true;
+
+  @override
+  bool get hadIdentityReset => false;
+
+  @override
+  int get ownDeviceId => 1;
+
+  @override
+  VerifiedDeviceList? cachedDeviceList(int userId) => lists[userId];
+
+  @override
+  Future<VerifiedDeviceList> getVerifiedDeviceList(
+    int userId, {
+    bool forceRefresh = false,
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    if (unverifiable.contains(userId)) throw StateError('chain refused');
+    if (forceRefresh) {
+      forcedFetches.add(userId);
+      final fresh = served[userId];
+      if (fresh != null) lists[userId] = fresh;
+    }
+    return lists[userId] ?? const VerifiedDeviceList.notEnrolled();
+  }
+
+  @override
+  Future<void> ensureSession(int recipientId, {int deviceId = 1}) async {}
+
+  @override
+  Future<String> encrypt(
+    int recipientId,
+    String plaintext, {
+    int deviceId = 1,
+  }) async {
+    encryptCalls.add((recipientId, deviceId));
+    final bytes = oversize.contains(deviceId)
+        ? Uint8List(BoxFrame.maxSignalBytes + 1)
+        : utf8.encode(plaintext);
+    return '3:${base64Encode(bytes)}';
+  }
+
+  @override
+  Future<void> savePendingSendRecord(
+    String key,
+    Map<String, dynamic> data,
+  ) async {}
+}
+
+class _Outbox implements BoxOutbox {
+  final Map<int, Map<int, ContactOutbound>> addresses = {};
+
+  /// Peer devices whose `send` the box refuses.
+  final Set<int> refuse = {};
+
+  /// Every frame handed over, with its address.
+  final List<(ContactOutbound, BoxFrame)> delivered = [];
+
+  bool noLocalId = false;
+
+  /// When set, every `send` waits for it: a box that has not answered yet.
+  Completer<void>? hold;
+  int _next = kFirstLocalMessageId + 40;
+
+  @override
+  Map<int, ContactOutbound> addressesFor(int peerUserId) =>
+      addresses[peerUserId] ?? const {};
+
+  @override
+  Future<bool> deliver(ContactOutbound to, Uint8List body) async {
+    delivered.add((to, BoxFrame.decode(body)!));
+    await hold?.future;
+    return !refuse.contains(to.peerDeviceId);
+  }
+
+  @override
+  Future<int?> nextLocalId() async => noLocalId ? null : _next++;
+}
+
+ContactOutbound _address(int device) => ContactOutbound(
+  peerDeviceId: device,
+  sid: 'sid-$device',
+  sealPub: 'seal-$device',
+);
+
+VerifiedDeviceList _enrolled(List<int> live, {List<int> revoked = const []}) =>
+    VerifiedDeviceList.enrolled(
+      version: 3,
+      listHash: 'H' * 44,
+      devices: [
+        for (final id in [...live, ...revoked]..sort())
+          DeviceListEntry(
+            deviceId: id,
+            platform: 'test',
+            addedAtMs: 0,
+            revokedAtMs: revoked.contains(id) ? 1 : null,
+          ),
+      ],
+    );
+
+Map<String, dynamic> _conv({int? timer}) => {
+  'id': 10,
+  'userOne': {'id': 1, 'username': 'alice', 'tag': '0001'},
+  'userTwo': {'id': 2, 'username': 'bob', 'tag': '0002'},
+  'createdAt': '2026-01-01T00:00:00.000Z',
+  'disappearingTimer': timer,
+  'unreadCount': 0,
+  'lastMessage': null,
+};
+
+void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  late MessagingProvider provider;
+  late ConversationsProvider conversations;
+  late _SendEncryption encryption;
+  late _Outbox outbox;
+  late List<String> emitted;
+
+  MessagingProvider newProvider() => MessagingProvider()
+    ..setConversationsProvider(conversations)
+    ..setEncryptionProvider(encryption)
+    ..setCurrentUserId(1)
+    ..setToken('tok')
+    ..setIncomingMessageSoundEnabledForTest(false)
+    ..onConnect(false)
+    ..setActiveConversationIdForTest(10)
+    ..setEmitCallback((event, data) => emitted.add(event))
+    ..boxOutbox = outbox;
+
+  Future<void> setUpWith({int? timer}) async {
+    FlutterSecureStorage.setMockInitialValues({});
+    SharedPreferences.setMockInitialValues({});
+    final service = EncryptionService();
+    await service.initialize(
+      1,
+      checkServerIdentity: () async => const ServerIdentityGuard(exists: false),
+    );
+    encryption = _SendEncryption(service);
+    conversations = ConversationsProvider()
+      ..setCurrentUserId(1)
+      ..onConversationsList([_conv(timer: timer)])
+      ..openConversation(10);
+    outbox = _Outbox();
+    emitted = [];
+    provider = newProvider();
+  }
+
+  setUp(setUpWith);
+
+  Future<void> pump([int turns = 40]) async {
+    for (var i = 0; i < turns; i++) {
+      await Future<void>.delayed(Duration.zero);
+    }
+  }
+
+  /// Bob (2) on devices [live]; every one of [addressed] handed us a queue.
+  void bob(List<int> live, {List<int>? addressed, List<int> revoked = const []}) {
+    encryption.lists[2] = _enrolled(live, revoked: revoked);
+    outbox.addresses[2] = {
+      for (final d in addressed ?? live) d: _address(d),
+    };
+  }
+
+  Future<MessageModel> send(String text) async {
+    provider.sendMessage(text);
+    await pump();
+    return provider.messages.last;
+  }
+
+  /// The envelope a delivered frame carries.
+  Map<String, dynamic> envelopeOf(BoxFrame frame) =>
+      jsonDecode(utf8.decode(frame.signal)) as Map<String, dynamic>;
+
+  test(
+    'a text to a peer whose every live device has an address goes ONLY over '
+    'the box: one frame per device, never a sendMessage (decisions 15-16)',
+    () async {
+      bob([1, 2]);
+      final row = await send('hi over the box');
+
+      expect(emitted, isNot(contains('sendMessage')));
+      expect(
+        outbox.delivered.map((d) => d.$1.sid),
+        unorderedEquals(['sid-1', 'sid-2']),
+      );
+      for (final (_, frame) in outbox.delivered) {
+        expect(frame.senderDeviceId, 1, reason: 'the sending device');
+        expect(frame.kind, BoxFrameKind.preKey);
+        final envelope = envelopeOf(frame);
+        expect(envelope['content'], 'hi over the box');
+        expect(envelope['msgId'], row.wireId, reason: 'one wire id per message');
+        expect(envelope['ts'], row.createdAt.millisecondsSinceEpoch);
+      }
+      expect(isLocalMessageId(row.id), isTrue);
+      expect(row.deliveryStatus, MessageDeliveryStatus.sent);
+      expect(row.content, 'hi over the box');
+      expect(conversations.lastMessages[10]?.id, row.id);
+    },
+  );
+
+  test(
+    'the sent box message is stored under its local id with our wire stamp, '
+    'and comes back after a restart as SENT, not delivered',
+    () async {
+      bob([1]);
+      final row = await send('kept');
+
+      final record = await encryption.store.getDecryptedContent(row.id);
+      expect(record?['content'], 'kept');
+      expect(record?['senderId'], 1);
+
+      provider.dispose();
+      provider = newProvider();
+      await provider.onMessageHistory({
+        'conversationId': 10,
+        'messages': <Object>[],
+      });
+      await pump(80);
+
+      final back = provider.messages.singleWhere((m) => m.id == row.id);
+      expect(back.content, 'kept');
+      expect(back.senderId, 1);
+      expect(back.wireId, row.wireId);
+      expect(back.deliveryStatus, MessageDeliveryStatus.sent);
+    },
+  );
+
+  test(
+    'a live peer device WITHOUT an address sends the whole message over the '
+    'old path — never split across the two',
+    () async {
+      bob([1, 2], addressed: [1]);
+      final row = await send('mixed');
+
+      expect(outbox.delivered, isEmpty);
+      expect(emitted, contains('sendMessage'));
+      expect(isLocalMessageId(row.id), isFalse);
+    },
+  );
+
+  test(
+    'another live device of OUR account keeps the message on the old path '
+    '(no sibling queues yet)',
+    () async {
+      bob([1]);
+      encryption.lists[1] = _enrolled([1, 3]);
+      await send('siblings');
+
+      expect(outbox.delivered, isEmpty);
+      expect(emitted, contains('sendMessage'));
+    },
+  );
+
+  test(
+    'a revoked peer device gets nothing, even though it still holds an '
+    'address',
+    () async {
+      bob([1], addressed: [1, 2], revoked: [2]);
+      await send('live only');
+
+      expect(outbox.delivered.map((d) => d.$1.peerDeviceId), [1]);
+      expect(emitted, isNot(contains('sendMessage')));
+    },
+  );
+
+  test(
+    'a peer list with no live device is never "sent" to nobody',
+    () async {
+      bob(const [], addressed: [2], revoked: [2]);
+      await send('to whom');
+
+      expect(outbox.delivered, isEmpty);
+      expect(emitted, contains('sendMessage'));
+    },
+  );
+
+  test('a peer list that cannot be verified keeps the old path', () async {
+    bob([1]);
+    encryption.unverifiable.add(2);
+    await send('unverified');
+
+    expect(outbox.delivered, isEmpty);
+    expect(emitted, contains('sendMessage'));
+  });
+
+  test(
+    'a box refusal on ANY device fails the row (retry), stores nothing, and '
+    'the retry carries the SAME wire id',
+    () async {
+      bob([1, 2]);
+      outbox.refuse.add(2);
+      final failed = await send('try again');
+
+      expect(failed.deliveryStatus, MessageDeliveryStatus.failed);
+      expect(emitted, isNot(contains('sendMessage')));
+      final firstWire = envelopeOf(outbox.delivered.first.$2)['msgId'];
+
+      outbox
+        ..refuse.clear()
+        ..delivered.clear();
+      await provider.retryFailedMessage(failed.tempId!);
+      await pump();
+
+      final sent = provider.messages.singleWhere(
+        (m) => m.content == 'try again',
+      );
+      expect(sent.deliveryStatus, MessageDeliveryStatus.sent);
+      expect(outbox.delivered, hasLength(2));
+      for (final (_, frame) in outbox.delivered) {
+        expect(envelopeOf(frame)['msgId'], firstWire);
+      }
+      expect(
+        await encryption.store.localMessageRecords(10),
+        hasLength(1),
+        reason: 'only the attempt that went through is stored',
+      );
+    },
+  );
+
+  test(
+    'the retry keeps the wire id across a same-user reconnect — the box is '
+    'most often down exactly when the account socket reconnects',
+    () async {
+      bob([1, 2]);
+      outbox.refuse.add(2);
+      final failed = await send('after a reconnect');
+      final firstWire = envelopeOf(outbox.delivered.first.$2)['msgId'];
+
+      provider.onConnect(true);
+      outbox
+        ..refuse.clear()
+        ..delivered.clear();
+      await provider.retryFailedMessage(failed.tempId!);
+      await pump();
+
+      expect(outbox.delivered, hasLength(2));
+      for (final (_, frame) in outbox.delivered) {
+        expect(envelopeOf(frame)['msgId'], firstWire);
+      }
+    },
+  );
+
+  test(
+    'a retry whose box route is gone stays failed and never reaches the '
+    'server: device 1 may already hold it, and the old path cannot dedup',
+    () async {
+      bob([1, 2]);
+      outbox.refuse.add(2);
+      final failed = await send('pinned to the box');
+
+      outbox.addresses[2]!.remove(2);
+      await provider.retryFailedMessage(failed.tempId!);
+      await pump();
+
+      expect(emitted, isNot(contains('sendMessage')));
+      expect(
+        provider.messages.singleWhere((m) => m.tempId == failed.tempId)
+            .deliveryStatus,
+        MessageDeliveryStatus.failed,
+      );
+    },
+  );
+
+  test(
+    'a Signal message longer than one frame is refused before ANY device is '
+    'sent to — never truncated, never split',
+    () async {
+      bob([1, 2]);
+      encryption.oversize.add(2);
+      final row = await send('too long for the box');
+
+      expect(row.deliveryStatus, MessageDeliveryStatus.failed);
+      expect(outbox.delivered, isEmpty);
+      expect(emitted, isNot(contains('sendMessage')));
+    },
+  );
+
+  test('no local id (the store refused) fails before anything goes out', () async {
+    bob([1]);
+    outbox.noLocalId = true;
+    final row = await send('nowhere to keep it');
+
+    expect(row.deliveryStatus, MessageDeliveryStatus.failed);
+    expect(outbox.delivered, isEmpty);
+  });
+
+  test(
+    'a chat with a disappearing timer stays on the old path: the box '
+    'envelope carries no expiry yet',
+    () async {
+      await setUpWith(timer: 60);
+      bob([1]);
+      await send('vanishing');
+
+      expect(outbox.delivered, isEmpty);
+      expect(emitted, contains('sendMessage'));
+    },
+  );
+
+  test(
+    'a reply stays on the old path: the box envelope names no quoted '
+    'message yet',
+    () async {
+      bob([1]);
+      provider.sendMessage('re: that', replyToMessageId: 5);
+      await pump();
+
+      expect(outbox.delivered, isEmpty);
+      expect(emitted, contains('sendMessage'));
+    },
+  );
+
+  test(
+    'a peer device linked since the list was cached is found before the '
+    "session's first box send — it has no address, so the old path",
+    () async {
+      bob([1]);
+      encryption.served[2] = _enrolled([1, 2]);
+      await send('to both devices');
+
+      expect(encryption.forcedFetches, [2]);
+      expect(outbox.delivered, isEmpty);
+      expect(emitted, contains('sendMessage'));
+    },
+  );
+
+  test(
+    "the peer's list is re-verified once per connect, not per message — a "
+    'lookup per send would hand the server the pair and every send time',
+    () async {
+      bob([1]);
+      await send('one');
+      await send('two');
+      expect(encryption.forcedFetches, [2]);
+
+      provider.onConnect(true);
+      await send('three');
+      expect(encryption.forcedFetches, [2, 2]);
+    },
+  );
+
+  test(
+    'an account-socket error while the box has not answered neither fails '
+    'the row nor lets a retry store a second copy',
+    () async {
+      bob([1]);
+      final hold = outbox.hold = Completer<void>();
+      provider.sendMessage('slow box');
+      await pump();
+      final tempId = provider.messages.last.tempId!;
+
+      provider.markSendingMessagesFailed('socket error');
+      expect(
+        provider.messages.last.deliveryStatus,
+        MessageDeliveryStatus.sending,
+      );
+      await provider.retryFailedMessage(tempId);
+      await pump();
+      expect(outbox.delivered, hasLength(1));
+
+      hold.complete();
+      await pump();
+      expect(
+        provider.messages.singleWhere((m) => m.tempId == tempId).deliveryStatus,
+        MessageDeliveryStatus.sent,
+      );
+      expect(await encryption.store.localMessageRecords(10), hasLength(1));
+    },
+  );
+
+  test(
+    'a send refused before any frame went out is not pinned to the box: '
+    'its retry may take the old path once the route is gone',
+    () async {
+      bob([1, 2]);
+      encryption.oversize.add(2);
+      final failed = await send('nothing left the device');
+
+      encryption.oversize.clear();
+      outbox.addresses[2]!.remove(2);
+      await provider.retryFailedMessage(failed.tempId!);
+      await pump();
+
+      expect(outbox.delivered, isEmpty);
+      expect(emitted, contains('sendMessage'));
+    },
+  );
+
+  test('media stays on the old path', () async {
+    bob([1]);
+    await provider.encryptAndSendForTest(
+      recipientId: 2,
+      content: '',
+      tempId: 'temp_img',
+      messageType: 'IMAGE',
+      mediaUrl: '/media/x.bin',
+    );
+    await pump();
+
+    expect(outbox.delivered, isEmpty);
+    expect(emitted, contains('sendMessage'));
+  });
+
+  test('a ping stays on the old path', () async {
+    bob([1]);
+    provider.sendPing(2);
+    await pump();
+
+    expect(outbox.delivered, isEmpty);
+    expect(emitted, contains('sendMessage'));
+  });
+}

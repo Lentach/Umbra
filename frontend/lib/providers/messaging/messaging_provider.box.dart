@@ -1,8 +1,23 @@
 part of '../messaging_provider.dart';
 
+/// How long a peer's verified device list may route box sends before it is
+/// fetched again (slice (c); see `_boxRoute`).
+const Duration _kBoxListMaxAge = Duration(minutes: 10);
+
+/// A box send's plan (slice (c)): one address per live peer device.
+typedef _BoxRoute = ({
+  BoxOutbox outbox,
+  List<ContactOutbound> targets,
+  int conversationId,
+  SenderListInfo senderListInfo,
+});
+
 /// Box deliveries (metadata-privacy PR3.1 slice (b)): the ONE dispatcher. A
 /// journaled delivery is decrypted here, NOW — unlike a server row, nothing
 /// can serve its ciphertext again — and routed on the envelope's `t`.
+///
+/// And the send side (slice (c)): [_boxRoute] decides whether a text goes
+/// over the box at all, [_sendOverBox] sends it.
 extension MessagingBox on MessagingProvider {
   /// Reads one journaled delivery from [peer]. True when finished with it —
   /// stored and shown, a duplicate, or refused for good; false to be offered
@@ -271,10 +286,193 @@ extension MessagingBox on MessagingProvider {
         senderUsername: sender?.id == senderId ? sender!.username : '',
         conversationId: conversationId,
         createdAt: DateTime.fromMillisecondsSinceEpoch(createdAtMs, isUtc: true),
-        deliveryStatus: MessageDeliveryStatus.delivered,
+        // Ours went out when the box took every frame (decision 20); no
+        // receipt comes back over the box yet.
+        deliveryStatus: senderId == _currentUserId
+            ? MessageDeliveryStatus.sent
+            : MessageDeliveryStatus.delivered,
       ),
       record,
     );
     return _hasUsableDecryptedContent(row) ? row : null;
+  }
+
+  /// Where a TEXT to [recipientId] goes over the box (slice (c), decision
+  /// 16): only when EVERY live device of the peer and every live OTHER
+  /// device of ours has a box address — one message is never split across
+  /// the two paths, because an old-path copy is a server row naming the
+  /// pair that the box devices would then be served as `none_for_device`.
+  /// Null = the old path, exactly as before.
+  ///
+  /// [addresses] is the outbox's answer for the peer, taken by the caller
+  /// WITHOUT an await, so a peer with none (every chat until the handoff
+  /// slice) reaches the old path's emit on exactly the turns it always did.
+  ///
+  /// Both lists come from the verified cache, fetched when absent (the peer
+  /// path of `getDeviceList` stays until PR4.1): unlike the old path, the
+  /// box has no server bounce to catch a device we did not know about.
+  Future<_BoxRoute?> _boxRoute(
+    int recipientId,
+    BoxOutbox outbox,
+    Map<int, ContactOutbound> addresses,
+  ) async {
+    final enc = _encryptionProvider;
+    final ownUserId = _currentUserId;
+    if (enc == null || ownUserId == null) return null;
+    void declined(String why) => _e2eFlowLog('BOX_ROUTE_OLD_PATH', {
+      'peer': recipientId,
+      'why': why,
+    });
+    final conversationId = _conversationsProvider?.conversations
+        .where((c) => conv_helpers.getOtherUserId(c, ownUserId) == recipientId)
+        .firstOrNull
+        ?.id;
+    if (conversationId == null) {
+      declined('no_conversation');
+      return null;
+    }
+    final VerifiedDeviceList peer;
+    final VerifiedDeviceList own;
+    // The box has no server bounce for a stale list (the old path's
+    // `deviceListStale`), so the peer's list is re-verified once per connect
+    // and then at most every [_kBoxListMaxAge] — never per message, which
+    // would hand the server the pair and the time of every send. The
+    // E2E device announcements (slice (e)) replace this.
+    final checked = _boxListCheckedAt[recipientId];
+    final stale =
+        checked == null || DateTime.now().difference(checked) > _kBoxListMaxAge;
+    try {
+      peer = await enc.getVerifiedDeviceList(recipientId, forceRefresh: stale);
+      own = await enc.getVerifiedDeviceList(ownUserId);
+    } on Object {
+      declined('list_unverified');
+      return null;
+    }
+    if (stale) _boxListCheckedAt[recipientId] = DateTime.now();
+    if (own.liveDeviceIds.any((d) => d != enc.ownDeviceId)) {
+      declined('own_devices');
+      return null;
+    }
+    final live = peer.liveDeviceIds;
+    final targets = [for (final d in live) ?addresses[d]];
+    if (live.isEmpty || targets.length != live.length) {
+      declined('peer_uncovered');
+      return null;
+    }
+    return (
+      outbox: outbox,
+      targets: targets,
+      conversationId: conversationId,
+      senderListInfo: SenderListInfo(
+        ownVersion: own.version,
+        ownListHash: own.listHash,
+        peerVersion: peer.version,
+        peerListHash: peer.listHash,
+      ),
+    );
+  }
+
+  /// Sends [content] along [route]: one Signal message per peer device, each
+  /// sealed into that device's queue. The row is SENT only once the box took
+  /// every frame (decision 20); anything less fails it for a retry (decision
+  /// 19), which re-seals under the same wire id, so a device that already
+  /// holds the message drops the copy (`wireHeldByOther`). Every frame is
+  /// built before the first goes out, so nothing reaches some devices only.
+  ///
+  /// While it runs, the tempId is in [_boxInFlight]: an account-socket error
+  /// cannot fail the row under it and a retry cannot start a second attempt
+  /// (each would take its own local id and store a second copy). It joins
+  /// [_boxTempIds] only just before the first frame goes out — the first
+  /// moment a device may hold the message.
+  Future<bool> _sendOverBox(
+    _BoxRoute route, {
+    required int recipientId,
+    required String content,
+    required String tempId,
+    required String sendToken,
+    Map<String, String?>? linkPreview,
+  }) async {
+    _boxInFlight.add(tempId);
+    try {
+      final enc = _encryptionProvider!;
+      // Whole ms: the envelope's `ts` and the stored `createdAt` must agree.
+      final sentAt = DateTime.fromMillisecondsSinceEpoch(
+        DateTime.now().millisecondsSinceEpoch,
+        isUtc: true,
+      );
+      final envelope = boxEnvelope(
+        content,
+        linkPreview: linkPreview,
+        senderListInfo: route.senderListInfo.toJson(),
+        msgId: sendToken,
+        sentAt: sentAt,
+      );
+      final frames = <(ContactOutbound, Uint8List)>[];
+      for (final to in route.targets) {
+        await enc.ensureSession(recipientId, deviceId: to.peerDeviceId);
+        final frame = BoxFrame.fromSignalCiphertext(
+          await enc.encrypt(
+            recipientId,
+            envelope.json,
+            deviceId: to.peerDeviceId,
+          ),
+          senderDeviceId: enc.ownDeviceId,
+        );
+        if (frame == null) throw StateError('encrypt gave no Signal message');
+        if (frame.signal.length > BoxFrame.maxSignalBytes) {
+          _e2eFlowLog('BOX_SEND_TOO_LONG', {
+            'tempId': tempId,
+            'bytes': frame.signal.length,
+          });
+          _markMessageFailed(tempId, 'Message is too long to send.');
+          return false;
+        }
+        frames.add((to, frame.encode()));
+      }
+      final localId = await route.outbox.nextLocalId();
+      if (localId == null) {
+        _e2eFlowLog('BOX_SEND_NO_LOCAL_ID', {'tempId': tempId});
+        _markMessageFailed(tempId, 'Could not send. Try again.');
+        return false;
+      }
+      _boxTempIds.add(tempId);
+      final accepted = await Future.wait([
+        for (final (to, body) in frames) route.outbox.deliver(to, body),
+      ]);
+      _e2eFlowLog('BOX_SEND', {
+        'tempId': tempId,
+        'frames': frames.length,
+        'accepted': accepted.where((ok) => ok).length,
+      });
+      if (accepted.contains(false)) {
+        _markMessageFailed(tempId, 'Could not send. Try again.');
+        return false;
+      }
+      final preview = envelope.linkPreview;
+      // Status is the model's default, `sent`: the box took every frame.
+      final sent = MessageModel(
+        id: localId,
+        content: content,
+        senderId: _currentUserId!,
+        senderUsername: '',
+        conversationId: route.conversationId,
+        createdAt: sentAt,
+        tempId: tempId,
+        wireId: sendToken,
+        linkPreviewUrl: preview?['url'],
+        linkPreviewTitle: preview?['title'],
+        linkPreviewImageUrl: preview?['imageUrl'],
+      );
+      enc.cacheDecryption(localId, sent);
+      await _persistDecryptedContent(sent);
+      if (await enc.recordExists(localId) != true) {
+        // Shown from RAM this session; nothing re-offers a sent message.
+        E2ePersistentDiag.record('BOX_SENT_STORE_UNPROVEN', {'msgId': localId});
+      }
+      _addMessageToState(sent);
+      return true;
+    } finally {
+      _boxInFlight.remove(tempId);
+    }
   }
 }
