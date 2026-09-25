@@ -16,6 +16,7 @@ The only project file Oh-My-Pi injects (it shadows root `CLAUDE.md`), so every l
 - Code wins over docs: fix the doc in the same commit. Re-verify volatile claims (branch, versions, CI, counts) with a command run THIS session.
 - Main checkout is on `feat/passcode-lock` (`master` = `fireplace-0a`): `git fetch && git status -sb` first; push `HEAD:master`, then the branch; any other worktree pushes only its own branch. Shared worktree: stage by explicit path, never `git add -A`; never `git revert 0cbf17b`.
 - Change only what was asked. Composer/attachment picker: read `frontend/docs/composer-media.md` first; keep a repro.
+- Metadata-privacy decisions: `docs/plans/metadata-privacy-decisions.md` is the authority. Read it before asking or answering; ask the owner only OWNER-class questions, batched per phase (S8).
 - **Every code change is driven on a device before it is "done"**: built app in a browser or Android emulator/phone, on the changed path. Tests, CI and headless probes do not count.
 - Never `--no-verify` (pre-commit: gitleaks + context budget). Never trim a fresh summary to fit — move detail out.
 - Prod: CI green first (`gh api repos/Lentach/Umbra/commits/master/check-runs`, never `gh run list`). Never `docker compose down -v` / `volume rm` / bare `up -d`. Never tell a user to clear site data.
