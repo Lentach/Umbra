@@ -21,8 +21,8 @@
 - DEVICE DRIVE (mp `AGENTS.md:20`): release web of `4cbb0dc2` plus a throwaway `BOX_DRIVE` scaffold (restored by `git checkout`, bundle deleted), installed Chrome on `localhost:8080`, mp stack, account 284 with friends 285–287.
   - Scaffold minted a real queue per friend. B blocked 287 over the account socket; after a reload, 287 was `blocked` and kept its queue.
   - Then notification permission was granted and a real Web Push subscription made on `fcm.googleapis.com`. Result: `BOX_NOTIFIERS {registered: 2, owed: 2}`, two `box_notifiers` rows (285, 286) on one webpush token, and none for 287.
-  - A visible reload re-challenged nothing: no diag line, `verifiedAt` unchanged, 0 challenge pushes.
-- CI on `4cbb0dc2`: 6/7; "Flutter analyze and tests" failed ONLY at the count gate (2613 documented vs 2616), fixed in the handoff commit.
+  - A visible reload (after restoring the minimized window; the first reload read `hidden` and proved nothing) re-registered nothing: the rewritten `BOX_DRIVE_STATE` had no `BOX_NOTIFIERS` line and `verifiedAt` stayed unchanged. (The backend logs only FAILED challenge pushes, so a push count is not evidence.)
+- CI on `4cbb0dc2`: 6/7; "Flutter analyze and tests" failed ONLY at the count gate (2613 documented vs 2616). CI on `80a891d5` (the count fix): 7/7 success.
 - NOT verified: the wake-up push after this change (flush code unchanged, rows proven); Android/FCM (G5, decision 36), iOS/Safari, Firefox; prod (box OFF).
 
 ## Notes for next session
