@@ -1,4 +1,4 @@
-# Sibling queues part A: a user's own devices swap box self-queue addresses through their request queues
+# Sibling queues part A is on the branch (CI 7/7), and metadata-privacy decisions now live in one tracked log
 
 **Date:** 2026-09-25 · **Version:** unchanged · **Tiers deployed:** none (branch `feat/metadata-privacy`, not master)
 
@@ -20,6 +20,13 @@
   - Fix: publish and swap wait for E2E-ready on that connect.
   - A sibling listed under our own sid is skipped.
   - A received handoff is answered with ours, which closes the primary's `devices:[]` race.
+
+- Decision process (owner, S8): decisions are classed OWNER / ENGINEERING and batched per phase.
+  - `docs/plans/metadata-privacy-decisions.md`: every decision with a unique id (D1–D12, A1–A5, B1–B4, S1–S8, 1–33) and its status; the engineering calls E1–E4; O1 open (G6 convergence).
+  - `docs/plans/2026-09-25-metadata-pr31-remainder.md`: the order and every engineering call for the rest of PR3.1.
+  - The owner answered O2–O5 in one pass → decisions 30–33: box total ~3 GB (2 GiB media + 60k blobs), honest 429 over the media budget, no push on the self-queue, D5 kept (one mutual switch, default OFF).
+  - `AGENTS.md` names the log as the authority; master's `traps.md` points at it.
+- Rebased onto master (32 MiB + nginx docs had made PR #185 `CONFLICTING`, so no PR CI ran). `--force-with-lease`; part A is now `a8a4e560`.
 
 ## Key files
 - New:
@@ -60,9 +67,12 @@
   - A reload sends nothing.
   - Stranger 279 → `BOX_SIBLING_FOREIGN_IDENTITY` on both devices, and no session with it.
   - No `box_*` column names a user.
+- CI on `dbe54d3a` (the rebased tip, part A included): 7/7 success. After the rebase: backend 1197, box int 27/27, box Flutter 149.
+- Rebase check: `git diff 9a16a85d HEAD` over `wire.md`, `traps.md` and `LATEST.md` shows master's facts only. The first scripted resolution committed conflict markers (CRLF) in a throwaway worktree: aborted, `rr-cache` entry deleted, redone with rerere off. Nothing bad was pushed.
 - NOT verified: Android and native (web only); a device linked BEFORE this build (the swap should run at its next connect; not driven); iOS.
 
 ## Notes for next session
+- Owner questions go into a batched design note, never mid-slice (S8); an order or decision change is asked as "changes decision N". Part B needs none.
 - Part B, in order:
   1. Sent copies over the sibling self-queues, with `_boxRoute` covering every live own device (all-or-nothing, decision 16). The envelope must name the peer so the sibling files the copy.
   2. Rotation on revoke (decision 27).
