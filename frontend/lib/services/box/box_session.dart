@@ -63,7 +63,8 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
        _store = store,
        _keys = QueueKeys(box: box, store: store),
        _seal = seal ?? QueueSeal(),
-       _emit = emit {
+       _emit = emit,
+       _now = now ?? DateTime.now {
     _inbox = BoxInbox(box: box, store: store, seal: _seal, now: now);
     _notifiers = push == null
         ? null
@@ -99,6 +100,11 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
 
   /// Siblings re-keyed this session ([rekeySibling]): once each.
   final Set<int> _rekeyed = {};
+
+  /// When this device built a re-key's handoff for a sibling it has not
+  /// read since ([awaitingRekeyFrom], decision 37).
+  final Map<int, DateTime> _rekeyAsked = {};
+  final DateTime Function() _now;
   final void Function(String event, Object? data) _emit;
 
   final List<StreamSubscription<Object?>> _subscriptions = [];
@@ -419,13 +425,33 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
   Future<void> rekeySibling(int deviceId) async {
     final self = _store.selfQueue;
     final to = siblingAddresses()[deviceId];
+    final encrypt = _swap.encrypt;
     if (self == null || to == null || !_rekeyed.add(deviceId)) return;
-    final sent = await _sendToSibling(
-      to,
-      E2eEnvelope.buildQueueHandoff(sid: self.sid, sealPub: self.sealPub),
+    final handoff = E2eEnvelope.buildQueueHandoff(
+      sid: self.sid,
+      sealPub: self.sealPub,
     );
+    final frame = _disposed || encrypt == null
+        ? null
+        : await encrypt(deviceId, jsonEncode(handoff), fresh: true);
+    // Marked before the send: our session with it is already the fresh one,
+    // so a replacing PreKey from it is an answer even if this send is lost.
+    if (frame != null) _rekeyAsked[deviceId] = _now();
+    final sent = frame != null && await deliver(to, frame.encode());
     E2eDiagLog.add('BOX_SIBLING_REKEYED', {'device': deviceId, 'sent': sent});
   }
+
+  @override
+  bool awaitingRekeyFrom(int deviceId) {
+    final at = _rekeyAsked[deviceId];
+    if (at == null) return false;
+    if (_now().difference(at) <= kSiblingRekeyWindow) return true;
+    _rekeyAsked.remove(deviceId);
+    return false;
+  }
+
+  @override
+  void rekeyAnswered(int deviceId) => _rekeyAsked.remove(deviceId);
 
   @override
   Future<int?> nextLocalId() => _store.allocateLocalId();

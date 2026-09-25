@@ -6,9 +6,17 @@ import 'box_frame.dart';
 /// Signal session every linked device already holds) and answers the frame
 /// — kind, THIS device's id, the Signal bytes, no account — or null when it
 /// cannot now (E2E not ready, no session could be built, a device the own
-/// verified list does not name live). The messaging side implements it, so
+/// verified list does not name live). [fresh] first builds a NEW session
+/// from that device's bundle over the current one, which libsignal ARCHIVES
+/// (never deletes, so what the sibling sent on it still reads): the frame is
+/// then a PreKey message (decision 37). The messaging side implements it, so
 /// the box layer stays crypto-free.
-typedef OwnDeviceEncrypt = Future<BoxFrame?> Function(int deviceId, String json);
+typedef OwnDeviceEncrypt =
+    Future<BoxFrame?> Function(int deviceId, String json, {bool fresh});
+
+/// How long a re-key this device sent waits for the sibling's answer
+/// ([BoxSiblingLink.awaitingRekeyFrom], decision 37, E37b).
+const Duration kSiblingRekeyWindow = Duration(minutes: 10);
 
 /// This device's id and every device id the account's own VERIFIED list
 /// names live, or null when that cannot be known now (E2E not ready, the
@@ -45,10 +53,23 @@ abstract interface class BoxSiblingLink {
   /// chat (E5); null when this device holds none (yet).
   ContactRecord? contactOf(int userId);
 
-  /// Our Signal session with sibling [deviceId] is gone (its delivery found
-  /// none, E8): hand our self-queue into that sibling's self-queue again.
-  /// The handoff is a fresh PreKey message, which gives the sibling a
-  /// session we hold, so what it sends next reads again. At most once per
+  /// Hand our self-queue into sibling [deviceId]'s self-queue again, on a
+  /// FRESH session ([OwnDeviceEncrypt]'s `fresh`): our Signal session with it
+  /// is gone (its delivery found none, E8), or it sent a PreKey message that
+  /// would replace the one we hold and we did not ask for it (decision 37).
+  /// The handoff is a PreKey message the sibling reads, so what it sends
+  /// next is under a session we hold. Once a handoff was built, this device
+  /// awaits that sibling's answer ([awaitingRekeyFrom]). At most once per
   /// sibling per session; nothing when its address is unknown.
   Future<void> rekeySibling(int deviceId);
+
+  /// Whether this device re-keyed sibling [deviceId] within the last
+  /// [kSiblingRekeyWindow] and has not read it since: only then is a PreKey
+  /// message from it that would replace our session read (decision 37). In
+  /// memory: a restart mid-exchange costs one more round.
+  bool awaitingRekeyFrom(int deviceId);
+
+  /// A message from sibling [deviceId] decrypted: the re-key this device
+  /// asked of it, if any, is answered.
+  void rekeyAnswered(int deviceId);
 }

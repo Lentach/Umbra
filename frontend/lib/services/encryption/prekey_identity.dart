@@ -34,3 +34,36 @@ bool ciphertextMatchesIdentity(
     return false;
   }
 }
+
+/// Whether decrypting the `"{type}:{base64}"` Signal ciphertext would
+/// REPLACE the session [record] holds (metadata-privacy decision 37, E37a).
+///
+/// Mirrors libsignal_protocol_dart 0.8.2 `SessionBuilder.processV3`
+/// (`session_builder.dart:56-76`), which archives the current state exactly
+/// when the record is not fresh and neither its current nor any archived
+/// state matches the PreKey message's `(version, baseKey)`. So a first
+/// contact (a fresh record) replaces nothing, and neither does an
+/// initiator's repeat: it keeps sending PreKey messages under the SAME base
+/// key until it is answered.
+///
+/// False for a whisper message and for anything unparseable (the decrypt
+/// refuses that on its own).
+bool preKeyWouldReplace(SessionRecord record, String ciphertext) {
+  final colon = ciphertext.indexOf(':');
+  if (colon < 0) return false;
+  if (int.tryParse(ciphertext.substring(0, colon)) !=
+      CiphertextMessage.prekeyType) {
+    return false;
+  }
+  final PreKeySignalMessage message;
+  try {
+    message = PreKeySignalMessage(base64Decode(ciphertext.substring(colon + 1)));
+  } on Object {
+    return false;
+  }
+  return !record.isFresh() &&
+      !record.hasSessionState(
+        message.getMessageVersion(),
+        message.getBaseKey().serialize(),
+      );
+}

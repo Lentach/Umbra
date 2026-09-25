@@ -154,11 +154,25 @@ class _Device {
   final List<String> emitted = [];
   bool started = false;
 
-  Future<BoxFrame?> encrypt(int toDevice, String json) async => BoxFrame(
-    kind: BoxFrameKind.whisper,
-    senderDeviceId: deviceId,
-    signal: Uint8List.fromList(utf8.encode(json)),
-  );
+  /// Every device a FRESH encrypt (a re-key's handoff) was asked for.
+  final List<int> freshFor = [];
+
+  /// The Signal side cannot encrypt now (E2E not ready, not live).
+  bool encryptFails = false;
+
+  Future<BoxFrame?> encrypt(
+    int toDevice,
+    String json, {
+    bool fresh = false,
+  }) async {
+    if (encryptFails) return null;
+    if (fresh) freshFor.add(toDevice);
+    return BoxFrame(
+      kind: BoxFrameKind.whisper,
+      senderDeviceId: deviceId,
+      signal: Uint8List.fromList(utf8.encode(json)),
+    );
+  }
 
   /// What `MessagingProvider.consumeBoxEntry` does with a sibling entry once
   /// decrypted: the handoff reaction itself is the box's own
@@ -811,4 +825,70 @@ void main() {
       expect(a.session.siblingAddresses().keys, [3]);
     },
   );
+
+  group('the re-key this device asked for (decision 37, E37b)', () {
+    var now = DateTime.utc(2026, 9, 25, 12);
+
+    Future<void> linked() async {
+      now = DateTime.utc(2026, 9, 25, 12);
+      a = _Device(2, box, clock: () => now);
+      await a.start();
+      await b.start();
+      a.session.accountReady(2);
+      b.session.accountReady(3);
+      await settle();
+      a.answer([b]);
+      b.answer([a]);
+      await settle();
+    }
+
+    test(
+      'a re-key builds its handoff on a FRESH session and marks that sibling '
+      'awaited; nothing is marked when no handoff could be built or the '
+      'address is unknown',
+      () async {
+        await linked();
+        expect(a.session.awaitingRekeyFrom(3), isFalse);
+
+        await a.session.rekeySibling(9);
+        expect(a.session.awaitingRekeyFrom(9), isFalse);
+
+        await a.session.rekeySibling(3);
+        expect(a.freshFor, [3]);
+        expect(a.session.awaitingRekeyFrom(3), isTrue);
+        expect(b.session.awaitingRekeyFrom(2), isFalse);
+      },
+    );
+
+    test('a re-key whose handoff cannot be built marks nothing', () async {
+      await linked();
+      a.encryptFails = true;
+      await a.session.rekeySibling(3);
+      expect(a.session.awaitingRekeyFrom(3), isFalse);
+    });
+
+    test(
+      'the mark is cleared once that sibling answers, and a second loss in '
+      'the same session re-keys nothing (the once-per-session guard)',
+      () async {
+        await linked();
+        await a.session.rekeySibling(3);
+        a.session.rekeyAnswered(3);
+        expect(a.session.awaitingRekeyFrom(3), isFalse);
+
+        await a.session.rekeySibling(3);
+        expect(a.freshFor, [3]);
+        expect(a.session.awaitingRekeyFrom(3), isFalse);
+      },
+    );
+
+    test('the mark lapses 10 minutes after the re-key', () async {
+      await linked();
+      await a.session.rekeySibling(3);
+      now = now.add(const Duration(minutes: 10));
+      expect(a.session.awaitingRekeyFrom(3), isTrue);
+      now = now.add(const Duration(seconds: 1));
+      expect(a.session.awaitingRekeyFrom(3), isFalse);
+    });
+  });
 }

@@ -2677,6 +2677,31 @@ class EncryptionService {
     return own != null && ciphertextMatchesIdentity(ciphertextStr, own);
   }
 
+  /// Whether decrypting [ciphertextStr] from [userId]'s [deviceId] would
+  /// replace the session this device holds with it ([preKeyWouldReplace],
+  /// decision 37): a sibling PreKey message is refused on that answer unless
+  /// this device asked for the re-key. Read under the per-address lock, so
+  /// an in-flight build or decrypt lands first. False before init, and when
+  /// the record cannot be read now: the decrypt that follows cannot read it
+  /// either, and its failure policy decides.
+  Future<bool> siblingPreKeyWouldReplace(
+    int userId,
+    int deviceId,
+    String ciphertextStr,
+  ) async {
+    if (!_initialized) return false;
+    return _runSessionSerialized(userId, deviceId, () async {
+      try {
+        final record = await _cipherSessionStore.loadSession(
+          SignalProtocolAddress(userId.toString(), deviceId),
+        );
+        return preKeyWouldReplace(record, ciphertextStr);
+      } on Object {
+        return false;
+      }
+    });
+  }
+
   /// Current locally minted registrationId — the (lxiv) install proof sent
   /// with one-time pre-key uploads so the server can tell this install from a
   /// foreign one sharing the account identity. Null before init.

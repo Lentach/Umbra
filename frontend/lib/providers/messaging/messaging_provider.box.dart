@@ -146,6 +146,19 @@ extension MessagingBox on MessagingProvider {
       }
       return !heldIfUnreadable;
     }
+    // Decision 37 (O6): a device's frame names its sender, which nothing
+    // authenticates, and a revoked sibling still holds the account identity.
+    // A PreKey message that would REPLACE our session with this sibling is
+    // read only when this device asked for the re-key; otherwise it is
+    // finished unread and answered by OUR re-key — a fresh PreKey handoff
+    // built from the sibling's real bundle, which only it can read. A sibling
+    // that really lost its session then takes ours: it asked.
+    if (!link.awaitingRekeyFrom(device) &&
+        await enc.siblingPreKeyWouldReplace(entry.peerUserId, device, signal)) {
+      _e2eFlowLog('BOX_SIBLING_PREKEY_REFUSED', {'device': device});
+      await link.rekeySibling(device);
+      return true;
+    }
 
     final String plaintext;
     try {
@@ -166,6 +179,7 @@ extension MessagingBox on MessagingProvider {
       return !heldIfUnreadable ||
           decision.retryAction == DecryptionRetryAction.none;
     }
+    link.rekeyAnswered(device);
     final E2eEnvelopeFields parsed;
     try {
       parsed = E2eEnvelope.parse(plaintext);
@@ -315,7 +329,17 @@ extension MessagingBox on MessagingProvider {
   /// says which siblings exist, but it must never decide who is handed our
   /// self-queue — rotation (decision 27) depends on a revoked or phantom
   /// device never holding it.
-  Future<BoxFrame?> encryptForOwnDevice(int deviceId, String json) async {
+  ///
+  /// [fresh] (a re-key, decision 37): the session is REBUILT from the
+  /// sibling's bundle first — [EncryptionProvider.ensureSession]'s rebuild,
+  /// which builds over the record, so libsignal archives the current state
+  /// and what the sibling already sent on it still reads — and the frame is
+  /// a PreKey message.
+  Future<BoxFrame?> encryptForOwnDevice(
+    int deviceId,
+    String json, {
+    bool fresh = false,
+  }) async {
     final enc = _encryptionProvider;
     final own = _currentUserId;
     if (enc == null || own == null || !enc.isE2EReady) return null;
@@ -326,6 +350,7 @@ extension MessagingBox on MessagingProvider {
         _e2eFlowLog('BOX_SIBLING_NOT_LIVE', {'device': deviceId});
         return null;
       }
+      if (fresh) enc.markSessionRebuild(own, deviceId: deviceId);
       await enc.ensureSession(own, deviceId: deviceId);
       return BoxFrame.fromSignalCiphertext(
         await enc.encrypt(own, json, deviceId: deviceId),

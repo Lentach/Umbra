@@ -281,6 +281,20 @@ class EncryptionProvider extends ChangeNotifier {
   Future<bool> carriesOwnIdentity(String ciphertext) =>
       _encryptionService.carriesOwnIdentity(ciphertext);
 
+  /// Whether [ciphertext] from own device [deviceId] would replace this
+  /// device's session with it — the check a sibling PreKey message passes
+  /// before [decrypt] (decision 37). Delegates to
+  /// [EncryptionService.siblingPreKeyWouldReplace].
+  Future<bool> siblingPreKeyWouldReplace(
+    int userId,
+    int deviceId,
+    String ciphertext,
+  ) => _encryptionService.siblingPreKeyWouldReplace(
+    userId,
+    deviceId,
+    ciphertext,
+  );
+
   /// Ensure a Signal session exists with [recipientId]'s [deviceId]
   /// (default 1 — the pre-multi-device address). If not, fetches that
   /// device's pre-key bundle from the server (via emit callback) and builds a

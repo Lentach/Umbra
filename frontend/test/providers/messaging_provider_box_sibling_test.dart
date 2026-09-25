@@ -109,6 +109,17 @@ class _SiblingEncryption extends EncryptionProvider {
     identityChecks.add(ciphertext);
     return ownIdentity;
   }
+
+  /// What [siblingPreKeyWouldReplace] answers: true = a PreKey message that
+  /// would replace our session with that sibling (decision 37).
+  bool replaces = false;
+
+  @override
+  Future<bool> siblingPreKeyWouldReplace(
+    int userId,
+    int deviceId,
+    String ciphertext,
+  ) async => replaces;
 }
 
 VerifiedDeviceList _enrolled(List<int> live, {List<int> revoked = const []}) =>
@@ -144,6 +155,15 @@ class _Link implements BoxSiblingLink {
 
   @override
   Future<void> rekeySibling(int deviceId) async => rekeyed.add(deviceId);
+
+  /// Siblings this device re-keyed and has not heard back from.
+  final Set<int> awaiting = {};
+
+  @override
+  bool awaitingRekeyFrom(int deviceId) => awaiting.contains(deviceId);
+
+  @override
+  void rekeyAnswered(int deviceId) => awaiting.remove(deviceId);
 
   /// A delivery journaled from this device's self-queue; any other
   /// own-account rid is the request queue.
@@ -357,6 +377,57 @@ void main() {
       expect(provider.messages, isEmpty);
     },
   );
+
+  group('a sibling PreKey message that would replace our session '
+      '(decision 37)', () {
+    test(
+      'from a sibling this device did not ask is finished unread and '
+      'answered by our own re-key — on either queue',
+      () async {
+        encryption.replaces = true;
+        inbound(E2eEnvelope.buildQueueHandoff(sid: _sid, sealPub: _sealPub));
+        expect(await consume(sibling()), isTrue);
+        expect(await consume(sibling(rid: 'request-rid')), isTrue);
+
+        expect(encryption.decrypts, isEmpty);
+        expect(link.learned, isEmpty);
+        expect(link.rekeyed, [3, 3]);
+        expect(emitted, isEmpty);
+      },
+    );
+
+    test(
+      'from a sibling this device re-keyed is read, and answers that re-key',
+      () async {
+        encryption.replaces = true;
+        link.awaiting.add(3);
+        inbound(E2eEnvelope.buildQueueHandoff(sid: _sid, sealPub: _sealPub));
+        final e = sibling();
+
+        expect(await consume(e), isTrue);
+
+        expect(encryption.decrypts, [(1, 3, e.localId)]);
+        expect(link.learned, [(3, _sid, _sealPub)]);
+        expect(link.rekeyed, isEmpty);
+        expect(link.awaiting, isEmpty);
+      },
+    );
+
+    test(
+      'an outstanding re-key is answered by any message from that sibling '
+      'that decrypts, never by one that fails',
+      () async {
+        link.awaiting.addAll([3, 4]);
+        encryption.inbound = Exception('InvalidMessageException: Bad Mac!');
+        expect(await consume(sibling()), isTrue);
+        expect(link.awaiting, {3, 4});
+
+        inbound(E2eEnvelope.buildQueueHandoffAck(sid: _sid));
+        expect(await consume(sibling()), isTrue);
+        expect(link.awaiting, {4});
+      },
+    );
+  });
 
   test(
     'encrypting for an own device builds that session and frames the Signal '
