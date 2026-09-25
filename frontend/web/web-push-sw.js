@@ -167,6 +167,34 @@ function shouldSuppressForFocusedConversation(convId) {
     });
 }
 
+// True when this subscription is on Apple's push service, where a push that
+// posts no notification counts toward Safari's revoke-after-3-silent budget.
+// Fails toward true: posting a card that closes at once is harmless.
+function isApplePushEndpoint() {
+  return self.registration.pushManager
+    .getSubscription()
+    .then(function (sub) {
+      var endpoint = sub && sub.endpoint ? sub.endpoint : '';
+      return endpoint.indexOf('https://web.push.apple.com/') === 0;
+    })
+    .catch(function () { return true; });
+}
+
+// Posts a silent card under [tag] and closes it at once: the push kept its
+// `userVisibleOnly` promise, and nothing stays in the tray.
+function postAndClose(title, body, tag, data) {
+  return self.registration
+    .showNotification(title, {
+      body: body,
+      icon: '/icons/notification-icon-512.png',
+      badge: '/icons/notification-badge-96.png',
+      tag: tag,
+      data: data,
+      silent: true,
+    })
+    .then(function () { return closeNotificationsForTag(tag); });
+}
+
 // Box push registration (metadata-privacy E9): a `notifier_challenge` code
 // proves this subscription reaches the page that holds the queue key. It is
 // handed to every open page — the one registering answers it — and is never
@@ -176,16 +204,8 @@ function shouldSuppressForFocusedConversation(convId) {
 // ours is visible. So one is posted and closed at once, unless a visible
 // page took the code on a non-Apple push service.
 function handleNotifierChallenge(code) {
-  function postAndClose() {
-    return self.registration
-      .showNotification('Umbra', {
-        body: 'Setting up notifications',
-        icon: '/icons/notification-icon-512.png',
-        badge: '/icons/notification-badge-96.png',
-        tag: 'box-notifier',
-        silent: true,
-      })
-      .then(function () { return closeNotificationsForTag('box-notifier'); });
+  function flash() {
+    return postAndClose('Umbra', 'Setting up notifications', 'box-notifier');
   }
   return clients
     .matchAll({ type: 'window', includeUncontrolled: true })
@@ -197,15 +217,11 @@ function handleNotifierChallenge(code) {
         }
         if (all[i].visibilityState === 'visible') visible = true;
       }
-      return self.registration.pushManager
-        .getSubscription()
-        .then(function (sub) {
-          var endpoint = sub && sub.endpoint ? sub.endpoint : '';
-          var apple = endpoint.indexOf('https://web.push.apple.com/') === 0;
-          return visible && !apple ? undefined : postAndClose();
-        });
+      return isApplePushEndpoint().then(function (apple) {
+        return visible && !apple ? undefined : flash();
+      });
     })
-    .catch(postAndClose);
+    .catch(flash);
 }
 
 self.addEventListener('push', function (event) {
@@ -343,11 +359,21 @@ self.addEventListener('push', function (event) {
       var chain = closeNotificationsForTag(tag);
       // Suppress ONLY the banner when the user is already viewing this chat;
       // the sweep + badge writes below must still run so other conversations'
-      // tray cards and the app badge stay correct.
+      // tray cards and the app badge stay correct. On an Apple endpoint a
+      // suppressed push still posts a silent card and closes it at once
+      // (decision 39): Safari revokes the subscription after 3 silent pushes.
       if (!suppress) {
         chain = chain.then(function () {
           return self.registration.showNotification(title, notificationOptions);
         });
+      } else {
+        // A failed flash must not skip the sweep and badge writes below.
+        chain = chain
+          .then(isApplePushEndpoint)
+          .then(function (apple) {
+            return apple ? postAndClose(title, body, tag, payload) : undefined;
+          })
+          .catch(function () {});
       }
       return chain
         .then(function () {

@@ -92,7 +92,7 @@ Status: ACTIVE (in force), DONE (carried out, still binding), SUPERSEDED, OPEN (
 | 36 | 09-25 | E9 keeps ONE sealed `boxntf_v1` row per account (not one row per queue); the Android/FCM E9 path is verified at G5 on a device, not locally | OWNER | ACTIVE |
 | 37 | 09-25 | (O6) A device REFUSES a sibling PreKey message that would replace an existing session with that sibling unless this device asked for the re-key; per-device keys (O6 option b) stay a later design change | OWNER | OWED (before box ON) |
 | 38 | 09-25 | (O7) Missing Signal sessions to box-covered devices (own siblings and peer devices) are PRE-BUILT at connect, so no pre-key fetch on the account socket lines up with a send | OWNER | OWED (before box ON) |
-| 39 | 09-25 | The OLD `new_message` push on an Apple endpoint always posts a notification and closes it at once, even for a focused chat (Safari revokes a subscription after 3 silent pushes); other endpoints unchanged | OWNER | OWED |
+| 39 | 09-25 | The OLD `new_message` push on an Apple endpoint always posts a notification and closes it at once, even for a focused chat (Safari revokes a subscription after 3 silent pushes); other endpoints unchanged | OWNER | DONE 09-25 (`web-push-sw.js`; Chrome drive: focused chat silent, other chat carded; Apple branch proved only in a vm harness, iPhone at G5) |
 
 ## Engineering calls made in the work so far (owner may overrule at the gate)
 
