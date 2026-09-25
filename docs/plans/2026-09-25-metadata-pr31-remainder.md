@@ -72,6 +72,42 @@ O2 → (a) ~3 GB (30) · O3 → (a) honest 429 (31) · O4 → (a) no push on the
 - **E17. Media.** Padded to the ladder rung, uploaded to `POST /box/media` against the recipient queue's sid, with `boxMediaId` inside E2E and downloaded through the capability URL. A file over 20 MiB of plaintext is refused before encryption. *Reason:* decision 9 and the I5 ladder.
 - **E18.** Replies, disappearing timers (local, D4), reactions (plain emoji), pin, edit and delete-for-everyone travel as E2E envelopes for box messages in release N. *Reason:* decision 22, and a box message's action bar has to work before the cutover. Delete cannot reach a device offline for more than 30 days: an accepted residual (design §5).
 
+## Item 3 (decision-22 slice): OWNER questions O8–O11 — OPEN (asked 2026-09-26, one batch)
+
+What the old path does today, for reference. Media sits on the server for as long as the message exists, and every view downloads it again. A reply names a server message id. A disappearing message's countdown starts when the RECIPIENT reads it: the server stamps `expiresAt` on read and tells both sides, so both copies go at the same moment, and an unread message goes after 1 day. The chat's timer is a server column (`conversations.disappearingTimer`, set with `setDisappearingTimer`). The box changes three of these facts: box media is deleted after 14 days whoever downloaded it (D8); there is no server read event, and receipts are off by default (D5/33); a box message has no server id.
+
+**O8 — Box photos, videos, voice notes and files are deleted from the server after 14 days (D8). What stays viewable after that?**
+- (a) **Every device downloads each attachment as it arrives and keeps an encrypted copy locally (the sender keeps its own).** History stays complete, as in Signal. Cost: storage on every device, and mobile data for files never opened (a video is up to 20 MiB). On the PWA the copy is device-local like the rest of its history (D9). *Recommended.*
+- (b) Keep a local copy only once the attachment has been shown. An attachment in a chat nobody opens within 14 days is lost and shows "expired".
+- (c) Keep nothing locally. Every view downloads again, and after 14 days every box attachment shows "expired" for everyone, the sender included. This does not work well with inline video either: `GET /box/media` is `no-store` and limited to 3000 per 15 min per IP.
+
+**O9 — When does a disappearing message's countdown start in a box chat?**
+- (a) **Signal's model: the sender's copies count from the send, and each receiving device counts from the moment it first shows the message. An unread message still goes 1 day after the send.** The visible change: the sender's copy of a message the peer has not read yet now disappears before the peer's copy does. *Recommended.*
+- (b) Everything counts from the send. Simplest, but a 5 s message sent to a phone that is offline is gone before anyone sees it.
+- (c) Keep today's shared deadline with a content-free "read" tick inside E2E. That tick is a read receipt the peer receives, which D5/33 leaves OFF by default, so (c) could only apply when both sides turned receipts on. Otherwise it falls back to (a).
+
+**O10 — Where does a chat's timer SETTING live during release N?**
+- (a) **It stays on the server, as today, until the old tables go (PR4.x). Each box message carries its own timer inside E2E, and the devices enforce it.** The server keeps learning which chats use disappearing messages and when that changes. In release N it already holds the `conversations` row naming the pair, so this leaks little on top of that. *Recommended.*
+- (b) Move it now. A change travels as an E2E control message to the peer's devices and our own, and is stored in the contact record; the server column is no longer written for box chats. The server learns nothing, at the cost of a second source of truth for as long as a message can still fall back to the old path.
+
+**O11 — Pings.** A ping is in no slice of the plan. Today a ping to a box contact goes over the old path, which leaves a server row naming the pair (decision 15 keeps a message on one path, but nothing moves pings).
+- (a) **Move pings in this slice.** It is small: the message type rides in the envelope, and the box reader already plays the ping effect. *Recommended.*
+- (b) Leave pings on the old path until a later slice.
+
+### ENGINEERING calls for item 3 (agent's, with the reason)
+
+- **E17a. Media wire.** The file is encrypted whole with AES-256-GCM as today (`MediaCryptoService`: fresh key and IV, refused above 20 MiB of plaintext before encryption). The ciphertext is framed as `uint32be(len) ‖ ct ‖ zeros` to the smallest ladder rung that fits (the `QueueSeal`/contact-backup framing), uploaded ONCE with `Box-Sid` = the queue of the first live peer device, and fetched by every device through `GET /box/media/<id>`, then unframed and decrypted. The envelope carries `boxMedia` (the 32-byte id, base64url) and today's `mediaKey`/`mediaIv`/`mediaDuration`/dimensions/thumbhash, never a `mediaUrl`. *Reason:* one upload is one budget charge (S2) and one file on disk; the id is the capability (design §4.1); a padded rung hides the size (I5).
+- **E17b. Media send failures.** A `quota_exceeded` or `rate_limited` answer, or silence, fails the row (decisions 19 and 31). A retry after a successful upload reuses the same id, key and wire id; a retry before one uploads again. The frames follow the ordinary box send, so the row gets ✓ only when every frame was taken (decision 20). *Reason:* re-encrypting under a new key would orphan the uploaded file (the old path's retry rule, `retryFailedMessage`).
+- **E17c. Media downloads never block the reader.** Journal, ack and read stay as they are (the 16-slot window, traps). Downloads run on their own queue after the message is stored, and a failed download is retried until the 14-day TTL has passed. *Reason:* a 20 MiB fetch on the read chain would stall every chat.
+- **E18a. Replies.** The envelope carries `re: {w, s, k, x}`: the quoted message's wire id `w` and sender `s` (a wire id is unique per sender only, traps), its type `k`, and a snippet `x` of at most 256 UTF-8 bytes. The receiver shows its OWN copy of the quoted message when it holds `(s, w)`, and the snippet only when it does not. A quoted row with no wire id (older than PR2.1) sends the snippet alone. Old-path sends keep `replyToMessageId`. *Reason:* a box message's local id differs on every device and names no server row (decision 14). Preferring the local original limits a forged snippet to quotes of messages the receiver never had (the Signal property).
+- **E18b. A timer per message.** The envelope carries `ttl` (seconds, 5 s..30 d, the timer sheet's range). The device that starts the countdown under O9 writes the record's own `_expiresAt` stamp, which the destruction gate already honours (`EncryptionService._recordExpiryDeadlineMs`). The receiver takes the message's `ttl`, not its own view of the chat's setting. A sibling's sent copy counts as the sender's copy. *Reason:* D4, and a stamp this device wrote cannot be lost the way the server's `messageDelivered` stamp can.
+- **E18c. Fitting in one frame.** The quote snippet and `ttl` fit inside the decision-18 bound. The link preview is still the first thing dropped (`boxEnvelope`), and the fit proof (`box_frame_test.dart`) is extended to the longest text with a quote and a preview. *Reason:* a message the composer accepts is never refused for its extras.
+
+Accepted residuals, recorded here:
+- A disappearing box attachment's ciphertext stays on the box until its 14-day TTL, since the box has no delete for media (it is ciphertext with no queue link).
+- The Anti-Quantum Note keeps its server-side note (`POST /notes`, authenticated). Only the message carrying it moves.
+- A reply to a box message that has to take the old path still loses its quote, as today (`isServerMessageId` send gate).
+
 ## Proof per item (unchanged ladder)
 
 Each item follows the same ladder:
