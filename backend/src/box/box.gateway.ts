@@ -17,7 +17,6 @@ import {
   boxSignedMessage,
   createQueueFields,
   notifierActivateFields,
-  notifierChallengeFields,
   verifyBoxSignature,
 } from './box-signature';
 import { BoxThrottlerGuard } from './box-throttler.guard';
@@ -199,6 +198,13 @@ export class BoxGateway implements OnGatewayDisconnect {
     return { ok: true };
   }
 
+  /**
+   * Step 1 `{platform, token}` pushes a code to the token; step 2 `{code,
+   * queues}` activates each queue whose entry its own key signed over
+   * `nid ‖ 0x02 ‖ code` (owner decision 34). A dead code refuses the whole
+   * frame; a bad entry is refused alone, one answer for an unknown nid and a
+   * wrong signature, as in `subscribe`.
+   */
   @Throttle({
     default: { limit: BOX_LIMITS.registerNotifier, ttl: BOX_THROTTLE_TTL_MS },
   })
@@ -206,23 +212,36 @@ export class BoxGateway implements OnGatewayDisconnect {
   async registerNotifier(
     @ConnectedSocket() client: Socket,
     @MessageBody() data: unknown,
-  ): Promise<BoxAnswer<{ state: 'challenged' | 'active' }>> {
+  ): Promise<
+    BoxAnswer<
+      | { state: 'challenged' }
+      | { refused: { nid: string; code: 'auth_failed' }[] }
+    >
+  > {
     const cmd = parseRegisterNotifier(data);
     if (!cmd) return INVALID;
-    const key = await this.box.authKeyByNid(cmd.nid);
-    const fields =
-      cmd.step === 1
-        ? notifierChallengeFields(cmd.nid, cmd.platform, cmd.token)
-        : notifierActivateFields(cmd.nid, cmd.code);
-    const message = boxSignedMessage('registerNotifier', client.id, fields);
-    if (!key || !verifyBoxSignature(key, message, cmd.sig)) return AUTH_FAILED;
     if (cmd.step === 1) {
-      await this.notifier.challenge(cmd.nid, cmd.platform, cmd.token);
+      await this.notifier.challenge(cmd.platform, cmd.token);
       return { ok: true, state: 'challenged' };
     }
-    return (await this.notifier.activate(cmd.nid, cmd.code))
-      ? { ok: true, state: 'active' }
-      : AUTH_FAILED;
+    const challenge = this.notifier.liveChallenge(cmd.code);
+    if (!challenge) return AUTH_FAILED;
+    const keys = await this.box.authKeysByNid(cmd.queues.map((q) => q.nid));
+    const accepted: Buffer[] = [];
+    const refused: { nid: string; code: 'auth_failed' }[] = [];
+    for (const { nid, sig } of cmd.queues) {
+      const key = keys.get(nid.toString('base64url'));
+      const message = boxSignedMessage(
+        'registerNotifier',
+        client.id,
+        notifierActivateFields(nid, cmd.code),
+      );
+      if (key && verifyBoxSignature(key, message, sig)) accepted.push(nid);
+      else
+        refused.push({ nid: nid.toString('base64url'), code: 'auth_failed' });
+    }
+    await this.notifier.activate(challenge, accepted);
+    return { ok: true, refused };
   }
 
   /** True when `rid` exists and `sig` is its owner's over `message`. */

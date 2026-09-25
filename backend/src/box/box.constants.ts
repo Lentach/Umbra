@@ -26,6 +26,8 @@ export const BOX_REQUEST_QUEUE_CAP = 50;
 export const BOX_DELIVERY_WINDOW = 16;
 /** Rids per `subscribe` frame. */
 export const BOX_SUBSCRIBE_MAX = 256;
+/** Queues per `registerNotifier` activation frame (step 2). */
+export const BOX_NOTIFIER_BATCH_MAX = 256;
 /** A notifier token (FCM token or a Web Push subscription JSON). */
 export const BOX_TOKEN_MAX_CHARS = 4096;
 

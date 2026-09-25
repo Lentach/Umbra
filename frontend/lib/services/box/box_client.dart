@@ -526,71 +526,85 @@ class BoxClient {
   }
 
   /// Notifier step 1: the box pushes a challenge code to [token] and stores
-  /// nothing durable. [queue] is the queue whose [nid] this is.
-  Future<BoxResult<NotifierState>> challengeNotifier(
-    BoxQueueAuth queue,
-    Uint8List nid,
+  /// nothing durable. Unsigned and names no queue: one code proves the token
+  /// for every queue (owner decision 34).
+  Future<BoxResult<void>> challengeNotifier(
     NotifierPlatform platform,
     String token,
   ) async {
-    _requireLength(nid, kBoxNidBytes, 'nid');
     final result = await _call(
       'registerNotifier',
-      (sockId) async => {
-        'v': 1,
-        'nid': boxB64(nid),
-        'platform': platform.name,
-        'token': token,
-        'sig': await _sig(
-          queue.key,
-          BoxSignedVerb.registerNotifier,
-          sockId,
-          notifierChallengeFields(nid, platform, token),
-        ),
-      },
+      (_) async => {'v': 1, 'platform': platform.name, 'token': token},
     );
-    return _notifierState(result);
+    return switch (result) {
+      BoxOk(:final value) when value['state'] == 'challenged' => const BoxOk(
+        null,
+      ),
+      BoxOk() => const BoxUnknown(BoxUnknownReason.malformed),
+      BoxRefused(:final code, :final retryAfter) => BoxRefused(
+        code,
+        retryAfter: retryAfter,
+      ),
+      BoxUnknown(:final reason) => BoxUnknown(reason),
+    };
   }
 
-  /// Notifier step 2: the [code] the push delivered, signed by the queue key.
-  Future<BoxResult<NotifierState>> activateNotifier(
-    BoxQueueAuth queue,
-    Uint8List nid,
+  /// Notifier step 2: the [code] the push delivered activates every queue in
+  /// [queues] (at most [kBoxNotifierBatchMax]), each entry signed by its own
+  /// queue key. A code the box never pushed refuses the whole frame
+  /// (`auth_failed`); otherwise the answer lists the nids refused alone (the
+  /// queue is gone), and every other one is active.
+  Future<BoxResult<List<Uint8List>>> activateNotifiers(
     Uint8List code,
+    List<({BoxQueueAuth queue, Uint8List nid})> queues,
   ) async {
-    _requireLength(nid, kBoxNidBytes, 'nid');
     _requireLength(code, kBoxCodeBytes, 'code');
-    final result = await _call(
-      'registerNotifier',
-      (sockId) async => {
+    if (queues.isEmpty || queues.length > kBoxNotifierBatchMax) {
+      throw ArgumentError.value(queues.length, 'queues', 'not 1..256');
+    }
+    for (final q in queues) {
+      _requireLength(q.nid, kBoxNidBytes, 'nid');
+    }
+    final result = await _call('registerNotifier', (sockId) async {
+      final sigs = await Future.wait([
+        for (final q in queues)
+          _sig(
+            q.queue.key,
+            BoxSignedVerb.registerNotifier,
+            sockId,
+            notifierActivateFields(q.nid, code),
+          ),
+      ]);
+      return {
         'v': 1,
-        'nid': boxB64(nid),
         'code': boxB64(code),
-        'sig': await _sig(
-          queue.key,
-          BoxSignedVerb.registerNotifier,
-          sockId,
-          notifierActivateFields(nid, code),
-        ),
-      },
-    );
-    return _notifierState(result);
+        'queues': [
+          for (var i = 0; i < queues.length; i++)
+            {'nid': boxB64(queues[i].nid), 'sig': sigs[i]},
+        ],
+      };
+    });
+    switch (result) {
+      case BoxOk(:final value):
+        final entries = value['refused'];
+        if (entries is! List) {
+          return const BoxUnknown(BoxUnknownReason.malformed);
+        }
+        final refused = <Uint8List>[];
+        for (final entry in entries) {
+          final nid = entry is Map
+              ? boxB64Decode(entry['nid'], kBoxNidBytes)
+              : null;
+          if (nid == null) return const BoxUnknown(BoxUnknownReason.malformed);
+          refused.add(nid);
+        }
+        return BoxOk(refused);
+      case BoxRefused(:final code, :final retryAfter):
+        return BoxRefused(code, retryAfter: retryAfter);
+      case BoxUnknown(:final reason):
+        return BoxUnknown(reason);
+    }
   }
-
-  static BoxResult<NotifierState> _notifierState(
-    BoxResult<Map<String, Object?>> result,
-  ) => switch (result) {
-    BoxOk(:final value) => switch (value['state']) {
-      'challenged' => const BoxOk(NotifierState.challenged),
-      'active' => const BoxOk(NotifierState.active),
-      _ => const BoxUnknown(BoxUnknownReason.malformed),
-    },
-    BoxRefused(:final code, :final retryAfter) => BoxRefused(
-      code,
-      retryAfter: retryAfter,
-    ),
-    BoxUnknown(:final reason) => BoxUnknown(reason),
-  };
 
   static BoxResult<void> _void(BoxResult<Map<String, Object?>> result) =>
       switch (result) {

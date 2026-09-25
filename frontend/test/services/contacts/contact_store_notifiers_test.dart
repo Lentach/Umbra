@@ -57,10 +57,10 @@ void main() {
       final b = _queue(0x20);
       await friend(42, [a]);
       await friend(43, [b]);
-      expect(await store.markNotifier(a.nid, 'T'), isTrue);
+      expect(await store.markNotifiers([a.nid], 'T'), isTrue);
 
       await friend(42, const []);
-      expect(await store.markNotifier(b.nid, 'T'), isTrue);
+      expect(await store.markNotifiers([b.nid], 'T'), isTrue);
 
       final again = newStore();
       await again.open(1);
@@ -77,8 +77,8 @@ void main() {
       final b = _queue(0x20);
       await friend(42, [a]);
       await friend(43, [b]);
-      expect(await store.markNotifier(a.nid, 'T'), isTrue);
-      expect(await store.markNotifier(b.nid, 'U'), isTrue);
+      expect(await store.markNotifiers([a.nid], 'T'), isTrue);
+      expect(await store.markNotifiers([b.nid], 'U'), isTrue);
 
       expect(store.notifierActive(b.nid, 'U'), isTrue);
       expect(store.notifierActive(a.nid, 'U'), isFalse);
@@ -99,7 +99,7 @@ void main() {
     await store.open(1);
 
     expect(store.notifiersUnsupported, isTrue);
-    expect(await store.markNotifier(a.nid, 'T'), isFalse);
+    expect(await store.markNotifiers([a.nid], 'T'), isFalse);
     expect(kv.getString(key), newer);
   });
 }

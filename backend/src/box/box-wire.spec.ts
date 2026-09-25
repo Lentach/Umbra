@@ -113,7 +113,20 @@ describe('box wire parser (strict: exact keys, v:1, canonical fixed-length base6
         keys: { p256dh: b64(65), auth: b64(16) },
       });
 
-    it('tells step 1 from step 2 by its exact key set', () => {
+    const activation = () => ({ nid: b64(16), sig: b64(64) });
+
+    it('tells step 1 from step 2 by its exact key set; step 1 names no queue and carries no signature', () => {
+      expect(
+        parseRegisterNotifier({
+          v: 1,
+          platform: 'fcm',
+          token: 'fcm-token_1:abc',
+        }),
+      ).toMatchObject({ step: 1, platform: 'fcm' });
+      expect(
+        parseRegisterNotifier({ v: 1, code: b64(16), queues: [activation()] }),
+      ).toMatchObject({ step: 2 });
+      // E9's one-queue-at-a-time shapes are gone (owner decision 34).
       expect(
         parseRegisterNotifier({
           v: 1,
@@ -122,7 +135,7 @@ describe('box wire parser (strict: exact keys, v:1, canonical fixed-length base6
           token: 'fcm-token_1:abc',
           sig: b64(64),
         }),
-      ).toMatchObject({ step: 1, platform: 'fcm' });
+      ).toBeNull();
       expect(
         parseRegisterNotifier({
           v: 1,
@@ -130,27 +143,35 @@ describe('box wire parser (strict: exact keys, v:1, canonical fixed-length base6
           code: b64(16),
           sig: b64(64),
         }),
-      ).toMatchObject({ step: 2 });
+      ).toBeNull();
       expect(
         parseRegisterNotifier({
           v: 1,
-          nid: b64(16),
-          code: b64(16),
           platform: 'fcm',
-          sig: b64(64),
+          code: b64(16),
+          queues: [activation()],
         }),
+      ).toBeNull();
+    });
+
+    it('bounds step 2 to 1..256 activations, each exactly {nid, sig}', () => {
+      const step2 = (queues: unknown) =>
+        parseRegisterNotifier({ v: 1, code: b64(16), queues });
+      expect(step2(Array.from({ length: 256 }, activation))).not.toBeNull();
+      expect(step2(Array.from({ length: 257 }, activation))).toBeNull();
+      expect(step2([])).toBeNull();
+      expect(step2(activation())).toBeNull();
+      expect(step2([{ ...activation(), v: 1 }])).toBeNull();
+      expect(step2([{ nid: b64(16) }])).toBeNull();
+      expect(step2([{ nid: b64(17), sig: b64(64) }])).toBeNull();
+      expect(
+        parseRegisterNotifier({ v: 1, code: b64(15), queues: [activation()] }),
       ).toBeNull();
     });
 
     it('accepts a Web Push subscription only for a known push service over https (the box would POST to it)', () => {
       const step1 = (token: string) =>
-        parseRegisterNotifier({
-          v: 1,
-          nid: b64(16),
-          platform: 'webpush',
-          token,
-          sig: b64(64),
-        });
+        parseRegisterNotifier({ v: 1, platform: 'webpush', token });
       expect(
         step1(subscription('https://fcm.googleapis.com/fcm/send/abc')),
       ).not.toBeNull();
@@ -175,13 +196,11 @@ describe('box wire parser (strict: exact keys, v:1, canonical fixed-length base6
       const step1 = (keys: Record<string, string>) =>
         parseRegisterNotifier({
           v: 1,
-          nid: b64(16),
           platform: 'webpush',
           token: JSON.stringify({
             endpoint: 'https://fcm.googleapis.com/fcm/send/abc',
             keys,
           }),
-          sig: b64(64),
         });
       const keys = { p256dh: b64(65), auth: b64(16) };
       expect(step1(keys)).not.toBeNull();
@@ -193,10 +212,8 @@ describe('box wire parser (strict: exact keys, v:1, canonical fixed-length base6
       expect(
         parseRegisterNotifier({
           v: 1,
-          nid: b64(16),
           platform: 'fcm',
           token: 'a'.repeat(4097),
-          sig: b64(64),
         }),
       ).toBeNull();
     });

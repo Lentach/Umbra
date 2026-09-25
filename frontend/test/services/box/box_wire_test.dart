@@ -16,7 +16,9 @@ Uint8List _seq(int start, int length) =>
 /// built the messages and node `crypto.sign(null, m, ed25519Key)` signed them,
 /// for seed 00..1f and socket id `Xk3_bQ9-ZtLpA0c1AAAB`. Ed25519 is
 /// deterministic, so equal signatures prove this client signs what the
-/// server's `crypto.verify` accepts.
+/// server's `crypto.verify` accepts. `registerNotifier` (the step-2 entry,
+/// owner decision 34) was re-made 2026-09-25 from `src/box/box-signature.ts`
+/// the same way; its `subscribe` signature came out equal to the one below.
 const _sockId = 'Xk3_bQ9-ZtLpA0c1AAAB';
 const _pub =
     '03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8';
@@ -41,9 +43,9 @@ const _vectors = <String, ({String msg, String sig})>{
   ),
   'registerNotifier': (
     msg:
-        '756d6272612e626f782e76310072656769737465724e6f7469666965720014586b335f6251392d5a744c704130633141414142101112131415161718191a1b1c1d1e1f01d505814daf9b6ae6658e8aa37b8e6181502f42586962fd1d01806b4a18d369f2',
+        '756d6272612e626f782e76310072656769737465724e6f7469666965720014586b335f6251392d5a744c704130633141414142101112131415161718191a1b1c1d1e1f02606162636465666768696a6b6c6d6e6f',
     sig:
-        '2f4e01db3d9df1770e9698bd759ac68c3496638faee7ffee52338b767afdeffeea0c056b10e6f6cd9517ed651434c58ace9ca16a8f94039bd8b4404864bd5809',
+        '1caa7c1e61c25d4552c0505e9f93812f116ecb118d5ffa680e9c5d416bcfc0e90ad027302899d8657a915ede7301f7b4632ba315c33932fcca3eb199ff340301',
   ),
 };
 
@@ -72,11 +74,7 @@ void main() {
       'registerNotifier': boxSignedMessage(
         BoxSignedVerb.registerNotifier,
         _sockId,
-        notifierChallengeFields(
-          _seq(0x10, 16),
-          NotifierPlatform.fcm,
-          'tok:en_1',
-        ),
+        notifierActivateFields(_seq(0x10, 16), _seq(0x60, 16)),
       ),
     };
 

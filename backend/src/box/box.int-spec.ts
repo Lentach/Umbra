@@ -25,7 +25,6 @@ import {
   boxSignedMessage,
   createQueueFields,
   notifierActivateFields,
-  notifierChallengeFields,
   type BoxSignedVerb,
 } from './box-signature';
 import { takeRefusalCounts } from './box-throttler.guard';
@@ -117,7 +116,7 @@ interface Answer {
   rid?: string;
   sid?: string;
   nid?: string;
-  refused?: { rid: string; code: string }[];
+  refused?: { rid?: string; nid?: string; code: string }[];
   state?: string;
 }
 
@@ -250,39 +249,57 @@ describeWithDb('box over real sockets and Postgres', () => {
     return rows.map((r) => r.id.toString('base64url'));
   }
 
+  /** Step 1: the box pushes a code to `token`; answers with that code. */
+  async function challengeToken(
+    socket: ClientSocket,
+    token: string,
+  ): Promise<Buffer> {
+    const before = pushes.length;
+    const answer = await call(socket, 'registerNotifier', {
+      v: 1,
+      platform: 'fcm',
+      token,
+    });
+    if (answer.state !== 'challenged') throw new Error('not challenged');
+    return Buffer.from(pushes[before].data.code, 'base64url');
+  }
+
+  /** Step 2: `code` activates every queue in `queues`, each signing for itself. */
+  function activateWith(socket: ClientSocket, code: Buffer, queues: Queue[]) {
+    return call(socket, 'registerNotifier', {
+      v: 1,
+      code: code.toString('base64url'),
+      queues: queues.map((q) => ({
+        nid: q.nid,
+        sig: signFor(
+          socket,
+          q.key,
+          'registerNotifier',
+          notifierActivateFields(Buffer.from(q.nid, 'base64url'), code),
+        ),
+      })),
+    });
+  }
+
   /** Registers and activates `token` as the queue's notifier, the two steps. */
   async function activateNotifier(
     socket: ClientSocket,
     queue: Queue,
     token: string,
   ): Promise<void> {
-    const nid = Buffer.from(queue.nid, 'base64url');
-    const before = pushes.length;
-    await call(socket, 'registerNotifier', {
-      v: 1,
-      nid: queue.nid,
-      platform: 'fcm',
-      token,
-      sig: signFor(
-        socket,
-        queue.key,
-        'registerNotifier',
-        notifierChallengeFields(nid, 'fcm', token),
-      ),
-    });
-    const code = Buffer.from(pushes[before].data.code, 'base64url');
-    const answer = await call(socket, 'registerNotifier', {
-      v: 1,
-      nid: queue.nid,
-      code: code.toString('base64url'),
-      sig: signFor(
-        socket,
-        queue.key,
-        'registerNotifier',
-        notifierActivateFields(nid, code),
-      ),
-    });
-    if (answer.state !== 'active') throw new Error('notifier not active');
+    const code = await challengeToken(socket, token);
+    const answer = await activateWith(socket, code, [queue]);
+    if (!answer.ok || answer.refused?.length !== 0) {
+      throw new Error('notifier not active');
+    }
+  }
+
+  async function notifierRows(queues: Queue[]): Promise<string[]> {
+    const rows: { nid: Buffer; token: string }[] = await db.query(
+      `SELECT nid, token FROM box_notifiers WHERE nid = ANY($1::bytea[])`,
+      [queues.map((q) => Buffer.from(q.nid, 'base64url'))],
+    );
+    return rows.map((r) => `${r.nid.toString('base64url')}:${r.token}`).sort();
   }
 
   function upload(sid: string, body: Buffer, ip = nextIp()) {
@@ -716,26 +733,18 @@ describeWithDb('box over real sockets and Postgres', () => {
   });
 
   describe('push notifier', () => {
-    it('activates only with the pushed code signed by the queue key, then wakes the device once per burst', async () => {
+    it('proves the token with ONE pushed code, then activates a batch of queues, each signed by its own key; then wakes the device once per burst', async () => {
       const bob = await connect();
       const alice = await connect();
-      const queue = await createQueue(bob);
-      const nid = Buffer.from(queue.nid, 'base64url');
+      const one = await createQueue(bob);
+      const two = await createQueue(bob);
+      const stranger = await createQueue(alice);
       const token = 'fcm-token_box:1';
 
+      // Step 1 names no queue and signs nothing: it only makes the box push
+      // a code to the token, which only the token's holder can read.
       expect(
-        await call(bob, 'registerNotifier', {
-          v: 1,
-          nid: queue.nid,
-          platform: 'fcm',
-          token,
-          sig: signFor(
-            bob,
-            queue.key,
-            'registerNotifier',
-            notifierChallengeFields(nid, 'fcm', token),
-          ),
-        }),
+        await call(bob, 'registerNotifier', { v: 1, platform: 'fcm', token }),
       ).toEqual({ ok: true, state: 'challenged' });
       expect(pushes).toHaveLength(1);
       const [challenge] = pushes;
@@ -746,38 +755,61 @@ describeWithDb('box over real sockets and Postgres', () => {
       expect(challenge.data.type).toBe('notifier_challenge');
       expect(challenge.data.code).toMatch(/^[A-Za-z0-9_-]{22}$/);
       const code = Buffer.from(challenge.data.code, 'base64url');
-      const activate = (candidate: Buffer) =>
-        call(bob, 'registerNotifier', {
-          v: 1,
-          nid: queue.nid,
-          code: candidate.toString('base64url'),
-          sig: signFor(
-            bob,
-            queue.key,
-            'registerNotifier',
-            notifierActivateFields(nid, candidate),
-          ),
-        });
-      expect(await activate(randomBytes(16))).toEqual({
+
+      // A code the box never pushed refuses the WHOLE frame, one answer.
+      expect(await activateWith(bob, randomBytes(16), [one, two])).toEqual({
         ok: false,
         code: 'auth_failed',
       });
-      const unverified: unknown[] = await db.query(
-        `SELECT 1 FROM box_notifiers WHERE nid = $1`,
-        [nid],
+      expect(await notifierRows([one, two])).toEqual([]);
+
+      // The right code: every entry stands on its own signature. An entry
+      // signed by another queue's key (a sid holder has no nid, but test
+      // the bytes) is refused alone, like a subscribe entry.
+      const forged = { ...stranger, key: one.key };
+      expect(await activateWith(bob, code, [one, two, forged])).toEqual({
+        ok: true,
+        refused: [{ nid: stranger.nid, code: 'auth_failed' }],
+      });
+      expect(await notifierRows([one, two, stranger])).toEqual(
+        [`${one.nid}:${token}`, `${two.nid}:${token}`].sort(),
       );
-      expect(unverified).toHaveLength(0);
-      expect(await activate(code)).toEqual({ ok: true, state: 'active' });
-      expect(await activate(code)).toEqual({ ok: true, state: 'active' });
+      // Idempotent: a repeat answers the same and rewrites nothing.
+      expect(await activateWith(bob, code, [one, two])).toEqual({
+        ok: true,
+        refused: [],
+      });
+      expect(pushes).toHaveLength(1);
 
       pushes.length = 0;
-      await call(alice, 'send', { v: 1, sid: queue.sid, blob: blob() });
-      await call(alice, 'send', { v: 1, sid: queue.sid, blob: blob() });
+      await call(alice, 'send', { v: 1, sid: one.sid, blob: blob() });
+      await call(alice, 'send', { v: 1, sid: one.sid, blob: blob() });
       await until(() => pushes.length === 1, 8000);
       await sleep(500);
       expect(pushes).toEqual([
         { platform: 'fcm', token, data: { type: 'new_message' } },
       ]);
+    });
+
+    it('a pushed code survives a reconnect between the steps and a stranger challenging the same token', async () => {
+      const first = await connect();
+      const queue = await createQueue(first);
+      const token = 'fcm-token_box:5';
+      const code = await challengeToken(first, token);
+      // Someone else asks for a code to the same token: the box pushes a
+      // second one, and the first stays good — no one can void it.
+      const stranger = await connect();
+      const second = await challengeToken(stranger, token);
+      expect(second.equals(code)).toBe(false);
+      first.disconnect();
+
+      // The code is the proof; the signatures bind the NEW connection.
+      const again = await connect();
+      expect(await activateWith(again, code, [queue])).toEqual({
+        ok: true,
+        refused: [],
+      });
+      expect(await notifierRows([queue])).toEqual([`${queue.nid}:${token}`]);
     });
 
     it('wakes the device for what a socket that went away never acked; one that acked everything leaves nothing to wake', async () => {

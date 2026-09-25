@@ -59,9 +59,11 @@ void main() {
   late _Push push;
   late BoxNotifiers notifiers;
 
-  /// The box's side: step 1 pushes a fresh code for the nid (unless
-  /// [deliver] is off), step 2 is `active` only with that nid's live code.
-  final issued = <String, String>{};
+  /// The box's side: a challenge pushes a fresh code (unless [deliver] is
+  /// off); an activation is refused whole unless its code was pushed, and
+  /// then refuses only the entries in [gone].
+  final issued = <String>{};
+  final gone = <String>{};
   var deliver = true;
   var codeFill = 0x90;
 
@@ -69,29 +71,35 @@ void main() {
   /// from an earlier challenge).
   final strays = <Uint8List>[];
 
-  /// Answers for step 1, by nid, used once each (then the default).
-  final challengeAnswers = <String, Map<String, Object?>>{};
+  /// Answers for the next challenges, used once each (then the default).
+  final challengeAnswers = <Map<String, Object?>>[];
 
-  List<EmittedFrame> registerFrames() => [
+  /// Every registerNotifier frame in emit order: `'challenge'`, or the nids
+  /// one activation frame carried.
+  List<Object> frames() => [
     for (final socket in sockets.sockets)
       for (final f in socket.emitted)
-        if (f.event == 'registerNotifier') f,
+        if (f.event == 'registerNotifier')
+          f.frame.containsKey('token')
+              ? 'challenge'
+              : [
+                  for (final q in f.frame['queues']! as List)
+                    (q as Map)['nid']! as String,
+                ],
   ];
 
-  /// `(nid, step)` of every registerNotifier frame, in emit order.
-  List<(String, int)> steps() => [
-    for (final f in registerFrames())
-      (f.frame['nid']! as String, f.frame.containsKey('token') ? 1 : 2),
-  ];
-
-  Future<void> friend(int peer, ContactQueue queue) => store.update(
+  Future<void> contact(
+    int peer,
+    List<ContactQueue> queues, {
+    ContactState state = ContactState.friend,
+  }) => store.update(
     peer,
     (_) => ContactRecord(
       userId: peer,
       username: 'peer$peer',
       tag: '0001',
-      state: ContactState.friend,
-      queues: [queue],
+      state: state,
+      queues: queues,
     ),
   );
 
@@ -112,6 +120,8 @@ void main() {
     }
   }
 
+  String target() => BoxNotifiers.targetId(push.current!);
+
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
     kv = await PrefsContentKv.open();
@@ -122,6 +132,7 @@ void main() {
     );
     await store.open(1);
     issued.clear();
+    gone.clear();
     strays.clear();
     challengeAnswers.clear();
     deliver = true;
@@ -130,20 +141,26 @@ void main() {
     sockets = FakeBoxSockets()
       ..respond = (_, f) {
         if (f.event != 'registerNotifier') return {'ok': true, 'refused': []};
-        final nid = f.frame['nid']! as String;
         if (f.frame.containsKey('token')) {
-          final canned = challengeAnswers.remove(nid);
-          if (canned != null) return canned;
+          if (challengeAnswers.isNotEmpty) return challengeAnswers.removeAt(0);
           final code = _bytes(16, codeFill++);
-          issued[nid] = boxB64(code);
+          issued.add(boxB64(code));
           final pending = [...strays, if (deliver) code];
           strays.clear();
           scheduleMicrotask(() => pending.forEach(push.codes.add));
           return {'ok': true, 'state': 'challenged'};
         }
-        return issued[nid] == f.frame['code']
-            ? {'ok': true, 'state': 'active'}
-            : {'ok': false, 'code': 'auth_failed'};
+        if (!issued.contains(f.frame['code'])) {
+          return {'ok': false, 'code': 'auth_failed'};
+        }
+        return {
+          'ok': true,
+          'refused': [
+            for (final q in f.frame['queues']! as List)
+              if (gone.contains((q as Map)['nid']))
+                {'nid': q['nid'], 'code': 'auth_failed'},
+          ],
+        };
       };
     box = BoxClient(baseUrl: 'http://box.test', socketFactory: sockets.call)
       ..connect();
@@ -157,70 +174,151 @@ void main() {
   });
 
   test(
-    'activates a notifier on every contact queue, one challenge at a time, '
-    'and never on the request queue or the self-queue (decisions 2, 32)',
+    'ONE challenge proves the target, then ONE frame activates every contact '
+    'queue; never the request queue or a self-queue, current or retiring '
+    '(decisions 2, 32, 34)',
     () async {
       final a = _queue(0x10);
       final b = _queue(0x20);
-      await friend(42, a);
-      await friend(43, b);
+      await contact(42, [a]);
+      await contact(43, [b]);
       expect(await store.claimRequestQueue(_queue(0x30)), isNotNull);
-      expect(await store.claimSelfQueue(_queue(0x40)), isNotNull);
+      final self = _queue(0x40);
+      expect(await store.claimSelfQueue(self), isNotNull);
+      final rotated = await store.rotateSelfQueue(
+        _queue(0x50),
+        replaces: self.rid,
+        live: const {},
+        now: DateTime.utc(2026, 9, 25),
+      );
+      expect(rotated, isNotNull, reason: 'a retiring self-queue exists');
 
       notifiers = build()..run();
       await settle();
 
-      // The code carries no nid: the next challenge waits for the activate.
-      expect(steps(), [(a.nid, 1), (a.nid, 2), (b.nid, 1), (b.nid, 2)]);
-      final target = BoxNotifiers.targetId(push.current!);
-      expect(store.notifierActive(a.nid, target), isTrue);
-      expect(store.notifierActive(b.nid, target), isTrue);
+      expect(frames(), [
+        'challenge',
+        [a.nid, b.nid],
+      ]);
+      expect(store.notifierActive(a.nid, target()), isTrue);
+      expect(store.notifierActive(b.nid, target()), isTrue);
     },
   );
 
   test(
-    'what was activated is not challenged again, across a reopen',
+    'a blocked or former contact gets no notifier: a blocked peer holding the '
+    'sid could ring an offline device (decision 35)',
     () async {
-      final a = _queue(0x10);
-      await friend(42, a);
+      final friend = _queue(0x10);
+      await contact(42, [friend]);
+      await contact(43, [_queue(0x20)], state: ContactState.blocked);
+      await contact(44, [_queue(0x30)], state: ContactState.former);
+
       notifiers = build()..run();
       await settle();
-      expect(steps(), hasLength(2));
+
+      expect(frames(), [
+        'challenge',
+        [friend.nid],
+      ]);
+    },
+  );
+
+  test('only blocked or former contacts: no challenge at all', () async {
+    await contact(43, [_queue(0x20)], state: ContactState.blocked);
+    notifiers = build()..run();
+    await settle();
+    expect(frames(), isEmpty);
+  });
+
+  test(
+    'what was activated is not challenged again, across a reopen',
+    () async {
+      await contact(42, [_queue(0x10)]);
+      notifiers = build()..run();
+      await settle();
+      expect(frames(), hasLength(2));
 
       notifiers.dispose();
       await store.open(1);
       notifiers = build()..run();
       await settle();
-      expect(steps(), hasLength(2), reason: 'a push per launch would spend '
-          'the 30 / 15 min budget and ring the phone');
+      expect(
+        frames(),
+        hasLength(2),
+        reason:
+            'a push per launch would spend '
+            'the 30 / 15 min budget and ring the phone',
+      );
     },
   );
 
   test('a new push target re-registers every queue under it', () async {
     final a = _queue(0x10);
     final b = _queue(0x20);
-    await friend(42, a);
-    await friend(43, b);
+    await contact(42, [a]);
+    await contact(43, [b]);
     notifiers = build()..run();
     await settle();
-    final before = BoxNotifiers.targetId(push.current!);
+    final before = target();
 
     push.current = (platform: NotifierPlatform.fcm, token: 'fcm-token-2');
     push.changed.add(null);
     await settle();
 
-    expect(steps().skip(4), [(a.nid, 1), (a.nid, 2), (b.nid, 1), (b.nid, 2)]);
-    final after = BoxNotifiers.targetId(push.current!);
-    expect(store.notifierActive(a.nid, after), isTrue);
+    expect(frames().skip(2), [
+      'challenge',
+      [a.nid, b.nid],
+    ]);
+    expect(store.notifierActive(a.nid, target()), isTrue);
     expect(store.notifierActive(a.nid, before), isFalse);
   });
 
+  test(
+    'more queues than one frame carries: one code activates them all, in '
+    'frames of $kBoxNotifierBatchMax',
+    () async {
+      final queues = [
+        for (var i = 0; i <= kBoxNotifierBatchMax; i++) _queue(i % 200),
+      ];
+      // Distinct nids: the fill pattern repeats, so number them apart.
+      final numbered = [
+        for (var i = 0; i < queues.length; i++)
+          ContactQueue(
+            rid: queues[i].rid,
+            sid: queues[i].sid,
+            nid: boxB64(Uint8List(16)..buffer.asByteData().setUint32(0, i)),
+            authPriv: queues[i].authPriv,
+            sealPriv: queues[i].sealPriv,
+            sealPub: queues[i].sealPub,
+          ),
+      ];
+      await contact(42, numbered);
+      notifiers = build()..run();
+      await settle();
+
+      final sent = frames();
+      expect(sent.first, 'challenge');
+      expect(
+        [for (final f in sent.skip(1)) (f as List).length],
+        [
+          kBoxNotifierBatchMax,
+          1,
+        ],
+      );
+      expect(
+        numbered.every((q) => store.notifierActive(q.nid, target())),
+        isTrue,
+      );
+    },
+  );
+
   test('no push target (no permission, no token): nothing is asked', () async {
-    await friend(42, _queue(0x10));
+    await contact(42, [_queue(0x10)]);
     push.current = null;
     notifiers = build()..run();
     await settle();
-    expect(registerFrames(), isEmpty);
+    expect(frames(), isEmpty);
   });
 
   test(
@@ -230,8 +328,8 @@ void main() {
     () async {
       final a = _queue(0x10);
       final b = _queue(0x20);
-      await friend(42, a);
-      await friend(43, b);
+      await contact(42, [a]);
+      await contact(43, [b]);
       deliver = false;
       notifiers = build(
         codeWait: const Duration(milliseconds: 30),
@@ -241,106 +339,125 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 120));
       await settle();
 
-      expect(steps(), [(a.nid, 1)], reason: 'push is not reaching this app: '
-          'more challenges would only spend the budget');
-      final target = BoxNotifiers.targetId(push.current!);
-      expect(store.notifierActive(a.nid, target), isFalse);
+      expect(frames(), ['challenge'], reason: 'push is not reaching this app');
+      expect(store.notifierActive(a.nid, target()), isFalse);
 
       deliver = true;
       notifiers.run();
       await settle();
-      expect(steps(), hasLength(1), reason: 'resting');
+      expect(frames(), hasLength(1), reason: 'resting');
 
       await Future<void>.delayed(const Duration(milliseconds: 2500));
       await settle();
-      expect(steps().skip(1), [(a.nid, 1), (a.nid, 2), (b.nid, 1), (b.nid, 2)]);
+      expect(frames().skip(1), [
+        'challenge',
+        [a.nid, b.nid],
+      ]);
     },
   );
 
   test(
-    'a push target the box refuses (invalid_payload) ends the pass — every '
-    'queue would get the same answer — and rests; a new target goes ahead',
+    'a push target the box refuses (invalid_payload) ends the pass and '
+    'rests; a new target goes ahead',
     () async {
       final a = _queue(0x10);
-      final b = _queue(0x20);
-      await friend(42, a);
-      await friend(43, b);
-      challengeAnswers[a.nid] = {'ok': false, 'code': 'invalid_payload'};
+      await contact(42, [a]);
+      challengeAnswers.add({'ok': false, 'code': 'invalid_payload'});
       notifiers = build()..run();
       await settle();
-      expect(steps(), [(a.nid, 1)]);
+      expect(frames(), ['challenge']);
 
       notifiers.run();
       await settle();
-      expect(steps(), hasLength(1), reason: 'resting');
+      expect(frames(), hasLength(1), reason: 'resting');
 
       push.current = (platform: NotifierPlatform.fcm, token: 'fcm-token-2');
       push.changed.add(null);
       await settle();
-      expect(steps().skip(1), [(a.nid, 1), (a.nid, 2), (b.nid, 1), (b.nid, 2)]);
+      expect(frames().skip(1), [
+        'challenge',
+        [a.nid],
+      ]);
     },
   );
 
   test(
-    "a stray code from an earlier challenge is refused, and the challenge's "
-    'own code still activates it',
+    'a stray code from an earlier challenge is refused whole, and the '
+    "challenge's own code still activates the batch",
     () async {
       final a = _queue(0x10);
-      await friend(42, a);
+      await contact(42, [a]);
       strays.add(_bytes(16, 0x01));
       notifiers = build()..run();
       await settle();
 
-      expect(steps(), [(a.nid, 1), (a.nid, 2), (a.nid, 2)]);
-      expect(
-        store.notifierActive(a.nid, BoxNotifiers.targetId(push.current!)),
-        isTrue,
-      );
+      expect(frames(), [
+        'challenge',
+        [a.nid],
+        [a.nid],
+      ]);
+      expect(store.notifierActive(a.nid, target()), isTrue);
     },
   );
 
   test('rate_limited stops the pass and resumes it after retryAfter', () async {
     final a = _queue(0x10);
-    final b = _queue(0x20);
-    await friend(42, a);
-    await friend(43, b);
-    challengeAnswers[b.nid] = {
+    await contact(42, [a]);
+    challengeAnswers.add({
       'ok': false,
       'code': 'rate_limited',
       'retryAfterMs': 600,
-    };
+    });
     notifiers = build()..run();
     await settle();
-    expect(steps(), [(a.nid, 1), (a.nid, 2), (b.nid, 1)]);
+    expect(frames(), ['challenge']);
 
     await Future<void>.delayed(const Duration(milliseconds: 1500));
     await settle();
-    expect(steps().skip(3), [(b.nid, 1), (b.nid, 2)]);
+    expect(frames().skip(1), [
+      'challenge',
+      [a.nid],
+    ]);
   });
 
   test(
-    'a queue the box refuses to challenge is skipped; the others register',
+    'a queue the box refuses in the batch is not recorded, the others are; '
+    'a later pass does not push another challenge for it',
     () async {
       final a = _queue(0x10);
       final b = _queue(0x20);
-      await friend(42, a);
-      await friend(43, b);
-      challengeAnswers[a.nid] = {'ok': false, 'code': 'auth_failed'};
+      await contact(42, [a]);
+      await contact(43, [b]);
+      gone.add(b.nid);
       notifiers = build()..run();
       await settle();
-      expect(steps(), [(a.nid, 1), (b.nid, 1), (b.nid, 2)]);
+      expect(store.notifierActive(a.nid, target()), isTrue);
+      expect(store.notifierActive(b.nid, target()), isFalse);
+
+      notifiers.run();
+      await settle();
+      expect(
+        frames(),
+        hasLength(2),
+        reason:
+            'the box already said the '
+            'queue is gone; another pass would only ring the device',
+      );
     },
   );
 
   test('overlapping triggers run ONE pass', () async {
     final a = _queue(0x10);
-    await friend(42, a);
+    await contact(42, [a]);
     notifiers = build()
       ..run()
       ..run();
     push.changed.add(null);
     await settle();
-    expect(steps(), [(a.nid, 1), (a.nid, 2)]);
+    expect(frames(), [
+      'challenge',
+      [a.nid],
+    ]);
   });
 
   test(
@@ -348,13 +465,13 @@ void main() {
     () async {
       final a = _queue(0x10);
       final b = _queue(0x20);
-      await friend(42, a);
-      await friend(43, b);
+      await contact(42, [a]);
+      await contact(43, [b]);
       final answer = sockets.respond!;
       var rotated = false;
       sockets.respond = (socket, f) {
         final reply = answer(socket, f);
-        if (!rotated && !f.frame.containsKey('token')) {
+        if (!rotated && f.frame.containsKey('queues')) {
           rotated = true;
           push.current = (platform: NotifierPlatform.fcm, token: 'fcm-token-2');
           push.changed.add(null);
@@ -364,49 +481,48 @@ void main() {
       notifiers = build()..run();
       await settle();
 
-      final after = BoxNotifiers.targetId(push.current!);
-      expect(store.notifierActive(a.nid, after), isTrue);
-      expect(store.notifierActive(b.nid, after), isTrue);
+      expect(store.notifierActive(a.nid, target()), isTrue);
+      expect(store.notifierActive(b.nid, target()), isTrue);
     },
   );
 
   test('a store that is closed or a box that is down asks nothing', () async {
-    await friend(42, _queue(0x10));
+    await contact(42, [_queue(0x10)]);
     store.close();
     notifiers = build()..run();
     await settle();
-    expect(registerFrames(), isEmpty);
+    expect(frames(), isEmpty);
 
     await store.open(1);
     sockets.last.serverDrop();
     notifiers.run();
     await settle();
-    expect(registerFrames(), isEmpty);
+    expect(frames(), isEmpty);
   });
 
-  test('a store that closes mid-pass (a vault re-lock) ends the pass', () async {
-    final a = _queue(0x10);
-    final b = _queue(0x20);
-    await friend(42, a);
-    await friend(43, b);
-    final answer = sockets.respond!;
-    sockets.respond = (socket, f) {
-      final reply = answer(socket, f);
-      if (f.event == 'registerNotifier' && !f.frame.containsKey('token')) {
-        store.close();
-      }
-      return reply;
-    };
-    notifiers = build()..run();
-    await settle();
-    expect(steps(), [(a.nid, 1), (a.nid, 2)]);
-  });
+  test(
+    'a store that closes mid-pass (a vault re-lock) ends the pass',
+    () async {
+      await contact(42, [_queue(0x10)]);
+      final answer = sockets.respond!;
+      sockets.respond = (socket, f) {
+        final reply = answer(socket, f);
+        if (f.event == 'registerNotifier' && f.frame.containsKey('token')) {
+          store.close();
+        }
+        return reply;
+      };
+      notifiers = build()..run();
+      await settle();
+      expect(frames(), ['challenge']);
+    },
+  );
 
   test(
     "a newer build's notifier row: nothing is asked, since nothing could be "
     'recorded and every run would challenge again',
     () async {
-      await friend(42, _queue(0x10));
+      await contact(42, [_queue(0x10)]);
       await kv.setString(
         ContactStore.notifiersKey(1),
         '{"v":${ContactStore.notifiersVersion + 1}}',
@@ -414,7 +530,7 @@ void main() {
       await store.open(1);
       notifiers = build()..run();
       await settle();
-      expect(registerFrames(), isEmpty);
+      expect(frames(), isEmpty);
     },
   );
 }

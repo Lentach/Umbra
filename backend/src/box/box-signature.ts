@@ -1,5 +1,5 @@
-import { createHash, createPublicKey, verify } from 'crypto';
-import type { NotifierPlatform, QueueKind } from './box-wire';
+import { createPublicKey, verify } from 'crypto';
+import type { QueueKind } from './box-wire';
 
 /**
  * What a recipient command signs (G3 surface A §1, `docs/contracts/wire.md`):
@@ -49,21 +49,10 @@ export function ackFields(rid: Buffer, id: Buffer): Buffer {
 }
 
 /**
- * F for `registerNotifier` step 1: nid ‖ 0x01 ‖ SHA-256(platform 0x00 token).
- * The separator keeps ("fcm", "x…") and ("fc", "mx…") from hashing alike.
+ * F for `registerNotifier` step 2, one per activated queue: nid ‖ 0x02 ‖ the
+ * code the push delivered (the bytes E9's step 2 signed; 0x01 was its
+ * retired step 1).
  */
-export function notifierChallengeFields(
-  nid: Buffer,
-  platform: NotifierPlatform,
-  token: string,
-): Buffer {
-  const digest = createHash('sha256')
-    .update(Buffer.from(`${platform}\0${token}`, 'utf8'))
-    .digest();
-  return Buffer.concat([nid, Buffer.from([0x01]), digest]);
-}
-
-/** F for `registerNotifier` step 2: nid ‖ 0x02 ‖ the code the push delivered. */
 export function notifierActivateFields(nid: Buffer, code: Buffer): Buffer {
   return Buffer.concat([nid, Buffer.from([0x02]), code]);
 }

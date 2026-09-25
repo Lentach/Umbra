@@ -162,12 +162,17 @@ export class BoxService {
     );
   }
 
-  async authKeyByNid(nid: Buffer): Promise<Buffer | null> {
-    const rows: { recipientAuthPub: Buffer }[] = await this.db.query(
-      `SELECT "recipientAuthPub" FROM public.box_queues WHERE nid = $1`,
-      [nid],
+  /** The auth key of each nid whose queue exists, keyed by its base64url form. */
+  async authKeysByNid(nids: Buffer[]): Promise<Map<string, Buffer>> {
+    const rows: { nid: Buffer; recipientAuthPub: Buffer }[] =
+      await this.db.query(
+        `SELECT nid, "recipientAuthPub" FROM public.box_queues
+          WHERE nid = ANY($1::bytea[])`,
+        [nids],
+      );
+    return new Map(
+      rows.map((r) => [r.nid.toString('base64url'), r.recipientAuthPub]),
     );
-    return rows[0]?.recipientAuthPub ?? null;
   }
 
   /**
@@ -262,18 +267,24 @@ export class BoxService {
     return new Map(rows.map((r) => [r.id.toString('base64url'), r.blob]));
   }
 
-  async saveNotifier(
-    nid: Buffer,
+  /**
+   * Points each of `nids` at the token. Selected from `box_queues`, so a
+   * queue deleted since its signature was checked is skipped, not an FK
+   * error.
+   */
+  async saveNotifiers(
+    nids: Buffer[],
     platform: NotifierPlatform,
     token: string,
   ): Promise<void> {
     await this.db.query(
       `INSERT INTO public.box_notifiers (nid, token, platform, "verifiedAt")
-       VALUES ($1, $2, $3, now())
+       SELECT q.nid, $2, $3, now() FROM public.box_queues q
+        WHERE q.nid = ANY($1::bytea[])
        ON CONFLICT (nid) DO UPDATE
          SET token = EXCLUDED.token, platform = EXCLUDED.platform,
              "verifiedAt" = EXCLUDED."verifiedAt"`,
-      [nid, token, platform],
+      [nids, token, platform],
     );
   }
 

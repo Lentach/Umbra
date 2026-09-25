@@ -17,7 +17,7 @@ class _NotifierBook {
   });
 
   /// Null = a newer build's row (off limits). Absent or unreadable reads
-  /// [empty]: the only cost is one more challenge per queue.
+  /// [empty]: the only cost is one more challenge and activation pass.
   static _NotifierBook? decode(Object? raw) {
     if (raw is! String) return empty;
     try {
@@ -40,7 +40,7 @@ class _NotifierBook {
 /// `e2e_<uid>_boxntf_v1`, outside `contact_v1_` with the other box rows: the
 /// target is THIS device's push token, so no backup and no history file may
 /// carry it to another install. Without it every launch would challenge
-/// every queue again — one push each, against a 30 / 15 min budget.
+/// every queue again — a push each pass, against a 30 / 15 min budget.
 ///
 /// Same kv, lock, `_generation` close semantics and newer-build refusal as
 /// every other row here; never fires [ContactStore.onChanged].
@@ -52,12 +52,12 @@ extension ContactStoreNotifiers on ContactStore {
   bool notifierActive(String nid, String target) =>
       _notifierBook.target == target && _notifierBook.nids.contains(nid);
 
-  /// Records queue [nid]'s notifier as active under [target]. A different
-  /// target on disk means the token changed: every other nid is stale and
-  /// dropped. So is any nid no contact record holds any more (the queue is
-  /// gone). False when nothing was written (closed, uncommitted, a newer
-  /// build's row).
-  Future<bool> markNotifier(String nid, String target) {
+  /// Records the notifiers of queues [nids] as active under [target], in one
+  /// write. A different target on disk means the token changed: every other
+  /// nid is stale and dropped. So is any nid no contact record holds any
+  /// more (the queue is gone). False when nothing was written (closed,
+  /// uncommitted, a newer build's row).
+  Future<bool> markNotifiers(Iterable<String> nids, String target) {
     final kv = _kv;
     final userId = _userId;
     if (kv == null || userId == null) return Future.value(false);
@@ -79,7 +79,7 @@ extension ContactStoreNotifiers on ContactStore {
           nids: {
             if (current.target == target)
               ...current.nids.where(held.contains),
-            nid,
+            ...nids,
           },
         );
         if (!await kv.setString(key, next.encode())) return false;
