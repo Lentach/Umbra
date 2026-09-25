@@ -317,6 +317,7 @@ Standing warnings that used to live in the `LATEST.md` banner and in rotated-out
 - **Never put a path that is tracked anywhere into `.git/info/exclude`** — it is shared by EVERY worktree: `git add <path>` then exits 1 (stages anyway, but breaks `add && commit`), and the built-in `grep`/`glob` hide the file. Count skills with `git ls-files .claude/skills`, not a gitignore-aware glob (`2026-09-23-session-start-skill.md`).
 
 ## Owner-owed decisions (open)
+- **Metadata-privacy decisions live in ONE tracked log on the branch — read it before asking or answering ANY metadata-privacy question:** `git show origin/feat/metadata-privacy:docs/plans/metadata-privacy-decisions.md`. The 16 MiB cap was asked twice with opposite answers because decision 9 lived only in a gitignored plan in another worktree. Owner answers only OWNER-class questions, batched per phase (S8, 2026-09-25).
 - README screenshot recapture, the domain decision (`2026-08-26-session.md`). **The GitHub repo rename is DONE — `Lentach/Fireplace` → `Lentach/Umbra`, 2026-09-14, owner's call** (`2026-09-14-session-apk-weight.md`).
 - Thief-with-password matrix answers (`2026-09-03-session-lxxii-reset-door.md`).
 - iPhone PWA camera recording for the WebKit probe fix; iOS eyeballing of reset-ceremony statuses, revoke/mismatch notices, fingerprint sheet, phrase reveal (`2026-09-08-session-c8-register-ceremony.md`).
