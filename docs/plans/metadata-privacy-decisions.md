@@ -87,6 +87,9 @@ Status: ACTIVE (in force), DONE (carried out, still binding), SUPERSEDED, OPEN (
 | 31 | 09-25 | (O3) Media over a queue's daily budget answers an honest `429 quota_exceeded` (the sender can retry); the residual — a sid holder learns the queue is alive and spent — is accepted | OWNER | ACTIVE |
 | 32 | 09-25 | (O4) No push notifier on the self-queue: your own sent copies reach your other devices when they open, never as a notification | OWNER | ACTIVE |
 | 33 | 09-25 | (O5) D5 confirmed with its visible effect: one global switch in Privacy settings, mutual (Signal model), default OFF — ✓✓ and typing disappear on box chats until both sides turn them on | OWNER | ACTIVE |
+| 34 | 09-25 | Box notifier registration is batched per TOKEN: one `notifier_challenge` push proves the token, then every queue is activated in one batch of `{nid, sig}`, each signed by its own queue key over `nid ‖ 0x02 ‖ code`. Replaces E9's one-queue-at-a-time client (wire.md + backend + int tests + client) | OWNER | OWED (next session) |
+| 35 | 09-25 | No notifier on a `blocked` or `former` contact's queue (the box cannot know a block; a blocked peer holding the sid could ring an offline device). Residual: a contact blocked AFTER registration keeps its notifier until the queue is deleted | OWNER | OWED (next session) |
+| 36 | 09-25 | E9 keeps ONE sealed `boxntf_v1` row per account (not one row per queue); the Android/FCM E9 path is verified at G5 on a device, not locally | OWNER | ACTIVE |
 
 ## Engineering calls made in the work so far (owner may overrule at the gate)
 

@@ -30,8 +30,9 @@
 - NOT verified: Android/FCM (no `FIREBASE_SERVICE_ACCOUNT` locally), iOS/Safari, Firefox; the SW's show-then-close itself (only "no card left" observed); two tabs registering at once; prod (box OFF).
 
 ## Notes for next session
-- Next action: decision-22 slice (plan item 3) — replies, disappearing timers and media (E17) over the box, test-first; read `docs/plans/2026-09-25-metadata-pr31-remainder.md` E17/E18 first. Item 9 (E10–E12, backend) may run beside it.
-- Owner-owed: O6, O7 (before box ON). New: an Android/FCM drive of E9 needs a dev Firebase service account in `.env` (`FIREBASE_SERVICE_ACCOUNT` is empty) — or it waits for G5 on a device.
+- Next action (owner, 09-25): apply decisions 34–35 to E9 before anything else. 34: batch registration per TOKEN (one `notifier_challenge` push proves the token, then a batch of `{nid, sig}`, each signed by its queue key over `nid ‖ 0x02 ‖ code`): backend verb + wire.md + int tests, then rewrite `BoxNotifiers`. 35: no notifier on `blocked`/`former` records, red-first; also pin that retiring self-queues are excluded. Then the decision-22 slice.
+- Owner-owed: O6, O7 (before box ON). Decided 36: one sealed `boxntf_v1` row stays; Android/FCM E9 verified at G5 on a device.
+- Open (found while writing docs): the OLD `new_message` SW path skips the banner for a focused chat on every endpoint, Apple included — possible Safari silent-push revocation; not yet raised with the owner.
 - Residual (decisions log E9): a resubscribe inside the 2.5 s coalescing still gets the wake-up push, as for `send`.
 - Drive recipe (scaffold deleted): a `BOX_DRIVE` `Timer.periodic(3 s)` in `BoxSession.start` calling `_keys.createInbound(friend)` for each friend with no queue, then `_notifiers?.run()`, printing `E2eDiagLog` `BOX_NOTIF` lines. Log in by setting `localStorage['flutter.jwt_token']` to the JSON-encoded token. Subscribe in the page with `reg.pushManager.subscribe` after the worker is activated (not `serviceWorker.ready` inside `tab.run`). Send with `node -e` + `socket.io-client` from `backend/` (`send {v:1, sid, blob: 16384 B}`).
 - Traps → `docs/agents/traps.md` (6 lines: Android/push ×3, Tests ×2, Agent tooling ×1).
