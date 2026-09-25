@@ -1,11 +1,17 @@
 import 'dart:async';
-import 'dart:typed_data';
+import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+
+import '../../utils/e2e_diag_log.dart';
+import '../../utils/e2e_envelope.dart';
 import '../contacts/contact_record.dart';
 import '../contacts/contact_store.dart';
 import 'box_client.dart';
 import 'box_inbox.dart';
 import 'box_outbox.dart';
+import 'box_sibling_swap.dart';
+import 'box_siblings.dart';
 import 'box_wire.dart';
 import 'queue_keys.dart';
 import 'queue_seal.dart';
@@ -32,7 +38,12 @@ import 'queue_seal.dart';
 ///
 /// And it SENDS (slice (c)): as the [BoxOutbox], it hands the messaging send
 /// path a friend's addresses and seals each frame into its queue.
-class BoxSession implements BoxOutbox {
+///
+/// And it links this account's OWN devices (sibling queues, owner decisions
+/// 26–29): it keeps this device's SELF-queue (`QueueKeys.ensureSelf`) beside
+/// the request queue, drives the address swap ([BoxSiblingSwap]) and, as the
+/// [BoxSiblingLink], stores what the messaging reader learns from a sibling.
+class BoxSession implements BoxOutbox, BoxSiblingLink {
   BoxSession({
     required BoxClient box,
     required ContactStore store,
@@ -44,6 +55,13 @@ class BoxSession implements BoxOutbox {
        _seal = seal ?? QueueSeal(),
        _emit = emit {
     _inbox = BoxInbox(box: box, store: store, seal: _seal);
+    _swap = BoxSiblingSwap(
+      box: box,
+      store: store,
+      seal: _seal,
+      emit: emit,
+      selfQueue: () => _self,
+    );
   }
 
   final BoxClient _box;
@@ -51,15 +69,28 @@ class BoxSession implements BoxOutbox {
   final QueueKeys _keys;
   final QueueSeal _seal;
   late final BoxInbox _inbox;
+  late final BoxSiblingSwap _swap;
   final void Function(String event, Object? data) _emit;
 
   final List<StreamSubscription<Object?>> _subscriptions = [];
   ContactQueue? _request;
   bool _ensuring = false;
 
+  /// This device's self-queue once ensured (and subscribed) this session.
+  ContactQueue? _self;
+  bool _ensuringSelf = false;
+
   /// Null until the account socket is ready; the device id it names (null
   /// from a server that predates the field — the server still files it).
   ({int? deviceId})? _account;
+
+  /// E2E became ready on THIS account connect (it fires once per connect).
+  /// Nothing is published before it: a device still on the link gate holds
+  /// no identity, and its token names the PRIMARY's device, so a publish
+  /// would overwrite the primary's request queue (found live, 2026-09-25).
+  /// Cleared with the connect, so a link rebind — identity adopted on the
+  /// old token — publishes only under the new one.
+  bool _e2eReady = false;
   String? _published;
   String? _inFlight;
   Timer? _retry;
@@ -80,6 +111,34 @@ class BoxSession implements BoxOutbox {
     if (!_disposed) unawaited(_inbox.drain());
   }
 
+  /// The Signal side of the sibling swap (`MessagingProvider`).
+  OwnDeviceEncrypt? get encryptForOwnDevice => _swap.encrypt;
+
+  set encryptForOwnDevice(OwnDeviceEncrypt? encrypt) {
+    _swap
+      ..encrypt = encrypt
+      ..run();
+  }
+
+  /// E2E is ready on this connect: the request queue may be published and a
+  /// handoff encrypted now.
+  void e2eReady() {
+    if (_disposed) return;
+    _e2eReady = true;
+    _publish();
+    _swap.e2eReady();
+  }
+
+  /// The own verified device list was dropped (a device linked or revoked).
+  void ownDevicesChanged() {
+    if (!_disposed) _swap.ownDevicesChanged();
+  }
+
+  /// `ownRequestQueues { success, devices?, error?, retryAfterMs? }`.
+  void onOwnRequestQueues(Object? data) {
+    if (!_disposed) unawaited(_swap.onOwnRequestQueues(data));
+  }
+
   /// Connects the box and starts following it.
   void start() {
     _inbox.start();
@@ -88,7 +147,9 @@ class BoxSession implements BoxOutbox {
         _box.states.listen((state) {
           if (state != BoxState.ready) return;
           if (_request == null) unawaited(_ensure());
+          if (_self == null) unawaited(_ensureSelf());
           unawaited(_receive());
+          _swap.run();
         }),
       )
       ..add(_box.lostQueues.listen(_onLost));
@@ -112,6 +173,7 @@ class BoxSession implements BoxOutbox {
     } else {
       _publish();
     }
+    _swap.accountReady(deviceId);
   }
 
   /// The contact store (re)opened — a web vault that booted locked was just
@@ -119,14 +181,18 @@ class BoxSession implements BoxOutbox {
   /// found it closed, and neither socket will say "ready" again on its own.
   void storeOpened() {
     if (_request == null) unawaited(_ensure());
+    if (_self == null) unawaited(_ensureSelf());
     unawaited(_receive());
+    _swap.run();
   }
 
   /// The account socket dropped: an answer still owed will never come.
   void accountLost() {
     _account = null;
+    _e2eReady = false;
     _inFlight = null;
     _retry?.cancel();
+    _swap.accountLost();
   }
 
   /// `requestQueueSet { success, error?, retryAfterMs? }`.
@@ -177,12 +243,83 @@ class BoxSession implements BoxOutbox {
   }
 
   @override
+  Future<SiblingWrite> takeSiblingHandoff(
+    int deviceId, {
+    required String sid,
+    required String sealPub,
+  }) async {
+    if (_disposed) return SiblingWrite.retryLater;
+    final stored = await _store.learnSibling(
+      deviceId,
+      sid: sid,
+      sealPub: sealPub,
+    );
+    if (stored != SiblingWrite.stored) return stored;
+    final selfQueue = ContactOutbound(
+      peerDeviceId: deviceId,
+      sid: sid,
+      sealPub: sealPub,
+    );
+    final acked = await _sendToSibling(
+      selfQueue,
+      E2eEnvelope.buildQueueHandoffAck(sid: sid),
+    );
+    final self = _store.selfQueue;
+    final owed =
+        self != null &&
+        _store.siblings
+                .where((s) => s.deviceId == deviceId)
+                .firstOrNull
+                ?.ackedSelfSid !=
+            self.sid;
+    final handedBack =
+        owed &&
+        await _sendToSibling(
+          selfQueue,
+          E2eEnvelope.buildQueueHandoff(sid: self.sid, sealPub: self.sealPub),
+        );
+    E2eDiagLog.add('BOX_SIBLING_HANDOFF', {
+      'device': deviceId,
+      'acked': acked,
+      if (owed) 'handedBack': handedBack,
+    });
+    if (kDebugMode) {
+      debugPrint(
+        '[E2E-FLOW] BOX_SIBLING_HANDOFF | {device: $deviceId, acked: $acked'
+        '${owed ? ', handedBack: $handedBack' : ''}}',
+      );
+    }
+    return SiblingWrite.stored;
+  }
+
+  /// Encrypts [envelope] for sibling [to] and seals it into its self-queue
+  /// as a normal frame; true only when the box took it.
+  Future<bool> _sendToSibling(
+    ContactOutbound to,
+    Map<String, dynamic> envelope,
+  ) async {
+    final encrypt = _swap.encrypt;
+    if (_disposed || encrypt == null) return false;
+    final frame = await encrypt(to.peerDeviceId, jsonEncode(envelope));
+    return frame != null && await deliver(to, frame.encode());
+  }
+
+  @override
+  Future<SiblingWrite> siblingAcked(int deviceId, String sid) => _disposed
+      ? Future.value(SiblingWrite.retryLater)
+      : _store.markSiblingAcked(deviceId, sid);
+
+  @override
+  bool viaSelfQueue(String rid) => _store.selfQueue?.rid == rid;
+
+  @override
   Future<int?> nextLocalId() => _store.allocateLocalId();
 
   void dispose() {
     if (_disposed) return;
     _disposed = true;
     _retry?.cancel();
+    _swap.dispose();
     for (final s in _subscriptions) {
       unawaited(s.cancel());
     }
@@ -217,18 +354,33 @@ class BoxSession implements BoxOutbox {
     }
   }
 
-  /// A reconnect's subscribe refused the request queue: it is gone for good.
-  /// Forgotten here; the `ready` that follows the resubscribe runs
-  /// [QueueKeys.ensureRequest], which sees the same refusal, drops the stored
-  /// row and creates a replacement.
+  Future<void> _ensureSelf() async {
+    if (_ensuringSelf || _disposed || _box.state != BoxState.ready) return;
+    _ensuringSelf = true;
+    try {
+      final queue = await _keys.ensureSelf();
+      if (_disposed || queue == null) return;
+      _self = queue;
+      _swap.run();
+    } finally {
+      _ensuringSelf = false;
+    }
+  }
+
+  /// A reconnect's subscribe refused the request queue or the self-queue:
+  /// it is gone for good. Forgotten here; the `ready` that follows the
+  /// resubscribe ensures it again, which sees the same refusal, drops the
+  /// stored row and creates a replacement.
   void _onLost(BoxRefusal refusal) {
-    if (boxB64(refusal.rid) == _request?.rid) _request = null;
+    final rid = boxB64(refusal.rid);
+    if (rid == _request?.rid) _request = null;
+    if (rid == _self?.rid) _self = null;
   }
 
   void _publish() {
     final account = _account;
     final queue = _request;
-    if (_disposed || account == null || queue == null) return;
+    if (_disposed || !_e2eReady || account == null || queue == null) return;
     final key = '${account.deviceId}:${queue.sid}';
     if (key == _published || key == _inFlight) return;
     _inFlight = key;

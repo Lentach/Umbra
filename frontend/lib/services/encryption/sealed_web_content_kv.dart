@@ -69,9 +69,11 @@ class SealedWebContentKv implements ContentKv {
   /// .requestQueueKey`) holds the queue's private auth + seal halves; a
   /// lost-kid row reads undecodable and `ContactStore` replaces it.
   /// `boxin_v1_` (the box delivery journal, `contact_store_inbox.dart`) holds
-  /// Signal ciphertext beside the peer it came from.
+  /// Signal ciphertext beside the peer it came from. `boxsib_v1` (this
+  /// device's box self-queue + its siblings' addresses, `ContactStore
+  /// .siblingsKey`) holds private halves and names every linked device.
   static final RegExp _familyKey = RegExp(
-    r'^e2e_\d+_(decrypted_|decrypt_raw_v1_|pendsend_v1_|contact_v1_|boxreq_v1|boxin_v1_)',
+    r'^e2e_\d+_(decrypted_|decrypt_raw_v1_|pendsend_v1_|contact_v1_|boxreq_v1|boxin_v1_|boxsib_v1)',
   );
   static final RegExp _retireIdKey = RegExp(
     r'^e2e_(\d+)_(?:decrypted_|decrypt_raw_v1_)(\d+)$',

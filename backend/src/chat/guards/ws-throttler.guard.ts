@@ -145,6 +145,12 @@ const THROTTLE_ANSWERS: Record<
     'requestQueueSet',
     { success: false, error: RATE_LIMITED, retryAfterMs },
   ],
+  // A throttled read must not look like "no siblings": the device would
+  // treat every sibling as unreachable instead of retrying.
+  getOwnRequestQueues: (_data, retryAfterMs) => [
+    'ownRequestQueues',
+    { success: false, error: RATE_LIMITED, retryAfterMs },
+  ],
 };
 
 /** One warn per (tracker, event) per this long; the rest go to debug. */

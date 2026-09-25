@@ -62,6 +62,22 @@ class E2eEnvelope {
   static const String _keyType = 't';
   static const String typeMessage = 'msg';
 
+  /// A sibling hands this account's other devices its box SELF-queue
+  /// address (metadata-privacy PR3.1 sibling queues, owner decisions 26/27):
+  /// `{t, sid, sealPub}`, sent into each sibling's REQUEST queue until that
+  /// sibling acknowledges it.
+  static const String typeQueueHandoff = 'queue_handoff';
+
+  /// The acknowledgement of one handoff: `{t, sid}` naming the self-queue sid
+  /// it stored, sent back into the handing device's self-queue.
+  static const String typeQueueHandoffAck = 'queue_handoff_ack';
+  static const String _keySid = 'sid';
+  static const String _keySealPub = 'sealPub';
+
+  /// The box's one spelling of a 32-byte id or key: unpadded base64url whose
+  /// last char carries no spare bits (wire.md "First contact").
+  static final RegExp _boxId32 = RegExp(r'^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$');
+
   /// When the sender sent it, whole ms since the epoch (decision 13): a box
   /// message has no server `createdAt`. Peer-claimed, so the receiver clamps
   /// it to its own receive time.
@@ -153,6 +169,51 @@ class E2eEnvelope {
           ? DateTime.fromMillisecondsSinceEpoch(rawSentAt, isUtc: true)
           : null,
     );
+  }
+
+  /// A [typeQueueHandoff] envelope handing over the self-queue [sid] and the
+  /// key its seal layer expects.
+  static Map<String, dynamic> buildQueueHandoff({
+    required String sid,
+    required String sealPub,
+  }) => {_keyType: typeQueueHandoff, _keySid: sid, _keySealPub: sealPub};
+
+  /// A [typeQueueHandoffAck] envelope acknowledging the handed-over [sid].
+  static Map<String, dynamic> buildQueueHandoffAck({required String sid}) => {
+    _keyType: typeQueueHandoffAck,
+    _keySid: sid,
+  };
+
+  /// The address a [typeQueueHandoff] envelope carries; null for any other
+  /// type or an address not spelled as the box spells a 32-byte id — a
+  /// sibling's claim is stored and later sent to, so it is never guessed at.
+  static ({String sid, String sealPub})? parseQueueHandoff(String jsonStr) {
+    final envelope = _object(jsonStr);
+    if (envelope == null || envelope[_keyType] != typeQueueHandoff) return null;
+    final sid = envelope[_keySid];
+    final sealPub = envelope[_keySealPub];
+    if (sid is! String || !_boxId32.hasMatch(sid)) return null;
+    if (sealPub is! String || !_boxId32.hasMatch(sealPub)) return null;
+    return (sid: sid, sealPub: sealPub);
+  }
+
+  /// The sid a [typeQueueHandoffAck] envelope acknowledges; null otherwise.
+  static String? parseQueueHandoffAck(String jsonStr) {
+    final envelope = _object(jsonStr);
+    if (envelope == null || envelope[_keyType] != typeQueueHandoffAck) {
+      return null;
+    }
+    final sid = envelope[_keySid];
+    return sid is String && _boxId32.hasMatch(sid) ? sid : null;
+  }
+
+  static Map<String, dynamic>? _object(String jsonStr) {
+    try {
+      final decoded = jsonDecode(jsonStr);
+      return decoded is Map<String, dynamic> ? decoded : null;
+    } on FormatException {
+      return null;
+    }
   }
 
   static bool _areValidMediaDimensions(Object? width, Object? height) =>

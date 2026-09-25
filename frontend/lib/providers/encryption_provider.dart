@@ -275,6 +275,12 @@ class EncryptionProvider extends ChangeNotifier {
     }
   }
 
+  /// Whether [ciphertext] may come from one of this account's own devices —
+  /// the check a sibling frame passes BEFORE [decrypt] (a request queue is
+  /// public). Delegates to [EncryptionService.carriesOwnIdentity].
+  Future<bool> carriesOwnIdentity(String ciphertext) =>
+      _encryptionService.carriesOwnIdentity(ciphertext);
+
   /// Ensure a Signal session exists with [recipientId]'s [deviceId]
   /// (default 1 — the pre-multi-device address). If not, fetches that
   /// device's pre-key bundle from the server (via emit callback) and builds a

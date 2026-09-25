@@ -12,6 +12,7 @@ import '../encryption/session_cross_context_lock.dart';
 import 'contact_record.dart';
 
 part 'contact_store_inbox.dart';
+part 'contact_store_siblings.dart';
 
 /// The store could not be opened for this session. [stage] names the first
 /// check that failed; the caller records it and runs WITHOUT local contacts
@@ -88,12 +89,19 @@ class ContactStore {
   static String requestQueueKey(int userId) => 'e2e_${userId}_boxreq_v1';
   static const int requestQueueVersion = 1;
 
+  /// This device's box SELF-queue and its siblings' addresses (PR3.1 sibling
+  /// queues, `contact_store_siblings.dart`): outside [keyPrefix] for the
+  /// [requestQueueKey] reasons, and no backup carries it (decision 28).
+  static String siblingsKey(int userId) => 'e2e_${userId}_boxsib_v1';
+
   int? _userId;
   ContentKv? _kv;
   final Map<int, ContactRecord> _records = <int, ContactRecord>{};
   UserModel? _self;
   ContactQueue? _requestQueue;
   bool _requestQueueUnsupported = false;
+  _SiblingBook _siblingBook = _SiblingBook.empty;
+  bool _siblingsUnsupported = false;
   int _undetermined = 0;
 
   /// The box delivery journal ([BoxInboxEntry]), keyed `rid.id`.
@@ -167,6 +175,7 @@ class ContactStore {
         (key) =>
             key.startsWith(keyPrefix(userId)) ||
             key == requestQueueKey(userId) ||
+            key == siblingsKey(userId) ||
             key.startsWith(_inboxPrefix(userId)),
       );
     } on Object {
@@ -178,6 +187,7 @@ class ContactStore {
     var undetermined = 0;
     final loaded = <int, ContactRecord>{};
     final request = _decodeRequest(rows.remove(requestQueueKey(userId)));
+    final siblingBook = _SiblingBook.decode(rows.remove(siblingsKey(userId)));
     final inbox = _takeInbox(rows, userId);
     UserModel? selfUser;
     for (final entry in rows.entries) {
@@ -213,6 +223,8 @@ class ContactStore {
     _self = selfUser;
     _requestQueue = request.queue;
     _requestQueueUnsupported = request.unsupported;
+    _siblingBook = siblingBook ?? _SiblingBook.empty;
+    _siblingsUnsupported = siblingBook == null;
     _undetermined = undetermined;
     _inbox
       ..clear()
@@ -235,6 +247,8 @@ class ContactStore {
     _self = null;
     _requestQueue = null;
     _requestQueueUnsupported = false;
+    _siblingBook = _SiblingBook.empty;
+    _siblingsUnsupported = false;
     _undetermined = 0;
     _records.clear();
     _inbox.clear();

@@ -172,4 +172,39 @@ export class ChatSearchService {
       client.emit('requestQueueSet', { success: false, error: 'internal' });
     }
   }
+
+  /**
+   * The request queues of the CALLER's OTHER live devices (metadata-privacy
+   * PR3.1 sibling queues, owner decision 26): a device swaps its self-queue
+   * address with each sibling by sending an E2E `queue_handoff` into that
+   * sibling's request queue. Own account only, so it names nobody the server
+   * does not already tie to the caller; no pre-key is claimed (siblings
+   * already hold sessions). Answers `ownRequestQueues { success, devices }`,
+   * `devices` = `[{ deviceId, requestSid, sealPub }]` oldest first, null
+   * until that device publishes; refusals `internal`, `rate_limited`.
+   */
+  async handleGetOwnRequestQueues(client: Socket): Promise<void> {
+    const user = socketUser(client);
+    if (!user) return;
+    const callerDeviceId = user.deviceId ?? DEFAULT_DEVICE_ID;
+    try {
+      const addresses = await this.devicesService.firstContactDevices(user.id);
+      client.emit('ownRequestQueues', {
+        success: true,
+        devices: addresses
+          .filter((address) => address.deviceId !== callerDeviceId)
+          .map((address) => ({
+            deviceId: address.deviceId,
+            requestSid: address.requestSid,
+            sealPub: address.requestSealPub,
+          })),
+      });
+    } catch (error) {
+      // Never a sid: each one is a capability.
+      this.logger.error(
+        `getOwnRequestQueues failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      client.emit('ownRequestQueues', { success: false, error: 'internal' });
+    }
+  }
 }

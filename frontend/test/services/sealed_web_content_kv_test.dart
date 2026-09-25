@@ -600,6 +600,19 @@ void main() {
       expect(kv.getString('e2e_37_boxreq_v1'), '{"v":1,"queue":{}}');
     });
 
+    test("this device's self-queue keys and its siblings' addresses are "
+        'sealed, never cleartext', () async {
+      // The row holds the self-queue's private halves AND names every other
+      // device of the account (PR3.1 sibling queues).
+      final kv = await openStore();
+      await kv.setString('e2e_37_boxsib_v1', '{"v":1,"siblings":[]}');
+      expect(
+        SealedWebEnvelope.isEnvelope(prefs.getString('e2e_37_boxsib_v1')!),
+        isTrue,
+      );
+      expect(kv.getString('e2e_37_boxsib_v1'), '{"v":1,"siblings":[]}');
+    });
+
     test('remove drops the row and the view', () async {
       final kv = await openStore();
       await kv.setString('e2e_37_decrypted_43', '{"c":"x"}');

@@ -271,5 +271,80 @@ void main() {
         expect(E2eEnvelope.parse(jsonEncode({'content': 'hi'})).sentAt, isNull);
       });
     });
+
+    group('queue_handoff / queue_handoff_ack (sibling self-queues)', () {
+      // Canonical unpadded base64url of 32 bytes: 42 free chars, then one of
+      // the 16 whose low two bits are zero.
+      final sid = '${'A' * 42}E';
+      final sealPub = '${'b' * 42}w';
+
+      test('a handoff round-trips its address under its own type', () {
+        final json = jsonEncode(
+          E2eEnvelope.buildQueueHandoff(sid: sid, sealPub: sealPub),
+        );
+        expect(E2eEnvelope.parse(json).type, E2eEnvelope.typeQueueHandoff);
+        expect(E2eEnvelope.parseQueueHandoff(json), (sid: sid, sealPub: sealPub));
+      });
+
+      test('an ack round-trips the sid it acknowledges', () {
+        final json = jsonEncode(E2eEnvelope.buildQueueHandoffAck(sid: sid));
+        expect(E2eEnvelope.parse(json).type, E2eEnvelope.typeQueueHandoffAck);
+        expect(E2eEnvelope.parseQueueHandoffAck(json), sid);
+      });
+
+      test('neither is ever read as a chat message', () {
+        for (final built in [
+          E2eEnvelope.buildQueueHandoff(sid: sid, sealPub: sealPub),
+          E2eEnvelope.buildQueueHandoffAck(sid: sid),
+        ]) {
+          expect(
+            E2eEnvelope.parse(jsonEncode(built)).type,
+            isNot(E2eEnvelope.typeMessage),
+          );
+        }
+      });
+
+      test('an address that is not a canonical 32-byte id is null — never '
+          'stored, never sent to', () {
+        for (final bad in [
+          'short',
+          '${'A' * 42}B', // spare bits set: not the canonical spelling
+          '${'A' * 43}=',
+          'A' * 44,
+          42,
+          null,
+        ]) {
+          expect(
+            E2eEnvelope.parseQueueHandoff(
+              jsonEncode({'t': 'queue_handoff', 'sid': bad, 'sealPub': sealPub}),
+            ),
+            isNull,
+          );
+          expect(
+            E2eEnvelope.parseQueueHandoff(
+              jsonEncode({'t': 'queue_handoff', 'sid': sid, 'sealPub': bad}),
+            ),
+            isNull,
+          );
+          expect(
+            E2eEnvelope.parseQueueHandoffAck(
+              jsonEncode({'t': 'queue_handoff_ack', 'sid': bad}),
+            ),
+            isNull,
+          );
+        }
+      });
+
+      test('the other type, or no JSON object at all, is null', () {
+        final handoff = jsonEncode(
+          E2eEnvelope.buildQueueHandoff(sid: sid, sealPub: sealPub),
+        );
+        final ack = jsonEncode(E2eEnvelope.buildQueueHandoffAck(sid: sid));
+        expect(E2eEnvelope.parseQueueHandoff(ack), isNull);
+        expect(E2eEnvelope.parseQueueHandoffAck(handoff), isNull);
+        expect(E2eEnvelope.parseQueueHandoff('[1]'), isNull);
+        expect(E2eEnvelope.parseQueueHandoffAck('not json'), isNull);
+      });
+    });
   });
 }

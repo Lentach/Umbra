@@ -57,9 +57,11 @@ class _RecordingConnection extends ConnectionProvider {
   _RecordingConnection({required super.socketService});
 
   final published = <Object?>[];
+  final events = <String>[];
 
   @override
   void emit(String event, dynamic data) {
+    events.add(event);
     if (event == 'setRequestQueue') published.add(data);
   }
 }
@@ -85,6 +87,7 @@ void main() {
   late ContentKv kv;
   late _AccountSocket account;
   late _RecordingConnection connection;
+  late _QuietEncryption encryption;
   late FakeBoxSockets sockets;
   late List<String> boxUrls;
 
@@ -105,9 +108,10 @@ void main() {
         _ => {'ok': true},
       };
     boxUrls = [];
+    encryption = _QuietEncryption();
     connection = _RecordingConnection(socketService: account)
       ..setProviders(
-        encryption: _QuietEncryption(),
+        encryption: encryption,
         friends: FriendsProvider(),
         conversations: ConversationsProvider(),
         messaging: MessagingProvider(),
@@ -136,7 +140,12 @@ void main() {
       sockets.last.serverConnect('S1');
       await pumpEventQueue();
 
+      // Nothing is published before this connect's E2E is ready: a device on
+      // the link gate (no identity) holds the PRIMARY's token.
       account.serve('socketReady', {'deviceId': 2});
+      await pumpEventQueue();
+      expect(connection.published, isEmpty);
+      encryption.onE2EReady!();
       await pumpEventQueue();
       expect(connection.published, [
         {'sid': address['sid'], 'sealPub': isA<String>()},
@@ -146,6 +155,7 @@ void main() {
         ..serve('requestQueueSet', {'success': true})
         ..drop()
         ..serve('socketReady', {'deviceId': 2});
+      encryption.onE2EReady!();
       await pumpEventQueue();
       expect(connection.published, hasLength(1));
     },
@@ -188,6 +198,7 @@ void main() {
       sockets.last.serverConnect('S1');
       await pumpEventQueue();
       account.serve('socketReady', {'deviceId': 2});
+      encryption.onE2EReady!();
       await pumpEventQueue();
       account.serve('requestQueueSet', {
         'success': false,
@@ -245,10 +256,66 @@ void main() {
 
       locked = false;
       await encryption.onPasscodeLockRestore!();
+      // A locked vault parks E2E init until the unlock; it is ready now.
+      encryption.onE2EReady!();
       await pumpEventQueue();
       expect(booted.published, [
         {'sid': address['sid'], 'sealPub': isA<String>()},
       ]);
+    },
+  );
+
+  test(
+    'the sibling swap is wired: asked once the box, the account socket and '
+    'E2E are ready; its answer reaches the session; a change of the OWN '
+    "device list asks again, a peer's does not",
+    () async {
+      final encryption = _QuietEncryption();
+      final wired = _RecordingConnection(socketService: account)
+        ..setProviders(
+          encryption: encryption,
+          friends: FriendsProvider(),
+          conversations: ConversationsProvider(),
+          messaging: MessagingProvider(),
+          contactStore: ContactStore(
+            open: () async => kv,
+            lock: <T>(_, action) => action(),
+            accepts: (_) => true,
+          ),
+          boxClient: (baseUrl) =>
+              BoxClient(baseUrl: baseUrl, socketFactory: sockets.call),
+        );
+      addTearDown(() => wired.disconnect(isLogout: true));
+      int asks() =>
+          wired.events.where((e) => e == 'getOwnRequestQueues').length;
+
+      await wired.connect(1, 'token', 'http://api.test');
+      sockets.last.serverConnect('S1');
+      await pumpEventQueue();
+      account.serve('socketReady', {'deviceId': 2});
+      await pumpEventQueue();
+      expect(asks(), 0, reason: 'E2E is not ready');
+
+      encryption.onE2EReady!();
+      await pumpEventQueue();
+      expect(asks(), 1);
+
+      account.serve('ownRequestQueues', {
+        'success': false,
+        'error': 'rate_limited',
+        'retryAfterMs': 5,
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      await pumpEventQueue();
+      expect(asks(), 2, reason: 'the answer reached the session');
+
+      account.serve('ownRequestQueues', {'success': false, 'error': 'internal'});
+      encryption.invalidateDeviceList(42);
+      await pumpEventQueue();
+      expect(asks(), 2, reason: "a peer's list says nothing about siblings");
+      encryption.invalidateDeviceList(1);
+      await pumpEventQueue();
+      expect(asks(), 3);
     },
   );
 }

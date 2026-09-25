@@ -36,6 +36,14 @@ typedef BoxInboxConsumer = Future<bool> Function(BoxInboxEntry entry);
 ///    and is only acked again: Signal never sees a ciphertext twice.
 ///  * Anything that is not a sealed, readable frame is acked and dropped:
 ///    nothing will ever read it.
+///
+/// This account's OWN other devices (siblings, PR3.1 sibling queues) reach it
+/// on two queues, both journaled under the OWN account id — the store's:
+/// this device's SELF-queue (normal frames, like a friend's queue) and its
+/// REQUEST queue, where only an account-bearing frame naming this very
+/// account is read (the sibling address swap). Everything else on the
+/// request queue is a stranger's and stays acked-and-dropped until first
+/// contact (slice (f)).
 class BoxInbox {
   BoxInbox({
     required BoxClient box,
@@ -138,8 +146,7 @@ class BoxInbox {
     }
     final request = _store.requestQueue;
     if (request != null && request.rid == rid) {
-      // First contact reads these (slice (f)). Until then nobody can.
-      await _ackAndDrop(delivery, slot, QueueKeys.authOf(request));
+      await _intakeRequest(delivery, slot, request);
       return;
     }
     final owner = _ownerOf(rid);
@@ -157,13 +164,48 @@ class BoxInbox {
     if (auth == null) return;
 
     final frame = await _open(queue, delivery);
-    if (frame == null) {
+    // A normal queue names its sender by itself: a frame claiming an
+    // account is not one it carries.
+    if (frame == null || frame.senderUserId != null) {
       E2ePersistentDiag.record('BOX_UNREADABLE', {'peer': peerUserId});
       await _ackAndDrop(delivery, slot, auth);
       return;
     }
+    await _journal(delivery, slot, peerUserId, frame, auth);
+  }
+
+  /// A delivery on this device's request queue: journaled only when it is an
+  /// account-bearing frame from THIS account (a sibling's handoff); any other
+  /// — a stranger's first contact, a frame naming no account, one that does
+  /// not open — is acked and dropped, as before sibling queues.
+  Future<void> _intakeRequest(
+    BoxDelivery delivery,
+    String slot,
+    ContactQueue request,
+  ) async {
+    final auth = QueueKeys.authOf(request);
+    final own = _store.userId;
+    final frame = await _open(request, delivery);
+    if (auth == null ||
+        own == null ||
+        frame == null ||
+        frame.senderUserId != own) {
+      await _ackAndDrop(delivery, slot, auth);
+      return;
+    }
+    await _journal(delivery, slot, own, frame, auth);
+  }
+
+  /// JOURNAL, then ack, then queue the read.
+  Future<void> _journal(
+    BoxDelivery delivery,
+    String slot,
+    int peerUserId,
+    BoxFrame frame,
+    BoxQueueAuth auth,
+  ) async {
     final entry = await _store.journalDelivery(
-      rid: rid,
+      rid: boxB64(delivery.rid),
       id: boxB64(delivery.id),
       peerUserId: peerUserId,
       senderDeviceId: frame.senderDeviceId,
@@ -271,11 +313,18 @@ class BoxInbox {
     return bytes == null ? null : _box.authFor(bytes);
   }
 
+  /// Which account queue [rid] reads for: a contact record's, or — this
+  /// device's own self-queue and request queue — the own account.
   ({int peerUserId, ContactQueue queue})? _ownerOf(String rid) {
     for (final record in _store.all) {
       for (final queue in record.queues) {
         if (queue.rid == rid) return (peerUserId: record.userId, queue: queue);
       }
+    }
+    final own = _store.userId;
+    if (own == null) return null;
+    for (final queue in [_store.selfQueue, _store.requestQueue]) {
+      if (queue?.rid == rid) return (peerUserId: own, queue: queue!);
     }
     return null;
   }

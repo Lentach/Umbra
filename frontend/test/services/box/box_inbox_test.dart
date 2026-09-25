@@ -408,4 +408,110 @@ void main() {
     await inbox.idle;
     expect(offered, hasLength(1));
   });
+
+  group('sibling deliveries (own account, PR3.1 sibling queues)', () {
+    Future<Uint8List> accountBlob(
+      ContactQueue queue, {
+      required int account,
+      int device = 2,
+    }) => sealed(
+      queue,
+      BoxFrame(
+        kind: BoxFrameKind.preKey,
+        senderDeviceId: device,
+        senderUserId: account,
+        signal: Uint8List.fromList([7, 7]),
+      ).encode(),
+    );
+
+    test(
+      "a frame on this device's SELF-queue is journaled under the OWN "
+      'account, acked and offered',
+      () async {
+        final self = _queue(0x80);
+        await store.claimSelfQueue(self);
+        await push(self, 1, await signalBlob(self, device: 2));
+
+        final entry = offered.single;
+        expect(entry.peerUserId, 1);
+        expect(entry.senderDeviceId, 2);
+        expect(ackedIds(), hasLength(1));
+      },
+    );
+
+    test(
+      'on the REQUEST queue, a frame naming THIS account is a sibling: '
+      'journaled under the own account, acked and offered',
+      () async {
+        final request = _queue(0x60);
+        await store.claimRequestQueue(request);
+        await push(request, 1, await accountBlob(request, account: 1));
+
+        final entry = offered.single;
+        expect(entry.peerUserId, 1);
+        expect(entry.senderDeviceId, 2);
+        expect(entry.signal, '3:Bwc=');
+        expect(ackedIds(), hasLength(1));
+      },
+    );
+
+    test(
+      "on the REQUEST queue, a stranger's account-bearing frame is still "
+      'acked and dropped — first contact is slice (f)',
+      () async {
+        final request = _queue(0x60);
+        await store.claimRequestQueue(request);
+        await push(request, 1, await accountBlob(request, account: 99));
+        expect(offered, isEmpty);
+        expect(ackedIds(), hasLength(1));
+        expect(kv.getKeys().where((k) => k.contains('boxin')), isEmpty);
+      },
+    );
+
+    test(
+      'an account-bearing frame on a normal contact queue is not a frame '
+      'that queue carries: acked and dropped',
+      () async {
+        await push(bobQueue, 1, await accountBlob(bobQueue, account: 1));
+        expect(offered, isEmpty);
+        expect(ackedIds(), hasLength(1));
+      },
+    );
+
+    test(
+      'a sibling handoff landing while the store is closed is held unacked, '
+      'and journaled under the own account once it reopens',
+      () async {
+        final request = _queue(0x60);
+        await store.claimRequestQueue(request);
+        store.close();
+        await push(request, 1, await accountBlob(request, account: 1));
+        expect(ackedIds(), isEmpty);
+
+        await store.open(1);
+        await inbox.drain();
+        await inbox.idle;
+        expect(offered.single.peerUserId, 1);
+        expect(ackedIds(), hasLength(1));
+      },
+    );
+
+    test(
+      'a sibling row whose ack was lost is re-acked by drain with the '
+      "request queue's own key",
+      () async {
+        final request = _queue(0x60);
+        await store.claimRequestQueue(request);
+        ackAnswer = 'lost';
+        await push(request, 1, await accountBlob(request, account: 1));
+        ackAnswer = {'ok': true};
+        await inbox.drain();
+        await inbox.idle;
+        await inbox.idle;
+        expect(offered.single.peerUserId, 1);
+        expect(ackedIds(), hasLength(2));
+        expect(kv.getKeys().where((k) => k.contains('boxin')), isEmpty);
+      },
+    );
+  });
 }

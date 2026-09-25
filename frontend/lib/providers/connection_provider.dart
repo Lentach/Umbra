@@ -498,15 +498,20 @@ class ConnectionProvider extends ChangeNotifier {
         )..start();
         // Slice (b): every box delivery is read by the messaging provider,
         // which knows the peer only through the contact record. Slice (c):
-        // it sends through the same session.
+        // it sends through the same session. Sibling queues: it encrypts
+        // the address handoffs and stores what a sibling hands over.
         final messaging = _messagingProvider;
         if (messaging != null) {
           _box!.consumer = (entry) => messaging.consumeBoxEntry(
             entry,
             contacts.byUserId(entry.peerUserId),
           );
-          messaging.boxOutbox = _box;
+          _box!.encryptForOwnDevice = messaging.encryptForOwnDevice;
+          messaging
+            ..boxOutbox = _box
+            ..boxSiblings = _box;
         }
+        if (_encryptionProvider?.isE2EReady == true) _box!.e2eReady();
       } else {
         _box!.resume();
       }
@@ -522,12 +527,18 @@ class ConnectionProvider extends ChangeNotifier {
       // A box delivery refused because E2E was not ready waits in the
       // journal; nothing else would offer it again before a reconnect.
       _box?.drainInbox();
+      // Sibling queues: a handoff can be encrypted now.
+      _box?.e2eReady();
       // Decision 21: the device lists a box send reads are looked up here,
       // once per connect — never by a send.
       _refreshBoxDeviceLists();
     };
-    _encryptionProvider?.onDeviceListInvalidated = (userId) =>
-        _messagingProvider?.onDeviceListInvalidated(userId);
+    _encryptionProvider?.onDeviceListInvalidated = (invalidated) {
+      _messagingProvider?.onDeviceListInvalidated(invalidated);
+      // The own list changed (a device linked or revoked): the siblings may
+      // have, so the address swap asks again.
+      if (invalidated == _boxUserId) _box?.ownDevicesChanged();
+    };
     // The old path may hold the PreKey message that creates the session a
     // waiting box message needs; its history pass is when that lands.
     _messagingProvider?.onHistoryDecryptPassFinished = () => _box?.drainInbox();
@@ -952,7 +963,9 @@ class ConnectionProvider extends ChangeNotifier {
       _contactStore?.close();
       _box?.dispose();
       _box = null;
-      _messagingProvider?.boxOutbox = null;
+      _messagingProvider
+        ?..boxOutbox = null
+        ..boxSiblings = null;
       _boxUserId = null;
     }
 
@@ -1614,7 +1627,9 @@ class ConnectionProvider extends ChangeNotifier {
     _socketService
       ..on('serverTime', _onServerTime)
       // PR3.1: the answer to the box request-queue publish (`BoxSession`).
-      ..on('requestQueueSet', (data) => _box?.onRequestQueueSet(data));
+      ..on('requestQueueSet', (data) => _box?.onRequestQueueSet(data))
+      // Sibling queues: the answer to the own request-queue lookup.
+      ..on('ownRequestQueues', (data) => _box?.onOwnRequestQueues(data));
 
     // --- Error event ---
     _socketService.on('error', (err) {

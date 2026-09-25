@@ -25,6 +25,12 @@ extension MessagingBox on MessagingProvider {
   Future<bool> consumeBoxEntry(BoxInboxEntry entry, ContactRecord? peer) {
     final signal = entry.signal;
     if (signal == null) return Future.value(true);
+    // One of this account's OWN devices (PR3.1 sibling queues): read before
+    // the contact-record refusals — the own account has no contact record.
+    final own = _currentUserId;
+    if (own != null && entry.peerUserId == own) {
+      return _runDecryptSerialized(own, () => _consumeSiblingBox(entry, signal));
+    }
     final conversationId = peer?.legacy.conversationId;
     // The chat list still hangs off server conversation ids (release N).
     // A contact without one, or one this account blocked, gets nothing shown.
@@ -66,6 +72,171 @@ extension MessagingBox on MessagingProvider {
     final finished = await _readBox(msg, receivedAt);
     if (finished) await _encryptionProvider?.removeRawReplay(msg.id);
     return finished;
+  }
+
+  /// Reads a delivery from sibling [BoxInboxEntry.senderDeviceId] (its
+  /// `queue_handoff` on our request queue, its ack or — part B — a sent copy
+  /// on our self-queue). Same contract as [consumeBoxEntry]; nothing here is
+  /// ever shown.
+  Future<bool> _consumeSiblingBox(BoxInboxEntry entry, String signal) async {
+    final finished = await _readSiblingBox(entry, signal);
+    if (finished) await _encryptionProvider?.removeRawReplay(entry.localId);
+    return finished;
+  }
+
+  Future<bool> _readSiblingBox(BoxInboxEntry entry, String signal) async {
+    final enc = _encryptionProvider;
+    final link = boxSiblings;
+    if (enc == null || link == null || !enc.isE2EReady) return false;
+    final device = entry.senderDeviceId;
+    final msg = MessageModel(
+      id: entry.localId,
+      content: '',
+      senderId: entry.peerUserId,
+      senderUsername: '',
+      conversationId: 0,
+      createdAt: entry.receivedAt,
+      encryptedContent: signal,
+      originDeviceId: device,
+    );
+    // A request queue is public: anyone can seal a frame naming our account.
+    // A sibling shares the account identity, so a PreKey message carrying any
+    // other key is a stranger's — refused BEFORE Signal sees it, because
+    // decrypting it would replace the real session with that device. Local
+    // and cheap, so it runs first.
+    if (!await enc.carriesOwnIdentity(signal)) {
+      _e2eFlowLog('BOX_SIBLING_FOREIGN_IDENTITY', {'device': device});
+      return true;
+    }
+    // What cannot be read NOW is held only on the self-queue, whose sid only
+    // siblings hold. On the public request queue it is finished: anyone can
+    // fill that queue, and a real sibling hands off again on its next connect.
+    final heldIfUnreadable = link.viaSelfQueue(entry.rid);
+    // The accept gate a peer delivery passes, against the OWN verified list:
+    // a revoked device of ours is refused like a revoked peer device.
+    if (!await _originDeviceIsLive(msg)) return !heldIfUnreadable;
+
+    final String plaintext;
+    try {
+      plaintext = await enc.decrypt(
+        entry.peerUserId,
+        signal,
+        messageId: entry.localId,
+        deviceId: device,
+      );
+    } on Object catch (e) {
+      return _siblingDecryptFailed(msg, e) || !heldIfUnreadable;
+    }
+    final String type;
+    try {
+      type = E2eEnvelope.parse(plaintext).type;
+    } on Object {
+      _e2eFlowLog('BOX_SIBLING_UNREADABLE', {'device': device});
+      return true;
+    }
+    switch (type) {
+      case E2eEnvelope.typeQueueHandoff:
+        return _takeSiblingHandoff(link, device, plaintext);
+      case E2eEnvelope.typeQueueHandoffAck:
+        final sid = E2eEnvelope.parseQueueHandoffAck(plaintext);
+        if (sid == null) {
+          _e2eFlowLog('BOX_SIBLING_UNREADABLE', {'device': device, 't': type});
+          return true;
+        }
+        return await link.siblingAcked(device, sid) != SiblingWrite.retryLater;
+      case E2eEnvelope.typeMessage:
+        // A sent copy from a sibling is part B; until then nothing sends one.
+        _e2eFlowLog('BOX_SIBLING_MESSAGE_UNHANDLED', {'device': device});
+        return true;
+      default:
+        _e2eFlowLog('BOX_UNKNOWN_TYPE', {'msgId': entry.localId, 't': type});
+        return true;
+    }
+  }
+
+  /// Hands sibling [device]'s self-queue from its handoff to the box, which
+  /// stores it, acks it and hands ours back when owed
+  /// ([BoxSiblingLink.takeSiblingHandoff]). Kept for the next offer only when
+  /// the store cannot take it now.
+  Future<bool> _takeSiblingHandoff(
+    BoxSiblingLink link,
+    int device,
+    String plaintext,
+  ) async {
+    final address = E2eEnvelope.parseQueueHandoff(plaintext);
+    if (address == null) {
+      _e2eFlowLog('BOX_SIBLING_UNREADABLE', {
+        'device': device,
+        't': E2eEnvelope.typeQueueHandoff,
+      });
+      return true;
+    }
+    switch (await link.takeSiblingHandoff(
+      device,
+      sid: address.sid,
+      sealPub: address.sealPub,
+    )) {
+      case SiblingWrite.retryLater:
+        return false;
+      case SiblingWrite.refused:
+        _e2eFlowLog('BOX_SIBLING_HANDOFF_REFUSED', {'device': device});
+        return true;
+      case SiblingWrite.stored:
+        return true;
+    }
+  }
+
+  /// The box failure policy ([decideDecryptionFailure]) for a sibling: what
+  /// may heal is offered again, the rest is finished. No re-key request:
+  /// `requestSessionRebuild` names an ACCOUNT and its receivers mark their
+  /// device-1 session for a rebuild — for the own account that is every
+  /// sibling's session with device 1, not the pair that failed.
+  bool _siblingDecryptFailed(MessageModel msg, Object e) {
+    final decision = decideDecryptionFailure(
+      _classifyDecryptError(e),
+      hadIdentityReset: _encryptionProvider?.hadIdentityReset == true,
+      isHistory: false,
+    );
+    _logDecryptionFailure(decision.rule, msg, e);
+    _e2eFlowLog('BOX_SIBLING_DECRYPT_FAILED', {
+      'msgId': msg.id,
+      'device': msg.originDeviceId,
+      'rule': decision.rule.name,
+    });
+    return decision.retryAction == DecryptionRetryAction.none;
+  }
+
+  /// Encrypts [json] for this account's own device [deviceId] and frames it
+  /// as from THIS device — the [OwnDeviceEncrypt] the box's sibling swap
+  /// uses, and the ack path above. Null when it cannot now (E2E not ready,
+  /// no session could be built) and for any device the own VERIFIED list
+  /// does not name live, this one included: the server's `ownRequestQueues`
+  /// says which siblings exist, but it must never decide who is handed our
+  /// self-queue — rotation (decision 27) depends on a revoked or phantom
+  /// device never holding it.
+  Future<BoxFrame?> encryptForOwnDevice(int deviceId, String json) async {
+    final enc = _encryptionProvider;
+    final own = _currentUserId;
+    if (enc == null || own == null || !enc.isE2EReady) return null;
+    try {
+      final verified =
+          enc.cachedDeviceList(own) ?? await enc.getVerifiedDeviceList(own);
+      if (deviceId == enc.ownDeviceId || !verified.isLiveDevice(deviceId)) {
+        _e2eFlowLog('BOX_SIBLING_NOT_LIVE', {'device': deviceId});
+        return null;
+      }
+      await enc.ensureSession(own, deviceId: deviceId);
+      return BoxFrame.fromSignalCiphertext(
+        await enc.encrypt(own, json, deviceId: deviceId),
+        senderDeviceId: enc.ownDeviceId,
+      );
+    } on Object catch (e) {
+      _e2eFlowLog('BOX_SIBLING_ENCRYPT_FAILED', {
+        'device': deviceId,
+        'error': e.runtimeType.toString(),
+      });
+      return null;
+    }
   }
 
   Future<bool> _readBox(MessageModel msg, DateTime receivedAt) async {

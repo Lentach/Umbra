@@ -824,6 +824,19 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     return this.chatSearchService.handleSetRequestQueue(client, data);
   }
 
+  /**
+   * A device reads its OWN siblings' request queues to swap self-queue
+   * addresses with them (metadata-privacy PR3.1 sibling queues) — once per
+   * connect, so the same tier as `setRequestQueue`. Answers on
+   * `ownRequestQueues`, the throttle refusal included.
+   */
+  @UseGuards(WsThrottlerGuard)
+  @Throttle({ default: { limit: 30, ttl: 900000 } })
+  @SubscribeMessage('getOwnRequestQueues')
+  async handleGetOwnRequestQueues(@ConnectedSocket() client: Socket) {
+    return this.chatSearchService.handleGetOwnRequestQueues(client);
+  }
+
   @UseGuards(WsThrottlerGuard)
   @Throttle({ default: { limit: 30, ttl: 900000 } })
   @SubscribeMessage('sendFriendRequest')

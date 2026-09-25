@@ -176,6 +176,116 @@ void main() {
     }
   });
 
+  group('account-bearing frames (request queue, sibling handoff)', () {
+    test(
+      'the body is v ‖ kind|0x10 ‖ u16be device ‖ u32be account ‖ Signal',
+      () {
+        final signal = _bytes(3);
+        final body = BoxFrame(
+          kind: BoxFrameKind.whisper,
+          senderDeviceId: 2,
+          senderUserId: 0x01020304,
+          signal: signal,
+        ).encode();
+        expect(body, [0x01, 0x12, 0x00, 0x02, 1, 2, 3, 4, ...signal]);
+      },
+    );
+
+    test('decode reads the sender account back; a normal frame has none', () {
+      for (final kind in BoxFrameKind.values) {
+        for (final account in [1, 42, 0xffffffff]) {
+          final back = BoxFrame.decode(
+            BoxFrame(
+              kind: kind,
+              senderDeviceId: 7,
+              senderUserId: account,
+              signal: _bytes(20),
+            ).encode(),
+          )!;
+          expect(back.kind, kind);
+          expect(back.senderDeviceId, 7);
+          expect(back.senderUserId, account);
+          expect(back.signal, _bytes(20));
+        }
+      }
+      final normal = BoxFrame.decode(
+        BoxFrame(
+          kind: BoxFrameKind.preKey,
+          senderDeviceId: 7,
+          signal: _bytes(20),
+        ).encode(),
+      )!;
+      expect(normal.senderUserId, isNull);
+    });
+
+    test('fromSignalCiphertext carries the account it is given', () {
+      final frame = BoxFrame.fromSignalCiphertext(
+        '3:${base64Encode(_bytes(5))}',
+        senderDeviceId: 4,
+        senderUserId: 9,
+      )!;
+      expect(BoxFrame.decode(frame.encode())!.senderUserId, 9);
+    });
+
+    test('the account header costs four Signal bytes: one more is a caller '
+        'bug', () {
+      expect(
+        BoxFrame(
+          kind: BoxFrameKind.whisper,
+          senderDeviceId: 1,
+          senderUserId: 1,
+          signal: _bytes(BoxFrame.maxSignalBytes - 4),
+        ).encode().length,
+        QueueSeal.maxBodyBytes,
+      );
+      expect(
+        () => BoxFrame(
+          kind: BoxFrameKind.whisper,
+          senderDeviceId: 1,
+          senderUserId: 1,
+          signal: _bytes(BoxFrame.maxSignalBytes - 3),
+        ).encode(),
+        throwsArgumentError,
+      );
+    });
+
+    test('an account outside 1..2^32-1 is a caller bug on encode', () {
+      for (final account in [0, -1, 0x100000000]) {
+        expect(
+          () => BoxFrame(
+            kind: BoxFrameKind.whisper,
+            senderDeviceId: 1,
+            senderUserId: account,
+            signal: _bytes(4),
+          ).encode(),
+          throwsArgumentError,
+        );
+      }
+    });
+
+    test('decode refuses account 0, a short header, and no Signal bytes', () {
+      Uint8List body(List<int> header, [int signal = 8]) =>
+          Uint8List.fromList([...header, ..._bytes(signal)]);
+      expect(
+        BoxFrame.decode(body([0x01, 0x12, 0x00, 0x01, 0, 0, 0, 0])),
+        isNull,
+      );
+      expect(
+        BoxFrame.decode(body([0x01, 0x13, 0x00, 0x01, 0, 0, 0, 1], 0)),
+        isNull,
+      );
+      expect(
+        BoxFrame.decode(Uint8List.fromList([0x01, 0x12, 0x00, 0x01, 0, 0])),
+        isNull,
+      );
+      expect(
+        BoxFrame.decode(body([0x01, 0x12, 0x00, 0x00, 0, 0, 0, 1])),
+        isNull,
+        reason: 'device 0',
+      );
+    });
+  });
+
   group('decode answers null for anything else', () {
     Uint8List body(List<int> header, [int signal = 8]) =>
         Uint8List.fromList([...header, ..._bytes(signal)]);
@@ -185,9 +295,9 @@ void main() {
       expect(BoxFrame.decode(body([0x00, 0x02, 0x00, 0x01])), isNull);
     });
 
-    test('a kind that is not a Signal message — the request-queue range '
-        'included, until first contact reads it', () {
-      for (final kind in [0x00, 0x01, 0x04, 0x10, 0x11, 0xff]) {
+    test('a kind that is not a Signal message — the reserved range beside '
+        'the account-bearing kinds included', () {
+      for (final kind in [0x00, 0x01, 0x04, 0x10, 0x11, 0x14, 0x22, 0xff]) {
         expect(BoxFrame.decode(body([0x01, kind, 0x00, 0x01])), isNull);
       }
     });

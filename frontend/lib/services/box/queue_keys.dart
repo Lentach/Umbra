@@ -97,10 +97,42 @@ class QueueKeys {
   /// Null when it cannot be known now: the store is closed, a newer build
   /// owns the row, the box did not answer, or the write did not commit. A
   /// row the store could not rule on is never minted over.
-  Future<ContactQueue?> ensureRequest() async {
+  Future<ContactQueue?> ensureRequest() => _ensureOwn(
+    QueueKind.request,
+    stored: () => _store.requestQueue,
+    unsupported: () => _store.requestQueueUnsupported,
+    claim: _store.claimRequestQueue,
+    drop: _store.dropRequestQueue,
+  );
+
+  /// This DEVICE's SELF-queue (PR3.1 sibling queues, owner decision 27): a
+  /// NORMAL queue every other device of the account sends into, the
+  /// per-friend model applied to the own account. Kept in the sibling row
+  /// (`ContactStore.siblingsKey`), created, claimed and subscribed exactly
+  /// like [ensureRequest] — including the drop-and-replace of a queue the
+  /// box refuses. Null for the same reasons.
+  Future<ContactQueue?> ensureSelf() => _ensureOwn(
+    QueueKind.normal,
+    stored: () => _store.selfQueue,
+    unsupported: () => _store.siblingsUnsupported,
+    claim: _store.claimSelfQueue,
+    drop: _store.dropSelfQueue,
+  );
+
+  /// One of this device's own queues: loaded from its row, or created, stored
+  /// and only then subscribed. A stored queue the box refuses on subscribe
+  /// (deleted, or reaped after 90 unsubscribed days) is dropped and replaced
+  /// once.
+  Future<ContactQueue?> _ensureOwn(
+    QueueKind kind, {
+    required ContactQueue? Function() stored,
+    required bool Function() unsupported,
+    required Future<ContactQueue?> Function(ContactQueue candidate) claim,
+    required Future<bool> Function(String rid) drop,
+  }) async {
     for (var attempt = 0; attempt < 2; attempt++) {
-      if (!_store.isOpen || _store.requestQueueUnsupported) return null;
-      final queue = _store.requestQueue ?? await _createRequest();
+      if (!_store.isOpen || unsupported()) return null;
+      final queue = stored() ?? await _createOwn(kind, claim);
       if (queue == null) return null;
       final owned = authOf(queue);
       if (owned != null) {
@@ -110,21 +142,24 @@ class QueueKeys {
             answer.value.any((r) => boxB64(r.rid) == queue.rid);
         if (!gone) return queue;
       }
-      if (!await _store.dropRequestQueue(queue.rid)) return null;
+      if (!await drop(queue.rid)) return null;
     }
     return null;
   }
 
-  Future<ContactQueue?> _createRequest() async {
+  Future<ContactQueue?> _createOwn(
+    QueueKind kind,
+    Future<ContactQueue?> Function(ContactQueue candidate) claim,
+  ) async {
     final auth = _signer.mint();
     final seal = QueueSeal.mintKeyPair();
-    final created = await _box.createQueue(QueueKind.request, auth);
+    final created = await _box.createQueue(kind, auth);
     if (created is! BoxOk<QueueAddress>) return null;
     final mine = _material(created.value, auth, seal);
-    final kept = await _store.claimRequestQueue(mine);
+    final kept = await claim(mine);
     if (kept?.rid != mine.rid) {
       // Another tab of this device claimed first, or nothing was stored:
-      // this queue's sid is never published, so nobody may keep it alive.
+      // this queue's sid is never handed out, so nobody may keep it alive.
       await _box.deleteQueue(BoxQueueAuth(rid: created.value.rid, key: auth));
     }
     return kept;

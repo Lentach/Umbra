@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:libsignal_protocol_dart/libsignal_protocol_dart.dart';
 import 'encryption/content_kv.dart';
+import 'encryption/prekey_identity.dart';
 import 'encryption/sealed_web_content_kv.dart';
 import 'encryption/sealed_web_envelope.dart';
 import 'encryption/content_kv_opener_stub.dart'
@@ -2666,6 +2667,14 @@ class EncryptionService {
     } catch (_) {
       return null;
     }
+  }
+
+  /// Whether [ciphertextStr] may come from one of this account's own devices
+  /// ([ciphertextMatchesIdentity] against the account identity). False before
+  /// init — nothing can be judged, so nothing is read.
+  Future<bool> carriesOwnIdentity(String ciphertextStr) async {
+    final own = await currentIdentityPublicKeyBase64();
+    return own != null && ciphertextMatchesIdentity(ciphertextStr, own);
   }
 
   /// Current locally minted registrationId — the (lxiv) install proof sent

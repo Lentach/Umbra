@@ -310,4 +310,65 @@ describe('ChatSearchService', () => {
       expect(client.emit).not.toHaveBeenCalled();
     });
   });
+
+  describe('getOwnRequestQueues', () => {
+    const own = () => service.handleGetOwnRequestQueues(socket());
+
+    it("serves the caller's OWN other devices and their request queues, never the calling device, and spends no pre-key", async () => {
+      client.data = { user: { id: 1, deviceId: 3 } };
+      devices.firstContactDevices.mockResolvedValue([
+        { deviceId: 1, requestSid: sid, requestSealPub: sealPub },
+        { deviceId: 3, requestSid: sid, requestSealPub: sealPub },
+        // Linked, but on a build that has not published a request queue yet.
+        { deviceId: 4, requestSid: null, requestSealPub: null },
+      ]);
+
+      await own();
+
+      expect(devices.firstContactDevices).toHaveBeenCalledWith(1);
+      expect(keyExchange.claimBundle).not.toHaveBeenCalled();
+      expect(payloadOf('ownRequestQueues')).toEqual({
+        success: true,
+        devices: [
+          { deviceId: 1, requestSid: sid, sealPub },
+          { deviceId: 4, requestSid: null, sealPub: null },
+        ],
+      });
+    });
+
+    it('treats a token without a device claim as device 1 (pre-Phase-1 sessions)', async () => {
+      client.data = { user: { id: 1 } };
+      devices.firstContactDevices.mockResolvedValue([
+        { deviceId: 1, requestSid: sid, requestSealPub: sealPub },
+        { deviceId: 2, requestSid: sid, requestSealPub: sealPub },
+      ]);
+
+      await own();
+
+      expect(payloadOf('ownRequestQueues')).toEqual({
+        success: true,
+        devices: [{ deviceId: 2, requestSid: sid, sealPub }],
+      });
+    });
+
+    it('answers internal when the lookup fails, never a partial list', async () => {
+      devices.firstContactDevices.mockRejectedValue(new Error('db down'));
+
+      await own();
+
+      expect(payloadOf('ownRequestQueues')).toEqual({
+        success: false,
+        error: 'internal',
+      });
+    });
+
+    it('ignores an unauthenticated socket', async () => {
+      client.data = {};
+
+      await own();
+
+      expect(devices.firstContactDevices).not.toHaveBeenCalled();
+      expect(client.emit).not.toHaveBeenCalled();
+    });
+  });
 });

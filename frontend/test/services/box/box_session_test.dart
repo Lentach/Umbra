@@ -87,10 +87,46 @@ void main() {
     await pumpEventQueue();
   }
 
+  /// One connect of an install that holds its identity: `socketReady`, then
+  /// E2E ready (it fires once per connect, `initializeE2E`).
   Future<void> accountReady(int? deviceId) async {
-    session.accountReady(deviceId);
+    session
+      ..accountReady(deviceId)
+      ..e2eReady();
     await pumpEventQueue();
   }
+
+  test(
+    'a device still on the LINK GATE never publishes: its token names the '
+    "primary's device, so a publish would overwrite the primary's request "
+    'queue (found live, 2026-09-25)',
+    () async {
+      await boxUp('S1');
+      session.accountReady(1);
+      await pumpEventQueue();
+      expect(published, isEmpty, reason: 'no identity yet: E2E never ready');
+    },
+  );
+
+  test(
+    "a reconnect under a new device id waits for THAT connect's E2E ready "
+    '(the link rebind: identity adopted on the old token, published only '
+    'under the new one)',
+    () async {
+      await boxUp('S1');
+      await accountReady(1);
+      session
+        ..onRequestQueueSet({'success': true})
+        ..accountLost()
+        ..accountReady(2);
+      await pumpEventQueue();
+      expect(published, hasLength(1), reason: 'E2E not ready on this connect');
+
+      session.e2eReady();
+      await pumpEventQueue();
+      expect(published, hasLength(2));
+    },
+  );
 
   test(
     'publishes the request queue once BOTH the box and the account socket '

@@ -341,4 +341,129 @@ void main() {
       expect(sent('createQueue'), isEmpty);
     });
   });
+
+  group("this device's SELF-queue (sibling queues, decision 27)", () {
+    final self = {
+      'rid': boxB64(_bytes(32, 0xa4)),
+      'sid': boxB64(_bytes(32, 0xa5)),
+      'nid': boxB64(_bytes(16, 0xa6)),
+    };
+
+    Iterable<EmittedFrame> sent(String event) =>
+        sockets.last.emitted.where((f) => f.event == event);
+
+    /// The box, holding the queues it created; [gone] rids are refused on
+    /// subscribe, as a reaped queue is.
+    final gone = <String>{};
+    var next = self;
+
+    setUp(() {
+      gone.clear();
+      next = self;
+      sockets.respond = (_, f) => switch (f.event) {
+        'createQueue' => {'ok': true, ...next},
+        'subscribe' => {
+          'ok': true,
+          'refused': [
+            for (final s in (f.frame['subs']! as List<Object?>))
+              if (gone.contains((s! as Map)['rid']))
+                {'rid': (s as Map)['rid'], 'code': 'auth_failed'},
+          ],
+        },
+        _ => {'ok': true},
+      };
+    });
+
+    test(
+      'is created as a NORMAL queue, subscribed, stored in the sibling row '
+      '(never a contact row, never the request row), and the same queue comes '
+      'back after a re-open',
+      () async {
+        final queue = (await keys.ensureSelf())!;
+        expect(queue.sid, self['sid']);
+        final create = sent('createQueue').single.frame;
+        expect(create['kind'], 'normal');
+        expect(boxB64(QueueKeys.authOf(queue)!.key.publicKey), create['authPub']);
+        expect(box.subscribed.map(boxB64), contains(queue.rid));
+
+        final reopened = newStore();
+        await reopened.open(1);
+        expect(reopened.undeterminedCount, 0);
+        expect(reopened.all.map((r) => r.userId), [42]);
+        expect(reopened.requestQueue, isNull);
+        expect(reopened.selfQueue?.rid, queue.rid);
+
+        final again = (await QueueKeys(
+          box: box,
+          store: reopened,
+        ).ensureSelf())!;
+        expect(again.rid, queue.rid);
+        expect(again.authPriv, queue.authPriv);
+        expect(sent('createQueue'), hasLength(1));
+      },
+    );
+
+    test(
+      'a self-queue another tab stored first wins; the one just created is '
+      'deleted again',
+      () async {
+        final other = newStore();
+        await other.open(1);
+        final theirs = (await QueueKeys(box: box, store: other).ensureSelf())!;
+        next = {
+          'rid': boxB64(_bytes(32, 0xb4)),
+          'sid': boxB64(_bytes(32, 0xb5)),
+          'nid': boxB64(_bytes(16, 0xb6)),
+        };
+        // This store opened before the other tab's claim: its RAM view has
+        // no self-queue, the disk does.
+        final kept = (await keys.ensureSelf())!;
+        expect(kept.rid, theirs.rid);
+        expect(sent('deleteQueue').single.frame['rid'], next['rid']);
+      },
+    );
+
+    test(
+      'a stored self-queue the box no longer knows (reaped) is replaced; the '
+      'sibling addresses stay',
+      () async {
+        final first = (await keys.ensureSelf())!;
+        await store.learnSibling(
+          2,
+          sid: boxB64(_bytes(32, 0xc0)),
+          sealPub: boxB64(_bytes(32, 0xc1)),
+        );
+        gone.add(first.rid);
+        next = {
+          'rid': boxB64(_bytes(32, 0xb4)),
+          'sid': boxB64(_bytes(32, 0xb5)),
+          'nid': boxB64(_bytes(16, 0xb6)),
+        };
+
+        final replaced = (await keys.ensureSelf())!;
+        expect(replaced.sid, next['sid']);
+        final stored = newStore();
+        await stored.open(1);
+        expect(stored.selfQueue?.rid, next['rid']);
+        expect(stored.siblings.single.deviceId, 2);
+      },
+    );
+
+    test('a row a newer build wrote is left alone; nothing is created', () async {
+      final future = jsonEncode({'v': 2, 'siblings': <Object>[]});
+      await kv.setString(ContactStore.siblingsKey(1), future);
+      final reopened = newStore();
+      await reopened.open(1);
+
+      expect(await QueueKeys(box: box, store: reopened).ensureSelf(), isNull);
+      expect(sent('createQueue'), isEmpty);
+      expect(kv.getString(ContactStore.siblingsKey(1)), future);
+    });
+
+    test('a closed store creates nothing', () async {
+      store.close();
+      expect(await keys.ensureSelf(), isNull);
+      expect(sent('createQueue'), isEmpty);
+    });
+  });
 }

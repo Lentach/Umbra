@@ -16,6 +16,7 @@ import '../services/box/box_device_list_refresh.dart';
 import '../services/box/box_envelope.dart';
 import '../services/box/box_frame.dart';
 import '../services/box/box_outbox.dart';
+import '../services/box/box_siblings.dart';
 import '../services/contacts/contact_record.dart';
 import '../services/contacts/contact_store.dart';
 import '../services/device_list/device_list_cache.dart';
@@ -382,6 +383,11 @@ class MessagingProvider extends ChangeNotifier {
   /// Where a text goes when it can go over the box (PR3.1 slice (c));
   /// `ConnectionProvider` wires the account session's one. Null = old path.
   BoxOutbox? boxOutbox;
+
+  /// This account's own devices over the box (PR3.1 sibling queues): where a
+  /// sibling's handoff is stored and its ack sent. `ConnectionProvider`
+  /// wires the account session's one; null = sibling entries wait.
+  BoxSiblingLink? boxSiblings;
 
   /// Set in [dispose]; lets the overlay's dispose-scheduled onComplete
   /// microtask no-op instead of notifying a disposed ChangeNotifier.
