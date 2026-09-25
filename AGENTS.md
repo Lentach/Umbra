@@ -6,7 +6,7 @@ The only project file Oh-My-Pi injects (it shadows root `CLAUDE.md`), so every l
 
 1. Root `CLAUDE.md` — workflow, architecture, deploy safety, version contract.
 2. The tier file before your first change in that tier: `backend/CLAUDE.md` or `frontend/CLAUDE.md`.
-3. `.cursor/session-summaries/LATEST.md`, then `grep docs/agents/traps.md` for your area (standing warnings, one line each).
+3. `.cursor/session-summaries/LATEST.md`, then the `docs/agents/traps.md` groups for your area (standing warnings, one line each).
 4. Area docs load as edit-time rules (`.omp/rules/`, mirrored in `.claude/rules/`): read the doc a rule names before that edit.
 5. Skills: `.claude/skills/` IS the set (`.omp/config.yml` mutes `~/.agents`); map + MCP: `docs/agents/skills-and-mcp.md`. Triggers: broken/slow → `diagnosing-bugs` · "review since X" → `code-review` · stress-test a plan → `grilling` · module shape → `codebase-design`, `design-an-interface` · docs/API facts → `research` · open design question → `prototype` · merge/rebase → `resolving-merge-conflicts` · file it → `qa`, `request-refactor-plan` · `/skill:` only → `triage`, `to-spec`, `to-tickets`.
 6. Delegating? Subagents start blank, in the main checkout: give the ABSOLUTE path of this worktree's baton + its traps (`umbra-session-start` §6), then only the slice.
