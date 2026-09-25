@@ -235,7 +235,7 @@ void main() {
       deliver = false;
       notifiers = build(
         codeWait: const Duration(milliseconds: 30),
-        park: const Duration(milliseconds: 500),
+        park: const Duration(milliseconds: 1500),
       )..run();
       await settle();
       await Future<void>.delayed(const Duration(milliseconds: 120));
@@ -251,7 +251,7 @@ void main() {
       await settle();
       expect(steps(), hasLength(1), reason: 'resting');
 
-      await Future<void>.delayed(const Duration(milliseconds: 900));
+      await Future<void>.delayed(const Duration(milliseconds: 2500));
       await settle();
       expect(steps().skip(1), [(a.nid, 1), (a.nid, 2), (b.nid, 1), (b.nid, 2)]);
     },
@@ -307,13 +307,13 @@ void main() {
     challengeAnswers[b.nid] = {
       'ok': false,
       'code': 'rate_limited',
-      'retryAfterMs': 40,
+      'retryAfterMs': 600,
     };
     notifiers = build()..run();
     await settle();
     expect(steps(), [(a.nid, 1), (a.nid, 2), (b.nid, 1)]);
 
-    await Future<void>.delayed(const Duration(milliseconds: 400));
+    await Future<void>.delayed(const Duration(milliseconds: 1500));
     await settle();
     expect(steps().skip(3), [(b.nid, 1), (b.nid, 2)]);
   });
