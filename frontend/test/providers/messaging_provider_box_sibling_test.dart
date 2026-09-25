@@ -41,6 +41,9 @@ class _SiblingEncryption extends EncryptionProvider {
   /// linked or revoked) and only a fetch answers.
   bool ownCached = true;
 
+  /// A fetch of the own list fails (timeout, bad chain).
+  bool ownFetchFails = false;
+
   /// What [carriesOwnIdentity] answers: false = a stranger's PreKey message.
   bool ownIdentity = true;
   final List<String> identityChecks = [];
@@ -69,7 +72,9 @@ class _SiblingEncryption extends EncryptionProvider {
     int userId, {
     bool forceRefresh = false,
     Duration timeout = const Duration(seconds: 10),
-  }) async => userId == 1 ? own : throw StateError('no list in this test');
+  }) async => userId == 1 && !ownFetchFails
+      ? own
+      : throw StateError('no list in this test');
 
   @override
   Future<String> decrypt(
@@ -575,6 +580,19 @@ void main() {
       encryption.own = _enrolled([2]);
       expect(await consume(sibling()), isFalse, reason: 'young: held');
       expect(await consume(sibling(receivedAt: old)), isTrue);
+      expect(encryption.decrypts, isEmpty);
+    },
+  );
+
+  test(
+    'a self-queue delivery whose origin cannot be decided NOW — the own list '
+    'is not cached and its fetch fails — is held, never finished as revoked',
+    () async {
+      encryption
+        ..ownCached = false
+        ..ownFetchFails = true;
+      inbound(E2eEnvelope.buildQueueHandoff(sid: _sid, sealPub: _sealPub));
+      expect(await consume(sibling()), isFalse);
       expect(encryption.decrypts, isEmpty);
     },
   );
