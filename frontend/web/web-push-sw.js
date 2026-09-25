@@ -167,9 +167,55 @@ function shouldSuppressForFocusedConversation(convId) {
     });
 }
 
+// Box push registration (metadata-privacy E9): a `notifier_challenge` code
+// proves this subscription reaches the page that holds the queue key. It is
+// handed to every open page — the one registering answers it — and is never
+// a "New message" card. But a push that posts NO notification is a broken
+// promise (`userVisibleOnly`): Safari REVOKES the subscription after three
+// (WebKit, WWDC22), and Chrome posts its own generic card when no page of
+// ours is visible. So one is posted and closed at once, unless a visible
+// page took the code on a non-Apple push service.
+function handleNotifierChallenge(code) {
+  function postAndClose() {
+    return self.registration
+      .showNotification('Umbra', {
+        body: 'Setting up notifications',
+        icon: '/icons/notification-icon-512.png',
+        badge: '/icons/notification-badge-96.png',
+        tag: 'box-notifier',
+        silent: true,
+      })
+      .then(function () { return closeNotificationsForTag('box-notifier'); });
+  }
+  return clients
+    .matchAll({ type: 'window', includeUncontrolled: true })
+    .then(function (all) {
+      var visible = false;
+      for (var i = 0; i < all.length; i++) {
+        if (typeof code === 'string') {
+          all[i].postMessage({ type: 'box-notifier-challenge', code: code });
+        }
+        if (all[i].visibilityState === 'visible') visible = true;
+      }
+      return self.registration.pushManager
+        .getSubscription()
+        .then(function (sub) {
+          var endpoint = sub && sub.endpoint ? sub.endpoint : '';
+          var apple = endpoint.indexOf('https://web.push.apple.com/') === 0;
+          return visible && !apple ? undefined : postAndClose();
+        });
+    })
+    .catch(postAndClose);
+}
+
 self.addEventListener('push', function (event) {
   var payload = {};
   try { payload = event.data ? event.data.json() : {}; } catch (_) {}
+
+  if (payload.type === 'notifier_challenge') {
+    event.waitUntil(handleNotifierChallenge(payload.code));
+    return;
+  }
 
   // Phase 0a takeover alarm: content-free security notice — the account's
   // key bundle was replaced by another sign-in. No conversation, no unread

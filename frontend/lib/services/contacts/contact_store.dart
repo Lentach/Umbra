@@ -12,6 +12,7 @@ import '../encryption/session_cross_context_lock.dart';
 import 'contact_record.dart';
 
 part 'contact_store_inbox.dart';
+part 'contact_store_notifiers.dart';
 part 'contact_store_siblings.dart';
 
 /// The store could not be opened for this session. [stage] names the first
@@ -94,6 +95,12 @@ class ContactStore {
   /// [requestQueueKey] reasons, and no backup carries it (decision 28).
   static String siblingsKey(int userId) => 'e2e_${userId}_boxsib_v1';
 
+  /// Which normal inbound queues have an active box push notifier, and for
+  /// which push target (E9, `contact_store_notifiers.dart`): outside
+  /// [keyPrefix] for the [requestQueueKey] reasons; no backup carries it.
+  static String notifiersKey(int userId) => 'e2e_${userId}_boxntf_v1';
+  static const int notifiersVersion = 1;
+
   int? _userId;
   ContentKv? _kv;
   final Map<int, ContactRecord> _records = <int, ContactRecord>{};
@@ -102,6 +109,8 @@ class ContactStore {
   bool _requestQueueUnsupported = false;
   _SiblingBook _siblingBook = _SiblingBook.empty;
   bool _siblingsUnsupported = false;
+  _NotifierBook _notifierBook = _NotifierBook.empty;
+  bool _notifiersUnsupported = false;
   int _undetermined = 0;
 
   /// The box delivery journal ([BoxInboxEntry]), keyed `rid.id`.
@@ -176,6 +185,7 @@ class ContactStore {
             key.startsWith(keyPrefix(userId)) ||
             key == requestQueueKey(userId) ||
             key == siblingsKey(userId) ||
+            key == notifiersKey(userId) ||
             key.startsWith(_inboxPrefix(userId)),
       );
     } on Object {
@@ -188,6 +198,9 @@ class ContactStore {
     final loaded = <int, ContactRecord>{};
     final request = _decodeRequest(rows.remove(requestQueueKey(userId)));
     final siblingBook = _SiblingBook.decode(rows.remove(siblingsKey(userId)));
+    final notifierBook = _NotifierBook.decode(
+      rows.remove(notifiersKey(userId)),
+    );
     final inbox = _takeInbox(rows, userId);
     UserModel? selfUser;
     for (final entry in rows.entries) {
@@ -225,6 +238,8 @@ class ContactStore {
     _requestQueueUnsupported = request.unsupported;
     _siblingBook = siblingBook ?? _SiblingBook.empty;
     _siblingsUnsupported = siblingBook == null;
+    _notifierBook = notifierBook ?? _NotifierBook.empty;
+    _notifiersUnsupported = notifierBook == null;
     _undetermined = undetermined;
     _inbox
       ..clear()
@@ -249,6 +264,8 @@ class ContactStore {
     _requestQueueUnsupported = false;
     _siblingBook = _SiblingBook.empty;
     _siblingsUnsupported = false;
+    _notifierBook = _NotifierBook.empty;
+    _notifiersUnsupported = false;
     _undetermined = 0;
     _records.clear();
     _inbox.clear();

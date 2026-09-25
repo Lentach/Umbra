@@ -171,6 +171,23 @@ export class BoxService {
   }
 
   /**
+   * The nid of each queue in `rids` still holding a message delivery would
+   * hand out (not expired): a socket that owned them went away, and what it
+   * was handed may be unread. Read-only, so the lock order (queue rows
+   * before msg rows) is not involved.
+   */
+  async waitingNids(rids: Buffer[]): Promise<Buffer[]> {
+    const rows: { nid: Buffer }[] = await this.db.query(
+      `SELECT q.nid FROM public.box_queues q
+        WHERE q.rid = ANY($1::bytea[])
+          AND EXISTS (SELECT 1 FROM public.box_msgs m
+                       WHERE m.rid = q.rid AND m."expiresAt" > now())`,
+      [rids],
+    );
+    return rows.map((r) => r.nid);
+  }
+
+  /**
    * A subscribe claims the queue (clears `claimBy`) and stamps the UTC day.
    * The WHERE skips rows already in that state: a reconnect loop must not
    * rewrite every row of a device on every connect.

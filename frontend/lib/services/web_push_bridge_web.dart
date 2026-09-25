@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
@@ -69,9 +70,100 @@ class WebPushBridge {
     final registration = await _registerServiceWorker();
     var subscription =
         await registration.pushManager.getSubscription().toDart;
+    final created = subscription == null;
     subscription ??=
         await _subscribe(registration, vapidPublicKey);
+    if (created) _subscriptionChanged.add(null);
     return _toPayload(subscription, userAgent);
+  }
+
+  /// This browser's push subscription as the box takes it (E9):
+  /// `PushSubscription.toJSON()`, JSON-encoded, with nothing the box's parser
+  /// refuses (it takes `endpoint`, `keys` and `expirationTime` only — never
+  /// the `userAgent` the account-side registration adds). Null without a
+  /// subscription or permission.
+  Future<String?> boxToken() async {
+    if (!isSupported || notificationPermission != 'granted') return null;
+    final registration = await _registerServiceWorker();
+    final subscription =
+        await registration.pushManager.getSubscription().toDart;
+    final payload = _toPayload(subscription, null);
+    if (payload == null) return null;
+    return jsonEncode({
+      'endpoint': payload['endpoint'],
+      'keys': payload['keys'],
+      'expirationTime': payload['expirationTime'],
+    });
+  }
+
+  /// Whether this page is on screen: the push SW hands a challenge code to
+  /// open pages, and posts no notification only for a visible one.
+  bool get pageVisible => web.document.visibilityState == 'visible';
+
+  static final StreamController<String> _boxChallengeCodes =
+      StreamController.broadcast();
+  static final StreamController<void> _subscriptionChanged =
+      StreamController.broadcast();
+
+  /// The code of every `notifier_challenge` push the SW forwarded. Empty
+  /// where push is unsupported: `navigator.serviceWorker` is undefined in an
+  /// insecure context and in some in-app WebViews, and touching it throws.
+  Stream<String> get boxChallengeCodes {
+    if (!isSupported) return const Stream.empty();
+    _listenToWorker();
+    return _boxChallengeCodes.stream;
+  }
+
+  /// The subscription may be new or different (the SW's
+  /// `pushsubscriptionchange`, a subscribe from a user gesture), or the page
+  /// came back on screen — when a challenge can be taken again. Empty where
+  /// push is unsupported, as [boxChallengeCodes].
+  Stream<void> get subscriptionChanged {
+    if (!isSupported) return const Stream.empty();
+    _listenToWorker();
+    return _subscriptionChanged.stream;
+  }
+
+  static bool _workerListenerRegistered = false;
+
+  static void _listenToWorker() {
+    if (_workerListenerRegistered) return;
+    _workerListenerRegistered = true;
+    final container = web.window.navigator.serviceWorker as JSObject
+      ..callMethod<JSAny?>(
+        'addEventListener'.toJS,
+        'message'.toJS,
+        ((JSObject event) {
+          try {
+            final data = event.getProperty<JSObject?>('data'.toJS);
+            if (data == null) return;
+            final type = data.getProperty<JSAny?>('type'.toJS).dartify();
+            if (type == 'box-notifier-challenge') {
+              final code = data.getProperty<JSAny?>('code'.toJS).dartify();
+              if (code is String) _boxChallengeCodes.add(code);
+            } else if (type == 'push-subscription-change') {
+              _subscriptionChanged.add(null);
+            }
+          } on Object {
+            // A message this page cannot read is not ours to act on.
+          }
+        }).toJS,
+      );
+    web.document.addEventListener(
+      'visibilitychange',
+      ((web.Event _) {
+        if (web.document.visibilityState == 'visible') {
+          _subscriptionChanged.add(null);
+        }
+      }).toJS,
+    );
+    // The same WebKit rule as [listenForNotificationClicks]: messages stay
+    // queued until startMessages() (idempotent).
+    try {
+      container.callMethod<JSAny?>('startMessages'.toJS);
+    } on Object {
+      // Engines without startMessages() deliver without it.
+    }
   }
 
   Future<String?> unsubscribe() async {

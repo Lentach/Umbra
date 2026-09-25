@@ -1,4 +1,4 @@
-import { UseFilters, UseGuards } from '@nestjs/common';
+import { Logger, UseFilters, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import {
   ConnectedSocket,
@@ -58,14 +58,32 @@ const AUTH_FAILED: BoxRefusal = { ok: false, code: 'auth_failed' };
 @UseGuards(BoxThrottlerGuard)
 @WebSocketGateway({ namespace: '/box', cors: { origin: buildCorsOrigin() } })
 export class BoxGateway implements OnGatewayDisconnect {
+  private readonly logger = new Logger(BoxGateway.name);
+
   constructor(
     private readonly box: BoxService,
     private readonly delivery: BoxDelivery,
     private readonly notifier: BoxNotifierService,
   ) {}
 
-  handleDisconnect(client: Socket): void {
-    this.delivery.detachSocket(client.id);
+  /**
+   * A queue the socket owned that still holds messages wakes its device:
+   * those went to this socket instead of to a push, and it may never have
+   * read them. Like `send`'s push, it fires even if the device resubscribes
+   * within the coalescing wait.
+   */
+  async handleDisconnect(client: Socket): Promise<void> {
+    const owned = this.delivery.detachSocket(client.id);
+    if (owned.length === 0) return;
+    try {
+      for (const nid of await this.box.waitingNids(owned)) {
+        this.notifier.schedule(nid);
+      }
+    } catch (error) {
+      this.logger.warn(
+        `[box] wake-up on disconnect failed: ${error instanceof Error ? error.name : 'unknown'}`,
+      );
+    }
   }
 
   @Throttle({

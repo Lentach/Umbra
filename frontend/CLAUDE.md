@@ -51,6 +51,7 @@ Lint conventions are recorded in `frontend/analysis_options.yaml` (relative impo
 - `WebPushBridge.listenForNotificationClicks` must call `navigator.serviceWorker.startMessages()` after adding the message listener; WebKit queues messages forever without it.
 - App → push-SW messages go through `PushSwChannel` using `getRegistration('/web-push-scope/')` and `reg.active.postMessage`. Do not use `serviceWorker.ready` / `.controller`; that targets Flutter's app SW.
 - Push SW owns notification tray and app badge. It close-before-shows stable `conversation-<id>` tags because iOS WebKit does not replace same-tag notifications reliably.
+- Every push the SW receives must post a notification inside `waitUntil`: Safari REVOKES the subscription after 3 silent pushes. The box `notifier_challenge` (E9) is forwarded to open pages and posted-then-closed unless a visible page took it on a non-Apple endpoint; never add a data-only branch (`docs/contracts/wire.md` "Client push registration").
 - iOS killed/suspended PWA deep links: `clients.openWindow('/?notify_conv=...')` can lose the URL. SW persists `{conversationId, at}` in IndexedDB `fireplace-push/kv/pending-deep-link`; `main.dart` drains it before `runApp`.
 - Android native push is data-only FCM → `flutter_local_notifications`; small icon is `@drawable/ic_stat_umbra` in notifications. Main plugin initialization still uses launcher icon; do not claim every native init path uses the drawable icon.
 - Notification small/badge icon must be monochrome white-on-transparent. Full-color opaque PNGs become white squares.

@@ -66,13 +66,21 @@ export class BoxDelivery {
     setImmediate(() => this.pump(attached));
   }
 
-  detachSocket(socketId: string): void {
+  /**
+   * Forgets the socket. Returns the rids it still owned: what it was handed
+   * may be unread — a socket that dies silently is detached only at the
+   * ping timeout, and every message stored meanwhile went to it, not to a
+   * push.
+   */
+  detachSocket(socketId: string): Buffer[] {
     const slot = this.slots.get(socketId);
-    if (!slot) return;
+    if (!slot) return [];
     for (const rid of slot.rids.keys()) {
       if (this.owners.get(rid) === socketId) this.owners.delete(rid);
     }
     this.slots.delete(socketId);
+    // `release` drops a rid a newer socket took: every rid left is still ours.
+    return [...slot.rids.values()];
   }
 
   /** The queue is gone (deleted or reaped): no socket owns it any more. */

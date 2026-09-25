@@ -613,6 +613,17 @@ void main() {
       expect(kv.getString('e2e_37_boxsib_v1'), '{"v":1,"siblings":[]}');
     });
 
+    test('the box notifier row is sealed, never cleartext', () async {
+      // It ties every contact queue's nid to this device's push token (E9).
+      final kv = await openStore();
+      await kv.setString('e2e_37_boxntf_v1', '{"v":1,"nids":[]}');
+      expect(
+        SealedWebEnvelope.isEnvelope(prefs.getString('e2e_37_boxntf_v1')!),
+        isTrue,
+      );
+      expect(kv.getString('e2e_37_boxntf_v1'), '{"v":1,"nids":[]}');
+    });
+
     test('remove drops the row and the view', () async {
       final kv = await openStore();
       await kv.setString('e2e_37_decrypted_43', '{"c":"x"}');

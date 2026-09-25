@@ -250,6 +250,41 @@ describeWithDb('box over real sockets and Postgres', () => {
     return rows.map((r) => r.id.toString('base64url'));
   }
 
+  /** Registers and activates `token` as the queue's notifier, the two steps. */
+  async function activateNotifier(
+    socket: ClientSocket,
+    queue: Queue,
+    token: string,
+  ): Promise<void> {
+    const nid = Buffer.from(queue.nid, 'base64url');
+    const before = pushes.length;
+    await call(socket, 'registerNotifier', {
+      v: 1,
+      nid: queue.nid,
+      platform: 'fcm',
+      token,
+      sig: signFor(
+        socket,
+        queue.key,
+        'registerNotifier',
+        notifierChallengeFields(nid, 'fcm', token),
+      ),
+    });
+    const code = Buffer.from(pushes[before].data.code, 'base64url');
+    const answer = await call(socket, 'registerNotifier', {
+      v: 1,
+      nid: queue.nid,
+      code: code.toString('base64url'),
+      sig: signFor(
+        socket,
+        queue.key,
+        'registerNotifier',
+        notifierActivateFields(nid, code),
+      ),
+    });
+    if (answer.state !== 'active') throw new Error('notifier not active');
+  }
+
   function upload(sid: string, body: Buffer, ip = nextIp()) {
     return fetch(`${base}/box/media`, {
       method: 'POST',
@@ -743,6 +778,82 @@ describeWithDb('box over real sockets and Postgres', () => {
       expect(pushes).toEqual([
         { platform: 'fcm', token, data: { type: 'new_message' } },
       ]);
+    });
+
+    it('wakes the device for what a socket that went away never acked; one that acked everything leaves nothing to wake', async () => {
+      const bob = await connect();
+      const alice = await connect();
+      const queue = await createQueue(bob);
+      const token = 'fcm-token_box:2';
+      await activateNotifier(bob, queue, token);
+      const got = collect(bob);
+      expect(await subscribe(bob, [queue])).toMatchObject({ ok: true });
+      pushes.length = 0;
+
+      // Handed to a live socket, never acked: the device may not have read
+      // it. A socket dies silently (a phone put the app away) and the box
+      // learns it only at the ping timeout — every message in between went
+      // to that socket instead of to a push.
+      await call(alice, 'send', { v: 1, sid: queue.sid, blob: blob() });
+      await until(() => got.length === 1, 4000);
+      await sleep(3000);
+      expect(pushes).toEqual([]);
+      bob.disconnect();
+      await until(() => pushes.length === 1, 8000);
+      expect(pushes).toEqual([
+        { platform: 'fcm', token, data: { type: 'new_message' } },
+      ]);
+
+      const carol = await connect();
+      const again = collect(carol);
+      await subscribe(carol, [queue]);
+      await until(() => again.length === 1, 4000);
+      expect(await ackMessage(carol, queue, again[0].id)).toMatchObject({
+        ok: true,
+      });
+      pushes.length = 0;
+      carol.disconnect();
+      await sleep(3500);
+      expect(pushes).toEqual([]);
+    });
+
+    it('a socket whose queue a newer socket took wakes nobody when it goes', async () => {
+      const stale = await connect();
+      const alice = await connect();
+      const queue = await createQueue(stale);
+      const token = 'fcm-token_box:3';
+      await activateNotifier(stale, queue, token);
+      await subscribe(stale, [queue]);
+      const fresh = await connect();
+      const got = collect(fresh);
+      await subscribe(fresh, [queue]);
+      await call(alice, 'send', { v: 1, sid: queue.sid, blob: blob() });
+      await until(() => got.length === 1, 4000);
+      pushes.length = 0;
+
+      // The unacked message sits with the live socket, which owns the queue.
+      stale.disconnect();
+      await sleep(3500);
+      expect(pushes).toEqual([]);
+      // Nothing left for the suite's disconnect to wake in the next test.
+      await ackMessage(fresh, queue, got[0].id);
+    });
+
+    it('an expired message the reaper has not swept yet wakes nobody: delivery would never hand it out', async () => {
+      const bob = await connect();
+      const queue = await createQueue(bob);
+      await activateNotifier(bob, queue, 'fcm-token_box:4');
+      await subscribe(bob, [queue]);
+      await db.query(
+        `INSERT INTO box_msgs (id, rid, blob, "createdAt", "expiresAt")
+         VALUES ($1, $2, $3, now() - interval '31 days', now() - interval '1 day')`,
+        [randomBytes(16), Buffer.from(queue.rid, 'base64url'), randomBytes(16)],
+      );
+      pushes.length = 0;
+
+      bob.disconnect();
+      await sleep(3500);
+      expect(pushes).toEqual([]);
     });
   });
 

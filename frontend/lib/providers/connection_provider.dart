@@ -11,6 +11,7 @@ import '../services/box/box_session.dart';
 import '../services/contacts/contact_backup.dart';
 import '../services/contacts/contact_backup_service.dart';
 import '../services/contacts/contact_store.dart';
+import '../services/push_box_source.dart';
 import '../services/push_service.dart';
 import '../services/device_link/dak_store.dart';
 import '../services/device_link/link_ceremony_controller.dart'
@@ -495,6 +496,8 @@ class ConnectionProvider extends ChangeNotifier {
           box: boxClient(baseUrl),
           store: contacts,
           emit: emit,
+          // E9: box push registration on every contact queue.
+          push: PushBoxSource(),
         )..start();
         // Slice (b): every box delivery is read by the messaging provider,
         // which knows the peer only through the contact record. Slice (c):

@@ -20,6 +20,14 @@ class WebPushBridge {
 
   Future<String?> unsubscribe() async => null;
 
+  Future<String?> boxToken() async => null;
+
+  bool get pageVisible => false;
+
+  Stream<String> get boxChallengeCodes => const Stream.empty();
+
+  Stream<void> get subscriptionChanged => const Stream.empty();
+
   void listenForNotificationClicks(
       void Function(int? conversationId) handler) {}
 }

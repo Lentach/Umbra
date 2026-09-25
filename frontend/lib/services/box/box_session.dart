@@ -9,6 +9,7 @@ import '../contacts/contact_record.dart';
 import '../contacts/contact_store.dart';
 import 'box_client.dart';
 import 'box_inbox.dart';
+import 'box_notifiers.dart';
 import 'box_outbox.dart';
 import 'box_sibling_rotation.dart';
 import 'box_sibling_swap.dart';
@@ -46,12 +47,17 @@ import 'queue_seal.dart';
 /// rotation on revoke ([BoxSiblingRotation]), hands the send path the
 /// siblings' self-queues ([siblingAddresses], part B) and, as the
 /// [BoxSiblingLink], stores what the messaging reader learns from a sibling.
+///
+/// And it registers box push (E9): with a [BoxPushSource], every contact
+/// queue gets a notifier ([BoxNotifiers]) once the box is ready and the
+/// store open, and again whenever the push target changes.
 class BoxSession implements BoxOutbox, BoxSiblingLink {
   BoxSession({
     required BoxClient box,
     required ContactStore store,
     required void Function(String event, Object? data) emit,
     QueueSeal? seal,
+    BoxPushSource? push,
     DateTime Function()? now,
   }) : _box = box,
        _store = store,
@@ -59,6 +65,9 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
        _seal = seal ?? QueueSeal(),
        _emit = emit {
     _inbox = BoxInbox(box: box, store: store, seal: _seal, now: now);
+    _notifiers = push == null
+        ? null
+        : BoxNotifiers(box: box, store: store, push: push);
     _swap = BoxSiblingSwap(
       box: box,
       store: store,
@@ -86,6 +95,7 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
   late final BoxInbox _inbox;
   late final BoxSiblingSwap _swap;
   late final BoxSiblingRotation _rotation;
+  late final BoxNotifiers? _notifiers;
 
   /// Siblings re-keyed this session ([rekeySibling]): once each.
   final Set<int> _rekeyed = {};
@@ -192,6 +202,7 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
   /// Connects the box and starts following it.
   void start() {
     _inbox.start();
+    _notifiers?.start();
     _subscriptions
       ..add(
         _box.states.listen((state) {
@@ -201,6 +212,7 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
           unawaited(_receive());
           _swap.run();
           _rotation.run();
+          _notifiers?.run();
         }),
       )
       ..add(_box.lostQueues.listen(_onLost));
@@ -238,6 +250,7 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
     unawaited(_receive());
     _swap.run();
     _rotation.run();
+    _notifiers?.run();
   }
 
   /// The account socket dropped: an answer still owed will never come.
@@ -423,6 +436,7 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
     _retry?.cancel();
     _swap.dispose();
     _rotation.dispose();
+    _notifiers?.dispose();
     for (final s in _subscriptions) {
       unawaited(s.cancel());
     }
