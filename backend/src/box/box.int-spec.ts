@@ -773,10 +773,25 @@ describeWithDb('box over real sockets and Postgres', () => {
       expect(Buffer.from(await fetched.arrayBuffer())).toEqual(body);
     });
 
+    it('stores the 32 MiB top rung, so a 20 MiB file of today still sends once padded', async () => {
+      const bob = await connect();
+      const queue = await createQueue(bob);
+      const posted = await upload(queue.sid, randomBytes(32 * 1024 * 1024));
+      expect(posted.status).toBe(201);
+      const answer = await readJson<{ id: string; bucket: string }>(posted);
+      expect(answer.bucket).toBe('32m');
+      expect((await queueRow(queue.rid)).mediaBytesToday).toBe(
+        32 * 1024 * 1024,
+      );
+      const fetched = await fetch(`${base}/box/media/${answer.id}`);
+      expect(fetched.status).toBe(200);
+      expect((await fetched.arrayBuffer()).byteLength).toBe(32 * 1024 * 1024);
+    });
+
     it('refuses an off-ladder body, and one over the top rung, with 413 bad_size', async () => {
       const bob = await connect();
       const queue = await createQueue(bob);
-      for (const size of [5000, 16 * 1024 * 1024 + 1]) {
+      for (const size of [5000, 32 * 1024 * 1024 + 1]) {
         const res = await upload(queue.sid, randomBytes(size));
         expect(res.status).toBe(413);
         expect(await res.json()).toEqual({ error: 'bad_size' });

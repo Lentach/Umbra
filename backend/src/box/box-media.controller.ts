@@ -63,7 +63,7 @@ class BoxMediaThrottleFilter implements ExceptionFilter {
  * is never stored, so the answer cannot test a sid.
  *
  * NO body parser runs on this route. The body is an unauthenticated upload of
- * up to 16 MiB, so it is read only AFTER the global throttle guard, and only
+ * up to 32 MiB, so it is read only AFTER the global throttle guard, and only
  * when `Content-Length` already names a ladder rung — an off-rung size is
  * refused from the headers, before one body byte is read — and then STREAMED
  * to disk (or drained, for an unknown sid), never buffered in memory.

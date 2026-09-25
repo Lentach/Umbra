@@ -43,7 +43,10 @@ export const BOX_CHALLENGE_TTL_MS = 10 * 60 * 1000;
 
 /**
  * I5 media ladder: an upload's body is exactly one of these sizes. The 32 MiB
- * rung waits for nginx `client_max_body_size` (21m today), so it is not here.
+ * rung keeps today's 20 MiB plaintext file sendable once padded (owner,
+ * 2026-09-24: raise now, not Phase 5); nginx lets it through only in
+ * `location /box/` (`client_max_body_size 32m`, infra/nginx/fireplace.conf),
+ * the rest of the vhost stays at 21m.
  */
 export const BOX_MEDIA_LADDER: ReadonlyArray<{
   bytes: number;
@@ -56,12 +59,13 @@ export const BOX_MEDIA_LADDER: ReadonlyArray<{
   { bytes: 1024 * 1024, bucket: '1m' },
   { bytes: 4 * 1024 * 1024, bucket: '4m' },
   { bytes: 16 * 1024 * 1024, bucket: '16m' },
+  { bytes: 32 * 1024 * 1024, bucket: '32m' },
 ];
 
 /**
  * Media bytes one NORMAL queue may receive per UTC day, charged at the RUNG
  * size (a 4.1 MiB file costs 16 MiB). The budget bounds disk use by whoever
- * holds a sid (a revoked peer keeps it until rotation, design §4.2): 64
+ * holds a sid (a revoked peer keeps it until rotation, design §4.2): 32
  * top-rung files a day, ≤ 14 GiB per queue over the 14-day TTL. Owner's
  * number (2026-09-23; 256 MiB was 16 videos a day). `mediaBytesToday` is an
  * `integer`: budget + the top rung must stay below 2^31, so anything from

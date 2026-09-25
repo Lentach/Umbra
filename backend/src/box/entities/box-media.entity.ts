@@ -16,7 +16,7 @@ export class BoxMedia {
   @Column({ type: 'text' })
   path: string;
 
-  /** A ladder rung label (`4k` … `16m`, I5). */
+  /** A ladder rung label (`4k` … `32m`, I5). */
   @Column({ type: 'varchar', length: 8 })
   sizeBucket: string;
 
