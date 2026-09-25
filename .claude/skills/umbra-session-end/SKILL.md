@@ -21,6 +21,7 @@ Exact template (the four `##` headings are checked by the hook on NEW files):
 
 ## What was done
 - ≤ 8 bullets. Each names the file:symbol and the observable change. No narrative of the investigation.
+- Out-of-repo changes (global omp/agent config, machine state, services left running, anything deleted outside the repo) — one bullet each, or "none". No other tracked file will ever carry them.
 
 ## Key files
 - Edited: …
@@ -28,12 +29,15 @@ Exact template (the four `##` headings are checked by the hook on NEW files):
 - Read only (load-bearing): …
 
 ## Verification
-- Commands run + their result lines (test counts, smoke result, CI run id). Mutants: F-number, substitution, killed/survived.
+- CI: `<result> on <sha>` — or `NOT RUN on <sha>: <why>` (only CodeQL / a conflicting PR / a bare branch push). Never omit this line.
+- Commands run + their result lines (test counts, lint baseline WITH its tool — Dart ratchet vs backend ESLint, smoke result). Mutants: every survivor by id, what it mutated, and what was done (test added / code deleted).
 - Live drives: what was driven, on which build, what was observed. Say NOT-verified surfaces explicitly (iOS, Android, prod).
 
 ## Notes for next session
+- Next action, verbatim as in the baton (step 6), plus any blocker in front of it (CI not run, conflict, stack state).
 - Owner-owed decisions.
 - NOT-verified surfaces.
+- Recipes a later session must repeat (a drive scaffold's key names and encoding, a data seed, a CDP trick) — or a pointer to where `.planning/<task>/findings.md` records them. Record them BEFORE deleting the throwaway code.
 - Traps: one line each, ALSO appended to docs/agents/traps.md (step 2).
 ```
 
@@ -66,10 +70,10 @@ If it blocks: the message names the file and the cap. Move content, do not trim 
 
 ## 5. Push in the same checkpoint
 
-Root `CLAUDE.md` §1: commit and `git push` together (the VM deploys via `git pull`). After pushing, CI status is `gh api repos/Lentach/Umbra/commits/master/check-runs --jq '.check_runs[] | [.name, .conclusion] | @tsv'` — never `gh run list`.
+Root `CLAUDE.md` §1: commit and `git push` together (the VM deploys via `git pull`). After pushing, check CI on the pushed sha: `gh api repos/Lentach/Umbra/commits/<sha>/check-runs --jq '.check_runs[] | [.name, .status, .conclusion] | @tsv'` — never `gh run list`. Green = every `ci.yml` job listed with `success`; only CodeQL (or nothing) = NOT RUN (`gh pr view <n> --json mergeable` says why). Write the result into the summary's CI line; if it lands after the summary commit, amend the summary in a follow-up commit — never leave it only in the baton.
 
 ## 6. Baton — `.cursor/session-summaries/NEXT.md` (gitignored, one per worktree)
 
-Write it last, after the push, so `HEAD` is the pushed SHA (mid-task: the current SHA, uncommitted paths listed). Format: `.claude/skills/umbra-session-start/SKILL.md` § The baton. Overwrite any previous `NEXT.md`. No concrete next action → write none; the next session falls back to LATEST.
+Write it last, after the push, so `HEAD` is the pushed SHA (mid-task: the current SHA, uncommitted paths listed). Format: `.claude/skills/umbra-session-start/SKILL.md` § The baton. Overwrite any previous `NEXT.md`. No concrete next action → write none; the next session falls back to LATEST. The baton adds NO facts of its own: its Next action and Open are already in the summary's Notes (step 1), because the baton is gitignored and the next start overwrites `NEXT.consumed.md`.
 
 Then tell the user: open a fresh session in this worktree and say "umbra session start".

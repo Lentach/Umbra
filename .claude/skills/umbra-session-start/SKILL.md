@@ -22,14 +22,15 @@ Every worktree (`git worktree list`) has its own baton. Never read another workt
   - HEAD moved → `git log --oneline <baton HEAD>..HEAD`; say what landed since.
   - `Uncommitted` disagrees with `git status` → say so; the shared worktree may hold someone else's edits.
   - Top `**Date:**` entry of `LATEST.md` is newer than `Written` → a later session ended without a baton; treat the baton as stale and use the fallback.
-- **Missing or stale:** take the top `**Date:**` entry of `.cursor/session-summaries/LATEST.md` and the dated summary it links (`## Notes for next session`). If that points at `.planning/<task>/task_plan.md` §Handoff, read that too.
+- **Missing or stale:** take the top `**Date:**` entry of `.cursor/session-summaries/LATEST.md` and the dated summary it links. Its `## Notes for next session` carries the next action, CI state and open items; follow any `.planning/…` path it names there.
 
 ## 3. Load the area — only what the next action needs
 
+- The dated summary named on the baton's `**Summary:**` line, WHOLE — even when the baton is fresh. The baton is a pointer; the summary holds the verification detail (CI, mutants, NOT-verified surfaces, out-of-repo changes, recipes). `none (mid-task)` → skip.
 - Every path under `Read first`.
-- `grep` `docs/agents/traps.md` for the `Area` keywords.
+- `docs/agents/traps.md`: read the `##` groups the baton's `Area` names (whole groups, not a keyword grep — a broad keyword truncates and misses tooling traps), plus the newest ~10 lines of `## Agent tooling / editing`.
 - The tier file (`backend/CLAUDE.md` / `frontend/CLAUDE.md`) if the next action edits that tier; the AGENTS.md reading order still binds.
-- CI only if the baton says a push is pending: `gh api repos/Lentach/Umbra/commits/master/check-runs --jq '.check_runs[] | [.name, .conclusion] | @tsv'` — never `gh run list`.
+- CI whenever the summary's CI line is not green on the baton's HEAD (volatile — AGENTS.md: re-verify this session): `gh api repos/Lentach/Umbra/commits/<sha>/check-runs --jq '.check_runs[] | [.name, .status, .conclusion] | @tsv'` — never `gh run list`. Only CodeQL, or nothing, means CI did NOT run (a conflicting PR or a bare branch push), not green.
 
 ## 4. Report, then wait
 
@@ -61,7 +62,7 @@ The baton is also the briefing for subagents: the task points at it instead of r
 # NEXT — <one-line goal>
 
 **Written:** YYYY-MM-DD HH:MM · **Branch:** <branch> · **HEAD:** <short sha> · **Worktree:** <dir name>
-**Area:** <traps.md group + keywords, e.g. "E2E, reactions">
+**Area:** <traps.md `##` group names, e.g. "E2E / multi-device / recovery; Android / push">
 **Summary:** `YYYY-MM-DD-<slug>.md` | none (mid-task)
 
 ## Next action
@@ -79,4 +80,4 @@ One concrete step — file:symbol, command, or decision. Not a menu.
 - Owner-owed decisions, blockers.
 ```
 
-The baton says where to go, not what happened: evidence and narrative belong in the dated summary or `.planning/<task>/findings.md`.
+The baton says where to go, not what happened: evidence and narrative belong in the dated summary or `.planning/<task>/findings.md`. Nothing may live ONLY in the baton: it is gitignored, per-worktree, and overwritten on consume — its Next action and Open are restated in the summary's `## Notes for next session`.

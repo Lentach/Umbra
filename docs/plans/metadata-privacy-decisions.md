@@ -99,7 +99,7 @@ Status: ACTIVE (in force), DONE (carried out, still binding), SUPERSEDED, OPEN (
 | E5 | Sent copies ride the E2E field `to` (the peer id); the route needs every live sibling addressed, else the whole message takes the old path; a sibling refusal fails the row | Decision 16; the box sees no account. The send-time pre-key fetch it can cause is owner question O7 |
 | E6 | A retiring self-queue is deleted only after the 30-d TTL, never on acks or drain markers; an ack of a non-current sid re-hands the current one | Two reviews: every earlier-delete scheme lost a copy still in flight or sent by a second tab from an older row, silently (a send to a deleted sid answers ok). Residuals: a sibling still on the old address after the TTL loses what it sends there; on a reconnect the TTL delete runs beside the resubscribe, so an EXPIRED queue can go before the box pushed its last frames; a sibling that re-learns the old address loses what it sends there until the re-hand reaches it |
 | E7 | `boxsib_v1` entries the own verified list no longer names live are pruned (in the rotation's write) | The verified list is the authority (E2) |
-| E8 | A revoked sibling origin is finished at once; an absent one or a missing session is held ≤ 30 d on a self-queue only; a copy waiting for a chat ≤ 30 d | The journal prune never drops an unconsumed row, so the reader must bound the hold |
+| E8 | A revoked sibling origin is finished at once; an absent one, an undecided one (the own list is not cached and its fetch fails) or a missing session is held ≤ 30 d on a self-queue only; a copy waiting for a chat ≤ 30 d | The journal prune never drops an unconsumed row, so the reader must bound the hold |
 
 ## Open — owner input owed
 
