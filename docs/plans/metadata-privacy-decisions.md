@@ -78,7 +78,7 @@ Status: ACTIVE (in force), DONE (carried out, still binding), SUPERSEDED, OPEN (
 | 23 | 09-24 | Order: sibling queues, then box push registration | OWNER | ACTIVE |
 | 24 | 09-24 | The "peer links a device mid-session" drive happens in the sibling slice | ENGINEERING | ACTIVE |
 | 25 | 09-24 | A box-pinned retry whose route is gone stays failed; the user resends | OWNER | ACTIVE |
-| 26 | 09-25 | Siblings swap self-queue addresses through their REQUEST queues, not the link blob | OWNER — changes approved design §4.2 | DONE (part A `a35930e4`) |
+| 26 | 09-25 | Siblings swap self-queue addresses through their REQUEST queues, not the link blob | OWNER — changes approved design §4.2 | DONE (part A `a8a4e560`, CI 7/7 on `dbe54d3a`) |
 | 27 | 09-25 | One self-queue per device; revoking a device = each survivor rotates its self-queue | ENGINEERING (owner was asked) | ACTIVE (rotation = part B) |
 | 28 | 09-25 | Sibling addresses live in `boxsib_v1`; no backup carries them | OWNER | DONE |
 | 29 | 09-25 | No auth-key escrow; a revoked device's queues are left to the 90-day reaper | OWNER — changes approved design §4.2 | ACTIVE |
