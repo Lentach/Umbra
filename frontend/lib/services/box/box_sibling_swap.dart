@@ -85,7 +85,11 @@ class BoxSiblingSwap {
 
   /// The own verified device list was dropped (a device linked or revoked):
   /// the siblings may have changed.
-  void ownDevicesChanged() {
+  void ownDevicesChanged() => handAgain();
+
+  /// Asks again now, whatever this connect was answered: a sibling showed it
+  /// holds a self sid that is not current (`BoxSession.siblingAcked`).
+  void handAgain() {
     _answeredFor = null;
     run();
   }
@@ -162,6 +166,12 @@ class BoxSiblingSwap {
 
   /// One `queue_handoff` to sibling [deviceId]'s request queue. A failure is
   /// only recorded: the next connect hands off again.
+  ///
+  /// The sibling gets an entry in `boxsib_v1` BEFORE the handoff leaves (and
+  /// only after [encrypt] — which refuses any device the own verified list
+  /// does not name live — produced it, so a phantom the server lists never
+  /// gets one): every device that may hold our self sid is then one the
+  /// rotation (E6) sees go.
   Future<void> _handoff(
     OwnDeviceEncrypt encrypt,
     int own,
@@ -181,6 +191,8 @@ class BoxSiblingSwap {
       if (_disposed) return;
       if (signal == null) {
         failed = 'encrypt';
+      } else if (await _store.noteSibling(deviceId) != SiblingWrite.stored) {
+        failed = 'note';
       } else {
         final body = BoxFrame(
           kind: signal.kind,

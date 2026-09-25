@@ -39,6 +39,7 @@ class BoxInboxEntry {
     required this.signal,
     required this.receivedAt,
     required this.acked,
+    this.viaSelfQueue = false,
   });
 
   /// The queue (base64url) and the box's message id on it.
@@ -52,6 +53,12 @@ class BoxInboxEntry {
   final String? signal;
   final DateTime receivedAt;
   final bool acked;
+
+  /// Journaled from one of this device's SELF-queues — the current one or
+  /// one retiring (sibling queues part B) — whose sid only siblings were
+  /// handed. Decided when the delivery is taken in, never when it is read:
+  /// by then that queue may have retired and left the sibling row.
+  final bool viaSelfQueue;
 
   bool get consumed => signal == null;
 
@@ -67,6 +74,7 @@ class BoxInboxEntry {
     'sig': ?signal,
     'at': receivedAt.millisecondsSinceEpoch,
     'acked': acked,
+    if (viaSelfQueue) 'self': true,
   };
 
   BoxInboxEntry _with({bool? acked, bool consume = false}) => BoxInboxEntry(
@@ -78,6 +86,7 @@ class BoxInboxEntry {
     signal: consume ? null : signal,
     receivedAt: receivedAt,
     acked: acked ?? this.acked,
+    viaSelfQueue: viaSelfQueue,
   );
 
   /// Null for anything this build cannot read — a newer `v`, a web row whose
@@ -107,6 +116,7 @@ class BoxInboxEntry {
           signal: sig is String ? sig : null,
           receivedAt: DateTime.fromMillisecondsSinceEpoch(at, isUtc: true),
           acked: acked,
+          viaSelfQueue: json['self'] == true,
         );
       }
     } on FormatException {
@@ -152,6 +162,7 @@ extension ContactStoreInbox on ContactStore {
     required int senderDeviceId,
     required String signal,
     required DateTime receivedAt,
+    bool viaSelfQueue = false,
   }) {
     final kv = _kv;
     final userId = _userId;
@@ -182,6 +193,7 @@ extension ContactStoreInbox on ContactStore {
             signal: signal,
             receivedAt: receivedAt,
             acked: false,
+            viaSelfQueue: viaSelfQueue,
           );
           if (!await kv.setString(key, jsonEncode(entry._toJson()))) {
             return false;

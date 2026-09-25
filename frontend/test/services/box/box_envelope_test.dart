@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:fireplace/constants/app_constants.dart';
 import 'package:fireplace/services/box/box_envelope.dart';
+import 'package:fireplace/utils/e2e_envelope.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -13,25 +14,27 @@ void main() {
     'peerListHash': 'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=',
   };
 
-  ({String json, Map<String, String?>? linkPreview}) envelope(
-    String text,
-    Map<String, String?>? preview,
-  ) => boxEnvelope(
+  ({String json, String copyJson, Map<String, String?>? linkPreview})
+  envelope(String text, Map<String, String?>? preview) => boxEnvelope(
     text,
     senderListInfo: senderListInfo,
     msgId: 'm' * 64,
     sentAt: sentAt,
+    sentTo: 0x7fffffff,
     linkPreview: preview,
   );
+
+  Map<String, dynamic> decode(String json) =>
+      jsonDecode(json) as Map<String, dynamic>;
 
   test('a preview that fits is kept', () {
     final preview = {'url': 'https://example.com/a', 'title': 'A page'};
     final built = envelope('see https://example.com/a', preview);
     expect(built.linkPreview, preview);
-    expect(
-      (jsonDecode(built.json) as Map<String, dynamic>)['linkPreview'],
-      preview,
-    );
+    expect(decode(built.json), containsPair('linkPreview', preview));
+    expect(decode(built.copyJson), containsPair('linkPreview', preview));
+    expect(decode(built.copyJson), containsPair('to', 0x7fffffff));
+    expect(decode(built.json), isNot(contains('to')));
   });
 
   test(
@@ -45,13 +48,41 @@ void main() {
       });
 
       expect(built.linkPreview, isNull);
-      final decoded = jsonDecode(built.json) as Map<String, dynamic>;
-      expect(decoded.containsKey('linkPreview'), isFalse);
-      expect(decoded['content'], text);
-      expect(
-        utf8.encode(built.json).length,
-        lessThanOrEqualTo(kBoxEnvelopeMaxBytes),
-      );
+      for (final json in [built.json, built.copyJson]) {
+        final decoded = decode(json);
+        expect(decoded, isNot(contains('linkPreview')));
+        expect(decoded, containsPair('content', text));
+        expect(utf8.encode(json), hasLength(lessThanOrEqualTo(kBoxEnvelopeMaxBytes)));
+      }
+    },
+  );
+
+  test(
+    'a preview that fits the peer envelope but not the longer sent copy is '
+    'dropped from both, so every device shows the same message',
+    () {
+      const url = 'https://example.com/';
+      int peerBytes(String title) => utf8
+          .encode(
+            jsonEncode(
+              E2eEnvelope.build(
+                'x',
+                linkPreview: {'url': url, 'title': title},
+                senderListInfo: senderListInfo,
+                msgId: 'm' * 64,
+                sentAt: sentAt,
+              ),
+            ),
+          )
+          .length;
+      final title = 't' * (kBoxEnvelopeMaxBytes - peerBytes('') - 5);
+      expect(peerBytes(title), kBoxEnvelopeMaxBytes - 5);
+
+      final built = envelope('x', {'url': url, 'title': title});
+
+      expect(built.linkPreview, isNull);
+      expect(decode(built.json), isNot(contains('linkPreview')));
+      expect(decode(built.copyJson), isNot(contains('linkPreview')));
     },
   );
 }

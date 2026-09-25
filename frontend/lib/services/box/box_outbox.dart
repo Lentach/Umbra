@@ -13,6 +13,12 @@ abstract interface class BoxOutbox {
   /// peer is not a friend.
   Map<int, ContactOutbound> addressesFor(int peerUserId);
 
+  /// This account's OWN other devices' self-queue addresses by device id
+  /// (sibling queues part B, E5): where a sent copy goes. Only siblings
+  /// whose handoff this device stored; whether a device is live is the own
+  /// verified list's call, never this map's.
+  Map<int, ContactOutbound> siblingAddresses();
+
   /// Every friend with at least one box address: the peers whose device
   /// lists the connect re-verifies (decision 21).
   Iterable<int> coveredPeers();

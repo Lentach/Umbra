@@ -18,6 +18,7 @@ typedef E2eEnvelopeFields = ({
   String? msgId,
   String type,
   DateTime? sentAt,
+  int? sentTo,
 });
 
 /// E2E encrypted message envelope format. Single source of truth for build/parse.
@@ -86,6 +87,12 @@ class E2eEnvelope {
   /// `DateTime`'s own range; also keeps the value an exact integer on web.
   static const int _maxEpochMs = 8640000000000000;
 
+  /// Who a SENT COPY was sent to (metadata-privacy PR3.1 sibling queues part
+  /// B, E5): the peer's user id, set only on the copy a sender hands its own
+  /// other devices, so a sibling files it under the right chat. Inside the
+  /// E2E plaintext: the box sees no account at all.
+  static const String _keySentTo = 'to';
+
   static Map<String, dynamic> build(
     String content, {
     String messageType = 'TEXT',
@@ -101,10 +108,12 @@ class E2eEnvelope {
     String? msgId,
     String? type,
     DateTime? sentAt,
+    int? sentTo,
   }) {
     final envelope = <String, dynamic>{_keyContent: content};
     if (type != null) envelope[_keyType] = type;
     if (sentAt != null) envelope[_keySentAt] = sentAt.millisecondsSinceEpoch;
+    if (sentTo != null) envelope[_keySentTo] = sentTo;
     if (messageType != 'TEXT') envelope[_keyMessageType] = messageType;
     if (mediaUrl != null) envelope[_keyMediaUrl] = mediaUrl;
     if (mediaDuration != null) envelope[_keyMediaDuration] = mediaDuration;
@@ -143,6 +152,7 @@ class E2eEnvelope {
     final rawMsgId = envelope[_keyMsgId];
     final rawType = envelope[_keyType];
     final rawSentAt = envelope[_keySentAt];
+    final rawSentTo = envelope[_keySentTo];
     return (
       content: content,
       messageType: messageType,
@@ -167,6 +177,10 @@ class E2eEnvelope {
       type: rawType == null ? typeMessage : (rawType is String ? rawType : ''),
       sentAt: rawSentAt is int && rawSentAt > 0 && rawSentAt <= _maxEpochMs
           ? DateTime.fromMillisecondsSinceEpoch(rawSentAt, isUtc: true)
+          : null,
+      // A user id (a Postgres int4); anything else names no one.
+      sentTo: rawSentTo is int && rawSentTo > 0 && rawSentTo <= 0x7fffffff
+          ? rawSentTo
           : null,
     );
   }

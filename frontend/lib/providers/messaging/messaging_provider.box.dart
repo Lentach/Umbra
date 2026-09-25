@@ -1,9 +1,11 @@
 part of '../messaging_provider.dart';
 
-/// A box send's plan (slice (c)): one address per live peer device.
+/// A box send's plan (slice (c)): one address per live peer device, and —
+/// sibling queues part B — one self-queue per live other device of ours.
 typedef _BoxRoute = ({
   BoxOutbox outbox,
   List<ContactOutbound> targets,
+  List<ContactOutbound> siblings,
   int conversationId,
   SenderListInfo senderListInfo,
 });
@@ -75,9 +77,8 @@ extension MessagingBox on MessagingProvider {
   }
 
   /// Reads a delivery from sibling [BoxInboxEntry.senderDeviceId] (its
-  /// `queue_handoff` on our request queue, its ack or — part B — a sent copy
-  /// on our self-queue). Same contract as [consumeBoxEntry]; nothing here is
-  /// ever shown.
+  /// `queue_handoff` on our request or self-queue, its ack, or — part B — a
+  /// sent copy on our self-queue). Same contract as [consumeBoxEntry].
   Future<bool> _consumeSiblingBox(BoxInboxEntry entry, String signal) async {
     final finished = await _readSiblingBox(entry, signal);
     if (finished) await _encryptionProvider?.removeRawReplay(entry.localId);
@@ -88,6 +89,12 @@ extension MessagingBox on MessagingProvider {
     final enc = _encryptionProvider;
     final link = boxSiblings;
     if (enc == null || link == null || !enc.isE2EReady) return false;
+    // A sent copy read and shown earlier whose record never committed: only
+    // the store is owed.
+    final unsaved = _boxUnsaved[entry.localId];
+    if (unsaved != null && unsaved.senderId == entry.peerUserId) {
+      return _storeBoxMessage(unsaved, alreadyShown: true);
+    }
     final device = entry.senderDeviceId;
     final msg = MessageModel(
       id: entry.localId,
@@ -108,13 +115,37 @@ extension MessagingBox on MessagingProvider {
       _e2eFlowLog('BOX_SIBLING_FOREIGN_IDENTITY', {'device': device});
       return true;
     }
-    // What cannot be read NOW is held only on the self-queue, whose sid only
-    // siblings hold. On the public request queue it is finished: anyone can
-    // fill that queue, and a real sibling hands off again on its next connect.
-    final heldIfUnreadable = link.viaSelfQueue(entry.rid);
+    // What cannot be read NOW is held only on a self-queue, whose sid only
+    // siblings hold, and only for the box TTL (E8): past it the sibling's
+    // copy of the frame is gone from the box too, and nothing it could still
+    // send would make this one readable. On the public request queue it is
+    // finished: anyone can fill that queue, and a real sibling hands off
+    // again on its next connect.
+    // Decided when the delivery was taken in: the queue may have retired
+    // since, and left the sibling row.
+    final viaSelf = entry.viaSelfQueue;
+    final heldIfUnreadable =
+        viaSelf &&
+        DateTime.now().toUtc().difference(entry.receivedAt) <=
+            kBoxRedeliveryWindow;
     // The accept gate a peer delivery passes, against the OWN verified list:
-    // a revoked device of ours is refused like a revoked peer device.
-    if (!await _originDeviceIsLive(msg)) return !heldIfUnreadable;
+    // a revoked device of ours is refused like a revoked peer device. A list
+    // that names it REVOKED is a verdict, finished at once — that device
+    // keeps its sid for our self-queue until the rotation deletes it (E6);
+    // only an ABSENT one waits, since our list may be stale.
+    if (!await _originDeviceIsLive(msg)) {
+      final revoked =
+          enc
+              .cachedDeviceList(entry.peerUserId)
+              ?.devices
+              .any((d) => d.deviceId == device && d.revokedAtMs != null) ??
+          false;
+      if (revoked) {
+        _e2eFlowLog('BOX_SIBLING_REVOKED_ORIGIN', {'device': device});
+        return true;
+      }
+      return !heldIfUnreadable;
+    }
 
     final String plaintext;
     try {
@@ -125,33 +156,102 @@ extension MessagingBox on MessagingProvider {
         deviceId: device,
       );
     } on Object catch (e) {
-      return _siblingDecryptFailed(msg, e) || !heldIfUnreadable;
+      final decision = _siblingDecryptFailed(msg, e);
+      // The peer policy asks a peer to re-key; a sibling is re-keyed from
+      // OUR side: a fresh handoff is a PreKey message it can read, and what
+      // it sends next is under a session we hold.
+      if (decision.rule == DecryptionFailureRule.noSession && viaSelf) {
+        await link.rekeySibling(device);
+      }
+      return !heldIfUnreadable ||
+          decision.retryAction == DecryptionRetryAction.none;
     }
-    final String type;
+    final E2eEnvelopeFields parsed;
     try {
-      type = E2eEnvelope.parse(plaintext).type;
+      parsed = E2eEnvelope.parse(plaintext);
     } on Object {
       _e2eFlowLog('BOX_SIBLING_UNREADABLE', {'device': device});
       return true;
     }
-    switch (type) {
+    switch (parsed.type) {
       case E2eEnvelope.typeQueueHandoff:
         return _takeSiblingHandoff(link, device, plaintext);
       case E2eEnvelope.typeQueueHandoffAck:
         final sid = E2eEnvelope.parseQueueHandoffAck(plaintext);
         if (sid == null) {
-          _e2eFlowLog('BOX_SIBLING_UNREADABLE', {'device': device, 't': type});
+          _e2eFlowLog('BOX_SIBLING_UNREADABLE', {
+            'device': device,
+            't': parsed.type,
+          });
           return true;
         }
-        return await link.siblingAcked(device, sid) != SiblingWrite.retryLater;
+        return await link.siblingAcked(device, sid) !=
+            SiblingWrite.retryLater;
       case E2eEnvelope.typeMessage:
-        // A sent copy from a sibling is part B; until then nothing sends one.
-        _e2eFlowLog('BOX_SIBLING_MESSAGE_UNHANDLED', {'device': device});
-        return true;
+        // A sent copy travels only into our self-queue.
+        if (!viaSelf) {
+          _e2eFlowLog('BOX_SIBLING_COPY_REFUSED', {'why': 'request_queue'});
+          return true;
+        }
+        return _takeSentCopy(link, msg, parsed);
       default:
-        _e2eFlowLog('BOX_UNKNOWN_TYPE', {'msgId': entry.localId, 't': type});
+        _e2eFlowLog('BOX_UNKNOWN_TYPE', {
+          'msgId': entry.localId,
+          't': parsed.type,
+        });
         return true;
     }
+  }
+
+  /// Files a sibling's SENT COPY (E5) under the chat of the peer it names,
+  /// as OUR row: sent, from that sibling ([msg]'s origin), under the
+  /// sender's wire id and clamped send time. Kept for the next offer while
+  /// this device holds no contact record (with a chat) for that peer — the
+  /// sibling may simply have befriended them first — but only for the box
+  /// TTL since it came in (E8); a peer this device blocked, or a copy naming
+  /// no peer or our own account, is finished.
+  Future<bool> _takeSentCopy(
+    BoxSiblingLink link,
+    MessageModel msg,
+    E2eEnvelopeFields parsed,
+  ) {
+    final to = parsed.sentTo;
+    if (to == null || to == msg.senderId) {
+      _e2eFlowLog('BOX_SIBLING_COPY_REFUSED', {'why': 'no_peer'});
+      return Future.value(true);
+    }
+    final peer = link.contactOf(to);
+    final conversationId = peer?.legacy.conversationId;
+    if (peer?.state == ContactState.blocked) {
+      _e2eFlowLog('BOX_SIBLING_COPY_REFUSED', {'why': 'blocked'});
+      return Future.value(true);
+    }
+    final receivedAt = msg.createdAt;
+    if (conversationId == null) {
+      if (DateTime.now().toUtc().difference(receivedAt) >
+          kBoxRedeliveryWindow) {
+        _e2eFlowLog('BOX_SIBLING_COPY_EXPIRED', {'peer': to});
+        return Future.value(true);
+      }
+      _e2eFlowLog('BOX_SIBLING_COPY_WAITING', {'peer': to});
+      return Future.value(false);
+    }
+    final sentAt = parsed.sentAt;
+    final row = MessageModel(
+      id: msg.id,
+      content: '',
+      senderId: msg.senderId,
+      senderUsername: '',
+      conversationId: conversationId,
+      createdAt: sentAt == null || sentAt.isAfter(receivedAt)
+          ? receivedAt
+          : sentAt,
+      encryptedContent: msg.encryptedContent,
+      originDeviceId: msg.originDeviceId,
+      // Status is the model's default, `sent`: ours went out when the
+      // sibling's box took every frame (decision 20).
+    );
+    return _consumeBoxMessage(_withEnvelope(row, parsed));
   }
 
   /// Hands sibling [device]'s self-queue from its handoff to the box, which
@@ -187,11 +287,12 @@ extension MessagingBox on MessagingProvider {
   }
 
   /// The box failure policy ([decideDecryptionFailure]) for a sibling: what
-  /// may heal is offered again, the rest is finished. No re-key request:
+  /// may heal is offered again, the rest is finished. No re-key REQUEST:
   /// `requestSessionRebuild` names an ACCOUNT and its receivers mark their
   /// device-1 session for a rebuild — for the own account that is every
-  /// sibling's session with device 1, not the pair that failed.
-  bool _siblingDecryptFailed(MessageModel msg, Object e) {
+  /// sibling's session with device 1, not the pair that failed; the reader
+  /// re-keys that sibling itself ([BoxSiblingLink.rekeySibling]).
+  DecryptionFailureDecision _siblingDecryptFailed(MessageModel msg, Object e) {
     final decision = decideDecryptionFailure(
       _classifyDecryptError(e),
       hadIdentityReset: _encryptionProvider?.hadIdentityReset == true,
@@ -203,7 +304,7 @@ extension MessagingBox on MessagingProvider {
       'device': msg.originDeviceId,
       'rule': decision.rule.name,
     });
-    return decision.retryAction == DecryptionRetryAction.none;
+    return decision;
   }
 
   /// Encrypts [json] for this account's own device [deviceId] and frames it
@@ -235,6 +336,30 @@ extension MessagingBox on MessagingProvider {
         'device': deviceId,
         'error': e.runtimeType.toString(),
       });
+      return null;
+    }
+  }
+
+  /// This device's id and the device ids the own VERIFIED list names live —
+  /// the [OwnLiveDevices] the box's rotation on revoke (E6/E7) acts on. Null
+  /// when E2E is not ready, the device id is not confirmed by `socketReady`
+  /// (a guess would let this device prune the real one), or the list cannot
+  /// be verified now. Read from the verified cache when held; never tied to
+  /// a send.
+  Future<({int self, Set<int> live})?> ownLiveDevices() async {
+    final enc = _encryptionProvider;
+    final own = _currentUserId;
+    if (enc == null ||
+        own == null ||
+        !enc.isE2EReady ||
+        !enc.ownDeviceIdConfirmed) {
+      return null;
+    }
+    try {
+      final verified =
+          enc.cachedDeviceList(own) ?? await enc.getVerifiedDeviceList(own);
+      return (self: enc.ownDeviceId, live: verified.liveDeviceIds.toSet());
+    } on Object {
       return null;
     }
   }
@@ -382,8 +507,11 @@ extension MessagingBox on MessagingProvider {
       _updateCache(msg.conversationId);
     }
     // Owner decision 11: a sound only for the chat on screen; any other
-    // chat gets its badge and nothing else.
-    if (inView && msg.messageType != MessageType.ping) {
+    // chat gets its badge and nothing else. A sibling's sent copy is ours:
+    // nothing arrived.
+    if (inView &&
+        msg.messageType != MessageType.ping &&
+        msg.senderId != _currentUserId) {
       _incomingSound.play().ignore();
     }
   }
@@ -465,15 +593,16 @@ extension MessagingBox on MessagingProvider {
   }
 
   /// Where a TEXT to [recipientId] goes over the box (slice (c), decision
-  /// 16): only when EVERY live device of the peer and every live OTHER
-  /// device of ours has a box address — one message is never split across
-  /// the two paths, because an old-path copy is a server row naming the
-  /// pair that the box devices would then be served as `none_for_device`.
-  /// Null = the old path, and ONLY on evidence: a verified list naming a
-  /// device with no address, or a second live device of ours. A list that
-  /// cannot be verified THROWS (the caller fails the row for a retry): the
-  /// peer is box-covered as far as we know, and on web socket.io would
-  /// replay an old-path emit buffered while offline as a server row.
+  /// 16): only when EVERY live device of the peer has a box address and
+  /// every live OTHER device of ours has a self-queue address (sibling
+  /// queues part B, E5) — one message is never split across the two paths,
+  /// because an old-path copy is a server row naming the pair that the box
+  /// devices would then be served as `none_for_device`. Null = the old path,
+  /// and ONLY on evidence: a verified list naming a device with no address.
+  /// A list that cannot be verified THROWS (the caller fails the row for a
+  /// retry): the peer is box-covered as far as we know, and on web
+  /// socket.io would replay an old-path emit buffered while offline as a
+  /// server row.
   ///
   /// [addresses] is the outbox's answer for the peer, taken by the caller
   /// WITHOUT an await, so a peer with none (every chat until the handoff
@@ -531,8 +660,14 @@ extension MessagingBox on MessagingProvider {
       _e2eFlowLog('BOX_ROUTE_UNVERIFIED', {'peer': recipientId});
       rethrow;
     }
-    if (own.liveDeviceIds.any((d) => d != enc.ownDeviceId)) {
-      declined('own_devices');
+    final siblingIds = [
+      for (final d in own.liveDeviceIds)
+        if (d != enc.ownDeviceId) d,
+    ];
+    final siblingAddresses = outbox.siblingAddresses();
+    final siblings = [for (final d in siblingIds) ?siblingAddresses[d]];
+    if (siblings.length != siblingIds.length) {
+      declined('own_uncovered');
       return null;
     }
     final live = peer.liveDeviceIds;
@@ -544,6 +679,7 @@ extension MessagingBox on MessagingProvider {
     return (
       outbox: outbox,
       targets: targets,
+      siblings: siblings,
       conversationId: conversationId,
       senderListInfo: SenderListInfo(
         ownVersion: own.version,
@@ -555,11 +691,14 @@ extension MessagingBox on MessagingProvider {
   }
 
   /// Sends [content] along [route]: one Signal message per peer device, each
-  /// sealed into that device's queue. The row is SENT only once the box took
-  /// every frame (decision 20); anything less fails it for a retry (decision
-  /// 19), which re-seals under the same wire id, so a device that already
-  /// holds the message drops the copy (`wireHeldByOther`). Every frame is
-  /// built before the first goes out, so nothing reaches some devices only.
+  /// sealed into that device's queue, and a SENT COPY — the same message
+  /// naming the peer inside E2E (E5) — per sibling, sealed into its
+  /// self-queue. The row is SENT only once the box took every frame, the
+  /// copies included (decision 20); anything less fails it for a retry
+  /// (decision 19), which re-seals under the same wire id, so a device that
+  /// already holds the message drops the copy (`wireHeldByOther`). Every
+  /// frame is built before the first goes out, so nothing reaches some
+  /// devices only.
   ///
   /// While it runs, the tempId is in [_boxInFlight]: an account-socket error
   /// cannot fail the row under it and a retry cannot start a second attempt
@@ -588,16 +727,17 @@ extension MessagingBox on MessagingProvider {
         senderListInfo: route.senderListInfo.toJson(),
         msgId: sendToken,
         sentAt: sentAt,
+        sentTo: recipientId,
       );
+      final ownUserId = _currentUserId!;
       final frames = <(ContactOutbound, Uint8List)>[];
-      for (final to in route.targets) {
-        await enc.ensureSession(recipientId, deviceId: to.peerDeviceId);
+      for (final (userId, to, json) in [
+        for (final to in route.targets) (recipientId, to, envelope.json),
+        for (final to in route.siblings) (ownUserId, to, envelope.copyJson),
+      ]) {
+        await enc.ensureSession(userId, deviceId: to.peerDeviceId);
         final frame = BoxFrame.fromSignalCiphertext(
-          await enc.encrypt(
-            recipientId,
-            envelope.json,
-            deviceId: to.peerDeviceId,
-          ),
+          await enc.encrypt(userId, json, deviceId: to.peerDeviceId),
           senderDeviceId: enc.ownDeviceId,
         );
         if (frame == null) throw StateError('encrypt gave no Signal message');
@@ -635,7 +775,7 @@ extension MessagingBox on MessagingProvider {
       final sent = MessageModel(
         id: localId,
         content: content,
-        senderId: _currentUserId!,
+        senderId: ownUserId,
         senderUsername: '',
         conversationId: route.conversationId,
         createdAt: sentAt,

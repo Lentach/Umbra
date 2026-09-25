@@ -11,34 +11,44 @@ const int kBoxSignalReserveBytes = 256;
 const int kBoxEnvelopeMaxBytes =
     BoxFrame.maxSignalBytes - kBoxSignalReserveBytes;
 
-/// The E2E envelope a box send seals (metadata-privacy PR3.1 slice (c)),
-/// with the link preview it actually carries.
+/// The E2E envelopes a box send seals (metadata-privacy PR3.1 slice (c)):
+/// `json` for the peer's devices, `copyJson` — the same message naming the
+/// peer [sentTo] — for the sender's own other devices (sibling queues part
+/// B, E5), and the link preview both actually carry.
 ///
 /// The composer bounds the user's TEXT to one frame
 /// (`AppConstants.maxEnvelopeBytes`); a link preview is not the user's text
 /// and has no bound (a native og:title comes from up to 100 KB of HTML), so
-/// when the whole envelope would not fit one frame the preview is dropped —
-/// the text is never truncated, and a message the composer accepted is
-/// never refused for its preview.
-({String json, Map<String, String?>? linkPreview}) boxEnvelope(
+/// when the copy — the longer of the two — would not fit one frame the
+/// preview is dropped from BOTH: the text is never truncated, a message the
+/// composer accepted is never refused for its preview, and every device
+/// shows the same message.
+({String json, String copyJson, Map<String, String?>? linkPreview}) boxEnvelope(
   String content, {
   required Map<String, dynamic> senderListInfo,
   required String msgId,
   required DateTime sentAt,
+  required int sentTo,
   Map<String, String?>? linkPreview,
 }) {
-  String build(Map<String, String?>? preview) => jsonEncode(
+  String build(Map<String, String?>? preview, {int? to}) => jsonEncode(
     E2eEnvelope.build(
       content,
       linkPreview: preview,
       senderListInfo: senderListInfo,
       msgId: msgId,
       sentAt: sentAt,
+      sentTo: to,
     ),
   );
-  final json = build(linkPreview);
-  if (linkPreview == null || utf8.encode(json).length <= kBoxEnvelopeMaxBytes) {
-    return (json: json, linkPreview: linkPreview);
-  }
-  return (json: build(null), linkPreview: null);
+  final fits =
+      linkPreview == null ||
+      utf8.encode(build(linkPreview, to: sentTo)).length <=
+          kBoxEnvelopeMaxBytes;
+  final preview = fits ? linkPreview : null;
+  return (
+    json: build(preview),
+    copyJson: build(preview, to: sentTo),
+    linkPreview: preview,
+  );
 }

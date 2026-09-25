@@ -104,7 +104,8 @@ void main() {
   test(
     'the longest message the composer accepts (isMessageWithinByteLimit), '
     'with a link preview, as a first (PreKey) message, fits one frame — in '
-    'every chat, so no message the user may send is refused by the box',
+    'every chat, so no message the user may send is refused by the box; '
+    "measured on a sibling's SENT COPY, the longest envelope (it adds `to`)",
     () async {
       // The composer's boundary in 3-byte characters: `{"content":"…"}` is
       // 14 bytes around the text, so this is the last length it takes.
@@ -149,6 +150,7 @@ void main() {
           msgId: 'm' * 64,
           type: E2eEnvelope.typeMessage,
           sentAt: DateTime.utc(2026, 9, 24),
+          sentTo: 0x7fffffff,
         ),
       );
       final message = await SessionCipher.fromStore(

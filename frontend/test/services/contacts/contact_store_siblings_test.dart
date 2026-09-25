@@ -248,4 +248,81 @@ void main() {
       expect(carried, isNot(contains(_sid(0x40))));
     },
   );
+
+  test(
+    'a rotation is ONE write — new self, the old one retiring with its '
+    'time, siblings outside the live set gone — and survives a re-open',
+    () async {
+      final old = _queue(0x10);
+      final next = _queue(0x20);
+      final at = DateTime.utc(2026, 9, 25, 9);
+      await store.claimSelfQueue(old);
+      await store.learnSibling(2, sid: _sid(0x40), sealPub: _sid(0x41));
+      await store.learnSibling(3, sid: _sid(0x50), sealPub: _sid(0x51));
+
+      expect(
+        (await store.rotateSelfQueue(
+          next,
+          replaces: old.rid,
+          live: {1, 2},
+          now: at,
+        ))?.rid,
+        next.rid,
+      );
+
+      final again = await reopened();
+      expect(again.selfQueue?.rid, next.rid);
+      expect(again.retiringSelfQueues.single.queue.authPriv, old.authPriv);
+      expect(again.retiringSelfQueues.single.since, at);
+      expect(again.siblings.map((s) => s.deviceId), [2]);
+    },
+  );
+
+  test(
+    'a rotation of a self-queue this row no longer holds (another tab '
+    'rotated first) is refused and changes nothing',
+    () async {
+      final current = _queue(0x10);
+      await store.claimSelfQueue(current);
+      await store.learnSibling(3, sid: _sid(0x50), sealPub: _sid(0x51));
+
+      expect(
+        await store.rotateSelfQueue(
+          _queue(0x20),
+          replaces: _queue(0x30).rid,
+          live: {1},
+          now: DateTime.utc(2026, 9, 25),
+        ),
+        isNull,
+      );
+
+      final again = await reopened();
+      expect(again.selfQueue?.rid, current.rid);
+      expect(again.retiringSelfQueues, isEmpty);
+      expect(again.siblings.map((s) => s.deviceId), [3]);
+    },
+  );
+
+  test(
+    'a sibling that acked a stale sid forgets what it acked, keeping its '
+    'address; a device with no entry gets none',
+    () async {
+      final current = _queue(0x10);
+      await store.claimSelfQueue(current);
+      await store.learnSibling(2, sid: _sid(0x40), sealPub: _sid(0x41));
+      await store.markSiblingAcked(2, current.sid);
+
+      expect(await store.forgetSiblingAck(2), SiblingWrite.stored);
+      expect(await store.forgetSiblingAck(9), SiblingWrite.stored);
+
+      final again = await reopened();
+      expect(
+        again.siblings.single,
+        isA<SiblingAddress>()
+            .having((s) => s.deviceId, 'deviceId', 2)
+            .having((s) => s.sid, 'sid', _sid(0x40))
+            .having((s) => s.ackedSelfSid, 'ackedSelfSid', isNull),
+      );
+    },
+  );
 }

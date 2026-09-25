@@ -10,6 +10,7 @@ import '../contacts/contact_store.dart';
 import 'box_client.dart';
 import 'box_inbox.dart';
 import 'box_outbox.dart';
+import 'box_sibling_rotation.dart';
 import 'box_sibling_swap.dart';
 import 'box_siblings.dart';
 import 'box_wire.dart';
@@ -41,7 +42,9 @@ import 'queue_seal.dart';
 ///
 /// And it links this account's OWN devices (sibling queues, owner decisions
 /// 26–29): it keeps this device's SELF-queue (`QueueKeys.ensureSelf`) beside
-/// the request queue, drives the address swap ([BoxSiblingSwap]) and, as the
+/// the request queue, drives the address swap ([BoxSiblingSwap]) and the
+/// rotation on revoke ([BoxSiblingRotation]), hands the send path the
+/// siblings' self-queues ([siblingAddresses], part B) and, as the
 /// [BoxSiblingLink], stores what the messaging reader learns from a sibling.
 class BoxSession implements BoxOutbox, BoxSiblingLink {
   BoxSession({
@@ -49,18 +52,30 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
     required ContactStore store,
     required void Function(String event, Object? data) emit,
     QueueSeal? seal,
+    DateTime Function()? now,
   }) : _box = box,
        _store = store,
        _keys = QueueKeys(box: box, store: store),
        _seal = seal ?? QueueSeal(),
        _emit = emit {
-    _inbox = BoxInbox(box: box, store: store, seal: _seal);
+    _inbox = BoxInbox(box: box, store: store, seal: _seal, now: now);
     _swap = BoxSiblingSwap(
       box: box,
       store: store,
       seal: _seal,
       emit: emit,
-      selfQueue: () => _self,
+      selfQueue: _currentSelf,
+    );
+    _rotation = BoxSiblingRotation(
+      box: box,
+      store: store,
+      keys: _keys,
+      now: now,
+      rotated: (next) {
+        _self = next;
+        _swap.run();
+      },
+      sendToSibling: _sendToSibling,
     );
   }
 
@@ -70,6 +85,10 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
   final QueueSeal _seal;
   late final BoxInbox _inbox;
   late final BoxSiblingSwap _swap;
+  late final BoxSiblingRotation _rotation;
+
+  /// Siblings re-keyed this session ([rekeySibling]): once each.
+  final Set<int> _rekeyed = {};
   final void Function(String event, Object? data) _emit;
 
   final List<StreamSubscription<Object?>> _subscriptions = [];
@@ -77,8 +96,27 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
   bool _ensuring = false;
 
   /// This device's self-queue once ensured (and subscribed) this session.
+  /// Read through [_currentSelf], never directly.
   ContactQueue? _self;
   bool _ensuringSelf = false;
+
+  /// The self-queue to hand a sibling: the one the ROW holds, once this
+  /// session ensured one. Any write re-reads the row, and another tab of
+  /// this device may have rotated it meanwhile (E6): that queue is followed
+  /// — subscribed here too — and the one this session ensured, now
+  /// retiring, is never handed out again.
+  ContactQueue? _currentSelf() {
+    final ensured = _self;
+    final current = _store.selfQueue;
+    if (ensured == null || current == null || current.rid == ensured.rid) {
+      return ensured;
+    }
+    final owned = QueueKeys.authOf(current);
+    if (owned == null) return ensured;
+    _self = current;
+    unawaited(_box.subscribe([owned]));
+    return current;
+  }
 
   /// Null until the account socket is ready; the device id it names (null
   /// from a server that predates the field — the server still files it).
@@ -120,18 +158,30 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
       ..run();
   }
 
-  /// E2E is ready on this connect: the request queue may be published and a
-  /// handoff encrypted now.
+  /// The own verified list, for the rotation on revoke (`MessagingProvider`).
+  OwnLiveDevices? get ownLiveDevices => _rotation.liveDevices;
+
+  set ownLiveDevices(OwnLiveDevices? lookup) {
+    _rotation
+      ..liveDevices = lookup
+      ..run();
+  }
+
+  /// E2E is ready on this connect: the request queue may be published, a
+  /// handoff encrypted and the own list read now.
   void e2eReady() {
     if (_disposed) return;
     _e2eReady = true;
     _publish();
     _swap.e2eReady();
+    _rotation.run();
   }
 
   /// The own verified device list was dropped (a device linked or revoked).
   void ownDevicesChanged() {
-    if (!_disposed) _swap.ownDevicesChanged();
+    if (_disposed) return;
+    _swap.ownDevicesChanged();
+    _rotation.run();
   }
 
   /// `ownRequestQueues { success, devices?, error?, retryAfterMs? }`.
@@ -150,6 +200,7 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
           if (_self == null) unawaited(_ensureSelf());
           unawaited(_receive());
           _swap.run();
+          _rotation.run();
         }),
       )
       ..add(_box.lostQueues.listen(_onLost));
@@ -174,6 +225,8 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
       _publish();
     }
     _swap.accountReady(deviceId);
+    // `socketReady` is what confirms this device's id for the own list.
+    _rotation.run();
   }
 
   /// The contact store (re)opened — a web vault that booted locked was just
@@ -184,6 +237,7 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
     if (_self == null) unawaited(_ensureSelf());
     unawaited(_receive());
     _swap.run();
+    _rotation.run();
   }
 
   /// The account socket dropped: an answer still owed will never come.
@@ -224,6 +278,20 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
   }
 
   @override
+  Map<int, ContactOutbound> siblingAddresses() {
+    if (_disposed) return const {};
+    return {
+      for (final s in _store.siblings)
+        if ((s.sid, s.sealPub) case (final String sid, final String sealPub))
+          s.deviceId: ContactOutbound(
+            peerDeviceId: s.deviceId,
+            sid: sid,
+            sealPub: sealPub,
+          ),
+    };
+  }
+
+  @override
   Iterable<int> coveredPeers() => _disposed
       ? const []
       : [
@@ -260,10 +328,8 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
       sid: sid,
       sealPub: sealPub,
     );
-    final acked = await _sendToSibling(
-      selfQueue,
-      E2eEnvelope.buildQueueHandoffAck(sid: sid),
-    );
+    final ack = E2eEnvelope.buildQueueHandoffAck(sid: sid);
+    final acked = await _sendToSibling(selfQueue, ack);
     final self = _store.selfQueue;
     final owed =
         self != null &&
@@ -305,12 +371,48 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
   }
 
   @override
-  Future<SiblingWrite> siblingAcked(int deviceId, String sid) => _disposed
-      ? Future.value(SiblingWrite.retryLater)
-      : _store.markSiblingAcked(deviceId, sid);
+  Future<SiblingWrite> siblingAcked(int deviceId, String sid) async {
+    if (_disposed) return SiblingWrite.retryLater;
+    final written = await _store.markSiblingAcked(deviceId, sid);
+    return written == SiblingWrite.refused
+        ? _staleAck(deviceId, sid)
+        : written;
+  }
+
+  /// Sibling [deviceId] acked [sid], which is not our current self-queue: it
+  /// learned an older handoff after the newer one (they travel through
+  /// different queues, which the box does not order), and would send into a
+  /// queue that is retiring or gone. Its ack is forgotten, so the
+  /// swap hands it the current queue — asked again now, and on every
+  /// connect until it acks. The re-hand leaves only after the stale handoff
+  /// was read, so it cannot be overtaken by it.
+  Future<SiblingWrite> _staleAck(int deviceId, String sid) async {
+    final self = _store.selfQueue;
+    if (self == null || self.sid == sid || _store.siblingsUnsupported) {
+      return SiblingWrite.refused;
+    }
+    final forgot = await _store.forgetSiblingAck(deviceId);
+    if (forgot != SiblingWrite.stored) return forgot;
+    E2eDiagLog.add('BOX_SIBLING_STALE_ACK', {'device': deviceId});
+    _swap.handAgain();
+    return SiblingWrite.stored;
+  }
 
   @override
-  bool viaSelfQueue(String rid) => _store.selfQueue?.rid == rid;
+  ContactRecord? contactOf(int userId) =>
+      _disposed ? null : _store.byUserId(userId);
+
+  @override
+  Future<void> rekeySibling(int deviceId) async {
+    final self = _store.selfQueue;
+    final to = siblingAddresses()[deviceId];
+    if (self == null || to == null || !_rekeyed.add(deviceId)) return;
+    final sent = await _sendToSibling(
+      to,
+      E2eEnvelope.buildQueueHandoff(sid: self.sid, sealPub: self.sealPub),
+    );
+    E2eDiagLog.add('BOX_SIBLING_REKEYED', {'device': deviceId, 'sent': sent});
+  }
 
   @override
   Future<int?> nextLocalId() => _store.allocateLocalId();
@@ -320,6 +422,7 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
     _disposed = true;
     _retry?.cancel();
     _swap.dispose();
+    _rotation.dispose();
     for (final s in _subscriptions) {
       unawaited(s.cancel());
     }
@@ -360,6 +463,8 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
     try {
       final queue = await _keys.ensureSelf();
       if (_disposed || queue == null) return;
+      // A rotation that landed while this ran is followed on the next read
+      // ([_currentSelf]).
       _self = queue;
       _swap.run();
     } finally {

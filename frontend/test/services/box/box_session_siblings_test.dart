@@ -7,6 +7,7 @@ import 'package:fireplace/services/box/box_frame.dart';
 import 'package:fireplace/services/box/box_session.dart';
 import 'package:fireplace/services/box/box_wire.dart';
 import 'package:fireplace/services/box/queue_seal.dart';
+import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/services/contacts/contact_store.dart';
 import 'package:fireplace/services/encryption/content_kv.dart';
 import 'package:fireplace/utils/e2e_envelope.dart';
@@ -97,6 +98,11 @@ class _RoutingBox {
             Timer.run(() => reader.push({'rid': rid, 'id': id, 'blob': blob}));
           }
           return {'ok': true};
+        case 'deleteQueue':
+          final rid = f.frame['rid']! as String;
+          deleted.add(rid);
+          _ridOfSid.removeWhere((_, r) => r == rid);
+          return {'ok': true};
         default:
           return {'ok': true};
       }
@@ -111,13 +117,33 @@ class _RoutingBox {
 
   /// Every sid a `send` went to, in order.
   final List<String> sent = [];
+
+  /// Every rid a `deleteQueue` named, in order.
+  final List<String> deleted = [];
+
+  /// Every rid a `subscribe` named, in order.
+  List<String> subscribedBy(FakeBoxSocket socket) => [
+    for (final f in socket.emitted)
+      if (f.event == 'subscribe')
+        for (final s in f.frame['subs']! as List<Object?>)
+          (s! as Map)['rid']! as String,
+  ];
 }
 
 /// One linked device of account 1: its own storage, box connection and
 /// [BoxSession]. Signal is faked as the identity (a "ciphertext" is the JSON
 /// itself); what is under test is who is told what, and when.
 class _Device {
-  _Device(this.deviceId, this.box, {ContentKv? kv}) : kv = kv ?? _MemKv();
+  _Device(this.deviceId, this.box, {ContentKv? kv, this.clock})
+    : kv = kv ?? _MemKv();
+
+  /// What the own VERIFIED list names live; null = not known now.
+  Set<int>? live;
+
+  /// Every delivery this device read.
+  final List<BoxInboxEntry> reads = [];
+
+  final DateTime Function()? clock;
 
   final int deviceId;
   final _RoutingBox box;
@@ -138,6 +164,7 @@ class _Device {
   /// decrypted: the handoff reaction itself is the box's own
   /// [BoxSession.takeSiblingHandoff], the code under test.
   Future<bool> read(BoxInboxEntry entry) async {
+    reads.add(entry);
     if (entry.peerUserId != 1) return true;
     final json = utf8.decode(base64Decode(entry.signal!.split(':')[1]));
     final handoff = E2eEnvelope.parseQueueHandoff(json);
@@ -172,10 +199,15 @@ class _Device {
       store: store,
       emit: (event, _) => emitted.add(event),
       seal: QueueSeal(cipher: PointyGcmSealer()),
+      now: clock,
     )..start();
     socket = box.sockets.last;
     session.consumer = read;
     if (wireEncrypt) session.encryptForOwnDevice = encrypt;
+    session.ownLiveDevices = () async {
+      final ids = live;
+      return ids == null ? null : (self: deviceId, live: ids);
+    };
     if (e2e) session.e2eReady();
     started = true;
     socket.serverConnect('S$deviceId');
@@ -520,6 +552,263 @@ void main() {
       await settle();
       expect(b.sibling(2)?.sid, a.store.selfQueue!.sid);
       expect(a.sibling(3)?.ackedSelfSid, a.store.selfQueue!.sid);
+    },
+  );
+
+  group('a revoked sibling (E6, E7)', () {
+    late _Device c;
+    var now = DateTime.utc(2026, 9, 25);
+
+    setUp(() {
+      now = DateTime.utc(2026, 9, 25);
+      a = _Device(2, box, clock: () => now);
+      c = _Device(4, box);
+    });
+
+    tearDown(() {
+      if (c.started) c.session.dispose();
+    });
+
+    Future<void> converge(List<_Device> devices) async {
+      for (final d in devices) {
+        await d.start();
+      }
+      for (final d in devices) {
+        d.session.accountReady(d.deviceId);
+      }
+      await settle();
+      for (final d in devices) {
+        d.answer([
+          for (final other in devices)
+            if (other != d) other,
+        ]);
+      }
+      await settle();
+    }
+
+    /// The own list now names [live]; the E2E layer says it changed.
+    Future<void> ownListIs(_Device d, Set<int> live) async {
+      d
+        ..live = live
+        ..session.ownDevicesChanged();
+      await settle();
+    }
+
+    test(
+      'a survivor drops it, rotates its self-queue, hands the new one to '
+      'each remaining sibling through THAT sibling self-queue, and keeps the '
+      'old one retiring — an ack of the new one proves nothing about what '
+      'is still on its way into the old one',
+      () async {
+        await converge([a, b, c]);
+        final old = a.store.selfQueue!;
+        expect(a.sibling(4)?.ackedSelfSid, old.sid);
+        final sendsBefore = box.sent.length;
+
+        await ownListIs(a, {2, 3});
+
+        final next = a.store.selfQueue!;
+        expect(next.sid, isNot(old.sid));
+        expect(a.sibling(4), isNull);
+        // The swap's new ask is left unanswered: b learned it from a's
+        // handoff into b's self-queue.
+        expect(b.sibling(2)?.sid, next.sid);
+        expect(a.sibling(3)?.ackedSelfSid, next.sid);
+        expect(box.deleted, isEmpty);
+        expect(a.store.retiringSelfQueues.single.queue.rid, old.rid);
+        expect(
+          box.sent.sublist(sendsBefore),
+          isNot(contains(c.store.selfQueue!.sid)),
+          reason: 'the revoked device learns nothing',
+        );
+      },
+    );
+
+    test(
+      'the old queue stays subscribed and read after the sibling acked the '
+      'new one: a copy it built before it learned the new address still '
+      'lands, and is read as a self-queue delivery',
+      () async {
+        await converge([a, b, c]);
+        final old = a.store.selfQueue!;
+        await ownListIs(a, {2, 3});
+        expect(a.sibling(3)?.ackedSelfSid, a.store.selfQueue!.sid);
+
+        final readsBefore = a.reads.length;
+        expect(
+          await b.session.deliver(
+            ContactOutbound(peerDeviceId: 2, sid: old.sid, sealPub: old.sealPub),
+            BoxFrame(
+              kind: BoxFrameKind.whisper,
+              senderDeviceId: 3,
+              signal: Uint8List.fromList(utf8.encode('{"t":"msg"}')),
+            ).encode(),
+          ),
+          isTrue,
+        );
+        await settle();
+        expect(
+          a.reads.sublist(readsBefore),
+          [
+            isA<BoxInboxEntry>()
+                .having((e) => e.rid, 'rid', old.rid)
+                .having((e) => e.peerUserId, 'peerUserId', 1)
+                .having((e) => e.senderDeviceId, 'senderDeviceId', 3)
+                .having(
+                  (e) => e.viaSelfQueue,
+                  'viaSelfQueue',
+                  isTrue,
+                  // Journaled as a self-queue delivery: still read as one
+                  // once this queue has retired and left the sibling row.
+                ),
+          ],
+        );
+        expect(box.deleted, isEmpty);
+      },
+    );
+
+    test(
+      'the old queue goes once the box TTL has passed since the rotation, '
+      'and is subscribed again after a restart until then',
+      () async {
+        await converge([a, b, c]);
+        final old = a.store.selfQueue!;
+        b.session.consumer = null;
+        await ownListIs(a, {2, 3});
+
+        a.session.dispose();
+        a = _Device(2, box, kv: a.kv, clock: () => now)..live = {2, 3};
+        await a.start();
+        expect(box.subscribedBy(a.socket), contains(old.rid));
+        expect(box.deleted, isEmpty);
+
+        now = now.add(const Duration(days: 31));
+        a.session.storeOpened();
+        await settle();
+        expect(box.deleted, [old.rid]);
+        expect(a.store.retiringSelfQueues, isEmpty);
+      },
+    );
+
+    test(
+      'nothing rotates while this device is not live in its own list, or '
+      'while every sibling it knows still is',
+      () async {
+        await converge([a, b, c]);
+        final old = a.store.selfQueue!;
+
+        // Not live itself, and device 4 gone too: still nothing moves.
+        await ownListIs(a, {3});
+        await ownListIs(a, {2, 3, 4});
+
+        expect(a.store.selfQueue!.sid, old.sid);
+        expect(a.sibling(4), isNotNull);
+        expect(box.deleted, isEmpty);
+      },
+    );
+
+    test(
+      'a rotation another tab of this device made first is adopted: that '
+      'tab never hands a sibling the retiring sid',
+      () async {
+        await converge([a, b, c]);
+        final tab = _Device(2, box, kv: a.kv, clock: () => now);
+        addTearDown(() => tab.session.dispose());
+        await tab.start();
+        tab.session.accountReady(2);
+        await settle();
+
+        await ownListIs(a, {2, 3});
+        final next = a.store.selfQueue!;
+        expect(b.sibling(2)?.sid, next.sid);
+
+        await ownListIs(tab, {2, 3});
+        tab.answer([b]);
+        await settle();
+
+        expect(tab.store.selfQueue?.rid, next.rid);
+        expect(b.sibling(2)?.sid, next.sid);
+      },
+    );
+
+    test(
+      'a sibling the swap handed our self-queue to is noted BEFORE the '
+      'handoff, so revoking it before it ever answered still rotates',
+      () async {
+        await a.start();
+        await b.start();
+        b.session.consumer = null;
+        a.session.accountReady(2);
+        await settle();
+        a.answer([b]);
+        await settle();
+        final old = a.store.selfQueue!;
+        expect(a.sibling(3), isA<SiblingAddress>().having((s) => s.sid, 'sid', isNull));
+        expect(a.session.siblingAddresses(), isEmpty, reason: 'no address yet');
+
+        await ownListIs(a, {2});
+
+        expect(a.store.selfQueue!.sid, isNot(old.sid));
+        expect(a.store.retiringSelfQueues.single.queue.rid, old.rid);
+      },
+    );
+
+    test(
+      "a sibling that learns the OLD sid after the new one — the swap's "
+      'request-queue handoff overtaken by the rotation — is handed the '
+      'current one again, and its copies never go to a deleted queue',
+      () async {
+        await converge([a, b, c]);
+        final old = a.store.selfQueue!;
+        await ownListIs(a, {2, 3});
+        final next = a.store.selfQueue!;
+        expect(a.store.retiringSelfQueues.single.queue.rid, old.rid);
+        // The rotation's own ask, answered: b already acked the new sid.
+        a.answer([b]);
+        await settle();
+        final asks = a.asks;
+
+        // The late one: b re-learns a's retired address.
+        await b.session.takeSiblingHandoff(
+          2,
+          sid: old.sid,
+          sealPub: old.sealPub,
+        );
+        await settle();
+        expect(a.sibling(3)?.ackedSelfSid, isNull, reason: 'handed again');
+        expect(a.asks, asks + 1, reason: 'the swap is asked again now');
+        a.answer([b]);
+        await settle();
+
+        expect(b.sibling(2)?.sid, next.sid);
+        expect(a.sibling(3)?.ackedSelfSid, next.sid);
+      },
+    );
+  });
+
+  test(
+    "re-keying a sibling hands our self-queue into that sibling's "
+    'self-queue, once per session (E8)',
+    () async {
+      await a.start();
+      await b.start();
+      a.session.accountReady(2);
+      b.session.accountReady(3);
+      await settle();
+      a.answer([b]);
+      b.answer([a]);
+      await settle();
+      final before = box.sent.length;
+
+      await a.session.rekeySibling(3);
+      await a.session.rekeySibling(3);
+      await settle();
+
+      expect(
+        box.sent.sublist(before).where((sid) => sid == b.store.selfQueue!.sid),
+        hasLength(1),
+      );
+      expect(a.session.siblingAddresses().keys, [3]);
     },
   );
 }

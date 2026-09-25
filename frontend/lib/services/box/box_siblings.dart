@@ -1,3 +1,4 @@
+import '../contacts/contact_record.dart';
 import '../contacts/contact_store.dart';
 import 'box_frame.dart';
 
@@ -8,6 +9,12 @@ import 'box_frame.dart';
 /// verified list does not name live). The messaging side implements it, so
 /// the box layer stays crypto-free.
 typedef OwnDeviceEncrypt = Future<BoxFrame?> Function(int deviceId, String json);
+
+/// This device's id and every device id the account's own VERIFIED list
+/// names live, or null when that cannot be known now (E2E not ready, the
+/// device id not confirmed, the list not verifiable). The messaging side
+/// implements it; the box's sibling rotation (E6/E7) acts on nothing else.
+typedef OwnLiveDevices = Future<({int self, Set<int> live})?> Function();
 
 /// What the messaging reader of a sibling's box delivery needs from the box
 /// (metadata-privacy PR3.1 sibling queues, owner decisions 26–28). `BoxSession`
@@ -21,21 +28,27 @@ abstract interface class BoxSiblingLink {
   /// the sibling records it before it reads our handoff, so it never answers
   /// ours with another. A lost ack or hand-back costs nothing: the next
   /// connect's swap sends again. [SiblingWrite.stored] once the address is
-  /// stored, whatever became of the two sends.
+  /// stored, whatever became of the sends.
   Future<SiblingWrite> takeSiblingHandoff(
     int deviceId, {
     required String sid,
     required String sealPub,
   });
 
-  /// Sibling [deviceId] acknowledged self-queue [sid]; recorded only when it
-  /// is this device's current one.
+  /// Sibling [deviceId] acknowledged self-queue [sid]; recorded only when
+  /// [sid] is this device's current one. An ack of any other sid means the
+  /// sibling holds an address we replaced (an older handoff overtook the
+  /// newer one): the current one is handed to it again (E6).
   Future<SiblingWrite> siblingAcked(int deviceId, String sid);
 
-  /// Whether [rid] is this device's self-queue — whose sid only siblings
-  /// were handed. Any other own-account delivery came in on the PUBLIC
-  /// request queue, where a frame that cannot be read now is dropped rather
-  /// than held: anyone can fill that queue, and a real sibling hands off
-  /// again on its next connect.
-  bool viaSelfQueue(String rid);
+  /// [userId]'s contact record, which files a sibling's sent copy under its
+  /// chat (E5); null when this device holds none (yet).
+  ContactRecord? contactOf(int userId);
+
+  /// Our Signal session with sibling [deviceId] is gone (its delivery found
+  /// none, E8): hand our self-queue into that sibling's self-queue again.
+  /// The handoff is a fresh PreKey message, which gives the sibling a
+  /// session we hold, so what it sends next reads again. At most once per
+  /// sibling per session; nothing when its address is unknown.
+  Future<void> rekeySibling(int deviceId);
 }

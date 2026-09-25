@@ -39,7 +39,8 @@ typedef BoxInboxConsumer = Future<bool> Function(BoxInboxEntry entry);
 ///
 /// This account's OWN other devices (siblings, PR3.1 sibling queues) reach it
 /// on two queues, both journaled under the OWN account id — the store's:
-/// this device's SELF-queue (normal frames, like a friend's queue) and its
+/// this device's SELF-queue — and any it is retiring after a rotation —
+/// (normal frames, like a friend's queue) and its
 /// REQUEST queue, where only an account-bearing frame naming this very
 /// account is read (the sibling address swap). Everything else on the
 /// request queue is a stranger's and stays acked-and-dropped until first
@@ -159,7 +160,7 @@ class BoxInbox {
       }
       return;
     }
-    final (:peerUserId, :queue) = owner;
+    final (:peerUserId, :queue, :self) = owner;
     final auth = QueueKeys.authOf(queue);
     if (auth == null) return;
 
@@ -171,7 +172,7 @@ class BoxInbox {
       await _ackAndDrop(delivery, slot, auth);
       return;
     }
-    await _journal(delivery, slot, peerUserId, frame, auth);
+    await _journal(delivery, slot, peerUserId, frame, auth, viaSelf: self);
   }
 
   /// A delivery on this device's request queue: journaled only when it is an
@@ -196,14 +197,16 @@ class BoxInbox {
     await _journal(delivery, slot, own, frame, auth);
   }
 
-  /// JOURNAL, then ack, then queue the read.
+  /// JOURNAL, then ack, then queue the read. [viaSelf]: it came in on one of
+  /// this device's self-queues.
   Future<void> _journal(
     BoxDelivery delivery,
     String slot,
     int peerUserId,
     BoxFrame frame,
-    BoxQueueAuth auth,
-  ) async {
+    BoxQueueAuth auth, {
+    bool viaSelf = false,
+  }) async {
     final entry = await _store.journalDelivery(
       rid: boxB64(delivery.rid),
       id: boxB64(delivery.id),
@@ -211,6 +214,7 @@ class BoxInbox {
       senderDeviceId: frame.senderDeviceId,
       signal: frame.signalCiphertext,
       receivedAt: _now().toUtc(),
+      viaSelfQueue: viaSelf,
     );
     if (entry == null) {
       _held[slot] = delivery;
@@ -314,17 +318,27 @@ class BoxInbox {
   }
 
   /// Which account queue [rid] reads for: a contact record's, or — this
-  /// device's own self-queue and request queue — the own account.
-  ({int peerUserId, ContactQueue queue})? _ownerOf(String rid) {
+  /// device's own self-queue (current or retiring, `self` true) and request
+  /// queue — the own account.
+  ({int peerUserId, ContactQueue queue, bool self})? _ownerOf(String rid) {
     for (final record in _store.all) {
       for (final queue in record.queues) {
-        if (queue.rid == rid) return (peerUserId: record.userId, queue: queue);
+        if (queue.rid == rid) {
+          return (peerUserId: record.userId, queue: queue, self: false);
+        }
       }
     }
     final own = _store.userId;
     if (own == null) return null;
-    for (final queue in [_store.selfQueue, _store.requestQueue]) {
-      if (queue?.rid == rid) return (peerUserId: own, queue: queue!);
+    final request = _store.requestQueue;
+    if (request?.rid == rid) {
+      return (peerUserId: own, queue: request!, self: false);
+    }
+    for (final queue in [
+      _store.selfQueue,
+      for (final r in _store.retiringSelfQueues) r.queue,
+    ]) {
+      if (queue?.rid == rid) return (peerUserId: own, queue: queue!, self: true);
     }
     return null;
   }

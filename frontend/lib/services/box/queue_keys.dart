@@ -119,6 +119,41 @@ class QueueKeys {
     drop: _store.dropSelfQueue,
   );
 
+  /// Replaces this device's self-queue [current] (E6): a new normal queue,
+  /// stored in ONE write that starts [current] retiring at [now] and drops
+  /// every sibling entry outside [live], then subscribed. [current] stays
+  /// subscribed until [retire] deletes it. Null when nothing was rotated —
+  /// the box did not create one, or the store kept a different self-queue
+  /// (the new one is then deleted again).
+  Future<ContactQueue?> rotateSelf(
+    ContactQueue current, {
+    required Set<int> live,
+    required DateTime now,
+  }) async {
+    final next = await _createOwn(
+      QueueKind.normal,
+      (candidate) => _store.rotateSelfQueue(
+        candidate,
+        replaces: current.rid,
+        live: live,
+        now: now,
+      ),
+    );
+    final owned = next == null ? null : authOf(next);
+    if (owned != null) await _box.subscribe([owned]);
+    return next;
+  }
+
+  /// Deletes retiring self-queue [queue] from the box and then forgets it;
+  /// false when the box did not confirm (tried again on the next check). A
+  /// queue the box no longer knows counts as deleted.
+  Future<bool> retire(RetiringSelfQueue queue) async {
+    final owned = authOf(queue.queue);
+    if (owned != null && await _box.deleteQueue(owned) is! BoxOk) return false;
+    return await _store.dropRetiringSelfQueue(queue.queue.rid) ==
+        SiblingWrite.stored;
+  }
+
   /// One of this device's own queues: loaded from its row, or created, stored
   /// and only then subscribed. A stored queue the box refuses on subscribe
   /// (deleted, or reaped after 90 unsubscribed days) is dropped and replaced
@@ -197,9 +232,11 @@ class QueueKeys {
 
   /// Every readable inbound queue on every record — `former` ones too: the
   /// peer may still be sending there, and an unsubscribed queue is reaped
-  /// after 90 days. What a connection subscribes.
+  /// after 90 days — and every self-queue this device is retiring (E6): a
+  /// sibling may still be sending there. What a connection subscribes.
   List<BoxQueueAuth> inbound() => [
     for (final record in _store.all)
       for (final queue in record.queues) ?authOf(queue),
+    for (final retiring in _store.retiringSelfQueues) ?authOf(retiring.queue),
   ];
 }

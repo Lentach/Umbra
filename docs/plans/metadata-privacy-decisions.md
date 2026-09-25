@@ -79,7 +79,7 @@ Status: ACTIVE (in force), DONE (carried out, still binding), SUPERSEDED, OPEN (
 | 24 | 09-24 | The "peer links a device mid-session" drive happens in the sibling slice | ENGINEERING | ACTIVE |
 | 25 | 09-24 | A box-pinned retry whose route is gone stays failed; the user resends | OWNER | ACTIVE |
 | 26 | 09-25 | Siblings swap self-queue addresses through their REQUEST queues, not the link blob | OWNER — changes approved design §4.2 | DONE (part A `a8a4e560`, CI 7/7 on `dbe54d3a`) |
-| 27 | 09-25 | One self-queue per device; revoking a device = each survivor rotates its self-queue | ENGINEERING (owner was asked) | ACTIVE (rotation = part B) |
+| 27 | 09-25 | One self-queue per device; revoking a device = each survivor rotates its self-queue | ENGINEERING (owner was asked) | DONE (part B; old queue deleted after the 30-d TTL, E6) |
 | 28 | 09-25 | Sibling addresses live in `boxsib_v1`; no backup carries them | OWNER | DONE |
 | 29 | 09-25 | No auth-key escrow; a revoked device's queues are left to the 90-day reaper | OWNER — changes approved design §4.2 | ACTIVE |
 | S8 | 09-25 | Decisions are classed OWNER / ENGINEERING, batched per phase, logged here | OWNER | ACTIVE |
@@ -96,12 +96,17 @@ Status: ACTIVE (in force), DONE (carried out, still binding), SUPERSEDED, OPEN (
 | E2 | The self-queue is handed only to devices the own VERIFIED list names live | The server says which siblings exist; it must not decide who holds our self-queue |
 | E3 | Nothing device-scoped is published before E2E is ready on that connect | A device on the link gate holds the primary's token (found live: it overwrote device 1's request queue) |
 | E4 | `BoxSession.takeSiblingHandoff`: store → ack → hand ours back, ack first | Closes the primary's `devices:[]` race with no reconnect; ack-first stops a handoff ping-pong (pinned by an exact 4-send test) |
+| E5 | Sent copies ride the E2E field `to` (the peer id); the route needs every live sibling addressed, else the whole message takes the old path; a sibling refusal fails the row | Decision 16; the box sees no account. Residual accepted as for peers since slice (c): a send to a sibling with no Signal session fetches its pre-key bundle, which tells the server this account is sending now (the swap's PreKey handoffs make that rare) |
+| E6 | A retiring self-queue is deleted only after the 30-d TTL, never on acks or drain markers; an ack of a non-current sid re-hands the current one | Two reviews: every earlier-delete scheme lost a copy still in flight or sent by a second tab from an older row, silently (a send to a deleted sid answers ok) |
+| E7 | `boxsib_v1` entries the own verified list no longer names live are pruned (in the rotation's write) | The verified list is the authority (E2) |
+| E8 | A revoked sibling origin is finished at once; an absent one or a missing session is held ≤ 30 d on a self-queue only; a copy waiting for a chat ≤ 30 d | The journal prune never drops an unconsumed row, so the reader must bound the hold |
 
 ## Open — owner input owed
 
 | Id | Question | Needed before | Where |
 |---|---|---|---|
 | O1 | When release N+1 may drop the old tables (convergence rule). Current recommendation: no min-version gate; `contact_backups` row existence as the condition, plus a pre-G6 query that must be empty or knowingly accepted | G6 | `.planning/metadata-privacy/convergence-decision.md` |
+| O6 | Every device of an account shares ONE identity key, and a box frame's `senderDeviceId` is not authenticated, so a REVOKED device can still seal a PreKey message posing as a LIVE sibling into our public request queue: its handoff would replace that sibling's session and address, and every later sent copy (E5) would go to it. Options: (a) refuse a sibling PreKey message that would replace an existing session unless this device asked for a re-key; (b) per-device keys bound into the verified device list (changes approved design); (c) accept until slice (e)/(f). Recommendation: (a) now, (b) later | Box ON in prod | Re-review of part B (PartBReReview, P2-3), `.planning/metadata-privacy/task_plan.md` part B |
 
 ## Contradictions found while building this log
 

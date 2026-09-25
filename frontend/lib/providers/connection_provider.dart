@@ -499,14 +499,17 @@ class ConnectionProvider extends ChangeNotifier {
         // Slice (b): every box delivery is read by the messaging provider,
         // which knows the peer only through the contact record. Slice (c):
         // it sends through the same session. Sibling queues: it encrypts
-        // the address handoffs and stores what a sibling hands over.
+        // the address handoffs, stores what a sibling hands over and — part
+        // B — tells the rotation on revoke which own devices are live.
         final messaging = _messagingProvider;
         if (messaging != null) {
           _box!.consumer = (entry) => messaging.consumeBoxEntry(
             entry,
             contacts.byUserId(entry.peerUserId),
           );
-          _box!.encryptForOwnDevice = messaging.encryptForOwnDevice;
+          _box!
+            ..encryptForOwnDevice = messaging.encryptForOwnDevice
+            ..ownLiveDevices = messaging.ownLiveDevices;
           messaging
             ..boxOutbox = _box
             ..boxSiblings = _box;

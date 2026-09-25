@@ -112,6 +112,9 @@ class _SendEncryption extends EncryptionProvider {
 class _Outbox implements BoxOutbox {
   final Map<int, Map<int, ContactOutbound>> addresses = {};
 
+  /// Our own other devices' self-queue addresses, by device id.
+  final Map<int, ContactOutbound> siblings = {};
+
   /// Peer devices whose `send` the box refuses.
   final Set<int> refuse = {};
 
@@ -127,6 +130,9 @@ class _Outbox implements BoxOutbox {
   @override
   Map<int, ContactOutbound> addressesFor(int peerUserId) =>
       addresses[peerUserId] ?? const {};
+
+  @override
+  Map<int, ContactOutbound> siblingAddresses() => siblings;
 
   @override
   Iterable<int> coveredPeers() => [
@@ -314,16 +320,76 @@ void main() {
     },
   );
 
+  ContactOutbound selfQueueOf(int device) => ContactOutbound(
+    peerDeviceId: device,
+    sid: 'self-$device',
+    sealPub: 'self-seal-$device',
+  );
+
   test(
-    'another live device of OUR account keeps the message on the old path '
-    '(no sibling queues yet)',
+    'a live device of OUR account with no self-queue address keeps the '
+    'whole message on the old path (decision 16)',
     () async {
       bob([1]);
-      encryption.lists[1] = _enrolled([1, 3]);
+      encryption.lists[1] = _enrolled([1, 3, 4]);
+      outbox.siblings[3] = selfQueueOf(3);
       await send('siblings');
 
       expect(outbox.delivered, isEmpty);
       expect(emitted, contains('sendMessage'));
+    },
+  );
+
+  test(
+    'every live sibling gets a sent copy in its SELF-queue, encrypted for '
+    'that own device, under the same wire id and time, naming the peer '
+    'inside E2E; the peer copy names no one; a revoked sibling gets nothing '
+    '(E5)',
+    () async {
+      bob([1, 2]);
+      encryption.lists[1] = _enrolled([1, 3, 4], revoked: [5]);
+      outbox.siblings.addAll({
+        for (final d in [3, 4, 5]) d: selfQueueOf(d),
+      });
+      final row = await send('to bob, seen on my phone');
+
+      expect(emitted, isNot(contains('sendMessage')));
+      expect(row.deliveryStatus, MessageDeliveryStatus.sent);
+      expect(
+        outbox.delivered.map((d) => d.$1.sid),
+        unorderedEquals(['sid-1', 'sid-2', 'self-3', 'self-4']),
+      );
+      expect(encryption.encryptCalls, containsAll([(1, 3), (1, 4)]));
+      for (final (to, frame) in outbox.delivered) {
+        final envelope = envelopeOf(frame);
+        expect(frame.senderDeviceId, 1);
+        expect(envelope, containsPair('content', 'to bob, seen on my phone'));
+        expect(envelope, containsPair('msgId', row.wireId));
+        expect(
+          envelope,
+          containsPair('ts', row.createdAt.millisecondsSinceEpoch),
+        );
+        if (to.sid.startsWith('self-')) {
+          expect(envelope, containsPair('to', 2), reason: to.sid);
+        } else {
+          expect(envelope, isNot(contains('to')), reason: to.sid);
+        }
+      }
+    },
+  );
+
+  test(
+    'a sibling frame the box refuses fails the whole row (decision 20)',
+    () async {
+      bob([1]);
+      encryption.lists[1] = _enrolled([1, 3]);
+      outbox
+        ..siblings[3] = selfQueueOf(3)
+        ..refuse.add(3);
+      final row = await send('half sent');
+
+      expect(row.deliveryStatus, MessageDeliveryStatus.failed);
+      expect(emitted, isNot(contains('sendMessage')));
     },
   );
 
