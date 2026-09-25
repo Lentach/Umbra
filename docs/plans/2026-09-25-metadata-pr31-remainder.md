@@ -72,7 +72,9 @@ O2 → (a) ~3 GB (30) · O3 → (a) honest 429 (31) · O4 → (a) no push on the
 - **E17. Media.** Padded to the ladder rung, uploaded to `POST /box/media` against the recipient queue's sid, with `boxMediaId` inside E2E and downloaded through the capability URL. A file over 20 MiB of plaintext is refused before encryption. *Reason:* decision 9 and the I5 ladder.
 - **E18.** Replies, disappearing timers (local, D4), reactions (plain emoji), pin, edit and delete-for-everyone travel as E2E envelopes for box messages in release N. *Reason:* decision 22, and a box message's action bar has to work before the cutover. Delete cannot reach a device offline for more than 30 days: an accepted residual (design §5).
 
-## Item 3 (decision-22 slice): OWNER questions O8–O11 — OPEN (asked 2026-09-26, one batch)
+## Item 3 (decision-22 slice): OWNER questions O8–O11 — ANSWERED 2026-09-26 in one pass (decisions 40–43)
+
+O8 → (a) download on arrival, keep a local copy (40) · O9 → (a) Signal's countdown (41) · O10 → (a) setting stays a server column until PR4.x (42) · O11 → (a) pings move now (43).
 
 What the old path does today, for reference. Media sits on the server for as long as the message exists, and every view downloads it again. A reply names a server message id. A disappearing message's countdown starts when the RECIPIENT reads it: the server stamps `expiresAt` on read and tells both sides, so both copies go at the same moment, and an unread message goes after 1 day. The chat's timer is a server column (`conversations.disappearingTimer`, set with `setDisappearingTimer`). The box changes three of these facts: box media is deleted after 14 days whoever downloaded it (D8); there is no server read event, and receipts are off by default (D5/33); a box message has no server id.
 
