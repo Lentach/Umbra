@@ -715,6 +715,57 @@ extension MessagingBox on MessagingProvider {
     );
   }
 
+  /// The session pre-build for [user] (decision 38, E38a), run by the box
+  /// list refresh right after it verified [user]'s list — at a connect, a
+  /// list change or a backoff retry, never at a send: every box-covered
+  /// live device on that list with no usable session gets
+  /// [EncryptionProvider.ensureSession], which fetches its pre-key bundle.
+  /// Box-covered means a peer device the contact record holds an address
+  /// for or, for our own account, a sibling with a self-queue address; this
+  /// device is never one. One device at a time; every device is tried, then
+  /// the first failure is rethrown so the refresh retries on its backoff.
+  Future<void> _prebuildBoxSessions(int user) async {
+    final enc = _encryptionProvider;
+    final outbox = boxOutbox;
+    final own = _currentUserId;
+    if (enc == null || outbox == null || own == null) return;
+    final list = enc.cachedDeviceList(user);
+    // Dropped since the lookup: the invalidation started the next pass.
+    if (list == null) throw StateError('device list dropped');
+    final addressed = user == own
+        ? outbox.siblingAddresses()
+        : outbox.addressesFor(user);
+    (Object, StackTrace)? failure;
+    for (final device in list.liveDeviceIds) {
+      if (user == own && device == enc.ownDeviceId) continue;
+      if (!addressed.containsKey(device)) continue;
+      if (await _hasUsableBoxSession(enc, user, device)) continue;
+      _e2eFlowLog('BOX_SESSION_PREBUILD', {'userId': user, 'device': device});
+      try {
+        await enc.ensureSession(user, deviceId: device);
+      } on Object catch (e, st) {
+        _e2eFlowLog('BOX_SESSION_PREBUILD_FAILED', {
+          'userId': user,
+          'device': device,
+          'error': e.runtimeType.toString(),
+        });
+        failure ??= (e, st);
+      }
+    }
+    if (failure != null) Error.throwWithStackTrace(failure.$1, failure.$2);
+  }
+
+  /// Whether a box send may encrypt to [user]'s [device] as things stand: a
+  /// session is held and no rebuild of it is pending. A box send never
+  /// builds one (E38b).
+  Future<bool> _hasUsableBoxSession(
+    EncryptionProvider enc,
+    int user,
+    int device,
+  ) async =>
+      !enc.needsSessionRebuild(user, deviceId: device) &&
+      await enc.hasSessionWith(user, deviceId: device);
+
   /// Sends [content] along [route]: one Signal message per peer device, each
   /// sealed into that device's queue, and a SENT COPY — the same message
   /// naming the peer inside E2E (E5) — per sibling, sealed into its
@@ -723,7 +774,10 @@ extension MessagingBox on MessagingProvider {
   /// (decision 19), which re-seals under the same wire id, so a device that
   /// already holds the message drops the copy (`wireHeldByOther`). Every
   /// frame is built before the first goes out, so nothing reaches some
-  /// devices only.
+  /// devices only. A device with no usable session fails the row before
+  /// anything is encrypted, and nothing here fetches a pre-key bundle: a
+  /// fetch timed by the send would name the sender at the moment of the box
+  /// frame (decision 38, E38b); the refresh's next pass builds it.
   ///
   /// While it runs, the tempId is in [_boxInFlight]: an account-socket error
   /// cannot fail the row under it and a retry cannot start a second attempt
@@ -756,11 +810,23 @@ extension MessagingBox on MessagingProvider {
       );
       final ownUserId = _currentUserId!;
       final frames = <(ContactOutbound, Uint8List)>[];
-      for (final (userId, to, json) in [
+      final sends = [
         for (final to in route.targets) (recipientId, to, envelope.json),
         for (final to in route.siblings) (ownUserId, to, envelope.copyJson),
-      ]) {
-        await enc.ensureSession(userId, deviceId: to.peerDeviceId);
+      ];
+      for (final (userId, to, _) in sends) {
+        if (await _hasUsableBoxSession(enc, userId, to.peerDeviceId)) {
+          continue;
+        }
+        _e2eFlowLog('BOX_SEND_NO_SESSION', {
+          'tempId': tempId,
+          'userId': userId,
+          'device': to.peerDeviceId,
+        });
+        _markMessageFailed(tempId, 'Could not send. Try again.');
+        return false;
+      }
+      for (final (userId, to, json) in sends) {
         final frame = BoxFrame.fromSignalCiphertext(
           await enc.encrypt(userId, json, deviceId: to.peerDeviceId),
           senderDeviceId: enc.ownDeviceId,

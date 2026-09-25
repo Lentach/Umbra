@@ -86,8 +86,40 @@ class _SendEncryption extends EncryptionProvider {
     return lists[userId] ?? const VerifiedDeviceList.notEnrolled();
   }
 
+  /// Signal sessions this device holds, as (user, device).
+  final Set<(int, int)> sessions = {};
+
+  /// Every pre-key bundle fetch the real [ensureSession] would emit on the
+  /// account socket, as (user, device).
+  final List<(int, int)> bundleFetches = [];
+
+  /// Addresses whose bundle fetch fails (no bundle, a timeout).
+  final Set<(int, int)> unbuildable = {};
+
+  /// Per-address holds on a bundle fetch still in flight.
+  final Map<(int, int), Completer<void>> buildHold = {};
+
   @override
-  Future<void> ensureSession(int recipientId, {int deviceId = 1}) async {}
+  Future<bool> hasSessionWith(int peerUserId, {int deviceId = 1}) async =>
+      sessions.contains((peerUserId, deviceId));
+
+  /// The real one's contract: a session with no rebuild pending returns at
+  /// once; anything else fetches the bundle and builds, and a failed build
+  /// leaves the rebuild pending.
+  @override
+  Future<void> ensureSession(int recipientId, {int deviceId = 1}) async {
+    final address = (recipientId, deviceId);
+    final rebuild = needsSessionRebuild(recipientId, deviceId: deviceId);
+    clearSessionRebuild(recipientId, deviceId: deviceId);
+    if (sessions.contains(address) && !rebuild) return;
+    bundleFetches.add(address);
+    await buildHold[address]?.future;
+    if (unbuildable.contains(address)) {
+      if (rebuild) markSessionRebuild(recipientId, deviceId: deviceId);
+      throw StateError('Recipient has no key bundle');
+    }
+    sessions.add(address);
+  }
 
   @override
   Future<String> encrypt(
@@ -826,4 +858,144 @@ void main() {
     expect(outbox.delivered, isEmpty);
     expect(emitted, contains('sendMessage'));
   });
+
+  test(
+    'the connect pre-builds a session for exactly the box-covered live '
+    'devices with no usable one — never a device that has one, an '
+    'unaddressed or revoked device, or this device (decision 38)',
+    () async {
+      encryption
+        ..sessions.addAll({(2, 1), (2, 4), (1, 3)})
+        ..markSessionRebuild(2, deviceId: 4)
+        ..lists[1] = _enrolled([1, 3, 4, 6], revoked: [7]);
+      outbox.siblings.addAll({
+        for (final d in [3, 4, 7]) d: selfQueueOf(d),
+      });
+      bob([1, 2, 3, 4], addressed: [1, 2, 4, 5], revoked: [5]);
+      await pump();
+
+      expect(
+        encryption.bundleFetches,
+        unorderedEquals([(2, 2), (2, 4), (1, 4)]),
+      );
+    },
+  );
+
+  test(
+    "a send waits for the connect's pre-build and then fetches nothing: "
+    'every bundle fetch lines up with the connect, none with the send',
+    () async {
+      final build = encryption.buildHold[(2, 2)] = Completer<void>();
+      bob([1, 2]);
+      await pump();
+      expect(encryption.bundleFetches, [(2, 1), (2, 2)]);
+
+      provider.sendMessage('after the pre-build');
+      await pump();
+      expect(outbox.delivered, isEmpty);
+      expect(provider.messages.last.deliveryStatus,
+          MessageDeliveryStatus.sending);
+
+      build.complete();
+      await pump();
+      expect(outbox.delivered, hasLength(2));
+      expect(provider.messages.last.deliveryStatus,
+          MessageDeliveryStatus.sent);
+      expect(encryption.bundleFetches, [(2, 1), (2, 2)]);
+    },
+  );
+
+  test(
+    'a box send to a device whose session is gone FAILS the row and fetches '
+    'no bundle; the next connect pre-builds it and the retry goes through '
+    '(E38b)',
+    () async {
+      bob([1, 2]);
+      await pump();
+      encryption.sessions.remove((2, 2));
+      final row = await send('no session');
+
+      expect(row.deliveryStatus, MessageDeliveryStatus.failed);
+      expect(outbox.delivered, isEmpty);
+      expect(emitted, isNot(contains('sendMessage')));
+      expect(encryption.bundleFetches, [(2, 1), (2, 2)], reason: 'connect only');
+
+      provider
+        ..onConnect(true)
+        ..refreshBoxDeviceLists();
+      await pump();
+      expect(encryption.bundleFetches, [(2, 1), (2, 2), (2, 2)]);
+
+      await provider.retryFailedMessage(row.tempId!);
+      await pump();
+      expect(outbox.delivered, hasLength(2));
+      expect(
+        provider.messages.singleWhere((m) => m.tempId == row.tempId)
+            .deliveryStatus,
+        MessageDeliveryStatus.sent,
+      );
+      expect(encryption.bundleFetches, [(2, 1), (2, 2), (2, 2)]);
+    },
+  );
+
+  test(
+    'a session with a rebuild pending is not usable: the send fails and '
+    'fetches nothing',
+    () async {
+      bob([1]);
+      await pump();
+      encryption.markSessionRebuild(2);
+      final row = await send('stale session');
+
+      expect(row.deliveryStatus, MessageDeliveryStatus.failed);
+      expect(outbox.delivered, isEmpty);
+      expect(emitted, isNot(contains('sendMessage')));
+      expect(encryption.bundleFetches, [(2, 1)]);
+    },
+  );
+
+  test(
+    "a peer's rebuild request re-runs the pre-build on receipt, so the next "
+    'send rides the rebuilt session and fetches nothing',
+    () async {
+      encryption.onDeviceListInvalidated = provider.onDeviceListInvalidated;
+      bob([1]);
+      await pump();
+
+      encryption.onSessionRebuildNeeded({'fromUserId': 2});
+      await pump();
+      expect(encryption.bundleFetches, [(2, 1), (2, 1)]);
+
+      final row = await send('after the rebuild');
+      expect(row.deliveryStatus, MessageDeliveryStatus.sent);
+      expect(encryption.bundleFetches, [(2, 1), (2, 1)]);
+    },
+  );
+
+  test(
+    'a pre-build that failed fails the send (never the old path, never a '
+    'fetch of its own), and so does a retry before the next pass; the pass '
+    'builds it and the retry goes through',
+    () async {
+      encryption.unbuildable.add((2, 1));
+      bob([1]);
+      final row = await send('no bundle yet');
+
+      expect(row.deliveryStatus, MessageDeliveryStatus.failed);
+      expect(emitted, isNot(contains('sendMessage')));
+      expect(encryption.bundleFetches, [(2, 1)]);
+
+      encryption.unbuildable.clear();
+      await provider.retryFailedMessage(row.tempId!);
+      await pump();
+      expect(outbox.delivered, isEmpty);
+      expect(encryption.bundleFetches, [(2, 1)], reason: 'a retry is a send');
+
+      provider.refreshBoxDeviceLists();
+      await provider.retryFailedMessage(row.tempId!);
+      await pump();
+      expect(outbox.delivered, hasLength(1));
+      expect(encryption.bundleFetches, [(2, 1), (2, 1)]);
+    },
+  );
 }

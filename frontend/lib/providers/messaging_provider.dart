@@ -272,8 +272,9 @@ class MessagingProvider extends ChangeNotifier {
 
   /// This connect's lookups of every device list a box send reads (decision
   /// 21): each box-covered peer's, plus the account's own once any peer is
-  /// covered. Run by [refreshBoxDeviceLists], only awaited by a box send.
-  /// Reset on every connect and on logout.
+  /// covered — each followed by the session pre-build for that user's
+  /// box-covered devices (decision 38). Run by [refreshBoxDeviceLists], only
+  /// awaited by a box send. Reset on every connect and on logout.
   late final BoxDeviceListRefresh _boxLists = BoxDeviceListRefresh(
     users: () {
       final covered = boxOutbox?.coveredPeers().toList() ?? const <int>[];
@@ -285,6 +286,7 @@ class MessagingProvider extends ChangeNotifier {
       if (enc == null) throw StateError('no encryption provider');
       await enc.getVerifiedDeviceList(user, forceRefresh: true);
     },
+    prebuild: _prebuildBoxSessions,
   );
 
   /// Looks up every device list a box send reads, unless this connect

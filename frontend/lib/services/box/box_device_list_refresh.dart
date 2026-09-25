@@ -20,17 +20,27 @@ const List<Duration> kBoxDeviceListRetryDelays = [
 /// the sender (the own list) at the moment of an otherwise unlinkable box
 /// frame. The price: a device linked mid-session is seen at the next connect
 /// (E2E device announcements, slice (e), replace this).
+///
+/// Each verified list is followed by that user's session PRE-BUILD
+/// (decision 38, E38a): every box-covered device on it that has no usable
+/// Signal session gets one now, so the pre-key bundle fetch lines up with
+/// the connect, a list change or this backoff — never with a send, which
+/// fails rather than fetch (E38b). An entry is ready only after both, and
+/// a failed pre-build fails the entry like a failed lookup.
 class BoxDeviceListRefresh {
   BoxDeviceListRefresh({
     required Iterable<int> Function() users,
     required Future<void> Function(int userId) fetch,
+    Future<void> Function(int userId)? prebuild,
     List<Duration> retryDelays = kBoxDeviceListRetryDelays,
   }) : _users = users,
        _fetch = fetch,
+       _prebuild = prebuild,
        _retryDelays = retryDelays;
 
   final Iterable<int> Function() _users;
   final Future<void> Function(int userId) _fetch;
+  final Future<void> Function(int userId)? _prebuild;
   final List<Duration> _retryDelays;
 
   final Map<int, Future<void>> _entries = {};
@@ -38,8 +48,9 @@ class BoxDeviceListRefresh {
   Timer? _retry;
   int _retries = 0;
 
-  /// This connect's lookup of [userId]'s list — running, done or failed;
-  /// null when none has started, which a send must treat as a failure.
+  /// This connect's lookup of [userId]'s list and the session pre-build
+  /// after it — running, done or failed; null when none has started, which
+  /// a send must treat as a failure.
   Future<void>? readyFor(int userId) => _entries[userId];
 
   /// Looks up every list that has no entry yet or whose last lookup failed.
@@ -67,7 +78,16 @@ class BoxDeviceListRefresh {
 
   void _start(int user) {
     _failed.remove(user);
-    final lookup = Future.sync(() => _fetch(user));
+    // One pass per user at a time: a pass started while the last one is
+    // still pre-building (a rebuild request's invalidation) waits for it,
+    // so it never reads a session that pass is rebuilding as usable.
+    final previous = _entries[user];
+    final lookup = previous == null
+        ? Future.sync(() => _pass(user))
+        : previous.then(
+            (_) => _pass(user),
+            onError: (Object _) => _pass(user),
+          );
     _entries[user] = lookup;
     unawaited(
       lookup.then(
@@ -91,5 +111,10 @@ class BoxDeviceListRefresh {
         },
       ),
     );
+  }
+
+  Future<void> _pass(int user) async {
+    await _fetch(user);
+    await _prebuild?.call(user);
   }
 }
