@@ -9,7 +9,8 @@ sealed class InboundQueueResult {
   const InboundQueueResult();
 }
 
-/// The queue exists, is stored on the peer's record and is subscribed.
+/// The queue exists and is stored on the peer's record; subscribed unless
+/// the caller asked to batch that itself ([QueueKeys.ensureInbound]).
 final class InboundQueueCreated extends InboundQueueResult {
   const InboundQueueCreated(this.queue);
 
@@ -57,11 +58,18 @@ class QueueKeys {
   /// is reaped). A queue another tab stored meanwhile wins and ours is
   /// deleted again, so a friend is never handed two queues of this device.
   ///
+  /// [subscribe] false leaves the subscribe to the caller, which batches a
+  /// whole pass's new queues into one frame: the box counts subscribe
+  /// FRAMES against its per-IP limit (60 per 15 min).
+  ///
   /// Order matters: the queue is created BEFORE it is stored because the
   /// record needs the address the box assigns. A process death in between
   /// leaves only an unsubscribed queue whose sid nobody was ever given — the
   /// reaper's case, not a lost message.
-  Future<InboundQueueResult> ensureInbound(int peerUserId) async {
+  Future<InboundQueueResult> ensureInbound(
+    int peerUserId, {
+    bool subscribe = true,
+  }) async {
     final held = _store.byUserId(peerUserId)?.queues.firstOrNull;
     if (held != null) return InboundQueueCreated(held);
     final auth = _signer.mint();
@@ -91,7 +99,7 @@ class QueueKeys {
           ? InboundQueueCreated(stored)
           : const InboundQueueNotStored();
     }
-    await _box.subscribe([owned]);
+    if (subscribe) await _box.subscribe([owned]);
     return InboundQueueCreated(queue);
   }
 

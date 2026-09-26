@@ -95,6 +95,7 @@ class BoxSession implements BoxOutbox, BoxSiblingLink, BoxFriendLink {
       sendToSibling: _sendToSibling,
     );
     _friends = BoxFriendHandoff(
+      now: _now,
       box: box,
       store: store,
       keys: _keys,

@@ -29,6 +29,7 @@ class ContactQueue {
     required this.sealPriv,
     required this.sealPub,
     this.ackedBy = const [],
+    this.handedAt = const {},
   });
 
   factory ContactQueue.fromJson(Map<String, dynamic> j) => ContactQueue(
@@ -42,6 +43,12 @@ class ContactQueue {
       for (final d in j['ackedBy'] as List<dynamic>? ?? const [])
         if (d is int) d,
     ],
+    handedAt: {
+      for (final MapEntry(:key, :value)
+          in (j['handedAt'] as Map<String, dynamic>? ?? const {}).entries)
+        if (int.tryParse(key) case final int device when value is int)
+          device: DateTime.fromMillisecondsSinceEpoch(value, isUtc: true),
+    },
   );
 
   final String rid;
@@ -52,24 +59,38 @@ class ContactQueue {
   final String sealPub;
 
   /// The peer's device ids that acknowledged this queue's handoff (item 5,
-  /// E20e): on each connect the migration hands it again to every live
+  /// E20e): the migration hands it again ([handedAt] paces that) to every live
   /// device of the peer NOT named here. Additive to the frozen shape above:
   /// a build that predates it drops the key on its next write, which only
   /// costs one more handoff.
   final List<int> ackedBy;
 
+  /// When this queue was last handed to each of the peer's devices that has
+  /// not acknowledged it (item 5, review): a handoff to a device that never
+  /// answers is sent again only after `kFriendHandoffResend`, since every
+  /// one is a blob left in that device's queue. Additive, like [ackedBy].
+  final Map<int, DateTime> handedAt;
+
   /// This queue, acknowledged by the peer's [deviceId] as well.
   ContactQueue withAck(int deviceId) => ackedBy.contains(deviceId)
       ? this
-      : ContactQueue(
-          rid: rid,
-          sid: sid,
-          nid: nid,
-          authPriv: authPriv,
-          sealPriv: sealPriv,
-          sealPub: sealPub,
-          ackedBy: [...ackedBy, deviceId],
-        );
+      : _with(ackedBy: [...ackedBy, deviceId]);
+
+  /// This queue, handed to the peer's [deviceId] at [at].
+  ContactQueue withHanded(int deviceId, DateTime at) =>
+      _with(handedAt: {...handedAt, deviceId: at});
+
+  ContactQueue _with({List<int>? ackedBy, Map<int, DateTime>? handedAt}) =>
+      ContactQueue(
+        rid: rid,
+        sid: sid,
+        nid: nid,
+        authPriv: authPriv,
+        sealPriv: sealPriv,
+        sealPub: sealPub,
+        ackedBy: ackedBy ?? this.ackedBy,
+        handedAt: handedAt ?? this.handedAt,
+      );
 
   Map<String, dynamic> toJson() => {
     'rid': rid,
@@ -79,6 +100,11 @@ class ContactQueue {
     'sealPriv': sealPriv,
     'sealPub': sealPub,
     if (ackedBy.isNotEmpty) 'ackedBy': ackedBy,
+    if (handedAt.isNotEmpty)
+      'handedAt': {
+        for (final MapEntry(:key, :value) in handedAt.entries)
+          '$key': value.millisecondsSinceEpoch,
+      },
   };
 }
 

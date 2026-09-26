@@ -16,6 +16,12 @@ import 'queue_seal.dart';
 /// How long a pass waits after a refusal that named no `retryAfter`.
 const Duration kFriendHandoffRetry = Duration(seconds: 30);
 
+/// How long a device that has not acknowledged a handoff waits before it is
+/// handed the same queue again. Every handoff is one more blob in that
+/// device's queue until it reads it — a friend away for weeks would
+/// otherwise collect one per reconnect of ours (review).
+const Duration kFriendHandoffResend = Duration(hours: 24);
+
 /// Moves every existing friendship onto the box (metadata-privacy item 5,
 /// slice (d), owner decision 47): this device's inbound queue for each
 /// friend is handed, as an E2E `queue_handoff`, to every live device of that
@@ -32,10 +38,12 @@ const Duration kFriendHandoffRetry = Duration(seconds: 30);
 ///
 /// A pass runs once the account socket, E2E, the box and the store are all
 /// ready on this connect (the sibling swap's gate, E3), again when a friends
-/// list arrives and when a friend's device list changes; a device is handed
-/// a given queue at most once per connect. No queue is created for a friend
-/// with no device to hand it to. `rate_limited` stops the pass and runs it
-/// again after `retryAfter`.
+/// list arrives and when a friend's device list changes. A device is handed
+/// a given queue at most once per connect, and again only
+/// [kFriendHandoffResend] after the last time ([ContactQueue.handedAt],
+/// kept across connects). No queue is created for a friend with no device
+/// to hand it to; a pass's new queues are subscribed in one frame.
+/// `rate_limited` stops the pass and runs it again after `retryAfter`.
 class BoxFriendHandoff {
   BoxFriendHandoff({
     required BoxClient box,
@@ -43,17 +51,20 @@ class BoxFriendHandoff {
     required QueueKeys keys,
     required QueueSeal seal,
     required void Function() queueCreated,
+    DateTime Function()? now,
   }) : _box = box,
        _store = store,
        _keys = keys,
        _seal = seal,
-       _queueCreated = queueCreated;
+       _queueCreated = queueCreated,
+       _now = now ?? DateTime.now;
 
   final BoxClient _box;
   final ContactStore _store;
   final QueueKeys _keys;
   final QueueSeal _seal;
   final void Function() _queueCreated;
+  final DateTime Function() _now;
 
   /// The Signal side and the verified lists; nothing is handed until both
   /// are wired.
@@ -136,9 +147,25 @@ class BoxFriendHandoff {
   }
 
   /// Records that [userId]'s [deviceId] was handed [sid] outside a pass (a
-  /// hand-back on receipt), so this connect's pass does not repeat it.
-  void noteHanded(int userId, int deviceId, String sid) =>
-      _handed.add('$userId:$deviceId:$sid');
+  /// hand-back on receipt, a re-key), so no pass repeats it this connect or
+  /// before [kFriendHandoffResend].
+  void noteHanded(int userId, int deviceId, String sid) {
+    _handed.add('$userId:$deviceId:$sid');
+    unawaited(_markHanded(userId, deviceId, sid));
+  }
+
+  Future<void> _markHanded(int userId, int deviceId, String sid) {
+    final at = _now();
+    return _store.update(userId, (current) {
+      if (current == null) return null;
+      final i = current.queues.indexWhere((q) => q.sid == sid);
+      if (i < 0) return null;
+      return current.copyWith(
+        queues: [...current.queues]
+          ..[i] = current.queues[i].withHanded(deviceId, at),
+      );
+    });
+  }
 
   /// Where [userId]'s [deviceId] takes a handoff: the queue it handed us,
   /// else its request queue (account-bearing). Null: nowhere yet.
@@ -222,24 +249,45 @@ class BoxFriendHandoff {
     // Every lookup starts in this one turn, so a connect's lists leave as
     // one batched frame (E20a).
     final lists = await Future.wait([for (final f in friends) lookup(f)]);
-    for (var i = 0; i < friends.length; i++) {
-      if (_disposed || !_accountReady) return;
-      final live = lists[i];
-      if (live == null) continue;
-      if (!await _handTo(friends[i], live)) return;
+    final created = <BoxQueueAuth>[];
+    try {
+      for (var i = 0; i < friends.length; i++) {
+        if (_disposed || !_accountReady) return;
+        final live = lists[i];
+        if (live == null) continue;
+        if (!await _handTo(friends[i], live, created)) return;
+      }
+    } finally {
+      // One frame for the whole pass (chunked by the client past 256): the
+      // box counts subscribe frames, 60 per 15 min per IP. A refused frame
+      // leaves the rids in the client's set for its next reconnect.
+      if (created.isNotEmpty && !_disposed) {
+        final answer = await _box.subscribe(created);
+        if (answer is! BoxOk) {
+          E2ePersistentDiag.record('BOX_FRIEND_HANDOFF_FAILED', {
+            'stage': 'subscribe',
+            'queues': created.length,
+          });
+        }
+      }
     }
   }
 
   /// Hands our queue for [userId] to each of its [live] devices that has a
-  /// target and has not acknowledged it. False to stop the pass (rate
-  /// limited: a retry is armed).
-  Future<bool> _handTo(int userId, Set<int> live) async {
+  /// target and has not acknowledged it; a queue made for it goes into
+  /// [created], to be subscribed with the rest of the pass. False to stop
+  /// the pass (rate limited: a retry is armed).
+  Future<bool> _handTo(
+    int userId,
+    Set<int> live,
+    List<BoxQueueAuth> created,
+  ) async {
     final targets = {
       for (final d in live) d: ?targetOf(userId, d),
     };
     if (targets.isEmpty) return true;
     final hadQueue = _store.byUserId(userId)?.queues.isNotEmpty ?? false;
-    final ensured = await _keys.ensureInbound(userId);
+    final ensured = await _keys.ensureInbound(userId, subscribe: false);
     final ContactQueue queue;
     switch (ensured) {
       case InboundQueueCreated(queue: final q):
@@ -249,8 +297,11 @@ class BoxFriendHandoff {
       case InboundQueueNotStored():
         return true;
     }
-    // A new queue gets its push notifier (E9) like every contact queue.
-    if (!hadQueue) _queueCreated();
+    if (!hadQueue) {
+      if (QueueKeys.authOf(queue) case final auth?) created.add(auth);
+      // A new queue gets its push notifier (E9) like every contact queue.
+      _queueCreated();
+    }
     final handoff = jsonEncode(
       E2eEnvelope.buildQueueHandoff(sid: queue.sid, sealPub: queue.sealPub),
     );
@@ -258,6 +309,10 @@ class BoxFriendHandoff {
       if (queue.ackedBy.contains(device)) continue;
       final key = '$userId:$device:${queue.sid}';
       if (_handed.contains(key)) continue;
+      final last = queue.handedAt[device];
+      if (last != null && _now().difference(last) < kFriendHandoffResend) {
+        continue;
+      }
       final seal = encrypt;
       if (_disposed || seal == null) return false;
       final frame = await seal(userId, device, handoff);
@@ -271,6 +326,7 @@ class BoxFriendHandoff {
       final answer = await send(target, frame);
       if (answer is BoxOk) {
         _handed.add(key);
+        await _markHanded(userId, device, queue.sid);
         E2eDiagLog.add('BOX_FRIEND_HANDOFF_SENT', {
           'device': device,
           'viaRequest': target.viaRequest,

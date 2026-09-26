@@ -143,6 +143,9 @@ class _Device {
   /// Reads nothing: a device that has not answered yet.
   bool deaf = false;
 
+  /// This device's clock.
+  DateTime clock = DateTime.utc(2026, 9, 26, 12);
+
   /// Every account-socket event this device's session emitted.
   final List<String> emitted = [];
 
@@ -229,6 +232,7 @@ class _Device {
       store: store,
       emit: (event, _) => emitted.add(event),
       seal: QueueSeal(cipher: PointyGcmSealer()),
+      now: () => clock,
     )..start();
     socket = box.sockets.last;
     session
@@ -410,6 +414,126 @@ void main() {
 
       final toB = b.store.requestQueue!.sid;
       expect(box.sent.where((sid) => sid == toB), hasLength(1));
+    },
+  );
+
+  test(
+    'a device that never acknowledges is handed our queue again only after '
+    'a day, however often this device reconnects — each handoff is one more '
+    "blob in that device's request queue (review)",
+    () async {
+      await a.start();
+      await b.start();
+      b.deaf = true;
+      a.session.onFriendsList([b.listed]);
+      await settle();
+      final toB = b.store.requestQueue!.sid;
+      int handoffs() => box.sent.where((sid) => sid == toB).length;
+      expect(handoffs(), 1);
+
+      Future<void> reconnect() async {
+        a.session
+          ..accountLost()
+          ..accountReady(2)
+          ..e2eReady()
+          ..onFriendsList([b.listed]);
+        await settle();
+      }
+
+      a.clock = a.clock.add(const Duration(hours: 23));
+      await reconnect();
+      await reconnect();
+      expect(handoffs(), 1);
+
+      a.clock = a.clock.add(const Duration(hours: 2));
+      await reconnect();
+      expect(handoffs(), 2);
+    },
+  );
+
+  test(
+    "many friends' new queues are subscribed in ONE frame: the box allows "
+    '60 subscribe frames per 15 min per IP, and one frame per queue left '
+    'every friend past the 60th unsubscribed (review)',
+    () async {
+      const count = 70;
+      final store = ContactStore(
+        open: () async => _MemKv(),
+        lock: <T>(_, action) => action(),
+        accepts: (_) => true,
+      );
+      await store.open(1);
+      final list = <Map<String, Object?>>[];
+      for (var f = 100; f < 100 + count; f++) {
+        await store.update(
+          f,
+          (_) => ContactRecord(
+            userId: f,
+            username: 'f$f',
+            tag: '0000',
+            state: ContactState.friend,
+          ),
+        );
+        list.add({
+          'id': f,
+          'devices': [
+            {
+              'deviceId': 1,
+              // Nothing the fake box hands out (its sids fill 0x80 + n).
+              'requestSid': boxB64(Uint8List(32)..[0] = 0xEE..[1] = f),
+              'sealPub': boxB64(Uint8List(32)..[0] = 0xEE..[1] = f),
+            },
+          ],
+        });
+      }
+      final session = BoxSession(
+        box: BoxClient(
+          baseUrl: 'http://box.test',
+          socketFactory: box.sockets.call,
+        ),
+        store: store,
+        emit: (_, _) {},
+        seal: QueueSeal(cipher: PointyGcmSealer()),
+      )..start();
+      addTearDown(session.dispose);
+      final socket = box.sockets.last;
+      session
+        ..consumer = ((_) async => true)
+        ..encryptForFriend = ((user, device, json, {fresh = false}) async =>
+            BoxFrame(
+              kind: BoxFrameKind.whisper,
+              senderDeviceId: 2,
+              signal: Uint8List.fromList(utf8.encode(json)),
+            ))
+        ..friendLiveDevices = ((_) async => {1})
+        ..e2eReady();
+      socket.serverConnect('S1.2');
+      await settle();
+      session.accountReady(2);
+      await settle();
+      final before = socket.emitted.where((f) => f.event == 'subscribe').length;
+
+      session.onFriendsList(list);
+      for (var i = 0; i < 10; i++) {
+        await settle();
+      }
+
+      final rids = {
+        for (final f in list) store.byUserId(f['id']! as int)!.queues.single.rid,
+      };
+      expect(rids, hasLength(count));
+      final frames = socket.emitted
+          .where((f) => f.event == 'subscribe')
+          .skip(before)
+          .toList();
+      expect(frames, hasLength(1));
+      expect(
+        {
+          for (final s in frames.single.frame['subs']! as List<Object?>)
+            (s! as Map)['rid'],
+        },
+        rids,
+      );
     },
   );
 
