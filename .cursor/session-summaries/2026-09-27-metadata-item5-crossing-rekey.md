@@ -27,7 +27,7 @@
 - Read only: `box_friend_handoff.dart` (the pass's gates), `connection_provider.dart:492-508` (one BoxSession per account).
 
 ## Verification
-- CI: 7/7 green on `57066bc5` (the libsignal fix, with decision 49). Decision 49 alone was 7/7 on `5b560057`.
+- CI: 7/7 green on `ea42da65` (both libsignal patches) and `57066bc5` (patch 1). Decision 49 alone was 7/7 on `5b560057`.
 - Red before green: with the lib unchanged, the new crossing test failed (`converged` false) and the flipped test failed (`awaiting` empty); both pass after the change.
 - Mutants on `encryptForFriend`'s `started`: all 4 killed. `true` survived the first round and is now killed by the resend assertion. Detail: `.planning/metadata-item5/findings.md` § 2026-09-27 mutants.
 - libsignal cause, proven: with the round trips added and upstream 0.8.2, the first A→B message failed with `No valid sessions` (4× `Bad Mac`). The one-line copy fix, applied TEMPORARILY in the pub cache (restored, hash checked), made it green. The vendored override with only that patch is green too. Patch 2 (stale archive copy) is pinned by the direct test: red with patch 1 only (2 copies of the state), and red again without patch 1 (the current state moved); the crossing test also goes red without patch 1.
