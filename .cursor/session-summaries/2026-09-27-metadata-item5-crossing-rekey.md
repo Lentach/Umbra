@@ -27,7 +27,7 @@
 - Read only: `box_friend_handoff.dart` (the pass's gates), `connection_provider.dart:492-508` (one BoxSession per account).
 
 ## Verification
-- CI: decision 49 alone was 7/7 green on `5b560057`. The libsignal commit: see the follow-up line in Notes.
+- CI: 7/7 green on `57066bc5` (the libsignal fix, with decision 49). Decision 49 alone was 7/7 on `5b560057`.
 - Red before green: with the lib unchanged, the new crossing test failed (`converged` false) and the flipped test failed (`awaiting` empty); both pass after the change.
 - Mutants on `started` (each run as a subprocess, lib hash checked after):
   - `!fresh && …` (fix B) → 4 red.
