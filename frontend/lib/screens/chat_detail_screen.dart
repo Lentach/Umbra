@@ -11,6 +11,7 @@ import '../providers/messaging_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/voice_audio_coordinator.dart';
 import '../theme/rpg_theme.dart';
+import '../widgets/box_friend_older_app_note.dart';
 import '../widgets/glass/glass_top_bar.dart';
 import '../widgets/message/chat_message_bubble.dart';
 import '../widgets/input/chat_input_bar.dart';
@@ -930,6 +931,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     required UserModel? otherUser,
     required Color mutedColor,
     required ColorScheme colorScheme,
+    required String? olderAppName,
   }) {
     if (otherUser != null &&
         context.read<FriendsProvider>().blockedByUserIds.contains(
@@ -955,7 +957,16 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
         ),
       );
     }
-    return ChatInputBar(key: _composerKey);
+    // Always a Column, so the composer keeps its place in the tree when the
+    // decision-48 notice comes or goes; the notice mounts instantly (the
+    // composer is a no-animation zone).
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (olderAppName != null) BoxFriendOlderAppNote(name: olderAppName),
+        ChatInputBar(key: _composerKey),
+      ],
+    );
   }
 
   /// Wraps the message [body] with the ping-effect overlay and the
@@ -1122,6 +1133,11 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
       otherUser: otherUser,
       mutedColor: mutedColor,
       colorScheme: colorScheme,
+      // Owner decision 48: while this friend is not on the box yet.
+      olderAppName:
+          otherUser != null && messaging.boxFriendPending(otherUser.id)
+          ? contactName
+          : null,
     );
 
     // When other user deleted the conversation, show message instead of auto-close

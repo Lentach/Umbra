@@ -506,6 +506,11 @@ class AppLocalizationsEn extends AppLocalizations {
   String get devicesSyncingNote => 'Syncing your devices…';
 
   @override
+  String boxFriendOlderAppNote(String name) {
+    return '$name has an older version of the app. Messages are encrypted, but the server can see when you write to each other.';
+  }
+
+  @override
   String get encryptionNotInitialized => 'Encryption not initialized';
 
   @override

@@ -15,6 +15,11 @@ import {
   FriendRequestStatus,
 } from '../../friends/friend-request.entity';
 import { User } from '../../users/user.entity';
+import {
+  DevicesService,
+  FirstContactDevice,
+} from '../../key-bundles/devices.service';
+import { DeviceListService } from '../../key-bundles/device-list.service';
 
 describe('ChatFriendRequestService', () => {
   let service: ChatFriendRequestService;
@@ -26,6 +31,11 @@ describe('ChatFriendRequestService', () => {
   let chatValidationService: jest.Mocked<ChatValidationService>;
   let mockServer: Partial<Server>;
   let onlineRooms: Map<string, Set<string>>;
+  let firstContactDevicesFor: jest.Mock<
+    Promise<Map<number, FirstContactDevice[]>>,
+    [number[]]
+  >;
+  let pendingReplacementUserIds: jest.Mock<Promise<Set<number>>, [number[]]>;
 
   // Mark a user online by placing a socket in their per-user room — the same
   // structure isUserOnline/socketsForUser read. Two ids in one set = two tabs.
@@ -50,7 +60,12 @@ describe('ChatFriendRequestService', () => {
       emit: jest.fn(),
       sockets: { adapter: { rooms: onlineRooms } } as any,
     };
-
+    firstContactDevicesFor = jest
+      .fn<Promise<Map<number, FirstContactDevice[]>>, [number[]]>()
+      .mockResolvedValue(new Map());
+    pendingReplacementUserIds = jest
+      .fn<Promise<Set<number>>, [number[]]>()
+      .mockResolvedValue(new Set());
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ChatFriendRequestService,
@@ -115,6 +130,8 @@ describe('ChatFriendRequestService', () => {
             validateCanMessage: jest.fn().mockResolvedValue({ valid: true }),
           },
         },
+        { provide: DevicesService, useValue: { firstContactDevicesFor } },
+        { provide: DeviceListService, useValue: { pendingReplacementUserIds } },
       ],
     }).compile();
 
@@ -926,6 +943,141 @@ describe('ChatFriendRequestService', () => {
           expect.objectContaining({ id: 2, username: 'bob', tag: '0002' }),
         ]),
       );
+    });
+
+    // Item 5 (decision 47): the friends list is where a device learns each
+    // friend device's REQUEST queue, to hand it a box queue of its own.
+    describe('devices (friend request queues)', () => {
+      const sid = 'A'.repeat(43);
+      const sealPub = 'B'.repeat(43);
+      const friend = (id: number) => ({
+        id,
+        username: `u${id}`,
+        tag: '0001',
+        profilePictureUrl: null,
+      });
+      const devicesOf = (payload: unknown) =>
+        new Map(
+          (payload as { id: number; devices: unknown }[]).map((f) => [
+            f.id,
+            f.devices,
+          ]),
+        );
+      const emitted = (emit: unknown, event: string) =>
+        (emit as jest.Mock).mock.calls
+          .filter(([name]) => name === event)
+          .map(([, payload]: [string, unknown]) => payload);
+
+      it("carries each friend's live published devices, null until a device publishes, in ONE lookup for every friend", async () => {
+        friendsService.getFriends.mockResolvedValue([
+          friend(2),
+          friend(3),
+          friend(4),
+        ] as never);
+        firstContactDevicesFor.mockResolvedValue(
+          new Map([
+            [
+              2,
+              [
+                { deviceId: 1, requestSid: null, requestSealPub: null },
+                { deviceId: 3, requestSid: sid, requestSealPub: sealPub },
+              ],
+            ],
+            [3, [{ deviceId: 1, requestSid: sid, requestSealPub: sealPub }]],
+          ]),
+        );
+
+        await service.handleGetFriends(mockClient as Socket);
+
+        const [list] = emitted(mockClient.emit, 'friendsList');
+        expect(devicesOf(list)).toEqual(
+          new Map([
+            [
+              2,
+              [
+                { deviceId: 1, requestSid: null, sealPub: null },
+                { deviceId: 3, requestSid: sid, sealPub },
+              ],
+            ],
+            [3, [{ deviceId: 1, requestSid: sid, sealPub }]],
+            // No live device holding a bundle: nothing to address.
+            [4, []],
+          ]),
+        );
+        expect(firstContactDevicesFor.mock.calls).toEqual([[[2, 3, 4]]]);
+        expect(pendingReplacementUserIds.mock.calls).toEqual([[[2, 3, 4]]]);
+      });
+
+      it('answers devices: [] for a friend who owes a replacement enrollment', async () => {
+        friendsService.getFriends.mockResolvedValue([
+          friend(2),
+          friend(3),
+        ] as never);
+        firstContactDevicesFor.mockResolvedValue(
+          new Map([
+            [2, [{ deviceId: 2, requestSid: sid, requestSealPub: sealPub }]],
+            [3, [{ deviceId: 1, requestSid: sid, requestSealPub: sealPub }]],
+          ]),
+        );
+        pendingReplacementUserIds.mockResolvedValue(new Set([2]));
+
+        await service.handleGetFriends(mockClient as Socket);
+
+        // As `searchUsers`: a roster that cannot receive is never addressed.
+        const [list] = emitted(mockClient.emit, 'friendsList');
+        expect(devicesOf(list)).toEqual(
+          new Map([
+            [2, []],
+            [3, [{ deviceId: 1, requestSid: sid, sealPub }]],
+          ]),
+        );
+      });
+
+      it('never looks up the devices of a blocked friend', async () => {
+        friendsService.getFriends.mockResolvedValue([
+          friend(2),
+          friend(3),
+        ] as never);
+        blockedService.getBlockedByUserIds.mockResolvedValue([2]);
+
+        await service.handleGetFriends(mockClient as Socket);
+
+        expect(firstContactDevicesFor.mock.calls).toEqual([[[3]]]);
+      });
+
+      it('carries devices on the list BOTH sides get when a request is accepted', async () => {
+        friendsService.acceptRequest.mockResolvedValue({
+          ...mockFriendRequest,
+          status: 'accepted',
+        } as never);
+        usersService.findById
+          .mockResolvedValueOnce(mockSender as never)
+          .mockResolvedValueOnce(mockRecipient as never);
+        friendsService.getFriends.mockResolvedValue([friend(3)] as never);
+        firstContactDevicesFor.mockResolvedValue(
+          new Map([
+            [3, [{ deviceId: 1, requestSid: sid, requestSealPub: sealPub }]],
+          ]),
+        );
+        setOnline(1);
+        setOnline(2);
+
+        await service.handleAcceptFriendRequest(
+          mockClient as Socket,
+          { requestId: 10 },
+          mockServer as Server,
+        );
+
+        const expected = new Map([
+          [3, [{ deviceId: 1, requestSid: sid, sealPub }]],
+        ]);
+        const lists = [
+          ...emitted(mockClient.emit, 'friendsList'),
+          ...emitted(mockServer.emit, 'friendsList'),
+        ];
+        expect(lists).toHaveLength(2);
+        for (const list of lists) expect(devicesOf(list)).toEqual(expected);
+      });
     });
   });
 });

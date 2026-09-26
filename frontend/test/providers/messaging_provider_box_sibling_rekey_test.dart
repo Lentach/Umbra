@@ -226,7 +226,7 @@ void main() {
       expect(link.learned, [_sid('A'), _sid('B')]);
       expect(link.rekeyed, [3]);
       expect(
-        await enc.encryptionService.siblingPreKeyWouldReplace(1, 3, dRekey),
+        await enc.encryptionService.preKeyWouldReplaceSession(1, 3, dRekey),
         isTrue,
       );
 
@@ -244,7 +244,7 @@ void main() {
       // D asked for this re-key, so it takes S's PreKey although it replaces
       // D's own new session.
       expect(
-        await d.siblingPreKeyWouldReplace(1, 2, sRekey.signalCiphertext),
+        await d.preKeyWouldReplaceSession(1, 2, sRekey.signalCiphertext),
         isTrue,
       );
       expect(
@@ -291,14 +291,14 @@ void main() {
       );
       final first = await fromD(handoff(_sid('A')));
       final service = enc.encryptionService;
-      expect(await service.siblingPreKeyWouldReplace(1, 3, first), isFalse);
+      expect(await service.preKeyWouldReplaceSession(1, 3, first), isFalse);
       expect(await deliver(first), isTrue);
       final answer = (await s.encryptForOwnDevice(3, '{"t":"x"}'))!;
       await d.decrypt(1, answer.signalCiphertext, deviceId: 2);
       final whisper = await fromD(handoff(_sid('B')));
       expect(whisper, startsWith('2:'));
-      expect(await service.siblingPreKeyWouldReplace(1, 3, whisper), isFalse);
-      expect(await service.siblingPreKeyWouldReplace(1, 3, 'junk'), isFalse);
+      expect(await service.preKeyWouldReplaceSession(1, 3, whisper), isFalse);
+      expect(await service.preKeyWouldReplaceSession(1, 3, 'junk'), isFalse);
     },
   );
 }

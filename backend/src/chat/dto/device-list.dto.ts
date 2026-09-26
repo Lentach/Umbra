@@ -1,10 +1,15 @@
 import {
+  ArrayMaxSize,
+  ArrayMinSize,
+  ArrayUnique,
+  IsArray,
   IsInt,
   IsNotEmpty,
   IsPositive,
   IsString,
   Max,
   MaxLength,
+  Min,
 } from 'class-validator';
 import { MAX_DEVICE_ID } from '../../key-bundles/key-bundles.service';
 
@@ -91,4 +96,23 @@ export class GetDeviceListDto {
   @IsInt()
   @IsPositive()
   userId: number;
+}
+
+/** Most users one `getDeviceLists` names: a friends list's worth per frame. */
+const MAX_DEVICE_LISTS_PER_REQUEST = 256;
+
+/**
+ * `getDeviceLists` (metadata-privacy item 5, E20a): the `getDeviceList` rules
+ * for each user named. A duplicate is refused rather than collapsed, so one
+ * request can never ask for the same roster twice.
+ */
+export class GetDeviceListsDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(MAX_DEVICE_LISTS_PER_REQUEST)
+  @ArrayUnique()
+  @IsInt({ each: true })
+  @Min(1, { each: true })
+  @Max(2147483647, { each: true })
+  userIds: number[];
 }

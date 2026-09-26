@@ -25,6 +25,8 @@ import {
 } from '../../friends/friend-request.entity';
 import { ChatConversationService } from './chat-conversation.service';
 import { ChatValidationService } from './chat-validation.service';
+import { DevicesService } from '../../key-bundles/devices.service';
+import { DeviceListService } from '../../key-bundles/device-list.service';
 
 @Injectable()
 export class ChatFriendRequestService {
@@ -39,7 +41,36 @@ export class ChatFriendRequestService {
     private readonly mediaCleanup: MediaCleanupService,
     private readonly chatConversationService: ChatConversationService,
     private readonly chatValidationService: ChatValidationService,
+    private readonly devicesService: DevicesService,
+    private readonly deviceListService: DeviceListService,
   ) {}
+
+  /**
+   * The `friendsList` payload: each friend's user fields plus `devices:
+   * [{ deviceId, requestSid, sealPub }]`, the friend devices a queue handoff
+   * may address (metadata-privacy item 5, decision 47) by the `searchUsers`
+   * rule — live devices holding a published bundle, oldest first, null until
+   * that device publishes — and `[]` for a friend who owes a replacement
+   * enrollment. No pre-key is claimed. At most four queries for the whole
+   * list, never one per friend.
+   */
+  private async friendsListPayload(friends: User[]) {
+    const ids = friends.map((u) => u.id);
+    const [addresses, owed] = await Promise.all([
+      this.devicesService.firstContactDevicesFor(ids),
+      this.deviceListService.pendingReplacementUserIds(ids),
+    ]);
+    return friends.map((u) => ({
+      ...UserMapper.toPayload(u),
+      devices: owed.has(u.id)
+        ? []
+        : (addresses.get(u.id) ?? []).map((address) => ({
+            deviceId: address.deviceId,
+            requestSid: address.requestSid,
+            sealPub: address.requestSealPub,
+          })),
+    }));
+  }
 
   /** Emit friendsList to client and optionally to another socket. */
   private async emitFriendsListToBoth(
@@ -50,16 +81,12 @@ export class ChatFriendRequestService {
   ): Promise<void> {
     try {
       const clientFriends = await this.friendsService.getFriends(clientUserId);
-      client.emit(
-        'friendsList',
-        clientFriends.map((u) => UserMapper.toPayload(u)),
-      );
+      client.emit('friendsList', await this.friendsListPayload(clientFriends));
       if (otherUserId != null && isUserOnline(server, otherUserId)) {
         const otherFriends = await this.friendsService.getFriends(otherUserId);
-        server.to(userRoom(otherUserId)).emit(
-          'friendsList',
-          otherFriends.map((u) => UserMapper.toPayload(u)),
-        );
+        server
+          .to(userRoom(otherUserId))
+          .emit('friendsList', await this.friendsListPayload(otherFriends));
       }
     } catch (error) {
       this.logger.error('emitFriendsListToBoth (non-critical):', error);
@@ -714,8 +741,7 @@ export class ChatFriendRequestService {
     ]);
     const excludeSet = new Set([...blockedIds, ...blockedByUserIds]);
     const filtered = friends.filter((u) => !excludeSet.has(u.id));
-    const list = filtered.map((u) => UserMapper.toPayload(u));
-    client.emit('friendsList', list);
+    client.emit('friendsList', await this.friendsListPayload(filtered));
   }
 
   async handleUnfriend(client: Socket, data: any, server: Server) {
@@ -788,9 +814,7 @@ export class ChatFriendRequestService {
     // the server's ciphertext can never be re-read). That was live in prod.
     try {
       client.emit('unfriended', { userId: peerId });
-      server
-        .to(userRoom(peerId))
-        .emit('unfriended', { userId: currentUserId });
+      server.to(userRoom(peerId)).emit('unfriended', { userId: currentUserId });
     } catch (error) {
       this.logger.error(
         'handleUnfriend: emit unfriended (non-critical):',

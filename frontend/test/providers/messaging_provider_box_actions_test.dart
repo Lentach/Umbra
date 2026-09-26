@@ -56,6 +56,7 @@ class _Encryption extends EncryptionProvider {
   Future<VerifiedDeviceList> getVerifiedDeviceList(
     int userId, {
     bool forceRefresh = false,
+    bool batched = false,
     Duration timeout = const Duration(seconds: 10),
   }) async => lists[userId] ?? const VerifiedDeviceList.notEnrolled();
 
@@ -88,7 +89,7 @@ class _Encryption extends EncryptionProvider {
   Future<bool> carriesOwnIdentity(String ciphertext) async => true;
 
   @override
-  Future<bool> siblingPreKeyWouldReplace(
+  Future<bool> preKeyWouldReplaceSession(
     int userId,
     int deviceId,
     String ciphertext,

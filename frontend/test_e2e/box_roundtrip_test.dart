@@ -18,6 +18,14 @@
 //      refused on the ack — also on a fresh connection — while another
 //      address still proceeds (PR1.0's `X-Real-IP` resolution, through the
 //      real stack).
+//   3. item 5 (slice (d), the migration handoff, decision 47): the same two
+//      accounts become friends on the old path; one side's `BoxSession`
+//      starts while the other still "predates the box" and hands nothing;
+//      the other then starts, finds the first side's request queue in its
+//      friends list and hands its queue off; the first side hands its own
+//      back with no reconnect; a box message round-trips; no `messages` row
+//      appears and neither queue row names an account. The same two
+//      registrations: nothing is added to the register bucket.
 //
 // Opt-in, and it MUST stay that way: it registers two accounts, and
 // `/auth/register` is 10 per HOUR per IP with an in-memory counter that the
@@ -39,10 +47,21 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:fireplace/services/box/box_client.dart';
+import 'package:fireplace/services/box/box_frame.dart';
+import 'package:fireplace/services/box/box_friends.dart';
+import 'package:fireplace/services/box/box_session.dart';
 import 'package:fireplace/services/box/box_signer.dart';
 import 'package:fireplace/services/box/box_wire.dart';
+import 'package:fireplace/services/box/queue_seal.dart';
+import 'package:fireplace/services/contacts/contact_record.dart';
+import 'package:fireplace/services/contacts/contact_store.dart';
+import 'package:fireplace/services/encryption/content_kv.dart';
+import 'package:fireplace/utils/e2e_envelope.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import '../test/support/box_fakes.dart' show PointyGcmSealer;
 import 'support/e2e_test_client.dart';
 
 const bool _enabled = bool.fromEnvironment('BOX_PROBE');
@@ -117,6 +136,170 @@ bool _carriesAccount(Map<String, Object?> row, E2eClient client) {
             (needles.any(v.contains) ||
                 (v.startsWith(r'\x') && hexNeedles.any(v.contains)))),
   );
+}
+
+/// One device's own storage for its contact store.
+class _MemKv implements ContentKv {
+  final Map<String, Object> _rows = {};
+
+  @override
+  Future<void> reload() async {}
+
+  @override
+  Future<Map<String, Object>?> authoritativeSnapshot() async => null;
+
+  @override
+  String? getString(String key) => _rows[key] as String?;
+
+  @override
+  int? getInt(String key) => _rows[key] as int?;
+
+  @override
+  bool containsKey(String key) => _rows.containsKey(key);
+
+  @override
+  Set<String> getKeys() => _rows.keys.toSet();
+
+  @override
+  Future<bool> setString(String key, String value) async {
+    _rows[key] = value;
+    return true;
+  }
+
+  @override
+  Future<bool> setInt(String key, int value) async {
+    _rows[key] = value;
+    return true;
+  }
+
+  @override
+  Future<bool> remove(String key) async {
+    _rows.remove(key);
+    return true;
+  }
+}
+
+/// One single-device account running the app's box layer for item 5 (slice
+/// (d)): the shipped [BoxSession] — friend handoff, inbox, queue keys — over
+/// the production box socket, beside [me]'s logged-in account socket, with
+/// its own contact store naming [friend] a friend. The messaging reader is
+/// stood in by a plain decrypt that hands a handoff or an ack to the session
+/// (`messaging_provider_box_friend_test` drives the real reader's checks on
+/// real Signal); what is proven here is the rest of the chain against the
+/// real server: friends list addresses, request queues, routing, sealing.
+class _AppSide {
+  _AppSide(this.me, this.friend, this.client);
+
+  final E2eClient me;
+  final E2eClient friend;
+  final BoxClient client;
+  late final ContactStore store;
+  late final BoxSession session;
+
+  /// Chat messages read over the box, as their text.
+  final List<String> read = [];
+
+  Future<void> start() async {
+    store = ContactStore(
+      open: () async => _MemKv(),
+      lock: <T>(_, action) => action(),
+      accepts: (_) => true,
+    );
+    await store.open(me.userId);
+    await store.update(
+      friend.userId,
+      (_) => ContactRecord(
+        userId: friend.userId,
+        username: friend.username,
+        tag: friend.tag,
+        state: ContactState.friend,
+      ),
+    );
+    me.events.discard('requestQueueSet');
+    session = BoxSession(
+      box: client,
+      store: store,
+      emit: (event, data) => me.socketService.socket!.emit(event, data),
+      // webcrypto's native library does not load under `flutter test` on
+      // every box; the seal is the same AES-256-GCM either way.
+      seal: QueueSeal(cipher: PointyGcmSealer()),
+    )..start();
+    session
+      ..consumer = _read
+      ..encryptForFriend = _encrypt
+      ..friendLiveDevices = ((user) async => user == friend.userId ? {1} : null)
+      ..e2eReady()
+      ..accountReady(1);
+    await me.events.next(
+      'requestQueueSet',
+      where: (p) => p is Map && p['success'] == true,
+      reason: '${me.label} publishes its request queue',
+    );
+  }
+
+  /// The friends list as the server serves it at connect.
+  Future<void> takeFriendsList() async {
+    me.events.discard('friendsList');
+    me.socketService.getFriends();
+    session.onFriendsList(
+      await me.events.next('friendsList', reason: '${me.label} friends list'),
+    );
+  }
+
+  Future<BoxFrame?> _encrypt(
+    int user,
+    int device,
+    String json, {
+    bool fresh = false,
+  }) async {
+    if (!await me.encryption.hasSession(user, deviceId: device)) {
+      await me.encryption.buildSession(
+        user,
+        await me.fetchBundleFor(user, deviceId: device),
+        deviceId: device,
+        expectedIdentityBase64: null,
+      );
+    }
+    return BoxFrame.fromSignalCiphertext(
+      await me.encryption.encrypt(user, json, deviceId: device),
+      senderDeviceId: 1,
+    );
+  }
+
+  Future<bool> _read(BoxInboxEntry entry) async {
+    if (entry.peerUserId != friend.userId) return true;
+    final json = await me.encryption.decrypt(
+      entry.peerUserId,
+      entry.signal!,
+      deviceId: entry.senderDeviceId,
+    );
+    final handoff = E2eEnvelope.parseQueueHandoff(json);
+    if (handoff != null) {
+      return await session.takeFriendHandoff(
+            entry.peerUserId,
+            entry.senderDeviceId,
+            sid: handoff.sid,
+            sealPub: handoff.sealPub,
+          ) !=
+          FriendWrite.retryLater;
+    }
+    if (entry.viaRequestQueue) return true;
+    final acked = E2eEnvelope.parseQueueHandoffAck(json);
+    if (acked != null) {
+      return await session.friendAcked(
+            entry.peerUserId,
+            entry.senderDeviceId,
+            acked,
+          ) !=
+          FriendWrite.retryLater;
+    }
+    read.add(E2eEnvelope.parse(json).content);
+    return true;
+  }
+
+  ContactRecord get record => store.byUserId(friend.userId)!;
+
+  ContactOutbound? get address => record.outbound.firstOrNull;
 }
 
 void main() {
@@ -364,6 +547,94 @@ void main() {
           ]) {
             expect(await other.deleteQueue(queue), isA<BoxOk<void>>());
           }
+        },
+        timeout: const Timeout(Duration(minutes: 2)),
+      );
+
+      test(
+        'item 5: an existing friendship moves onto the box — the side that '
+        "updates later hands its queue into the other side's request queue, "
+        'that side hands its own back with no reconnect, a box message then '
+        'round-trips, and the migration writes no messages row',
+        () async {
+          // Signal keys and the content store need the mocked platform
+          // storage (the harness's other e2e files do the same).
+          FlutterSecureStorage.setMockInitialValues({});
+          SharedPreferences.setMockInitialValues({});
+          await alice.initializeAndUploadKeys();
+          await bob.initializeAndUploadKeys();
+          alice.socketService.sendFriendRequest(bob.userId);
+          final request =
+              await bob.events.next(
+                    'newFriendRequest',
+                    where: (p) =>
+                        p is Map &&
+                        p['sender'] is Map &&
+                        (p['sender'] as Map)['id'] == alice.userId,
+                    reason: 'friend request',
+                  )
+                  as Map;
+          bob.socketService.acceptFriendRequest(request['id'] as int);
+          await alice.events.next('friendRequestAccepted', reason: 'accept');
+
+          final a = _AppSide(alice, bob, box(ip: _randomIp()));
+          await a.start();
+          // Bob's app predates the box: the list names his device with no
+          // request queue, so alice hands nothing off and makes no queue.
+          await a.takeFriendsList();
+          await Future<void>.delayed(const Duration(seconds: 1));
+          expect(a.record.queues, isEmpty);
+          expect(a.address, isNull);
+
+          // Bob updates. Alice's session hears nothing new from its server.
+          final b = _AppSide(bob, alice, box(ip: _randomIp()));
+          await b.start();
+          await b.takeFriendsList();
+          await _until(
+            () =>
+                a.address != null &&
+                b.address != null &&
+                (a.record.queues.firstOrNull?.ackedBy.contains(1) ?? false) &&
+                (b.record.queues.firstOrNull?.ackedBy.contains(1) ?? false),
+            "both sides hold the other's queue and both queues are acked",
+          );
+          expect(a.address!.sid, b.record.queues.single.sid);
+          expect(b.address!.sid, a.record.queues.single.sid);
+
+          // A box message now round-trips on the addresses the handoff gave.
+          final text = 'box-${_randomIp()}';
+          final frame = (await a._encrypt(
+            bob.userId,
+            1,
+            jsonEncode(E2eEnvelope.build(text)),
+          ))!;
+          expect(await a.session.deliver(a.address!, frame.encode()), isTrue);
+          await _until(() => b.read.contains(text), 'bob reads it');
+
+          // Nothing of the migration or the message is a server row.
+          final rows = await e2eSql(
+            'SELECT count(*) FROM public.messages '
+            'WHERE sender_id IN (${alice.userId}, ${bob.userId})',
+          );
+          expect(rows.single.single, '0');
+          for (final (side, account) in [(a, alice), (b, bob)]) {
+            final queue = side.record.queues.single;
+            final stored = await _rows(
+              'box_queues',
+              'rid',
+              boxB64Decode(queue.rid, 32)!,
+            );
+            expect(stored, hasLength(1));
+            for (final client in [alice, bob]) {
+              expect(
+                _carriesAccount(stored.single, client),
+                isFalse,
+                reason: "${account.label}'s queue names ${client.label}",
+              );
+            }
+          }
+          a.session.dispose();
+          b.session.dispose();
         },
         timeout: const Timeout(Duration(minutes: 2)),
       );

@@ -509,6 +509,11 @@ class AppLocalizationsPl extends AppLocalizations {
   String get devicesSyncingNote => 'Synchronizowanie urządzeń…';
 
   @override
+  String boxFriendOlderAppNote(String name) {
+    return '$name ma starszą wersję aplikacji. Wiadomości są szyfrowane, ale serwer widzi, kiedy piszecie.';
+  }
+
+  @override
   String get encryptionNotInitialized => 'Szyfrowanie niezainicjowane';
 
   @override

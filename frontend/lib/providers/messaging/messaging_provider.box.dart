@@ -58,13 +58,22 @@ extension MessagingBox on MessagingProvider {
     if (own != null && entry.peerUserId == own) {
       return _runDecryptSerialized(own, () => _consumeSiblingBox(entry, signal));
     }
+    // A friend's queue handoff from our public REQUEST queue (item 5): the
+    // one thing read from it, under its own checks.
+    if (entry.viaRequestQueue) {
+      return _runDecryptSerialized(
+        entry.peerUserId,
+        () => _consumeFriendRequest(entry, signal, peer),
+      );
+    }
     final conversationId = peer?.legacy.conversationId;
     // The chat list still hangs off server conversation ids (release N).
-    // A contact without one, or one this account blocked, gets nothing shown.
+    // A contact this account blocked gets nothing read; a friend without a
+    // conversation yet gets only its queue handoff and ack read (item 5: a
+    // friendship moves onto the box before anyone writes in it).
     final refusal = switch (peer) {
       null => 'no_contact',
       ContactRecord(state: ContactState.blocked) => 'blocked',
-      _ when conversationId == null => 'no_conversation',
       _ => null,
     };
     if (refusal != null) {
@@ -79,7 +88,7 @@ extension MessagingBox on MessagingProvider {
       content: '',
       senderId: entry.peerUserId,
       senderUsername: peer!.username,
-      conversationId: conversationId!,
+      conversationId: conversationId ?? 0,
       createdAt: entry.receivedAt,
       encryptedContent: signal,
       originDeviceId: entry.senderDeviceId,
@@ -87,19 +96,262 @@ extension MessagingBox on MessagingProvider {
     );
     return _runDecryptSerialized(
       entry.peerUserId,
-      () => _consumeBox(msg, entry.receivedAt),
+      () => _consumeBox(
+        msg,
+        entry.receivedAt,
+        controlOnly: conversationId == null,
+      ),
     );
   }
 
   /// Reads [msg]; a delivery it is FINISHED with — stored, a duplicate, an
   /// unknown type, empty, refused for good — is never offered again, so its
   /// raw replay row (plaintext, keyed by the local id) goes with it, whatever
-  /// the exit.
-  Future<bool> _consumeBox(MessageModel msg, DateTime receivedAt) async {
-    final finished = await _readBox(msg, receivedAt);
+  /// the exit. [controlOnly]: the chat has no conversation, so only a queue
+  /// handoff or its ack is taken.
+  Future<bool> _consumeBox(
+    MessageModel msg,
+    DateTime receivedAt, {
+    bool controlOnly = false,
+  }) async {
+    final finished = await _readBox(
+      msg,
+      receivedAt,
+      controlOnly: controlOnly,
+    );
     if (finished) await _encryptionProvider?.removeRawReplay(msg.id);
     return finished;
   }
+
+  /// Reads a friend's frame from our public request queue (item 5, E20c):
+  /// only its `queue_handoff` is taken. Same finishing contract as
+  /// [_consumeBox]; everything refused here is FINISHED, because anyone can
+  /// fill a request queue and a real friend hands off again on its next
+  /// connect.
+  Future<bool> _consumeFriendRequest(
+    BoxInboxEntry entry,
+    String signal,
+    ContactRecord? peer,
+  ) async {
+    final finished = await _readFriendRequest(entry, signal, peer);
+    if (finished) await _encryptionProvider?.removeRawReplay(entry.localId);
+    return finished;
+  }
+
+  Future<bool> _readFriendRequest(
+    BoxInboxEntry entry,
+    String signal,
+    ContactRecord? peer,
+  ) async {
+    final enc = _encryptionProvider;
+    final link = boxFriends;
+    if (enc == null || link == null || !enc.isE2EReady) return false;
+    final user = entry.peerUserId;
+    final device = entry.senderDeviceId;
+    void refused(String why) => _e2eFlowLog('BOX_FRIEND_HANDOFF_REFUSED', {
+      'peer': user,
+      'device': device,
+      'why': why,
+    });
+    if (peer?.state != ContactState.friend) {
+      refused('not_friend');
+      return true;
+    }
+    // A request queue is public: anyone can seal a frame naming a friend's
+    // account. A PreKey message must carry that friend's pinned identity,
+    // checked BEFORE Signal sees it — decrypting a stranger's would replace
+    // the real session. With no identity pinned yet, nothing here can judge
+    // it: our own handoff to that friend builds the session from the
+    // server's bundle (the old path's trust), and the friend's next one is
+    // read under it.
+    switch (await enc.friendFrameIdentity(user, signal)) {
+      case FriendFrameIdentity.matches:
+        break;
+      case FriendFrameIdentity.noAnchor:
+        refused('no_anchor');
+        link.handOffTo(user);
+        return true;
+      case FriendFrameIdentity.foreign:
+        refused('foreign_identity');
+        return true;
+    }
+    // Only a device the friend's VERIFIED list names live is ever given an
+    // answer (E2); a list that cannot be verified now refuses too.
+    if (!await _friendDeviceIsLive(user, device)) {
+      refused('not_live');
+      return true;
+    }
+    // A revoked device of the friend still holds its account identity, so a
+    // PreKey message that would replace our session with that device is read
+    // only when this device asked for it — it started that session to hand
+    // off, or re-keyed it; otherwise it is answered by our re-key, built from
+    // that device's real bundle (decision 37's rule).
+    if (!link.awaitingFriendRekeyFrom(user, device) &&
+        await enc.preKeyWouldReplaceSession(user, device, signal)) {
+      refused('would_replace');
+      await link.rekeyFriend(user, device);
+      return true;
+    }
+    final String plaintext;
+    try {
+      plaintext = await enc.decrypt(
+        user,
+        signal,
+        messageId: entry.localId,
+        deviceId: device,
+      );
+    } on Object catch (e) {
+      refused('decrypt_${e.runtimeType}');
+      return true;
+    }
+    link.friendRekeyAnswered(user, device);
+    return _takeFriendHandoff(link, user, device, plaintext);
+  }
+
+  /// Whether friend [userId]'s VERIFIED list names [deviceId] live: the held
+  /// list, else one batched lookup. False when it cannot be verified.
+  Future<bool> _friendDeviceIsLive(int userId, int deviceId) async {
+    final enc = _encryptionProvider;
+    if (enc == null) return false;
+    try {
+      final list =
+          enc.cachedDeviceList(userId) ??
+          await enc.getVerifiedDeviceList(userId, batched: true);
+      return list.isLiveDevice(deviceId);
+    } on Object {
+      return false;
+    }
+  }
+
+  /// Stores friend [userId]'s [device] address from its handoff
+  /// ([BoxFriendLink.takeFriendHandoff]: store, ack, hand ours back). Once
+  /// stored, the friend may be covered now: this connect's lookup of its
+  /// list runs (traps: a peer covered mid-session fails every box send until
+  /// the next connect otherwise), and the composer notice is re-read.
+  Future<bool> _takeFriendHandoff(
+    BoxFriendLink link,
+    int userId,
+    int device,
+    String plaintext,
+  ) async {
+    final address = E2eEnvelope.parseQueueHandoff(plaintext);
+    if (address == null) {
+      _e2eFlowLog('BOX_FRIEND_HANDOFF_REFUSED', {
+        'peer': userId,
+        'device': device,
+        'why': 'not_a_handoff',
+      });
+      return true;
+    }
+    switch (await link.takeFriendHandoff(
+      userId,
+      device,
+      sid: address.sid,
+      sealPub: address.sealPub,
+    )) {
+      case FriendWrite.retryLater:
+        return false;
+      case FriendWrite.refused:
+        _e2eFlowLog('BOX_FRIEND_HANDOFF_REFUSED', {
+          'peer': userId,
+          'device': device,
+          'why': 'store',
+        });
+        return true;
+      case FriendWrite.stored:
+        refreshBoxDeviceLists();
+        notifyListeners();
+        return true;
+    }
+  }
+
+  /// Encrypts [json] for friend [userId]'s [deviceId] and frames it as from
+  /// THIS device — the [FriendEncrypt] the box's friend handoff uses (the
+  /// box asks only for friends). Null when it cannot now: E2E not ready, a
+  /// device the friend's VERIFIED list does not name live (the server's
+  /// friends list says which devices exist, never who is handed our queue,
+  /// E2), or no session could be built. [fresh] (a re-key) rebuilds the
+  /// session from the device's bundle first, so the frame is a PreKey
+  /// message. Runs at connect or in answer to an inbound frame, never timed
+  /// by a send (decision 21).
+  Future<BoxFrame?> encryptForFriend(
+    int userId,
+    int deviceId,
+    String json, {
+    bool fresh = false,
+  }) async {
+    final enc = _encryptionProvider;
+    if (enc == null || !enc.isE2EReady) return null;
+    if (!await _friendDeviceIsLive(userId, deviceId)) {
+      _e2eFlowLog('BOX_FRIEND_NOT_LIVE', {'peer': userId, 'device': deviceId});
+      return null;
+    }
+    try {
+      // A session built where there was NONE makes this device the one that
+      // asked: that device's own PreKey answer may replace it (two friends
+      // starting at once) and is read for a while. A re-key's fresh session
+      // does not: a real device answers it with a whisper message, and the
+      // window would let a revoked device of the friend, which provoked the
+      // re-key, replace the session with its next PreKey (review).
+      final started =
+          !fresh && !await enc.hasSessionWith(userId, deviceId: deviceId);
+      if (fresh) enc.markSessionRebuild(userId, deviceId: deviceId);
+      await enc.ensureSession(userId, deviceId: deviceId);
+      final frame = BoxFrame.fromSignalCiphertext(
+        await enc.encrypt(userId, json, deviceId: deviceId),
+        senderDeviceId: enc.ownDeviceId,
+      );
+      if (started && frame != null) {
+        boxFriends?.friendSessionStarted(userId, deviceId);
+      }
+      return frame;
+    } on Object catch (e) {
+      _e2eFlowLog('BOX_FRIEND_ENCRYPT_FAILED', {
+        'peer': userId,
+        'device': deviceId,
+        'error': e.runtimeType.toString(),
+      });
+      return null;
+    }
+  }
+
+  /// The device ids friend [userId]'s VERIFIED list names live — the
+  /// [FriendLiveDevices] the box's friend handoff hands to. Batched, so a
+  /// connect's pass costs one lookup frame (E20a); null when it cannot be
+  /// verified now.
+  Future<Set<int>?> friendLiveDevices(int userId) async {
+    final enc = _encryptionProvider;
+    if (enc == null || !enc.isE2EReady) return null;
+    try {
+      final list =
+          enc.cachedDeviceList(userId) ??
+          await enc.getVerifiedDeviceList(userId, batched: true);
+      return list.liveDeviceIds.toSet();
+    } on Object {
+      return null;
+    }
+  }
+
+  /// Whether the chat with [peerUserId] shows the "older app" notice (owner
+  /// decision 48): this device is on the box, [peerUserId] is a friend, and
+  /// its messages still take the old path because some live device of the
+  /// friend has handed us no queue — the peer half of [_boxRoute]'s rule,
+  /// read from the same record and list. Never blocks a send.
+  bool boxFriendPending(int peerUserId) {
+    final link = boxFriends;
+    final outbox = boxOutbox;
+    if (link == null || outbox == null || !link.onBox) return false;
+    if (link.contactOf(peerUserId)?.state != ContactState.friend) return false;
+    final addresses = outbox.addressesFor(peerUserId);
+    final list = _encryptionProvider?.cachedDeviceList(peerUserId);
+    if (list == null) return addresses.isEmpty;
+    final live = list.liveDeviceIds;
+    return live.isEmpty || live.any((d) => !addresses.containsKey(d));
+  }
+
+  /// This device is on the box now (its request queue was published): the
+  /// decision-48 notice may show in a chat already on screen.
+  void onBoxReady() => notifyListeners();
 
   /// Reads a delivery from sibling [BoxInboxEntry.senderDeviceId] (its
   /// `queue_handoff` on our request or self-queue, its ack, or — part B — a
@@ -183,7 +435,7 @@ extension MessagingBox on MessagingProvider {
     // built from the sibling's real bundle, which only it can read. A sibling
     // that really lost its session then takes ours: it asked.
     if (!link.awaitingRekeyFrom(device) &&
-        await enc.siblingPreKeyWouldReplace(entry.peerUserId, device, signal)) {
+        await enc.preKeyWouldReplaceSession(entry.peerUserId, device, signal)) {
       _e2eFlowLog('BOX_SIBLING_PREKEY_REFUSED', {'device': device});
       await link.rekeySibling(device);
       return true;
@@ -457,7 +709,11 @@ extension MessagingBox on MessagingProvider {
     }
   }
 
-  Future<bool> _readBox(MessageModel msg, DateTime receivedAt) async {
+  Future<bool> _readBox(
+    MessageModel msg,
+    DateTime receivedAt, {
+    bool controlOnly = false,
+  }) async {
     // Read and shown earlier, but its plaintext record never committed: only
     // the store is owed, never a second decrypt or a second display.
     final unsaved = _boxUnsaved[msg.id];
@@ -500,7 +756,56 @@ extension MessagingBox on MessagingProvider {
       _e2eFlowLog('BOX_ENVELOPE_UNREADABLE', {'msgId': msg.id});
       return true;
     }
+    final link = boxFriends;
     switch (parsed.type) {
+      // The friend's device handed us its queue — a hand-back over our own
+      // queue for it (item 5, E20d) — or acknowledged ours. A hand-back rides
+      // the session the handoff built, so it is a whisper message; one that
+      // came in a PreKey message is taken only when this device asked for
+      // that session (it started or re-keyed it): a revoked device of the
+      // friend still holds this queue's sid and the account identity, and
+      // would otherwise move a live device's address to its own queue.
+      case E2eEnvelope.typeQueueHandoff when link != null:
+        final device = msg.originDeviceId ?? 1;
+        if (msg.encryptedContent!.startsWith('${BoxFrameKind.preKey.byte}:') &&
+            !link.awaitingFriendRekeyFrom(msg.senderId, device)) {
+          _e2eFlowLog('BOX_FRIEND_HANDOFF_REFUSED', {
+            'peer': msg.senderId,
+            'device': device,
+            'why': 'prekey_unasked',
+          });
+          return true;
+        }
+        link.friendRekeyAnswered(msg.senderId, device);
+        return _takeFriendHandoff(link, msg.senderId, device, plaintext);
+      case E2eEnvelope.typeQueueHandoffAck when link != null:
+        final sid = E2eEnvelope.parseQueueHandoffAck(plaintext);
+        if (sid == null) {
+          _e2eFlowLog('BOX_ENVELOPE_UNREADABLE', {'msgId': msg.id});
+          return true;
+        }
+        return switch (await link.friendAcked(
+          msg.senderId,
+          msg.originDeviceId ?? 1,
+          sid,
+        )) {
+          FriendWrite.retryLater => false,
+          FriendWrite.stored || FriendWrite.refused => true,
+        };
+      case _ when controlOnly:
+        // No conversation to show it in yet (release N's chat list hangs off
+        // server conversation ids). A friend always has one on the server,
+        // so this device's link to it is only late (found in the item-5
+        // drive: the first box message after a friendship made elsewhere):
+        // held for a later offer — the plaintext waits in the replay cache —
+        // never dropped. Anyone else's is dropped, as before.
+        final friend =
+            link?.contactOf(msg.senderId)?.state == ContactState.friend;
+        _e2eFlowLog(friend ? 'BOX_HELD' : 'BOX_DROPPED', {
+          'peer': msg.senderId,
+          'reason': 'no_conversation',
+        });
+        return !friend;
       case E2eEnvelope.typeMessage:
         // Decision 13: the sender's clock, never past our own receive time.
         final sentAt = parsed.sentAt;

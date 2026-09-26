@@ -180,6 +180,8 @@
   "historyNotOnThisDevice": "Earlier messages aren't available on this device",
   "@historyNotOnThisDevice": {"description": "One pill at the oldest end of a thread, standing in for every row this install can never read: rows that predate this device's link (multi-device spec amendment (lxxxi)), or rows sealed before a storage loss replaced or restored this install's keys (amendments (lxxxvi)/(lxxxviii)). One neutral sentence for both causes."},
   "devicesSyncingNote": "Syncing your devices…",
+  "boxFriendOlderAppNote": "{name} has an older version of the app. Messages are encrypted, but the server can see when you write to each other.",
+  "@boxFriendOlderAppNote": {"description": "One quiet line above the composer while this friend is not on the box yet (metadata-privacy owner decision 48): our messages to them still take the old path, which the server can see the timing of. Sending is never blocked. Shown only once this device itself is on the box.", "placeholders": {"name": {"type": "String"}}},
   "encryptionNotInitialized": "Encryption not initialized",
   "identityDamagedTitle": "Encryption keys missing on this device",
 

@@ -50,15 +50,20 @@ class QueueKeys {
   final ContactStore _store;
   final BoxSigner _signer;
 
-  /// Mints an auth key and a seal key pair, creates a normal queue under the
-  /// auth key, stores it on [peerUserId]'s record, then subscribes it (a
-  /// queue nobody subscribes within 24 h is reaped).
+  /// [peerUserId]'s inbound queue on this device (item 5, E20b): the one
+  /// its record holds, or a new one when it holds none — an auth key and a
+  /// seal key pair minted, a normal queue created under the auth key, stored
+  /// on the record, then subscribed (a queue nobody subscribes within 24 h
+  /// is reaped). A queue another tab stored meanwhile wins and ours is
+  /// deleted again, so a friend is never handed two queues of this device.
   ///
   /// Order matters: the queue is created BEFORE it is stored because the
   /// record needs the address the box assigns. A process death in between
   /// leaves only an unsubscribed queue whose sid nobody was ever given — the
   /// reaper's case, not a lost message.
-  Future<InboundQueueResult> createInbound(int peerUserId) async {
+  Future<InboundQueueResult> ensureInbound(int peerUserId) async {
+    final held = _store.byUserId(peerUserId)?.queues.firstOrNull;
+    if (held != null) return InboundQueueCreated(held);
     final auth = _signer.mint();
     final seal = QueueSeal.mintKeyPair();
     final created = await _box.createQueue(QueueKind.normal, auth);
@@ -67,16 +72,24 @@ class QueueKeys {
     }
     final address = created.value;
     final queue = _material(address, auth, seal);
-    var attached = false;
+    ContactQueue? kept;
     final committed = await _store.update(peerUserId, (current) {
       if (current == null) return null;
-      attached = true;
-      return current.copyWith(queues: [...current.queues, queue]);
+      final existing = current.queues.firstOrNull;
+      if (existing != null) {
+        kept = existing;
+        return null;
+      }
+      kept = queue;
+      return current.copyWith(queues: [queue]);
     });
     final owned = BoxQueueAuth(rid: address.rid, key: auth);
-    if (!committed || !attached) {
+    final stored = kept;
+    if (!committed || stored == null || stored.rid != queue.rid) {
       await _box.deleteQueue(owned);
-      return const InboundQueueNotStored();
+      return committed && stored != null
+          ? InboundQueueCreated(stored)
+          : const InboundQueueNotStored();
     }
     await _box.subscribe([owned]);
     return InboundQueueCreated(queue);
@@ -85,7 +98,7 @@ class QueueKeys {
   /// This DEVICE's request queue (design §4.4; wire.md "First contact"): the
   /// one a stranger who searched this account seals a friend request into.
   /// Loaded from the store, or created, stored and only then subscribed, the
-  /// [createInbound] order. A stored queue the box refuses on subscribe
+  /// [ensureInbound] order. A stored queue the box refuses on subscribe
   /// (deleted, or reaped after 90 unsubscribed days) is dropped and replaced
   /// once: its sid is public, and publishing a queue nobody reads loses every
   /// request sent to it.

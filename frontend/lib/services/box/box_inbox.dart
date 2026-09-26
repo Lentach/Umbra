@@ -41,10 +41,12 @@ typedef BoxInboxConsumer = Future<bool> Function(BoxInboxEntry entry);
 /// on two queues, both journaled under the OWN account id — the store's:
 /// this device's SELF-queue — and any it is retiring after a rotation —
 /// (normal frames, like a friend's queue) and its
-/// REQUEST queue, where only an account-bearing frame naming this very
-/// account is read (the sibling address swap). Everything else on the
-/// request queue is a stranger's and stays acked-and-dropped until first
-/// contact (slice (f)).
+/// REQUEST queue, where an account-bearing frame naming this very account is
+/// read (the sibling address swap). A FRIEND's account-bearing frame there is
+/// journaled under the friend's id, marked as from the request queue: its
+/// queue handoff (item 5, E20c; the reader takes nothing else from it).
+/// Everything else on the request queue is a stranger's and stays
+/// acked-and-dropped until first contact (slice (f)).
 class BoxInbox {
   BoxInbox({
     required BoxClient box,
@@ -176,9 +178,10 @@ class BoxInbox {
   }
 
   /// A delivery on this device's request queue: journaled only when it is an
-  /// account-bearing frame from THIS account (a sibling's handoff); any other
-  /// — a stranger's first contact, a frame naming no account, one that does
-  /// not open — is acked and dropped, as before sibling queues.
+  /// account-bearing frame from THIS account (a sibling's handoff) or from a
+  /// FRIEND (their queue handoff, item 5); any other — a stranger's first
+  /// contact, a frame naming no account, one that does not open — is acked
+  /// and dropped, as before sibling queues.
   Future<void> _intakeRequest(
     BoxDelivery delivery,
     String slot,
@@ -187,18 +190,25 @@ class BoxInbox {
     final auth = QueueKeys.authOf(request);
     final own = _store.userId;
     final frame = await _open(request, delivery);
-    if (auth == null ||
-        own == null ||
-        frame == null ||
-        frame.senderUserId != own) {
+    final sender = frame?.senderUserId;
+    if (auth == null || own == null || frame == null || sender == null) {
       await _ackAndDrop(delivery, slot, auth);
       return;
     }
-    await _journal(delivery, slot, own, frame, auth);
+    if (sender == own) {
+      await _journal(delivery, slot, own, frame, auth);
+      return;
+    }
+    if (_store.byUserId(sender)?.state != ContactState.friend) {
+      await _ackAndDrop(delivery, slot, auth);
+      return;
+    }
+    await _journal(delivery, slot, sender, frame, auth, viaRequest: true);
   }
 
   /// JOURNAL, then ack, then queue the read. [viaSelf]: it came in on one of
-  /// this device's self-queues.
+  /// this device's self-queues; [viaRequest]: a friend's frame on its
+  /// request queue.
   Future<void> _journal(
     BoxDelivery delivery,
     String slot,
@@ -206,6 +216,7 @@ class BoxInbox {
     BoxFrame frame,
     BoxQueueAuth auth, {
     bool viaSelf = false,
+    bool viaRequest = false,
   }) async {
     final entry = await _store.journalDelivery(
       rid: boxB64(delivery.rid),
@@ -215,6 +226,7 @@ class BoxInbox {
       signal: frame.signalCiphertext,
       receivedAt: _now().toUtc(),
       viaSelfQueue: viaSelf,
+      viaRequestQueue: viaRequest,
     );
     if (entry == null) {
       _held[slot] = delivery;

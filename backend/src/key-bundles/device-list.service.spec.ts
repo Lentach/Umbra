@@ -16,14 +16,15 @@ import { DEVICE_LIST_VECTOR as V } from './device-list-signature.vectors';
 
 interface AuthRepoMock {
   findOne: jest.Mock;
+  find: jest.Mock;
   insert: jest.Mock;
   query: jest.Mock;
 }
 
 describe('DeviceListService', () => {
   let authRepo: AuthRepoMock;
-  let keyBundleRepo: { findOne: jest.Mock };
-  let devicesService: { listForUser: jest.Mock };
+  let keyBundleRepo: { findOne: jest.Mock; find: jest.Mock };
+  let devicesService: { listForUser: jest.Mock; listLiveForUsers: jest.Mock };
   let service: DeviceListService;
 
   const enrollment = () => ({
@@ -47,6 +48,7 @@ describe('DeviceListService', () => {
   beforeEach(() => {
     authRepo = {
       findOne: jest.fn(),
+      find: jest.fn().mockResolvedValue([]),
       insert: jest.fn().mockResolvedValue(undefined),
       // repo.query() returns [rows, rowCount] for UPDATE (backend/CLAUDE.md
       // §4) — the mock MUST return the tuple shape or it hides the exact bug
@@ -57,12 +59,16 @@ describe('DeviceListService', () => {
       findOne: jest
         .fn()
         .mockResolvedValue({ identityPublicKey: V.identityPublicKey }),
+      find: jest.fn().mockResolvedValue([]),
     };
     // Only `pendingReplacementVersion` (xlv) consults the roster; the enroll
     // paths under test here never reach it. An account whose live device IS
     // device 1 is the ordinary shape and keeps that method's answer null.
     devicesService = {
-      listForUser: jest.fn().mockResolvedValue([{ deviceId: 1, revokedAt: null }]),
+      listForUser: jest
+        .fn()
+        .mockResolvedValue([{ deviceId: 1, revokedAt: null }]),
+      listLiveForUsers: jest.fn().mockResolvedValue([]),
     };
     service = new DeviceListService(
       authRepo as never,
@@ -364,7 +370,9 @@ describe('DeviceListService', () => {
       ]);
       // The post-reset never-enrolled shape: peers would synthesize a device 1
       // that no longer exists.
-      await expect(service.pendingReplacementVersion(V.userId)).resolves.toBe(1);
+      await expect(service.pendingReplacementVersion(V.userId)).resolves.toBe(
+        1,
+      );
     });
 
     it('owes nothing when NO device is live — offline or deleted, not this defect', async () => {
@@ -391,7 +399,73 @@ describe('DeviceListService', () => {
       keyBundleRepo.findOne.mockResolvedValue({
         identityPublicKey: V.lockNewIdentityPublicKey,
       });
-      await expect(service.pendingReplacementVersion(V.userId)).resolves.toBe(7);
+      await expect(service.pendingReplacementVersion(V.userId)).resolves.toBe(
+        7,
+      );
+    });
+  });
+
+  // The friends list asks (xlv) for every friend at once; the batch must answer
+  // exactly what `pendingReplacementVersion` answers for each account, in a
+  // fixed number of queries however many friends there are.
+  describe('pendingReplacementUserIds (batch of (xlv))', () => {
+    const ENROLLED = V.userId;
+    const ORPHANED = V.userId + 1;
+    const LOST_DEVICE_1 = V.userId + 2;
+    const ORDINARY = V.userId + 3;
+    const NO_BUNDLE = V.userId + 4;
+    const NOTHING_LIVE = V.userId + 5;
+
+    it('names exactly the accounts that owe a replacement, in three queries', async () => {
+      keyBundleRepo.find.mockResolvedValue([
+        // Lowest device first per account, as ordered: its identity decides.
+        {
+          userId: ENROLLED,
+          deviceId: 1,
+          identityPublicKey: V.identityPublicKey,
+        },
+        { userId: ENROLLED, deviceId: 2, identityPublicKey: 'ignored' },
+        {
+          userId: ORPHANED,
+          deviceId: 2,
+          identityPublicKey: V.lockNewIdentityPublicKey,
+        },
+        { userId: LOST_DEVICE_1, deviceId: 1, identityPublicKey: 'ik' },
+        { userId: ORDINARY, deviceId: 1, identityPublicKey: 'ik' },
+        { userId: NOTHING_LIVE, deviceId: 1, identityPublicKey: 'ik' },
+      ]);
+      authRepo.find.mockResolvedValue([
+        storedRow(),
+        { ...storedRow(), userId: ORPHANED, listVersion: 6 },
+      ]);
+      devicesService.listLiveForUsers.mockResolvedValue([
+        { userId: LOST_DEVICE_1, deviceId: 2, revokedAt: null },
+        { userId: ORDINARY, deviceId: 1, revokedAt: null },
+      ]);
+
+      const owed = await service.pendingReplacementUserIds([
+        ENROLLED,
+        ORPHANED,
+        LOST_DEVICE_1,
+        ORDINARY,
+        NO_BUNDLE,
+        NOTHING_LIVE,
+      ]);
+
+      expect(owed).toEqual(new Set([ORPHANED, LOST_DEVICE_1]));
+      expect(keyBundleRepo.find).toHaveBeenCalledTimes(1);
+      expect(authRepo.find).toHaveBeenCalledTimes(1);
+      // The roster matters only to an account with no enrollment row.
+      expect(devicesService.listLiveForUsers.mock.calls).toEqual([
+        [[LOST_DEVICE_1, ORDINARY, NOTHING_LIVE]],
+      ]);
+    });
+
+    it('asks nothing for an empty batch', async () => {
+      await expect(service.pendingReplacementUserIds([])).resolves.toEqual(
+        new Set(),
+      );
+      expect(keyBundleRepo.find).not.toHaveBeenCalled();
     });
   });
 });

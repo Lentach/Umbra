@@ -16,6 +16,7 @@ import '../services/api_service.dart';
 import '../services/box/box_device_list_refresh.dart';
 import '../services/box/box_envelope.dart';
 import '../services/box/box_frame.dart';
+import '../services/box/box_friends.dart';
 import '../services/box/box_media_fetcher.dart';
 import '../services/box/box_media_frame.dart';
 import '../services/box/box_media_url.dart';
@@ -28,6 +29,7 @@ import '../services/device_list/device_list_cache.dart';
 import '../services/device_list/sender_list_info.dart';
 import '../services/media_crypto_service.dart';
 import '../services/encrypted_media_upload_service.dart';
+import '../services/encryption/prekey_identity.dart' show FriendFrameIdentity;
 import '../services/encryption_service.dart';
 import '../services/incoming_message_sound_service.dart';
 import '../services/link_preview_service.dart';
@@ -289,10 +291,13 @@ class MessagingProvider extends ChangeNotifier {
       final own = _currentUserId;
       return [if (covered.isNotEmpty && own != null) own, ...covered];
     },
+    // Batched: every list this connect looks up leaves as ONE
+    // `getDeviceLists` frame, so the throttle is spent per connect, not per
+    // covered friend (item 5, E20a).
     fetch: (user) async {
       final enc = _encryptionProvider;
       if (enc == null) throw StateError('no encryption provider');
-      await enc.getVerifiedDeviceList(user, forceRefresh: true);
+      await enc.getVerifiedDeviceList(user, forceRefresh: true, batched: true);
     },
     prebuild: _prebuildBoxSessions,
   );
@@ -404,6 +409,12 @@ class MessagingProvider extends ChangeNotifier {
   /// sibling's handoff is stored and its ack sent. `ConnectionProvider`
   /// wires the account session's one; null = sibling entries wait.
   BoxSiblingLink? boxSiblings;
+
+  /// Friendships moving onto the box (item 5, decision 47): where a friend's
+  /// queue handoff is stored and acknowledged, and whether this device is on
+  /// the box at all. `ConnectionProvider` wires the account session's one;
+  /// null = friend handoffs wait and no composer notice shows.
+  BoxFriendLink? boxFriends;
 
   /// This account's box attachment copies (item 3 / media wiring, decision
   /// 40): kept on send and arrival, read to display. `ConnectionProvider`

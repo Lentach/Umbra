@@ -7,6 +7,7 @@ import {
 import {
   EnrollDeviceAuthorityDto,
   GetDeviceListDto,
+  GetDeviceListsDto,
   UpdateDeviceListDto,
 } from '../dto/device-list.dto';
 import { validateDto } from '../utils/dto.validator';
@@ -154,56 +155,112 @@ export class ChatDeviceListService {
     if (!requesterId) return;
     try {
       const dto = validateDto(GetDeviceListDto, data);
-      if (!(await this.mayReadDeviceList(requesterId, dto.userId))) {
-        this.logger.warn(`[device-list] REFUSED reason=not_entitled`);
-        return;
-      }
-      const row = await this.deviceListService.getAuthorization(dto.userId);
-      if (
-        (await this.deviceListService.pendingReplacementVersion(dto.userId)) !==
-        null
-      ) {
-        // Amendment (xlv) clause 2, widened to every account shape by (l).
-        //
-        // Two shapes reach here, and BOTH serve a roster that cannot receive:
-        //
-        //  * NO enrollment row. `authorization: null` is not merely "not
-        //    enrolled" on the wire — the client answers it by SYNTHESIZING the
-        //    single device 1 a non-enrolled account has by construction. A
-        //    completed §6.2 reset breaks that construction: ids are never
-        //    reused ((a)), so the recovering device is id >= 2 and device 1 is
-        //    revoked.
-        //  * A SURVIVING enrollment row, which is the shape (l) fixes. The
-        //    teardown deliberately leaves the row ((xxix)) and only stamps
-        //    `devices.revokedAt`, so `listCanonical` still names the pre-reset
-        //    devices LIVE. A peer holding the pre-reset anchor VERIFIES that
-        //    dead roster — the enrollment was signed by the very key it pinned
-        //    — and where the only live entry is device 1 the envelope is
-        //    accepted (device 1 is exempt from the liveness refusal), commits
-        //    with `encryptedContent = null`, and the recovering device reads
-        //    `none_for_device` forever. The sender sees success.
-        //
-        // Either way the loss is silent, permanent and bidirectional, and the
-        // send path cannot notice. So refuse, exactly as an entitlement
-        // refusal does — silence is fail-closed on the client (I5: "cannot
-        // verify", never "no devices"), which downgrades silent message loss
-        // to a visible send failure until the recovering device re-enrolls
-        // ((xlv) clause 1).
-        this.logger.warn(
-          `[device-list] REFUSED reason=no_addressable_device (replacement enrollment owed — post-reset or post-rotation; enrolled=${row != null})`,
-        );
-        return;
-      }
-      client.emit('deviceList', {
-        userId: dto.userId,
-        authorization: deviceAuthorizationPayload(row),
-      });
+      await this.serveDeviceList(client, requesterId, dto.userId);
     } catch (error) {
       // Silence is fail-closed on the client (I5: an unanswered fetch means
       // "cannot verify", never "no devices").
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error(`getDeviceList failed: ${message}`);
     }
+  }
+
+  /**
+   * `getDeviceLists { userIds }` (metadata-privacy item 5, E20a): one request
+   * for every friend at connect, instead of one `getDeviceList` per friend
+   * from the shared fetch bucket. Each user named gets EXACTLY the
+   * [handleGetDeviceList] treatment — the same entitlement, the same
+   * replacement-owed refusal, the same `deviceList` answer — so a batch can
+   * never reach a roster a single request could not. A refused user stays
+   * silent while the others are served; an invalid batch (empty, over 256, a
+   * duplicate, an id outside 1..2³¹−1) is refused whole, in silence.
+   *
+   * Users are served one after another, not in parallel: 256 users in
+   * parallel would hold the connection pool against every other request.
+   * One user's failure does not silence the rest.
+   */
+  async handleGetDeviceLists(client: Socket, data: unknown): Promise<void> {
+    const requesterId = socketUserId(client);
+    if (!requesterId) return;
+    let dto: GetDeviceListsDto;
+    try {
+      dto = validateDto(GetDeviceListsDto, data);
+    } catch {
+      this.logger.warn(`[device-list] batch REFUSED reason=invalid_payload`);
+      return;
+    }
+    let failed = 0;
+    let firstFailure = '';
+    for (const userId of dto.userIds) {
+      try {
+        await this.serveDeviceList(client, requesterId, userId);
+      } catch (error) {
+        if (failed === 0) {
+          firstFailure = error instanceof Error ? error.message : String(error);
+        }
+        failed++;
+      }
+    }
+    if (failed > 0) {
+      this.logger.error(
+        `getDeviceLists failed for ${failed} of ${dto.userIds.length}: ${firstFailure}`,
+      );
+    }
+  }
+
+  /**
+   * The per-user rule both verbs share: emit `deviceList` for [userId] when
+   * [requesterId] is entitled and the account owes no replacement enrollment,
+   * else nothing. Throws on a lookup failure; each caller decides what a
+   * failure silences.
+   */
+  private async serveDeviceList(
+    client: Socket,
+    requesterId: number,
+    userId: number,
+  ): Promise<void> {
+    if (!(await this.mayReadDeviceList(requesterId, userId))) {
+      this.logger.warn(`[device-list] REFUSED reason=not_entitled`);
+      return;
+    }
+    const row = await this.deviceListService.getAuthorization(userId);
+    if (
+      (await this.deviceListService.pendingReplacementVersion(userId)) !== null
+    ) {
+      // Amendment (xlv) clause 2, widened to every account shape by (l).
+      //
+      // Two shapes reach here, and BOTH serve a roster that cannot receive:
+      //
+      //  * NO enrollment row. `authorization: null` is not merely "not
+      //    enrolled" on the wire — the client answers it by SYNTHESIZING the
+      //    single device 1 a non-enrolled account has by construction. A
+      //    completed §6.2 reset breaks that construction: ids are never
+      //    reused ((a)), so the recovering device is id >= 2 and device 1 is
+      //    revoked.
+      //  * A SURVIVING enrollment row, which is the shape (l) fixes. The
+      //    teardown deliberately leaves the row ((xxix)) and only stamps
+      //    `devices.revokedAt`, so `listCanonical` still names the pre-reset
+      //    devices LIVE. A peer holding the pre-reset anchor VERIFIES that
+      //    dead roster — the enrollment was signed by the very key it pinned
+      //    — and where the only live entry is device 1 the envelope is
+      //    accepted (device 1 is exempt from the liveness refusal), commits
+      //    with `encryptedContent = null`, and the recovering device reads
+      //    `none_for_device` forever. The sender sees success.
+      //
+      // Either way the loss is silent, permanent and bidirectional, and the
+      // send path cannot notice. So refuse, exactly as an entitlement
+      // refusal does — silence is fail-closed on the client (I5: "cannot
+      // verify", never "no devices"), which downgrades silent message loss
+      // to a visible send failure until the recovering device re-enrolls
+      // ((xlv) clause 1).
+      this.logger.warn(
+        `[device-list] REFUSED reason=no_addressable_device (replacement enrollment owed — post-reset or post-rotation; enrolled=${row != null})`,
+      );
+      return;
+    }
+    client.emit('deviceList', {
+      userId,
+      authorization: deviceAuthorizationPayload(row),
+    });
   }
 
   /**

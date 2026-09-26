@@ -56,6 +56,7 @@ class _AcceptEncryption extends EncryptionProvider {
   Future<VerifiedDeviceList> getVerifiedDeviceList(
     int userId, {
     bool forceRefresh = false,
+    bool batched = false,
     Duration timeout = const Duration(seconds: 10),
   }) async {
     refreshes.add(userId);

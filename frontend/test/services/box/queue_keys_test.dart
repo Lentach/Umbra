@@ -71,7 +71,7 @@ void main() {
     'a created queue is stored whole on the peer record, survives a re-open, '
     'is subscribed, and its stored keys are the ones the box saw',
     () async {
-      final result = await keys.createInbound(42);
+      final result = await keys.ensureInbound(42);
       expect(result, isA<InboundQueueCreated>());
       await store.settled;
 
@@ -111,7 +111,7 @@ void main() {
   test(
     'a peer with no record gets no queue: the fresh one is deleted again',
     () async {
-      final result = await keys.createInbound(77);
+      final result = await keys.ensureInbound(77);
       expect(result, isA<InboundQueueNotStored>());
       expect(store.byUserId(77), isNull);
       final delete = sockets.last.emitted.lastWhere(
@@ -124,7 +124,7 @@ void main() {
 
   test('a refused create leaves the record untouched', () async {
     sockets.respond = (_, f) => {'ok': false, 'code': 'rate_limited'};
-    final result = await keys.createInbound(42);
+    final result = await keys.ensureInbound(42);
     expect(
       result,
       isA<InboundQueueNotCreated>().having(
@@ -138,13 +138,71 @@ void main() {
   });
 
   test("a former record's queues are still subscribed at connect", () async {
-    await keys.createInbound(42);
+    await keys.ensureInbound(42);
     await store.settled;
     await store.update(
       42,
       (r) => r!.copyWith(state: ContactState.former),
     );
     expect(keys.inbound(), hasLength(1));
+  });
+
+  group('ensureInbound (item 5, E20b)', () {
+    test('a record that holds a queue gets it back and the box creates none', () async {
+      await keys.ensureInbound(42);
+      await store.settled;
+      final held = store.byUserId(42)!.queues.single;
+
+      final again = await keys.ensureInbound(42);
+
+      expect(
+        again,
+        isA<InboundQueueCreated>().having((r) => r.queue.rid, 'rid', held.rid),
+      );
+      expect(
+        sockets.last.emitted.where((f) => f.event == 'createQueue'),
+        hasLength(1),
+      );
+    });
+
+    test(
+      'a queue another tab stored while ours was created wins: ours is '
+      'deleted again, the record keeps one queue, and theirs is answered',
+      () async {
+        final theirs = ContactQueue(
+          rid: boxB64(_bytes(32, 0x91)),
+          sid: boxB64(_bytes(32, 0x92)),
+          nid: boxB64(_bytes(16, 0x93)),
+          authPriv: boxB64(const Ed25519BoxSigner().mint().bytes),
+          sealPriv: boxB64(_bytes(32, 0x94)),
+          sealPub: boxB64(_bytes(32, 0x95)),
+        );
+        sockets.respond = (_, f) {
+          if (f.event == 'createQueue') {
+            // The other tab's write lands first: the store runs it before
+            // the update ensureInbound queues after this answer.
+            unawaited(
+              store.update(42, (r) => r!.copyWith(queues: [theirs])),
+            );
+            return {'ok': true, ...address};
+          }
+          return {'ok': true, 'refused': <Object?>[]};
+        };
+
+        final result = await keys.ensureInbound(42);
+        await store.settled;
+
+        expect(
+          result,
+          isA<InboundQueueCreated>().having((r) => r.queue.rid, 'rid', theirs.rid),
+        );
+        expect(store.byUserId(42)!.queues.map((q) => q.rid), [theirs.rid]);
+        final delete = sockets.last.emitted.lastWhere(
+          (f) => f.event == 'deleteQueue',
+        );
+        expect(delete.frame['rid'], address['rid']);
+      },
+    );
   });
 
   group("this device's REQUEST queue (design §4.4)", () {

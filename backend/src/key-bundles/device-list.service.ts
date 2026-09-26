@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, Repository } from 'typeorm';
+import { EntityManager, In, Repository } from 'typeorm';
 import { AccountAuthorization } from './account-authorization.entity';
 import { KeyBundle } from './key-bundle.entity';
 import { DevicesService } from './devices.service';
@@ -77,6 +77,35 @@ export interface ListUpdateInput {
 }
 
 /**
+ * (xlv) for an account with NO enrollment row: it owes a FIRST enrollment
+ * (version 1) once device 1 is gone while another device lives. An account
+ * with no live device at all is offline or deleted, not this defect.
+ */
+function unenrolledReplacementVersion(liveDeviceIds: number[]): number | null {
+  const addressable = liveDeviceIds.length === 0 || liveDeviceIds.includes(1);
+  return addressable ? null : 1;
+}
+
+/**
+ * (xlv) for an account whose enrollment row survives: it owes stored+1 once
+ * the record no longer verifies under the CURRENT published identity.
+ */
+function enrolledReplacementVersion(
+  userId: number,
+  identityPublicKey: string,
+  stored: AccountAuthorization,
+): number | null {
+  const stillValid = verifyEnrollmentSignature({
+    identityPublicKey,
+    userId,
+    dakPub: stored.dakPub,
+    createdAtMs: stored.enrollmentCreatedAt.getTime(),
+    signature: stored.enrollmentSig,
+  });
+  return stillValid ? null : stored.listVersion + 1;
+}
+
+/**
  * The DAK-signed device list (Phase 2 T2, spec §3/§5.2 + §12 amendments
  * (d)/(g)).
  *
@@ -129,21 +158,69 @@ export class DeviceListService {
 
     const stored = await this.authorizationRepo.findOne({ where: { userId } });
     if (!stored) {
-      const live = (await this.devicesService.listForUser(userId)).filter(
-        (d) => d.revokedAt == null,
+      return unenrolledReplacementVersion(
+        (await this.devicesService.listForUser(userId))
+          .filter((d) => d.revokedAt == null)
+          .map((d) => d.deviceId),
       );
-      const addressable = live.length === 0 || live.some((d) => d.deviceId === 1);
-      return addressable ? null : 1;
+    }
+    return enrolledReplacementVersion(
+      userId,
+      published.identityPublicKey,
+      stored,
+    );
+  }
+
+  /**
+   * The accounts of [userIds] that owe a replacement enrollment — the
+   * [pendingReplacementVersion] predicate for many accounts in three queries
+   * however many there are (the friends list, metadata-privacy item 5).
+   */
+  async pendingReplacementUserIds(userIds: number[]): Promise<Set<number>> {
+    const owed = new Set<number>();
+    if (userIds.length === 0) return owed;
+
+    // The PUBLISHED identity per account: its lowest device's bundle, the
+    // same account-scoped lookup as the single-account path.
+    const published = new Map<number, string>();
+    for (const bundle of await this.keyBundleRepo.find({
+      where: { userId: In(userIds) },
+      select: { userId: true, deviceId: true, identityPublicKey: true },
+      order: { userId: 'ASC', deviceId: 'ASC' },
+    })) {
+      if (!published.has(bundle.userId)) {
+        published.set(bundle.userId, bundle.identityPublicKey);
+      }
+    }
+    if (published.size === 0) return owed;
+
+    const stored = new Map(
+      (
+        await this.authorizationRepo.find({
+          where: { userId: In([...published.keys()]) },
+        })
+      ).map((row) => [row.userId, row]),
+    );
+    const unenrolled = [...published.keys()].filter((id) => !stored.has(id));
+    const liveDeviceIds = new Map<number, number[]>();
+    if (unenrolled.length > 0) {
+      for (const device of await this.devicesService.listLiveForUsers(
+        unenrolled,
+      )) {
+        const ids = liveDeviceIds.get(device.userId) ?? [];
+        ids.push(device.deviceId);
+        liveDeviceIds.set(device.userId, ids);
+      }
     }
 
-    const stillValid = verifyEnrollmentSignature({
-      identityPublicKey: published.identityPublicKey,
-      userId,
-      dakPub: stored.dakPub,
-      createdAtMs: stored.enrollmentCreatedAt.getTime(),
-      signature: stored.enrollmentSig,
-    });
-    return stillValid ? null : stored.listVersion + 1;
+    for (const [userId, identityPublicKey] of published) {
+      const row = stored.get(userId);
+      const version = row
+        ? enrolledReplacementVersion(userId, identityPublicKey, row)
+        : unenrolledReplacementVersion(liveDeviceIds.get(userId) ?? []);
+      if (version !== null) owed.add(userId);
+    }
+    return owed;
   }
 
   /**

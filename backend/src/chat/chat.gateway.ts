@@ -588,6 +588,21 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   /**
+   * `getDeviceList` for up to 256 users at once (metadata-privacy item 5,
+   * E20a): each served user answers the same `deviceList` event. Its own
+   * bucket, so covering every friend at connect never drains the fetch tier.
+   */
+  @UseGuards(WsThrottlerGuard)
+  @Throttle({ default: { limit: 60, ttl: 900000 } })
+  @SubscribeMessage('getDeviceLists')
+  async handleGetDeviceLists(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: unknown,
+  ) {
+    return this.chatDeviceListService.handleGetDeviceLists(client, data);
+  }
+
+  /**
    * Revocation (§5.5) — mutating-action tier, and deliberately as generous as
    * the list mutation it carries: a protective action must stay available (I4
    * spirit), and every refusal here is pre-write.

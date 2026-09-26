@@ -71,6 +71,7 @@ class _SiblingEncryption extends EncryptionProvider {
   Future<VerifiedDeviceList> getVerifiedDeviceList(
     int userId, {
     bool forceRefresh = false,
+    bool batched = false,
     Duration timeout = const Duration(seconds: 10),
   }) async => userId == 1 && !ownFetchFails
       ? own
@@ -110,12 +111,12 @@ class _SiblingEncryption extends EncryptionProvider {
     return ownIdentity;
   }
 
-  /// What [siblingPreKeyWouldReplace] answers: true = a PreKey message that
+  /// What [preKeyWouldReplaceSession] answers: true = a PreKey message that
   /// would replace our session with that sibling (decision 37).
   bool replaces = false;
 
   @override
-  Future<bool> siblingPreKeyWouldReplace(
+  Future<bool> preKeyWouldReplaceSession(
     int userId,
     int deviceId,
     String ciphertext,

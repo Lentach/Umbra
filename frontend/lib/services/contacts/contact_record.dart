@@ -28,6 +28,7 @@ class ContactQueue {
     required this.authPriv,
     required this.sealPriv,
     required this.sealPub,
+    this.ackedBy = const [],
   });
 
   factory ContactQueue.fromJson(Map<String, dynamic> j) => ContactQueue(
@@ -37,6 +38,10 @@ class ContactQueue {
     authPriv: j['authPriv'] as String,
     sealPriv: j['sealPriv'] as String,
     sealPub: j['sealPub'] as String,
+    ackedBy: [
+      for (final d in j['ackedBy'] as List<dynamic>? ?? const [])
+        if (d is int) d,
+    ],
   );
 
   final String rid;
@@ -46,6 +51,26 @@ class ContactQueue {
   final String sealPriv;
   final String sealPub;
 
+  /// The peer's device ids that acknowledged this queue's handoff (item 5,
+  /// E20e): on each connect the migration hands it again to every live
+  /// device of the peer NOT named here. Additive to the frozen shape above:
+  /// a build that predates it drops the key on its next write, which only
+  /// costs one more handoff.
+  final List<int> ackedBy;
+
+  /// This queue, acknowledged by the peer's [deviceId] as well.
+  ContactQueue withAck(int deviceId) => ackedBy.contains(deviceId)
+      ? this
+      : ContactQueue(
+          rid: rid,
+          sid: sid,
+          nid: nid,
+          authPriv: authPriv,
+          sealPriv: sealPriv,
+          sealPub: sealPub,
+          ackedBy: [...ackedBy, deviceId],
+        );
+
   Map<String, dynamic> toJson() => {
     'rid': rid,
     'sid': sid,
@@ -53,6 +78,7 @@ class ContactQueue {
     'authPriv': authPriv,
     'sealPriv': sealPriv,
     'sealPub': sealPub,
+    if (ackedBy.isNotEmpty) 'ackedBy': ackedBy,
   };
 }
 

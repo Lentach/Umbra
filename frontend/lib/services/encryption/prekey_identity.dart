@@ -67,3 +67,33 @@ bool preKeyWouldReplace(SessionRecord record, String ciphertext) {
         message.getBaseKey().serialize(),
       );
 }
+
+/// Who can have sealed a FRIEND's account-bearing frame into our public
+/// request queue (metadata-privacy item 5, E20c).
+enum FriendFrameIdentity {
+  /// A whisper message (its MAC is keyed by a session we hold), or a PreKey
+  /// message carrying the friend's pinned account identity.
+  matches,
+
+  /// A PreKey message, and this device pinned no identity for that account
+  /// yet: nothing here can say whose key it carries.
+  noAnchor,
+
+  /// A PreKey message under any other key, or nothing parseable.
+  foreign,
+}
+
+/// [ciphertextMatchesIdentity] against a friend's pinned account identity
+/// [anchorBase64] (null: none pinned).
+FriendFrameIdentity friendFrameIdentity(String ciphertext, String? anchorBase64) {
+  final colon = ciphertext.indexOf(':');
+  final type = colon < 0
+      ? null
+      : int.tryParse(ciphertext.substring(0, colon));
+  if (type == CiphertextMessage.whisperType) return FriendFrameIdentity.matches;
+  if (type != CiphertextMessage.prekeyType) return FriendFrameIdentity.foreign;
+  if (anchorBase64 == null) return FriendFrameIdentity.noAnchor;
+  return ciphertextMatchesIdentity(ciphertext, anchorBase64)
+      ? FriendFrameIdentity.matches
+      : FriendFrameIdentity.foreign;
+}

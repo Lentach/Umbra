@@ -70,6 +70,7 @@ class _BoxEncryption extends EncryptionProvider {
   Future<VerifiedDeviceList> getVerifiedDeviceList(
     int userId, {
     bool forceRefresh = false,
+    bool batched = false,
     Duration timeout = const Duration(seconds: 10),
   }) async => throw StateError('no list in this test');
 
@@ -343,20 +344,25 @@ void main() {
     },
   );
 
-  test('a blocked peer, or one with no chat, gets nothing shown', () async {
-    envelope('hi');
-    expect(
-      await deliver(
-        entry(),
-        _peer(2, conversationId: 10, state: ContactState.blocked),
-      ),
-      isTrue,
-    );
-    expect(await deliver(entry(), _peer(2)), isTrue);
-    expect(await deliver(entry(), null), isTrue);
-    expect(encryption.decryptedIds, isEmpty);
-    expect(provider.messages, isEmpty);
-  });
+  test(
+    'a blocked peer, or no contact, gets nothing read; one with no chat yet '
+    'gets nothing shown (only its queue handoff is taken, item 5)',
+    () async {
+      envelope('hi');
+      expect(
+        await deliver(
+          entry(),
+          _peer(2, conversationId: 10, state: ContactState.blocked),
+        ),
+        isTrue,
+      );
+      expect(await deliver(entry(), null), isTrue);
+      expect(encryption.decryptedIds, isEmpty);
+
+      expect(await deliver(entry(), _peer(2)), isTrue);
+      expect(provider.messages, isEmpty);
+    },
+  );
 
   test(
     'after a restart the box message is back when its chat opens — no '

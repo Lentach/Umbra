@@ -178,6 +178,8 @@
   "historyNotOnThisDevice": "Wcześniejsze wiadomości nie są dostępne na tym urządzeniu",
   "@historyNotOnThisDevice": {"description": "One pill at the oldest end of a thread, standing in for every row this install can never read: rows that predate this device's link (multi-device spec amendment (lxxxi)), or rows sealed before a storage loss replaced or restored this install's keys (amendments (lxxxvi)/(lxxxviii)). One neutral sentence for both causes."},
   "devicesSyncingNote": "Synchronizowanie urządzeń…",
+  "boxFriendOlderAppNote": "{name} ma starszą wersję aplikacji. Wiadomości są szyfrowane, ale serwer widzi, kiedy piszecie.",
+  "@boxFriendOlderAppNote": {"description": "One quiet line above the composer while this friend is not on the box yet (metadata-privacy owner decision 48): our messages to them still take the old path, which the server can see the timing of. Sending is never blocked. Shown only once this device itself is on the box.", "placeholders": {"name": {"type": "String"}}},
   "encryptionNotInitialized": "Szyfrowanie niezainicjowane",
   "identityDamagedTitle": "Brak kluczy szyfrowania na tym urządzeniu",
 

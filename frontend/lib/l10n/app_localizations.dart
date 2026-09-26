@@ -980,6 +980,12 @@ abstract class AppLocalizations {
   /// **'Synchronizowanie urządzeń…'**
   String get devicesSyncingNote;
 
+  /// One quiet line above the composer while this friend is not on the box yet (metadata-privacy owner decision 48): our messages to them still take the old path, which the server can see the timing of. Sending is never blocked. Shown only once this device itself is on the box.
+  ///
+  /// In pl, this message translates to:
+  /// **'{name} ma starszą wersję aplikacji. Wiadomości są szyfrowane, ale serwer widzi, kiedy piszecie.'**
+  String boxFriendOlderAppNote(String name);
+
   /// No description provided for @encryptionNotInitialized.
   ///
   /// In pl, this message translates to:

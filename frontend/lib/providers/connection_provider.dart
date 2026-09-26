@@ -524,10 +524,15 @@ class ConnectionProvider extends ChangeNotifier {
           );
           _box!
             ..encryptForOwnDevice = messaging.encryptForOwnDevice
-            ..ownLiveDevices = messaging.ownLiveDevices;
+            ..ownLiveDevices = messaging.ownLiveDevices
+            // Item 5: existing friendships move onto the box.
+            ..encryptForFriend = messaging.encryptForFriend
+            ..friendLiveDevices = messaging.friendLiveDevices
+            ..onBoxReady = messaging.onBoxReady;
           messaging
             ..boxOutbox = _box
             ..boxSiblings = _box
+            ..boxFriends = _box
             ..boxMedia = _boxMedia;
         }
         if (_encryptionProvider?.isE2EReady == true) _box!.e2eReady();
@@ -556,7 +561,12 @@ class ConnectionProvider extends ChangeNotifier {
       _messagingProvider?.onDeviceListInvalidated(invalidated);
       // The own list changed (a device linked or revoked): the siblings may
       // have, so the address swap asks again.
-      if (invalidated == _boxUserId) _box?.ownDevicesChanged();
+      if (invalidated == _boxUserId) {
+        _box?.ownDevicesChanged();
+      } else {
+        // A friend's devices may have changed: its handoff runs again.
+        _box?.friendDevicesChanged(invalidated);
+      }
     };
     // The old path may hold the PreKey message that creates the session a
     // waiting box message needs; its history pass is when that lands.
@@ -987,6 +997,7 @@ class ConnectionProvider extends ChangeNotifier {
       _messagingProvider
         ?..boxOutbox = null
         ..boxSiblings = null
+        ..boxFriends = null
         ..boxMedia = null;
       _boxUserId = null;
     }
@@ -1531,6 +1542,9 @@ class ConnectionProvider extends ChangeNotifier {
     });
     _socketService.on('friendsList', (data) {
       _friendsProvider?.onFriendsList(data);
+      // Item 5: each friend device's request queue, where the handoff of
+      // our queue goes until that device hands us its own.
+      _box?.onFriendsList(data);
     });
     _socketService.on('searchUsersResult', (data) {
       _friendsProvider?.onSearchUsersResult(data);
@@ -1549,6 +1563,12 @@ class ConnectionProvider extends ChangeNotifier {
     _socketService.on('conversationsList', (data) {
       _serverResponseCounter++;
       _conversationsProvider?.onConversationsList(data);
+      // A friend's box message held because this device had not linked its
+      // chat yet (item 5) is read once the list's write lands in the store.
+      final store = _contactStore;
+      if (store != null) {
+        unawaited(store.settled.then((_) => _box?.drainInbox()));
+      }
     });
     _socketService.on('openConversation', (data) {
       _conversationsProvider?.onOpenConversation(data);

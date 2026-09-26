@@ -239,4 +239,117 @@ describe('ChatDeviceListService.handleGetDeviceList entitlement', () => {
       expect.objectContaining({ userId: TARGET }),
     );
   });
+
+  // --- getDeviceLists: the same rules, applied to each user of a batch -------
+  // One request covers every friend at connect (item 5, E20a) without spending
+  // one `getDeviceList` per friend from the shared fetch bucket. It may never
+  // become a way around the per-user rules above.
+  describe('getDeviceLists (batch)', () => {
+    const STRANGER = 11;
+    const OWING = 12;
+
+    const getMany = (data: unknown) =>
+      service.handleGetDeviceLists(client as Socket, data);
+
+    it('serves each entitled user of a batch and stays silent on the rest', async () => {
+      validateCanMessage.mockImplementation((_from: number, to: number) =>
+        Promise.resolve(
+          to === TARGET ? { valid: true } : { valid: false, error: 'nope' },
+        ),
+      );
+
+      await getMany({ userIds: [STRANGER, TARGET] });
+
+      expect(emit.mock.calls).toEqual([
+        [
+          'deviceList',
+          { userId: TARGET, authorization: authorizationProjection },
+        ],
+      ]);
+      expect(getAuthorization).not.toHaveBeenCalledWith(STRANGER);
+    });
+
+    it('stays silent for a user who owes a replacement enrollment, serving the rest', async () => {
+      validateCanMessage.mockResolvedValue({ valid: true });
+      pendingReplacementVersion.mockImplementation((userId: number) =>
+        Promise.resolve(userId === OWING ? 4 : null),
+      );
+
+      await getMany({ userIds: [OWING, TARGET] });
+
+      expect(emit.mock.calls).toEqual([
+        [
+          'deviceList',
+          { userId: TARGET, authorization: authorizationProjection },
+        ],
+      ]);
+    });
+
+    it('serves the rest when one user of the batch fails to load', async () => {
+      validateCanMessage.mockResolvedValue({ valid: true });
+      getAuthorization.mockImplementation((userId: number) =>
+        userId === STRANGER
+          ? Promise.reject(new Error('db down'))
+          : Promise.resolve(authorizationRow),
+      );
+
+      await getMany({ userIds: [STRANGER, TARGET] });
+
+      expect(emit.mock.calls).toEqual([
+        [
+          'deviceList',
+          { userId: TARGET, authorization: authorizationProjection },
+        ],
+      ]);
+    });
+
+    it('serves a full batch of 256 users', async () => {
+      validateCanMessage.mockResolvedValue({ valid: true });
+      const userIds = Array.from({ length: 256 }, (_, i) => i + 100);
+
+      await getMany({ userIds });
+
+      const served = (emit.mock.calls as [string, { userId: number }][]).map(
+        ([, payload]) => payload.userId,
+      );
+      expect(served).toEqual(userIds);
+    });
+
+    it.each([
+      ['a user named twice', { userIds: [TARGET, STRANGER, TARGET] }],
+      [
+        'more than 256 users',
+        { userIds: Array.from({ length: 257 }, (_, i) => i + 100) },
+      ],
+      ['no users', { userIds: [] }],
+      ['user id 0', { userIds: [TARGET, 0] }],
+      ['a user id above 2^31-1', { userIds: [2147483648] }],
+      ['a fractional user id', { userIds: [9.5] }],
+      ['a user id as a string', { userIds: ['9'] }],
+      ['userIds that is not an array', { userIds: TARGET }],
+      ['no payload', null],
+    ])(
+      'refuses a batch with %s whole, in silence, touching nothing',
+      async (_label, data) => {
+        validateCanMessage.mockResolvedValue({ valid: true });
+
+        await getMany(data);
+
+        expect(emit).not.toHaveBeenCalled();
+        expect(validateCanMessage).not.toHaveBeenCalled();
+        expect(getAuthorization).not.toHaveBeenCalled();
+      },
+    );
+
+    it('accepts the largest user id, 2^31-1', async () => {
+      validateCanMessage.mockResolvedValue({ valid: true });
+
+      await getMany({ userIds: [2147483647] });
+
+      expect(emit).toHaveBeenCalledWith(
+        'deviceList',
+        expect.objectContaining({ userId: 2147483647 }),
+      );
+    });
+  });
 });

@@ -8,6 +8,8 @@ import '../../utils/e2e_envelope.dart';
 import '../contacts/contact_record.dart';
 import '../contacts/contact_store.dart';
 import 'box_client.dart';
+import 'box_friend_handoff.dart';
+import 'box_friends.dart';
 import 'box_inbox.dart';
 import 'box_notifiers.dart';
 import 'box_outbox.dart';
@@ -48,10 +50,15 @@ import 'queue_seal.dart';
 /// siblings' self-queues ([siblingAddresses], part B) and, as the
 /// [BoxSiblingLink], stores what the messaging reader learns from a sibling.
 ///
+/// And it moves existing friendships onto the box (item 5, decision 47): it
+/// hands this device's queue for each friend to that friend's devices
+/// ([BoxFriendHandoff]) and, as the [BoxFriendLink], stores what the
+/// messaging reader learns from a friend's handoff.
+///
 /// And it registers box push (E9): with a [BoxPushSource], every contact
 /// queue gets a notifier ([BoxNotifiers]) once the box is ready and the
 /// store open, and again whenever the push target changes.
-class BoxSession implements BoxOutbox, BoxSiblingLink {
+class BoxSession implements BoxOutbox, BoxSiblingLink, BoxFriendLink {
   BoxSession({
     required BoxClient box,
     required ContactStore store,
@@ -87,6 +94,13 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
       },
       sendToSibling: _sendToSibling,
     );
+    _friends = BoxFriendHandoff(
+      box: box,
+      store: store,
+      keys: _keys,
+      seal: _seal,
+      queueCreated: () => _notifiers?.run(),
+    );
   }
 
   final BoxClient _box;
@@ -97,6 +111,28 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
   late final BoxSiblingSwap _swap;
   late final BoxSiblingRotation _rotation;
   late final BoxNotifiers? _notifiers;
+  late final BoxFriendHandoff _friends;
+
+  /// Friend devices re-keyed this session ([rekeyFriend]), as `user:device`:
+  /// once each.
+  final Set<String> _friendRekeyed = {};
+
+  /// When this device started a session with a friend's device it has not
+  /// read since ([friendSessionStarted], [awaitingFriendRekeyFrom]), by
+  /// `user:device`.
+  final Map<String, DateTime> _friendRekeyAsked = {};
+
+  /// Called when this device first counts as on the box ([onBox]): its
+  /// request queue was published. The composer notice (decision 48) reads it.
+  void Function()? onBoxReady;
+
+  /// Re-keys owed to friend devices this device had no address for, whether
+  /// a fresh friends list was asked for them, and the devices one was asked
+  /// for this session: once each, so a device the next list still names no
+  /// address for is given up, never looped on ([rekeyFriend]).
+  final Set<(int, int)> _rekeyOwed = {};
+  final Set<String> _friendAddressAsked = {};
+  bool _askedFriends = false;
 
   /// Siblings re-keyed this session ([rekeySibling]): once each.
   final Set<int> _rekeyed = {};
@@ -183,6 +219,24 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
       ..run();
   }
 
+  /// The Signal side of the friend handoff (`MessagingProvider`).
+  FriendEncrypt? get encryptForFriend => _friends.encrypt;
+
+  set encryptForFriend(FriendEncrypt? encrypt) {
+    _friends
+      ..encrypt = encrypt
+      ..run();
+  }
+
+  /// Friends' verified lists, for the friend handoff (`MessagingProvider`).
+  FriendLiveDevices? get friendLiveDevices => _friends.liveDevices;
+
+  set friendLiveDevices(FriendLiveDevices? lookup) {
+    _friends
+      ..liveDevices = lookup
+      ..run();
+  }
+
   /// E2E is ready on this connect: the request queue may be published, a
   /// handoff encrypted and the own list read now.
   void e2eReady() {
@@ -191,6 +245,7 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
     _publish();
     _swap.e2eReady();
     _rotation.run();
+    _friends.e2eReady();
   }
 
   /// The own verified device list was dropped (a device linked or revoked).
@@ -203,6 +258,32 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
   /// `ownRequestQueues { success, devices?, error?, retryAfterMs? }`.
   void onOwnRequestQueues(Object? data) {
     if (!_disposed) unawaited(_swap.onOwnRequestQueues(data));
+  }
+
+  /// `friendsList`: each friend device's request queue, where the friend
+  /// handoff goes until that device hands us its own queue (item 5). A
+  /// re-key that was owed for want of an address goes out once the store
+  /// holds what the list wrote ([rekeyFriend]).
+  void onFriendsList(Object? data) {
+    if (_disposed) return;
+    _friends.takeFriendsList(data);
+    _askedFriends = false;
+    if (_rekeyOwed.isEmpty) return;
+    final owed = List.of(_rekeyOwed);
+    _rekeyOwed.clear();
+    unawaited(
+      _store.settled.then((_) async {
+        for (final (user, device) in owed) {
+          await rekeyFriend(user, device);
+        }
+      }),
+    );
+  }
+
+  /// Friend [userId]'s verified device list was dropped (a device linked or
+  /// revoked): its devices may have changed, so the handoff runs again.
+  void friendDevicesChanged(int userId) {
+    if (!_disposed) _friends.friendChanged(userId);
   }
 
   /// Connects the box and starts following it.
@@ -219,6 +300,7 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
           _swap.run();
           _rotation.run();
           _notifiers?.run();
+          _friends.run();
         }),
       )
       ..add(_box.lostQueues.listen(_onLost));
@@ -245,6 +327,7 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
     _swap.accountReady(deviceId);
     // `socketReady` is what confirms this device's id for the own list.
     _rotation.run();
+    if (deviceId != null) _friends.accountReady();
   }
 
   /// The contact store (re)opened — a web vault that booted locked was just
@@ -257,6 +340,7 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
     _swap.run();
     _rotation.run();
     _notifiers?.run();
+    _friends.run();
   }
 
   /// The account socket dropped: an answer still owed will never come.
@@ -266,6 +350,7 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
     _inFlight = null;
     _retry?.cancel();
     _swap.accountLost();
+    _friends.accountLost();
   }
 
   /// `requestQueueSet { success, error?, retryAfterMs? }`.
@@ -274,7 +359,9 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
     _inFlight = null;
     if (sent == null || data is! Map) return;
     if (data['success'] == true) {
+      final first = _published == null;
       _published = sent;
+      if (first) onBoxReady?.call();
       return;
     }
     final retryMs = data['retryAfterMs'];
@@ -479,12 +566,174 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
   @override
   Future<int?> nextLocalId() => _store.allocateLocalId();
 
+  @override
+  bool get onBox => !_disposed && _published != null;
+
+  @override
+  Future<FriendWrite> takeFriendHandoff(
+    int userId,
+    int deviceId, {
+    required String sid,
+    required String sealPub,
+  }) async {
+    if (_disposed) return FriendWrite.retryLater;
+    final address = ContactOutbound(
+      peerDeviceId: deviceId,
+      sid: sid,
+      sealPub: sealPub,
+    );
+    var friend = false;
+    final committed = await _store.update(userId, (current) {
+      if (current == null || current.state != ContactState.friend) return null;
+      friend = true;
+      final held = current.outbound
+          .where((o) => o.peerDeviceId == deviceId)
+          .firstOrNull;
+      if (held?.sid == sid && held?.sealPub == sealPub) return null;
+      return current.copyWith(
+        outbound: [
+          for (final o in current.outbound)
+            if (o.peerDeviceId != deviceId) o,
+          address,
+        ],
+      );
+    });
+    if (!committed) return FriendWrite.retryLater;
+    if (!friend) return FriendWrite.refused;
+    final acked = await _sendToFriend(
+      userId,
+      deviceId,
+      E2eEnvelope.buildQueueHandoffAck(sid: sid),
+    );
+    final ours = _store.byUserId(userId)?.queues.firstOrNull;
+    bool? handedBack;
+    if (ours == null || !ours.ackedBy.contains(deviceId)) {
+      handedBack = false;
+      final ensured = await _keys.ensureInbound(userId);
+      if (ensured case InboundQueueCreated(:final queue)) {
+        if (ours == null) _notifiers?.run();
+        handedBack = await _sendToFriend(
+          userId,
+          deviceId,
+          E2eEnvelope.buildQueueHandoff(
+            sid: queue.sid,
+            sealPub: queue.sealPub,
+          ),
+        );
+        if (handedBack) _friends.noteHanded(userId, deviceId, queue.sid);
+      }
+    }
+    E2eDiagLog.add('BOX_FRIEND_HANDOFF', {
+      'device': deviceId,
+      'acked': acked,
+      'handedBack': ?handedBack,
+    });
+    return FriendWrite.stored;
+  }
+
+  /// Encrypts [envelope] for [userId]'s [deviceId] and sends it to where
+  /// that device takes it (the queue it handed us, else its request queue);
+  /// true only when the box took it.
+  Future<bool> _sendToFriend(
+    int userId,
+    int deviceId,
+    Map<String, dynamic> envelope,
+  ) async {
+    final encrypt = _friends.encrypt;
+    final target = _friends.targetOf(userId, deviceId);
+    if (_disposed || encrypt == null || target == null) return false;
+    final frame = await encrypt(userId, deviceId, jsonEncode(envelope));
+    return frame != null && await _friends.send(target, frame) is BoxOk;
+  }
+
+  @override
+  Future<FriendWrite> friendAcked(int userId, int deviceId, String sid) async {
+    if (_disposed) return FriendWrite.retryLater;
+    var matched = false;
+    final committed = await _store.update(userId, (current) {
+      if (current == null) return null;
+      final i = current.queues.indexWhere((q) => q.sid == sid);
+      if (i < 0) return null;
+      matched = true;
+      final queue = current.queues[i];
+      if (queue.ackedBy.contains(deviceId)) return null;
+      return current.copyWith(
+        queues: [...current.queues]..[i] = queue.withAck(deviceId),
+      );
+    });
+    if (!committed) return FriendWrite.retryLater;
+    return matched ? FriendWrite.stored : FriendWrite.refused;
+  }
+
+  @override
+  Future<void> rekeyFriend(int userId, int deviceId) async {
+    final key = '$userId:$deviceId';
+    final encrypt = _friends.encrypt;
+    if (_disposed || encrypt == null || _friendRekeyed.contains(key)) return;
+    final target = _friends.targetOf(userId, deviceId);
+    if (target == null) {
+      // Our friends list predates that device's app update (it named no
+      // request queue then): ask for a fresh one, once per device per
+      // session, and re-key when it arrives ([onFriendsList]).
+      if (!_friendAddressAsked.add(key)) return;
+      _rekeyOwed.add((userId, deviceId));
+      if (!_askedFriends) {
+        _askedFriends = true;
+        _emit('getFriends', null);
+      }
+      return;
+    }
+    _friendRekeyed.add(key);
+    final ensured = await _keys.ensureInbound(userId);
+    if (ensured is! InboundQueueCreated || _disposed) return;
+    final queue = ensured.queue;
+    // Not "asked" by the re-key itself: a real device answers a re-key with
+    // a whisper message, and a window opened here would let a revoked device
+    // of the friend replace the session with its next PreKey (review).
+    final frame = await encrypt(
+      userId,
+      deviceId,
+      jsonEncode(
+        E2eEnvelope.buildQueueHandoff(sid: queue.sid, sealPub: queue.sealPub),
+      ),
+      fresh: true,
+    );
+    final sent = frame != null && await _friends.send(target, frame) is BoxOk;
+    if (sent) _friends.noteHanded(userId, deviceId, queue.sid);
+    E2eDiagLog.add('BOX_FRIEND_REKEYED', {'device': deviceId, 'sent': sent});
+  }
+
+  @override
+  void friendSessionStarted(int userId, int deviceId) {
+    if (!_disposed) _friendRekeyAsked['$userId:$deviceId'] = _now();
+  }
+
+  @override
+  bool awaitingFriendRekeyFrom(int userId, int deviceId) {
+    final key = '$userId:$deviceId';
+    final at = _friendRekeyAsked[key];
+    if (at == null) return false;
+    if (_now().difference(at) <= kFriendRekeyWindow) return true;
+    _friendRekeyAsked.remove(key);
+    return false;
+  }
+
+  @override
+  void friendRekeyAnswered(int userId, int deviceId) =>
+      _friendRekeyAsked.remove('$userId:$deviceId');
+
+  @override
+  void handOffTo(int userId) {
+    if (!_disposed) _friends.friendChanged(userId);
+  }
+
   void dispose() {
     if (_disposed) return;
     _disposed = true;
     _retry?.cancel();
     _swap.dispose();
     _rotation.dispose();
+    _friends.dispose();
     _notifiers?.dispose();
     for (final s in _subscriptions) {
       unawaited(s.cancel());

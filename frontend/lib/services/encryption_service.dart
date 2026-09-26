@@ -2679,12 +2679,13 @@ class EncryptionService {
 
   /// Whether decrypting [ciphertextStr] from [userId]'s [deviceId] would
   /// replace the session this device holds with it ([preKeyWouldReplace],
-  /// decision 37): a sibling PreKey message is refused on that answer unless
-  /// this device asked for the re-key. Read under the per-address lock, so
-  /// an in-flight build or decrypt lands first. False before init, and when
-  /// the record cannot be read now: the decrypt that follows cannot read it
-  /// either, and its failure policy decides.
-  Future<bool> siblingPreKeyWouldReplace(
+  /// decision 37): a PreKey message from a sibling, or from a friend's
+  /// device on the box (item 5, E20c), is refused on that answer unless this
+  /// device asked for the re-key or just started that session. Read under
+  /// the per-address lock, so an in-flight build or decrypt lands first.
+  /// False before init, and when the record cannot be read now: the decrypt
+  /// that follows cannot read it either, and its failure policy decides.
+  Future<bool> preKeyWouldReplaceSession(
     int userId,
     int deviceId,
     String ciphertextStr,
@@ -2701,6 +2702,18 @@ class EncryptionService {
       }
     });
   }
+
+  /// Who can have sealed friend [userId]'s frame [ciphertextStr] into our
+  /// public request queue ([friendFrameIdentity] against the account anchor
+  /// pinned for [userId]; item 5, E20c). Checked BEFORE Signal sees it: a
+  /// PreKey decrypt under a stranger's key would replace the real session.
+  Future<FriendFrameIdentity> friendFrameIdentityOf(
+    int userId,
+    String ciphertextStr,
+  ) async => friendFrameIdentity(
+    ciphertextStr,
+    await peerTofuIdentityBase64(userId),
+  );
 
   /// Current locally minted registrationId — the (lxiv) install proof sent
   /// with one-time pre-key uploads so the server can tell this install from a

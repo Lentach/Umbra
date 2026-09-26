@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, IsNull, Repository } from 'typeorm';
+import { EntityManager, In, IsNull, Repository } from 'typeorm';
 import { Device } from './device.entity';
 import { DEFAULT_DEVICE_ID } from './key-bundles.service';
 
@@ -233,6 +233,13 @@ export class DevicesService {
     });
   }
 
+  /** The live devices of many accounts, in one query. */
+  async listLiveForUsers(userIds: number[]): Promise<Device[]> {
+    return this.deviceRepo.find({
+      where: { userId: In(userIds), revokedAt: IsNull() },
+    });
+  }
+
   /**
    * Publishes this device's box request queue (metadata-privacy PR3.2).
    * Writes only a LIVE row: a revoked device must not become reachable again,
@@ -255,7 +262,16 @@ export class DevicesService {
   /**
    * The devices of [userId] a first contact may address, oldest first: every
    * device holding a published key bundle and not revoked, with the request
-   * queue it published (null if none yet).
+   * queue it published (null if none yet). [firstContactDevicesFor] for one
+   * account.
+   */
+  async firstContactDevices(userId: number): Promise<FirstContactDevice[]> {
+    return (await this.firstContactDevicesFor([userId])).get(userId) ?? [];
+  }
+
+  /**
+   * [firstContactDevices] for many accounts in ONE query (the friends list,
+   * metadata-privacy item 5). An account with no such device has no entry.
    *
    * Keyed on `key_bundles`, not `devices`: an account that predates the
    * devices table has a bundle for device 1 but no row until its next
@@ -263,15 +279,27 @@ export class DevicesService {
    * gates). A SELECT through `query()` returns plain rows (backend/CLAUDE.md
    * §4).
    */
-  async firstContactDevices(userId: number): Promise<FirstContactDevice[]> {
-    return this.deviceRepo.query<FirstContactDevice[]>(
-      `SELECT kb."deviceId", d."requestSid", d."requestSealPub"
+  async firstContactDevicesFor(
+    userIds: number[],
+  ): Promise<Map<number, FirstContactDevice[]>> {
+    const byUser = new Map<number, FirstContactDevice[]>();
+    if (userIds.length === 0) return byUser;
+    const rows = await this.deviceRepo.query<
+      (FirstContactDevice & { userId: number })[]
+    >(
+      `SELECT kb."userId", kb."deviceId", d."requestSid", d."requestSealPub"
          FROM public.key_bundles kb
          LEFT JOIN public.devices d
            ON d."userId" = kb."userId" AND d."deviceId" = kb."deviceId"
-        WHERE kb."userId" = $1 AND d."revokedAt" IS NULL
-        ORDER BY kb."deviceId" ASC`,
-      [userId],
+        WHERE kb."userId" = ANY($1::int[]) AND d."revokedAt" IS NULL
+        ORDER BY kb."userId" ASC, kb."deviceId" ASC`,
+      [userIds],
     );
+    for (const { userId, deviceId, requestSid, requestSealPub } of rows) {
+      const devices = byUser.get(userId) ?? [];
+      devices.push({ deviceId, requestSid, requestSealPub });
+      byUser.set(userId, devices);
+    }
+    return byUser;
   }
 }

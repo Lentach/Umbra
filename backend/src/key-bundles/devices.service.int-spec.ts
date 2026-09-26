@@ -137,6 +137,47 @@ describeWithDb(
       ]);
     });
 
+    it('serves many accounts in one lookup, each under its own id, by the same rule', async () => {
+      // The friends list (item 5, decision 47) addresses every friend at once.
+      const legacy = await seedUser([1, 2, 3]);
+      await addDevice(legacy, 2, false);
+      await addDevice(legacy, 3, true);
+      expect(await service.setRequestQueue(legacy, 2, sid, sealPub)).toBe(true);
+      const published = await seedUser([1]);
+      await addDevice(published, 1, false);
+      const otherSid = randomBytes(32).toString('base64url');
+      expect(
+        await service.setRequestQueue(published, 1, otherSid, sealPub),
+      ).toBe(true);
+      const allRevoked = await seedUser([1]);
+      await addDevice(allRevoked, 1, true);
+      const noBundle = await seedUser([]);
+
+      expect(
+        await service.firstContactDevicesFor([
+          published,
+          noBundle,
+          allRevoked,
+          legacy,
+        ]),
+      ).toEqual(
+        new Map([
+          [
+            legacy,
+            [
+              { deviceId: 1, requestSid: null, requestSealPub: null },
+              { deviceId: 2, requestSid: sid, requestSealPub: sealPub },
+            ],
+          ],
+          [
+            published,
+            [{ deviceId: 1, requestSid: otherSid, requestSealPub: sealPub }],
+          ],
+        ]),
+      );
+      expect(await service.firstContactDevicesFor([])).toEqual(new Map());
+    });
+
     it('never lets a revoked device, or one without a row, publish a request queue', async () => {
       const userId = await seedUser([1, 2]);
       await addDevice(userId, 2, true);

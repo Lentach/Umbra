@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 
@@ -8,6 +9,7 @@ import '../services/account_enrolled_hint.dart';
 import '../services/audio_cache_store.dart';
 import '../services/box/box_media_url.dart';
 import '../services/e2e_lock_revoker.dart';
+import '../services/encryption/prekey_identity.dart' show FriendFrameIdentity;
 import '../services/encryption_service.dart';
 import '../services/device_link/dak_store.dart';
 import '../services/device_link/identity_backup.dart';
@@ -289,19 +291,27 @@ class EncryptionProvider extends ChangeNotifier {
   Future<bool> carriesOwnIdentity(String ciphertext) =>
       _encryptionService.carriesOwnIdentity(ciphertext);
 
-  /// Whether [ciphertext] from own device [deviceId] would replace this
-  /// device's session with it — the check a sibling PreKey message passes
-  /// before [decrypt] (decision 37). Delegates to
-  /// [EncryptionService.siblingPreKeyWouldReplace].
-  Future<bool> siblingPreKeyWouldReplace(
+  /// Whether [ciphertext] from [userId]'s [deviceId] would replace this
+  /// device's session with it — the check a sibling's PreKey message and a
+  /// friend's on the box pass before [decrypt] (decision 37, item 5).
+  /// Delegates to [EncryptionService.preKeyWouldReplaceSession].
+  Future<bool> preKeyWouldReplaceSession(
     int userId,
     int deviceId,
     String ciphertext,
-  ) => _encryptionService.siblingPreKeyWouldReplace(
+  ) => _encryptionService.preKeyWouldReplaceSession(
     userId,
     deviceId,
     ciphertext,
   );
+
+  /// Who can have sealed friend [userId]'s frame on our public request
+  /// queue — the check a friend's queue handoff passes BEFORE [decrypt]
+  /// (item 5). Delegates to [EncryptionService.friendFrameIdentityOf].
+  Future<FriendFrameIdentity> friendFrameIdentity(
+    int userId,
+    String ciphertext,
+  ) => _encryptionService.friendFrameIdentityOf(userId, ciphertext);
 
   /// Ensure a Signal session exists with [recipientId]'s [deviceId]
   /// (default 1 — the pre-multi-device address). If not, fetches that
@@ -507,6 +517,14 @@ class EncryptionProvider extends ChangeNotifier {
   final Map<int, Completer<Map<String, dynamic>?>> _pendingDeviceListFetches =
       {};
 
+  /// Users whose BATCHED lookup has not gone out yet ([getVerifiedDeviceList]
+  /// `batched`): every one started in the same turn leaves as ONE
+  /// `getDeviceLists` frame (metadata-privacy item 5, E20a).
+  final List<int> _deviceListBatch = [];
+
+  /// The most users one `getDeviceLists` frame may name (the server's bound).
+  static const int deviceListBatchMax = 256;
+
   /// Which device THIS session is, as the server reported it on `socketReady`
   /// (spec §5.3). Defaults to 1 — a token predating the claim, and every
   /// single-device account, is device 1 (§8).
@@ -582,9 +600,16 @@ class EncryptionProvider extends ChangeNotifier {
   /// failed chain THROWS. The caller must fail the send — an enrolled peer
   /// must never silently degrade to device 1. The only single-device answer
   /// is the server's explicit `authorization: null` (non-enrolled account).
+  ///
+  /// [batched]: the lookup waits for the end of this turn and leaves with
+  /// every other batched lookup started in it, as ONE `getDeviceLists`
+  /// frame. The box's connect-time lookups use it, so covering every friend
+  /// costs one throttled frame per connect, not one per friend (E20a). The
+  /// answer is the same `deviceList` event either way.
   Future<VerifiedDeviceList> getVerifiedDeviceList(
     int userId, {
     bool forceRefresh = false,
+    bool batched = false,
     Duration timeout = const Duration(seconds: 10),
   }) async {
     if (!_e2eInitialized || _currentUserId == null) {
@@ -594,7 +619,11 @@ class EncryptionProvider extends ChangeNotifier {
       final held = _deviceListCache.cached(userId);
       if (held != null) return held;
     }
-    final answer = await _fetchDeviceListAnswer(userId, timeout);
+    final answer = await _fetchDeviceListAnswer(
+      userId,
+      timeout,
+      batched: batched,
+    );
     return _adoptDeviceListAnswer(userId, answer);
   }
 
@@ -678,14 +707,20 @@ class EncryptionProvider extends ChangeNotifier {
   /// One in-flight `getDeviceList` per userId; concurrent callers share it.
   Future<Map<String, dynamic>?> _fetchDeviceListAnswer(
     int userId,
-    Duration timeout,
-  ) {
+    Duration timeout, {
+    bool batched = false,
+  }) {
     final existing = _pendingDeviceListFetches[userId];
     if (existing != null) return existing.future;
     final completer = Completer<Map<String, dynamic>?>();
     _pendingDeviceListFetches[userId] = completer;
     _e2eFlowLog('DEVICE_LIST_FETCH_EMIT', {'userId': userId});
-    _emit?.call('getDeviceList', {'userId': userId});
+    if (batched) {
+      if (_deviceListBatch.isEmpty) scheduleMicrotask(_flushDeviceListBatch);
+      _deviceListBatch.add(userId);
+    } else {
+      _emit?.call('getDeviceList', {'userId': userId});
+    }
     return completer.future.timeout(
       timeout,
       onTimeout: () {
@@ -697,6 +732,29 @@ class EncryptionProvider extends ChangeNotifier {
         throw TimeoutException('Device list fetch timed out for user $userId');
       },
     );
+  }
+
+  /// Sends this turn's batched lookups: one user as the plain
+  /// `getDeviceList`, more as `getDeviceLists` frames of at most
+  /// [deviceListBatchMax]. The server answers each entitled user with its own
+  /// `deviceList` and stays silent on the rest, exactly as for one.
+  void _flushDeviceListBatch() {
+    final users = List.of(_deviceListBatch);
+    _deviceListBatch.clear();
+    final emit = _emit;
+    if (emit == null || users.isEmpty) return;
+    if (users.length == 1) {
+      emit('getDeviceList', {'userId': users.single});
+      return;
+    }
+    for (var i = 0; i < users.length; i += deviceListBatchMax) {
+      emit('getDeviceLists', {
+        'userIds': users.sublist(
+          i,
+          math.min(i + deviceListBatchMax, users.length),
+        ),
+      });
+    }
   }
 
   /// Handler for the `deviceList` server event (answer to `getDeviceList`).
@@ -3264,6 +3322,7 @@ class EncryptionProvider extends ChangeNotifier {
       }
     }
     _pendingDeviceListFetches.clear();
+    _deviceListBatch.clear();
   }
 }
 

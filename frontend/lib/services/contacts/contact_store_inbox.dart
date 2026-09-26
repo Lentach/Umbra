@@ -40,6 +40,7 @@ class BoxInboxEntry {
     required this.receivedAt,
     required this.acked,
     this.viaSelfQueue = false,
+    this.viaRequestQueue = false,
   });
 
   /// The queue (base64url) and the box's message id on it.
@@ -60,6 +61,12 @@ class BoxInboxEntry {
   /// by then that queue may have retired and left the sibling row.
   final bool viaSelfQueue;
 
+  /// Journaled from this device's public REQUEST queue as a FRIEND's
+  /// account-bearing frame (item 5, E20c): only a `queue_handoff` is read
+  /// from it. Decided at intake like [viaSelfQueue]: the request queue may be
+  /// replaced before the read.
+  final bool viaRequestQueue;
+
   bool get consumed => signal == null;
 
   String get _slot => '$rid.$id';
@@ -75,6 +82,7 @@ class BoxInboxEntry {
     'at': receivedAt.millisecondsSinceEpoch,
     'acked': acked,
     if (viaSelfQueue) 'self': true,
+    if (viaRequestQueue) 'req': true,
   };
 
   BoxInboxEntry _with({bool? acked, bool consume = false}) => BoxInboxEntry(
@@ -87,6 +95,7 @@ class BoxInboxEntry {
     receivedAt: receivedAt,
     acked: acked ?? this.acked,
     viaSelfQueue: viaSelfQueue,
+    viaRequestQueue: viaRequestQueue,
   );
 
   /// Null for anything this build cannot read — a newer `v`, a web row whose
@@ -117,6 +126,7 @@ class BoxInboxEntry {
           receivedAt: DateTime.fromMillisecondsSinceEpoch(at, isUtc: true),
           acked: acked,
           viaSelfQueue: json['self'] == true,
+          viaRequestQueue: json['req'] == true,
         );
       }
     } on FormatException {
@@ -163,6 +173,7 @@ extension ContactStoreInbox on ContactStore {
     required String signal,
     required DateTime receivedAt,
     bool viaSelfQueue = false,
+    bool viaRequestQueue = false,
   }) {
     final kv = _kv;
     final userId = _userId;
@@ -194,6 +205,7 @@ extension ContactStoreInbox on ContactStore {
             receivedAt: receivedAt,
             acked: false,
             viaSelfQueue: viaSelfQueue,
+            viaRequestQueue: viaRequestQueue,
           );
           if (!await kv.setString(key, jsonEncode(entry._toJson()))) {
             return false;

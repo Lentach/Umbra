@@ -308,4 +308,55 @@ void main() {
       expect(provider.cachedDeviceList(strangerId), isNull);
     },
   );
+
+  test(
+    'batched lookups started in one turn leave as ONE getDeviceLists frame '
+    'naming every user, and each resolves from its own deviceList answer '
+    '(item 5, E20a)',
+    () async {
+      final frames = <Map<String, dynamic>>[];
+      provider.setEmitCallback((event, data) {
+        frames.add({'event': event, 'data': data});
+      });
+
+      final lookups = [
+        for (final user in [peerId, 43, 44])
+          provider.getVerifiedDeviceList(
+            user,
+            forceRefresh: true,
+            batched: true,
+          ),
+      ];
+      await pumpEventQueue();
+
+      expect(frames, [
+        {
+          'event': 'getDeviceLists',
+          'data': {
+            'userIds': [peerId, 43, 44],
+          },
+        },
+      ]);
+      provider
+        ..onDeviceList({'userId': 44, 'authorization': null})
+        ..onDeviceList({'userId': peerId, 'authorization': authorizationV1()})
+        ..onDeviceList({'userId': 43, 'authorization': null});
+      final lists = await Future.wait(lookups);
+      expect(lists.map((l) => l.enrolled), [isTrue, isFalse, isFalse]);
+    },
+  );
+
+  test('a lone batched lookup goes out as the plain getDeviceList', () async {
+    final frames = <String>[];
+    provider.setEmitCallback((event, data) {
+      frames.add(event);
+      if (event == 'getDeviceList') {
+        provider.onDeviceList({'userId': peerId, 'authorization': null});
+      }
+    });
+
+    await provider.getVerifiedDeviceList(peerId, batched: true);
+
+    expect(frames, ['getDeviceList']);
+  });
 }
