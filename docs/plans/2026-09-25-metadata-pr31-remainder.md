@@ -9,12 +9,12 @@
 | 1 | **Sibling queues part B**: sent copies to own devices over the box, rotation on revoke, pruning, no-session policy | part A (`a8a4e560`) | unblocks multi-device senders on the box |
 | 2 | **Box push registration** | 1 | a box-only message wakes no closed app until this lands (23) |
 | 3 | **Decision-22 slice**: disappearing timers, replies and media over the box | 1, 2 | decision 22: "their own slice right after sibling queues + push" |
-| 4 | **Message actions over E2E**: reactions (plain emoji), pin, edit, delete-for-everyone | 3 | the PR3.1 bullet; a box message's action bar fails today |
+| 4 | **Message actions over E2E**: reactions (plain emoji), pin, edit, delete-for-everyone | 3 | BUILT 09-26 (`81b795e8`, decisions 45–46, E19a–E19j) |
 | 5 | **Slice (d)**: migration handoff over the old path | (c) | moves existing friendships onto the box |
 | 6 | **Slice (e)**: `device_added` / `device_removed` / `list_update` over the box | (b), (c) | replaces the server's `staleLists` bounce |
 | 7 | **Slice (f)**: first contact over request queues | (a), part A frames | friend requests over the box |
 | 8 | **Slice (g)**: receipts and typing (D5, 33) | 3 | |
-| 9 | **Prod prerequisites** for `BOX_ENABLED`: global ceiling (30), per-socket rid cap, media refusals counted | — | backend only, runs in parallel with 3–8 |
+| 9 | **Prod prerequisites** for `BOX_ENABLED`: global ceiling (30), per-socket rid cap, media refusals counted | — | DONE 09-26 (`box_totals` migration 0024, E10–E12; client reads `limit` as not gone); prod still `BOX_ENABLED: 'false'` until G5 |
 | 10 | **G5**: gate review, migration rehearsal on a device (master APK, then the branch APK over it), then release N | 1–9 | owner gate |
 
 Order follows decisions 5, 17, 22 and 23 as they stand: sibling queues, then push, then decision 22's slice, then the remaining slices in decision 5's (d)–(g) order. Changing that order would be an owner question. Frontend slices share `messaging_provider.box.dart`, so they go one at a time. Item 9 is backend-only and runs alongside them.

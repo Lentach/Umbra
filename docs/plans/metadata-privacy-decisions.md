@@ -83,7 +83,7 @@ Status: ACTIVE (in force), DONE (carried out, still binding), SUPERSEDED, OPEN (
 | 28 | 09-25 | Sibling addresses live in `boxsib_v1`; no backup carries them | OWNER | DONE |
 | 29 | 09-25 | No auth-key escrow; a revoked device's queues are left to the 90-day reaper | OWNER — changes approved design §4.2 | ACTIVE |
 | S8 | 09-25 | Decisions are classed OWNER / ENGINEERING, batched per phase, logged here | OWNER | ACTIVE |
-| 30 | 09-25 | (O2) The box may hold ~3 GB in total: 2 GiB of media + 60 000 undelivered message blobs; past it a send/upload answers `quota_exceeded` | OWNER | ACTIVE |
+| 30 | 09-25 | (O2) The box may hold ~3 GB in total: 2 GiB of media + 60 000 undelivered message blobs; past it a send/upload answers `quota_exceeded` | OWNER | DONE 09-26 (item 9: running totals in `box_totals`, migration 0024; int-tested with injected small ceilings) |
 | 31 | 09-25 | (O3) Media over a queue's daily budget answers an honest `429 quota_exceeded` (the sender can retry); the residual — a sid holder learns the queue is alive and spent — is accepted | OWNER | ACTIVE |
 | 32 | 09-25 | (O4) No push notifier on the self-queue: your own sent copies reach your other devices when they open, never as a notification | OWNER | ACTIVE |
 | 33 | 09-25 | (O5) D5 confirmed with its visible effect: one global switch in Privacy settings, mutual (Signal model), default OFF — ✓✓ and typing disappear on box chats until both sides turn them on | OWNER | ACTIVE |
