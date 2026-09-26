@@ -63,6 +63,11 @@ enum BoxCode {
   quotaExceeded('quota_exceeded'),
   rateLimited('rate_limited'),
   internal('internal'),
+
+  /// `subscribe` only (item 9, E10): this socket already holds its cap of
+  /// rids. The queue is NOT gone — `BoxClient` keeps it in its set and the
+  /// next connection offers it again.
+  limit('limit'),
   badSize('bad_size'),
   notFound('not_found');
 

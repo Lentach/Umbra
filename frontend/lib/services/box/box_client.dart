@@ -464,10 +464,13 @@ class BoxClient {
                 ? boxB64Decode(entry['rid'], kBoxRidBytes)
                 : null;
             if (rid == null) return const BoxUnknown(BoxUnknownReason.malformed);
+            final code = BoxCode.parse((entry as Map)['code']);
+            // Over the per-socket cap (E10) the queue is still ours: it stays
+            // in the set for the next connection and is never reported, since
+            // every caller reads a refusal as "gone" and would drop it.
+            if (code == BoxCode.limit) continue;
             _set.remove(boxB64(rid));
-            refused.add(
-              BoxRefusal(rid: rid, code: BoxCode.parse((entry as Map)['code'])),
-            );
+            refused.add(BoxRefusal(rid: rid, code: code));
           }
         case BoxRefused(:final code, :final retryAfter):
           return BoxRefused(code, retryAfter: retryAfter);
