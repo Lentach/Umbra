@@ -23,14 +23,14 @@
 - Backend on the final tree (re-run after restoring the `--fix` rewrites): jest 1217/68, int 39/2, `scripts/lint-ratchet.mjs` held at baseline.
 - Flutter: full suite 2809 passed, 14 skipped at `bb8f6f17`; 2811/14 after the follow-up's 2 tests. Analyze showed 0 errors or warnings. `scripts/dart-lint-ratchet.mjs` PASS at 3160; the 8 new infos were fixed, found by diffing against a HEAD worktree.
 - E2E: `box_roundtrip_test.dart` with `BOX_PROBE=true` passed 3/3 on the local stack.
-- Mutants: all killed. Three first-round survivors were fixed by strengthening tests. Review-fix mutants RV-M1..3 and HOLD-M1 were killed, as were RR-A (drop the once-per-device guard) and RR-B (fresh re-key opens the window). Follow-up: A1–A3 (resend gate removed / not persisted / inverted) and C1–C2 (per-queue subscribe / new queue not batched) were killed.
+- Mutants: all killed (first-round survivors fixed by tests; RV-M1..3, HOLD-M1, RR-A/B, A1–A3, C1–C2).
 - Live drive, release web, headless Chrome, local stack. Final build: F/G (324/325, conv 99), with G's request queue nulled to emulate an old app.
   - Notice shown on F; the old-path send went to `messages` (row 617).
   - G came back and handed off via F's request queue. F refused it (`would_replace`) and both sides re-keyed. G took F's queue and acked it; F refused G's re-key (`prekey_unasked`) and held no queue from G that session.
   - Box traffic both ways ("gus replies…", "second from gus", "fay over the box"); `messages` stayed at 1 row.
-  - The note did NOT clear live: F refused both of G's handoffs (`would_replace`, `prekey_unasked`; see Notes), so it held no queue from G and the note was right. It was gone at a reopen a minute later with no handoff logged; unexplained.
+  - The note did NOT clear live (F held no queue from G); it vanished at a reopen, unexplained.
   - Earlier build (319–323): three bugs found, fixed test-first.
-- Follow-up drive (release web of the fix, H/I 328/329, conv 101): I online once, then offline; befriended; H reloaded 4 times. I's request queue held 1 handoff blob throughout, and H's last connect looked up I's list and sent nothing. I returned: box both ways ("hal/ida over the box"), 0 `messages` rows, no note.
+- Follow-up drive (H/I 328/329): 4 reloads left 1 handoff blob for the offline friend; box both ways after, 0 server rows (detail: `.planning/metadata-item5/findings.md`).
 - NOT verified: the inbox drain after `conversationsList` (no way found to make a friend's chat link land late on demand); Android, iOS, prod (box OFF), a linked second device of a friend (E20g: waits for the next connect's pass), the 24 h resend and >60 friends on a device (tests only).
 
 ## Notes for next session
@@ -38,6 +38,7 @@
 - Open, owner-class, MEASURED: under review fix B two devices that re-key each other at once NEVER converge. The uncommitted two-sided real-Signal test `frontend/test/providers/messaging_provider_box_friend_crossing_test.dart` shows it: 3 reconnects on both sides, neither holds the other's queue. With fix B reverted (a re-key opens the window), the same harness converges in one round. So this is a lasting stall, not one reconnect. Options: revert B for friends (decision 37's rule; a revoked friend device could use that 10-min window) or find a rule that converges without a window. Turn the test into the regression guard for the owner's choice.
 - Open finding: on F the first box message from G was HELD (`no_conversation`) although that session's `conversationsList` named conv 99. The store held no link until the next connect, so the message showed only after a reload. Cause not pinned; trap added. Suspect: a `ContactStore.reconcile` dropped silently by a generation change.
 - Review P3 residual (wire.md): the normal-queue PreKey handoff guard runs after `decrypt`; predates item 5; the address is not moved.
+- Pending pass fixes (advisor, after `1fd2b7f2`): (1) two phases — ensure queues, ONE subscribe (retry after `retryAfter` on `rate_limited`), then sends; (2) liveness reset — a frame read from friend device D that has not acked our queue clears `handedAt[D]` and calls `friendChanged`, once per device per session, so the 24 h gate throttles only silent devices; (3) dedupe `BOX_FRIEND_HANDOFF_FAILED` per `user:device:stage:code` per session. Crossing harness `reconnect()` ignores the gate: mirror the real pass.
 - Carried: `boxdel_v1` lost-write race; reactions not ordered by `ts`; `getMessages`/`markConversationRead` name box chats; the chat-list preview after reload shows the last OLD-path message.
 - Drive recipes (register past the bucket, old-app emulation, befriend script, blob count, serving): `.planning/metadata-item5/findings.md`. Backend lint = `node scripts/lint-ratchet.mjs` only; `npm run lint` is `eslint --fix` (it rewrote 41 files this session, restored).
 - Traps: see `docs/agents/traps.md` lines citing this file (Tests / harness ×3, E2E / multi-device ×6).
