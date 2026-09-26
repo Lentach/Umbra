@@ -115,6 +115,14 @@ Accepted residuals, recorded here:
 - The Anti-Quantum Note keeps its server-side note (`POST /notes`, authenticated). Only the message carrying it moves.
 - A reply to a box message that has to take the old path still loses its quote, as today (`isServerMessageId` send gate).
 
+## Item 4 (message actions over E2E): OWNER questions O13–O14 — ANSWERED 2026-09-26 in one pass (decisions 45–46)
+
+O13 → (a) an E2E pin both sides see; pinning a box message clears an old server pin once (45) · O14 → (a) actions follow the message's path: old-path rows keep server events until release N+1 (46).
+
+Rejected options, for the record: O13 (b) a pin private to one device, (c) no pins on box messages until PR4.x; O14 (b) reactions and pins of old-path rows over E2E while edit/delete stay on the server (two sources of truth for one row).
+
+Engineering calls: E19a–E19d in the decision log (wire shape `t: react|pin|edit|del` + `tg: {s, w}`; sender-only edit/delete by the authenticated account; last-writer-wins on clamped `ts`; delete clears `re.x` and keeps a 30-d tombstone; plain emoji kept in the target's record).
+
 ## Proof per item (unchanged ladder)
 
 Each item follows the same ladder:
