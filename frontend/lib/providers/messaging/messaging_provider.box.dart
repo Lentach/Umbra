@@ -26,6 +26,9 @@ typedef _BoxMediaBody = ({
 /// it (E18a/E18b).
 typedef _BoxRowAtSend = ({ReplyToPreview? replyTo, int? ttl});
 
+/// Why a box send could not build its frames ([MessagingBox._sealBoxFrames]).
+enum _BoxSealFailure { noSession, tooLong }
+
 /// The payload key of a box message's record holding when its countdown
 /// started, whole ms (item 3, decision 41): the send for our own copies,
 /// the first time this device showed it for a received one. Absent = not
@@ -234,6 +237,26 @@ extension MessagingBox on MessagingProvider {
           return true;
         }
         return _takeSentCopy(link, msg, parsed);
+      case E2eEnvelope.typeReact ||
+          E2eEnvelope.typePin ||
+          E2eEnvelope.typeEdit ||
+          E2eEnvelope.typeDelete:
+        // Our own action, as a sibling sent it (item 4, E19a): like a sent
+        // copy, only through our self-queue, filed by the peer `to` names.
+        if (!viaSelf) {
+          _e2eFlowLog('BOX_SIBLING_COPY_REFUSED', {'why': 'request_queue'});
+          return true;
+        }
+        final chat = _sentCopyChat(link, msg, parsed);
+        final conversationId = chat.conversationId;
+        if (conversationId == null) return chat.finished;
+        return _takeBoxAction(
+          parsed,
+          plaintext,
+          actor: msg.senderId,
+          conversationId: conversationId,
+          receivedAt: msg.createdAt,
+        );
       default:
         _e2eFlowLog('BOX_UNKNOWN_TYPE', {
           'msgId': entry.localId,
@@ -243,39 +266,53 @@ extension MessagingBox on MessagingProvider {
     }
   }
 
-  /// Files a sibling's SENT COPY (E5) under the chat of the peer it names,
-  /// as OUR row: sent, from that sibling ([msg]'s origin), under the
-  /// sender's wire id and clamped send time. Kept for the next offer while
-  /// this device holds no contact record (with a chat) for that peer — the
-  /// sibling may simply have befriended them first — but only for the box
-  /// TTL since it came in (E8); a peer this device blocked, or a copy naming
-  /// no peer or our own account, is finished.
-  Future<bool> _takeSentCopy(
+  /// The chat a sibling's SENT COPY — a message (E5) or an action (item 4) —
+  /// belongs to: the conversation with the peer its `to` names. Without
+  /// one, `finished` says whether the copy is done with — it names no peer
+  /// or our own account, the peer is blocked, or it waited past the box TTL
+  /// (E8) — or is kept for the next offer while this device holds no chat
+  /// for that peer yet (the sibling may simply have befriended them first).
+  ({int? conversationId, bool finished}) _sentCopyChat(
     BoxSiblingLink link,
     MessageModel msg,
     E2eEnvelopeFields parsed,
   ) {
+    const done = (conversationId: null, finished: true);
     final to = parsed.sentTo;
     if (to == null || to == msg.senderId) {
       _e2eFlowLog('BOX_SIBLING_COPY_REFUSED', {'why': 'no_peer'});
-      return Future.value(true);
+      return done;
     }
     final peer = link.contactOf(to);
     final conversationId = peer?.legacy.conversationId;
     if (peer?.state == ContactState.blocked) {
       _e2eFlowLog('BOX_SIBLING_COPY_REFUSED', {'why': 'blocked'});
-      return Future.value(true);
+      return done;
     }
-    final receivedAt = msg.createdAt;
     if (conversationId == null) {
-      if (DateTime.now().toUtc().difference(receivedAt) >
+      if (DateTime.now().toUtc().difference(msg.createdAt) >
           kBoxRedeliveryWindow) {
         _e2eFlowLog('BOX_SIBLING_COPY_EXPIRED', {'peer': to});
-        return Future.value(true);
+        return done;
       }
       _e2eFlowLog('BOX_SIBLING_COPY_WAITING', {'peer': to});
-      return Future.value(false);
+      return (conversationId: null, finished: false);
     }
+    return (conversationId: conversationId, finished: false);
+  }
+
+  /// Files a sibling's SENT COPY (E5) under the chat of the peer it names
+  /// ([_sentCopyChat]), as OUR row: sent, from that sibling ([msg]'s
+  /// origin), under the sender's wire id and clamped send time.
+  Future<bool> _takeSentCopy(
+    BoxSiblingLink link,
+    MessageModel msg,
+    E2eEnvelopeFields parsed,
+  ) {
+    final chat = _sentCopyChat(link, msg, parsed);
+    final conversationId = chat.conversationId;
+    if (conversationId == null) return Future.value(chat.finished);
+    final receivedAt = msg.createdAt;
     final sentAt = parsed.sentAt;
     final row = MessageModel(
       id: msg.id,
@@ -477,6 +514,18 @@ extension MessagingBox on MessagingProvider {
             ).copyWith(createdAt: createdAt),
             parsed,
           ),
+          receivedAt: receivedAt,
+        );
+      case E2eEnvelope.typeReact ||
+          E2eEnvelope.typePin ||
+          E2eEnvelope.typeEdit ||
+          E2eEnvelope.typeDelete:
+        // The peer's action on a message of this chat (item 4, E19b).
+        return _takeBoxAction(
+          parsed,
+          plaintext,
+          actor: msg.senderId,
+          conversationId: msg.conversationId,
           receivedAt: receivedAt,
         );
       default:
@@ -709,6 +758,11 @@ extension MessagingBox on MessagingProvider {
     final enc = _encryptionProvider!;
     final wire = _wireKey(decrypted.senderId, decrypted.wireId);
     if (wire != null) {
+      // Deleted for everyone before this copy came (item 4, E19c/E19g).
+      if (await enc.boxTombstoned(wire)) {
+        _e2eFlowLog('BOX_TOMBSTONED', {'msgId': decrypted.id});
+        return true;
+      }
       final held = await enc.wireHeldByOther(wire, decrypted.id);
       if (held == null) return false;
       if (held) {
@@ -837,6 +891,8 @@ extension MessagingBox on MessagingProvider {
     }
     // Shown now: a disappearing one not started yet starts (decision 41).
     _startBoxCountdowns(conversationId);
+    // The chat's E2E pin names one of these (item 4, E19f).
+    await _resolveBoxPin(conversationId);
   }
 
   /// Every box message this device stores for [conversationId], rebuilt from
@@ -1389,39 +1445,28 @@ extension MessagingBox on MessagingProvider {
         mediaThumbHash: mediaThumbHash,
       );
       final ownUserId = _currentUserId!;
-      final frames = <(ContactOutbound, Uint8List)>[];
-      final sends = [
-        for (final to in route.targets) (recipientId, to, envelope.json),
-        for (final to in route.siblings) (ownUserId, to, envelope.copyJson),
-      ];
-      for (final (userId, to, _) in sends) {
-        if (await _hasUsableBoxSession(enc, userId, to.peerDeviceId)) {
-          continue;
-        }
-        _e2eFlowLog('BOX_SEND_NO_SESSION', {
-          'tempId': tempId,
-          'userId': userId,
-          'device': to.peerDeviceId,
-        });
-        _markMessageFailed(tempId, 'Could not send. Try again.');
-        return false;
-      }
-      for (final (userId, to, json) in sends) {
-        final frame = BoxFrame.fromSignalCiphertext(
-          await enc.encrypt(userId, json, deviceId: to.peerDeviceId),
-          senderDeviceId: enc.ownDeviceId,
-        );
-        if (frame == null) throw StateError('encrypt gave no Signal message');
-        if (frame.signal.length > BoxFrame.maxSignalBytes) {
-          _e2eFlowLog('BOX_SEND_TOO_LONG', {
+      final sealed = await _sealBoxFrames(
+        route,
+        recipientId: recipientId,
+        json: envelope.json,
+        copyJson: envelope.copyJson,
+      );
+      switch (sealed.failure) {
+        case _BoxSealFailure.noSession:
+          _e2eFlowLog('BOX_SEND_NO_SESSION', {
             'tempId': tempId,
-            'bytes': frame.signal.length,
+            ...sealed.detail,
           });
+          _markMessageFailed(tempId, 'Could not send. Try again.');
+          return false;
+        case _BoxSealFailure.tooLong:
+          _e2eFlowLog('BOX_SEND_TOO_LONG', {'tempId': tempId, ...sealed.detail});
           _markMessageFailed(tempId, 'Message is too long to send.');
           return false;
-        }
-        frames.add((to, frame.encode()));
+        case null:
+          break;
       }
+      final frames = sealed.frames;
       final localId = await route.outbox.nextLocalId();
       if (localId == null) {
         _e2eFlowLog('BOX_SEND_NO_LOCAL_ID', {'tempId': tempId});
@@ -1491,5 +1536,57 @@ extension MessagingBox on MessagingProvider {
     } finally {
       _boxInFlight.remove(tempId);
     }
+  }
+
+  /// Every frame of one box send along [route], built before the first goes
+  /// out: [json] as its own Signal message per peer device, [copyJson] per
+  /// sibling. A device with no usable session fails it before anything is
+  /// encrypted — a box send never fetches a pre-key bundle (decision 38,
+  /// E38b) — and a Signal message over one frame fails it whole
+  /// ([BoxFrame.maxSignalBytes]). `detail` names what failed, for the log.
+  Future<
+    ({
+      List<(ContactOutbound, Uint8List)> frames,
+      _BoxSealFailure? failure,
+      Map<String, Object> detail,
+    })
+  >
+  _sealBoxFrames(
+    _BoxRoute route, {
+    required int recipientId,
+    required String json,
+    required String copyJson,
+  }) async {
+    final enc = _encryptionProvider!;
+    final ownUserId = _currentUserId!;
+    final frames = <(ContactOutbound, Uint8List)>[];
+    final sends = [
+      for (final to in route.targets) (recipientId, to, json),
+      for (final to in route.siblings) (ownUserId, to, copyJson),
+    ];
+    for (final (userId, to, _) in sends) {
+      if (await _hasUsableBoxSession(enc, userId, to.peerDeviceId)) continue;
+      return (
+        frames: frames,
+        failure: _BoxSealFailure.noSession,
+        detail: {'userId': userId, 'device': to.peerDeviceId},
+      );
+    }
+    for (final (userId, to, body) in sends) {
+      final frame = BoxFrame.fromSignalCiphertext(
+        await enc.encrypt(userId, body, deviceId: to.peerDeviceId),
+        senderDeviceId: enc.ownDeviceId,
+      );
+      if (frame == null) throw StateError('encrypt gave no Signal message');
+      if (frame.signal.length > BoxFrame.maxSignalBytes) {
+        return (
+          frames: frames,
+          failure: _BoxSealFailure.tooLong,
+          detail: {'bytes': frame.signal.length},
+        );
+      }
+      frames.add((to, frame.encode()));
+    }
+    return (frames: frames, failure: null, detail: const <String, Object>{});
   }
 }

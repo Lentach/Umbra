@@ -14,3 +14,9 @@ bool isServerMessageId(int id) => id > 0 && id < kFirstLocalMessageId;
 /// Whether [id] names a box message this device holds under a LOCAL id —
 /// not a temp id (an unsent row, which still belongs to its send path).
 bool isLocalMessageId(int id) => id >= kFirstLocalMessageId;
+
+/// Whether a pin, edit, delete-for-everyone or reaction can name the
+/// message [id]: a server row by its id (the old path, decision 46), a box
+/// message by its sender's [wireId] (item 4, E19a) — never an unsent row.
+bool hasActionTarget(int id, {String? wireId}) =>
+    isServerMessageId(id) || (isLocalMessageId(id) && wireId != null);

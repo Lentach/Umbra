@@ -1634,6 +1634,20 @@ class AppLocalizationsEn extends AppLocalizations {
       'Reactions aren\'t ready on this device yet';
 
   @override
+  String get snackbarBoxReactionFailed =>
+      'Couldn\'t send the reaction. Try again.';
+
+  @override
+  String get snackbarBoxPinFailed => 'Couldn\'t change the pin. Try again.';
+
+  @override
+  String get snackbarBoxEditFailed => 'Couldn\'t save the edit. Try again.';
+
+  @override
+  String get snackbarBoxDeleteFailed =>
+      'Couldn\'t delete the message for everyone. Try again.';
+
+  @override
   String get snackbarPinnedMessageUnavailable =>
       'Message is no longer available';
 

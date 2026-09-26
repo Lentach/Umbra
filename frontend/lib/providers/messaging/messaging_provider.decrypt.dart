@@ -494,6 +494,9 @@ extension MessagingDecrypt on MessagingProvider {
       // Nor its quote (E18a).
       if (box && decrypted.replyTo != null)
         'replyTo': decrypted.replyTo!.toJson(),
+      // Nor its reactions: plain emoji, kept only here (item 4, E19d).
+      if (box && decrypted.reactions.isNotEmpty)
+        'reactions': decrypted.reactions,
       // When its countdown started (decision 41): a restart restores the
       // deadline of a started one, and leaves an unstarted one to the
       // 1-day cap.
@@ -713,9 +716,11 @@ extension MessagingDecrypt on MessagingProvider {
     final restoredType = _parseMessageTypeString(
       payload['messageType'] as String?,
     );
-    // Only a box message keeps its quote here (E18a); a server row's comes
-    // with the row.
+    // Only a box message keeps its quote, reactions and edit time here
+    // (E18a, item 4); a server row's come with the row.
+    final box = isLocalMessageId(msg.id);
     final quote = payload['replyTo'];
+    final editedAtRaw = payload['editedAt'];
     return msg.copyWith(
       // A PING carries no plaintext, so its persisted content is legitimately
       // empty. Falling back to msg.content ('[encrypted]') would keep
@@ -741,7 +746,22 @@ extension MessagingDecrypt on MessagingProvider {
       replyTo: quote is Map<String, dynamic>
           ? ReplyToPreview.fromJson(quote)
           : null,
+      reactions: box ? _recordReactions(payload['reactions']) : null,
+      editedAt: box && editedAtRaw is String
+          ? DateTime.tryParse(editedAtRaw)
+          : null,
     );
+  }
+
+  /// A box record's reactions (item 4, E19d): emoji → user ids; anything
+  /// else in the record is none.
+  Map<String, List<int>>? _recordReactions(Object? raw) {
+    if (raw is! Map<String, dynamic>) return null;
+    return {
+      for (final MapEntry(:key, :value) in raw.entries)
+        if (value is List && value.every((u) => u is int) && value.isNotEmpty)
+          key: value.cast<int>(),
+    };
   }
 
   /// Fill a freshly parsed server snapshot with plaintext we already hold,

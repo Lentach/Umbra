@@ -31,9 +31,13 @@ extension MessagingActions on MessagingProvider {
   void deleteMessage(int messageId, {required bool forEveryone}) {
     if (isLocalMessageId(messageId)) {
       // A box message (decision 14) has no server row to delete: "for me"
-      // is this device's copy, and "for everyone" returns over E2E later.
+      // is this device's copy, "for everyone" goes over the box (item 4).
+      if (forEveryone) {
+        _deleteOverBox(messageId).ignore();
+        return;
+      }
       final conversationId = messageById(messageId)?.conversationId;
-      if (forEveryone || conversationId == null) return;
+      if (conversationId == null) return;
       _handleMessageDeleted({
         'messageId': messageId,
         'conversationId': conversationId,
@@ -47,8 +51,9 @@ extension MessagingActions on MessagingProvider {
   }
 
   /// Optimistically apply a TEXT edit to a sent message, then encrypt the new
-  /// plaintext over the existing Signal session and emit `editMessage`.
-  /// Only own, TEXT, server-row rows are editable.
+  /// plaintext over the existing Signal session and emit `editMessage` — or,
+  /// for a box message, send it over the box (item 4). Only own TEXT rows
+  /// with a server row or a wire id are editable.
   void editMessage(int messageId, String newContent) {
     final trimmed = newContent.trim();
     if (trimmed.isEmpty || _currentUserId == null) return;
@@ -63,11 +68,11 @@ extension MessagingActions on MessagingProvider {
     final idx = _messages.indexWhere((m) => m.id == messageId);
     if (idx == -1) return;
     final original = _messages[idx];
+    final box = isLocalMessageId(messageId);
     if (original.senderId != _currentUserId ||
-        !isServerMessageId(messageId) ||
+        !hasActionTarget(messageId, wireId: original.wireId) ||
         original.messageType != MessageType.text ||
-        DateTime.now().difference(original.createdAt) >=
-            const Duration(minutes: 15)) {
+        DateTime.now().difference(original.createdAt) >= kMessageEditWindow) {
       cancelEditMessage();
       return;
     }
@@ -83,7 +88,10 @@ extension MessagingActions on MessagingProvider {
     // after fewer than three attempts — possibly none.
     _staleResendAttempts.remove('edit:$messageId');
     _pendingEdits[messageId] = original;
-    final edited = original.copyWith(content: trimmed, editedAt: DateTime.now());
+    // A box edit's time is its envelope's `ts`, in whole ms: every device
+    // keeps the same `editedAt` for last-writer-wins (E19b).
+    final editedAt = box ? _wholeMsNow() : DateTime.now();
+    final edited = original.copyWith(content: trimmed, editedAt: editedAt);
     _messages[idx] = edited;
     _reEnrichAllReplyQuotes();
     final lastMessages = _conversationsProvider?.lastMessages;
@@ -97,6 +105,10 @@ extension MessagingActions on MessagingProvider {
     cancelEditMessage();
     notifyListeners();
 
+    if (box) {
+      _editOverBox(original, trimmed, editedAt).ignore();
+      return;
+    }
     _encryptAndEmitEdit(
       messageId: messageId,
       recipientId: recipientId,
@@ -218,6 +230,10 @@ extension MessagingActions on MessagingProvider {
   }
 
   void pinMessage(int conversationId, int messageId) {
+    if (isLocalMessageId(messageId)) {
+      _pinOverBox(conversationId, messageId).ignore();
+      return;
+    }
     if (!isServerMessageId(messageId)) return;
     final local = messageById(messageId);
     if (local != null) {
@@ -234,18 +250,31 @@ extension MessagingActions on MessagingProvider {
   }
 
   void unpinMessage(int conversationId) {
+    // An E2E pin on show is unpinned over the box (decision 45).
+    final convs = _conversationsProvider;
+    final pin = convs?.boxPinOf(conversationId);
+    final shown = convs?.getConversationById(conversationId)?.pinnedMessageId;
+    if (pin != null && pin.pinned && shown != null && isLocalMessageId(shown)) {
+      _unpinOverBox(conversationId, pin).ignore();
+      return;
+    }
     _emit?.call('unpinMessage', {'conversationId': conversationId});
   }
 
-  /// Adds a reaction, blinded. Returns false when this device could not, in
+  /// Adds a reaction, blinded — or, on a box message, as a plain emoji over
+  /// the box (item 4, E19d). Returns false when this device could not, in
   /// which case the caller SHOWS that — a silent no-op looks like a dead tap.
   Future<bool> addReaction(int messageId, String emoji) =>
-      _emitReaction('addReaction', messageId, emoji);
+      isLocalMessageId(messageId)
+      ? _reactOverBox(messageId, emoji, on: true)
+      : _emitReaction('addReaction', messageId, emoji);
 
-  /// Removes a reaction, blinded. False has the same meaning as in
-  /// [addReaction].
+  /// Removes a reaction, as [addReaction] adds one. False has the same
+  /// meaning.
   Future<bool> removeReaction(int messageId, String emoji) =>
-      _emitReaction('removeReaction', messageId, emoji);
+      isLocalMessageId(messageId)
+      ? _reactOverBox(messageId, emoji, on: false)
+      : _emitReaction('removeReaction', messageId, emoji);
 
   /// The one path both reaction actions take.
   ///

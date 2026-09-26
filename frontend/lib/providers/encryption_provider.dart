@@ -1125,6 +1125,14 @@ class EncryptionProvider extends ChangeNotifier {
   Future<int?> wireHolder(WireKey wire) =>
       _encryptionService.wireHolder(wire);
 
+  /// Delegates to [EncryptionService.boxTombstoned] (item 4, E19g).
+  Future<bool> boxTombstoned(WireKey wire) =>
+      _encryptionService.boxTombstoned(wire);
+
+  /// Delegates to [EncryptionService.addBoxTombstone] (item 4, E19g).
+  Future<void> addBoxTombstone(WireKey wire) =>
+      _encryptionService.addBoxTombstone(wire);
+
   /// Delegates to [EncryptionService.localMessageRecords].
   Future<Map<int, Map<String, dynamic>>> localMessageRecords(
     int conversationId,

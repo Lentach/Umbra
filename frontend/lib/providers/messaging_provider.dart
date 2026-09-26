@@ -39,14 +39,17 @@ import '../utils/e2e_diag_log.dart';
 import '../utils/e2e_envelope.dart';
 import '../utils/media_preview_metadata.dart';
 import '../utils/e2e_persistent_diag.dart';
+import '../utils/message_edit_eligibility.dart';
 import '../utils/message_expiry.dart';
 import '../utils/message_ids.dart';
+import '../utils/message_length.dart';
 import '../utils/reply_preview_helper.dart';
 import 'conversation_helpers.dart' as conv_helpers;
 import 'conversations_provider.dart';
 import 'encryption_provider.dart';
 
 part 'messaging/messaging_provider.box.dart';
+part 'messaging/messaging_provider.box_actions.dart';
 part 'messaging/messaging_provider.history.dart';
 part 'messaging/messaging_provider.events.dart';
 part 'messaging/messaging_provider.send.dart';
@@ -408,6 +411,14 @@ class MessagingProvider extends ChangeNotifier {
   /// with a successful upload; a restart loses them, and the row stays
   /// failed for the user to send again.
   final Map<String, _BoxMediaBody> _boxMediaBodies = {};
+
+  /// Box message actions that failed (item 4, E19h), for the chat screen.
+  final StreamController<BoxActionFailure> _boxActionFailures =
+      StreamController<BoxActionFailure>.broadcast();
+
+  /// Each pin, edit or delete-for-everyone of a box message that could not
+  /// go over the box; its optimistic state is already undone.
+  Stream<BoxActionFailure> get boxActionFailures => _boxActionFailures.stream;
 
   /// Set in [dispose]; lets the overlay's dispose-scheduled onComplete
   /// microtask no-op instead of notifying a disposed ChangeNotifier.
@@ -1365,6 +1376,7 @@ class MessagingProvider extends ChangeNotifier {
     _boxLists.reset();
     _incomingSound.dispose();
     countdownTickNotifier.dispose();
+    _boxActionFailures.close().ignore();
     super.dispose();
   }
 }

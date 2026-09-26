@@ -155,6 +155,7 @@ class ChatMessageBubble extends StatelessWidget {
           context: context,
           isMine: isMine,
           messageId: message.id,
+          wireId: message.wireId,
           onDeleteForMe: () =>
               messaging.deleteMessage(message.id, forEveryone: false),
           onDeleteForEveryone: () =>

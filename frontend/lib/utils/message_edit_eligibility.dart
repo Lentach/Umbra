@@ -7,9 +7,11 @@ import 'message_ids.dart';
 const Duration kMessageEditWindow = Duration(minutes: 15);
 
 /// True when [message] may be edited by the current user from the context menu:
-/// own + TEXT + real plaintext + a server row ([isServerMessageId]) + a delivered
-/// state (never an optimistic/failed row) + within the edit window. The client
-/// gate is never the sole enforcer — the server re-checks sender + window.
+/// own + TEXT + real plaintext + a server row or a box message with its wire
+/// id ([hasActionTarget], item 4) + a delivered state (never an
+/// optimistic/failed row) + within the edit window. The client gate is never
+/// the sole enforcer — the server, or every receiving device for a box
+/// message (E19c), re-checks sender + window.
 bool messageEditEligible(
   MessageModel message, {
   required bool isMine,
@@ -17,8 +19,8 @@ bool messageEditEligible(
 }) {
   if (!isMine) return false;
   if (message.messageType != MessageType.text) return false;
-  // An optimistic/unsent row, or a box message (decision 14): no server row.
-  if (!isServerMessageId(message.id)) return false;
+  // An optimistic/unsent row, or a box message with no wire id to name it.
+  if (!hasActionTarget(message.id, wireId: message.wireId)) return false;
   if (!message.hasCopyablePlaintext) return false; // placeholder/terminal labels
   switch (message.deliveryStatus) {
     case MessageDeliveryStatus.sent:

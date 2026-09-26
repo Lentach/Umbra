@@ -2876,6 +2876,30 @@ abstract class AppLocalizations {
   /// **'Reakcje nie są jeszcze gotowe na tym urządzeniu'**
   String get snackbarReactionUnavailable;
 
+  /// No description provided for @snackbarBoxReactionFailed.
+  ///
+  /// In pl, this message translates to:
+  /// **'Nie udało się wysłać reakcji. Spróbuj ponownie.'**
+  String get snackbarBoxReactionFailed;
+
+  /// No description provided for @snackbarBoxPinFailed.
+  ///
+  /// In pl, this message translates to:
+  /// **'Nie udało się zmienić przypięcia. Spróbuj ponownie.'**
+  String get snackbarBoxPinFailed;
+
+  /// No description provided for @snackbarBoxEditFailed.
+  ///
+  /// In pl, this message translates to:
+  /// **'Nie udało się zapisać edycji. Spróbuj ponownie.'**
+  String get snackbarBoxEditFailed;
+
+  /// No description provided for @snackbarBoxDeleteFailed.
+  ///
+  /// In pl, this message translates to:
+  /// **'Nie udało się usunąć wiadomości u wszystkich. Spróbuj ponownie.'**
+  String get snackbarBoxDeleteFailed;
+
   /// No description provided for @snackbarPinnedMessageUnavailable.
   ///
   /// In pl, this message translates to:

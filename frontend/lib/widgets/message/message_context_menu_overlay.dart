@@ -375,7 +375,11 @@ void openMessageContextMenu({
   final layoutRect = bubbleRectForContextMenuLayout(anchorRect);
   // Read MediaQuery from the overlay build context below, not here. Keyboard
   // and visual-viewport metrics can change while the overlay is open on iOS/PWA.
-  final canPinOrDeleteForEveryone = isServerMessageId(message.id);
+  // A server row, or a box message named by its wire id (item 4, E19j).
+  final canPinOrDeleteForEveryone = hasActionTarget(
+    message.id,
+    wireId: message.wireId,
+  );
   final bubblePreview = bubblePreviewBuilder?.call(context);
   var pickerExpanded = false;
 
@@ -521,7 +525,7 @@ void openMessageContextMenu({
                             },
                       onPin: () {
                         dismissMessageContextMenu();
-                        if (!isServerMessageId(message.id)) {
+                        if (!canPinOrDeleteForEveryone) {
                           showTopSnackBar(
                             context,
                             l10n.messagePinRequiresSentMessage,

@@ -1,5 +1,6 @@
 import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/utils/message_edit_eligibility.dart';
+import 'package:fireplace/utils/message_ids.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 MessageModel _msg({
@@ -120,5 +121,37 @@ void main() {
         );
       }
     });
+
+    test(
+      'a box message (local id) is editable by its wire id, never without '
+      'one (item 4, E19j)',
+      () {
+        final box = MessageModel(
+          id: kFirstLocalMessageId + 3,
+          content: 'hello',
+          senderId: 1,
+          senderUsername: 'me',
+          conversationId: 1,
+          createdAt: now,
+          wireId: 'wire-0000001',
+        );
+        expect(messageEditEligible(box, isMine: true, now: now), isTrue);
+        expect(
+          messageEditEligible(
+            MessageModel(
+              id: box.id,
+              content: box.content,
+              senderId: 1,
+              senderUsername: 'me',
+              conversationId: 1,
+              createdAt: now,
+            ),
+            isMine: true,
+            now: now,
+          ),
+          isFalse,
+        );
+      },
+    );
   });
 }

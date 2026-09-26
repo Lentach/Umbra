@@ -36,6 +36,18 @@ typedef E2eReplyQuote = ({
   String snippet,
 });
 
+/// A box message action (metadata-privacy item 4, E19a/E19e): its type,
+/// the target message — named by its sender and wire id, since a wire id is
+/// unique per sender only — and, per type, the reaction's emoji and whether
+/// a reaction or pin is put on (true) or taken off (false).
+typedef E2eBoxAction = ({
+  String type,
+  int targetSender,
+  String targetWire,
+  String? emoji,
+  bool? on,
+});
+
 /// E2E encrypted message envelope format. Single source of truth for build/parse.
 class E2eEnvelope {
   E2eEnvelope._();
@@ -128,6 +140,28 @@ class E2eEnvelope {
 
   /// A box attachment's 32-byte id (E17a), spelled as the box spells one.
   static const String _keyBoxMedia = 'boxMedia';
+
+  /// The box message actions (item 4, E19a): a reaction, a pin or unpin,
+  /// an edit, a delete-for-everyone of the message `tg` names.
+  static const String typeReact = 'react';
+  static const String typePin = 'pin';
+  static const String typeEdit = 'edit';
+  static const String typeDelete = 'del';
+  static const Set<String> actionTypes = {
+    typeReact,
+    typePin,
+    typeEdit,
+    typeDelete,
+  };
+  static const String _keyTarget = 'tg';
+  static const String _keyTargetSender = 's';
+  static const String _keyTargetWire = 'w';
+  static const String _keyEmoji = 'e';
+  static const String _keyOn = 'on';
+
+  /// The most UTF-8 bytes a reaction's emoji may take: room for the longest
+  /// ZWJ sequences with skin tones, not for text.
+  static const int maxReactionEmojiBytes = 64;
 
   static Map<String, dynamic> build(
     String content, {
@@ -308,6 +342,65 @@ class E2eEnvelope {
     _keyType: typeQueueHandoffAck,
     _keySid: sid,
   };
+
+  /// A box message action envelope (item 4, E19a/E19e): `t`, the target
+  /// `tg: {s, w}`, the sender's `ts`, and per type the reaction's `e`, the
+  /// `on` of a reaction or pin, an edit's new `content`; a SENT COPY names
+  /// the peer in [sentTo]. Never a `msgId`: an action is not a message.
+  static Map<String, dynamic> buildAction(
+    String type, {
+    required int targetSender,
+    required String targetWire,
+    required DateTime sentAt,
+    String? emoji,
+    bool? on,
+    String content = '',
+    int? sentTo,
+    Map<String, dynamic>? senderListInfo,
+  }) => {
+    _keyType: type,
+    _keySentAt: sentAt.millisecondsSinceEpoch,
+    _keyTarget: {_keyTargetSender: targetSender, _keyTargetWire: targetWire},
+    if (type == typeEdit) _keyContent: content,
+    _keyEmoji: ?emoji,
+    _keyOn: ?on,
+    _keySentTo: ?sentTo,
+    if (senderListInfo != null && senderListInfo.isNotEmpty)
+      _keySenderListInfo: senderListInfo,
+  };
+
+  /// The action a peer's envelope carries; null — the whole action dropped
+  /// — for any other type or a target, emoji or `on` that is not sound. An
+  /// edit's words are [parse]'s `content`, its time `sentAt`.
+  static E2eBoxAction? parseAction(String jsonStr) {
+    final envelope = _object(jsonStr);
+    final type = envelope?[_keyType];
+    if (envelope == null || type is! String || !actionTypes.contains(type)) {
+      return null;
+    }
+    final target = envelope[_keyTarget];
+    if (target is! Map<String, dynamic>) return null;
+    final sender = target[_keyTargetSender];
+    final wire = target[_keyTargetWire];
+    if (sender is! int || !_isUserId(sender)) return null;
+    if (wire is! String || !_msgIdShape.hasMatch(wire)) return null;
+    final on = envelope[_keyOn];
+    if ((type == typeReact || type == typePin) && on is! bool) return null;
+    final emoji = envelope[_keyEmoji];
+    if (type == typeReact &&
+        (emoji is! String ||
+            emoji.isEmpty ||
+            utf8.encode(emoji).length > maxReactionEmojiBytes)) {
+      return null;
+    }
+    return (
+      type: type,
+      targetSender: sender,
+      targetWire: wire,
+      emoji: type == typeReact ? emoji as String : null,
+      on: on is bool ? on : null,
+    );
+  }
 
   /// The address a [typeQueueHandoff] envelope carries; null for any other
   /// type or an address not spelled as the box spells a 32-byte id — a

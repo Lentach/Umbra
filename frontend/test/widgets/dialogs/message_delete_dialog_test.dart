@@ -1,6 +1,7 @@
 import 'package:fireplace/l10n/app_localizations.dart';
 import 'package:fireplace/widgets/dialogs/message_delete_dialog.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
+import 'package:fireplace/utils/message_ids.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -8,6 +9,7 @@ void main() {
   Widget wrap({
     required bool isMine,
     required int messageId,
+    String? wireId,
     VoidCallback? onDeleteForMe,
     VoidCallback? onDeleteForEveryone,
   }) {
@@ -22,6 +24,7 @@ void main() {
               context: ctx,
               isMine: isMine,
               messageId: messageId,
+              wireId: wireId,
               onDeleteForMe: onDeleteForMe ?? () {},
               onDeleteForEveryone: onDeleteForEveryone ?? () {},
             ),
@@ -54,6 +57,32 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Delete for everyone'), findsNothing);
   });
+
+  testWidgets(
+    'own box message offers delete for everyone by its wire id, and not '
+    'without one (item 4)',
+    (tester) async {
+      await tester.pumpWidget(
+        wrap(
+          isMine: true,
+          messageId: kFirstLocalMessageId + 1,
+          wireId: 'wire-0000001',
+        ),
+      );
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      expect(find.text('Delete for everyone'), findsOneWidget);
+      await tester.tap(find.text('Delete for me'));
+      await tester.pumpAndSettle();
+
+      await tester.pumpWidget(
+        wrap(isMine: true, messageId: kFirstLocalMessageId + 1),
+      );
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      expect(find.text('Delete for everyone'), findsNothing);
+    },
+  );
 
   testWidgets('tapping delete for everyone fires callback and dismisses',
       (tester) async {

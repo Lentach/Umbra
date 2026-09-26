@@ -3748,6 +3748,74 @@ class EncryptionService {
     } catch (_) {}
   }
 
+  // ── Box delete tombstones (metadata-privacy item 4, E19c/E19g) ───────────
+  //
+  // A box message deleted for everyone may still reach this device later —
+  // a copy delivered after the delete, from a device offline for up to the
+  // box TTL. Its wire id is no longer held by any record, so the reader
+  // would store and show it again. `(sender, wire id) -> ms` of every delete
+  // this device applied, pruned past the box TTL and bounded like the
+  // retired set. No backup carries it: it is machinery, not history.
+
+  static const int _boxTombstoneCap = 5000;
+  static const Duration _boxTombstoneLife = Duration(days: 30);
+
+  String _boxTombstoneKey(int userId) => 'e2e_${userId}_boxdel_v1';
+
+  static String _tombstoneOf(WireKey wire) =>
+      '${wire.senderId}:${wire.wireId}';
+
+  /// Whether a delete-for-everyone of [wire] reached this device within the
+  /// box TTL. False when it cannot tell (no account, unreadable row): the
+  /// wire-id dedup still stands behind it for this app instance.
+  Future<bool> boxTombstoned(WireKey wire) async {
+    final userId = _userId;
+    if (userId == null) return false;
+    try {
+      final prefs = await _sharedPrefs;
+      return _readBoxTombstones(prefs, userId).containsKey(_tombstoneOf(wire));
+    } on Object catch (_) {
+      return false;
+    }
+  }
+
+  /// Records a delete-for-everyone of [wire]. Locked for the same reason the
+  /// retired set is: one key, every same-origin PWA engine.
+  Future<void> addBoxTombstone(WireKey wire) async {
+    final userId = _userId;
+    if (userId == null) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final oldest = now - _boxTombstoneLife.inMilliseconds;
+    await _sessionCrossContextLock('fireplace-e2e-boxdel-$userId', () async {
+      try {
+        final prefs = await _sharedPrefs;
+        await _reloadPrefsForCrossContext(prefs);
+        final kept = _readBoxTombstones(prefs, userId)
+          ..removeWhere((_, at) => at < oldest)
+          ..[_tombstoneOf(wire)] = now;
+        final newest = kept.entries.toList()
+          ..sort((a, b) => b.value.compareTo(a.value));
+        await prefs.setString(
+          _boxTombstoneKey(userId),
+          jsonEncode({
+            for (final e in newest.take(_boxTombstoneCap)) e.key: e.value,
+          }),
+        );
+      } on Object catch (_) {}
+    });
+  }
+
+  Map<String, int> _readBoxTombstones(ContentKv prefs, int userId) {
+    final raw = prefs.getString(_boxTombstoneKey(userId));
+    if (raw == null) return {};
+    final decoded = jsonDecode(raw);
+    if (decoded is! Map<String, dynamic>) return {};
+    return {
+      for (final MapEntry(:key, :value) in decoded.entries)
+        if (value is int) key: value,
+    };
+  }
+
   // ── Retired ids ──────────────────────────────────────────────────────────
   //
   // Ids whose plaintext this device destroyed while the server may STILL serve
