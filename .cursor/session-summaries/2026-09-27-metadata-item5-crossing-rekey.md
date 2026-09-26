@@ -1,4 +1,4 @@
-# A friend re-key now opens the "asked" window, so two friend devices that re-key each other converge (decision 49)
+# A friend re-key now opens the "asked" window (decision 49): the crossing pair swaps queues, but the next message fails — fix owed
 
 **Date:** 2026-09-27 · **Version:** unchanged · **Tiers deployed:** none (branch `feat/metadata-privacy` only)
 
@@ -40,7 +40,9 @@
 - NOT verified: the crossing on a device; Android, iOS, prod (box OFF); a revoked friend device actually using the window.
 
 ## Notes for next session
-- Next action: pending pass fixes 1–3 from `2026-09-26-metadata-item5-migration.md` Notes, then slice (e), queue rotation, per the remainder plan:
+- **BROKEN, found after the handoff commits:** 3 round trips each way after `converged()` (uncommitted in the crossing test) fail on the FIRST, A→B: `InvalidMessageException - No valid sessions` (4× `Bad Mac`). After the crossing, A's current state is the session B started and B's is the one A started, and each side's ack was read from an ARCHIVED state. [INFERENCE] That matches the libsignal 0.8.2 shallow-copy trial-decrypt trap. Decision 49 as built is on the branch only (box OFF in prod). The fix direction goes to the owner/user first; see the next bullet.
+- Fix candidates: (i) a tie-break on a crossing: only the lower `(user, device)` side reads the peer's re-key, so the pair keeps ONE session; (ii) fix the trial decrypt (a deep copy of the state before a try), which is the root cause and also covers the sibling case in that trap.
+- Next action: fix the post-crossing `Bad Mac` above, test-first, with the round-trip test as the red guard. Then do the pending pass fixes 1–3 from `2026-09-26-metadata-item5-migration.md` Notes, then slice (e), queue rotation, per the remainder plan:
   - (1) ensure queues, then ONE subscribe with a retry after `retryAfter`, then the sends;
   - (2) a frame from an unacked friend device clears `handedAt[D]` and calls `friendChanged`, once per device per session;
   - (3) dedupe `BOX_FRIEND_HANDOFF_FAILED` per `user:device:stage:code` per session.
