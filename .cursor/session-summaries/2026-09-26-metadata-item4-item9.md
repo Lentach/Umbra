@@ -24,7 +24,7 @@
 ## Verification
 - Flutter full suite 2761/14 before the item-9 client test was added, `flutter analyze` 0 errors or warnings, the lint ratchet held at 3160. Item-9 box tests 214/214, including the new `limit` test (red first: "lost isEmpty" failed).
 - Backend (item 9): `npm run test:int` 38/38 (7 new, all red before the fix), jest box 16/16, `tsc` clean, 17/17 mutants killed. Independent review: APPROVE, with one MINOR (the client did not know `limit`) that is now fixed.
-- Item 4: 38/38 builder mutants killed. An independent review returned REQUEST-CHANGES (1 MAJOR, 2 MINOR); all three are fixed with new tests. Their mutants: LWW removed → killed; revert without the ownership guard → survived first, test fixed, then killed; server pin at `DateTime.now()` → killed.
+- Item 4: 38/38 builder mutants killed. An independent review returned REQUEST-CHANGES (1 MAJOR, 2 MINOR), but it was CUT SHORT and ran no tests; all three findings are fixed with new tests. Their mutants: LWW removed → killed; revert without the ownership guard → survived first, test fixed, then killed; server pin at `DateTime.now()` → killed.
 - Dev DB: 0024 applied after `docker restart` (`box_totals` = `1|131|167849984`).
 - Web drive of `c7f4abd0` (release build plus a throwaway `BOX_DRIVE` scaffold, since deleted), users 294 ↔ 295, conversation 89, CDP frame log. All passed:
   - (a) reactions: add, change and remove seen by the peer; they survived reloads; only `/box send`.
@@ -34,12 +34,10 @@
   - (e) old-path row 613 still used `addReaction` and `pinMessage`.
   - (f) `messages` in the chat stayed at 1; `box_msgs` equalled `box_totals.msgCount` throughout.
 - CI 7/7 success on `c7f4abd0`.
-- NOT verified: Android and iOS; sibling copies of actions on a real linked device (unit-tested only); an action that arrives while its target still waits in the journal (E19i residual).
+- NOT verified: Android and iOS. This one-device-per-account drive could not reach two multi-device gaps, both closed later the same day (`2026-09-26-metadata-item4-gaps.md`): an action read before its target was dropped (E19i), and a partly taken action reverted (E19h).
 
 ## Notes for next session
 - Next: item 5 (slice (d), migration handoff over the old path). Batch its OWNER questions in one note first (S8).
-- Seen in the drive, not caused by items 4 or 9:
-  - A reaction chip reacts to taps only on its lower edge (`chat_message_bubble.dart:502-503`: `Positioned(top: -14)` sits outside the Stack's hit area). This affects old-path rows too; the owner should decide whether to fix it.
-  - Typing to a box peer still emits `typing` on the account socket. That belongs to item 8.
-- Residuals: an action that only some devices accepted stays on those devices while the sender reverts (E19h); prod stays OFF until G5.
+- The reaction chip and `typing` issues seen in this drive are FIXED in `2026-09-26-metadata-item4-gaps.md`.
+- Residuals: prod stays OFF until G5.
 - Traps → `docs/agents/traps.md` (4 new lines, 1 reworded).
