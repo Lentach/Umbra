@@ -17,7 +17,7 @@
 - New: `services/box/box_media_{frame,store,store_io,store_web,fetcher,url}.dart`, `widgets/message/box_media_source.dart`, tests `box_media_{frame,store,fetcher}_test.dart`, `messaging_provider_box_media_test.dart`.
 
 ## Verification
-- CI: 7/7 on `e0f17fc4`. Check `5bd09775` (review fixes) before building on it.
+- CI: 7/7 on `e0f17fc4` and 7/7 on `af0ff480`, which holds the review fixes of `5bd09775` plus docs. `5bd09775`'s own run was cancelled by that newer push.
 - Full `flutter test`: 2730 passed, 14 skipped (on `5bd09775`'s tree). Ratchet PASS at 3160. Every rule was red first (the helper reports list each failing assertion).
 - Mutants on `e0f17fc4` (scratch worktree): 10 of 12 killed. M6b (upload retry used the chat's timer), M7 (prefetch before a proven store) and M8 (old path mapped `boxMedia`) survived and now have tests. M3 and M3b are equivalent (reasons in the mutant report). The survivor tests were NOT re-run against their mutants on top of the fixes.
 - Two reviews: `b2a3d74c` (P1 quote words kept, P2 forged snippet, P2 countdown reset, P3 re-download loop) and `e0f17fc4` (2 P2, 3 P3). All fixed. The fixes in `5bd09775` have had no third review.
@@ -36,7 +36,7 @@
   - the ping sound (headless).
 
 ## Notes for next session
-- Next: check CI on `5bd09775`. Then plan item 4 (reactions, pin, edit, delete-for-everyone over E2E) test-first, and batch its OWNER questions in one note (S8). Item 4 also owes clearing a delivered quote snippet `re.x` when its original is deleted for everyone.
+- Next: plan item 4 (reactions, pin, edit, delete-for-everyone over E2E) test-first, and batch its OWNER questions in one note (S8). Item 4 also owes clearing a delivered quote snippet `re.x` when its original is deleted for everyone.
 - Open gaps:
   - Logout keeps plaintext records and box copies.
   - The Privacy screen's "clear local history" leaves the copies.
