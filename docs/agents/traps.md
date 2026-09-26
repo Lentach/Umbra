@@ -6,6 +6,7 @@ Standing warnings that used to live in the `LATEST.md` banner and in rotated-out
 - **Composer/attachment-picker ship freeze LIFTED 2026-09-19 (owner)** — the 2026-08-19 "green repro AND explicit OK" gate is retired; keep the repro discipline. Unrelated and still binding: never `git revert 0cbf17b` — it carries the 0.1.10 identity guard and the banner removal too (`2026-08-19-session-composer-regression.md:79-87`).
 - **Dependabot #174 (`file_picker` 11.0.3) is deliberately OPEN** — `web_file_input.dart` exists because of 11.0.2's DOM behaviour; no host test sees that path (`2026-09-08-session-dependabot-sweep-and-pc-health.md`).
 - A video RETRY must carry the full payload (poster/dimensions), not url/key/iv/duration only — a once-failed clip reached the peer as a 220 px blank square (`2026-09-05-session-video-nits.md`).
+- **A `Stack` child pushed out with a negative `Positioned` offset paints but takes NO taps there** — `Clip.none` only affects painting; the reaction chips (text and voice bubbles) answered on their bottom edge only until the 14 px room moved inside the Stack (`2026-09-26-metadata-item4-item9.md`).
 - A route pushed over the chat must RELEASE the inline video slot (`2026-09-05-session-video-nits.md`).
 - The WebKit `videoWidth == 0` probe fix is **NOT iOS-verified** — owner owes a recording from the iPhone PWA camera (`2026-09-05-session-video-nits.md`).
 - The attach picker must stay EXEMPT from the passcode lock, or a 0 s auto-lock loses the pick (`2026-09-05-session-video-merge-e2e-fix.md`).

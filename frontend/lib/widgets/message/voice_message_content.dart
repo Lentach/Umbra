@@ -202,14 +202,17 @@ class VoiceMessageContent extends StatelessWidget {
       onLongPress: () => _openContextMenu(context),
       child: Align(
         alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
-        child: Padding(
-          padding: EdgeInsets.only(
-            top: message.reactions.isNotEmpty ? 14.0 : 0.0,
-          ),
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              ContextMenuBubbleAnchor(
+        // The chip row's room lives INSIDE the Stack, as in
+        // `ChatMessageBubble`: a chip at a negative `top` sits outside the
+        // Stack's bounds, where Flutter never hit-tests it.
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Padding(
+              padding: EdgeInsets.only(
+                top: message.reactions.isNotEmpty ? 14.0 : 0.0,
+              ),
+              child: ContextMenuBubbleAnchor(
                 child: Container(
                   constraints: BoxConstraints(
                     maxWidth: MediaQuery.of(context).size.width * 0.6,
@@ -395,26 +398,26 @@ class VoiceMessageContent extends StatelessWidget {
                   ),
                 ),
               ),
-              if (message.reactions.isNotEmpty)
-                Positioned(
-                  top: -14,
-                  left: isMine ? null : 8,
-                  right: isMine ? 8 : null,
-                  child: ReactionChipsRow(
-                    reactions: message.reactions,
-                    currentUserId: currentUserId ?? -1,
-                    onTap: (emoji, isMyReaction) {
-                      toggleReaction(
-                        context,
-                        message.id,
-                        emoji,
-                        alreadyReacted: isMyReaction,
-                      ).ignore();
-                    },
-                  ),
+            ),
+            if (message.reactions.isNotEmpty)
+              Positioned(
+                top: 0,
+                left: isMine ? null : 8,
+                right: isMine ? 8 : null,
+                child: ReactionChipsRow(
+                  reactions: message.reactions,
+                  currentUserId: currentUserId ?? -1,
+                  onTap: (emoji, isMyReaction) {
+                    toggleReaction(
+                      context,
+                      message.id,
+                      emoji,
+                      alreadyReacted: isMyReaction,
+                    ).ignore();
+                  },
                 ),
-            ],
-          ),
+              ),
+          ],
         ),
       ),
     );

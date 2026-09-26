@@ -136,7 +136,8 @@ class _Pending {
 ///  * Every connection re-signs `subscribe` for the WHOLE set over its own id,
 ///    in chunks of [kBoxSubscribeMax]; [BoxState.ready] only once every chunk
 ///    has answered. A rid refused there is gone (deleted or reaped) and is
-///    reported on [lostQueues].
+///    reported on [lostQueues] — except `limit` (the per-socket cap, E10),
+///    which stays in the set for the next connection.
 ///  * The consumer acks every [BoxDelivery] once it is durably stored — also
 ///    one it cannot open, or it holds one of the 16 window slots forever.
 class BoxClient {
@@ -413,7 +414,8 @@ class BoxClient {
 
   /// Adds [queues] to the resubscribe set and, when connected, subscribes
   /// them now. The answer lists the rids the box refused; those are gone and
-  /// leave the set. Offline, the set still keeps them for the next
+  /// leave the set — except `limit` (the per-socket cap), which is neither
+  /// listed nor dropped. Offline, the set still keeps them for the next
   /// connection.
   Future<BoxResult<List<BoxRefusal>>> subscribe(
     Iterable<BoxQueueAuth> queues,
