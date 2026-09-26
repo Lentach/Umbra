@@ -27,12 +27,15 @@
   - 30 s timer: A's row was gone by send+53 s; B's copy was kept until B opened the chat and was gone at open+34 s;
   - image: one `POST /box/media`, B prefetched once, and after a reload both showed it with no `/box/media` request;
   - `messages` for conv 88 stayed 0.
+- Second drive, of `3f45a8f2` (review fixes included): a 17.5 MiB random FILE A→B.
+  - One `POST /box/media` of exactly 32 MiB, one `GET`. B's IndexedDB holds 18 350 096 bytes (unframed ciphertext + tag).
+  - The save and a save after a reload both match the source SHA-256; the reload sent no `/box/media` request; still 0 `messages` rows.
+  - About 13–17 s pass between picking the file and the POST (reading and encrypting it); the upload and download take about 0.4 s each on the local stack.
+  - Setup artifact: the drive deleted the Chrome profiles, so both accounts re-minted and the first file hit badMac until the fingerprints were confirmed (by design, traps E2E).
 - NOT verified:
-  - the review fixes, driven live;
-  - a ~17 MiB file driven live (unit test only);
   - multi-device sibling copies of media;
   - Android and iOS;
-  - the real `MediaCryptoService` decrypt of box media (a stand-in cipher in tests; the drive used a 26 KB PNG);
+  - `MediaCryptoService` on native (the web webcrypto path was proven by the 17.5 MiB drive);
   - the ping sound (headless).
 
 ## Notes for next session
