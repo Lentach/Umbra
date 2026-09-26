@@ -594,6 +594,26 @@ void main() {
   });
 
   test(
+    'a session this device started or re-keyed with a friend device counts '
+    'as asked for that device only, for 10 min, and not once it answered — '
+    'the window is all a revoked device of the friend can use (decision 49)',
+    () async {
+      await a.start();
+      a.session.friendSessionStarted(5, 3);
+      expect(a.session.awaitingFriendRekeyFrom(5, 4), isFalse);
+      a.clock = a.clock.add(kFriendRekeyWindow);
+      expect(a.session.awaitingFriendRekeyFrom(5, 3), isTrue);
+      a.clock = a.clock.add(const Duration(milliseconds: 1));
+      expect(a.session.awaitingFriendRekeyFrom(5, 3), isFalse);
+
+      a.session
+        ..friendSessionStarted(5, 3)
+        ..friendRekeyAnswered(5, 3);
+      expect(a.session.awaitingFriendRekeyFrom(5, 3), isFalse);
+    },
+  );
+
+  test(
     'a rate-limited create stops the pass, and it runs again after the wait',
     () async {
       box.createRefusal = {

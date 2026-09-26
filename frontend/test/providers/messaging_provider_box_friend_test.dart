@@ -259,9 +259,9 @@ void main() {
   );
 
   test(
-    "our re-key's fresh session opens NO window: a replacing PreKey that "
-    'follows it is still refused (review: a revoked device could provoke '
-    'the re-key and then use the window)',
+    "our re-key's fresh session counts as asking (owner, decision 49): the "
+    "device's replacing PreKey that follows it is read — two friends that "
+    're-key each other at once converge',
     () async {
       await s.encryptForFriend(_friend, 3, '{"t":"x"}');
       link.awaiting.clear();
@@ -273,21 +273,24 @@ void main() {
         fresh: true,
       ))!;
       expect(rekey.kind, BoxFrameKind.preKey);
-      expect(link.awaiting, isEmpty);
+      expect(link.awaiting, {(_friend, 3)});
 
       expect(await deliver(await fromFreshF(handoff(_sid('P')), 0)), isTrue);
-      expect(link.learned, isEmpty);
+      expect(link.learned, [_sid('P')]);
     },
   );
 
   test(
     'a PreKey that would replace a session this device did NOT just start — '
-    'one it wrote on long ago and that was never answered — is refused and '
-    're-keyed, on the request queue and on our own queue alike',
+    'one it wrote on long ago and that was never answered, and writes on '
+    'again (the 24 h resend) — is refused and re-keyed, on the request queue '
+    'and on our own queue alike: only a first session or a re-key asks',
     () async {
       await s.encryptForFriend(_friend, 3, '{"t":"x"}');
       // The window closed: the session is old, unanswered, not "asked".
       link.awaiting.clear();
+      await s.encryptForFriend(_friend, 3, jsonEncode(handoff(_sid('K'))));
+      expect(link.awaiting, isEmpty);
 
       final viaRequest = await fromFreshF(handoff(_sid('R')), 0);
       expect(await deliver(viaRequest), isTrue);

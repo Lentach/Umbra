@@ -688,9 +688,9 @@ class BoxSession implements BoxOutbox, BoxSiblingLink, BoxFriendLink {
     final ensured = await _keys.ensureInbound(userId);
     if (ensured is! InboundQueueCreated || _disposed) return;
     final queue = ensured.queue;
-    // Not "asked" by the re-key itself: a real device answers a re-key with
-    // a whisper message, and a window opened here would let a revoked device
-    // of the friend replace the session with its next PreKey (review).
+    // The fresh session counts as asked (`friendSessionStarted`, set by the
+    // encrypt side): two devices that re-key each other at once read each
+    // other's re-key (decision 49).
     final frame = await encrypt(
       userId,
       deviceId,

@@ -287,14 +287,15 @@ extension MessagingBox on MessagingProvider {
       return null;
     }
     try {
-      // A session built where there was NONE makes this device the one that
-      // asked: that device's own PreKey answer may replace it (two friends
-      // starting at once) and is read for a while. A re-key's fresh session
-      // does not: a real device answers it with a whisper message, and the
-      // window would let a revoked device of the friend, which provoked the
-      // re-key, replace the session with its next PreKey (review).
+      // A session built where there was NONE, or a re-key's fresh one, makes
+      // this device the one that asked: that device's own PreKey answer may
+      // replace it (two friends starting, or re-keying each other, at once)
+      // and is read for a while. Without it for a re-key, two devices that
+      // re-key each other at once refuse each other for good. Accepted
+      // residual (owner, decision 49): a revoked device of the friend can
+      // provoke our re-key and replace that device's session in the window.
       final started =
-          !fresh && !await enc.hasSessionWith(userId, deviceId: deviceId);
+          fresh || !await enc.hasSessionWith(userId, deviceId: deviceId);
       if (fresh) enc.markSessionRebuild(userId, deviceId: deviceId);
       await enc.ensureSession(userId, deviceId: deviceId);
       final frame = BoxFrame.fromSignalCiphertext(

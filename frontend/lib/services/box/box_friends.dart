@@ -81,13 +81,13 @@ abstract interface class BoxFriendLink {
   /// under a session we hold. At most once per device per session.
   Future<void> rekeyFriend(int userId, int deviceId);
 
-  /// This device just built a session with [userId]'s device [deviceId]
-  /// where it held NONE, to hand it our queue: that device's answer may be a
-  /// PreKey message of its own that replaces it — two friends starting at
-  /// once — so it counts as asked for the next [kFriendRekeyWindow]. A
-  /// re-key's fresh session never counts: a revoked device of the friend
-  /// could provoke one and then use the window. Called by the
-  /// [FriendEncrypt] implementation.
+  /// This device just built a session with [userId]'s device [deviceId] —
+  /// where it held NONE, or afresh for a re-key — to hand it our queue: that
+  /// device's answer may be a PreKey message of its own that replaces it
+  /// (two friends starting, or re-keying each other, at once), so it counts
+  /// as asked for the next [kFriendRekeyWindow] (decision 49; a revoked
+  /// device of the friend can provoke a re-key and use that window). Called
+  /// by the [FriendEncrypt] implementation.
   void friendSessionStarted(int userId, int deviceId);
 
   /// Whether this device started a session with [userId]'s device
