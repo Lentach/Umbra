@@ -130,18 +130,6 @@ class SocketService {
     });
   }
 
-  void emitRecordingVoice(
-    int recipientId,
-    int conversationId,
-    bool isRecording,
-  ) {
-    _socket?.emit('recordingVoice', {
-      'recipientId': recipientId,
-      'conversationId': conversationId,
-      'isRecording': isRecording,
-    });
-  }
-
   void emitMarkConversationRead(int conversationId) {
     _socket?.emit('markConversationRead', {'conversationId': conversationId});
   }

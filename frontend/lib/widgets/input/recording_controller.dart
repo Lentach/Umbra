@@ -11,7 +11,6 @@ import 'package:provider/provider.dart';
 import 'package:record/record.dart';
 
 import '../../l10n/app_localizations.dart';
-import '../../providers/connection_provider.dart';
 import '../../providers/conversations_provider.dart';
 import '../../providers/messaging_provider.dart';
 import '../../services/voice_audio_coordinator.dart';
@@ -114,7 +113,6 @@ class RecordingController extends StatefulWidget {
 class RecordingControllerState extends State<RecordingController>
     with SingleTickerProviderStateMixin {
   MessagingProvider? _messagingProvider;
-  ConnectionProvider? _connectionProvider;
   ConversationsProvider? _conversationsProvider;
 
   /// Widget tests: drive [stopAndSend] / [cancelRecording] without hardware.
@@ -162,7 +160,6 @@ class RecordingControllerState extends State<RecordingController>
   void _cacheProvidersFromContext() {
     try {
       _messagingProvider ??= context.read<MessagingProvider>();
-      _connectionProvider ??= context.read<ConnectionProvider>();
       _conversationsProvider ??= context.read<ConversationsProvider>();
     } on ProviderNotFoundException {
       // RecordingController unit tests may omit the provider tree.
@@ -272,16 +269,21 @@ class RecordingControllerState extends State<RecordingController>
     }
   }
 
+  /// Through [MessagingProvider.sendRecordingVoiceIndicator], which sends
+  /// nothing to a box-covered peer (decision 33, like typing).
   void _emitRecordingVoiceToRecipient(bool isRecording) {
     final convs = _conversationsProvider;
-    final conn = _connectionProvider;
-    if (convs == null || conn == null) return;
+    final messaging = _messagingProvider;
+    if (convs == null || messaging == null) return;
     final convId = convs.activeConversationId;
     if (convId == null) return;
     final conv = convs.getConversationById(convId);
     if (conv == null) return;
-    final recipientId = convs.getOtherUserId(conv);
-    conn.socketService.emitRecordingVoice(recipientId, convId, isRecording);
+    messaging.sendRecordingVoiceIndicator(
+      convs.getOtherUserId(conv),
+      convId,
+      isRecording: isRecording,
+    );
   }
 
   /// Public: idle mic tapped. Parent ([ChatInputBar._onMicTap]) calls this after

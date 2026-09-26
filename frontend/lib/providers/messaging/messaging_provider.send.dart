@@ -924,15 +924,35 @@ extension MessagingSend on MessagingProvider {
     sendMessage(noteUrl, expiresIn: expiresInSeconds);
   }
 
+  /// Whether [peerUserId] is box-covered: an address in its contact record,
+  /// the `_boxRoute` rule, whatever the box's state.
+  bool _boxCovers(int peerUserId) =>
+      boxOutbox?.addressesFor(peerUserId).isNotEmpty ?? false;
+
   /// Typing rides the ACCOUNT socket, so it names the pair to the server at
-  /// the moment of typing. A box-covered peer (an address in its contact
-  /// record, the `_boxRoute` rule) gets none: decision 33 turns typing off on
-  /// box chats until both sides enable it, and item 8 sends it inside E2E.
+  /// the moment of typing. A box-covered peer gets none: decision 33 turns
+  /// typing off on box chats until both sides enable it, and item 8 sends
+  /// it inside E2E.
   void sendTypingIndicator(int recipientId, int conversationId) {
-    if (boxOutbox?.addressesFor(recipientId).isNotEmpty ?? false) return;
+    if (_boxCovers(recipientId)) return;
     _emit?.call('typing', {
       'recipientId': recipientId,
       'conversationId': conversationId,
+    });
+  }
+
+  /// The voice-recording indicator: the same account-socket signal as
+  /// typing, under the same rule (decision 33, until item 8).
+  void sendRecordingVoiceIndicator(
+    int recipientId,
+    int conversationId, {
+    required bool isRecording,
+  }) {
+    if (_boxCovers(recipientId)) return;
+    _emit?.call('recordingVoice', {
+      'recipientId': recipientId,
+      'conversationId': conversationId,
+      'isRecording': isRecording,
     });
   }
 

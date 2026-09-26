@@ -77,4 +77,29 @@ void main() {
 
     expect(emitted, ['typing']);
   });
+
+  test(
+    'the voice-recording indicator follows the same rule: none to a '
+    'box-covered peer, `recordingVoice` with its payload to an uncovered one',
+    () {
+      final payloads = <Object?>[];
+      provider
+        ..setEmitCallback((event, data) {
+          emitted.add(event);
+          payloads.add(data);
+        })
+        ..boxOutbox = (_Outbox()..addresses[2] = {1: _address(1)})
+        ..sendRecordingVoiceIndicator(2, 10, isRecording: true)
+        ..sendRecordingVoiceIndicator(2, 10, isRecording: false);
+      expect(emitted, isEmpty);
+
+      provider.sendRecordingVoiceIndicator(3, 11, isRecording: true);
+      expect(emitted, ['recordingVoice']);
+      expect(payloads.single, {
+        'recipientId': 3,
+        'conversationId': 11,
+        'isRecording': true,
+      });
+    },
+  );
 }
