@@ -171,10 +171,14 @@ class SessionCipher {
     final pStates = HasNextIterator(previousStates.iterator);
     while (pStates.hasNext) {
       try {
-        final promotedState = SessionState.fromSessionState(pStates.next());
+        final archived = pStates.next();
+        final promotedState = SessionState.fromSessionState(archived);
         final plaintext = _decryptFromState(promotedState, cipherText);
 
-        previousStates.remove(promotedState);
+        // UMBRA PATCH (0.8.2+umbra.1): remove the archived ORIGINAL. Upstream
+        // removed the copy, which was never in the list, so a stale snapshot
+        // of this state (its message key unused) stayed archived.
+        previousStates.remove(archived);
         sessionRecord.promoteState(promotedState);
 
         return plaintext;

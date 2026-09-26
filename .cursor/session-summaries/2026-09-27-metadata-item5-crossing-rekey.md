@@ -16,8 +16,8 @@
   - The "session this device did NOT just start" test now also writes on the held session (the 24 h resend) and asserts that no window opens.
   - New in `box_session_friends_test.dart`: the window applies to one device, lasts 10 min, and closes on answer.
 - Post-convergence traffic exposed a second bug. With decision 49 alone, the pair swapped queues, but the FIRST message after that failed with `No valid sessions` (4× `Bad Mac`). Root cause (proven, see Verification): libsignal 0.8.2 `SessionState.fromSessionState` shares the protobuf, so `SessionCipher._decrypt`'s failed try on the current state advances it before an archived state matches. After a crossing, each side reads the other's ack from an archived state.
-- Fix: `libsignal_protocol_dart` is vendored at `frontend/third_party/libsignal_protocol_dart` (`lib/`, LICENSE GPL-3, README; version `0.8.2+umbra.1`) through `pubspec.yaml` `dependency_overrides`. It carries ONE `UMBRA PATCH`: `fromSessionState` copies via `fromBuffer(writeToBuffer())`. `analysis_options.yaml` excludes `third_party/**`. The (unused) `frontend/Dockerfile` copies `third_party` before `pub get`. 0.8.2 is the latest release. The crossing test now also sends 3 messages each way after convergence.
-- Docs: decisions log (decision 49, O17, E20c, E49a), `wire.md`, `e2e-invariants.md` (the vendoring invariant), remainder plan E20c, `traps.md` (the crossing trap, and the libsignal trap marked FIXED), and root `CLAUDE.md` Flutter count 2811 → 2813.
+- Fix: `libsignal_protocol_dart` is vendored at `frontend/third_party/libsignal_protocol_dart` (`lib/`, LICENSE GPL-3, README; version `0.8.2+umbra.1`) through `pubspec.yaml` `dependency_overrides`. It carries TWO `UMBRA PATCH`es: `fromSessionState` copies via `fromBuffer(writeToBuffer())`, and `_decrypt` removes the archived original it promotes (upstream left a stale copy holding an unused message key). New direct test: `frontend/test/services/encryption/libsignal_trial_decrypt_test.dart`. `analysis_options.yaml` excludes `third_party/**`. The (unused) `frontend/Dockerfile` copies `third_party` before `pub get`. 0.8.2 is the latest release. The crossing test now also sends 3 messages each way after convergence.
+- Docs: decisions log (decision 49, O17, E20c, E49a), `wire.md`, `e2e-invariants.md` (the vendoring invariant), remainder plan E20c, `traps.md` (the crossing trap, and the libsignal trap marked FIXED), and root `CLAUDE.md` Flutter count 2811 → 2814.
 - Out-of-repo: local drive accounts 330 `cxjane` / 331 `cxkurt` (conv 102) and 332 `cxlena` / 333 `cxmarc` (conv 103) remain in `fireplace-mp-db-1`. The Chrome profiles `%TEMP%/umbra-cx-*`, the befriend script `%TEMP%/umbra-crossing-befriend.cjs` and `frontend/build/web` were deleted. No services were left running.
 
 ## Key files
@@ -29,19 +29,15 @@
 ## Verification
 - CI: 7/7 green on `57066bc5` (the libsignal fix, with decision 49). Decision 49 alone was 7/7 on `5b560057`.
 - Red before green: with the lib unchanged, the new crossing test failed (`converged` false) and the flipped test failed (`awaiting` empty); both pass after the change.
-- Mutants on `started` (each run as a subprocess, lib hash checked after):
-  - `!fresh && …` (fix B) → 4 red.
-  - `fresh` only → 2 red (first contact).
-  - no-session only → 2 red.
-  - `true` SURVIVED the first round (a plain write on a held session would open the window). It is now killed by the resend assertion added to the "did NOT just start" test.
-- libsignal cause, proven: with the round trips added and upstream 0.8.2, the first A→B message failed with `No valid sessions` (4× `Bad Mac`). The one-line copy fix, applied TEMPORARILY in the pub cache (restored, hash checked), made it green. The vendored override with only that patch is green too. A second candidate patch (the stale duplicate archive entry) had no failing test and was dropped.
-- Full `flutter test` with the vendored package: exit 0, 2813 passed, 14 skipped; the count gate OK. `scripts/dart-lint-ratchet.mjs`: PASS at 3160, after sorting `dependency_overrides` (`sort_pub_dependencies` had added +1). `pubspec.lock` switched to the path source.
+- Mutants on `encryptForFriend`'s `started`: all 4 killed. `true` survived the first round and is now killed by the resend assertion. Detail: `.planning/metadata-item5/findings.md` § 2026-09-27 mutants.
+- libsignal cause, proven: with the round trips added and upstream 0.8.2, the first A→B message failed with `No valid sessions` (4× `Bad Mac`). The one-line copy fix, applied TEMPORARILY in the pub cache (restored, hash checked), made it green. The vendored override with only that patch is green too. Patch 2 (stale archive copy) is pinned by the direct test: red with patch 1 only (2 copies of the state), and red again without patch 1 (the current state moved); the crossing test also goes red without patch 1.
+- `flutter build apk --debug` resolves the path override (built). Full `flutter test` with both patches: exit 0, 2814 passed, 14 skipped; the count gate OK. `scripts/dart-lint-ratchet.mjs`: PASS at 3160, after sorting `dependency_overrides` (`sort_pub_dependencies` had added +1). `pubspec.lock` switched to the path source.
 - Live drive of the patched build (every decrypt goes through the patched copy): release web with the vendored package, two isolated Chrome profiles, fresh accounts L 332 / M 333 (conv 103).
   - Old-path messages were read both ways, then box messages both ways; the server rows stayed at 2.
   - After both profiles reloaded, history was intact and one message each way was read.
   - "box 2" never left the sender (a headless typing flake), not a lost message.
 - Live drive J 330 / K 331 (conv 102), one-sided re-key: converged live, box both ways, 1 server row. It is a NO-REGRESSION check only: decision 49's window was never consulted, and the two-sided crossing is harness-only. Detail: `.planning/metadata-item5/findings.md` § 2026-09-27.
-- NOT verified: the crossing on a device; the libsignal patch on Android/iOS (it is pure Dart, but the sibling re-key case in the trap was never re-driven); prod (box OFF); a revoked friend device actually using the window.
+- NOT verified: the crossing on a device; patch 2 on a device (it runs only when a message is read from an ARCHIVED state, which no drive triggers on demand; the drive of the patched build predates patch 2 and exercised patch 1); the libsignal patch on Android/iOS (it is pure Dart, but the sibling re-key case in the trap was never re-driven); prod (box OFF); a revoked friend device actually using the window.
 
 ## Notes for next session
 - Next action: pending pass fixes 1–3 from `2026-09-26-metadata-item5-migration.md` Notes, then slice (e), queue rotation, per the remainder plan:
