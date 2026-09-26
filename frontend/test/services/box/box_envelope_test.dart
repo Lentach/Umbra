@@ -85,4 +85,68 @@ void main() {
       expect(decode(built.copyJson), isNot(contains('linkPreview')));
     },
   );
+
+  const quote = (
+    wireId: 'temp_1758700000000_2-m3x9k2a1',
+    senderId: 2,
+    type: 'TEXT',
+    snippet: 'the quoted words',
+  );
+
+  test(
+    'the message type, timer and quote ride BOTH envelopes (item 3, '
+    'E18a/E18b)',
+    () {
+      final built = boxEnvelope(
+        '',
+        messageType: 'PING',
+        ttl: 60,
+        replyQuote: quote,
+        senderListInfo: senderListInfo,
+        msgId: 'm' * 64,
+        sentAt: sentAt,
+        sentTo: 0x7fffffff,
+      );
+      for (final json in [built.json, built.copyJson]) {
+        final parsed = E2eEnvelope.parse(json);
+        expect(parsed.messageType, 'PING');
+        expect(parsed.ttl, 60);
+        expect(parsed.replyQuote, quote);
+      }
+    },
+  );
+
+  test(
+    'at the longest text the composer accepts, a preview that would '
+    'overflow is dropped — never the quote or the timer (E18c)',
+    () {
+      final text = 'a' * (AppConstants.maxEnvelopeBytes - 14);
+      final built = boxEnvelope(
+        text,
+        ttl: 2592000,
+        replyQuote: (
+          wireId: 'w' * 64,
+          senderId: 0x7fffffff,
+          type: 'TEXT',
+          snippet: '\u0001' * 256,
+        ),
+        senderListInfo: senderListInfo,
+        msgId: 'm' * 64,
+        sentAt: sentAt,
+        sentTo: 0x7fffffff,
+        linkPreview: {'url': 'https://example.com/', 'title': 't' * 3000},
+      );
+
+      expect(built.linkPreview, isNull);
+      for (final json in [built.json, built.copyJson]) {
+        final parsed = E2eEnvelope.parse(json);
+        expect(parsed.linkPreviewUrl, isNull);
+        expect(parsed.content, text);
+        expect(parsed.ttl, 2592000);
+        expect(parsed.replyQuote?.snippet, '\u0001' * 256);
+        expect(parsed.replyQuote?.wireId, 'w' * 64);
+        expect(utf8.encode(json), hasLength(lessThanOrEqualTo(kBoxEnvelopeMaxBytes)));
+      }
+    },
+  );
 }

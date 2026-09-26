@@ -280,6 +280,9 @@ ReplyToPreview enrichReplyToPreview(
         content: fromList,
         senderUsername: replyTo.senderUsername,
         messageType: quoted.messageType,
+        wireId: replyTo.wireId,
+        senderId: replyTo.senderId,
+        quotedDisappears: replyTo.quotedDisappears,
       );
     }
   }
@@ -301,6 +304,9 @@ ReplyToPreview enrichReplyToPreview(
               : decrypted),
       senderUsername: replyTo.senderUsername,
       messageType: replyTo.messageType,
+      wireId: replyTo.wireId,
+      senderId: replyTo.senderId,
+      quotedDisappears: replyTo.quotedDisappears,
     );
   }
   return ReplyToPreview(
@@ -317,6 +323,9 @@ ReplyToPreview enrichReplyToPreview(
     ),
     senderUsername: replyTo.senderUsername,
     messageType: replyTo.messageType,
+    wireId: replyTo.wireId,
+    senderId: replyTo.senderId,
+    quotedDisappears: replyTo.quotedDisappears,
   );
 }
 

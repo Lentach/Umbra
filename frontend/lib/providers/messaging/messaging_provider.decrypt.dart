@@ -454,11 +454,23 @@ extension MessagingDecrypt on MessagingProvider {
             )
         ? decrypted.linkPreviewImageUrl
         : null;
+    final box = isLocalMessageId(decrypted.id);
+    final ttl = decrypted.disappearAfterSeconds;
+    final expiresAt = decrypted.expiresAt;
     final data = <String, dynamic>{
       'content': decrypted.content,
       // A box message has no server row to name its sender on the next
       // launch (decision 14): the record is the only place it survives.
       if (!isServerMessageId(decrypted.id)) 'senderId': decrypted.senderId,
+      // Nor its quote (E18a).
+      if (box && decrypted.replyTo != null)
+        'replyTo': decrypted.replyTo!.toJson(),
+      // When its countdown started (decision 41): a restart restores the
+      // deadline of a started one, and leaves an unstarted one to the
+      // 1-day cap.
+      if (box && ttl != null && expiresAt != null)
+        _boxCountdownFromKey:
+            expiresAt.toUtc().millisecondsSinceEpoch - ttl * 1000,
       if (decrypted.editedAt != null)
         'editedAt': decrypted.editedAt!.toIso8601String(),
       if (decrypted.messageType != MessageType.text)
@@ -486,7 +498,7 @@ extension MessagingDecrypt on MessagingProvider {
         data,
         conversationId: decrypted.conversationId,
         createdAt: decrypted.createdAt,
-        expiresAt: decrypted.expiresAt,
+        expiresAt: box ? _boxRecordExpiry(decrypted) : expiresAt,
         disappearAfterSeconds: decrypted.disappearAfterSeconds,
         // A NEW pair is only ever stamped from an authenticated sender: a
         // wire id first reaches a row from an envelope that decrypted under
@@ -672,6 +684,9 @@ extension MessagingDecrypt on MessagingProvider {
     final restoredType = _parseMessageTypeString(
       payload['messageType'] as String?,
     );
+    // Only a box message keeps its quote here (E18a); a server row's comes
+    // with the row.
+    final quote = payload['replyTo'];
     return msg.copyWith(
       // A PING carries no plaintext, so its persisted content is legitimately
       // empty. Falling back to msg.content ('[encrypted]') would keep
@@ -694,6 +709,9 @@ extension MessagingDecrypt on MessagingProvider {
       linkPreviewTitle: payload['linkPreviewTitle'] as String?,
       linkPreviewImageUrl: validImage,
       wireId: payload[PlaintextRecordCodec.wireIdKey] as String?,
+      replyTo: quote is Map<String, dynamic>
+          ? ReplyToPreview.fromJson(quote)
+          : null,
     );
   }
 

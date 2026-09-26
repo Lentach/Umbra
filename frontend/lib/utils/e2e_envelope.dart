@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'message_expiry.dart';
+
 /// One parsed [E2eEnvelope].
 typedef E2eEnvelopeFields = ({
   String content,
@@ -19,6 +21,19 @@ typedef E2eEnvelopeFields = ({
   String type,
   DateTime? sentAt,
   int? sentTo,
+  int? ttl,
+  E2eReplyQuote? replyQuote,
+  String? boxMedia,
+});
+
+/// A box reply's quote (metadata-privacy item 3, E18a): the quoted
+/// message's wire id and sender — a wire id is unique per sender only — its
+/// message type, and the snippet a device that does not hold it shows.
+typedef E2eReplyQuote = ({
+  String? wireId,
+  int senderId,
+  String type,
+  String snippet,
 });
 
 /// E2E encrypted message envelope format. Single source of truth for build/parse.
@@ -93,6 +108,27 @@ class E2eEnvelope {
   /// E2E plaintext: the box sees no account at all.
   static const String _keySentTo = 'to';
 
+  /// A box message's own timer in seconds (metadata-privacy item 3, E18b,
+  /// decision 42): the chat's setting stays a server column, and each box
+  /// message carries the one it was sent under. Only the timer sheet's range
+  /// counts; anything else is no timer.
+  static const String _keyTtl = 'ttl';
+
+  /// A box reply's quote ([E2eReplyQuote], E18a): `{w?, s, k, x}`.
+  static const String _keyReplyQuote = 're';
+  static const String _keyQuoteWireId = 'w';
+  static const String _keyQuoteSender = 's';
+  static const String _keyQuoteType = 'k';
+  static const String _keyQuoteSnippet = 'x';
+
+  /// The most UTF-8 bytes a quote's snippet carries (E18a/E18c): enough to
+  /// recognise the quoted message, small enough that the longest text the
+  /// composer takes still fits one box frame with it.
+  static const int maxQuoteSnippetBytes = 256;
+
+  /// A box attachment's 32-byte id (E17a), spelled as the box spells one.
+  static const String _keyBoxMedia = 'boxMedia';
+
   static Map<String, dynamic> build(
     String content, {
     String messageType = 'TEXT',
@@ -109,6 +145,9 @@ class E2eEnvelope {
     String? type,
     DateTime? sentAt,
     int? sentTo,
+    int? ttl,
+    E2eReplyQuote? replyQuote,
+    String? boxMedia,
   }) {
     final envelope = <String, dynamic>{_keyContent: content};
     if (type != null) envelope[_keyType] = type;
@@ -131,6 +170,23 @@ class E2eEnvelope {
       envelope[_keySenderListInfo] = senderListInfo;
     }
     if (msgId != null) envelope[_keyMsgId] = msgId;
+    if (_isValidTtl(ttl)) envelope[_keyTtl] = ttl;
+    if (replyQuote != null && _isUserId(replyQuote.senderId)) {
+      final wireId = replyQuote.wireId;
+      envelope[_keyReplyQuote] = {
+        if (wireId != null && _msgIdShape.hasMatch(wireId))
+          _keyQuoteWireId: wireId,
+        _keyQuoteSender: replyQuote.senderId,
+        _keyQuoteType: replyQuote.type,
+        _keyQuoteSnippet: _cutToBytes(
+          replyQuote.snippet,
+          maxQuoteSnippetBytes,
+        ),
+      };
+    }
+    if (boxMedia != null && _boxId32.hasMatch(boxMedia)) {
+      envelope[_keyBoxMedia] = boxMedia;
+    }
     return envelope;
   }
 
@@ -153,6 +209,8 @@ class E2eEnvelope {
     final rawType = envelope[_keyType];
     final rawSentAt = envelope[_keySentAt];
     final rawSentTo = envelope[_keySentTo];
+    final rawTtl = envelope[_keyTtl];
+    final rawBoxMedia = envelope[_keyBoxMedia];
     return (
       content: content,
       messageType: messageType,
@@ -182,7 +240,60 @@ class E2eEnvelope {
       sentTo: rawSentTo is int && rawSentTo > 0 && rawSentTo <= 0x7fffffff
           ? rawSentTo
           : null,
+      ttl: rawTtl is int && _isValidTtl(rawTtl) ? rawTtl : null,
+      replyQuote: _parseReplyQuote(envelope[_keyReplyQuote]),
+      boxMedia: rawBoxMedia is String && _boxId32.hasMatch(rawBoxMedia)
+          ? rawBoxMedia
+          : null,
     );
+  }
+
+  /// A quote a peer sent: dropped whole unless its sender, type and snippet
+  /// are sound — it is shown and stored, never the reason a message is lost.
+  /// A wire id outside the minting shape is dropped alone: the snippet still
+  /// shows (a quoted message older than PR2.1 has none).
+  static E2eReplyQuote? _parseReplyQuote(Object? raw) {
+    if (raw is! Map<String, dynamic>) return null;
+    final senderId = raw[_keyQuoteSender];
+    final type = raw[_keyQuoteType];
+    final snippet = raw[_keyQuoteSnippet];
+    final wireId = raw[_keyQuoteWireId];
+    if (senderId is! int || !_isUserId(senderId)) return null;
+    if (type is! String || snippet is! String) return null;
+    if (utf8.encode(snippet).length > maxQuoteSnippetBytes) return null;
+    return (
+      wireId: wireId is String && _msgIdShape.hasMatch(wireId) ? wireId : null,
+      senderId: senderId,
+      type: type,
+      snippet: snippet,
+    );
+  }
+
+  static bool _isValidTtl(int? ttl) =>
+      ttl != null &&
+      ttl >= kDisappearingMinSeconds &&
+      ttl <= kDisappearingMaxSeconds;
+
+  /// A user id (a Postgres int4).
+  static bool _isUserId(int id) => id > 0 && id <= 0x7fffffff;
+
+  /// [text] cut to at most [maxBytes] UTF-8 bytes, only ever between two
+  /// code points.
+  static String _cutToBytes(String text, int maxBytes) {
+    var bytes = 0;
+    var end = 0;
+    for (final rune in text.runes) {
+      bytes += rune < 0x80
+          ? 1
+          : rune < 0x800
+          ? 2
+          : rune < 0x10000
+          ? 3
+          : 4;
+      if (bytes > maxBytes) return text.substring(0, end);
+      end += rune < 0x10000 ? 1 : 2;
+    }
+    return text;
   }
 
   /// A [typeQueueHandoff] envelope handing over the self-queue [sid] and the

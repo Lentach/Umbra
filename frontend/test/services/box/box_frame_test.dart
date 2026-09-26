@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:fireplace/constants/app_constants.dart';
+import 'package:fireplace/services/box/box_envelope.dart';
 import 'package:fireplace/services/box/box_frame.dart';
 import 'package:fireplace/services/box/queue_seal.dart';
 import 'package:fireplace/utils/e2e_envelope.dart';
@@ -11,6 +12,35 @@ import 'package:libsignal_protocol_dart/libsignal_protocol_dart.dart';
 
 Uint8List _bytes(int length) =>
     Uint8List.fromList(List.generate(length, (i) => (i * 11 + 5) & 0xff));
+
+/// [plaintext] as the FIRST Signal message of a fresh session: the PreKey
+/// header is the worst case a box frame carries.
+Future<CiphertextMessage> _firstMessage(String plaintext) async {
+  final bobIdentity = generateIdentityKeyPair();
+  final bobPreKey = generatePreKeys(1, 1).single;
+  final bobSigned = generateSignedPreKey(bobIdentity, 1);
+  final alice = InMemorySignalProtocolStore(
+    generateIdentityKeyPair(),
+    generateRegistrationId(false),
+  );
+  const bob = SignalProtocolAddress('bob', 1);
+  await SessionBuilder.fromSignalStore(alice, bob).processPreKeyBundle(
+    PreKeyBundle(
+      generateRegistrationId(false),
+      1,
+      bobPreKey.id,
+      bobPreKey.getKeyPair().publicKey,
+      bobSigned.id,
+      bobSigned.getKeyPair().publicKey,
+      bobSigned.signature,
+      bobIdentity.getPublicKey(),
+    ),
+  );
+  return SessionCipher.fromStore(
+    alice,
+    bob,
+  ).encrypt(Uint8List.fromList(utf8.encode(plaintext)));
+}
 
 void main() {
   test('the body is v ‖ kind ‖ u16be device ‖ the raw Signal bytes', () {
@@ -162,6 +192,58 @@ void main() {
         message.serialize().length,
         lessThanOrEqualTo(BoxFrame.maxSignalBytes),
       );
+    },
+  );
+
+  test(
+    'the longest text the composer accepts WITH a maximal quote (a '
+    '256-byte snippet at its worst JSON escaping, a 64-char wire id, the '
+    'largest sender id) and the longest timer, as a first (PreKey) message, '
+    "fits one frame — the peer's envelope and the sibling's sent copy; a "
+    'preview that would overflow is what goes, never the quote (E18c)',
+    () async {
+      final text = '界' * ((AppConstants.maxEnvelopeBytes - 14) ~/ 3);
+      expect(isMessageWithinByteLimit(text), isTrue);
+      // A control char is escaped `\u0001`: six JSON bytes per UTF-8 byte.
+      final snippet = '\u0001' * E2eEnvelope.maxQuoteSnippetBytes;
+      final built = boxEnvelope(
+        text,
+        ttl: 2592000,
+        replyQuote: (
+          wireId: 'w' * 64,
+          senderId: 0x7fffffff,
+          type: 'TEXT',
+          snippet: snippet,
+        ),
+        senderListInfo: {
+          'ownVersion': 12,
+          'ownListHash': 'A' * 44,
+          'peerVersion': 7,
+          'peerListHash': 'B' * 44,
+        },
+        msgId: 'm' * 64,
+        sentAt: DateTime.utc(2026, 9, 24),
+        sentTo: 0x7fffffff,
+        linkPreview: {
+          'url': 'https://example.com/${'a' * 200}',
+          'title': '標題' * 50,
+          'imageUrl': 'https://example.com/${'i' * 200}.png',
+        },
+      );
+      expect(built.linkPreview, isNull, reason: 'the preview went');
+      for (final json in [built.json, built.copyJson]) {
+        final parsed = E2eEnvelope.parse(json);
+        expect(parsed.content, text);
+        expect(parsed.replyQuote?.snippet, snippet);
+        expect(parsed.ttl, 2592000);
+        final message = await _firstMessage(json);
+        expect(message.getType(), CiphertextMessage.prekeyType);
+        expect(
+          message.serialize().length,
+          lessThanOrEqualTo(BoxFrame.maxSignalBytes),
+        );
+      }
+      expect(E2eEnvelope.parse(built.copyJson).sentTo, 0x7fffffff);
     },
   );
 

@@ -8,6 +8,7 @@ import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/services/box/box_frame.dart';
 import 'package:fireplace/services/box/box_outbox.dart';
+import 'package:fireplace/services/box/box_wire.dart';
 import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/services/device_list/device_list_cache.dart';
 import 'package:fireplace/services/device_list/device_list_canonical.dart';
@@ -159,6 +160,9 @@ class _Outbox implements BoxOutbox {
   Completer<void>? hold;
   int _next = kFirstLocalMessageId + 40;
 
+  /// What the box's media route holds, by base64url id.
+  final Map<String, Uint8List> media = {};
+
   @override
   Map<int, ContactOutbound> addressesFor(int peerUserId) =>
       addresses[peerUserId] ?? const {};
@@ -181,6 +185,24 @@ class _Outbox implements BoxOutbox {
 
   @override
   Future<int?> nextLocalId() async => noLocalId ? null : _next++;
+
+  @override
+  Future<BoxResult<BoxMediaRef>> uploadMedia(
+    ContactOutbound to,
+    Uint8List framed,
+  ) async {
+    final id = Uint8List(kBoxMediaIdBytes)..[0] = media.length + 1;
+    media[boxB64(id)] = framed;
+    return BoxOk(
+      BoxMediaRef(id: id, bucket: 'd14', expiresAt: DateTime.utc(2026, 10, 10)),
+    );
+  }
+
+  @override
+  Future<BoxResult<Uint8List>> downloadMedia(Uint8List id) async {
+    final body = media[boxB64(id)];
+    return body == null ? const BoxRefused(BoxCode.notFound) : BoxOk(body);
+  }
 }
 
 ContactOutbound _address(int device) => ContactOutbound(
@@ -223,6 +245,9 @@ void main() {
   late _Outbox outbox;
   late List<String> emitted;
 
+  /// Every old-path `sendMessage` payload.
+  late List<Map<String, dynamic>> oldPathSends;
+
   MessagingProvider newProvider() => MessagingProvider()
     ..setConversationsProvider(conversations)
     ..setEncryptionProvider(encryption)
@@ -231,7 +256,12 @@ void main() {
     ..setIncomingMessageSoundEnabledForTest(false)
     ..onConnect(false)
     ..setActiveConversationIdForTest(10)
-    ..setEmitCallback((event, data) => emitted.add(event))
+    ..setEmitCallback((event, data) {
+      emitted.add(event);
+      if (event == 'sendMessage') {
+        oldPathSends.add(data as Map<String, dynamic>);
+      }
+    })
     ..boxOutbox = outbox;
 
   Future<void> setUpWith({int? timer}) async {
@@ -249,6 +279,7 @@ void main() {
       ..openConversation(10);
     outbox = _Outbox();
     emitted = [];
+    oldPathSends = [];
     provider = newProvider();
   }
 
@@ -579,29 +610,215 @@ void main() {
     expect(outbox.delivered, isEmpty);
   });
 
+  /// A fresh provider whose chat opens with an empty server page: box rows
+  /// come back only from their records (decision 14).
+  Future<void> restart() async {
+    provider.dispose();
+    provider = newProvider();
+    await provider.onMessageHistory({
+      'conversationId': 10,
+      'messages': <Object>[],
+    });
+    await pump(80);
+  }
+
+  /// Our other device 3, with a self-queue: every box send makes a copy.
+  void withSibling() {
+    encryption.lists[1] = _enrolled([1, 3]);
+    outbox.siblings[3] = selfQueueOf(3);
+  }
+
   test(
-    'a chat with a disappearing timer stays on the old path: the box '
-    'envelope carries no expiry yet',
+    'a text in a chat with a timer goes over the box, its timer in the peer '
+    'frame AND the sent copy; our row counts from the send, its record '
+    'carries that deadline, and a restart brings both back (E18b, decision '
+    '41)',
     () async {
       await setUpWith(timer: 60);
       bob([1]);
-      await send('vanishing');
+      withSibling();
+      final row = await send('vanishing');
 
-      expect(outbox.delivered, isEmpty);
-      expect(emitted, contains('sendMessage'));
+      expect(emitted, isNot(contains('sendMessage')));
+      expect(
+        outbox.delivered.map((d) => d.$1.sid),
+        unorderedEquals(['sid-1', 'self-3']),
+      );
+      for (final (to, frame) in outbox.delivered) {
+        expect(envelopeOf(frame), containsPair('ttl', 60), reason: to.sid);
+      }
+      expect(isLocalMessageId(row.id), isTrue);
+      expect(row.disappearAfterSeconds, 60);
+      expect(row.expiresAt, row.createdAt.add(const Duration(seconds: 60)));
+      final record = await encryption.store.getDecryptedContent(row.id);
+      expect(
+        record?['_expiresAt'],
+        row.expiresAt!.millisecondsSinceEpoch,
+        reason: 'the stamp the destruction gate honours',
+      );
+
+      await restart();
+      final back = provider.messages.singleWhere((m) => m.id == row.id);
+      expect(back.disappearAfterSeconds, 60);
+      expect(back.expiresAt, row.expiresAt);
+    },
+  );
+
+  MessageModel quotable(int id, {String? wireId, int senderId = 2}) =>
+      MessageModel(
+        id: id,
+        content: 'the original words',
+        senderId: senderId,
+        senderUsername: senderId == 2 ? 'bob' : 'alice',
+        conversationId: 10,
+        createdAt: DateTime.utc(2026, 9, 20),
+        wireId: wireId,
+      );
+
+  test(
+    'a reply goes over the box quoting the original by wire id and sender, '
+    'with its type and snippet, in the peer frame AND the sent copy — never '
+    'a server id; a restart brings the quote back (E18a)',
+    () async {
+      bob([1]);
+      withSibling();
+      final original = await send('the original words');
+      outbox.delivered.clear();
+      provider.setReplyingTo(original);
+      final reply = await send('re: that');
+
+      expect(emitted, isNot(contains('sendMessage')));
+      expect(outbox.delivered, hasLength(2));
+      for (final (to, frame) in outbox.delivered) {
+        expect(envelopeOf(frame)['re'], {
+          'w': original.wireId,
+          's': 1,
+          'k': 'TEXT',
+          'x': 'the original words',
+        }, reason: to.sid);
+      }
+      expect(isLocalMessageId(reply.id), isTrue);
+      expect(reply.deliveryStatus, MessageDeliveryStatus.sent);
+      expect(reply.replyTo?.id, original.id);
+      expect(reply.replyTo?.wireId, original.wireId);
+      expect(reply.replyTo?.senderId, 1);
+
+      await restart();
+      final back = provider.messages.singleWhere((m) => m.id == reply.id);
+      expect(back.replyTo?.id, original.id);
+      expect(back.replyTo?.content, 'the original words');
+      expect(back.replyTo?.wireId, original.wireId);
+      expect(back.replyTo?.senderId, 1);
+      expect(back.replyTo?.messageType, MessageType.text);
     },
   );
 
   test(
-    'a reply stays on the old path: the box envelope names no quoted '
-    'message yet',
+    'a reply to a message with no wire id (older than PR2.1) sends the '
+    'snippet alone, a non-text original its type and no snippet',
+    () async {
+      bob([1]);
+      provider.setReplyingTo(quotable(5));
+      await send('re: old');
+      expect(envelopeOf(outbox.delivered.single.$2)['re'], {
+        's': 2,
+        'k': 'TEXT',
+        'x': 'the original words',
+      });
+
+      outbox.delivered.clear();
+      provider.setReplyingTo(
+        quotable(6, wireId: 'wire-00000006').copyWith(
+          messageType: MessageType.ping,
+          content: '',
+        ),
+      );
+      await send('re: ping');
+      expect(envelopeOf(outbox.delivered.single.$2)['re'], {
+        'w': 'wire-00000006',
+        's': 2,
+        'k': 'PING',
+        'x': '',
+      });
+    },
+  );
+
+  test(
+    'a reply to a message that itself disappears sends NO snippet of it — '
+    'only its wire id, sender and type — or the reply would keep its words '
+    'for its own lifetime (E18a)',
+    () async {
+      bob([1]);
+      final timed = quotable(5, wireId: 'wire-00000005');
+      for (final quoted in [
+        timed.copyWith(disappearAfterSeconds: 60),
+        timed.copyWith(expiresAt: DateTime.now().add(const Duration(hours: 1))),
+      ]) {
+        outbox.delivered.clear();
+        provider.setReplyingTo(quoted);
+        final reply = await send('re: fleeting');
+        expect(envelopeOf(outbox.delivered.single.$2)['re'], {
+          'w': 'wire-00000005',
+          's': 2,
+          'k': 'TEXT',
+          'x': '',
+        });
+        expect(
+          reply.replyTo?.content,
+          'the original words',
+          reason: 'this device still shows its own preview',
+        );
+      }
+    },
+  );
+
+  test(
+    'a failed box reply is retried with the quote rebuilt from its row',
+    () async {
+      bob([1]);
+      outbox.refuse.add(1);
+      provider.setReplyingTo(quotable(5, wireId: 'wire-00000005'));
+      final failed = await send('re: again');
+      expect(failed.deliveryStatus, MessageDeliveryStatus.failed);
+
+      outbox
+        ..refuse.clear()
+        ..delivered.clear();
+      await provider.retryFailedMessage(failed.tempId!);
+      await pump();
+
+      expect(outbox.delivered, hasLength(1));
+      expect(
+        envelopeOf(outbox.delivered.single.$2)['re'],
+        containsPair('w', 'wire-00000005'),
+      );
+      expect(emitted, isNot(contains('sendMessage')));
+    },
+  );
+
+  test(
+    'a reply to a peer the box does not cover keeps the old path: the '
+    'server row it quotes is named by replyToMessageId, as ever',
+    () async {
+      bob([1, 2], addressed: [1]);
+      provider.setReplyingTo(quotable(5, wireId: 'wire-00000005'));
+      await send('re: over the server');
+
+      expect(outbox.delivered, isEmpty);
+      expect(oldPathSends.single, containsPair('replyToMessageId', 5));
+    },
+  );
+
+  test(
+    'a reply naming a message this device holds no preview of stays on the '
+    'old path: the box would have nothing to quote',
     () async {
       bob([1]);
       provider.sendMessage('re: that', replyToMessageId: 5);
       await pump();
 
       expect(outbox.delivered, isEmpty);
-      expect(emitted, contains('sendMessage'));
+      expect(oldPathSends.single, containsPair('replyToMessageId', 5));
     },
   );
 
@@ -850,14 +1067,71 @@ void main() {
     expect(emitted, contains('sendMessage'));
   });
 
-  test('a ping stays on the old path', () async {
-    bob([1]);
-    provider.sendPing(2);
-    await pump();
+  test(
+    'a ping goes over the box like a text, typed PING in the peer frame AND '
+    'the sent copy, and comes back after a restart as a ping that fires '
+    'nothing (decision 43)',
+    () async {
+      await setUpWith(timer: 30);
+      bob([1]);
+      withSibling();
+      provider.sendPing(2);
+      await pump();
 
-    expect(outbox.delivered, isEmpty);
-    expect(emitted, contains('sendMessage'));
-  });
+      expect(emitted, isNot(contains('sendMessage')));
+      expect(outbox.delivered, hasLength(2));
+      for (final (to, frame) in outbox.delivered) {
+        final envelope = envelopeOf(frame);
+        expect(envelope, containsPair('messageType', 'PING'), reason: to.sid);
+        expect(envelope, containsPair('ttl', 30), reason: to.sid);
+      }
+      final row = provider.messages.single;
+      expect(isLocalMessageId(row.id), isTrue);
+      expect(row.messageType, MessageType.ping);
+      expect(row.deliveryStatus, MessageDeliveryStatus.sent);
+
+      await restart();
+      final back = provider.messages.singleWhere((m) => m.id == row.id);
+      expect(back.messageType, MessageType.ping);
+      expect(back.content, isEmpty);
+      expect(provider.showPingEffect, isFalse);
+    },
+  );
+
+  test(
+    'a failed box text, ping or reply is retried under its OWN timer, not '
+    "the chat's timer changed since: the retry reuses the wire id, so a "
+    'device already holding the message keeps what it has (E18b)',
+    () async {
+      await setUpWith(timer: 30);
+      bob([1, 2]);
+      outbox.refuse.add(2);
+      final text = await send('first try');
+      provider.sendPing(2);
+      await pump();
+      final ping = provider.messages.last;
+      provider.setReplyingTo(quotable(5, wireId: 'wire-00000005'));
+      final reply = await send('re: first try');
+      for (final row in [text, ping, reply]) {
+        expect(row.deliveryStatus, MessageDeliveryStatus.failed);
+      }
+
+      conversations.onDisappearingTimerUpdated({
+        'conversationId': 10,
+        'seconds': 3600,
+      });
+      outbox.refuse.clear();
+      for (final row in [text, ping, reply]) {
+        outbox.delivered.clear();
+        await provider.retryFailedMessage(row.tempId!);
+        await pump();
+        expect(outbox.delivered, hasLength(2), reason: row.tempId);
+        for (final (_, frame) in outbox.delivered) {
+          expect(envelopeOf(frame), containsPair('ttl', 30), reason: row.tempId);
+        }
+      }
+    },
+  );
 
   test(
     'the connect pre-builds a session for exactly the box-covered live '

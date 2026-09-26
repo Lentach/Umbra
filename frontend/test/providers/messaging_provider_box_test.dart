@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
@@ -8,6 +9,7 @@ import 'package:fireplace/services/contacts/contact_store.dart';
 import 'package:fireplace/services/device_list/device_list_cache.dart';
 import 'package:fireplace/services/encryption_service.dart';
 import 'package:fireplace/utils/e2e_envelope.dart';
+import 'package:fireplace/utils/message_expiry.dart';
 import 'package:fireplace/utils/message_ids.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -503,4 +505,330 @@ void main() {
       expect(emitted, ['deleteMessage']);
     },
   );
+
+  group('item 3: replies, timers and pings over the box', () {
+    const wire = 'wire-orig-0001';
+
+    void inbound({
+      String text = 'x',
+      String messageType = 'TEXT',
+      String? msgId,
+      int? ttl,
+      E2eReplyQuote? quote,
+      DateTime? sentAt,
+    }) => encryption.inbound = jsonEncode(
+      E2eEnvelope.build(
+        text,
+        messageType: messageType,
+        msgId: msgId,
+        ttl: ttl,
+        replyQuote: quote,
+        sentAt: sentAt,
+      ),
+    );
+
+    /// Received NOW: a timer's 1-day unread cap runs on the real clock.
+    Future<MessageModel> receive({int peer = 2, int conversationId = 10}) async {
+      final e = BoxInboxEntry(
+        rid: 'rid',
+        id: 'm${nextLocal - kFirstLocalMessageId}',
+        localId: nextLocal++,
+        peerUserId: peer,
+        senderDeviceId: 1,
+        signal: '2:AQID',
+        receivedAt: DateTime.now().toUtc(),
+        acked: true,
+      );
+      expect(await deliver(e, _peer(peer, conversationId: conversationId)), isTrue);
+      return provider.messages.singleWhere((m) => m.id == e.localId);
+    }
+
+    Future<void> restart() async {
+      provider.dispose();
+      provider = newProvider();
+      await provider.onMessageHistory({
+        'conversationId': 10,
+        'messages': <Object>[],
+      });
+      await pump(80);
+    }
+
+    test(
+      'a reply shows OUR copy of the quoted message when this device holds '
+      "that sender's wire id — in the open chat or only on disk — and the "
+      'snippet otherwise; a restart keeps it (E18a)',
+      () async {
+        inbound(text: 'the original', msgId: wire);
+        final original = await receive();
+        inbound(
+          text: 'reply',
+          quote: (wireId: wire, senderId: 2, type: 'TEXT', snippet: 'forged'),
+        );
+        final reply = await receive();
+        expect(reply.replyTo?.id, original.id);
+        expect(reply.replyTo?.senderId, 2);
+        expect(reply.replyTo?.wireId, wire);
+        expect(reply.replyTo?.senderUsername, 'bob');
+
+        await encryption.store.saveDecryptedContent(
+          500,
+          {'content': 'mine, on disk only'},
+          conversationId: 10,
+          wire: (senderId: 1, wireId: 'wire-mine-0001'),
+        );
+        inbound(
+          text: 'about yours',
+          quote: (
+            wireId: 'wire-mine-0001',
+            senderId: 1,
+            type: 'TEXT',
+            snippet: 'mine',
+          ),
+        );
+        final aboutMine = await receive();
+        expect(aboutMine.replyTo?.id, 500);
+        expect(aboutMine.replyTo?.senderUsername, 'alice');
+
+        inbound(
+          text: 'about something gone',
+          quote: (
+            wireId: 'wire-none-0001',
+            senderId: 2,
+            type: 'TEXT',
+            snippet: 'what I said',
+          ),
+        );
+        final unheld = await receive();
+        expect(unheld.replyTo?.id, 0);
+        expect(unheld.replyTo?.content, 'what I said');
+
+        await restart();
+        final back = provider.messages.singleWhere((m) => m.id == reply.id);
+        expect(back.replyTo?.id, original.id);
+        expect(back.replyTo?.wireId, wire);
+        expect(back.replyTo?.senderId, 2);
+        expect(
+          provider.messages.singleWhere((m) => m.id == unheld.id).replyTo?.content,
+          'what I said',
+        );
+      },
+    );
+
+    test(
+      'a quote names a message by sender AND wire id: the same wire id from '
+      'another sender, or a message of another chat, is never its quote',
+      () async {
+        await encryption.store.saveDecryptedContent(
+          500,
+          {'content': 'ours, same wire id'},
+          conversationId: 10,
+          wire: (senderId: 1, wireId: wire),
+        );
+        await encryption.store.saveDecryptedContent(
+          501,
+          {'content': "carol's"},
+          conversationId: 11,
+          wire: (senderId: 3, wireId: 'wire-carol-001'),
+        );
+        inbound(
+          text: 'reply',
+          quote: (wireId: wire, senderId: 2, type: 'TEXT', snippet: 'bob said'),
+        );
+        final reply = await receive();
+        expect(reply.replyTo?.id, 0);
+        expect(reply.replyTo?.content, 'bob said');
+
+        inbound(
+          text: 'reply',
+          quote: (
+            wireId: 'wire-carol-001',
+            senderId: 3,
+            type: 'TEXT',
+            snippet: 'x',
+          ),
+        );
+        expect((await receive()).replyTo?.id, 0);
+      },
+    );
+
+    test(
+      "a received message's timer starts only when it is SHOWN: until then "
+      'no deadline and a record stamped with the 1-day unread cap from its '
+      'SEND — a device offline for hours gets no fresh day; shown, it goes '
+      'at now + its timer, once — a second show never restarts it (E18b, '
+      'decision 41)',
+      () async {
+        conversations.setClientVisible(false);
+        final sentAt = DateTime.now().toUtc().subtract(
+          const Duration(hours: 20),
+        );
+        inbound(text: 'vanishing', ttl: 60, sentAt: sentAt);
+        final row = await receive();
+
+        expect(row.createdAt.millisecondsSinceEpoch, sentAt.millisecondsSinceEpoch);
+        expect(row.disappearAfterSeconds, 60);
+        expect(row.expiresAt, isNull, reason: 'in a hidden app: not shown');
+        final unread = await encryption.store.getDecryptedContent(row.id);
+        expect(
+          unread?['_expiresAt'],
+          sentAt.add(const Duration(days: 1)).millisecondsSinceEpoch,
+          reason: 'the send + 1 day, never the arrival + 1 day',
+        );
+        expect(unread, isNot(contains('ttlFrom')));
+
+        conversations.setClientVisible(true);
+        final before = DateTime.now();
+        provider.markConversationRead(10);
+        final after = DateTime.now();
+        await pump();
+
+        final shown = provider.messages.singleWhere((m) => m.id == row.id);
+        final deadline = shown.expiresAt!;
+        expect(
+          deadline.millisecondsSinceEpoch,
+          inInclusiveRange(
+            before.millisecondsSinceEpoch + 60000,
+            after.millisecondsSinceEpoch + 60000,
+          ),
+        );
+        final started = await encryption.store.getDecryptedContent(row.id);
+        expect(started?['_expiresAt'], deadline.millisecondsSinceEpoch);
+        expect(started?['ttlFrom'], deadline.millisecondsSinceEpoch - 60000);
+
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+        provider.markConversationRead(10);
+        await pump();
+        expect(
+          provider.messages.singleWhere((m) => m.id == row.id).expiresAt,
+          deadline,
+        );
+        final again = await encryption.store.getDecryptedContent(row.id);
+        expect(again?['_expiresAt'], deadline.millisecondsSinceEpoch);
+      },
+    );
+
+    test(
+      'an unread box message is destroyable only past its send + 1 day, by '
+      'its own stamp; an old-path record with no server stamp never is by '
+      'expiry (decision 41, `_recordExpiryDeadlineMs`)',
+      () async {
+        conversations.setClientVisible(false);
+        final sentAt = DateTime.now().toUtc().subtract(
+          const Duration(hours: 20),
+        );
+        inbound(text: 'unread', ttl: 60, sentAt: sentAt);
+        final row = await receive();
+        await encryption.store.saveDecryptedContent(
+          700,
+          {'content': 'old path, read-mode'},
+          conversationId: 10,
+          createdAt: sentAt,
+          disappearAfterSeconds: 60,
+        );
+
+        Future<Set<int>> expiredAt(DateTime serverNow) async =>
+            (await encryption.store.destroyableMessageIds(
+              serverNow: serverNow,
+              expiryGrace: kExpiryPurgeGrace,
+            )).expired;
+
+        final cap = sentAt.add(const Duration(days: 1));
+        expect(await expiredAt(DateTime.now().toUtc()), isEmpty);
+        expect(
+          await expiredAt(cap.add(kExpiryPurgeGrace)),
+          isEmpty,
+          reason: 'not before the cap and its grace',
+        );
+        expect(
+          await expiredAt(
+            cap.add(kExpiryPurgeGrace).add(const Duration(seconds: 1)),
+          ),
+          {row.id},
+          reason: 'the old-path record has no stamp: never by expiry',
+        );
+      },
+    );
+
+    test(
+      'a message arriving in the chat on screen starts counting at once',
+      () async {
+        inbound(text: 'seen', ttl: 30);
+        final before = DateTime.now();
+        final row = await receive();
+        expect(row.expiresAt, isNotNull);
+        expect(
+          row.expiresAt!.millisecondsSinceEpoch,
+          greaterThanOrEqualTo(before.millisecondsSinceEpoch + 30000),
+        );
+      },
+    );
+
+    test(
+      'a restart keeps an unstarted countdown unstarted and a started one at '
+      'the deadline it started with — never restarted',
+      () async {
+        conversations.setClientVisible(false);
+        inbound(text: 'unread one', ttl: 60);
+        final unread = await receive();
+        await restart();
+        final stillUnread = provider.messages.singleWhere(
+          (m) => m.id == unread.id,
+        );
+        expect(stillUnread.disappearAfterSeconds, 60);
+        expect(stillUnread.expiresAt, isNull);
+
+        conversations.setClientVisible(true);
+        provider.markConversationRead(10);
+        await pump();
+        final deadline = provider.messages
+            .singleWhere((m) => m.id == unread.id)
+            .expiresAt;
+        expect(deadline, isNotNull);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+
+        await restart();
+        final back = provider.messages.singleWhere((m) => m.id == unread.id);
+        expect(back.disappearAfterSeconds, 60);
+        expect(back.expiresAt, deadline);
+      },
+    );
+
+    test(
+      'a timer outside 5 s..30 d, a malformed quote and a malformed media id '
+      'are dropped — the message is not',
+      () async {
+        encryption.inbound = jsonEncode({
+          'content': 'still here',
+          'ttl': 4,
+          're': {'s': 'bob', 'k': 'TEXT', 'x': 'x'},
+          'boxMedia': 'short',
+        });
+        final row = await receive();
+        expect(row.content, 'still here');
+        expect(row.disappearAfterSeconds, isNull);
+        expect(row.expiresAt, isNull);
+        expect(row.replyTo, isNull);
+        final record = await encryption.store.getDecryptedContent(row.id);
+        expect(record, isNot(contains('_expiresAt')));
+      },
+    );
+
+    test(
+      'a ping plays its effect (no sound) in the chat on screen and comes '
+      'back after a restart as a consumed ping (decision 43)',
+      () async {
+        inbound(text: '', messageType: 'PING');
+        final ping = await receive();
+        expect(ping.messageType, MessageType.ping);
+        expect(provider.showPingEffect, isTrue);
+        expect(provider.incomingSoundRequestsForTest, 0);
+
+        await restart();
+        final back = provider.messages.singleWhere((m) => m.id == ping.id);
+        expect(back.messageType, MessageType.ping);
+        expect(back.content, isEmpty);
+        expect(provider.showPingEffect, isFalse);
+      },
+    );
+  });
 }

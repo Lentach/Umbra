@@ -14,14 +14,17 @@ const int kBoxEnvelopeMaxBytes =
 /// The E2E envelopes a box send seals (metadata-privacy PR3.1 slice (c)):
 /// `json` for the peer's devices, `copyJson` — the same message naming the
 /// peer [sentTo] — for the sender's own other devices (sibling queues part
-/// B, E5), and the link preview both actually carry.
+/// B, E5), and the link preview both actually carry. Both carry the
+/// message's type, its own timer [ttl] and a reply's [replyQuote] (item 3,
+/// E18a/E18b).
 ///
 /// The composer bounds the user's TEXT to one frame
-/// (`AppConstants.maxEnvelopeBytes`); a link preview is not the user's text
-/// and has no bound (a native og:title comes from up to 100 KB of HTML), so
-/// when the copy — the longer of the two — would not fit one frame the
-/// preview is dropped from BOTH: the text is never truncated, a message the
-/// composer accepted is never refused for its preview, and every device
+/// (`AppConstants.maxEnvelopeBytes`), and the quote's snippet and the timer
+/// are bounded too (E18c); a link preview is not the user's text and has no
+/// bound (a native og:title comes from up to 100 KB of HTML), so when the
+/// copy — the longer of the two — would not fit one frame the preview is
+/// dropped from BOTH: the text, quote and timer are never dropped, a message
+/// the composer accepted is never refused for its preview, and every device
 /// shows the same message.
 ({String json, String copyJson, Map<String, String?>? linkPreview}) boxEnvelope(
   String content, {
@@ -30,15 +33,21 @@ const int kBoxEnvelopeMaxBytes =
   required DateTime sentAt,
   required int sentTo,
   Map<String, String?>? linkPreview,
+  String messageType = 'TEXT',
+  int? ttl,
+  E2eReplyQuote? replyQuote,
 }) {
   String build(Map<String, String?>? preview, {int? to}) => jsonEncode(
     E2eEnvelope.build(
       content,
+      messageType: messageType,
       linkPreview: preview,
       senderListInfo: senderListInfo,
       msgId: msgId,
       sentAt: sentAt,
       sentTo: to,
+      ttl: ttl,
+      replyQuote: replyQuote,
     ),
   );
   final fits =

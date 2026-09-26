@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import '../contacts/contact_record.dart';
+import 'box_wire.dart';
 
 /// The send side of the box (metadata-privacy PR3.1 slice (c)): what the
 /// messaging send path needs, and nothing of how the box is reached.
@@ -32,4 +33,17 @@ abstract interface class BoxOutbox {
   /// sends, from the counter box deliveries draw on; null when the store
   /// could not commit one.
   Future<int?> nextLocalId();
+
+  /// Uploads [framed] (the file's ciphertext padded to a ladder rung,
+  /// `frameMediaToRung`) ONCE, against [to]'s queue, whose daily budget pays
+  /// (E17a). A bad address or a body off the ladder is refused with nothing
+  /// sent.
+  Future<BoxResult<BoxMediaRef>> uploadMedia(
+    ContactOutbound to,
+    Uint8List framed,
+  );
+
+  /// The framed body of media [id]; [BoxCode.notFound] once the box dropped
+  /// it (14 days, D8) or never held it.
+  Future<BoxResult<Uint8List>> downloadMedia(Uint8List id);
 }

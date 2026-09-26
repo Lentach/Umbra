@@ -3607,6 +3607,23 @@ class EncryptionService {
   /// A deleted record's claim is kept, which can only drop a later copy of
   /// a message the user already deleted.
   Future<bool?> wireHeldByOther(WireKey wire, int id) async {
+    final claims = await _cachedWireClaims();
+    if (claims == null) return null;
+    return claims[wire]?.any((other) => other != id) ?? false;
+  }
+
+  /// The ONE record holding [wire] — what a box reply's quote resolves to
+  /// (metadata-privacy item 3, E18a) — from [wireHeldByOther]'s cache. Null
+  /// when none or more than one does ([wireIdIndex]'s rule: a guess would
+  /// show the wrong message as the quote) or the stores could not be
+  /// enumerated. A deleted record's claim is kept, so the caller reads the
+  /// record before trusting the id.
+  Future<int?> wireHolder(WireKey wire) async {
+    final ids = (await _cachedWireClaims())?[wire];
+    return ids != null && ids.length == 1 ? ids.single : null;
+  }
+
+  Future<Map<WireKey, Set<int>>?> _cachedWireClaims() async {
     final userId = _userId;
     if (userId == null) return null;
     var cache = _wireClaims;
@@ -3616,7 +3633,7 @@ class EncryptionService {
       cache = (userId: userId, claims: scanned);
       _wireClaims = cache;
     }
-    return cache.claims[wire]?.any((other) => other != id) ?? false;
+    return cache.claims;
   }
 
   ({int userId, Map<WireKey, Set<int>> claims})? _wireClaims;

@@ -9,11 +9,26 @@ class ReplyToPreview {
   final String senderUsername;
   final MessageType messageType;
 
+  /// The quoted message's wire id and sender (metadata-privacy item 3,
+  /// E18a): what a box reply names it by — a wire id is unique per sender
+  /// only, and a box message's local [id] differs on every device. Null on
+  /// a server snapshot and when the quoted message predates PR2.1.
+  final String? wireId;
+  final int? senderId;
+
+  /// The quoted message itself disappears (it had a timer when quoted): a
+  /// box reply then sends no snippet of it (E18a), or the reply would keep
+  /// its words for the reply's own lifetime.
+  final bool quotedDisappears;
+
   const ReplyToPreview({
     required this.id,
     required this.content,
     required this.senderUsername,
     required this.messageType,
+    this.wireId,
+    this.senderId,
+    this.quotedDisappears = false,
   });
 
   factory ReplyToPreview.fromJson(Map<String, dynamic> json) {
@@ -24,8 +39,23 @@ class ReplyToPreview {
       messageType: MessageModel._parseMessageType(
         json['messageType'] as String?,
       ),
+      wireId: json['wireId'] as String?,
+      senderId: json['senderId'] as int?,
+      quotedDisappears: json['quotedDisappears'] == true,
     );
   }
+
+  /// The shape [ReplyToPreview.fromJson] reads: how a box message's quote is
+  /// kept in its plaintext record (it has no server row to carry it).
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'content': content,
+    'senderUsername': senderUsername,
+    'messageType': messageType.name.toUpperCase(),
+    'wireId': ?wireId,
+    'senderId': ?senderId,
+    if (quotedDisappears) 'quotedDisappears': true,
+  };
 }
 
 class MessageModel {

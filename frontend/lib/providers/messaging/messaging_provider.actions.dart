@@ -18,6 +18,9 @@ extension MessagingActions on MessagingProvider {
   /// again with this gate passing.
   void markConversationRead(int conversationId) {
     if (_conversationsProvider?.isClientVisible == false) return;
+    // A box message has no server read mark: its countdown starts here, at
+    // the same moments (decision 41).
+    _startBoxCountdowns(conversationId);
     _emit?.call('markConversationRead', {'conversationId': conversationId});
   }
 

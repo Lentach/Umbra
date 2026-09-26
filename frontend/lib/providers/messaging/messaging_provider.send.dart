@@ -1430,6 +1430,16 @@ extension MessagingSend on MessagingProvider {
     // attempt for this row left behind, so a retry that fails for a different
     // reason (or succeeds) stops claiming the peer's keys changed.
     _identityRefusedSendTempIds.remove(tempId);
+    // Read before the first await: the optimistic row leaves [_messages] once
+    // the user opens another chat. A box send quotes and times the message
+    // from its row, a retry included (E18a/E18b): a retry reuses the wire
+    // id, so a device already holding the message drops the copy, and a
+    // timer changed since would differ between devices.
+    final row = _messages.where((m) => m.tempId == tempId).firstOrNull;
+    final replyTo = row?.replyTo;
+    final boxTtl = row == null
+        ? effectiveExpiresIn
+        : row.disappearAfterSeconds;
 
     try {
       // 1. Fetch client-side link preview before encrypting (TEXT only).
@@ -1486,23 +1496,24 @@ extension MessagingSend on MessagingProvider {
         }
       }
 
-      // 2b. The box (metadata-privacy PR3.1 slice (c)). A plain text goes
-      // there — and ONLY there (decision 15) — when every live device on
-      // both sides has a box address; otherwise the old path below, as ever.
-      // Media, pings, replies and disappearing timers stay on the old path:
-      // the box envelope carries none of them yet.
+      // 2b. The box (metadata-privacy PR3.1 slice (c), item 3). A text or a
+      // ping (decision 43) — a reply and a disappearing one included — goes
+      // there, and ONLY there (decision 15), when every live device on both
+      // sides has a box address; otherwise the old path below, as ever.
+      // Media stays on the old path: the box envelope carries none yet. So
+      // does a reply the row holds no quote of: the box would name nothing.
       final outbox = boxOutbox;
       final addresses = outbox?.addressesFor(recipientId) ?? const {};
       if (outbox != null &&
           addresses.isNotEmpty &&
-          messageType == 'TEXT' &&
+          (messageType == 'TEXT' || messageType == 'PING') &&
           // The box envelope carries no media fields: a TEXT that ever did
           // carry a `mediaUrl` would lose it silently.
           mediaUrl == null &&
-          effectiveReplyToId == null &&
-          (effectiveExpiresIn ?? 0) <= 0) {
+          (effectiveReplyToId == null || _boxQuoteOf(replyTo) != null)) {
         final route = await _boxRoute(recipientId, outbox, addresses);
         if (route != null) {
+          final ttl = boxTtl;
           // Awaited: a throw must reach this try's failure handling.
           return await _sendOverBox(
             route,
@@ -1511,6 +1522,17 @@ extension MessagingSend on MessagingProvider {
             tempId: tempId,
             sendToken: _sendTokenFor(tempId),
             linkPreview: linkPreview,
+            messageType: messageType,
+            // Decision 42: the chat's setting, taken into E2E per message at
+            // its send; one outside the timer sheet's range is no timer
+            // (E18b).
+            ttl:
+                ttl != null &&
+                    ttl >= kDisappearingMinSeconds &&
+                    ttl <= kDisappearingMaxSeconds
+                ? ttl
+                : null,
+            replyTo: replyTo,
           );
         }
       }

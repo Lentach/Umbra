@@ -1,6 +1,8 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:fireplace/services/box/box_client.dart';
+import 'package:fireplace/services/box/box_media_frame.dart';
 import 'package:fireplace/services/box/box_session.dart';
 import 'package:fireplace/services/box/box_signer.dart';
 import 'package:fireplace/services/box/box_wire.dart';
@@ -10,6 +12,8 @@ import 'package:fireplace/services/contacts/contact_store.dart';
 import 'package:fireplace/services/encryption/content_kv.dart';
 import 'package:fireplace/utils/message_ids.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../support/box_fakes.dart';
@@ -41,6 +45,10 @@ void main() {
   /// What the box answers a `send`.
   var sendAnswer = <String, Object?>{'ok': true};
 
+  /// What the box's media route answers.
+  var media = (http.Request req) async => http.Response('', 500);
+  final mediaRequests = <http.Request>[];
+
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
     kv = await PrefsContentKv.open();
@@ -53,6 +61,8 @@ void main() {
     address = _address(0x10);
     gone.clear();
     sendAnswer = {'ok': true};
+    media = (_) async => http.Response('', 500);
+    mediaRequests.clear();
     sockets = FakeBoxSockets()
       ..respond = (_, f) => switch (f.event) {
         'createQueue' => {'ok': true, ...address},
@@ -69,7 +79,14 @@ void main() {
       };
     published = [];
     session = BoxSession(
-      box: BoxClient(baseUrl: 'http://box.test', socketFactory: sockets.call),
+      box: BoxClient(
+        baseUrl: 'http://box.test',
+        socketFactory: sockets.call,
+        httpClient: MockClient((req) {
+          mediaRequests.add(req);
+          return media(req);
+        }),
+      ),
       store: store,
       emit: (event, data) {
         if (event == 'setRequestQueue') {
@@ -468,6 +485,96 @@ void main() {
       store.close();
       expect(await session.nextLocalId(), isNull);
     });
+
+    test(
+      "uploadMedia puts the framed body on the box against the address's "
+      "sid (that queue's budget pays) and answers the box's reference",
+      () async {
+        final id = _bytes(32, 0x33);
+        media = (_) async => http.Response(
+          jsonEncode({
+            'id': boxB64(id),
+            'bucket': 'd14',
+            'expiresAt': '2026-10-10T00:00:00.000Z',
+          }),
+          201,
+        );
+        final framed = frameMediaToRung(Uint8List.fromList([1, 2, 3]));
+        final result = await session.uploadMedia(address, framed);
+
+        final req = mediaRequests.single;
+        expect(req.method, 'POST');
+        expect(req.headers['Box-Sid'], address.sid);
+        expect(req.bodyBytes, framed);
+        expect(
+          result,
+          isA<BoxOk<BoxMediaRef>>().having((r) => r.value.id, 'id', id),
+        );
+      },
+    );
+
+    test('a refused upload is the refusal, not an answer', () async {
+      media = (_) async =>
+          http.Response(jsonEncode({'error': 'quota_exceeded'}), 429);
+      final result = await session.uploadMedia(
+        address,
+        frameMediaToRung(Uint8List(1)),
+      );
+      expect(
+        result,
+        isA<BoxRefused<BoxMediaRef>>()
+            .having((r) => r.code, 'code', BoxCode.quotaExceeded),
+      );
+    });
+
+    test(
+      'an address that is not a canonical sid, or a body that is not a '
+      'ladder size, is refused with nothing sent — never a throw',
+      () async {
+        final bad = ContactOutbound(
+          peerDeviceId: 2,
+          sid: 'short',
+          sealPub: address.sealPub,
+        );
+        expect(
+          await session.uploadMedia(bad, frameMediaToRung(Uint8List(1))),
+          isA<BoxRefused<BoxMediaRef>>(),
+        );
+        expect(
+          await session.uploadMedia(address, Uint8List(5000)),
+          isA<BoxRefused<BoxMediaRef>>()
+              .having((r) => r.code, 'code', BoxCode.badSize),
+        );
+        expect(
+          await session.downloadMedia(Uint8List(31)),
+          isA<BoxRefused<Uint8List>>(),
+        );
+        expect(mediaRequests, isEmpty);
+      },
+    );
+
+    test(
+      "downloadMedia fetches the id's body; a 404 (expired, or never there) "
+      'is notFound',
+      () async {
+        final id = _bytes(32, 0x44);
+        final body = frameMediaToRung(Uint8List.fromList([7]));
+        media = (_) async => http.Response.bytes(body, 200);
+        final got = await session.downloadMedia(id);
+        expect(mediaRequests.single.url.path, '/box/media/${boxB64(id)}');
+        expect(
+          got,
+          isA<BoxOk<Uint8List>>().having((r) => r.value, 'body', body),
+        );
+
+        media = (_) async => http.Response('', 404);
+        expect(
+          await session.downloadMedia(id),
+          isA<BoxRefused<Uint8List>>()
+              .having((r) => r.code, 'code', BoxCode.notFound),
+        );
+      },
+    );
   });
 
   test('dispose closes the box connection', () async {

@@ -635,6 +635,68 @@ void main() {
         expect(provider.messages, isEmpty);
       },
     );
+
+    test(
+      "with a timer counts from the SEND, as the sender's own copy does, and "
+      'its record carries that deadline (E18b, decision 41)',
+      () async {
+        inbound({...copy(), 'ttl': 60});
+        final e = sibling();
+        expect(await consume(e), isTrue);
+
+        final row = provider.messages.single;
+        final deadline = sentAt.add(const Duration(seconds: 60));
+        expect(row.disappearAfterSeconds, 60);
+        expect(row.expiresAt, deadline);
+        final record = await encryption.store.getDecryptedContent(e.localId);
+        expect(record?['_expiresAt'], deadline.millisecondsSinceEpoch);
+      },
+    );
+
+    test(
+      "of a reply quotes this device's own copy of the peer's message by its "
+      'sender and wire id (E18a)',
+      () async {
+        await encryption.store.saveDecryptedContent(
+          500,
+          {'content': "bob's words"},
+          conversationId: 10,
+          wire: (senderId: 2, wireId: 'wire-bob-00001'),
+        );
+        inbound({
+          ...copy(),
+          ...E2eEnvelope.build(
+            'my answer',
+            msgId: wire,
+            sentAt: sentAt,
+            replyQuote: (
+              wireId: 'wire-bob-00001',
+              senderId: 2,
+              type: 'TEXT',
+              snippet: "bob's",
+            ),
+          ),
+        });
+        expect(await consume(sibling()), isTrue);
+
+        final quote = provider.messages.single.replyTo;
+        expect(quote?.id, 500);
+        expect(quote?.senderId, 2);
+        expect(quote?.senderUsername, 'bob');
+      },
+    );
+
+    test(
+      'of a ping is our ping: filed, and no ping effect fires (decision 43)',
+      () async {
+        inbound({...copy(), 'messageType': 'PING', 'content': ''});
+        expect(await consume(sibling()), isTrue);
+
+        expect(provider.messages.single.messageType, MessageType.ping);
+        expect(provider.showPingEffect, isFalse);
+        expect(provider.incomingSoundRequestsForTest, 0);
+      },
+    );
   });
 
   test(

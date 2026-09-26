@@ -346,5 +346,149 @@ void main() {
         expect(E2eEnvelope.parseQueueHandoffAck('not json'), isNull);
       });
     });
+
+    group('ttl / re / boxMedia (item 3, E17a/E18a/E18b)', () {
+      final boxMedia = '${'A' * 42}E';
+      const quote = (
+        wireId: 'temp_1758700000000_2-m3x9k2a1',
+        senderId: 2,
+        type: 'IMAGE',
+        snippet: 'look at this',
+      );
+
+      test('all three survive a build -> parse round trip', () {
+        final built = E2eEnvelope.build(
+          'hi',
+          ttl: 60,
+          replyQuote: quote,
+          boxMedia: boxMedia,
+        );
+        expect(built['ttl'], 60);
+        expect(built['re'], {
+          'w': quote.wireId,
+          's': 2,
+          'k': 'IMAGE',
+          'x': 'look at this',
+        });
+        expect(built['boxMedia'], boxMedia);
+        final parsed = E2eEnvelope.parse(jsonEncode(built));
+        expect(parsed.ttl, 60);
+        expect(parsed.replyQuote, quote);
+        expect(parsed.boxMedia, boxMedia);
+      });
+
+      test('none is written when not given, and none parses from an old '
+          'envelope', () {
+        final built = E2eEnvelope.build('hi');
+        expect(built.keys, isNot(anyOf(contains('ttl'), contains('re'))));
+        expect(built, isNot(contains('boxMedia')));
+        final parsed = E2eEnvelope.parse(jsonEncode({'content': 'hi'}));
+        expect(parsed.ttl, isNull);
+        expect(parsed.replyQuote, isNull);
+        expect(parsed.boxMedia, isNull);
+      });
+
+      test('a ttl outside the timer sheet range (5 s..30 d) is no timer, '
+          'never a message dropped', () {
+        for (final value in <Object>[0, 4, 2592001, -60, 60.5, '60', true]) {
+          final parsed = E2eEnvelope.parse(
+            jsonEncode({'content': 'hi', 'ttl': value}),
+          );
+          expect(parsed.ttl, isNull, reason: '$value');
+          expect(parsed.content, 'hi', reason: '$value');
+        }
+        for (final value in [5, 2592000]) {
+          expect(
+            E2eEnvelope.parse(jsonEncode({'content': 'hi', 'ttl': value})).ttl,
+            value,
+          );
+        }
+        expect(E2eEnvelope.build('hi', ttl: 4), isNot(contains('ttl')));
+      });
+
+      test('an invalid re is dropped whole — never the message; a bad wire '
+          'id is dropped alone', () {
+        final valid = {'w': quote.wireId, 's': 2, 'k': 'TEXT', 'x': 'hey'};
+        for (final bad in <Object?>[
+          'not an object',
+          [1],
+          {...valid, 's': 0},
+          {...valid, 's': 0x80000000},
+          {...valid, 's': '2'},
+          {...valid}..remove('s'),
+          {...valid, 'k': 7},
+          {...valid}..remove('k'),
+          {...valid, 'x': 9},
+          {...valid}..remove('x'),
+          {...valid, 'x': 'a' * 257},
+          {...valid, 'x': '界' * 86},
+        ]) {
+          final parsed = E2eEnvelope.parse(
+            jsonEncode({'content': 'hi', 're': bad}),
+          );
+          expect(parsed.replyQuote, isNull, reason: '$bad');
+          expect(parsed.content, 'hi', reason: '$bad');
+        }
+        for (final w in <Object?>['short', 'x' * 65, 'has space', 42]) {
+          final parsed = E2eEnvelope.parse(
+            jsonEncode({'content': 'hi', 're': {...valid, 'w': w}}),
+          );
+          expect(
+            parsed.replyQuote,
+            (wireId: null, senderId: 2, type: 'TEXT', snippet: 'hey'),
+            reason: '$w',
+          );
+        }
+        expect(
+          E2eEnvelope.parse(
+            jsonEncode({'content': 'hi', 're': {...valid, 'x': '界' * 85}}),
+          ).replyQuote?.snippet,
+          '界' * 85,
+          reason: '255 bytes is within the bound',
+        );
+      });
+
+      test('build cuts the snippet to 256 UTF-8 bytes at a character '
+          'boundary, so what it writes always parses', () {
+        for (final (text, kept) in [
+          ('a' * 300, 'a' * 256),
+          ('界' * 100, '界' * 85),
+          ('${'a' * 254}😀z', 'a' * 254),
+          ('${'a' * 252}😀z', '${'a' * 252}😀'),
+        ]) {
+          final built = E2eEnvelope.build(
+            'hi',
+            replyQuote: (wireId: null, senderId: 2, type: 'TEXT', snippet: text),
+          );
+          final re = built['re'] as Map<String, dynamic>;
+          expect(re['x'], kept);
+          expect(re, isNot(contains('w')), reason: 'no wire id, no w');
+          expect(
+            E2eEnvelope.parse(jsonEncode(built)).replyQuote?.snippet,
+            kept,
+          );
+        }
+      });
+
+      test('a boxMedia not spelled as a canonical 32-byte id is absent', () {
+        for (final bad in <Object?>[
+          'short',
+          '${'A' * 42}B',
+          '${'A' * 43}=',
+          'A' * 44,
+          42,
+        ]) {
+          final parsed = E2eEnvelope.parse(
+            jsonEncode({'content': 'hi', 'boxMedia': bad}),
+          );
+          expect(parsed.boxMedia, isNull, reason: '$bad');
+          expect(parsed.content, 'hi');
+        }
+        expect(
+          E2eEnvelope.build('hi', boxMedia: 'short'),
+          isNot(contains('boxMedia')),
+        );
+      });
+    });
   });
 }

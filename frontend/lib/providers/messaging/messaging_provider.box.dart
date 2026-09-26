@@ -10,6 +10,12 @@ typedef _BoxRoute = ({
   SenderListInfo senderListInfo,
 });
 
+/// The payload key of a box message's record holding when its countdown
+/// started, whole ms (item 3, decision 41): the send for our own copies,
+/// the first time this device showed it for a received one. Absent = not
+/// started, so only the 1-day unread cap runs.
+const String _boxCountdownFromKey = 'ttlFrom';
+
 /// Box deliveries (metadata-privacy PR3.1 slice (b)): the ONE dispatcher. A
 /// journaled delivery is decrypted here, NOW — unlike a server row, nothing
 /// can serve its ciphertext again — and routed on the envelope's `t`.
@@ -265,7 +271,10 @@ extension MessagingBox on MessagingProvider {
       // Status is the model's default, `sent`: ours went out when the
       // sibling's box took every frame (decision 20).
     );
-    return _consumeBoxMessage(_withEnvelope(row, parsed));
+    return _withBoxExtras(
+      _withEnvelope(row, parsed),
+      parsed,
+    ).then(_consumeBoxMessage);
   }
 
   /// Hands sibling [device]'s self-queue from its handoff to the box, which
@@ -436,13 +445,147 @@ extension MessagingBox on MessagingProvider {
             ? receivedAt
             : sentAt;
         return _consumeBoxMessage(
-          _withEnvelope(msg, parsed).copyWith(createdAt: createdAt),
+          await _withBoxExtras(
+            _withEnvelope(msg, parsed).copyWith(createdAt: createdAt),
+            parsed,
+          ),
         );
       default:
         // A type a newer peer speaks: nothing here can show it.
         _e2eFlowLog('BOX_UNKNOWN_TYPE', {'msgId': msg.id, 't': parsed.type});
         return true;
     }
+  }
+
+  /// What only a box message carries (item 3), on [row]: its own timer and
+  /// a reply's quote. Never read for a server row, whose timer and quote the
+  /// server holds.
+  ///
+  /// Decision 41: our own copy — a sibling's sent copy — counts from the
+  /// send, like the sender's; a received one only from the first time this
+  /// device shows it ([_startBoxCountdowns]), with the 1-day unread cap
+  /// until then.
+  Future<MessageModel> _withBoxExtras(
+    MessageModel row,
+    E2eEnvelopeFields parsed,
+  ) async {
+    final ttl = parsed.ttl;
+    final quote = parsed.replyQuote;
+    return row.copyWith(
+      disappearAfterSeconds: ttl,
+      expiresAt: ttl != null && row.senderId == _currentUserId
+          ? row.createdAt.add(Duration(seconds: ttl))
+          : null,
+      replyTo: quote == null
+          ? null
+          : await _boxReplyTo(quote, row.conversationId),
+    );
+  }
+
+  /// A box reply's [quote] as the row's preview (E18a). It points at OUR
+  /// copy of the quoted message when this device holds one from that sender
+  /// under that wire id in this chat, so the quote shows what we hold and a
+  /// forged snippet shows only for a message we never had; otherwise at no
+  /// row (id 0), and the snippet shows.
+  Future<ReplyToPreview> _boxReplyTo(
+    E2eReplyQuote quote,
+    int conversationId,
+  ) async {
+    final conversation = _conversationsProvider?.conversations
+        .where((c) => c.id == conversationId)
+        .firstOrNull;
+    final sender = [
+      ?conversation?.userOne,
+      ?conversation?.userTwo,
+    ].where((u) => u.id == quote.senderId).firstOrNull;
+    return ReplyToPreview(
+      id: await _heldQuoteId(quote, conversationId) ?? 0,
+      content: quote.snippet,
+      senderUsername: sender?.username ?? '',
+      messageType: _parseMessageTypeString(quote.type) ?? MessageType.text,
+      wireId: quote.wireId,
+      senderId: quote.senderId,
+    );
+  }
+
+  /// The id of the message [quote] names, held in [conversationId]: by
+  /// sender AND wire id, since a wire id is unique per sender only. Null
+  /// when there is no wire id, or no such message here.
+  Future<int?> _heldQuoteId(E2eReplyQuote quote, int conversationId) async {
+    final wireId = quote.wireId;
+    if (wireId == null) return null;
+    for (final m in _messages) {
+      if (m.conversationId == conversationId &&
+          m.senderId == quote.senderId &&
+          m.wireId == wireId) {
+        return m.id;
+      }
+    }
+    final enc = _encryptionProvider;
+    if (enc == null) return null;
+    final id = await enc.wireHolder((senderId: quote.senderId, wireId: wireId));
+    if (id == null) return null;
+    // Another chat's message is never this one's quote.
+    final record = await enc.getDecryptedContent(id);
+    return record?[PlaintextRecordCodec.conversationIdKey] == conversationId
+        ? id
+        : null;
+  }
+
+  /// The destruction stamp of box message [msg]'s record (decision 41): its
+  /// deadline once its countdown runs, else — a received one not shown yet
+  /// — 1 day after the send, the unread cap. The stamp is what the
+  /// destruction gate honours (`EncryptionService._recordExpiryDeadlineMs`).
+  DateTime? _boxRecordExpiry(MessageModel msg) {
+    if (msg.expiresAt != null || msg.disappearAfterSeconds == null) {
+      return msg.expiresAt;
+    }
+    return msg.createdAt.add(
+      const Duration(seconds: kNeverReadRetentionSeconds),
+    );
+  }
+
+  /// Starts the countdown of every received box message in
+  /// [conversationId] that has a timer and has not started one (decision
+  /// 41): the first time this device SHOWS it — the chat open and the app
+  /// in the foreground, the moments an old-path read mark is sent. The row
+  /// then goes at now + its timer, and its record is re-stamped with that
+  /// deadline and when it started, so a restart keeps counting.
+  void _startBoxCountdowns(int conversationId) {
+    if (_conversationsProvider?.isClientVisible == false) return;
+    final viewing = _effectiveActiveConversationId ?? _paginationConversationId;
+    if (conversationId != viewing) return;
+    final own = _currentUserId;
+    // Whole ms: the stored start and the row's deadline must agree.
+    final now = DateTime.fromMillisecondsSinceEpoch(
+      DateTime.now().millisecondsSinceEpoch,
+      isUtc: true,
+    );
+    var started = false;
+    for (var i = 0; i < _messages.length; i++) {
+      final m = _messages[i];
+      final ttl = m.disappearAfterSeconds;
+      if (m.conversationId != conversationId ||
+          !isLocalMessageId(m.id) ||
+          m.senderId == own ||
+          ttl == null ||
+          m.expiresAt != null ||
+          isMessageExpired(m, now)) {
+        continue;
+      }
+      final shown = m.copyWith(expiresAt: now.add(Duration(seconds: ttl)));
+      _messages[i] = shown;
+      started = true;
+      _encryptionProvider?.cacheDecryption(shown.id, shown);
+      // An unsaved row's next store must not undo the start.
+      if (_boxUnsaved.containsKey(shown.id)) _boxUnsaved[shown.id] = shown;
+      unawaited(_persistDecryptedContent(shown));
+    }
+    if (!started) return;
+    if (_conversationCache.containsKey(conversationId)) {
+      _updateCache(conversationId);
+    }
+    notifyListeners();
   }
 
   /// The server path's failure policy ([decideDecryptionFailure]) applied to
@@ -522,12 +665,17 @@ extension MessagingBox on MessagingProvider {
   void _showBoxMessage(MessageModel msg) {
     final viewing = _effectiveActiveConversationId ?? _paginationConversationId;
     final inView = msg.conversationId == viewing;
+    // A sibling's sent ping is ours: nothing arrived, as for an old-path
+    // self-sync copy.
     if (inView &&
         msg.messageType == MessageType.ping &&
+        msg.senderId != _currentUserId &&
         _pingEffectFiredIds.add(msg.id)) {
       _showPingEffect = true;
     }
     _addMessageToState(msg);
+    // Shown: a disappearing one starts counting now (decision 41).
+    if (inView) _startBoxCountdowns(msg.conversationId);
     if (inView && _conversationCache.containsKey(msg.conversationId)) {
       _updateCache(msg.conversationId);
     }
@@ -550,20 +698,27 @@ extension MessagingBox on MessagingProvider {
     final viewing = _effectiveActiveConversationId ?? _paginationConversationId;
     if (viewing != conversationId) return;
     final held = {for (final m in _messages) m.id};
+    final now = DateTime.now();
     final missing = [
       for (final row in rows)
-        if (!held.contains(row.id) && !_deletedMessageIds.contains(row.id)) row,
+        if (!held.contains(row.id) &&
+            !_deletedMessageIds.contains(row.id) &&
+            !isMessageExpired(row, now))
+          row,
     ];
-    if (missing.isEmpty) return;
-    _messages = [..._messages, ...missing]
-      ..sort((a, b) {
-        final byTime = a.createdAt.compareTo(b.createdAt);
-        return byTime != 0 ? byTime : a.id.compareTo(b.id);
-      });
-    if (_conversationCache.containsKey(conversationId)) {
-      _updateCache(conversationId);
+    if (missing.isNotEmpty) {
+      _messages = [..._messages, ...missing]
+        ..sort((a, b) {
+          final byTime = a.createdAt.compareTo(b.createdAt);
+          return byTime != 0 ? byTime : a.id.compareTo(b.id);
+        });
+      if (_conversationCache.containsKey(conversationId)) {
+        _updateCache(conversationId);
+      }
+      notifyListeners();
     }
-    notifyListeners();
+    // Shown now: a disappearing one not started yet starts (decision 41).
+    _startBoxCountdowns(conversationId);
   }
 
   /// Every box message this device stores for [conversationId], rebuilt from
@@ -598,6 +753,16 @@ extension MessagingBox on MessagingProvider {
         : conversation.userOne.id == senderId
         ? conversation.userOne
         : conversation.userTwo;
+    // Its own timer (item 3), and its deadline once the countdown started;
+    // an unstarted one runs on the 1-day cap until shown (decision 41).
+    final storedTtl = record[PlaintextRecordCodec.disappearAfterKey];
+    final ttl =
+        storedTtl is int &&
+            storedTtl >= kDisappearingMinSeconds &&
+            storedTtl <= kDisappearingMaxSeconds
+        ? storedTtl
+        : null;
+    final countdownFrom = record[_boxCountdownFromKey];
     final row = _restoreFromPersistedPayload(
       MessageModel(
         id: id,
@@ -611,6 +776,13 @@ extension MessagingBox on MessagingProvider {
         deliveryStatus: senderId == _currentUserId
             ? MessageDeliveryStatus.sent
             : MessageDeliveryStatus.delivered,
+        disappearAfterSeconds: ttl,
+        expiresAt: ttl != null && countdownFrom is int
+            ? DateTime.fromMillisecondsSinceEpoch(
+                countdownFrom + ttl * 1000,
+                isUtc: true,
+              )
+            : null,
       ),
       record,
     );
@@ -766,18 +938,45 @@ extension MessagingBox on MessagingProvider {
       !enc.needsSessionRebuild(user, deviceId: device) &&
       await enc.hasSessionWith(user, deviceId: device);
 
+  /// The quote a box reply carries (E18a), from the reply's preview: the
+  /// quoted message's wire id and sender, its type, and — for a text — the
+  /// preview's words as the snippet (`E2eEnvelope.build` cuts it to 256
+  /// bytes). No words of a message that itself disappears: the reply would
+  /// keep them for its own lifetime. Null when there is no preview, or it
+  /// names no sender (a server snapshot's): the box could not name what it
+  /// quotes.
+  E2eReplyQuote? _boxQuoteOf(ReplyToPreview? replyTo) {
+    final senderId = replyTo?.senderId;
+    if (replyTo == null || senderId == null) return null;
+    final words =
+        replyTo.messageType == MessageType.text &&
+        !replyTo.quotedDisappears &&
+        !isEncryptedPreviewContent(
+          replyTo.content,
+          encryptedMessageLabel: kReplyPreviewLabels.encryptedMessageLabel,
+        );
+    return (
+      wireId: replyTo.wireId,
+      senderId: senderId,
+      type: replyTo.messageType.name.toUpperCase(),
+      snippet: words ? replyTo.content : '',
+    );
+  }
+
   /// Sends [content] along [route]: one Signal message per peer device, each
   /// sealed into that device's queue, and a SENT COPY — the same message
   /// naming the peer inside E2E (E5) — per sibling, sealed into its
-  /// self-queue. The row is SENT only once the box took every frame, the
-  /// copies included (decision 20); anything less fails it for a retry
-  /// (decision 19), which re-seals under the same wire id, so a device that
-  /// already holds the message drops the copy (`wireHeldByOther`). Every
-  /// frame is built before the first goes out, so nothing reaches some
-  /// devices only. A device with no usable session fails the row before
-  /// anything is encrypted, and nothing here fetches a pre-key bundle: a
-  /// fetch timed by the send would name the sender at the moment of the box
-  /// frame (decision 38, E38b); the refresh's next pass builds it.
+  /// self-queue. Both carry the message's type, its own timer [ttl] and the
+  /// quote of a reply's [replyTo] (item 3). The row is SENT only once the
+  /// box took every frame, the copies included (decision 20); anything less
+  /// fails it for a retry (decision 19), which re-seals under the same wire
+  /// id, so a device that already holds the message drops the copy
+  /// (`wireHeldByOther`). Every frame is built before the first goes out, so
+  /// nothing reaches some devices only. A device with no usable session
+  /// fails the row before anything is encrypted, and nothing here fetches a
+  /// pre-key bundle: a fetch timed by the send would name the sender at the
+  /// moment of the box frame (decision 38, E38b); the refresh's next pass
+  /// builds it.
   ///
   /// While it runs, the tempId is in [_boxInFlight]: an account-socket error
   /// cannot fail the row under it and a retry cannot start a second attempt
@@ -791,6 +990,9 @@ extension MessagingBox on MessagingProvider {
     required String tempId,
     required String sendToken,
     Map<String, String?>? linkPreview,
+    String messageType = 'TEXT',
+    int? ttl,
+    ReplyToPreview? replyTo,
   }) async {
     _boxInFlight.add(tempId);
     try {
@@ -803,6 +1005,9 @@ extension MessagingBox on MessagingProvider {
       final envelope = boxEnvelope(
         content,
         linkPreview: linkPreview,
+        messageType: messageType,
+        ttl: ttl,
+        replyQuote: _boxQuoteOf(replyTo),
         senderListInfo: route.senderListInfo.toJson(),
         msgId: sendToken,
         sentAt: sentAt,
@@ -870,8 +1075,13 @@ extension MessagingBox on MessagingProvider {
         senderUsername: '',
         conversationId: route.conversationId,
         createdAt: sentAt,
+        messageType: _parseMessageTypeString(messageType) ?? MessageType.text,
+        // Decision 41: the sender's copy counts from the send.
+        disappearAfterSeconds: ttl,
+        expiresAt: ttl == null ? null : sentAt.add(Duration(seconds: ttl)),
         tempId: tempId,
         wireId: sendToken,
+        replyTo: replyTo,
         linkPreviewUrl: preview?['url'],
         linkPreviewTitle: preview?['title'],
         linkPreviewImageUrl: preview?['imageUrl'],

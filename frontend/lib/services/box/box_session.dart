@@ -330,6 +330,29 @@ class BoxSession implements BoxOutbox, BoxSiblingLink {
   }
 
   @override
+  Future<BoxResult<BoxMediaRef>> uploadMedia(
+    ContactOutbound to,
+    Uint8List framed,
+  ) async {
+    // Refused here, never thrown: the client throws on both, and the send
+    // path fails the row on any refusal (E17b).
+    final sid = boxB64Decode(to.sid, kBoxSidBytes);
+    if (sid == null) return const BoxRefused(BoxCode.invalidPayload);
+    if (!kBoxMediaLadder.contains(framed.length)) {
+      return const BoxRefused(BoxCode.badSize);
+    }
+    return _box.uploadMedia(sid, framed);
+  }
+
+  @override
+  Future<BoxResult<Uint8List>> downloadMedia(Uint8List id) async {
+    if (id.length != kBoxMediaIdBytes) {
+      return const BoxRefused(BoxCode.invalidPayload);
+    }
+    return _box.downloadMedia(id);
+  }
+
+  @override
   Future<SiblingWrite> takeSiblingHandoff(
     int deviceId, {
     required String sid,

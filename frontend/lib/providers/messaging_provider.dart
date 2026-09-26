@@ -628,6 +628,11 @@ class MessagingProvider extends ChangeNotifier {
       ),
       senderUsername: rt.senderUsername,
       messageType: rt.messageType,
+      // What a box reply names the quoted message by (E18a).
+      wireId: rt.wireId,
+      senderId: rt.senderId,
+      quotedDisappears:
+          rt.disappearAfterSeconds != null || rt.expiresAt != null,
     );
   }
 

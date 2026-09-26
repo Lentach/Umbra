@@ -1113,6 +1113,10 @@ class EncryptionProvider extends ChangeNotifier {
   Future<bool?> wireHeldByOther(WireKey wire, int messageId) =>
       _encryptionService.wireHeldByOther(wire, messageId);
 
+  /// Delegates to [EncryptionService.wireHolder] (box reply quotes).
+  Future<int?> wireHolder(WireKey wire) =>
+      _encryptionService.wireHolder(wire);
+
   /// Delegates to [EncryptionService.localMessageRecords].
   Future<Map<int, Map<String, dynamic>>> localMessageRecords(
     int conversationId,
