@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../../models/message_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../utils/encrypted_media_loader.dart';
+import '../message/box_media_source.dart';
 
 /// Horizontal strip of image/GIF media exchanged in a conversation, shown on
 /// the other-user card ("shared media", Telegram parity).
@@ -82,12 +83,14 @@ class _SharedMediaThumbState extends State<_SharedMediaThumb> {
     final url = widget.message.mediaUrl;
     if (url == null || url.isEmpty) return null;
     final token = context.read<AuthProvider>().token ?? '';
+    final box = boxMediaSourceFor(context, url);
     try {
       return await loadDecryptedMediaBytes(
         url: url,
         token: token,
         key: widget.message.mediaKey,
         iv: widget.message.mediaIv,
+        box: box,
       );
     } catch (_) {
       // Fetch/oversize/decrypt failure -> placeholder tile below.

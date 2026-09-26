@@ -21,7 +21,7 @@ import { User } from '../users/user.entity';
  * returning session can be told it was revoked instead of quietly
  * re-authorizing.
  *
- * Prod truth is migration 0015.
+ * Prod truth is migrations 0015 and 0023.
  */
 @Entity('devices')
 export class Device {
@@ -54,4 +54,17 @@ export class Device {
 
   @Column({ type: 'timestamp', nullable: true })
   revokedAt: Date | null;
+
+  /**
+   * This device's box REQUEST queue (metadata-privacy PR3.2, design §4.4):
+   * the send capability `searchUsers` hands a stranger for first contact.
+   * Canonical unpadded base64url of 32 bytes; public by design. Null until
+   * the device publishes one (`setRequestQueue`).
+   */
+  @Column({ type: 'text', nullable: true })
+  requestSid: string | null;
+
+  /** The raw X25519 key a first-contact blob is sealed to (same spelling). */
+  @Column({ type: 'text', nullable: true })
+  requestSealPub: string | null;
 }

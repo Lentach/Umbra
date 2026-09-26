@@ -10,7 +10,9 @@ import '../../l10n/app_localizations.dart';
 import '../../models/message_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/settings_provider.dart';
+import '../../services/box/box_media_url.dart';
 import '../../utils/e2e_persistent_diag.dart';
+import 'box_media_source.dart';
 import 'inline_video_arbiter.dart';
 import 'media_preview_frame.dart';
 import 'video_fullscreen_view.dart';
@@ -108,11 +110,15 @@ class _VideoMessageContentState extends State<VideoMessageContent>
 
   /// Uploaded AND decrypted. A history row arrives with its plaintext
   /// `mediaUrl` column but no `mediaKey` until the Signal pass reaches it;
-  /// loading then would fetch the blob only to fail the decrypt.
-  bool get _hasUploadedBlob =>
-      (widget.message.mediaUrl?.startsWith('http') ?? false) &&
-      widget.message.mediaKey != null &&
-      widget.message.mediaIv != null;
+  /// loading then would fetch the blob only to fail the decrypt. A box
+  /// attachment (`box:<id>`, item 3 / media wiring) is uploaded too.
+  bool get _hasUploadedBlob {
+    final url = widget.message.mediaUrl;
+    return url != null &&
+        (url.startsWith('http') || isBoxMediaUrl(url)) &&
+        widget.message.mediaKey != null &&
+        widget.message.mediaIv != null;
+  }
 
   @override
   void initState() {
@@ -283,7 +289,11 @@ class _VideoMessageContentState extends State<VideoMessageContent>
     }
     final factory =
         widget.sessionFactory ??
-        (message, token) => VideoPlaybackSession(message: message, token: token);
+        (message, token) => VideoPlaybackSession(
+          message: message,
+          token: token,
+          box: boxMediaSourceFor(context, message.mediaUrl),
+        );
     final session = factory(widget.message, token);
     _session = session;
     final failure = await session.load();

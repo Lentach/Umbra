@@ -11,6 +11,7 @@ import '../../utils/download_utils_web.dart'
 import '../glass/glass_dialog.dart';
 import '../top_snackbar.dart';
 import '../../utils/encrypted_media_loader.dart';
+import 'box_media_source.dart';
 
 /// FILE/document message: legacy direct URL download or fetch+decrypt+save.
 class FileMessageContent extends StatefulWidget {
@@ -36,6 +37,7 @@ class _FileMessageContentState extends State<FileMessageContent> {
     final token = context.read<AuthProvider>().token ?? '';
     final url = widget.message.mediaUrl;
     if (url == null || url.isEmpty) return;
+    final box = boxMediaSourceFor(context, url);
 
     try {
       final key = widget.message.mediaKey;
@@ -46,6 +48,7 @@ class _FileMessageContentState extends State<FileMessageContent> {
           token: token,
           key: key,
           iv: iv,
+          box: box,
         );
         await download_utils.saveBytesAsDownload(plain, _filename);
       } else {

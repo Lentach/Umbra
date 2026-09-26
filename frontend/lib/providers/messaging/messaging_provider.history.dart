@@ -177,6 +177,9 @@ extension MessagingHistory on MessagingProvider {
       linkPreviewTitle: local.linkPreviewTitle ?? server.linkPreviewTitle,
       linkPreviewImageUrl:
           local.linkPreviewImageUrl ?? server.linkPreviewImageUrl,
+      // A server snapshot never carries a PEER row's wire id; only the local
+      // copy learned it at decrypt, so the local one survives the merge.
+      wireId: local.wireId ?? server.wireId,
     );
   }
 
@@ -258,6 +261,9 @@ extension MessagingHistory on MessagingProvider {
     _reEnrichAllReplyQuotes();
     notifyListeners();
     _processIncomingMessageQueue();
+    // The pass may have decrypted a peer's PreKey message that CREATES the
+    // session a waiting box message needs (release N runs both paths).
+    onHistoryDecryptPassFinished?.call();
   }
 
   void _patchMessageInCache(
@@ -483,6 +489,9 @@ extension MessagingHistory on MessagingProvider {
       markConversationRead(effectiveActive);
     }
 
+    // Box messages have no server row (decision 14), so no page names them.
+    if (convIdForMerge != null) unawaited(_mergeLocalBoxRows(convIdForMerge));
+
     // Decrypt history first so no live message advances the session before
     // we decrypt in order. Queue any incoming messages until done.
     final myConversationId =
@@ -580,6 +589,11 @@ extension MessagingHistory on MessagingProvider {
           linkPreviewUrl: savedData?['linkPreviewUrl'] as String?,
           linkPreviewTitle: savedData?['linkPreviewTitle'] as String?,
           linkPreviewImageUrl: savedData?['linkPreviewImageUrl'] as String?,
+          // Our wire id is the token THIS device minted for the tempId, never
+          // the server's echo: a server echoing another of our tokens (one
+          // our other device sent) would claim that message's wire id under
+          // our name before its self-sync copy lands here.
+          wireId: _sendTokenByTempId[msg.tempId],
         );
         final persistData = <String, dynamic>{
           'content': plaintextContent,
@@ -605,7 +619,13 @@ extension MessagingHistory on MessagingProvider {
           if (savedData?['linkPreviewImageUrl'] != null)
             'linkPreviewImageUrl': savedData!['linkPreviewImageUrl'],
         };
-        _encryptionProvider?.saveDecryptedContent(msg.id, persistData).ignore();
+        _encryptionProvider
+            ?.saveDecryptedContent(
+              msg.id,
+              persistData,
+              wire: _wireKey(_currentUserId!, msg.wireId),
+            )
+            .ignore();
       }
       // Ack arrived — the pending-send record served its purpose; consume it
       // so normal sends keep the reconcile store self-cleaning. Same
@@ -660,7 +680,9 @@ extension MessagingHistory on MessagingProvider {
       if (msg.conversationId != activeConversationId) {
         _conversationsProvider?.incrementUnreadCount(msg.conversationId);
       }
-      _emit?.call('messageDelivered', {'messageId': msg.id});
+      if (isServerMessageId(msg.id)) {
+        _emit?.call('messageDelivered', {'messageId': msg.id});
+      }
       if (msg.conversationId == activeConversationId) {
         markConversationRead(msg.conversationId);
       }

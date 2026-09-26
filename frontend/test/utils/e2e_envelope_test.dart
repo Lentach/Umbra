@@ -188,5 +188,307 @@ void main() {
       expect(result.linkPreviewTitle, isNull);
       expect(result.linkPreviewImageUrl, isNull);
     });
+
+    group('msgId (metadata-privacy PR2.1 wire id)', () {
+      test('survives a build -> parse round trip', () {
+        final built = E2eEnvelope.build(
+          'hi',
+          msgId: 'temp_1758700000000_7-m3x9k2a1',
+        );
+        final result = E2eEnvelope.parse(jsonEncode(built));
+        expect(result.msgId, 'temp_1758700000000_7-m3x9k2a1');
+      });
+
+      test('is absent from an envelope built without one', () {
+        expect(E2eEnvelope.build('hi'), isNot(contains('msgId')));
+        expect(E2eEnvelope.parse(jsonEncode({'content': 'hi'})).msgId, isNull);
+      });
+
+      // The value comes from a PEER and lands on this device's disk as a
+      // record stamp; anything outside the sender's own minting shape (the
+      // server's sendToken bound, 8..64 of [A-Za-z0-9_-]) is refused.
+      test('parses to null when the peer sent a malformed one', () {
+        final malformed = <Object?>[
+          42,
+          'short',
+          'x' * 65,
+          'has space in it',
+          'semi;colon-token',
+          <String, Object?>{'nested': true},
+        ];
+        for (final value in malformed) {
+          final result = E2eEnvelope.parse(
+            jsonEncode({'content': 'hi', 'msgId': value}),
+          );
+          expect(result.msgId, isNull, reason: 'msgId $value');
+          expect(result.content, 'hi', reason: 'the message still arrives');
+        }
+      });
+
+      test('accepts both ends of the length bound', () {
+        for (final value in ['a' * 8, 'Z' * 64]) {
+          final result = E2eEnvelope.parse(
+            jsonEncode({'content': 'hi', 'msgId': value}),
+          );
+          expect(result.msgId, value);
+        }
+      });
+    });
+
+    group('t / ts (metadata-privacy PR3.1 box envelope, decision 13)', () {
+      test('an envelope without t is a chat message — every old-path one', () {
+        expect(E2eEnvelope.parse(jsonEncode({'content': 'hi'})).type, 'msg');
+        expect(E2eEnvelope.build('hi'), isNot(contains('t')));
+      });
+
+      test('t and ts survive a build -> parse round trip', () {
+        final sentAt = DateTime.utc(2026, 9, 24, 12, 30, 5, 123);
+        final built = E2eEnvelope.build('hi', type: 'goodbye', sentAt: sentAt);
+        expect(built['t'], 'goodbye');
+        expect(built['ts'], sentAt.millisecondsSinceEpoch);
+        final parsed = E2eEnvelope.parse(jsonEncode(built));
+        expect(parsed.type, 'goodbye');
+        expect(parsed.sentAt, sentAt);
+        expect(parsed.sentAt!.isUtc, isTrue);
+      });
+
+      test('a t that is not a string matches no type, never a message', () {
+        for (final value in <Object>[1, true, <String>[], <String, Object>{}]) {
+          final parsed = E2eEnvelope.parse(
+            jsonEncode({'content': 'hi', 't': value}),
+          );
+          expect(parsed.type, isNot('msg'), reason: '$value');
+        }
+      });
+
+      test('a ts that is not a positive whole ms is absent, never a date', () {
+        for (final value in <Object>[0, -1, 1.5, '1758700000000', 1 << 53]) {
+          final parsed = E2eEnvelope.parse(
+            jsonEncode({'content': 'hi', 'ts': value}),
+          );
+          expect(parsed.sentAt, isNull, reason: '$value');
+        }
+        expect(E2eEnvelope.parse(jsonEncode({'content': 'hi'})).sentAt, isNull);
+      });
+    });
+
+    group('queue_handoff / queue_handoff_ack (sibling self-queues)', () {
+      // Canonical unpadded base64url of 32 bytes: 42 free chars, then one of
+      // the 16 whose low two bits are zero.
+      final sid = '${'A' * 42}E';
+      final sealPub = '${'b' * 42}w';
+
+      test('a handoff round-trips its address under its own type', () {
+        final json = jsonEncode(
+          E2eEnvelope.buildQueueHandoff(sid: sid, sealPub: sealPub),
+        );
+        expect(E2eEnvelope.parse(json).type, E2eEnvelope.typeQueueHandoff);
+        expect(E2eEnvelope.parseQueueHandoff(json), (sid: sid, sealPub: sealPub));
+      });
+
+      test('an ack round-trips the sid it acknowledges', () {
+        final json = jsonEncode(E2eEnvelope.buildQueueHandoffAck(sid: sid));
+        expect(E2eEnvelope.parse(json).type, E2eEnvelope.typeQueueHandoffAck);
+        expect(E2eEnvelope.parseQueueHandoffAck(json), sid);
+      });
+
+      test('neither is ever read as a chat message', () {
+        for (final built in [
+          E2eEnvelope.buildQueueHandoff(sid: sid, sealPub: sealPub),
+          E2eEnvelope.buildQueueHandoffAck(sid: sid),
+        ]) {
+          expect(
+            E2eEnvelope.parse(jsonEncode(built)).type,
+            isNot(E2eEnvelope.typeMessage),
+          );
+        }
+      });
+
+      test('an address that is not a canonical 32-byte id is null — never '
+          'stored, never sent to', () {
+        for (final bad in [
+          'short',
+          '${'A' * 42}B', // spare bits set: not the canonical spelling
+          '${'A' * 43}=',
+          'A' * 44,
+          42,
+          null,
+        ]) {
+          expect(
+            E2eEnvelope.parseQueueHandoff(
+              jsonEncode({'t': 'queue_handoff', 'sid': bad, 'sealPub': sealPub}),
+            ),
+            isNull,
+          );
+          expect(
+            E2eEnvelope.parseQueueHandoff(
+              jsonEncode({'t': 'queue_handoff', 'sid': sid, 'sealPub': bad}),
+            ),
+            isNull,
+          );
+          expect(
+            E2eEnvelope.parseQueueHandoffAck(
+              jsonEncode({'t': 'queue_handoff_ack', 'sid': bad}),
+            ),
+            isNull,
+          );
+        }
+      });
+
+      test('the other type, or no JSON object at all, is null', () {
+        final handoff = jsonEncode(
+          E2eEnvelope.buildQueueHandoff(sid: sid, sealPub: sealPub),
+        );
+        final ack = jsonEncode(E2eEnvelope.buildQueueHandoffAck(sid: sid));
+        expect(E2eEnvelope.parseQueueHandoff(ack), isNull);
+        expect(E2eEnvelope.parseQueueHandoffAck(handoff), isNull);
+        expect(E2eEnvelope.parseQueueHandoff('[1]'), isNull);
+        expect(E2eEnvelope.parseQueueHandoffAck('not json'), isNull);
+      });
+    });
+
+    group('ttl / re / boxMedia (item 3, E17a/E18a/E18b)', () {
+      final boxMedia = '${'A' * 42}E';
+      const quote = (
+        wireId: 'temp_1758700000000_2-m3x9k2a1',
+        senderId: 2,
+        type: 'IMAGE',
+        snippet: 'look at this',
+      );
+
+      test('all three survive a build -> parse round trip', () {
+        final built = E2eEnvelope.build(
+          'hi',
+          ttl: 60,
+          replyQuote: quote,
+          boxMedia: boxMedia,
+        );
+        expect(built['ttl'], 60);
+        expect(built['re'], {
+          'w': quote.wireId,
+          's': 2,
+          'k': 'IMAGE',
+          'x': 'look at this',
+        });
+        expect(built['boxMedia'], boxMedia);
+        final parsed = E2eEnvelope.parse(jsonEncode(built));
+        expect(parsed.ttl, 60);
+        expect(parsed.replyQuote, quote);
+        expect(parsed.boxMedia, boxMedia);
+      });
+
+      test('none is written when not given, and none parses from an old '
+          'envelope', () {
+        final built = E2eEnvelope.build('hi');
+        expect(built.keys, isNot(anyOf(contains('ttl'), contains('re'))));
+        expect(built, isNot(contains('boxMedia')));
+        final parsed = E2eEnvelope.parse(jsonEncode({'content': 'hi'}));
+        expect(parsed.ttl, isNull);
+        expect(parsed.replyQuote, isNull);
+        expect(parsed.boxMedia, isNull);
+      });
+
+      test('a ttl outside the timer sheet range (5 s..30 d) is no timer, '
+          'never a message dropped', () {
+        for (final value in <Object>[0, 4, 2592001, -60, 60.5, '60', true]) {
+          final parsed = E2eEnvelope.parse(
+            jsonEncode({'content': 'hi', 'ttl': value}),
+          );
+          expect(parsed.ttl, isNull, reason: '$value');
+          expect(parsed.content, 'hi', reason: '$value');
+        }
+        for (final value in [5, 2592000]) {
+          expect(
+            E2eEnvelope.parse(jsonEncode({'content': 'hi', 'ttl': value})).ttl,
+            value,
+          );
+        }
+        expect(E2eEnvelope.build('hi', ttl: 4), isNot(contains('ttl')));
+      });
+
+      test('an invalid re is dropped whole — never the message; a bad wire '
+          'id is dropped alone', () {
+        final valid = {'w': quote.wireId, 's': 2, 'k': 'TEXT', 'x': 'hey'};
+        for (final bad in <Object?>[
+          'not an object',
+          [1],
+          {...valid, 's': 0},
+          {...valid, 's': 0x80000000},
+          {...valid, 's': '2'},
+          {...valid}..remove('s'),
+          {...valid, 'k': 7},
+          {...valid}..remove('k'),
+          {...valid, 'x': 9},
+          {...valid}..remove('x'),
+          {...valid, 'x': 'a' * 257},
+          {...valid, 'x': '界' * 86},
+        ]) {
+          final parsed = E2eEnvelope.parse(
+            jsonEncode({'content': 'hi', 're': bad}),
+          );
+          expect(parsed.replyQuote, isNull, reason: '$bad');
+          expect(parsed.content, 'hi', reason: '$bad');
+        }
+        for (final w in <Object?>['short', 'x' * 65, 'has space', 42]) {
+          final parsed = E2eEnvelope.parse(
+            jsonEncode({'content': 'hi', 're': {...valid, 'w': w}}),
+          );
+          expect(
+            parsed.replyQuote,
+            (wireId: null, senderId: 2, type: 'TEXT', snippet: 'hey'),
+            reason: '$w',
+          );
+        }
+        expect(
+          E2eEnvelope.parse(
+            jsonEncode({'content': 'hi', 're': {...valid, 'x': '界' * 85}}),
+          ).replyQuote?.snippet,
+          '界' * 85,
+          reason: '255 bytes is within the bound',
+        );
+      });
+
+      test('build cuts the snippet to 256 UTF-8 bytes at a character '
+          'boundary, so what it writes always parses', () {
+        for (final (text, kept) in [
+          ('a' * 300, 'a' * 256),
+          ('界' * 100, '界' * 85),
+          ('${'a' * 254}😀z', 'a' * 254),
+          ('${'a' * 252}😀z', '${'a' * 252}😀'),
+        ]) {
+          final built = E2eEnvelope.build(
+            'hi',
+            replyQuote: (wireId: null, senderId: 2, type: 'TEXT', snippet: text),
+          );
+          final re = built['re'] as Map<String, dynamic>;
+          expect(re['x'], kept);
+          expect(re, isNot(contains('w')), reason: 'no wire id, no w');
+          expect(
+            E2eEnvelope.parse(jsonEncode(built)).replyQuote?.snippet,
+            kept,
+          );
+        }
+      });
+
+      test('a boxMedia not spelled as a canonical 32-byte id is absent', () {
+        for (final bad in <Object?>[
+          'short',
+          '${'A' * 42}B',
+          '${'A' * 43}=',
+          'A' * 44,
+          42,
+        ]) {
+          final parsed = E2eEnvelope.parse(
+            jsonEncode({'content': 'hi', 'boxMedia': bad}),
+          );
+          expect(parsed.boxMedia, isNull, reason: '$bad');
+          expect(parsed.content, 'hi');
+        }
+        expect(
+          E2eEnvelope.build('hi', boxMedia: 'short'),
+          isNot(contains('boxMedia')),
+        );
+      });
+    });
   });
 }

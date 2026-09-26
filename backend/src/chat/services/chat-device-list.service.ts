@@ -13,6 +13,7 @@ import { validateDto } from '../utils/dto.validator';
 import { userRoom } from '../utils/user-room';
 import { ChatValidationService } from './chat-validation.service';
 import { ConversationsService } from '../../conversations/conversations.service';
+import { deviceAuthorizationPayload } from '../mappers/device-authorization.mapper';
 
 /**
  * socket.io declares `Socket.data` as `any`; one documented narrowing keeps
@@ -123,10 +124,8 @@ export class ChatDeviceListService {
 
   /**
    * Serves the stored enrollment + list to a caller ENTITLED to it: peers run
-   * the I7 chain themselves and need the full record. `listCanonical` is
-   * echoed as the STORED base64 string verbatim (falsification 23);
-   * `enrollmentCreatedAt` as the signed integer milliseconds, so E re-verifies
-   * bit-for-bit.
+   * the I7 chain themselves and need the full record, in the byte-exact form
+   * of [deviceAuthorizationPayload].
    *
    * Entitlement (amendment (xliii)). This used to serve ANY account's roster
    * to ANY authenticated caller, which made it a device-count, platform and
@@ -197,16 +196,7 @@ export class ChatDeviceListService {
       }
       client.emit('deviceList', {
         userId: dto.userId,
-        authorization: row
-          ? {
-              dakPub: row.dakPub,
-              enrollmentSig: row.enrollmentSig,
-              enrollmentCreatedAt: row.enrollmentCreatedAt.getTime(),
-              listVersion: row.listVersion,
-              listSignature: row.listSignature,
-              listCanonical: row.listCanonical,
-            }
-          : null,
+        authorization: deviceAuthorizationPayload(row),
       });
     } catch (error) {
       // Silence is fail-closed on the client (I5: an unanswered fetch means

@@ -139,6 +139,18 @@ const THROTTLE_ANSWERS: Record<
       retryAfterMs,
     },
   ],
+  // A throttled publish must not read as published: the device would believe
+  // strangers can reach it through a queue identity never stored.
+  setRequestQueue: (_data, retryAfterMs) => [
+    'requestQueueSet',
+    { success: false, error: RATE_LIMITED, retryAfterMs },
+  ],
+  // A throttled read must not look like "no siblings": the device would
+  // treat every sibling as unreachable instead of retrying.
+  getOwnRequestQueues: (_data, retryAfterMs) => [
+    'ownRequestQueues',
+    { success: false, error: RATE_LIMITED, retryAfterMs },
+  ],
 };
 
 /** One warn per (tracker, event) per this long; the rest go to debug. */

@@ -8,6 +8,7 @@ import '../services/contacts/contact_record.dart';
 import '../services/contacts/contact_store.dart';
 import '../utils/e2e_diag_log.dart';
 import '../utils/message_expiry.dart';
+import '../utils/message_ids.dart';
 import '../utils/reply_preview_helper.dart';
 import 'conversation_helpers.dart' as conv_helpers;
 import '../models/user_model.dart';
@@ -87,6 +88,9 @@ class ConversationsProvider extends ChangeNotifier {
     ];
     if (rows.isEmpty) return;
     _conversations = rows;
+    _serverPins
+      ..clear()
+      ..addAll({for (final c in rows) c.id: ?c.pinnedMessageId});
     notifyListeners();
   }
 
@@ -162,6 +166,9 @@ class ConversationsProvider extends ChangeNotifier {
                   muted: c.muted,
                   mutedUntil: c.mutedUntil,
                   pinnedMessageId: c.pinnedMessageId,
+                  // The E2E pin is the devices' own (item 4): no server
+                  // list names it.
+                  boxPin: base.settings.boxPin,
                 ),
                 legacy: base.legacy.copyWith(
                   conversationId: c.id,
@@ -359,8 +366,13 @@ class ConversationsProvider extends ChangeNotifier {
       _activeConversationDeletedByOther = true;
     }
 
-    _conversations = newConvs;
+    // The store keeps the SERVER's pin; what the chat shows keeps an E2E pin
+    // still in force (item 4, E19f) — no server list names one.
     _storeConversationsList(newConvs);
+    _serverPins
+      ..clear()
+      ..addAll({for (final c in newConvs) c.id: ?c.pinnedMessageId});
+    _conversations = [for (final c in newConvs) _withBoxPinShown(c)];
     _unreadCounts.clear();
     // The server list is AUTHORITATIVE over any optimistic pin still waiting
     // for its answer, so every pre-pin snapshot is now superseded. Keeping one
@@ -562,10 +574,30 @@ class ConversationsProvider extends ChangeNotifier {
   }
 
   /// Handle 'messagePinned' event — update pin id and preview snapshot.
+  ///
+  /// A server pin names an OLD-path row (decision 46) and replaces an E2E
+  /// pin: the E2E register goes unpinned at its OWN last `ts` (decision 45,
+  /// E19f) — never this device's clock, which no other device shares.
   void onMessagePinned(dynamic data, {MessageModel? localPinnedMessage}) {
     final m = data as Map<String, dynamic>;
     final conversationId = m['conversationId'] as int;
     final pinnedMessageId = m['pinnedMessageId'] as int?;
+    if (pinnedMessageId == null) {
+      onMessageUnpinned(data);
+      return;
+    }
+    // No time of its own: this device's clock is not an action `ts` every
+    // device shares, and a fast clock here would drop newer E2E pins as
+    // stale (E19f). The register keeps its last `at`, unpinned — a tie goes
+    // to the unpin, so a re-delivered older pin cannot resurrect.
+    final replaced = BoxPin(
+      at:
+          boxPinOf(conversationId)?.at ??
+          DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+    );
+    _serverPins[conversationId] = pinnedMessageId;
+    _boxPins[conversationId] = replaced;
+    _boxPinShown.remove(conversationId);
     MessageModel? preview;
     final previewData = m['pinnedMessage'];
     if (previewData != null) {
@@ -576,7 +608,7 @@ class ConversationsProvider extends ChangeNotifier {
         serverPreview: serverPreview,
         localMessage: localPinnedMessage,
       );
-    } else if (localPinnedMessage != null && pinnedMessageId != null) {
+    } else if (localPinnedMessage != null) {
       preview = localPinnedMessage;
     }
 
@@ -585,7 +617,6 @@ class ConversationsProvider extends ChangeNotifier {
       final oldConv = _conversations[index];
       _conversations[index] = oldConv.copyWith(
         pinnedMessageId: pinnedMessageId,
-        clearPinnedMessageId: pinnedMessageId == null,
         pinnedMessagePreview: preview,
         clearPinnedMessagePreview: preview == null,
       );
@@ -595,29 +626,116 @@ class ConversationsProvider extends ChangeNotifier {
     _prePinState.remove(conversationId);
     _storeSettings(
       conversationId,
-      (s) => s.copyWith(
-        pinnedMessageId: pinnedMessageId,
-        clearPinnedMessageId: pinnedMessageId == null,
-      ),
+      (s) => s.copyWith(pinnedMessageId: pinnedMessageId, boxPin: replaced),
     );
     notifyListeners();
   }
 
-  /// Handle 'messageUnpinned' event — clear pin fields.
+  /// Handle 'messageUnpinned' event — clear the SERVER pin. An E2E pin on
+  /// show stays (item 4): the server never held it, and this is often the
+  /// answer to the `unpinMessage` our own E2E pin sent (decision 45).
   void onMessageUnpinned(dynamic data) {
     final conversationId =
         (data as Map<String, dynamic>)['conversationId'] as int;
+    _serverPins.remove(conversationId);
     final index = _conversations.indexWhere((c) => c.id == conversationId);
-    if (index != -1) {
-      final oldConv = _conversations[index];
-      _conversations[index] = oldConv.copyWith(
-        clearPinnedMessageId: true,
-        clearPinnedMessagePreview: true,
-      );
+    final shown = index == -1 ? null : _conversations[index].pinnedMessageId;
+    if (shown == null || !isLocalMessageId(shown)) {
+      if (index != -1) {
+        _conversations[index] = _conversations[index].copyWith(
+          clearPinnedMessageId: true,
+          clearPinnedMessagePreview: true,
+        );
+      }
+      _prePinState.remove(conversationId);
     }
-    _prePinState.remove(conversationId);
     _storeSettings(conversationId, (s) => s.copyWith(clearPinnedMessageId: true));
     notifyListeners();
+  }
+
+  /// The E2E pin register of each chat this session wrote or read (item 4,
+  /// E19f); the contact record holds it across launches.
+  final Map<int, BoxPin> _boxPins = {};
+
+  /// The message each E2E pin shows — THIS device's copy, found by the
+  /// messaging side ([applyBoxPin]) — kept over every server snapshot.
+  final Map<int, MessageModel> _boxPinShown = {};
+
+  /// The pin the server holds in each chat, as its snapshots and events
+  /// said: what decision 45's one `unpinMessage` clears.
+  final Map<int, int> _serverPins = {};
+
+  /// [conversationId]'s E2E pin register: this session's, else the one the
+  /// peer's contact record kept. Null = never written.
+  BoxPin? boxPinOf(int conversationId) {
+    final held = _boxPins[conversationId];
+    if (held != null) return held;
+    final conv = getConversationById(conversationId);
+    if (conv == null) return null;
+    return _store?.byUserId(getOtherUserId(conv))?.settings.boxPin;
+  }
+
+  /// Sets [conversationId]'s E2E pin register to [pin] (the caller decided
+  /// it wins, [BoxPin.supersedes]) and keeps it on the contact record. A pin
+  /// shows [shown]; an unpin takes an E2E pin off the banner. Settles any
+  /// optimistic pin of this chat.
+  void applyBoxPin(int conversationId, BoxPin pin, {MessageModel? shown}) {
+    _boxPins[conversationId] = pin;
+    _prePinState.remove(conversationId);
+    final show = pin.pinned ? shown : null;
+    if (show != null) {
+      _boxPinShown[conversationId] = show;
+    } else {
+      _boxPinShown.remove(conversationId);
+    }
+    final index = _conversations.indexWhere((c) => c.id == conversationId);
+    if (index != -1) {
+      final conv = _conversations[index];
+      final shownId = conv.pinnedMessageId;
+      if (show != null) {
+        _conversations[index] = conv.copyWith(
+          pinnedMessageId: show.id,
+          pinnedMessagePreview: show,
+        );
+      } else if (shownId != null && isLocalMessageId(shownId)) {
+        _conversations[index] = conv.copyWith(
+          clearPinnedMessageId: true,
+          clearPinnedMessagePreview: true,
+        );
+      }
+    }
+    _storeSettings(conversationId, (s) => s.copyWith(boxPin: pin));
+    notifyListeners();
+  }
+
+  /// Takes an E2E pin off the banner before its unpin was sent, keeping
+  /// what it showed for [onPinMessageFailed].
+  void setUnpinnedOptimistic(int conversationId) {
+    final index = _conversations.indexWhere((c) => c.id == conversationId);
+    if (index == -1) return;
+    final conv = _conversations[index];
+    _prePinState.putIfAbsent(
+      conversationId,
+      () => (
+        messageId: conv.pinnedMessageId,
+        preview: conv.pinnedMessagePreview,
+      ),
+    );
+    _conversations[index] = conv.copyWith(
+      clearPinnedMessageId: true,
+      clearPinnedMessagePreview: true,
+    );
+    notifyListeners();
+  }
+
+  /// The server pin of [conversationId] as the server last said, kept until
+  /// `messageUnpinned` answers decision 45's `unpinMessage`.
+  int? serverPinOf(int conversationId) => _serverPins[conversationId];
+
+  ConversationModel _withBoxPinShown(ConversationModel conv) {
+    final shown = _boxPinShown[conv.id];
+    if (shown == null || !(_boxPins[conv.id]?.pinned ?? false)) return conv;
+    return conv.copyWith(pinnedMessageId: shown.id, pinnedMessagePreview: shown);
   }
 
   // ---------- Action Methods ----------
@@ -835,6 +953,9 @@ class ConversationsProvider extends ChangeNotifier {
       _lastMessages.clear();
       _unreadCounts.clear();
       _prePinState.clear();
+      _boxPins.clear();
+      _boxPinShown.clear();
+      _serverPins.clear();
       _preDisappearingTimerState.clear();
       _pendingOpenConversationId = null;
       _pendingNotificationConversationId = null;
@@ -865,6 +986,9 @@ class ConversationsProvider extends ChangeNotifier {
     _lastMessages.clear();
     _unreadCounts.clear();
     _prePinState.clear();
+    _boxPins.clear();
+    _boxPinShown.clear();
+    _serverPins.clear();
     _preDisappearingTimerState.clear();
     _pendingOpenConversationId = null;
     _pendingNotificationConversationId = null;

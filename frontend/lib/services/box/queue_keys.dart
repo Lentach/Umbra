@@ -66,14 +66,7 @@ class QueueKeys {
       return InboundQueueNotCreated(created);
     }
     final address = created.value;
-    final queue = ContactQueue(
-      rid: boxB64(address.rid),
-      sid: boxB64(address.sid),
-      nid: boxB64(address.nid),
-      authPriv: boxB64(auth.bytes),
-      sealPriv: boxB64(seal.privateKey),
-      sealPub: boxB64(seal.publicKey),
-    );
+    final queue = _material(address, auth, seal);
     var attached = false;
     final committed = await _store.update(peerUserId, (current) {
       if (current == null) return null;
@@ -88,6 +81,137 @@ class QueueKeys {
     await _box.subscribe([owned]);
     return InboundQueueCreated(queue);
   }
+
+  /// This DEVICE's request queue (design §4.4; wire.md "First contact"): the
+  /// one a stranger who searched this account seals a friend request into.
+  /// Loaded from the store, or created, stored and only then subscribed, the
+  /// [createInbound] order. A stored queue the box refuses on subscribe
+  /// (deleted, or reaped after 90 unsubscribed days) is dropped and replaced
+  /// once: its sid is public, and publishing a queue nobody reads loses every
+  /// request sent to it.
+  ///
+  /// No push notifier is ever registered on it (owner, 2026-09-24): the
+  /// device's one push token would link this public queue to the device's
+  /// normal queues in a dump, so a friend request waits for the next open.
+  ///
+  /// Null when it cannot be known now: the store is closed, a newer build
+  /// owns the row, the box did not answer, or the write did not commit. A
+  /// row the store could not rule on is never minted over.
+  Future<ContactQueue?> ensureRequest() => _ensureOwn(
+    QueueKind.request,
+    stored: () => _store.requestQueue,
+    unsupported: () => _store.requestQueueUnsupported,
+    claim: _store.claimRequestQueue,
+    drop: _store.dropRequestQueue,
+  );
+
+  /// This DEVICE's SELF-queue (PR3.1 sibling queues, owner decision 27): a
+  /// NORMAL queue every other device of the account sends into, the
+  /// per-friend model applied to the own account. Kept in the sibling row
+  /// (`ContactStore.siblingsKey`), created, claimed and subscribed exactly
+  /// like [ensureRequest] — including the drop-and-replace of a queue the
+  /// box refuses. Null for the same reasons.
+  Future<ContactQueue?> ensureSelf() => _ensureOwn(
+    QueueKind.normal,
+    stored: () => _store.selfQueue,
+    unsupported: () => _store.siblingsUnsupported,
+    claim: _store.claimSelfQueue,
+    drop: _store.dropSelfQueue,
+  );
+
+  /// Replaces this device's self-queue [current] (E6): a new normal queue,
+  /// stored in ONE write that starts [current] retiring at [now] and drops
+  /// every sibling entry outside [live], then subscribed. [current] stays
+  /// subscribed until [retire] deletes it. Null when nothing was rotated —
+  /// the box did not create one, or the store kept a different self-queue
+  /// (the new one is then deleted again).
+  Future<ContactQueue?> rotateSelf(
+    ContactQueue current, {
+    required Set<int> live,
+    required DateTime now,
+  }) async {
+    final next = await _createOwn(
+      QueueKind.normal,
+      (candidate) => _store.rotateSelfQueue(
+        candidate,
+        replaces: current.rid,
+        live: live,
+        now: now,
+      ),
+    );
+    final owned = next == null ? null : authOf(next);
+    if (owned != null) await _box.subscribe([owned]);
+    return next;
+  }
+
+  /// Deletes retiring self-queue [queue] from the box and then forgets it;
+  /// false when the box did not confirm (tried again on the next check). A
+  /// queue the box no longer knows counts as deleted.
+  Future<bool> retire(RetiringSelfQueue queue) async {
+    final owned = authOf(queue.queue);
+    if (owned != null && await _box.deleteQueue(owned) is! BoxOk) return false;
+    return await _store.dropRetiringSelfQueue(queue.queue.rid) ==
+        SiblingWrite.stored;
+  }
+
+  /// One of this device's own queues: loaded from its row, or created, stored
+  /// and only then subscribed. A stored queue the box refuses on subscribe
+  /// (deleted, or reaped after 90 unsubscribed days) is dropped and replaced
+  /// once.
+  Future<ContactQueue?> _ensureOwn(
+    QueueKind kind, {
+    required ContactQueue? Function() stored,
+    required bool Function() unsupported,
+    required Future<ContactQueue?> Function(ContactQueue candidate) claim,
+    required Future<bool> Function(String rid) drop,
+  }) async {
+    for (var attempt = 0; attempt < 2; attempt++) {
+      if (!_store.isOpen || unsupported()) return null;
+      final queue = stored() ?? await _createOwn(kind, claim);
+      if (queue == null) return null;
+      final owned = authOf(queue);
+      if (owned != null) {
+        final answer = await _box.subscribe([owned]);
+        final gone =
+            answer is BoxOk<List<BoxRefusal>> &&
+            answer.value.any((r) => boxB64(r.rid) == queue.rid);
+        if (!gone) return queue;
+      }
+      if (!await drop(queue.rid)) return null;
+    }
+    return null;
+  }
+
+  Future<ContactQueue?> _createOwn(
+    QueueKind kind,
+    Future<ContactQueue?> Function(ContactQueue candidate) claim,
+  ) async {
+    final auth = _signer.mint();
+    final seal = QueueSeal.mintKeyPair();
+    final created = await _box.createQueue(kind, auth);
+    if (created is! BoxOk<QueueAddress>) return null;
+    final mine = _material(created.value, auth, seal);
+    final kept = await claim(mine);
+    if (kept?.rid != mine.rid) {
+      // Another tab of this device claimed first, or nothing was stored:
+      // this queue's sid is never handed out, so nobody may keep it alive.
+      await _box.deleteQueue(BoxQueueAuth(rid: created.value.rid, key: auth));
+    }
+    return kept;
+  }
+
+  static ContactQueue _material(
+    QueueAddress address,
+    BoxAuthKey auth,
+    QueueSealKeyPair seal,
+  ) => ContactQueue(
+    rid: boxB64(address.rid),
+    sid: boxB64(address.sid),
+    nid: boxB64(address.nid),
+    authPriv: boxB64(auth.bytes),
+    sealPriv: boxB64(seal.privateKey),
+    sealPub: boxB64(seal.publicKey),
+  );
 
   /// How to prove [queue] to the box; null for a stored shape this build
   /// cannot read (never guessed around: a wrong key only earns auth_failed).
@@ -108,9 +232,11 @@ class QueueKeys {
 
   /// Every readable inbound queue on every record — `former` ones too: the
   /// peer may still be sending there, and an unsubscribed queue is reaped
-  /// after 90 days. What a connection subscribes.
+  /// after 90 days — and every self-queue this device is retiring (E6): a
+  /// sibling may still be sending there. What a connection subscribes.
   List<BoxQueueAuth> inbound() => [
     for (final record in _store.all)
       for (final queue in record.queues) ?authOf(queue),
+    for (final retiring in _store.retiringSelfQueues) ?authOf(retiring.queue),
   ];
 }

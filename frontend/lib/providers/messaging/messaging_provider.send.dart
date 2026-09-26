@@ -254,6 +254,22 @@ extension MessagingSend on MessagingProvider {
           notifyListeners();
         }
       }
+      // Item 3 / media wiring: a peer the box covers gets the image over the
+      // box, uploaded there once; null = the old path below.
+      if (_boxMayCarryMedia(recipientId, tempId)) {
+        final sent = await _sendMediaOverBox(
+          recipientId: recipientId,
+          tempId: tempId,
+          messageType: 'IMAGE',
+          bytes: Uint8List.fromList(rawBytes),
+          effectiveExpiresIn: effectiveExpiresIn,
+          effectiveReplyToId: effectiveReplyToId,
+          mediaWidth: preview?.width,
+          mediaHeight: preview?.height,
+          mediaThumbHash: preview?.thumbHash,
+        );
+        if (sent != null) return sent;
+      }
       final upload = await _mediaUpload.encryptAndUpload(
         bytes: Uint8List.fromList(rawBytes),
         token: token,
@@ -380,6 +396,20 @@ extension MessagingSend on MessagingProvider {
       }
       if (rawBytes.length > MediaCryptoService.maxBytes) {
         throw Exception('Voice file too large');
+      }
+
+      if (_boxMayCarryMedia(recipientId, tempId)) {
+        final sent = await _sendMediaOverBox(
+          recipientId: recipientId,
+          tempId: tempId,
+          messageType: 'VOICE',
+          bytes: Uint8List.fromList(rawBytes),
+          recording: localAudioPath,
+          effectiveExpiresIn: effectiveExpiresIn,
+          effectiveReplyToId: effectiveReplyToId,
+          mediaDuration: duration,
+        );
+        if (sent != null) return;
       }
 
       final upload = await _mediaUpload.encryptAndUpload(
@@ -511,6 +541,22 @@ extension MessagingSend on MessagingProvider {
           '${MediaCryptoService.maxVideoDurationSeconds} seconds)',
         );
         return false;
+      }
+
+      if (_boxMayCarryMedia(recipientId, tempId)) {
+        final sent = await _sendMediaOverBox(
+          recipientId: recipientId,
+          tempId: tempId,
+          messageType: 'VIDEO',
+          bytes: Uint8List.fromList(videoBytes),
+          effectiveExpiresIn: effectiveExpiresIn,
+          effectiveReplyToId: effectiveReplyToId,
+          mediaDuration: duration,
+          mediaWidth: width,
+          mediaHeight: height,
+          mediaThumbHash: thumbHash,
+        );
+        if (sent != null) return sent;
       }
 
       final upload = await _mediaUpload.encryptAndUpload(
@@ -662,6 +708,21 @@ extension MessagingSend on MessagingProvider {
         }
       }
 
+      if (_boxMayCarryMedia(recipientId, tempId)) {
+        final sent = await _sendMediaOverBox(
+          recipientId: recipientId,
+          tempId: tempId,
+          messageType: 'GIF',
+          bytes: Uint8List.fromList(gifBytes),
+          effectiveExpiresIn: effectiveExpiresIn,
+          effectiveReplyToId: effectiveReplyToId,
+          mediaWidth: preview?.width,
+          mediaHeight: preview?.height,
+          mediaThumbHash: preview?.thumbHash,
+        );
+        if (sent != null) return;
+      }
+
       final upload = await _mediaUpload.encryptAndUpload(
         bytes: Uint8List.fromList(gifBytes),
         token: token,
@@ -754,6 +815,19 @@ extension MessagingSend on MessagingProvider {
       if (fileBytes.length > MediaCryptoService.maxBytes) {
         _markMessageFailed(tempId, 'File too large (max 20 MB)');
         return;
+      }
+
+      if (_boxMayCarryMedia(recipientId, tempId)) {
+        final sent = await _sendMediaOverBox(
+          recipientId: recipientId,
+          tempId: tempId,
+          messageType: 'FILE',
+          bytes: Uint8List.fromList(fileBytes),
+          content: fileName,
+          effectiveExpiresIn: effectiveExpiresIn,
+          effectiveReplyToId: effectiveReplyToId,
+        );
+        if (sent != null) return;
       }
 
       final upload = await _mediaUpload.encryptAndUpload(
@@ -850,7 +924,12 @@ extension MessagingSend on MessagingProvider {
     sendMessage(noteUrl, expiresIn: expiresInSeconds);
   }
 
+  /// Typing rides the ACCOUNT socket, so it names the pair to the server at
+  /// the moment of typing. A box-covered peer (an address in its contact
+  /// record, the `_boxRoute` rule) gets none: decision 33 turns typing off on
+  /// box chats until both sides enable it, and item 8 sends it inside E2E.
   void sendTypingIndicator(int recipientId, int conversationId) {
+    if (boxOutbox?.addressesFor(recipientId).isNotEmpty ?? false) return;
     _emit?.call('typing', {
       'recipientId': recipientId,
       'conversationId': conversationId,
@@ -1050,6 +1129,33 @@ extension MessagingSend on MessagingProvider {
     if (conv == null) return;
     final recipientId = conv_helpers.getOtherUserId(conv, _currentUserId);
 
+    // A box attachment whose upload never succeeded (item 3 / media wiring,
+    // E17b): the SAME held ciphertext, key and IV go up again, under the
+    // row's own timer and quote. One uploaded already (`box:<id>` + keys)
+    // takes its type's branch below and re-sends the frames only.
+    if (message.messageType != MessageType.text &&
+        message.messageType != MessageType.ping &&
+        !isBoxMediaUrl(message.mediaUrl) &&
+        _boxMediaBodies.containsKey(tempId)) {
+      _messages[index] = _messages[index].copyWith(
+        deliveryStatus: MessageDeliveryStatus.sending,
+      );
+      notifyListeners();
+      await _sendMediaOverBox(
+        recipientId: recipientId,
+        tempId: tempId,
+        messageType: message.messageType.name.toUpperCase(),
+        content: message.content,
+        effectiveExpiresIn: message.disappearAfterSeconds,
+        effectiveReplyToId: message.replyToMessageId,
+        mediaDuration: message.mediaDuration,
+        mediaWidth: message.mediaWidth,
+        mediaHeight: message.mediaHeight,
+        mediaThumbHash: message.mediaThumbHash,
+      );
+      return;
+    }
+
     if (message.messageType == MessageType.ping) {
       _messages[index] = _messages[index].copyWith(
         deliveryStatus: MessageDeliveryStatus.sending,
@@ -1077,7 +1183,7 @@ extension MessagingSend on MessagingProvider {
           vUrl.isNotEmpty &&
           vKey != null &&
           vIv != null &&
-          vUrl.startsWith('http')) {
+          (vUrl.startsWith('http') || isBoxMediaUrl(vUrl))) {
         _messages[index] = _messages[index].copyWith(
           deliveryStatus: MessageDeliveryStatus.sending,
         );
@@ -1397,6 +1503,7 @@ extension MessagingSend on MessagingProvider {
     int? mediaWidth,
     int? mediaHeight,
     String? mediaThumbHash,
+    _BoxRowAtSend? boxRowAtSend,
   }) async {
     final e2eReady = _encryptionProvider?.isE2EReady ?? false;
     _e2eFlowLog('SEND_START', {
@@ -1430,6 +1537,19 @@ extension MessagingSend on MessagingProvider {
     // attempt for this row left behind, so a retry that fails for a different
     // reason (or succeeds) stops claiming the peer's keys changed.
     _identityRefusedSendTempIds.remove(tempId);
+    // Read before the first await: the optimistic row leaves [_messages] once
+    // the user opens another chat. A box send quotes and times the message
+    // from its row, a retry included (E18a/E18b): a retry reuses the wire
+    // id, so a device already holding the message drops the copy, and a
+    // timer changed since would differ between devices. A box attachment
+    // read its row before its upload ([boxRowAtSend]).
+    final row = _messages.where((m) => m.tempId == tempId).firstOrNull;
+    final (:replyTo, ttl: boxTtl) =
+        boxRowAtSend ??
+        (
+          replyTo: row?.replyTo,
+          ttl: row == null ? effectiveExpiresIn : row.disappearAfterSeconds,
+        );
 
     try {
       // 1. Fetch client-side link preview before encrypting (TEXT only).
@@ -1486,6 +1606,70 @@ extension MessagingSend on MessagingProvider {
         }
       }
 
+      // 2b. The box (metadata-privacy PR3.1 slice (c), item 3). A text or a
+      // ping (decision 43) — a reply and a disappearing one included — goes
+      // there, and ONLY there (decision 15), when every live device on both
+      // sides has a box address; otherwise the old path below, as ever. So
+      // does a reply the row holds no quote of: the box would name nothing.
+      // An attachment already uploaded to the box (`box:<id>`, item 3 /
+      // media wiring) goes nowhere else; any other media url is the old
+      // path's.
+      final onBox = isBoxMediaUrl(mediaUrl);
+      final outbox = boxOutbox;
+      final addresses = outbox?.addressesFor(recipientId) ?? const {};
+      if (outbox != null &&
+          addresses.isNotEmpty &&
+          (onBox ||
+              ((messageType == 'TEXT' || messageType == 'PING') &&
+                  // A TEXT that ever did carry an old-path `mediaUrl` would
+                  // lose it silently.
+                  mediaUrl == null &&
+                  (effectiveReplyToId == null ||
+                      _boxQuoteOf(replyTo) != null)))) {
+        final route = await _boxRoute(recipientId, outbox, addresses);
+        if (route != null) {
+          final ttl = boxTtl;
+          // Awaited: a throw must reach this try's failure handling.
+          return await _sendOverBox(
+            route,
+            recipientId: recipientId,
+            content: content,
+            tempId: tempId,
+            sendToken: _sendTokenFor(tempId),
+            linkPreview: linkPreview,
+            messageType: messageType,
+            // Decision 42: the chat's setting, taken into E2E per message at
+            // its send; one outside the timer sheet's range is no timer
+            // (E18b).
+            ttl:
+                ttl != null &&
+                    ttl >= kDisappearingMinSeconds &&
+                    ttl <= kDisappearingMaxSeconds
+                ? ttl
+                : null,
+            replyTo: replyTo,
+            mediaUrl: onBox ? mediaUrl : null,
+            mediaKey: onBox ? mediaKey : null,
+            mediaIv: onBox ? mediaIv : null,
+            mediaDuration: onBox ? mediaDuration : null,
+            mediaWidth: onBox ? mediaWidth : null,
+            mediaHeight: onBox ? mediaHeight : null,
+            mediaThumbHash: onBox ? mediaThumbHash : null,
+          );
+        }
+      }
+      if (_boxTempIds.contains(tempId) || onBox) {
+        // A retry of a box send whose route is gone (a peer device lost its
+        // address, ours gained a sibling): the box may already have handed
+        // it to some devices, and the old path's reader would show those a
+        // second copy. It stays failed; nothing goes to the server
+        // (decision 25). A box attachment is pinned from its upload: the
+        // old path could not even name it.
+        _e2eFlowLog('BOX_RETRY_NO_ROUTE', {'tempId': tempId});
+        _markMessageFailed(tempId, 'Could not send. Try again.');
+        return false;
+      }
+
       // 3. Resolve the addresses this send must reach (spec §5.2 + §12
       // amendment (x)).
       //
@@ -1504,6 +1688,12 @@ extension MessagingSend on MessagingProvider {
       final fanOut = resolved.fanOut;
       final targets = resolved.targets;
       final senderListInfo = resolved.senderListInfo;
+      // Minted once per tempId and reused by every retry (see
+      // [_sendTokenFor]), so a resend carries the same wire id as the first
+      // attempt. It rides inside the plaintext as `msgId` (PR2.1): the server
+      // echoes the token only to this device, so it is how every OTHER device
+      // learns the message's wire id.
+      final sendToken = _sendTokenFor(tempId);
       final envelopeJson = jsonEncode(
         E2eEnvelope.build(
           content,
@@ -1517,6 +1707,7 @@ extension MessagingSend on MessagingProvider {
           mediaThumbHash: mediaThumbHash,
           linkPreview: linkPreview,
           senderListInfo: senderListInfo.toJson(),
+          msgId: sendToken,
         ),
       );
 
@@ -1570,14 +1761,16 @@ extension MessagingSend on MessagingProvider {
       // ciphertext key, which is what its own row echoes back. The token is
       // minted per tempId and REUSED by a retry of the same send, so a retry
       // reconciles to the same row either way. Fire-and-forget: the send is
-      // never delayed or failed by this.
-      final sendToken = _sendTokenFor(tempId);
+      // never delayed or failed by this. (The token itself was minted above,
+      // before the envelope that carries it.)
       final pendingSnapshot = _pendingSendContent[tempId];
       if (pendingSnapshot != null) {
         _encryptionProvider!
             .savePendingSendRecord(
               fanOut ? sendToken : legacyCiphertext!,
-              Map<String, dynamic>.from(pendingSnapshot),
+              // The minted token rides along so a lost-ack reconcile stamps
+              // OUR wire id, never the server's echo of it.
+              {...pendingSnapshot, PlaintextRecordCodec.wireIdKey: sendToken},
             )
             .ignore();
       }
@@ -1594,7 +1787,9 @@ extension MessagingSend on MessagingProvider {
         'sendToken': sendToken,
         'expiresIn': effectiveExpiresIn,
         'tempId': tempId,
-        'replyToMessageId': effectiveReplyToId,
+        // A box message's LOCAL id names no server row (decision 14).
+        if (effectiveReplyToId != null && isServerMessageId(effectiveReplyToId))
+          'replyToMessageId': effectiveReplyToId,
       };
       if (fanOut && recipientList?.version != null) {
         emitPayload['recipientListVersion'] = recipientList!.version;
@@ -1689,10 +1884,16 @@ extension MessagingSend on MessagingProvider {
     notifyListeners();
   }
 
-  /// Mark any message currently in "sending" state as failed.
+  /// Mark any message currently in "sending" state as failed — except a box
+  /// send still waiting on the box: an account-socket error says nothing
+  /// about it, and a retry started now would store a second copy.
   void markSendingMessagesFailed(String errorMsg) {
     final sending = _messages
-        .where((m) => m.deliveryStatus == MessageDeliveryStatus.sending)
+        .where(
+          (m) =>
+              m.deliveryStatus == MessageDeliveryStatus.sending &&
+              !_boxInFlight.contains(m.tempId),
+        )
         .toList();
     if (sending.isEmpty) return;
     for (final msg in sending) {

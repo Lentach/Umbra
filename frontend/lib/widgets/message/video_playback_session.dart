@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:video_player/video_player.dart';
 
 import '../../models/message_model.dart';
+import '../../services/box/box_media_url.dart';
 import '../../utils/encrypted_media_loader.dart';
 import '../../utils/e2e_persistent_diag.dart';
 import '../../utils/video_blob_url_stub.dart'
@@ -46,6 +47,9 @@ class VideoPlaybackSession {
   final MessageModel message;
   final String token;
 
+  /// Where a box attachment's bytes come from (item 3 / media wiring).
+  final BoxCiphertextSource? box;
+
   VideoPlayerController? _controller;
   String? _objectUrl;
   String? _tempFilePath;
@@ -56,7 +60,7 @@ class VideoPlaybackSession {
   /// the owner having to dig the durable log out of hacker mode.
   String? failureDetail;
 
-  VideoPlaybackSession({required this.message, required this.token});
+  VideoPlaybackSession({required this.message, required this.token, this.box});
 
   VideoPlayerController? get controller => _controller;
 
@@ -71,7 +75,9 @@ class VideoPlaybackSession {
   Future<VideoStageError?> load() async {
     final url = message.mediaUrl;
     // An optimistic bubble has no uploaded blob yet; nothing to fetch.
-    if (url == null || url.isEmpty || !url.startsWith('http')) {
+    if (url == null ||
+        url.isEmpty ||
+        !(url.startsWith('http') || isBoxMediaUrl(url))) {
       return VideoStageError.stillSending;
     }
     // Which step failed. The loader throws one undifferentiated exception,
@@ -85,6 +91,7 @@ class VideoPlaybackSession {
         token: token,
         key: message.mediaKey,
         iv: message.mediaIv,
+        box: box,
       );
       byteCount = bytes.length;
       if (_disposed) return VideoStageError.unplayable;

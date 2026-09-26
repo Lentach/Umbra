@@ -588,6 +588,42 @@ void main() {
       expect(prefs.getInt('e2e_37_retention_epoch_v1'), 123);
     });
 
+    test("this device's request-queue keys are sealed, never cleartext",
+        () async {
+      // The row holds the queue's private auth + seal halves (PR3.1).
+      final kv = await openStore();
+      await kv.setString('e2e_37_boxreq_v1', '{"v":1,"queue":{}}');
+      expect(
+        SealedWebEnvelope.isEnvelope(prefs.getString('e2e_37_boxreq_v1')!),
+        isTrue,
+      );
+      expect(kv.getString('e2e_37_boxreq_v1'), '{"v":1,"queue":{}}');
+    });
+
+    test("this device's self-queue keys and its siblings' addresses are "
+        'sealed, never cleartext', () async {
+      // The row holds the self-queue's private halves AND names every other
+      // device of the account (PR3.1 sibling queues).
+      final kv = await openStore();
+      await kv.setString('e2e_37_boxsib_v1', '{"v":1,"siblings":[]}');
+      expect(
+        SealedWebEnvelope.isEnvelope(prefs.getString('e2e_37_boxsib_v1')!),
+        isTrue,
+      );
+      expect(kv.getString('e2e_37_boxsib_v1'), '{"v":1,"siblings":[]}');
+    });
+
+    test('the box notifier row is sealed, never cleartext', () async {
+      // It ties every contact queue's nid to this device's push token (E9).
+      final kv = await openStore();
+      await kv.setString('e2e_37_boxntf_v1', '{"v":1,"nids":[]}');
+      expect(
+        SealedWebEnvelope.isEnvelope(prefs.getString('e2e_37_boxntf_v1')!),
+        isTrue,
+      );
+      expect(kv.getString('e2e_37_boxntf_v1'), '{"v":1,"nids":[]}');
+    });
+
     test('remove drops the row and the view', () async {
       final kv = await openStore();
       await kv.setString('e2e_37_decrypted_43', '{"c":"x"}');

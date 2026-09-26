@@ -149,16 +149,13 @@ class ChatMessageBubble extends StatelessWidget {
       onEdit: messageEditEligible(message, isMine: isMine)
           ? () => messaging.beginEditMessage(message)
           : null,
-      onPin: () {
-        if (message.id > 0) {
-          messaging.pinMessage(message.conversationId, message.id);
-        }
-      },
+      onPin: () => messaging.pinMessage(message.conversationId, message.id),
       onDelete: () {
         showMessageDeleteDialog(
           context: context,
           isMine: isMine,
           messageId: message.id,
+          wireId: message.wireId,
           onDeleteForMe: () =>
               messaging.deleteMessage(message.id, forEveryone: false),
           onDeleteForEveryone: () =>
@@ -289,14 +286,18 @@ class ChatMessageBubble extends StatelessWidget {
       onLongPress: () => _openContextMenu(context),
       child: Align(
         alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
-        child: Padding(
-          padding: EdgeInsets.only(
-            top: message.reactions.isNotEmpty ? 14.0 : 0.0,
-          ),
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              LayoutBuilder(
+        // The chip row's room above the bubble lives INSIDE the Stack: Flutter
+        // hit-tests a Stack child only within the Stack's own bounds
+        // (`Clip.none` paints outside, it does not take taps there), so a chip
+        // pushed up with a negative `top` took taps on its lower edge only.
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Padding(
+              padding: EdgeInsets.only(
+                top: message.reactions.isNotEmpty ? 14.0 : 0.0,
+              ),
+              child: LayoutBuilder(
                 builder: (context, layoutConstraints) {
                   final maxBubbleWidth = layoutConstraints.maxWidth * 0.85;
                   final contentAreaWidth = maxBubbleWidth - 32;
@@ -501,26 +502,26 @@ class ChatMessageBubble extends StatelessWidget {
                   );
                 },
               ),
-              if (message.reactions.isNotEmpty)
-                Positioned(
-                  top: -14,
-                  left: isMine ? null : 8,
-                  right: isMine ? 8 : null,
-                  child: ReactionChipsRow(
-                    reactions: message.reactions,
-                    currentUserId: currentUserId ?? -1,
-                    onTap: (emoji, isMyReaction) {
-                      toggleReaction(
-                        context,
-                        message.id,
-                        emoji,
-                        alreadyReacted: isMyReaction,
-                      ).ignore();
-                    },
-                  ),
+            ),
+            if (message.reactions.isNotEmpty)
+              Positioned(
+                top: 0,
+                left: isMine ? null : 8,
+                right: isMine ? 8 : null,
+                child: ReactionChipsRow(
+                  reactions: message.reactions,
+                  currentUserId: currentUserId ?? -1,
+                  onTap: (emoji, isMyReaction) {
+                    toggleReaction(
+                      context,
+                      message.id,
+                      emoji,
+                      alreadyReacted: isMyReaction,
+                    ).ignore();
+                  },
                 ),
-            ],
-          ),
+              ),
+          ],
         ),
       ),
     );

@@ -167,9 +167,71 @@ function shouldSuppressForFocusedConversation(convId) {
     });
 }
 
+// True when this subscription is on Apple's push service, where a push that
+// posts no notification counts toward Safari's revoke-after-3-silent budget.
+// Fails toward true: posting a card that closes at once is harmless.
+function isApplePushEndpoint() {
+  return self.registration.pushManager
+    .getSubscription()
+    .then(function (sub) {
+      var endpoint = sub && sub.endpoint ? sub.endpoint : '';
+      return endpoint.indexOf('https://web.push.apple.com/') === 0;
+    })
+    .catch(function () { return true; });
+}
+
+// Posts a silent card under [tag] and closes it at once: the push kept its
+// `userVisibleOnly` promise, and nothing stays in the tray.
+function postAndClose(title, body, tag, data) {
+  return self.registration
+    .showNotification(title, {
+      body: body,
+      icon: '/icons/notification-icon-512.png',
+      badge: '/icons/notification-badge-96.png',
+      tag: tag,
+      data: data,
+      silent: true,
+    })
+    .then(function () { return closeNotificationsForTag(tag); });
+}
+
+// Box push registration (metadata-privacy E9): a `notifier_challenge` code
+// proves this subscription reaches the page that holds the queue key. It is
+// handed to every open page — the one registering answers it — and is never
+// a "New message" card. But a push that posts NO notification is a broken
+// promise (`userVisibleOnly`): Safari REVOKES the subscription after three
+// (WebKit, WWDC22), and Chrome posts its own generic card when no page of
+// ours is visible. So one is posted and closed at once, unless a visible
+// page took the code on a non-Apple push service.
+function handleNotifierChallenge(code) {
+  function flash() {
+    return postAndClose('Umbra', 'Setting up notifications', 'box-notifier');
+  }
+  return clients
+    .matchAll({ type: 'window', includeUncontrolled: true })
+    .then(function (all) {
+      var visible = false;
+      for (var i = 0; i < all.length; i++) {
+        if (typeof code === 'string') {
+          all[i].postMessage({ type: 'box-notifier-challenge', code: code });
+        }
+        if (all[i].visibilityState === 'visible') visible = true;
+      }
+      return isApplePushEndpoint().then(function (apple) {
+        return visible && !apple ? undefined : flash();
+      });
+    })
+    .catch(flash);
+}
+
 self.addEventListener('push', function (event) {
   var payload = {};
   try { payload = event.data ? event.data.json() : {}; } catch (_) {}
+
+  if (payload.type === 'notifier_challenge') {
+    event.waitUntil(handleNotifierChallenge(payload.code));
+    return;
+  }
 
   // Phase 0a takeover alarm: content-free security notice — the account's
   // key bundle was replaced by another sign-in. No conversation, no unread
@@ -297,11 +359,21 @@ self.addEventListener('push', function (event) {
       var chain = closeNotificationsForTag(tag);
       // Suppress ONLY the banner when the user is already viewing this chat;
       // the sweep + badge writes below must still run so other conversations'
-      // tray cards and the app badge stay correct.
+      // tray cards and the app badge stay correct. On an Apple endpoint a
+      // suppressed push still posts a silent card and closes it at once
+      // (decision 39): Safari revokes the subscription after 3 silent pushes.
       if (!suppress) {
         chain = chain.then(function () {
           return self.registration.showNotification(title, notificationOptions);
         });
+      } else {
+        // A failed flash must not skip the sweep and badge writes below.
+        chain = chain
+          .then(isApplePushEndpoint)
+          .then(function (apple) {
+            return apple ? postAndClose(title, body, tag, payload) : undefined;
+          })
+          .catch(function () {});
       }
       return chain
         .then(function () {

@@ -1,4 +1,4 @@
-import { UseFilters, UseGuards } from '@nestjs/common';
+import { Logger, UseFilters, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import {
   ConnectedSocket,
@@ -17,10 +17,9 @@ import {
   boxSignedMessage,
   createQueueFields,
   notifierActivateFields,
-  notifierChallengeFields,
   verifyBoxSignature,
 } from './box-signature';
-import { BoxThrottlerGuard } from './box-throttler.guard';
+import { BoxThrottlerGuard, countRefusal } from './box-throttler.guard';
 import {
   parseAck,
   parseCreateQueue,
@@ -58,14 +57,32 @@ const AUTH_FAILED: BoxRefusal = { ok: false, code: 'auth_failed' };
 @UseGuards(BoxThrottlerGuard)
 @WebSocketGateway({ namespace: '/box', cors: { origin: buildCorsOrigin() } })
 export class BoxGateway implements OnGatewayDisconnect {
+  private readonly logger = new Logger(BoxGateway.name);
+
   constructor(
     private readonly box: BoxService,
     private readonly delivery: BoxDelivery,
     private readonly notifier: BoxNotifierService,
   ) {}
 
-  handleDisconnect(client: Socket): void {
-    this.delivery.detachSocket(client.id);
+  /**
+   * A queue the socket owned that still holds messages wakes its device:
+   * those went to this socket instead of to a push, and it may never have
+   * read them. Like `send`'s push, it fires even if the device resubscribes
+   * within the coalescing wait.
+   */
+  async handleDisconnect(client: Socket): Promise<void> {
+    const owned = this.delivery.detachSocket(client.id);
+    if (owned.length === 0) return;
+    try {
+      for (const nid of await this.box.waitingNids(owned)) {
+        this.notifier.schedule(nid);
+      }
+    } catch (error) {
+      this.logger.warn(
+        `[box] wake-up on disconnect failed: ${error instanceof Error ? error.name : 'unknown'}`,
+      );
+    }
   }
 
   @Throttle({
@@ -102,12 +119,24 @@ export class BoxGateway implements OnGatewayDisconnect {
     if (!cmd) return INVALID;
     const stored = await this.box.enqueue(cmd.sid, cmd.blob);
     if (stored.result === 'full') return { ok: false, code: 'queue_full' };
+    if (stored.result === 'over_ceiling') {
+      countRefusal('send:ceiling');
+      return { ok: false, code: 'quota_exceeded' };
+    }
     if (stored.result === 'stored' && !this.delivery.onEnqueued(stored.rid)) {
       this.notifier.schedule(stored.nid);
     }
     return { ok: true };
   }
 
+  /**
+   * Each entry stands alone, refusals listed in frame order: `auth_failed`
+   * (unknown rid or wrong signature, one answer) or `limit` (past the
+   * socket's rid cap, E10). A `limit` entry is checked before the claim, so
+   * it claims nothing — unless a concurrent frame on this socket filled the
+   * cap in between; `attach` refuses it then, after its own owner's
+   * signature already claimed the queue (harmless).
+   */
   @Throttle({
     default: { limit: BOX_LIMITS.subscribe, ttl: BOX_THROTTLE_TTL_MS },
   })
@@ -115,23 +144,32 @@ export class BoxGateway implements OnGatewayDisconnect {
   async subscribe(
     @ConnectedSocket() client: Socket,
     @MessageBody() data: unknown,
-  ): Promise<BoxAnswer<{ refused: { rid: string; code: 'auth_failed' }[] }>> {
+  ): Promise<
+    BoxAnswer<{ refused: { rid: string; code: 'auth_failed' | 'limit' }[] }>
+  > {
     const cmd = parseSubscribe(data);
     if (!cmd) return INVALID;
     const keys = await this.box.authKeysByRid(cmd.subs.map((s) => s.rid));
-    const accepted: Buffer[] = [];
-    const refused: { rid: string; code: 'auth_failed' }[] = [];
-    for (const { rid, sig } of cmd.subs) {
+    const signed = cmd.subs.map(({ rid, sig }) => {
       const key = keys.get(rid.toString('base64url'));
       const message = boxSignedMessage('subscribe', client.id, rid);
-      if (key && verifyBoxSignature(key, message, sig)) accepted.push(rid);
-      else
-        refused.push({ rid: rid.toString('base64url'), code: 'auth_failed' });
+      return key !== undefined && verifyBoxSignature(key, message, sig);
+    });
+    const { fits, over } = this.delivery.fit(
+      client.id,
+      cmd.subs.filter((_, i) => signed[i]).map((s) => s.rid),
+    );
+    if (fits.length > 0) {
+      await this.box.markSubscribed(fits);
+      over.push(...this.delivery.attach(client, fits));
     }
-    if (accepted.length > 0) {
-      await this.box.markSubscribed(accepted);
-      this.delivery.attach(client, accepted);
-    }
+    const overRids = new Set(over.map((rid) => rid.toString('base64url')));
+    const refused: { rid: string; code: 'auth_failed' | 'limit' }[] = [];
+    cmd.subs.forEach(({ rid }, i) => {
+      const b64 = rid.toString('base64url');
+      if (!signed[i]) refused.push({ rid: b64, code: 'auth_failed' });
+      else if (overRids.has(b64)) refused.push({ rid: b64, code: 'limit' });
+    });
     return { ok: true, refused };
   }
 
@@ -181,6 +219,13 @@ export class BoxGateway implements OnGatewayDisconnect {
     return { ok: true };
   }
 
+  /**
+   * Step 1 `{platform, token}` pushes a code to the token; step 2 `{code,
+   * queues}` activates each queue whose entry its own key signed over
+   * `nid ‖ 0x02 ‖ code` (owner decision 34). A dead code refuses the whole
+   * frame; a bad entry is refused alone, one answer for an unknown nid and a
+   * wrong signature, as in `subscribe`.
+   */
   @Throttle({
     default: { limit: BOX_LIMITS.registerNotifier, ttl: BOX_THROTTLE_TTL_MS },
   })
@@ -188,23 +233,36 @@ export class BoxGateway implements OnGatewayDisconnect {
   async registerNotifier(
     @ConnectedSocket() client: Socket,
     @MessageBody() data: unknown,
-  ): Promise<BoxAnswer<{ state: 'challenged' | 'active' }>> {
+  ): Promise<
+    BoxAnswer<
+      | { state: 'challenged' }
+      | { refused: { nid: string; code: 'auth_failed' }[] }
+    >
+  > {
     const cmd = parseRegisterNotifier(data);
     if (!cmd) return INVALID;
-    const key = await this.box.authKeyByNid(cmd.nid);
-    const fields =
-      cmd.step === 1
-        ? notifierChallengeFields(cmd.nid, cmd.platform, cmd.token)
-        : notifierActivateFields(cmd.nid, cmd.code);
-    const message = boxSignedMessage('registerNotifier', client.id, fields);
-    if (!key || !verifyBoxSignature(key, message, cmd.sig)) return AUTH_FAILED;
     if (cmd.step === 1) {
-      await this.notifier.challenge(cmd.nid, cmd.platform, cmd.token);
+      await this.notifier.challenge(cmd.platform, cmd.token);
       return { ok: true, state: 'challenged' };
     }
-    return (await this.notifier.activate(cmd.nid, cmd.code))
-      ? { ok: true, state: 'active' }
-      : AUTH_FAILED;
+    const challenge = this.notifier.liveChallenge(cmd.code);
+    if (!challenge) return AUTH_FAILED;
+    const keys = await this.box.authKeysByNid(cmd.queues.map((q) => q.nid));
+    const accepted: Buffer[] = [];
+    const refused: { nid: string; code: 'auth_failed' }[] = [];
+    for (const { nid, sig } of cmd.queues) {
+      const key = keys.get(nid.toString('base64url'));
+      const message = boxSignedMessage(
+        'registerNotifier',
+        client.id,
+        notifierActivateFields(nid, cmd.code),
+      );
+      if (key && verifyBoxSignature(key, message, sig)) accepted.push(nid);
+      else
+        refused.push({ nid: nid.toString('base64url'), code: 'auth_failed' });
+    }
+    await this.notifier.activate(challenge, accepted);
+    return { ok: true, refused };
   }
 
   /** True when `rid` exists and `sig` is its owner's over `message`. */

@@ -1662,6 +1662,22 @@ class AppLocalizationsPl extends AppLocalizations {
       'Reakcje nie są jeszcze gotowe na tym urządzeniu';
 
   @override
+  String get snackbarBoxReactionFailed =>
+      'Nie udało się wysłać reakcji. Spróbuj ponownie.';
+
+  @override
+  String get snackbarBoxPinFailed =>
+      'Nie udało się zmienić przypięcia. Spróbuj ponownie.';
+
+  @override
+  String get snackbarBoxEditFailed =>
+      'Nie udało się zapisać edycji. Spróbuj ponownie.';
+
+  @override
+  String get snackbarBoxDeleteFailed =>
+      'Nie udało się usunąć wiadomości u wszystkich. Spróbuj ponownie.';
+
+  @override
   String get snackbarPinnedMessageUnavailable => 'Wiadomość jest niedostępna';
 
   @override

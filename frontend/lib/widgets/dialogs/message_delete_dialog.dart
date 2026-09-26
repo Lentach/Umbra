@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../l10n/app_localizations.dart';
+import '../../utils/message_ids.dart';
 import '../glass/glass_dialog.dart';
 
 Future<void> showMessageDeleteDialog({
@@ -8,9 +9,11 @@ Future<void> showMessageDeleteDialog({
   required int messageId,
   required VoidCallback onDeleteForMe,
   required VoidCallback onDeleteForEveryone,
+  String? wireId,
 }) {
   final l10n = AppLocalizations.of(context);
-  final showForEveryone = isMine && messageId > 0;
+  // A server row, or a box message named by its wire id (item 4).
+  final showForEveryone = isMine && hasActionTarget(messageId, wireId: wireId);
   return showDialog<void>(
     context: context,
     builder: (ctx) => GlassDialog(

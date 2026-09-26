@@ -1,0 +1,585 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:fireplace/services/box/box_client.dart';
+import 'package:fireplace/services/box/box_media_frame.dart';
+import 'package:fireplace/services/box/box_session.dart';
+import 'package:fireplace/services/box/box_signer.dart';
+import 'package:fireplace/services/box/box_wire.dart';
+import 'package:fireplace/services/box/queue_seal.dart';
+import 'package:fireplace/services/contacts/contact_record.dart';
+import 'package:fireplace/services/contacts/contact_store.dart';
+import 'package:fireplace/services/encryption/content_kv.dart';
+import 'package:fireplace/utils/message_ids.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../../support/box_fakes.dart';
+
+Uint8List _bytes(int length, int fill) =>
+    Uint8List(length)..fillRange(0, length, fill);
+
+Map<String, String> _address(int fill) => {
+  'rid': boxB64(_bytes(32, fill)),
+  'sid': boxB64(_bytes(32, fill + 1)),
+  'nid': boxB64(_bytes(16, fill + 2)),
+};
+
+void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  late ContentKv kv;
+  late ContactStore store;
+  late FakeBoxSockets sockets;
+  late BoxSession session;
+  late Map<String, String> address;
+  late List<Map<String, Object?>> published;
+  final seal = QueueSeal(cipher: PointyGcmSealer());
+
+  /// Answers the box like a server holding exactly the queues it created;
+  /// [gone] rids are refused on subscribe, as a reaped queue is.
+  final gone = <String>{};
+
+  /// What the box answers a `send`.
+  var sendAnswer = <String, Object?>{'ok': true};
+
+  /// What the box's media route answers.
+  var media = (http.Request req) async => http.Response('', 500);
+  final mediaRequests = <http.Request>[];
+
+  setUp(() async {
+    SharedPreferences.setMockInitialValues({});
+    kv = await PrefsContentKv.open();
+    store = ContactStore(
+      open: () async => kv,
+      lock: <T>(_, action) => action(),
+      accepts: (_) => true,
+    );
+    await store.open(1);
+    address = _address(0x10);
+    gone.clear();
+    sendAnswer = {'ok': true};
+    media = (_) async => http.Response('', 500);
+    mediaRequests.clear();
+    sockets = FakeBoxSockets()
+      ..respond = (_, f) => switch (f.event) {
+        'createQueue' => {'ok': true, ...address},
+        'subscribe' => {
+          'ok': true,
+          'refused': [
+            for (final s in (f.frame['subs']! as List<Object?>))
+              if (gone.contains((s! as Map)['rid']))
+                {'rid': (s as Map)['rid'], 'code': 'auth_failed'},
+          ],
+        },
+        'send' => sendAnswer,
+        _ => {'ok': true},
+      };
+    published = [];
+    session = BoxSession(
+      box: BoxClient(
+        baseUrl: 'http://box.test',
+        socketFactory: sockets.call,
+        httpClient: MockClient((req) {
+          mediaRequests.add(req);
+          return media(req);
+        }),
+      ),
+      store: store,
+      emit: (event, data) {
+        if (event == 'setRequestQueue') {
+          published.add(Map<String, Object?>.from(data! as Map));
+        }
+      },
+      seal: seal,
+    )..start();
+  });
+
+  tearDown(() => session.dispose());
+
+  Future<void> boxUp(String sockId) async {
+    sockets.last.serverConnect(sockId);
+    await pumpEventQueue();
+  }
+
+  /// One connect of an install that holds its identity: `socketReady`, then
+  /// E2E ready (it fires once per connect, `initializeE2E`).
+  Future<void> accountReady(int? deviceId) async {
+    session
+      ..accountReady(deviceId)
+      ..e2eReady();
+    await pumpEventQueue();
+  }
+
+  test(
+    'a device still on the LINK GATE never publishes: its token names the '
+    "primary's device, so a publish would overwrite the primary's request "
+    'queue (found live, 2026-09-25)',
+    () async {
+      await boxUp('S1');
+      session.accountReady(1);
+      await pumpEventQueue();
+      expect(published, isEmpty, reason: 'no identity yet: E2E never ready');
+    },
+  );
+
+  test(
+    "a reconnect under a new device id waits for THAT connect's E2E ready "
+    '(the link rebind: identity adopted on the old token, published only '
+    'under the new one)',
+    () async {
+      await boxUp('S1');
+      await accountReady(1);
+      session
+        ..onRequestQueueSet({'success': true})
+        ..accountLost()
+        ..accountReady(2);
+      await pumpEventQueue();
+      expect(published, hasLength(1), reason: 'E2E not ready on this connect');
+
+      session.e2eReady();
+      await pumpEventQueue();
+      expect(published, hasLength(2));
+    },
+  );
+
+  test(
+    'publishes the request queue once BOTH the box and the account socket '
+    'are up — box first',
+    () async {
+      await boxUp('S1');
+      expect(published, isEmpty, reason: 'the account socket is not ready');
+      await accountReady(2);
+      expect(published, [
+        {'sid': address['sid'], 'sealPub': store.requestQueue!.sealPub},
+      ]);
+    },
+  );
+
+  test('— account first', () async {
+    await accountReady(2);
+    expect(published, isEmpty, reason: 'no queue before the box is up');
+    await boxUp('S1');
+    expect(published.single['sid'], address['sid']);
+  });
+
+  test(
+    'an accepted publish is not repeated on a same-device reconnect, and is '
+    'repeated for a new device id (a reset re-homes the account)',
+    () async {
+      await boxUp('S1');
+      await accountReady(2);
+      session
+        ..onRequestQueueSet({'success': true})
+        ..accountLost();
+      await accountReady(2);
+      expect(published, hasLength(1));
+
+      session.accountLost();
+      await accountReady(5);
+      expect(published, hasLength(2));
+    },
+  );
+
+  test('a refused publish is sent again on the next ready', () async {
+    await boxUp('S1');
+    await accountReady(2);
+    session.onRequestQueueSet({'success': false, 'error': 'internal'});
+    await accountReady(2);
+    expect(published, hasLength(2));
+  });
+
+  test('a rate-limited publish is sent again after retryAfterMs', () async {
+    await boxUp('S1');
+    await accountReady(2);
+    session.onRequestQueueSet({
+      'success': false,
+      'error': 'rate_limited',
+      'retryAfterMs': 5,
+    });
+    expect(published, hasLength(1));
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    await pumpEventQueue();
+    expect(published, hasLength(2));
+  });
+
+  test(
+    'an answer lost with the account socket is sent again on the next ready',
+    () async {
+      await boxUp('S1');
+      await accountReady(2);
+      session.accountLost();
+      await accountReady(2);
+      expect(published, hasLength(2));
+    },
+  );
+
+  test(
+    'a request queue the box refuses on a reconnect (reaped) is replaced and '
+    'the new address published',
+    () async {
+      await boxUp('S1');
+      await accountReady(2);
+      session.onRequestQueueSet({'success': true});
+      final first = address;
+
+      gone.add(first['rid']!);
+      address = _address(0x40);
+      sockets.last.serverDrop();
+      await pumpEventQueue();
+      // The box's own backoff opens the next connection (~1-2 s).
+      for (var i = 0; i < 100 && sockets.sockets.length < 2; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      await boxUp('S2');
+
+      expect(published.map((p) => p['sid']), [first['sid'], address['sid']]);
+      expect(store.requestQueue?.rid, address['rid']);
+    },
+    timeout: const Timeout(Duration(seconds: 20)),
+  );
+
+  test(
+    'a store that opens only after both sockets are ready (web vault booted '
+    'locked, then unlocked) still gets its queue published',
+    () async {
+      store.close();
+      await boxUp('S1');
+      await accountReady(2);
+      expect(published, isEmpty, reason: 'no store, no queue');
+
+      await store.open(1);
+      session.storeOpened();
+      await pumpEventQueue();
+      expect(published.single['sid'], address['sid']);
+    },
+  );
+
+  group('inbound contact queues (slice (b))', () {
+    /// Stores a friend holding one inbound queue with real key material.
+    Future<ContactQueue> friendWithQueue(int peer, int fill) async {
+      final auth = const Ed25519BoxSigner().mint();
+      final seal = QueueSeal.mintKeyPair();
+      final queue = ContactQueue(
+        rid: boxB64(_bytes(32, fill)),
+        sid: boxB64(_bytes(32, fill + 1)),
+        nid: boxB64(_bytes(16, fill + 2)),
+        authPriv: boxB64(auth.bytes),
+        sealPriv: boxB64(seal.privateKey),
+        sealPub: boxB64(seal.publicKey),
+      );
+      await store.update(
+        peer,
+        (_) => ContactRecord(
+          userId: peer,
+          username: 'peer$peer',
+          tag: '0001',
+          state: ContactState.friend,
+          queues: [queue],
+        ),
+      );
+      return queue;
+    }
+
+    List<String> subscribedRids() => [
+      for (final socket in sockets.sockets)
+        for (final f in socket.emitted)
+          if (f.event == 'subscribe')
+            for (final s in f.frame['subs']! as List<Object?>)
+              (s! as Map)['rid']! as String,
+    ];
+
+    test('once the box is ready, every contact queue is subscribed', () async {
+      final a = await friendWithQueue(42, 0x50);
+      final b = await friendWithQueue(43, 0x58);
+      await boxUp('S1');
+      expect(subscribedRids(), containsAll([a.rid, b.rid]));
+
+      // Already in the box's set: a later trigger does not re-sign them.
+      final before = subscribedRids().length;
+      session.storeOpened();
+      await pumpEventQueue();
+      expect(subscribedRids(), hasLength(before));
+    });
+
+    test('a store that opens late subscribes them then', () async {
+      final a = await friendWithQueue(42, 0x50);
+      store.close();
+      await boxUp('S1');
+      expect(subscribedRids(), isNot(contains(a.rid)));
+
+      await store.open(1);
+      session.storeOpened();
+      await pumpEventQueue();
+      expect(subscribedRids(), contains(a.rid));
+    });
+
+    test('a reader wired after deliveries landed is offered them', () async {
+      await boxUp('S1');
+      await store.journalDelivery(
+        rid: 'r',
+        id: 'm',
+        peerUserId: 42,
+        senderDeviceId: 1,
+        signal: '2:AQ==',
+        receivedAt: DateTime.utc(2026, 9, 24),
+      );
+      final offered = <String?>[];
+      session.consumer = (entry) async {
+        offered.add(entry.signal);
+        return true;
+      };
+      await pumpEventQueue();
+      expect(offered, ['2:AQ==']);
+    });
+  });
+
+  group('sending (slice (c))', () {
+    final sealKeys = QueueSeal.mintKeyPair();
+    final address = ContactOutbound(
+      peerDeviceId: 2,
+      sid: boxB64(_bytes(32, 0x70)),
+      sealPub: boxB64(sealKeys.publicKey),
+    );
+
+    Future<void> friend({ContactState state = ContactState.friend}) =>
+        store.update(
+          42,
+          (_) => ContactRecord(
+            userId: 42,
+            username: 'peer42',
+            tag: '0001',
+            state: state,
+            outbound: [address],
+          ),
+        );
+
+    List<EmittedFrame> sends() => [
+      for (final socket in sockets.sockets)
+        for (final f in socket.emitted)
+          if (f.event == 'send') f,
+    ];
+
+    test(
+      "a friend's addresses, per peer device — ALSO while the box is down, "
+      'so a covered peer fails the send instead of taking the old path '
+      '(decisions 15, 19)',
+      () async {
+        await friend();
+        expect(session.addressesFor(42).keys, [2], reason: 'box not up yet');
+        await boxUp('S1');
+        sockets.last.serverDrop();
+        await pumpEventQueue();
+        expect(session.addressesFor(42)[2]?.sid, address.sid);
+        expect(await session.deliver(address, Uint8List(4)), isFalse);
+        expect(session.addressesFor(7), isEmpty, reason: 'no record');
+      },
+    );
+
+    test('a contact who is not a friend has no address to send to', () async {
+      await friend(state: ContactState.blocked);
+      await boxUp('S1');
+      expect(session.addressesFor(42), isEmpty);
+    });
+
+    test('a closed contact store has no address to send to', () async {
+      await friend();
+      await boxUp('S1');
+      store.close();
+      expect(session.addressesFor(42), isEmpty);
+    });
+
+    test(
+      'the peers whose lists a connect re-verifies are exactly the friends '
+      'holding an address — no lookup for anyone else (decision 21)',
+      () async {
+        await friend();
+        for (final (id, state, outbound) in [
+          (43, ContactState.blocked, [address]),
+          (44, ContactState.friend, <ContactOutbound>[]),
+        ]) {
+          await store.update(
+            id,
+            (_) => ContactRecord(
+              userId: id,
+              username: 'peer$id',
+              tag: '0001',
+              state: state,
+              outbound: outbound,
+            ),
+          );
+        }
+        expect(session.coveredPeers(), [42]);
+      },
+    );
+
+    test(
+      'deliver seals the body to that address: the blob goes to its sid and '
+      "opens under its queue's key",
+      () async {
+        await boxUp('S1');
+        final body = Uint8List.fromList([1, 3, 0, 1, 9, 9]);
+        expect(await session.deliver(address, body), isTrue);
+
+        final frame = sends().single.frame;
+        expect(frame['sid'], address.sid);
+        final blob = boxB64Decode(frame['blob'], kBoxBlobBytes)!;
+        expect(
+          await seal.open(sealKeys.privateKey, sealKeys.publicKey, blob),
+          body,
+        );
+      },
+    );
+
+    test('a refused send is false', () async {
+      await boxUp('S1');
+      sendAnswer = {'ok': false, 'code': 'queue_full'};
+      expect(await session.deliver(address, Uint8List(4)), isFalse);
+    });
+
+    test('a box that is not connected is false, and nothing is emitted', () async {
+      expect(await session.deliver(address, Uint8List(4)), isFalse);
+      expect(sends(), isEmpty);
+    });
+
+    test(
+      'an address that is not a canonical sid / 32-byte key is false, never '
+      'a throw',
+      () async {
+        await boxUp('S1');
+        for (final bad in [
+          ContactOutbound(peerDeviceId: 2, sid: 'short', sealPub: address.sealPub),
+          ContactOutbound(peerDeviceId: 2, sid: address.sid, sealPub: 'short'),
+        ]) {
+          expect(await session.deliver(bad, Uint8List(4)), isFalse);
+        }
+        expect(sends(), isEmpty);
+      },
+    );
+
+    test(
+      'local ids for sends come from the counter deliveries draw on: never '
+      'the same id twice',
+      () async {
+        final sent = await session.nextLocalId();
+        final journaled = await store.journalDelivery(
+          rid: 'r',
+          id: 'm',
+          peerUserId: 42,
+          senderDeviceId: 1,
+          signal: '2:AQ==',
+          receivedAt: DateTime.utc(2026, 9, 24),
+        );
+        final sentAgain = await session.nextLocalId();
+        expect(
+          {sent, journaled?.localId, sentAgain},
+          hasLength(3),
+        );
+        expect(sent, greaterThanOrEqualTo(kFirstLocalMessageId));
+      },
+    );
+
+    test('a closed store hands out no local id', () async {
+      store.close();
+      expect(await session.nextLocalId(), isNull);
+    });
+
+    test(
+      "uploadMedia puts the framed body on the box against the address's "
+      "sid (that queue's budget pays) and answers the box's reference",
+      () async {
+        final id = _bytes(32, 0x33);
+        media = (_) async => http.Response(
+          jsonEncode({
+            'id': boxB64(id),
+            'bucket': 'd14',
+            'expiresAt': '2026-10-10T00:00:00.000Z',
+          }),
+          201,
+        );
+        final framed = frameMediaToRung(Uint8List.fromList([1, 2, 3]));
+        final result = await session.uploadMedia(address, framed);
+
+        final req = mediaRequests.single;
+        expect(req.method, 'POST');
+        expect(req.headers['Box-Sid'], address.sid);
+        expect(req.bodyBytes, framed);
+        expect(
+          result,
+          isA<BoxOk<BoxMediaRef>>().having((r) => r.value.id, 'id', id),
+        );
+      },
+    );
+
+    test('a refused upload is the refusal, not an answer', () async {
+      media = (_) async =>
+          http.Response(jsonEncode({'error': 'quota_exceeded'}), 429);
+      final result = await session.uploadMedia(
+        address,
+        frameMediaToRung(Uint8List(1)),
+      );
+      expect(
+        result,
+        isA<BoxRefused<BoxMediaRef>>()
+            .having((r) => r.code, 'code', BoxCode.quotaExceeded),
+      );
+    });
+
+    test(
+      'an address that is not a canonical sid, or a body that is not a '
+      'ladder size, is refused with nothing sent — never a throw',
+      () async {
+        final bad = ContactOutbound(
+          peerDeviceId: 2,
+          sid: 'short',
+          sealPub: address.sealPub,
+        );
+        expect(
+          await session.uploadMedia(bad, frameMediaToRung(Uint8List(1))),
+          isA<BoxRefused<BoxMediaRef>>(),
+        );
+        expect(
+          await session.uploadMedia(address, Uint8List(5000)),
+          isA<BoxRefused<BoxMediaRef>>()
+              .having((r) => r.code, 'code', BoxCode.badSize),
+        );
+        expect(
+          await session.downloadMedia(Uint8List(31)),
+          isA<BoxRefused<Uint8List>>(),
+        );
+        expect(mediaRequests, isEmpty);
+      },
+    );
+
+    test(
+      "downloadMedia fetches the id's body; a 404 (expired, or never there) "
+      'is notFound',
+      () async {
+        final id = _bytes(32, 0x44);
+        final body = frameMediaToRung(Uint8List.fromList([7]));
+        media = (_) async => http.Response.bytes(body, 200);
+        final got = await session.downloadMedia(id);
+        expect(mediaRequests.single.url.path, '/box/media/${boxB64(id)}');
+        expect(
+          got,
+          isA<BoxOk<Uint8List>>().having((r) => r.value, 'body', body),
+        );
+
+        media = (_) async => http.Response('', 404);
+        expect(
+          await session.downloadMedia(id),
+          isA<BoxRefused<Uint8List>>()
+              .having((r) => r.code, 'code', BoxCode.notFound),
+        );
+      },
+    );
+  });
+
+  test('dispose closes the box connection', () async {
+    await boxUp('S1');
+    session.dispose();
+    expect(sockets.last.disposed, isTrue);
+  });
+}

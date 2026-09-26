@@ -628,6 +628,10 @@
     "placeholders": { "count": { "type": "int" } }
   },
   "snackbarReactionUnavailable": "Reakcje nie są jeszcze gotowe na tym urządzeniu",
+  "snackbarBoxReactionFailed": "Nie udało się wysłać reakcji. Spróbuj ponownie.",
+  "snackbarBoxPinFailed": "Nie udało się zmienić przypięcia. Spróbuj ponownie.",
+  "snackbarBoxEditFailed": "Nie udało się zapisać edycji. Spróbuj ponownie.",
+  "snackbarBoxDeleteFailed": "Nie udało się usunąć wiadomości u wszystkich. Spróbuj ponownie.",
   "snackbarPinnedMessageUnavailable": "Wiadomość jest niedostępna",
   "snackbarMessageCopied": "Skopiowano wiadomość",
   "composerAttachmentRemoveTooltip": "Usuń załącznik",

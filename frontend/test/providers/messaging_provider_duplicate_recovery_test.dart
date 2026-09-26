@@ -2,6 +2,7 @@ import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
+import 'package:fireplace/services/encryption_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Regression for the "message breaks mid-conversation" bug (2026-07-11, the
@@ -73,6 +74,7 @@ class _ThrowingEncryption extends EncryptionProvider {
     DateTime? createdAt,
     DateTime? expiresAt,
     int? disappearAfterSeconds,
+    WireKey? wire,
   }) async {
     final copy = Map<String, dynamic>.from(data);
     durableWrites.add(MapEntry(messageId, copy));

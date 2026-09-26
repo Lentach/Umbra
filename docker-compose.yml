@@ -37,8 +37,8 @@ services:
       MEDIA_BASE_URL: ${MEDIA_BASE_URL:-http://localhost:3000}
       MEDIA_DIR: /app/media
       # The box is OFF unless this is `true` (backend/src/app.module.ts). Dev and
-      # CI's e2e stacks (this file) run it on; prod leaves it unset until the
-      # box has a global storage ceiling.
+      # CI's e2e stacks (this file) run it on; prod pins it off until the owner
+      # turns it on after G5.
       BOX_ENABLED: ${BOX_ENABLED:-true}
       FIREBASE_SERVICE_ACCOUNT: ${FIREBASE_SERVICE_ACCOUNT}
       WEB_PUSH_VAPID_PUBLIC_KEY: ${WEB_PUSH_VAPID_PUBLIC_KEY}

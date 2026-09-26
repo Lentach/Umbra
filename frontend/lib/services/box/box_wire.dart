@@ -1,8 +1,6 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:crypto/crypto.dart';
-
 /// The box wire, client half (`docs/contracts/wire.md` "The box"; server
 /// `backend/src/box/box-wire.ts` + `box-signature.ts`). The signed bytes are
 /// byte-exact with the server's: `test/services/box/box_wire_test.dart` pins
@@ -13,6 +11,9 @@ const int kBoxBlobBytes = 16384;
 
 /// Most entries one `subscribe` frame may carry.
 const int kBoxSubscribeMax = 256;
+
+/// Most queues one `registerNotifier` activation frame may carry.
+const int kBoxNotifierBatchMax = 256;
 
 const int kBoxRidBytes = 32;
 const int kBoxSidBytes = 32;
@@ -41,8 +42,6 @@ enum QueueKind { normal, request }
 
 enum NotifierPlatform { fcm, webpush }
 
-enum NotifierState { challenged, active }
-
 enum BoxState {
   /// No connection, or the last one dropped.
   offline,
@@ -64,6 +63,11 @@ enum BoxCode {
   quotaExceeded('quota_exceeded'),
   rateLimited('rate_limited'),
   internal('internal'),
+
+  /// `subscribe` only (item 9, E10): this socket already holds its cap of
+  /// rids. The queue is NOT gone — `BoxClient` keeps it in its set and the
+  /// next connection offers it again.
+  limit('limit'),
   badSize('bad_size'),
   notFound('not_found');
 
@@ -219,17 +223,7 @@ Uint8List createQueueFields(QueueKind kind, List<int> authPub) =>
 Uint8List ackFields(List<int> rid, List<int> id) =>
     Uint8List.fromList([...rid, ...id]);
 
-/// F for `registerNotifier` step 1: nid ‖ 0x01 ‖ SHA-256(platform 0x00 token).
-Uint8List notifierChallengeFields(
-  List<int> nid,
-  NotifierPlatform platform,
-  String token,
-) => Uint8List.fromList([
-  ...nid,
-  0x01,
-  ...sha256.convert(utf8.encode('${platform.name}\x00$token')).bytes,
-]);
-
-/// F for `registerNotifier` step 2: nid ‖ 0x02 ‖ the code the push delivered.
+/// F for `registerNotifier` step 2, one per activated queue: nid ‖ 0x02 ‖ the
+/// code the push delivered. Step 1 is unsigned (owner decision 34).
 Uint8List notifierActivateFields(List<int> nid, List<int> code) =>
     Uint8List.fromList([...nid, 0x02, ...code]);

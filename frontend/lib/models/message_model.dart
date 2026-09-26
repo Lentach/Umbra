@@ -9,11 +9,26 @@ class ReplyToPreview {
   final String senderUsername;
   final MessageType messageType;
 
+  /// The quoted message's wire id and sender (metadata-privacy item 3,
+  /// E18a): what a box reply names it by — a wire id is unique per sender
+  /// only, and a box message's local [id] differs on every device. Null on
+  /// a server snapshot and when the quoted message predates PR2.1.
+  final String? wireId;
+  final int? senderId;
+
+  /// The quoted message itself disappears (it had a timer when quoted): a
+  /// box reply then sends no snippet of it (E18a), or the reply would keep
+  /// its words for the reply's own lifetime.
+  final bool quotedDisappears;
+
   const ReplyToPreview({
     required this.id,
     required this.content,
     required this.senderUsername,
     required this.messageType,
+    this.wireId,
+    this.senderId,
+    this.quotedDisappears = false,
   });
 
   factory ReplyToPreview.fromJson(Map<String, dynamic> json) {
@@ -24,8 +39,23 @@ class ReplyToPreview {
       messageType: MessageModel._parseMessageType(
         json['messageType'] as String?,
       ),
+      wireId: json['wireId'] as String?,
+      senderId: json['senderId'] as int?,
+      quotedDisappears: json['quotedDisappears'] == true,
     );
   }
+
+  /// The shape [ReplyToPreview.fromJson] reads: how a box message's quote is
+  /// kept in its plaintext record (it has no server row to carry it).
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'content': content,
+    'senderUsername': senderUsername,
+    'messageType': messageType.name.toUpperCase(),
+    'wireId': ?wireId,
+    'senderId': ?senderId,
+    if (quotedDisappears) 'quotedDisappears': true,
+  };
 }
 
 class MessageModel {
@@ -81,6 +111,15 @@ class MessageModel {
   /// (spec §12 amendment (ix)) — the lost-ack reconcile key, since such a row
   /// carries no ciphertext this device could match on.
   final String? sendToken;
+
+  /// The message's WIRE id (metadata-privacy PR2.1): the sender's `sendToken`
+  /// for this send, which names the message independently of the server's
+  /// row id. Never read from the server: an own row gets it from our echoed
+  /// token only on the origin-scoped ack / lost-ack paths, every other row
+  /// from `E2eEnvelope.msgId` at decrypt (Signal-authenticated), and any row
+  /// from the persisted record's `_wid` stamp. Null for rows sent by a client
+  /// that predates it. Nothing reads it yet.
+  final String? wireId;
 
   /// True when the server explicitly said this device has no ciphertext for
   /// this row. Such a row must never enter the decrypt pass.
@@ -178,6 +217,7 @@ class MessageModel {
     this.envelopeStatus,
     this.originDeviceId,
     this.sendToken,
+    this.wireId,
     this.mediaKey,
     this.mediaIv,
     this.editedAt,
@@ -292,9 +332,11 @@ class MessageModel {
     String? envelopeStatus,
     int? originDeviceId,
     String? sendToken,
+    String? wireId,
     String? mediaKey,
     String? mediaIv,
     DateTime? editedAt,
+    DateTime? createdAt,
   }) {
     return MessageModel(
       id: id,
@@ -302,7 +344,7 @@ class MessageModel {
       senderId: senderId,
       senderUsername: senderUsername,
       conversationId: conversationId,
-      createdAt: createdAt,
+      createdAt: createdAt ?? this.createdAt,
       deliveryStatus: deliveryStatus ?? this.deliveryStatus,
       expiresAt: expiresAt ?? this.expiresAt,
       disappearAfterSeconds:
@@ -327,6 +369,7 @@ class MessageModel {
       envelopeStatus: envelopeStatus ?? this.envelopeStatus,
       originDeviceId: originDeviceId ?? this.originDeviceId,
       sendToken: sendToken ?? this.sendToken,
+      wireId: wireId ?? this.wireId,
       mediaKey: mediaKey ?? this.mediaKey,
       mediaIv: mediaIv ?? this.mediaIv,
       editedAt: editedAt ?? this.editedAt,

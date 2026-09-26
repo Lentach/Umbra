@@ -299,6 +299,62 @@ void main() {
   );
 
   test(
+    'a rid refused for the per-socket cap (`limit`) is NOT gone: it stays in '
+    'the set, is never reported lost, and the next connection offers it again',
+    () {
+      fakeAsync((clock) {
+        final box = client();
+        final kept = _queue(1);
+        final capped = _queue(2);
+        final lost = <BoxRefusal>[];
+        box.lostQueues.listen(lost.add);
+        unawaited(box.subscribe([kept, capped]));
+        box.connect();
+        final first = sockets.last..serverConnect('S1');
+        clock.flushMicrotasks();
+        first.emitted.single.answer(
+          _ok({
+            'refused': [
+              {'rid': boxB64(capped.rid), 'code': 'limit'},
+            ],
+          }),
+        );
+        clock.flushMicrotasks();
+        expect(box.state, BoxState.ready);
+        expect(lost, isEmpty);
+        expect(box.subscribed.map(boxB64), contains(boxB64(capped.rid)));
+
+        // An explicit subscribe answers no refusal for it either: a caller
+        // reading its list as "gone" would drop a live queue.
+        BoxResult<List<BoxRefusal>>? answer;
+        unawaited(box.subscribe([capped]).then((r) => answer = r));
+        clock.flushMicrotasks();
+        first.emitted.last.answer(
+          _ok({
+            'refused': [
+              {'rid': boxB64(capped.rid), 'code': 'limit'},
+            ],
+          }),
+        );
+        clock.flushMicrotasks();
+        expect(answer, isA<BoxOk<List<BoxRefusal>>>());
+        expect((answer! as BoxOk<List<BoxRefusal>>).value, isEmpty);
+
+        first.serverDrop();
+        clock.elapse(const Duration(seconds: 3));
+        sockets.respond = (_, f) => _subscribed();
+        final second = sockets.last..serverConnect('S2');
+        clock.flushMicrotasks();
+        final resent = [
+          for (final f in second.emitted)
+            ...(f.frame['subs']! as List<Object?>).cast<Map<String, Object?>>(),
+        ];
+        expect(resent.map((e) => e['rid']), contains(boxB64(capped.rid)));
+      });
+    },
+  );
+
+  test(
     'a resubscribe the box refuses drops the connection and backs off',
     () {
       fakeAsync((clock) {
@@ -331,6 +387,33 @@ void main() {
       expect(box.state, BoxState.offline);
     });
   });
+
+  test(
+    'a server outage longer than the fast backoff never ends the box: it keeps '
+    'retrying until close() (device-found 2026-09-24: a 195 s backend restart '
+    'left the app with no box until it was restarted)',
+    () {
+      fakeAsync((clock) {
+        final box = client()..connect();
+        // Every attempt refused, well past AppConstants.reconnectMaxAttempts.
+        for (var i = 0; i < 12; i++) {
+          sockets.last.refuseConnection();
+          clock.elapse(const Duration(seconds: 31));
+        }
+        final attempts = sockets.sockets.length;
+        expect(attempts, greaterThan(6), reason: 'still retrying');
+
+        sockets.respond = (_, f) => _subscribed();
+        sockets.last.serverConnect('S-back');
+        clock.flushMicrotasks();
+        expect(box.state, BoxState.ready);
+
+        box.close();
+        clock.elapse(const Duration(minutes: 5));
+        expect(sockets.sockets, hasLength(attempts), reason: 'close() stops it');
+      });
+    },
+  );
 
   test(
     'deleteQueue reads auth_failed as already gone, and the rid leaves the set',

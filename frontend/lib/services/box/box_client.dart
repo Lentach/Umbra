@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:http/http.dart' as http;
 import 'package:socket_io_client/socket_io_client.dart' as io;
 
+import '../../constants/app_constants.dart';
 import '../../providers/chat_reconnect_manager.dart';
 import 'box_signer.dart';
 import 'box_wire.dart';
@@ -135,7 +136,8 @@ class _Pending {
 ///  * Every connection re-signs `subscribe` for the WHOLE set over its own id,
 ///    in chunks of [kBoxSubscribeMax]; [BoxState.ready] only once every chunk
 ///    has answered. A rid refused there is gone (deleted or reaped) and is
-///    reported on [lostQueues].
+///    reported on [lostQueues] — except `limit` (the per-socket cap, E10),
+///    which stays in the set for the next connection.
 ///  * The consumer acks every [BoxDelivery] once it is durably stored — also
 ///    one it cannot open, or it holds one of the 16 window slots forever.
 class BoxClient {
@@ -250,9 +252,18 @@ class BoxClient {
   void _lostConnection() {
     _drop();
     if (!_wanted) return;
-    _reconnect.onDisconnect(() {
+    void reopen() {
       if (_wanted && _socket == null) _open();
-    }, (_) {});
+    }
+
+    // The shared manager stops after `reconnectMaxAttempts`; the box must
+    // not ([connect]'s contract: "until close"). Past the fast attempts it
+    // keeps retrying at the manager's ceiling — nothing else would ever
+    // reopen it once the account socket recovers on its own (device-found
+    // 2026-09-24: a 195 s backend restart left the app with no box).
+    if (!_reconnect.onDisconnect(reopen, (_) {})) {
+      _reconnect.scheduleReconnectAfter(AppConstants.reconnectMaxDelay, reopen);
+    }
   }
 
   /// A fresh connection: re-sign the whole set over its id. Any chunk that
@@ -403,7 +414,8 @@ class BoxClient {
 
   /// Adds [queues] to the resubscribe set and, when connected, subscribes
   /// them now. The answer lists the rids the box refused; those are gone and
-  /// leave the set. Offline, the set still keeps them for the next
+  /// leave the set — except `limit` (the per-socket cap), which is neither
+  /// listed nor dropped. Offline, the set still keeps them for the next
   /// connection.
   Future<BoxResult<List<BoxRefusal>>> subscribe(
     Iterable<BoxQueueAuth> queues,
@@ -454,10 +466,13 @@ class BoxClient {
                 ? boxB64Decode(entry['rid'], kBoxRidBytes)
                 : null;
             if (rid == null) return const BoxUnknown(BoxUnknownReason.malformed);
+            final code = BoxCode.parse((entry as Map)['code']);
+            // Over the per-socket cap (E10) the queue is still ours: it stays
+            // in the set for the next connection and is never reported, since
+            // every caller reads a refusal as "gone" and would drop it.
+            if (code == BoxCode.limit) continue;
             _set.remove(boxB64(rid));
-            refused.add(
-              BoxRefusal(rid: rid, code: BoxCode.parse((entry as Map)['code'])),
-            );
+            refused.add(BoxRefusal(rid: rid, code: code));
           }
         case BoxRefused(:final code, :final retryAfter):
           return BoxRefused(code, retryAfter: retryAfter);
@@ -470,6 +485,11 @@ class BoxClient {
 
   /// Drops [rid] from the resubscribe set. Local only.
   void forget(Uint8List rid) => _set.remove(boxB64(rid));
+
+  /// How this client proves [rid] — held for every queue it subscribed —
+  /// or null. Lets a reader ack a delivery on a queue its owner record no
+  /// longer holds, so it does not keep one of the 16 window slots.
+  BoxQueueAuth? authFor(Uint8List rid) => _set[boxB64(rid)];
 
   /// Deletes delivered message [id] from [queue]. Acking a gone id is ok.
   Future<BoxResult<void>> ack(BoxQueueAuth queue, Uint8List id) async {
@@ -511,71 +531,85 @@ class BoxClient {
   }
 
   /// Notifier step 1: the box pushes a challenge code to [token] and stores
-  /// nothing durable. [queue] is the queue whose [nid] this is.
-  Future<BoxResult<NotifierState>> challengeNotifier(
-    BoxQueueAuth queue,
-    Uint8List nid,
+  /// nothing durable. Unsigned and names no queue: one code proves the token
+  /// for every queue (owner decision 34).
+  Future<BoxResult<void>> challengeNotifier(
     NotifierPlatform platform,
     String token,
   ) async {
-    _requireLength(nid, kBoxNidBytes, 'nid');
     final result = await _call(
       'registerNotifier',
-      (sockId) async => {
-        'v': 1,
-        'nid': boxB64(nid),
-        'platform': platform.name,
-        'token': token,
-        'sig': await _sig(
-          queue.key,
-          BoxSignedVerb.registerNotifier,
-          sockId,
-          notifierChallengeFields(nid, platform, token),
-        ),
-      },
+      (_) async => {'v': 1, 'platform': platform.name, 'token': token},
     );
-    return _notifierState(result);
+    return switch (result) {
+      BoxOk(:final value) when value['state'] == 'challenged' => const BoxOk(
+        null,
+      ),
+      BoxOk() => const BoxUnknown(BoxUnknownReason.malformed),
+      BoxRefused(:final code, :final retryAfter) => BoxRefused(
+        code,
+        retryAfter: retryAfter,
+      ),
+      BoxUnknown(:final reason) => BoxUnknown(reason),
+    };
   }
 
-  /// Notifier step 2: the [code] the push delivered, signed by the queue key.
-  Future<BoxResult<NotifierState>> activateNotifier(
-    BoxQueueAuth queue,
-    Uint8List nid,
+  /// Notifier step 2: the [code] the push delivered activates every queue in
+  /// [queues] (at most [kBoxNotifierBatchMax]), each entry signed by its own
+  /// queue key. A code the box never pushed refuses the whole frame
+  /// (`auth_failed`); otherwise the answer lists the nids refused alone (the
+  /// queue is gone), and every other one is active.
+  Future<BoxResult<List<Uint8List>>> activateNotifiers(
     Uint8List code,
+    List<({BoxQueueAuth queue, Uint8List nid})> queues,
   ) async {
-    _requireLength(nid, kBoxNidBytes, 'nid');
     _requireLength(code, kBoxCodeBytes, 'code');
-    final result = await _call(
-      'registerNotifier',
-      (sockId) async => {
+    if (queues.isEmpty || queues.length > kBoxNotifierBatchMax) {
+      throw ArgumentError.value(queues.length, 'queues', 'not 1..256');
+    }
+    for (final q in queues) {
+      _requireLength(q.nid, kBoxNidBytes, 'nid');
+    }
+    final result = await _call('registerNotifier', (sockId) async {
+      final sigs = await Future.wait([
+        for (final q in queues)
+          _sig(
+            q.queue.key,
+            BoxSignedVerb.registerNotifier,
+            sockId,
+            notifierActivateFields(q.nid, code),
+          ),
+      ]);
+      return {
         'v': 1,
-        'nid': boxB64(nid),
         'code': boxB64(code),
-        'sig': await _sig(
-          queue.key,
-          BoxSignedVerb.registerNotifier,
-          sockId,
-          notifierActivateFields(nid, code),
-        ),
-      },
-    );
-    return _notifierState(result);
+        'queues': [
+          for (var i = 0; i < queues.length; i++)
+            {'nid': boxB64(queues[i].nid), 'sig': sigs[i]},
+        ],
+      };
+    });
+    switch (result) {
+      case BoxOk(:final value):
+        final entries = value['refused'];
+        if (entries is! List) {
+          return const BoxUnknown(BoxUnknownReason.malformed);
+        }
+        final refused = <Uint8List>[];
+        for (final entry in entries) {
+          final nid = entry is Map
+              ? boxB64Decode(entry['nid'], kBoxNidBytes)
+              : null;
+          if (nid == null) return const BoxUnknown(BoxUnknownReason.malformed);
+          refused.add(nid);
+        }
+        return BoxOk(refused);
+      case BoxRefused(:final code, :final retryAfter):
+        return BoxRefused(code, retryAfter: retryAfter);
+      case BoxUnknown(:final reason):
+        return BoxUnknown(reason);
+    }
   }
-
-  static BoxResult<NotifierState> _notifierState(
-    BoxResult<Map<String, Object?>> result,
-  ) => switch (result) {
-    BoxOk(:final value) => switch (value['state']) {
-      'challenged' => const BoxOk(NotifierState.challenged),
-      'active' => const BoxOk(NotifierState.active),
-      _ => const BoxUnknown(BoxUnknownReason.malformed),
-    },
-    BoxRefused(:final code, :final retryAfter) => BoxRefused(
-      code,
-      retryAfter: retryAfter,
-    ),
-    BoxUnknown(:final reason) => BoxUnknown(reason),
-  };
 
   static BoxResult<void> _void(BoxResult<Map<String, Object?>> result) =>
       switch (result) {

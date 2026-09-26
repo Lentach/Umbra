@@ -57,11 +57,13 @@ Future<List<String>> wipeOriginStorage() async {
 /// names are always deleted too — an enumeration gap must not leave a
 /// database behind. Verified against a live origin on 2026-09-04: the app
 /// creates `fireplace-boot-marker`, `fireplace-deep-link` and
-/// `fireplace-push`.
+/// `fireplace-push`; `umbra-box-media` (box attachment copies,
+/// `services/box/box_media_store_web.dart`) came with PR3.1.
 const List<String> _knownIdbNames = <String>[
   'fireplace-boot-marker',
   'fireplace-deep-link',
   'fireplace-push',
+  'umbra-box-media',
 ];
 
 Future<void> _deleteAllIndexedDbs() async {

@@ -4,6 +4,7 @@ import {
   BOX_CODE_BYTES,
   BOX_MSG_ID_BYTES,
   BOX_NID_BYTES,
+  BOX_NOTIFIER_BATCH_MAX,
   BOX_RID_BYTES,
   BOX_SID_BYTES,
   BOX_SIG_BYTES,
@@ -32,6 +33,8 @@ export type BoxCode =
   | 'auth_failed'
   | 'queue_full'
   | 'quota_exceeded'
+  /** A subscribe entry past the socket's rid cap (E10); refused alone. */
+  | 'limit'
   | 'rate_limited'
   | 'internal';
 
@@ -67,15 +70,14 @@ export interface DeleteQueueCmd {
   rid: Buffer;
   sig: Buffer;
 }
+/**
+ * Step 1 proves the TOKEN: the box pushes a code to it (owner decision 34).
+ * Step 2 brings that code back with the queues to activate, each entry
+ * signed by its own queue key.
+ */
 export type RegisterNotifierCmd =
-  | {
-      step: 1;
-      nid: Buffer;
-      platform: NotifierPlatform;
-      token: string;
-      sig: Buffer;
-    }
-  | { step: 2; nid: Buffer; code: Buffer; sig: Buffer };
+  | { step: 1; platform: NotifierPlatform; token: string }
+  | { step: 2; code: Buffer; queues: { nid: Buffer; sig: Buffer }[] };
 
 /** `data` as a record when it is a plain object with EXACTLY these keys; else null. */
 function exactKeys(
@@ -166,26 +168,34 @@ export function parseDeleteQueue(data: unknown): DeleteQueueCmd | null {
 export function parseRegisterNotifier(
   data: unknown,
 ): RegisterNotifierCmd | null {
-  const step1 = command(data, ['nid', 'platform', 'token', 'sig']);
+  const step1 = command(data, ['platform', 'token']);
   if (step1) {
-    const nid = decodeFixedB64(step1.nid, BOX_NID_BYTES);
-    const sig = decodeFixedB64(step1.sig, BOX_SIG_BYTES);
     const { platform, token } = step1;
-    if (!nid || !sig || typeof token !== 'string') return null;
+    if (typeof token !== 'string') return null;
     if (platform === 'fcm' && FCM_TOKEN.test(token)) {
-      return { step: 1, nid, platform, token, sig };
+      return { step: 1, platform, token };
     }
     if (platform === 'webpush' && parseWebPushSubscription(token)) {
-      return { step: 1, nid, platform, token, sig };
+      return { step: 1, platform, token };
     }
     return null;
   }
-  const step2 = command(data, ['nid', 'code', 'sig']);
-  if (!step2) return null;
-  const nid = decodeFixedB64(step2.nid, BOX_NID_BYTES);
+  const step2 = command(data, ['code', 'queues']);
+  if (!step2 || !Array.isArray(step2.queues)) return null;
   const code = decodeFixedB64(step2.code, BOX_CODE_BYTES);
-  const sig = decodeFixedB64(step2.sig, BOX_SIG_BYTES);
-  return nid && code && sig ? { step: 2, nid, code, sig } : null;
+  const entries: unknown[] = step2.queues;
+  if (!code || entries.length < 1 || entries.length > BOX_NOTIFIER_BATCH_MAX) {
+    return null;
+  }
+  const queues: { nid: Buffer; sig: Buffer }[] = [];
+  for (const entry of entries) {
+    const e = exactKeys(entry, ['nid', 'sig']);
+    const nid = e && decodeFixedB64(e.nid, BOX_NID_BYTES);
+    const sig = e && decodeFixedB64(e.sig, BOX_SIG_BYTES);
+    if (!nid || !sig) return null;
+    queues.push({ nid, sig });
+  }
+  return { step: 2, code, queues };
 }
 
 const FCM_TOKEN = new RegExp(`^[A-Za-z0-9_:-]{1,${BOX_TOKEN_MAX_CHARS}}$`);

@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:libsignal_protocol_dart/libsignal_protocol_dart.dart';
 import 'encryption/content_kv.dart';
+import 'encryption/prekey_identity.dart';
 import 'encryption/sealed_web_content_kv.dart';
 import 'encryption/sealed_web_envelope.dart';
 import 'encryption/content_kv_opener_stub.dart'
@@ -10,6 +11,7 @@ import 'encryption/content_kv_opener_stub.dart'
 
 import '../utils/e2e_diag_log.dart';
 import '../utils/e2e_persistent_diag.dart';
+import '../utils/message_ids.dart';
 import 'plaintext_record_codec.dart';
 import 'encryption/signal_stores.dart';
 import 'device_link/identity_backup.dart';
@@ -88,6 +90,14 @@ class AccountIdentityMismatch implements Exception {
       'AccountIdentityMismatch: the bundle served for userId=$userId '
       'deviceId=$deviceId carries an identity key that is not the account\'s';
 }
+
+/// A message's wire identity (metadata-privacy PR2.1): the sender's wire id
+/// (`E2eEnvelope.msgId`) is unique only per SENDER — the server enforces
+/// `UNIQUE(senderId, sendToken)` and nothing more — so it never identifies a
+/// message without the account that sent it. `senderId` must come from an
+/// authenticated source: the peer whose Signal session decrypted the message,
+/// or our own account for our own sends. Never a bare server field.
+typedef WireKey = ({int senderId, String wireId});
 
 class EncryptionService {
   EncryptionService({
@@ -2659,6 +2669,39 @@ class EncryptionService {
     }
   }
 
+  /// Whether [ciphertextStr] may come from one of this account's own devices
+  /// ([ciphertextMatchesIdentity] against the account identity). False before
+  /// init — nothing can be judged, so nothing is read.
+  Future<bool> carriesOwnIdentity(String ciphertextStr) async {
+    final own = await currentIdentityPublicKeyBase64();
+    return own != null && ciphertextMatchesIdentity(ciphertextStr, own);
+  }
+
+  /// Whether decrypting [ciphertextStr] from [userId]'s [deviceId] would
+  /// replace the session this device holds with it ([preKeyWouldReplace],
+  /// decision 37): a sibling PreKey message is refused on that answer unless
+  /// this device asked for the re-key. Read under the per-address lock, so
+  /// an in-flight build or decrypt lands first. False before init, and when
+  /// the record cannot be read now: the decrypt that follows cannot read it
+  /// either, and its failure policy decides.
+  Future<bool> siblingPreKeyWouldReplace(
+    int userId,
+    int deviceId,
+    String ciphertextStr,
+  ) async {
+    if (!_initialized) return false;
+    return _runSessionSerialized(userId, deviceId, () async {
+      try {
+        final record = await _cipherSessionStore.loadSession(
+          SignalProtocolAddress(userId.toString(), deviceId),
+        );
+        return preKeyWouldReplace(record, ciphertextStr);
+      } on Object {
+        return false;
+      }
+    });
+  }
+
   /// Current locally minted registrationId — the (lxiv) install proof sent
   /// with one-time pre-key uploads so the server can tell this install from a
   /// foreign one sharing the account identity. Null before init.
@@ -2818,6 +2861,8 @@ class EncryptionService {
   static const String _metaExpiresAt = PlaintextRecordCodec.expiresAtKey;
   static const String _metaDisappearAfter =
       PlaintextRecordCodec.disappearAfterKey;
+  static const String _metaWireId = PlaintextRecordCodec.wireIdKey;
+  static const String _metaWireSender = PlaintextRecordCodec.wireSenderKey;
 
   /// Content values that are UI PLACEHOLDERS, never real message text.
   ///
@@ -2867,6 +2912,7 @@ class EncryptionService {
     DateTime? createdAt,
     DateTime? expiresAt,
     int? disappearAfterSeconds,
+    WireKey? wire,
   }) async {
     final userId = _userId;
     if (userId == null) return;
@@ -2944,6 +2990,21 @@ class EncryptionService {
           _metaExpiresAt: expiresAt.toUtc().millisecondsSinceEpoch
         else if (existing?[_metaExpiresAt] != null)
           _metaExpiresAt: existing![_metaExpiresAt],
+        // The message's wire identity (PR2.1), written as ONE stamp: FIRST
+        // WRITE WINS, unlike the stamps above. A row's wire identity never
+        // legitimately changes, while a later write is exactly where a peer
+        // could try to move it (an edit is a fresh envelope the peer
+        // controls). An edit re-persists WITHOUT one, so carrying it forward
+        // also keeps the record in [wireIdIndex]. Carried as a pair, so a
+        // later write can never supply the sender of a `_wid` stamped without
+        // one.
+        if (existing?[_metaWireId] != null) ...{
+          _metaWireId: existing![_metaWireId],
+          _metaWireSender: ?existing[_metaWireSender],
+        } else if (wire != null) ...{
+          _metaWireId: wire.wireId,
+          _metaWireSender: wire.senderId,
+        },
       };
       final payload = jsonEncode(record);
       // A dropped write is how a decrypted message later re-decrypts, throws
@@ -2971,6 +3032,16 @@ class EncryptionService {
       // Ledger AFTER the confirmed commit, never before: recording an id whose
       // plaintext did not land would refuse the one decrypt that still works.
       _noteDecrypted(id, data);
+      final stamped = record[_metaWireId];
+      final stampedBy = record[_metaWireSender];
+      final claims = _wireClaims;
+      if (stamped is String &&
+          stampedBy is int &&
+          claims != null &&
+          claims.userId == userId) {
+        (claims.claims[(senderId: stampedBy, wireId: stamped)] ??= <int>{})
+            .add(id);
+      }
       await _pruneDecryptedContentCache(prefs, userId);
     } catch (_) {}
   }
@@ -3494,6 +3565,151 @@ class EncryptionService {
     }
   }
 
+  /// `(senderId, wireId) -> localId` over every persisted plaintext record
+  /// (metadata-privacy PR2.1): the `_wid`/`_wsid` stamp of each `_decrypted_`
+  /// record, keyed back to the id its key names. Nothing reads it yet; the
+  /// box path (PR3.1) dedups its at-least-once deliveries against it.
+  ///
+  /// Both record stores, as [getDecryptedContent] reads them: the content
+  /// store, then — mobile only — the legacy secure store for keys the content
+  /// store does not hold, so a stale legacy copy never outvotes the live one.
+  ///
+  /// The AUTHORITATIVE view, like the history read path: the caller will
+  /// treat a miss as "never seen", and a reload-clobbered cache would hand it
+  /// exactly that for a message this device already holds.
+  ///
+  /// Keyed by SENDER as well as wire id ([WireKey]). A peer sees the wire ids
+  /// of our own sends in plaintext and can stamp one on a message of its
+  /// own; scoped, that claim sits under the peer's name and can never shadow
+  /// ours — even when it lands first, before our copy exists to contradict
+  /// it. A `_wid` stamped without its sender claims nothing. Two records
+  /// holding one sender's wire id contradict `UNIQUE(senderId, sendToken)`,
+  /// so that key maps to NOTHING rather than to a guess. A record that cannot
+  /// be decoded claims nothing. Null means the stores could not be
+  /// enumerated, which is not the same answer as an empty index.
+  Future<Map<WireKey, int>?> wireIdIndex() async {
+    final claims = await _scanWireClaims();
+    if (claims == null) return null;
+    return {
+      for (final MapEntry(key: wire, value: ids) in claims.entries)
+        if (ids.length == 1) wire: ids.single,
+    };
+  }
+
+  /// Whether a record OTHER than [id] already holds [wire] — the box path's
+  /// dedup (metadata-privacy PR3.1 slice (b)): the same message may already
+  /// be here, delivered over the old path or journaled twice. Any claim
+  /// counts, ambiguous ones too: this asks "is it here", not "which row is
+  /// it" ([wireIdIndex]). Null when the stores could not be enumerated.
+  ///
+  /// Served from a per-account cache: the first call scans every record (on
+  /// web that unseals them), and [saveDecryptedContent] adds each new stamp.
+  /// A deleted record's claim is kept, which can only drop a later copy of
+  /// a message the user already deleted.
+  Future<bool?> wireHeldByOther(WireKey wire, int id) async {
+    final claims = await _cachedWireClaims();
+    if (claims == null) return null;
+    return claims[wire]?.any((other) => other != id) ?? false;
+  }
+
+  /// The ONE record holding [wire] — what a box reply's quote resolves to
+  /// (metadata-privacy item 3, E18a) — from [wireHeldByOther]'s cache. Null
+  /// when none or more than one does ([wireIdIndex]'s rule: a guess would
+  /// show the wrong message as the quote) or the stores could not be
+  /// enumerated. A deleted record's claim is kept, so the caller reads the
+  /// record before trusting the id.
+  Future<int?> wireHolder(WireKey wire) async {
+    final ids = (await _cachedWireClaims())?[wire];
+    return ids != null && ids.length == 1 ? ids.single : null;
+  }
+
+  Future<Map<WireKey, Set<int>>?> _cachedWireClaims() async {
+    final userId = _userId;
+    if (userId == null) return null;
+    var cache = _wireClaims;
+    if (cache == null || cache.userId != userId) {
+      final scanned = await _scanWireClaims();
+      if (scanned == null || _userId != userId) return null;
+      cache = (userId: userId, claims: scanned);
+      _wireClaims = cache;
+    }
+    return cache.claims;
+  }
+
+  ({int userId, Map<WireKey, Set<int>> claims})? _wireClaims;
+
+  /// Every box message stored for [conversationId] — LOCAL ids (decision
+  /// 14), which no server history page will ever name — as id → record.
+  ///
+  /// Runs on every chat open, so it reads only the local-range records: the
+  /// cost follows the box messages held, not the whole store. The key view
+  /// is the cached one; a miss only defers a row to the next open.
+  Future<Map<int, Map<String, dynamic>>> localMessageRecords(
+    int conversationId,
+  ) async {
+    final userId = _userId;
+    if (userId == null) return {};
+    final prefix = _decryptedContentPrefix(userId);
+    final Set<int> ids;
+    try {
+      final prefs = await _sharedPrefs;
+      ids = {
+        for (final key in _recordKeys(null, prefs, prefix))
+          if (int.tryParse(key.substring(prefix.length)) case final id?
+              when id >= kFirstLocalMessageId)
+            id,
+      };
+    } on Object catch (_) {
+      return {};
+    }
+    if (ids.isEmpty) return {};
+    return (await getDecryptedContentMany(ids))
+      ..removeWhere((_, record) => record[_metaConversationId] != conversationId);
+  }
+
+  /// Every `(sender, wire id)` stamp → the record ids holding it.
+  Future<Map<WireKey, Set<int>>?> _scanWireClaims() async {
+    final userId = _userId;
+    if (userId == null) return null;
+    final prefix = _decryptedContentPrefix(userId);
+    final claims = <WireKey, Set<int>>{};
+    void claim(String key, String? raw) {
+      final id = int.tryParse(key.substring(prefix.length));
+      if (id == null || raw == null) return;
+      try {
+        if (jsonDecode(raw) case {
+          _metaWireId: final String wireId,
+          _metaWireSender: final int senderId,
+        }) {
+          (claims[(senderId: senderId, wireId: wireId)] ??= <int>{}).add(id);
+        }
+      } on FormatException catch (_) {}
+    }
+
+    try {
+      final prefs = await _sharedPrefs;
+      final snapshot = await _authoritativeSnapshot();
+      if (snapshot == null) await _reloadPrefsForCrossContext(prefs);
+      final storeKeys = _recordKeys(snapshot, prefs, prefix).toSet();
+      for (final key in storeKeys) {
+        claim(key, _rawRecord(snapshot, prefs, key));
+      }
+      if (!kIsWeb) {
+        final legacy = await _storage.readAll();
+        for (final MapEntry(:key, :value) in legacy.entries) {
+          if (key.startsWith(prefix) && !storeKeys.contains(key)) {
+            claim(key, value);
+          }
+        }
+      }
+      // Any store failure — Keystore, SQLCipher, a web reload — means the
+      // stores were not enumerated, which must not read as an empty index.
+    } on Object catch (_) {
+      return null;
+    }
+    return claims;
+  }
+
   // ── Server reconciliation ────────────────────────────────────────────────
 
   String _reconcileStampKey(int userId) => 'e2e_${userId}_reconcile_last_v1';
@@ -3530,6 +3746,205 @@ class EncryptionService {
       final prefs = await _sharedPrefs;
       await prefs.setInt(_reconcileStampKey(userId), atMs);
     } catch (_) {}
+  }
+
+  // ── Box delete tombstones (metadata-privacy item 4, E19c/E19g) ───────────
+  //
+  // A box message deleted for everyone may still reach this device later —
+  // a copy delivered after the delete, from a device offline for up to the
+  // box TTL. Its wire id is no longer held by any record, so the reader
+  // would store and show it again. `(sender, wire id) -> ms` of every delete
+  // this device applied, pruned past the box TTL and bounded like the
+  // retired set. No backup carries it: it is machinery, not history.
+
+  static const int _boxTombstoneCap = 5000;
+  static const Duration _boxTombstoneLife = Duration(days: 30);
+
+  String _boxTombstoneKey(int userId) => 'e2e_${userId}_boxdel_v1';
+
+  static String _tombstoneOf(WireKey wire) =>
+      '${wire.senderId}:${wire.wireId}';
+
+  /// Whether a delete-for-everyone of [wire] reached this device within the
+  /// box TTL. False when it cannot tell (no account, unreadable row): the
+  /// wire-id dedup still stands behind it for this app instance.
+  Future<bool> boxTombstoned(WireKey wire) async {
+    final userId = _userId;
+    if (userId == null) return false;
+    try {
+      final prefs = await _sharedPrefs;
+      return _readBoxTombstones(prefs, userId).containsKey(_tombstoneOf(wire));
+    } on Object catch (_) {
+      return false;
+    }
+  }
+
+  /// Records a delete-for-everyone of [wire]. Locked for the same reason the
+  /// retired set is: one key, every same-origin PWA engine.
+  Future<void> addBoxTombstone(WireKey wire) async {
+    final userId = _userId;
+    if (userId == null) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final oldest = now - _boxTombstoneLife.inMilliseconds;
+    await _sessionCrossContextLock('fireplace-e2e-boxdel-$userId', () async {
+      try {
+        final prefs = await _sharedPrefs;
+        await _reloadPrefsForCrossContext(prefs);
+        final kept = _readBoxTombstones(prefs, userId)
+          ..removeWhere((_, at) => at < oldest)
+          ..[_tombstoneOf(wire)] = now;
+        final newest = kept.entries.toList()
+          ..sort((a, b) => b.value.compareTo(a.value));
+        await prefs.setString(
+          _boxTombstoneKey(userId),
+          jsonEncode({
+            for (final e in newest.take(_boxTombstoneCap)) e.key: e.value,
+          }),
+        );
+      } on Object catch (_) {}
+    });
+  }
+
+  Map<String, int> _readBoxTombstones(ContentKv prefs, int userId) {
+    final raw = prefs.getString(_boxTombstoneKey(userId));
+    if (raw == null) return {};
+    final decoded = jsonDecode(raw);
+    if (decoded is! Map<String, dynamic>) return {};
+    return {
+      for (final MapEntry(:key, :value) in decoded.entries)
+        if (value is int) key: value,
+    };
+  }
+
+  // ── Box actions parked until their target lands (item 4, E19k) ──────────
+  //
+  // A reaction, pin or edit of a box message often rides a different queue
+  // than its target: our sibling's copy of our reaction on the self-queue,
+  // the peer's message on the contact queue. Read first, it names nothing
+  // held yet, so it waits here until the target is stored in that chat.
+  // `{"<chat>|<s>:<w>": [action + "r": received ms]}`, pruned past the box
+  // TTL and bounded like the tombstones (newest kept). Beside them, under
+  // the cross-context lock AND an in-process queue ([_parkedWrite]), and
+  // like them carried by no backup: machinery.
+
+  static const int _parkedBoxActionCap = 5000;
+
+  String _parkedBoxActionKey(int userId) => 'e2e_${userId}_boxact_v1';
+
+  static String _parkedOf(int conversationId, WireKey wire) =>
+      '$conversationId|${_tombstoneOf(wire)}';
+
+  static const String _parkedReceivedKey = 'r';
+
+  /// Parks [action] (a JSON-safe map) for [wire] in [conversationId],
+  /// received at [receivedAt] — the box TTL counts from there.
+  Future<void> parkBoxAction(
+    int conversationId,
+    WireKey wire,
+    Map<String, Object?> action, {
+    required DateTime receivedAt,
+  }) async {
+    final userId = _userId;
+    if (userId == null) return;
+    await _parkedWrite(userId, () async {
+      try {
+        final prefs = await _sharedPrefs;
+        await _reloadPrefsForCrossContext(prefs);
+        final parked = _readParkedBoxActions(prefs, userId);
+        (parked[_parkedOf(conversationId, wire)] ??= []).add({
+          ...action,
+          _parkedReceivedKey: receivedAt.millisecondsSinceEpoch,
+        });
+        final all = [
+          for (final MapEntry(:key, :value) in parked.entries)
+            for (final a in value) (key, a),
+        ]..sort((a, b) => _parkedAt(b.$2).compareTo(_parkedAt(a.$2)));
+        final kept = <String, List<Map<String, dynamic>>>{};
+        for (final (key, a) in all.take(_parkedBoxActionCap)) {
+          (kept[key] ??= []).add(a);
+        }
+        await prefs.setString(_parkedBoxActionKey(userId), jsonEncode(kept));
+      } on Object catch (_) {}
+    });
+  }
+
+  /// The actions parked for [wire] in [conversationId] and still within
+  /// the box TTL; empty when none or unreadable.
+  Future<List<Map<String, dynamic>>> parkedBoxActions(
+    int conversationId,
+    WireKey wire,
+  ) async {
+    final userId = _userId;
+    if (userId == null) return const [];
+    try {
+      final prefs = await _sharedPrefs;
+      return _readParkedBoxActions(
+            prefs,
+            userId,
+          )[_parkedOf(conversationId, wire)] ??
+          const [];
+    } on Object catch (_) {
+      return const [];
+    }
+  }
+
+  /// Drops what is parked for [wire] in [conversationId]: it was applied.
+  Future<void> dropParkedBoxActions(int conversationId, WireKey wire) async {
+    final userId = _userId;
+    if (userId == null) return;
+    await _parkedWrite(userId, () async {
+      try {
+        final prefs = await _sharedPrefs;
+        await _reloadPrefsForCrossContext(prefs);
+        final parked = _readParkedBoxActions(prefs, userId);
+        if (parked.remove(_parkedOf(conversationId, wire)) == null) return;
+        await prefs.setString(_parkedBoxActionKey(userId), jsonEncode(parked));
+      } on Object catch (_) {}
+    });
+  }
+
+  /// The park's writes, one after another: the cross-context lock passes
+  /// through off web, and the native store shows a write only once it
+  /// committed, so two overlapping read-modify-writes lost one (the peer's
+  /// and the self-queue's reads run side by side).
+  Future<void> _parkedTail = Future<void>.value();
+
+  Future<void> _parkedWrite(int userId, Future<void> Function() write) {
+    final run = _parkedTail.then(
+      (_) => _sessionCrossContextLock('fireplace-e2e-boxact-$userId', write),
+    );
+    _parkedTail = run.then((_) {}, onError: (Object _) {});
+    return run;
+  }
+
+  static int _parkedAt(Map<String, dynamic> action) =>
+      action[_parkedReceivedKey] as int;
+
+  /// Every parked action within the box TTL, by chat and target.
+  Map<String, List<Map<String, dynamic>>> _readParkedBoxActions(
+    ContentKv prefs,
+    int userId,
+  ) {
+    final raw = prefs.getString(_parkedBoxActionKey(userId));
+    if (raw == null) return {};
+    final decoded = jsonDecode(raw);
+    if (decoded is! Map<String, dynamic>) return {};
+    final oldest =
+        DateTime.now().millisecondsSinceEpoch -
+        _boxTombstoneLife.inMilliseconds;
+    final parked = <String, List<Map<String, dynamic>>>{};
+    for (final MapEntry(:key, :value) in decoded.entries) {
+      if (value is! List) continue;
+      final live = [
+        for (final a in value)
+          if (a is Map<String, dynamic> &&
+              a[_parkedReceivedKey] is int &&
+              _parkedAt(a) >= oldest)
+            a,
+      ];
+      if (live.isNotEmpty) parked[key] = live;
+    }
+    return parked;
   }
 
   // ── Retired ids ──────────────────────────────────────────────────────────
@@ -4596,20 +5011,39 @@ class EncryptionService {
   String _rawDecryptedContentKey(int userId, int messageId) =>
       '${_rawDecryptedContentPrefix(userId)}$messageId';
 
+  /// Drops [messageId]'s raw replay row. The box reader calls it once a box
+  /// message's plaintext record is PROVEN stored: from then on the record, not
+  /// the replay row, answers for it (and the journal never offers it again).
+  Future<void> removeRawReplay(int messageId) async {
+    final userId = _userId;
+    if (userId == null) return;
+    try {
+      final prefs = await _sharedPrefs;
+      await prefs.remove(_rawDecryptedContentKey(userId, messageId));
+    } on Object catch (_) {}
+  }
+
+  /// Keeps the 40 HIGHEST ids of each range, server and local, counted
+  /// apart: a local (box) id is always higher than any server id, so ranking
+  /// them together would push every server row out once 40 box messages
+  /// landed. A box row normally goes as soon as its record is stored
+  /// ([removeRawReplay]); the local cap is the backstop for one that did not.
   Future<void> _pruneRawDecryptedContent(ContentKv prefs, int userId) async {
     final prefix = _rawDecryptedContentPrefix(userId);
-    final keys = prefs
-        .getKeys()
-        .where((key) => key.startsWith(prefix))
-        .toList();
-    if (keys.length <= _rawDecryptedContentCacheLimit) return;
-    keys.sort((a, b) {
-      final aId = int.tryParse(a.substring(prefix.length)) ?? 0;
-      final bId = int.tryParse(b.substring(prefix.length)) ?? 0;
-      return aId.compareTo(bId);
-    });
-    for (final key in keys.take(keys.length - _rawDecryptedContentCacheLimit)) {
-      await prefs.remove(key);
+    final server = <int, String>{};
+    final local = <int, String>{};
+    for (final key in prefs.getKeys()) {
+      if (!key.startsWith(prefix)) continue;
+      final id = int.tryParse(key.substring(prefix.length));
+      if (id == null) continue;
+      (isLocalMessageId(id) ? local : server)[id] = key;
+    }
+    for (final range in [server, local]) {
+      if (range.length <= _rawDecryptedContentCacheLimit) continue;
+      final ids = range.keys.toList()..sort();
+      for (final id in ids.take(ids.length - _rawDecryptedContentCacheLimit)) {
+        await prefs.remove(range[id]!);
+      }
     }
   }
 
@@ -4653,6 +5087,11 @@ class EncryptionService {
       return;
     }
 
+    // Lowest id first ("ids ascend with age"). Owed before release N+1: a box
+    // message's LOCAL id is higher than every server id, so once box records
+    // alone pass the cap this order evicts arriving server records first; the
+    // fix is a save-time order that does NOT unseal every record per save
+    // (at the cap this sweep runs on every write).
     keys.sort((a, b) {
       final aId = int.tryParse(a.substring(prefix.length)) ?? 0;
       final bId = int.tryParse(b.substring(prefix.length)) ?? 0;

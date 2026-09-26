@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../../l10n/app_localizations.dart';
 import '../../providers/messaging_provider.dart';
+import '../../utils/message_ids.dart';
 import '../top_snackbar.dart';
 
 /// Toggles a reaction and reports the one failure a user can act on.
@@ -15,7 +16,9 @@ import '../top_snackbar.dart';
 /// the tap would look broken.
 ///
 /// Shared by every reaction entry point (bubble chips, voice-message chips,
-/// the context menu's picker) so all of them fail the same visible way.
+/// the context menu's picker) so all of them fail the same visible way. A
+/// box message's reaction (item 4) fails for another reason — the box did
+/// not take it — and says that instead.
 Future<void> toggleReaction(
   BuildContext context,
   int messageId,
@@ -25,7 +28,10 @@ Future<void> toggleReaction(
   final messaging = context.read<MessagingProvider>();
   // Resolved BEFORE the await: the overlay this was tapped from may be gone by
   // the time the round trip answers, and a dead context cannot be localized.
-  final message = AppLocalizations.of(context).snackbarReactionUnavailable;
+  final l10n = AppLocalizations.of(context);
+  final message = isLocalMessageId(messageId)
+      ? l10n.snackbarBoxReactionFailed
+      : l10n.snackbarReactionUnavailable;
   final sent = alreadyReacted
       ? await messaging.removeReaction(messageId, emoji)
       : await messaging.addReaction(messageId, emoji);

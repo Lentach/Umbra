@@ -15,12 +15,15 @@ class AppConstants {
   static const int messagePageSize = 50;
 
   /// Max UTF-8 byte size of the JSON-encoded E2E envelope for a sendable
-  /// message. The server caps the resulting base64 ciphertext
-  /// (`encryptedContent`) at 65536 chars; base64 is ~4/3 of the Signal
-  /// ciphertext (the envelope plus Signal/prekey overhead). Budgeting the
-  /// ENVELOPE bytes (via `isMessageWithinByteLimit`) accounts for JSON escaping
-  /// and multi-byte emoji — a raw character/byte count would not.
-  static const int maxEnvelopeBytes = 45000;
+  /// message, checked by the composer (`isMessageWithinByteLimit`) in EVERY
+  /// chat. Sized so the longest text it accepts, with a link preview and the
+  /// send path's metadata, still fits ONE box frame as a first (PreKey)
+  /// message (`BoxFrame.maxSignalBytes`, 16 315 B; pinned by
+  /// `box_frame_test.dart`): the box never truncates, it refuses. One limit
+  /// for every chat, so it does not shrink the day a contact moves to the
+  /// box (metadata-privacy PR3.1 slice (c), decision 18). Budgeting the
+  /// ENVELOPE bytes accounts for JSON escaping and multi-byte emoji.
+  static const int maxEnvelopeBytes = 14000;
 
   /// A TEXT message longer than this many wrapped lines collapses in the chat
   /// bubble behind a "Read more" toggle so one long message cannot fill the

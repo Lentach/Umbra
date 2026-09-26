@@ -82,15 +82,75 @@ class ContactOutbound {
   };
 }
 
+/// The chat's E2E pin (metadata-privacy item 4, decision 45, E19f): ONE
+/// last-writer-wins register — the pinned message as its sender and wire id
+/// (`(s, w)` names the same box message on every device), or none, written
+/// at [at], the action's clamped send time. A pin and an unpin travel from
+/// the peer's queue and from a sibling's self-queue with no order between
+/// the two, so [supersedes] is a total order every device applies alike.
+class BoxPin {
+  const BoxPin({required this.at, this.senderId, this.wireId});
+
+  /// Null for a shape this build cannot read: the register is then empty.
+  static BoxPin? fromJson(Object? raw) {
+    if (raw is! Map<String, dynamic>) return null;
+    final ts = raw['ts'];
+    final s = raw['s'];
+    final w = raw['w'];
+    if (ts is! int || (s == null) != (w == null)) return null;
+    if (s != null && (s is! int || w is! String)) return null;
+    return BoxPin(
+      at: DateTime.fromMillisecondsSinceEpoch(ts, isUtc: true),
+      senderId: s as int?,
+      wireId: w as String?,
+    );
+  }
+
+  final DateTime at;
+  final int? senderId;
+  final String? wireId;
+
+  bool get pinned => senderId != null && wireId != null;
+
+  /// The pinned message, or null when unpinned.
+  ({int senderId, String wireId})? get wire =>
+      pinned ? (senderId: senderId!, wireId: wireId!) : null;
+
+  bool names(({int senderId, String wireId}) message) => wire == message;
+
+  /// Whether this write replaces [current]: a newer [at] wins; on a tie an
+  /// unpin beats a pin, then the greater `s:w` wins; an equal write changes
+  /// nothing.
+  bool supersedes(BoxPin? current) {
+    if (current == null) return true;
+    final byTime = at.compareTo(current.at);
+    if (byTime != 0) return byTime > 0;
+    if (pinned != current.pinned) return !pinned;
+    if (!pinned) return false;
+    return '$senderId:$wireId'.compareTo(
+          '${current.senderId}:${current.wireId}',
+        ) >
+        0;
+  }
+
+  Map<String, dynamic> toJson() => {
+    's': ?senderId,
+    'w': ?wireId,
+    'ts': at.millisecondsSinceEpoch,
+  };
+}
+
 /// Per-contact settings that used to live only on the server's
 /// `conversations` row. Local from now on; the server copy still overwrites
-/// while the old path exists.
+/// while the old path exists. [boxPin] is the exception: it is E2E and only
+/// the devices write it (item 4).
 class ContactSettings {
   const ContactSettings({
     this.disappearingTimer,
     this.muted = false,
     this.mutedUntil,
     this.pinnedMessageId,
+    this.boxPin,
   });
 
   factory ContactSettings.fromJson(Map<String, dynamic> j) => ContactSettings(
@@ -100,6 +160,7 @@ class ContactSettings {
         ? null
         : DateTime.parse(j['mutedUntil'] as String),
     pinnedMessageId: j['pinnedMessageId'] as int?,
+    boxPin: BoxPin.fromJson(j[boxPinKey]),
   );
 
   /// Seconds; null = off.
@@ -108,11 +169,18 @@ class ContactSettings {
   final DateTime? mutedUntil;
   final int? pinnedMessageId;
 
+  /// The chat's E2E pin register ([BoxPin]); null = never written.
+  final BoxPin? boxPin;
+
+  /// Its key: [ContactRecord.toBackupJson] drops it (E19f).
+  static const String boxPinKey = 'boxPin';
+
   Map<String, dynamic> toJson() => {
     if (disappearingTimer != null) 'disappearingTimer': disappearingTimer,
     if (muted) 'muted': true,
     if (mutedUntil != null) 'mutedUntil': mutedUntil!.toIso8601String(),
     if (pinnedMessageId != null) 'pinnedMessageId': pinnedMessageId,
+    if (boxPin != null) boxPinKey: boxPin!.toJson(),
   };
 
   ContactSettings copyWith({
@@ -123,6 +191,7 @@ class ContactSettings {
     bool clearMutedUntil = false,
     int? pinnedMessageId,
     bool clearPinnedMessageId = false,
+    BoxPin? boxPin,
   }) => ContactSettings(
     disappearingTimer: clearDisappearingTimer
         ? null
@@ -132,6 +201,7 @@ class ContactSettings {
     pinnedMessageId: clearPinnedMessageId
         ? null
         : pinnedMessageId ?? this.pinnedMessageId,
+    boxPin: boxPin ?? this.boxPin,
   );
 }
 
@@ -290,9 +360,13 @@ class ContactRecord {
   /// and a restored device re-mints them anyway (the identity died with the
   /// same storage); [legacy] because the server re-supplies those ids in the
   /// first list, so a backed-up one could only outlive the row it names.
+  /// The E2E pin ([ContactSettings.boxPin]) is dropped too: a pin would move
+  /// the backup's `rev`/`updatedAt` — a per-pin activity clock on the
+  /// server (item 4, E19f).
   Map<String, dynamic> toBackupJson() => toJson()
     ..remove('queues')
-    ..remove('legacy');
+    ..remove('legacy')
+    ..['settings'] = (settings.toJson()..remove(ContactSettings.boxPinKey));
 
   UserModel toUser() => UserModel(
     id: userId,

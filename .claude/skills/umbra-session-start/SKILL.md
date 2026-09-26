@@ -1,6 +1,6 @@
 ---
 name: umbra-session-start
-description: Start-of-session pickup for Umbra/Fireplace — read the baton (NEXT.md) the last session left, check branch/HEAD drift, load the traps for the area, and report where the work stands before touching anything. Use when the user says "session start" / "pick up" / "continue from the handoff", or opens a fresh session on existing work.
+description: Start-of-session pickup for Umbra/Fireplace — read the baton (NEXT.md) the last session left, check branch/HEAD drift, load the traps for the area, and report where the work stands before touching anything. Use when the user says "session start" / "pick up" / "continue from the handoff", or opens a fresh session on existing work. Also the briefing for a helper agent: when delegating a slice, point it at the baton (§6) instead of retyping context.
 ---
 
 # Umbra session start
@@ -21,15 +21,16 @@ Every worktree (`git worktree list`) has its own baton. Never read another workt
   - Different branch → stop and ask.
   - HEAD moved → `git log --oneline <baton HEAD>..HEAD`; say what landed since.
   - `Uncommitted` disagrees with `git status` → say so; the shared worktree may hold someone else's edits.
-  - Top `**Date:**` entry of `LATEST.md` is newer than `Written` → a later session ended without a baton; treat the baton as stale and use the fallback.
-- **Missing or stale:** take the top `**Date:**` entry of `.cursor/session-summaries/LATEST.md` and the dated summary it links (`## Notes for next session`). If that points at `.planning/<task>/task_plan.md` §Handoff, read that too.
+  - Top `**Date:**` entry of `LATEST.md` links a different dated summary than the baton's `**Summary:**` line → a later session ended without a baton; treat the baton as stale and use the fallback.
+- **Missing or stale:** take the top `**Date:**` entry of `.cursor/session-summaries/LATEST.md` and the dated summary it links. Its `## Notes for next session` carries the next action, CI state and open items; follow any `.planning/…` path it names there (gitignored: it may be gone on another machine). Step 3 then runs with the summary in the baton's place: its `Key files` for `Read first`, and the traps groups matching its area.
 
 ## 3. Load the area — only what the next action needs
 
+- The dated summary named on the baton's `**Summary:**` line, WHOLE — even when the baton is fresh. The baton is a pointer; the summary holds the verification detail (CI, mutants, NOT-verified surfaces, out-of-repo changes, recipes). `none (mid-task)` → skip.
 - Every path under `Read first`.
-- `grep` `docs/agents/traps.md` for the `Area` keywords.
+- `docs/agents/traps.md`: read the `##` groups the baton's `Area` names (whole groups, not a keyword grep — a broad keyword truncates and misses tooling traps), plus the newest ~10 lines of `## Agent tooling / editing`.
 - The tier file (`backend/CLAUDE.md` / `frontend/CLAUDE.md`) if the next action edits that tier; the AGENTS.md reading order still binds.
-- CI only if the baton says a push is pending: `gh api repos/Lentach/Umbra/commits/master/check-runs --jq '.check_runs[] | [.name, .conclusion] | @tsv'` — never `gh run list`.
+- CI whenever the summary's CI line is not green on the baton's HEAD (volatile — AGENTS.md: re-verify this session): `gh api repos/Lentach/Umbra/commits/<sha>/check-runs --jq '.check_runs[] | [.name, .status, .conclusion] | @tsv'` — never `gh run list`. Only CodeQL, or nothing, means CI did NOT run (a conflicting PR or a bare branch push), not green.
 
 ## 4. Report, then wait
 
@@ -46,13 +47,22 @@ Then stop for the go-ahead, unless the user's message already said to continue. 
 
 Rename `NEXT.md` → `NEXT.consumed.md` (overwrite). Both are gitignored. The next fresh session falls back to LATEST instead of replaying this baton, and the consumed copy stays readable if this session dies early.
 
+## 6. Handing a slice to a helper agent
+
+The baton is also the briefing for subagents: the task points at it instead of retyping context.
+
+- Give the **absolute** path of this worktree's live baton — `NEXT.consumed.md` after step 5, or `NEXT.md` once this session has written a fresh one. Subagents start in the main checkout, not in this worktree, so a relative path hands them another worktree's baton (or none).
+- Tell the helper to do steps 2–3 only, from that worktree: read the baton, its `Summary:` file, its `Read first` paths, and the `docs/agents/traps.md` groups its `Area` names. A helper never runs steps 1, 4 or 5: it does not report-and-wait, rename or rewrite the baton.
+- The task text then carries only what the baton does not: the slice (files, symbols, non-goals), decisions made since the baton was written, and the acceptance check.
+- Refresh a baton the session has outgrown (the next action moved on) before delegating: the helper trusts it.
+
 ## The baton — format (≤ 2 KB)
 
 ```markdown
 # NEXT — <one-line goal>
 
 **Written:** YYYY-MM-DD HH:MM · **Branch:** <branch> · **HEAD:** <short sha> · **Worktree:** <dir name>
-**Area:** <traps.md group + keywords, e.g. "E2E, reactions">
+**Area:** <traps.md `##` group names, e.g. "E2E / multi-device / recovery; Android / push">
 **Summary:** `YYYY-MM-DD-<slug>.md` | none (mid-task)
 
 ## Next action
@@ -70,4 +80,4 @@ One concrete step — file:symbol, command, or decision. Not a menu.
 - Owner-owed decisions, blockers.
 ```
 
-The baton says where to go, not what happened: evidence and narrative belong in the dated summary or `.planning/<task>/findings.md`.
+The baton says where to go, not what happened: evidence and narrative belong in the dated summary or `.planning/<task>/findings.md`. Nothing may live ONLY in the baton: it is gitignored, per-worktree, and overwritten on consume — its Next action and Open are restated in the summary's `## Notes for next session`.

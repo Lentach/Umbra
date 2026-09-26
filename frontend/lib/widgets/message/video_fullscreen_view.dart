@@ -11,6 +11,7 @@ import '../../models/message_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../theme/rpg_theme.dart';
 import '../message_date_separator.dart';
+import 'box_media_source.dart';
 import 'video_playback_session.dart';
 
 /// Opens the fullscreen video player for [message], optionally starting at
@@ -156,6 +157,7 @@ class _VideoFullscreenViewState extends State<_VideoFullscreenView>
     final session = VideoPlaybackSession(
       message: widget.message,
       token: context.read<AuthProvider>().token ?? '',
+      box: boxMediaSourceFor(context, widget.message.mediaUrl),
     );
     _session = session;
     final failure = await session.load();

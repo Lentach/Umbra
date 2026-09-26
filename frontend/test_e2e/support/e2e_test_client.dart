@@ -336,6 +336,10 @@ class E2eClient {
     // records nothing that is not listed here, so a missing entry would make
     // every refusal assert pass vacuously.
     'deviceListStale',
+    // Metadata-privacy PR3.2: first contact (a device publishes its request
+    // queue; a stranger's search serves it with a bundle per device).
+    'requestQueueSet',
+    'searchUsersResult',
   ];
 
   /// Registers a brand-new account. Fresh every run BY DESIGN: reusing

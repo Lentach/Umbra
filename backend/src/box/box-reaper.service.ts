@@ -12,8 +12,9 @@ import { BoxService } from './box.service';
  * (file first, then row — the repo's media-before-row rule), queues never
  * subscribed within 24 h of creation, and queues not subscribed for 90 days
  * (their messages and notifier go by FK cascade). The same pass logs how many
- * socket events were throttled since the last one (counts per event, never a
- * client). At 00:00 UTC every queue's daily media budget restarts.
+ * socket events were throttled and how many sends and uploads the quotas
+ * refused since the last one (counts per event, never a client). At 00:00
+ * UTC every queue's daily media budget restarts.
  */
 @Injectable()
 export class BoxReaper {
@@ -42,7 +43,7 @@ export class BoxReaper {
     const refused = takeRefusalCounts();
     if (refused.size > 0) {
       const counts = [...refused].map(([event, n]) => `${event}=${n}`);
-      this.logger.log(`[box] throttle refusals ${counts.join(' ')}`);
+      this.logger.log(`[box] refusals ${counts.join(' ')}`);
     }
   }
 

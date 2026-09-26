@@ -121,11 +121,11 @@ import { BoxModule, BOX_ENTITIES } from './box/box.module';
     VersionModule,
     // Shares ChatGateway's engine.io server; both pass the same options
     // (`common/socket-cors.ts`), so module order does not matter.
-    // Registered ONLY when BOX_ENABLED=true: the box has per-queue limits but
-    // no global storage ceiling yet, and anyone can mint a queue, so an
-    // exposed box could fill the host disk Postgres shares (G4 review,
-    // 2026-09-23). Prod leaves it unset until that ceiling lands (PR3.1
-    // prerequisite); the dev compose, and so CI's e2e stacks, set it.
+    // Registered ONLY when BOX_ENABLED=true. Anyone can mint a queue, so the
+    // box is safe to expose only with its global ceiling (decision 30) and
+    // per-socket rid cap (item 9) in place; prod still pins it off until the
+    // owner turns it on after G5 (G4 review, 2026-09-23). The dev compose,
+    // and so CI's e2e stacks, set it.
     ConditionalModule.registerWhen(
       BoxModule,
       (env: NodeJS.ProcessEnv) => env.BOX_ENABLED === 'true',

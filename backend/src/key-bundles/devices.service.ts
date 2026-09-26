@@ -4,6 +4,13 @@ import { EntityManager, IsNull, Repository } from 'typeorm';
 import { Device } from './device.entity';
 import { DEFAULT_DEVICE_ID } from './key-bundles.service';
 
+/** One device a stranger can reach at first contact (`firstContactDevices`). */
+export interface FirstContactDevice {
+  deviceId: number;
+  requestSid: string | null;
+  requestSealPub: string | null;
+}
+
 /**
  * The account's devices (Phase 1, multi-device spec §4).
  *
@@ -224,5 +231,47 @@ export class DevicesService {
       where: { userId },
       order: { deviceId: 'ASC' },
     });
+  }
+
+  /**
+   * Publishes this device's box request queue (metadata-privacy PR3.2).
+   * Writes only a LIVE row: a revoked device must not become reachable again,
+   * and device ids >= 2 exist only after a provisioning commit. False when no
+   * such row exists; the caller answers `unknown_device`.
+   */
+  async setRequestQueue(
+    userId: number,
+    deviceId: number,
+    requestSid: string,
+    requestSealPub: string,
+  ): Promise<boolean> {
+    const result = await this.deviceRepo.update(
+      { userId, deviceId, revokedAt: IsNull() },
+      { requestSid, requestSealPub },
+    );
+    return (result.affected ?? 0) > 0;
+  }
+
+  /**
+   * The devices of [userId] a first contact may address, oldest first: every
+   * device holding a published key bundle and not revoked, with the request
+   * queue it published (null if none yet).
+   *
+   * Keyed on `key_bundles`, not `devices`: an account that predates the
+   * devices table has a bundle for device 1 but no row until its next
+   * connect, and a MISSING row never means revoked (wire.md, §5.5 session
+   * gates). A SELECT through `query()` returns plain rows (backend/CLAUDE.md
+   * §4).
+   */
+  async firstContactDevices(userId: number): Promise<FirstContactDevice[]> {
+    return this.deviceRepo.query<FirstContactDevice[]>(
+      `SELECT kb."deviceId", d."requestSid", d."requestSealPub"
+         FROM public.key_bundles kb
+         LEFT JOIN public.devices d
+           ON d."userId" = kb."userId" AND d."deviceId" = kb."deviceId"
+        WHERE kb."userId" = $1 AND d."revokedAt" IS NULL
+        ORDER BY kb."deviceId" ASC`,
+      [userId],
+    );
   }
 }

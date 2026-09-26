@@ -14,6 +14,7 @@ import '../providers/friends_provider.dart';
 import '../providers/messaging_provider.dart';
 import '../providers/passcode_provider.dart';
 import '../providers/settings_provider.dart';
+import '../services/box/box_client.dart';
 import '../services/contacts/contact_store.dart';
 import '../theme/rpg_theme.dart';
 import '../widgets/avatar_circle.dart';
@@ -82,6 +83,8 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         // PR2.4: owned by AuthProvider (the password lives only there);
         // handed here so the connect path can restore before the socket.
         contactBackup: auth.contactBackup,
+        // PR3.1: the box — its own socket on the same server, no account.
+        boxClient: (baseUrl) => BoxClient(baseUrl: baseUrl),
       );
 
       // Wire MessagingProvider dependencies

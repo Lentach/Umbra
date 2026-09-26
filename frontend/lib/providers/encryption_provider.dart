@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import '../models/message_model.dart';
 import '../services/account_enrolled_hint.dart';
 import '../services/audio_cache_store.dart';
+import '../services/box/box_media_url.dart';
 import '../services/e2e_lock_revoker.dart';
 import '../services/encryption_service.dart';
 import '../services/device_link/dak_store.dart';
@@ -20,6 +21,7 @@ import '../services/server_clock.dart';
 import '../utils/e2e_diag_log.dart';
 import '../utils/e2e_persistent_diag.dart';
 import '../utils/message_expiry.dart' show kExpiryPurgeGrace;
+import '../utils/message_ids.dart';
 import '../utils/storage_persist.dart';
 import '../utils/boot_markers.dart';
 
@@ -108,6 +110,20 @@ class EncryptionProvider extends ChangeNotifier {
   /// `MessagingProvider` whose visible rows depend on it, so an open thread
   /// re-filters when the audit row lands after its history (amendment (lxxxvi)).
   void Function()? onOwnIdentitySinceChanged;
+
+  /// Called whenever a verified device list is dropped
+  /// ([invalidateDeviceList]: a rebuild request, an adopted identity, the
+  /// own `deviceListChanged`, a restore, a decrypt-time recheck). Set by
+  /// `ConnectionProvider`: a box send never looks a list up
+  /// (metadata-privacy decision 21), so the box refresh looks it up again.
+  void Function(int userId)? onDeviceListInvalidated;
+
+  /// Called with the box attachment urls (`box:<id>`) of records a purge
+  /// destroyed — timer, delete-for-me, clear history, reconcile: every path
+  /// ends in [purgeLocalPlaintext]. The record held the only key, so this
+  /// device's copy goes too (item 3 / media wiring, decision 40). Set by
+  /// `MessagingProvider`, which owns the copies.
+  void Function(List<String> boxMediaUrls)? onBoxMediaDestroyed;
 
   // ---------- Public Getters ----------
 
@@ -266,6 +282,26 @@ class EncryptionProvider extends ChangeNotifier {
       rethrow;
     }
   }
+
+  /// Whether [ciphertext] may come from one of this account's own devices —
+  /// the check a sibling frame passes BEFORE [decrypt] (a request queue is
+  /// public). Delegates to [EncryptionService.carriesOwnIdentity].
+  Future<bool> carriesOwnIdentity(String ciphertext) =>
+      _encryptionService.carriesOwnIdentity(ciphertext);
+
+  /// Whether [ciphertext] from own device [deviceId] would replace this
+  /// device's session with it — the check a sibling PreKey message passes
+  /// before [decrypt] (decision 37). Delegates to
+  /// [EncryptionService.siblingPreKeyWouldReplace].
+  Future<bool> siblingPreKeyWouldReplace(
+    int userId,
+    int deviceId,
+    String ciphertext,
+  ) => _encryptionService.siblingPreKeyWouldReplace(
+    userId,
+    deviceId,
+    ciphertext,
+  );
 
   /// Ensure a Signal session exists with [recipientId]'s [deviceId]
   /// (default 1 — the pre-multi-device address). If not, fetches that
@@ -530,9 +566,14 @@ class EncryptionProvider extends ChangeNotifier {
   VerifiedDeviceList? cachedDeviceList(int userId) =>
       _deviceListCache.cached(userId);
 
-  /// Drop the cached list so the next send refetches (e.g. on
+  /// Drop the cached list so the next old-path send refetches (e.g. on
   /// `deviceListChanged` for the own account). The rollback pin survives.
-  void invalidateDeviceList(int userId) => _deviceListCache.invalidate(userId);
+  /// Every drop goes through here so [onDeviceListInvalidated] sees it: a box
+  /// send never refetches, so the box refresh must.
+  void invalidateDeviceList(int userId) {
+    _deviceListCache.invalidate(userId);
+    onDeviceListInvalidated?.call(userId);
+  }
 
   /// The verified device list for [userId] — cached, else fetched via
   /// `getDeviceList`, I7-verified BEFORE anything is trusted, and cached.
@@ -677,7 +718,8 @@ class EncryptionProvider extends ChangeNotifier {
   /// cached own list so the next send re-fetches and re-verifies.
   void onDeviceListChanged(dynamic data) {
     if (data is! Map || data['userId'] is! int) return;
-    _deviceListCache.invalidate(data['userId'] as int);
+    final userId = data['userId'] as int;
+    invalidateDeviceList(userId);
   }
 
   /// Whether a Signal session exists with [peerUserId]. Diagnostic + policy
@@ -734,6 +776,7 @@ class EncryptionProvider extends ChangeNotifier {
     DateTime? createdAt,
     DateTime? expiresAt,
     int? disappearAfterSeconds,
+    WireKey? wire,
   }) async {
     await _encryptionService.saveDecryptedContent(
       messageId,
@@ -742,6 +785,7 @@ class EncryptionProvider extends ChangeNotifier {
       createdAt: createdAt,
       expiresAt: expiresAt,
       disappearAfterSeconds: disappearAfterSeconds,
+      wire: wire,
     );
   }
 
@@ -984,7 +1028,12 @@ class EncryptionProvider extends ChangeNotifier {
       }
     }
 
-    final stored = await _encryptionService.storedMessageIds();
+    // A box message (a LOCAL id, decision 14) has no server row: the server
+    // would answer "not served" for it, and that answer would destroy the
+    // only copy. Only server ids are the server's to rule on.
+    final stored = (await _encryptionService.storedMessageIds())
+        .where(isServerMessageId)
+        .toSet();
     if (stored.isEmpty) {
       await _encryptionService.markReconciledAt(nowMs);
       return;
@@ -1067,6 +1116,54 @@ class EncryptionProvider extends ChangeNotifier {
   ) async {
     return _encryptionService.getDecryptedContentMany(messageIds);
   }
+
+  /// Delegates to [EncryptionService.wireHeldByOther] (box dedup).
+  Future<bool?> wireHeldByOther(WireKey wire, int messageId) =>
+      _encryptionService.wireHeldByOther(wire, messageId);
+
+  /// Delegates to [EncryptionService.wireHolder] (box reply quotes).
+  Future<int?> wireHolder(WireKey wire) =>
+      _encryptionService.wireHolder(wire);
+
+  /// Delegates to [EncryptionService.boxTombstoned] (item 4, E19g).
+  Future<bool> boxTombstoned(WireKey wire) =>
+      _encryptionService.boxTombstoned(wire);
+
+  /// Delegates to [EncryptionService.addBoxTombstone] (item 4, E19g).
+  Future<void> addBoxTombstone(WireKey wire) =>
+      _encryptionService.addBoxTombstone(wire);
+
+  /// Delegates to [EncryptionService.parkBoxAction] (item 4, E19k).
+  Future<void> parkBoxAction(
+    int conversationId,
+    WireKey wire,
+    Map<String, Object?> action, {
+    required DateTime receivedAt,
+  }) => _encryptionService.parkBoxAction(
+    conversationId,
+    wire,
+    action,
+    receivedAt: receivedAt,
+  );
+
+  /// Delegates to [EncryptionService.parkedBoxActions] (item 4, E19k).
+  Future<List<Map<String, dynamic>>> parkedBoxActions(
+    int conversationId,
+    WireKey wire,
+  ) => _encryptionService.parkedBoxActions(conversationId, wire);
+
+  /// Delegates to [EncryptionService.dropParkedBoxActions] (item 4, E19k).
+  Future<void> dropParkedBoxActions(int conversationId, WireKey wire) =>
+      _encryptionService.dropParkedBoxActions(conversationId, wire);
+
+  /// Delegates to [EncryptionService.localMessageRecords].
+  Future<Map<int, Map<String, dynamic>>> localMessageRecords(
+    int conversationId,
+  ) => _encryptionService.localMessageRecords(conversationId);
+
+  /// Delegates to [EncryptionService.removeRawReplay].
+  Future<void> removeRawReplay(int messageId) =>
+      _encryptionService.removeRawReplay(messageId);
 
   /// Record an emitted send for lost-ack reconciliation (keyed by the exact
   /// emitted ciphertext). Delegates to [EncryptionService.savePendingSendRecord].
@@ -1191,6 +1288,20 @@ class EncryptionProvider extends ChangeNotifier {
     for (final id in ids) {
       _decryptedContentCache.remove(id);
     }
+    // Read before the records go: only a box record (local id) can name a
+    // box attachment, and nothing else would remember its url.
+    final boxMedia = <int, String>{};
+    for (final id in ids) {
+      if (!isLocalMessageId(id)) continue;
+      try {
+        final url = (await _encryptionService.getDecryptedContent(
+          id,
+        ))?['mediaUrl'];
+        if (url is String && isBoxMediaUrl(url)) boxMedia[id] = url;
+      } on Object {
+        // Unreadable: the copy stays, ciphertext without a key.
+      }
+    }
 
     final failedCiphertexts = <String>{};
     for (final ciphertext in ciphertexts) {
@@ -1218,6 +1329,11 @@ class EncryptionProvider extends ChangeNotifier {
       _decryptedLedger.removeAll(settled);
       await _encryptionService.forgetDecryptedMany(settled);
     }
+    final released = [
+      for (final MapEntry(key: id, value: url) in boxMedia.entries)
+        if (settled.contains(id)) url,
+    ];
+    if (released.isNotEmpty) onBoxMediaDestroyed?.call(released);
 
     final result = PlaintextPurgeResult(
       removed: disk.removed,
@@ -2719,9 +2835,10 @@ class EncryptionProvider extends ChangeNotifier {
     // Peer wedged after a phrase restore, 2026-09-22: a peer whose identity
     // moved to a NEW deviceId leaves us holding BOTH a dead session and the
     // verified list that keeps pointing every send and every accept-gate
-    // check at the device it abandoned. Invalidate only — the next send
-    // (or inbound row) re-verifies through its own rate-limited refetch.
-    _deviceListCache.invalidate(fromUserId);
+    // check at the device it abandoned. Invalidate only — the next old-path
+    // send (or inbound row) re-verifies through its own rate-limited
+    // refetch; a box-covered peer's list is looked up by the box refresh.
+    invalidateDeviceList(fromUserId);
     _e2eFlowLog('SESSION_REBUILD_RECEIVED', {'fromUserId': fromUserId});
   }
 
@@ -2970,7 +3087,7 @@ class EncryptionProvider extends ChangeNotifier {
       adoptIdentityBase64: adoptIdentityBase64,
     );
     if (advanced) {
-      _deviceListCache.invalidate(peerId);
+      invalidateDeviceList(peerId);
       for (final deviceId in addresses) {
         markSessionRebuild(peerId, deviceId: deviceId);
       }

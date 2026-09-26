@@ -796,14 +796,45 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   // ========== FRIEND REQUEST HANDLERS ==========
 
+  // The fetch tier, not a lookup tier: since metadata-privacy PR3.2 every
+  // stranger search CLAIMS one one-time pre-key per target device, so it may
+  // not drain a pool faster than `fetchPreKeyBundle` can (100 / 15 min).
   @UseGuards(WsThrottlerGuard)
-  @Throttle({ default: { limit: 30, ttl: 60000 } })
+  @Throttle({ default: { limit: 100, ttl: 900000 } })
   @SubscribeMessage('searchUsers')
   async handleSearchUsers(
     @ConnectedSocket() client: Socket,
-    @MessageBody() data: any,
+    @MessageBody() data: unknown,
   ) {
-    return this.chatSearchService.handleSearchUsers(client, data);
+    return this.chatSearchService.handleSearchUsers(client, data, this.server);
+  }
+
+  /**
+   * A device publishes its box request queue (metadata-privacy PR3.2) —
+   * once per boot, so the key-rebuild tier is generous. Answers on
+   * `requestQueueSet`, the throttle refusal included.
+   */
+  @UseGuards(WsThrottlerGuard)
+  @Throttle({ default: { limit: 30, ttl: 900000 } })
+  @SubscribeMessage('setRequestQueue')
+  async handleSetRequestQueue(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: unknown,
+  ) {
+    return this.chatSearchService.handleSetRequestQueue(client, data);
+  }
+
+  /**
+   * A device reads its OWN siblings' request queues to swap self-queue
+   * addresses with them (metadata-privacy PR3.1 sibling queues) — once per
+   * connect, so the same tier as `setRequestQueue`. Answers on
+   * `ownRequestQueues`, the throttle refusal included.
+   */
+  @UseGuards(WsThrottlerGuard)
+  @Throttle({ default: { limit: 30, ttl: 900000 } })
+  @SubscribeMessage('getOwnRequestQueues')
+  async handleGetOwnRequestQueues(@ConnectedSocket() client: Socket) {
+    return this.chatSearchService.handleGetOwnRequestQueues(client);
   }
 
   @UseGuards(WsThrottlerGuard)

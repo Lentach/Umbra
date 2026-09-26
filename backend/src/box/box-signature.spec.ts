@@ -1,8 +1,7 @@
-import { createHash, generateKeyPairSync, randomBytes, sign } from 'crypto';
+import { generateKeyPairSync, randomBytes, sign } from 'crypto';
 import {
   ackFields,
   boxSignedMessage,
-  notifierChallengeFields,
   verifyBoxSignature,
 } from './box-signature';
 
@@ -28,18 +27,6 @@ describe('box signatures (Ed25519 over the canonical per-verb bytes)', () => {
     ]);
     expect(boxSignedMessage('ack', 'S1ab', ackFields(rid, id))).toEqual(
       expected,
-    );
-  });
-
-  it('hashes platform and token with a separator, so the pair cannot be re-split', () => {
-    const nid = Buffer.alloc(16, 1);
-    const fields = notifierChallengeFields(nid, 'fcm', 'tok');
-    expect(fields).toEqual(
-      Buffer.concat([
-        nid,
-        Buffer.from([1]),
-        createHash('sha256').update(Buffer.from('fcm\0tok')).digest(),
-      ]),
     );
   });
 

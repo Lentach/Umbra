@@ -26,7 +26,7 @@ import {
   BOX_THROTTLE_TTL_MS,
 } from './box.constants';
 import { BoxMediaStore } from './box-media.store';
-import { boxTrackerFor } from './box-throttler.guard';
+import { boxTrackerFor, countRefusal } from './box-throttler.guard';
 import { decodeFixedB64 } from './box-wire';
 import { BoxService } from './box.service';
 
@@ -58,9 +58,12 @@ class BoxMediaThrottleFilter implements ExceptionFilter {
  *
  * `POST /box/media` presents a sid in `Box-Sid` (never in the URL) and an
  * `application/octet-stream` body of exactly one ladder size (I5). The upload
- * is charged to that queue's daily byte budget and stored with NO link to it
- * ("budget without link"). An unknown sid gets the same `201` with an id that
- * is never stored, so the answer cannot test a sid.
+ * is charged to that queue's daily byte budget and to the box's global media
+ * ceiling (decision 30), and stored with NO link to the queue ("budget
+ * without link"). Either quota refuses it `429 quota_exceeded` from the
+ * headers. An unknown sid gets the same `201` with an id that is never
+ * stored — or, at the ceiling, the same `429` — so the answer cannot test a
+ * sid.
  *
  * NO body parser runs on this route. The body is an unauthenticated upload of
  * up to 32 MiB, so it is read only AFTER the global throttle guard, and only
@@ -105,10 +108,22 @@ export class BoxMediaController {
       expiresAt: expiresAt.toISOString(),
     };
     const sid = decodeFixedB64(req.headers['box-sid'], BOX_SID_BYTES);
-    const charge = sid
-      ? await this.box.chargeMedia(sid, rung.bytes)
-      : 'unknown_sid';
-    if (charge === 'over_budget') {
+    // Row first, inside the charge: a crash before the write leaves a row
+    // whose GET 404s and which the TTL sweep removes, never an unreferenced
+    // file.
+    const relative = this.store.newPath();
+    const charge = await this.box.chargeMedia(sid, {
+      id,
+      path: relative,
+      bucket: rung.bucket,
+      bytes: rung.bytes,
+      expiresAt,
+    });
+    if (charge === 'over_budget' || charge === 'over_ceiling') {
+      // Counted, never traced (E11).
+      countRefusal(
+        charge === 'over_budget' ? 'mediaUpload:budget' : 'mediaUpload:ceiling',
+      );
       throw new HttpException({ error: 'quota_exceeded' }, 429);
     }
     if (charge === 'unknown_sid') {
@@ -118,10 +133,6 @@ export class BoxMediaController {
       await finished(req);
       return answer;
     }
-    // Row first: a crash before the write leaves a row whose GET 404s and
-    // which the TTL sweep removes, never an unreferenced file.
-    const relative = this.store.newPath();
-    await this.box.insertMedia(id, relative, rung.bucket, expiresAt);
     if (!(await this.store.writeFrom(relative, req, rung.bytes))) {
       await this.box.deleteMedia([id]);
       throw new HttpException({ error: 'bad_size' }, 413);

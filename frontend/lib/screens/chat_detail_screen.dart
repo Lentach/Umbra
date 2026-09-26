@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:provider/provider.dart';
@@ -60,6 +62,10 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   /// Cached in [initState] so [dispose] can sync push state without relying on [context].
   late final ConversationsProvider _conversations;
   late final MessagingProvider _messaging;
+
+  /// Box message actions the box did not take (item 4, E19h): said here,
+  /// since an edit starts in the composer and the others in overlays.
+  StreamSubscription<BoxActionFailure>? _boxActionFailures;
   final _notificationCleaner = createNotificationCleaner();
 
   final _scrollController = ScrollController();
@@ -361,6 +367,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     _conversations = context.read<ConversationsProvider>();
     _messaging = context.read<MessagingProvider>();
     _scrollController.addListener(_onScroll);
+    _boxActionFailures = _messaging.boxActionFailures.listen(
+      _onBoxActionFailed,
+    );
     // D3 fix: didChangeMetrics never fires for the iOS WebKit keyboard
     // (Flutter's viewInsets stay 0 there) — the shared visualViewport source
     // is the real keyboard signal, so the keyboard-open autoscroll listens to
@@ -489,9 +498,20 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     WidgetsBinding.instance.removeObserver(this);
     _sharedInset.inset.removeListener(_onWebKeyboardInsetChanged);
     _clearActiveConversationIfThisChat();
+    _boxActionFailures?.cancel().ignore();
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     super.dispose();
+  }
+
+  void _onBoxActionFailed(BoxActionFailure failure) {
+    if (!mounted) return;
+    final l10n = AppLocalizations.of(context);
+    showTopSnackBar(context, switch (failure) {
+      BoxActionFailure.pin => l10n.snackbarBoxPinFailed,
+      BoxActionFailure.edit => l10n.snackbarBoxEditFailed,
+      BoxActionFailure.delete => l10n.snackbarBoxDeleteFailed,
+    });
   }
 
   Future<void> _onAvatarTap() async {

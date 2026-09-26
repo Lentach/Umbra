@@ -96,12 +96,24 @@ class PlaintextRecordCodec {
   static const String expiresAtKey = '_expiresAt';
   static const String disappearAfterKey = '_disappearAfter';
 
+  /// The message's wire id (metadata-privacy PR2.1, `E2eEnvelope.msgId`), and
+  /// the account that sent it. A wire id is unique only per sender
+  /// (`UNIQUE(senderId, sendToken)`), so the two are one identity: written
+  /// together, and a `_wid` without its `_wsid` identifies nothing.
+  /// Listed as metadata so the codec's legacy/sealed split keeps them beside
+  /// `_cid`; note `EncryptionService.wireIdIndex` decodes the WHOLE record
+  /// (on web: unseals it), so it does not rely on that split.
+  static const String wireIdKey = '_wid';
+  static const String wireSenderKey = '_wsid';
+
   static const Set<String> metadataKeys = {
     conversationIdKey,
     savedAtKey,
     createdAtKey,
     expiresAtKey,
     disappearAfterKey,
+    wireIdKey,
+    wireSenderKey,
   };
 
   static const Set<String> _envelopeKeys = {

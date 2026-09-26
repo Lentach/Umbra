@@ -6,9 +6,14 @@ import 'package:flutter/foundation.dart';
 import '../config/app_config.dart';
 import '../constants/app_constants.dart';
 import '../services/api_service.dart';
+import '../services/box/box_client.dart';
+import '../services/box/box_media_fetcher.dart';
+import '../services/box/box_media_store.dart';
+import '../services/box/box_session.dart';
 import '../services/contacts/contact_backup.dart';
 import '../services/contacts/contact_backup_service.dart';
 import '../services/contacts/contact_store.dart';
+import '../services/push_box_source.dart';
 import '../services/push_service.dart';
 import '../services/device_link/dak_store.dart';
 import '../services/device_link/link_ceremony_controller.dart'
@@ -104,6 +109,24 @@ class ConnectionProvider extends ChangeNotifier {
   /// owning widget wired none.
   ContactBackupService? _contactBackup;
 
+  /// Builds the box client for a server's base URL (metadata-privacy PR3.1).
+  /// Null when the owning widget wired none — then no box is ever opened.
+  BoxClient Function(String baseUrl)? _boxClient;
+
+  /// The box link of the signed-in account's session; replaced when another
+  /// account connects, disposed on logout.
+  BoxSession? _box;
+  int? _boxUserId;
+
+  /// That account's box attachment copies and downloads (item 3 / media
+  /// wiring, decision 40): made with its session, gone with it.
+  BoxMediaFetcher? _boxMedia;
+
+  /// Whether this connect's account socket has seen `socketReady`. The box
+  /// device-list refresh (decision 21) waits for it: a `getDeviceList` sent
+  /// before the server finished auth is never answered.
+  bool _accountReady = false;
+
   /// Why the contact store could not open this session, or null when it did
   /// (or none is wired). Surfaced by the loss screen (PR2.3).
   String? _contactStoreUnavailable;
@@ -144,9 +167,11 @@ class ConnectionProvider extends ChangeNotifier {
     required MessagingProvider messaging,
     ContactStore? contactStore,
     ContactBackupService? contactBackup,
+    BoxClient Function(String baseUrl)? boxClient,
   }) {
     _contactStore = contactStore;
     _contactBackup = contactBackup;
+    _boxClient = boxClient;
     if (contactStore != null) contactBackup?.attach(contactStore);
     friends.contactStore = contactStore;
     conversations.contactStore = contactStore;
@@ -199,6 +224,9 @@ class ConnectionProvider extends ChangeNotifier {
         // lists are re-applied as the freshest truth.
         _friendsProvider?.rewriteStore();
         _conversationsProvider?.rewriteStore();
+        // A vault that booted locked left the box without a request queue.
+        _box?.storeOpened();
+        _refreshBoxDeviceLists();
       }
       // PR2.4: a phrase the user just enrolled gets a second wrap of the
       // contact-backup content key, so a device that lost its storage AND
@@ -346,6 +374,8 @@ class ConnectionProvider extends ChangeNotifier {
       _messagingProvider?.clearAll();
     }
 
+    _accountReady = false;
+
     // 4. Notify sub-providers of connect lifecycle
     _encryptionProvider?.onConnect(isReconnect);
     _friendsProvider?.onConnect(isReconnect);
@@ -381,6 +411,8 @@ class ConnectionProvider extends ChangeNotifier {
               if (_connectGeneration != generation) return;
               _friendsProvider?.hydrateFromStore();
               _conversationsProvider?.hydrateFromStore();
+              _box?.storeOpened();
+              _refreshBoxDeviceLists();
             }),
           );
         }
@@ -457,13 +489,78 @@ class ConnectionProvider extends ChangeNotifier {
       );
     }
 
+    // 4d. The box (PR3.1): its own socket, no account on its path. One
+    // session per account — a reconnect of the same account only resumes it,
+    // so its published request queue and subscriptions carry over.
+    final boxClient = _boxClient;
+    final contacts = _contactStore;
+    if (boxClient != null && contacts != null) {
+      if (_box == null || _boxUserId != userId) {
+        _box?.dispose();
+        _boxMedia?.dispose();
+        _boxUserId = userId;
+        _box = BoxSession(
+          box: boxClient(baseUrl),
+          store: contacts,
+          emit: emit,
+          // E9: box push registration on every contact queue.
+          push: PushBoxSource(),
+        )..start();
+        final session = _box!;
+        _boxMedia = BoxMediaFetcher(
+          store: BoxMediaStore.device(),
+          download: session.downloadMedia,
+        );
+        // Slice (b): every box delivery is read by the messaging provider,
+        // which knows the peer only through the contact record. Slice (c):
+        // it sends through the same session. Sibling queues: it encrypts
+        // the address handoffs, stores what a sibling hands over and — part
+        // B — tells the rotation on revoke which own devices are live.
+        final messaging = _messagingProvider;
+        if (messaging != null) {
+          _box!.consumer = (entry) => messaging.consumeBoxEntry(
+            entry,
+            contacts.byUserId(entry.peerUserId),
+          );
+          _box!
+            ..encryptForOwnDevice = messaging.encryptForOwnDevice
+            ..ownLiveDevices = messaging.ownLiveDevices;
+          messaging
+            ..boxOutbox = _box
+            ..boxSiblings = _box
+            ..boxMedia = _boxMedia;
+        }
+        if (_encryptionProvider?.isE2EReady == true) _box!.e2eReady();
+      } else {
+        _box!.resume();
+      }
+    }
+
     // 5. Set up emit callbacks so sub-providers can send socket events
     _encryptionProvider?.setEmitCallback((event, data) => emit(event, data));
     _friendsProvider?.setEmitCallback((event, data) => emit(event, data));
     _conversationsProvider?.setEmitCallback((event, data) => emit(event, data));
     _messagingProvider?.setEmitCallback((event, data) => emit(event, data));
-    _encryptionProvider?.onE2EReady = () =>
-        _messagingProvider?.retryDecryptActiveConversation();
+    _encryptionProvider?.onE2EReady = () {
+      unawaited(_messagingProvider?.retryDecryptActiveConversation());
+      // A box delivery refused because E2E was not ready waits in the
+      // journal; nothing else would offer it again before a reconnect.
+      _box?.drainInbox();
+      // Sibling queues: a handoff can be encrypted now.
+      _box?.e2eReady();
+      // Decision 21: the device lists a box send reads are looked up here,
+      // once per connect — never by a send.
+      _refreshBoxDeviceLists();
+    };
+    _encryptionProvider?.onDeviceListInvalidated = (invalidated) {
+      _messagingProvider?.onDeviceListInvalidated(invalidated);
+      // The own list changed (a device linked or revoked): the siblings may
+      // have, so the address swap asks again.
+      if (invalidated == _boxUserId) _box?.ownDevicesChanged();
+    };
+    // The old path may hold the PreKey message that creates the session a
+    // waiting box message needs; its history pass is when that lands.
+    _messagingProvider?.onHistoryDecryptPassFinished = () => _box?.drainInbox();
 
     // 6. Wire cross-provider callbacks (friends -> conversations)
     _friendsProvider?.onRemoveConversationsForUser = (uid) {
@@ -516,6 +613,9 @@ class ConnectionProvider extends ChangeNotifier {
         _encryptionProvider?.setOwnDeviceId(readyDeviceId);
       }
       _onSocketReady();
+      _box?.accountReady(readyDeviceId is int ? readyDeviceId : null);
+      _accountReady = true;
+      _refreshBoxDeviceLists();
     });
 
     // 10. On 'disconnect': handle reconnect
@@ -524,6 +624,8 @@ class ConnectionProvider extends ChangeNotifier {
         'intentional': _intentionalDisconnect,
       });
       _isConnected = false;
+      _accountReady = false;
+      _box?.accountLost();
       notifyListeners();
 
       if (!_intentionalDisconnect) {
@@ -535,6 +637,12 @@ class ConnectionProvider extends ChangeNotifier {
       _socketReadyWatchdog?.cancel();
       _socketReadyWatchdog = null;
     });
+  }
+
+  /// Looks up the device lists a box send reads once E2E AND the account
+  /// socket are both ready this connect — whichever comes last triggers it.
+  void _refreshBoxDeviceLists() {
+    if (_accountReady) _messagingProvider?.refreshBoxDeviceLists();
   }
 
   void _scheduleReconnect() {
@@ -851,6 +959,7 @@ class ConnectionProvider extends ChangeNotifier {
 
     // Socket cleanup
     _socketService.disconnect();
+    _box?.close();
     _isConnected = false;
     _errorMessage = null;
 
@@ -871,6 +980,15 @@ class ConnectionProvider extends ChangeNotifier {
       _conversationsProvider?.clearAll();
       _messagingProvider?.clearAll();
       _contactStore?.close();
+      _box?.dispose();
+      _box = null;
+      _boxMedia?.dispose();
+      _boxMedia = null;
+      _messagingProvider
+        ?..boxOutbox = null
+        ..boxSiblings = null
+        ..boxMedia = null;
+      _boxUserId = null;
     }
 
     notifyListeners();
@@ -1528,7 +1646,12 @@ class ConnectionProvider extends ChangeNotifier {
       _messagingProvider?.onPartnerRecordingVoice(data);
     });
     _socketService.on('servedMessageIds', _onServedMessageIds);
-    _socketService.on('serverTime', _onServerTime);
+    _socketService
+      ..on('serverTime', _onServerTime)
+      // PR3.1: the answer to the box request-queue publish (`BoxSession`).
+      ..on('requestQueueSet', (data) => _box?.onRequestQueueSet(data))
+      // Sibling queues: the answer to the own request-queue lookup.
+      ..on('ownRequestQueues', (data) => _box?.onOwnRequestQueues(data));
 
     // --- Error event ---
     _socketService.on('error', (err) {
@@ -1573,6 +1696,8 @@ class ConnectionProvider extends ChangeNotifier {
     _socketReadyWatchdog?.cancel();
     _reconnectManager.cancel();
     _socketService.disconnect();
+    _box?.dispose();
+    _boxMedia?.dispose();
     super.dispose();
   }
 }

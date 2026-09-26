@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
@@ -9,8 +10,20 @@ import '../utils/file_utils_stub.dart'
     as file_utils;
 
 import '../config/app_config.dart';
+import '../models/conversation_model.dart';
 import '../models/message_model.dart';
 import '../services/api_service.dart';
+import '../services/box/box_device_list_refresh.dart';
+import '../services/box/box_envelope.dart';
+import '../services/box/box_frame.dart';
+import '../services/box/box_media_fetcher.dart';
+import '../services/box/box_media_frame.dart';
+import '../services/box/box_media_url.dart';
+import '../services/box/box_outbox.dart';
+import '../services/box/box_siblings.dart';
+import '../services/box/box_wire.dart';
+import '../services/contacts/contact_record.dart';
+import '../services/contacts/contact_store.dart';
 import '../services/device_list/device_list_cache.dart';
 import '../services/device_list/sender_list_info.dart';
 import '../services/media_crypto_service.dart';
@@ -27,12 +40,17 @@ import '../utils/e2e_diag_log.dart';
 import '../utils/e2e_envelope.dart';
 import '../utils/media_preview_metadata.dart';
 import '../utils/e2e_persistent_diag.dart';
+import '../utils/message_edit_eligibility.dart';
 import '../utils/message_expiry.dart';
+import '../utils/message_ids.dart';
+import '../utils/message_length.dart';
 import '../utils/reply_preview_helper.dart';
 import 'conversation_helpers.dart' as conv_helpers;
 import 'conversations_provider.dart';
 import 'encryption_provider.dart';
 
+part 'messaging/messaging_provider.box.dart';
+part 'messaging/messaging_provider.box_actions.dart';
 part 'messaging/messaging_provider.history.dart';
 part 'messaging/messaging_provider.events.dart';
 part 'messaging/messaging_provider.send.dart';
@@ -250,6 +268,53 @@ class MessagingProvider extends ChangeNotifier {
   /// [_pendingSendContent].
   final Map<String, String> _sendTokenByTempId = {};
 
+  /// TempIds a box send has handed at least one frame to (PR3.1 slice (c)).
+  /// Their wire id survives a same-user reconnect and a retry never falls
+  /// back to the old path: the box may already have delivered the message
+  /// to some devices, and only the box reader drops a copy by wire id.
+  final Set<String> _boxTempIds = {};
+
+  /// TempIds whose box send is running now: nothing else may fail or resend
+  /// them until the box has answered.
+  final Set<String> _boxInFlight = {};
+
+  /// This connect's lookups of every device list a box send reads (decision
+  /// 21): each box-covered peer's, plus the account's own once any peer is
+  /// covered — each followed by the session pre-build for that user's
+  /// box-covered devices (decision 38). Run by [refreshBoxDeviceLists], only
+  /// awaited by a box send. Reset on every connect and on logout.
+  late final BoxDeviceListRefresh _boxLists = BoxDeviceListRefresh(
+    users: () {
+      final covered = boxOutbox?.coveredPeers().toList() ?? const <int>[];
+      final own = _currentUserId;
+      return [if (covered.isNotEmpty && own != null) own, ...covered];
+    },
+    fetch: (user) async {
+      final enc = _encryptionProvider;
+      if (enc == null) throw StateError('no encryption provider');
+      await enc.getVerifiedDeviceList(user, forceRefresh: true);
+    },
+    prebuild: _prebuildBoxSessions,
+  );
+
+  /// Looks up every device list a box send reads, unless this connect
+  /// already verified it. Called when E2E or the account socket becomes
+  /// ready and when the contact store opens late — never by a send
+  /// (decision 21). A lookup before E2E is ready fails locally, emits
+  /// nothing, and is looked up again when E2E-ready calls this.
+  ///
+  /// Box ready or reconnected: every box action a device still owes is
+  /// sent again now (E19l).
+  void refreshBoxDeviceLists() {
+    _boxLists.refresh();
+    _retryBoxActionsNow();
+  }
+
+  /// The E2E layer dropped [userId]'s verified list (a rebuild request, an
+  /// identity change, the own account's `deviceListChanged`): a box send
+  /// that reads it waits for a fresh lookup.
+  void onDeviceListInvalidated(int userId) => _boxLists.invalidate(userId);
+
   /// Stale-list resend attempts per tempId (spec §5.2 cap of 3, then a
   /// surfaced failure). Cleared with [_pendingSendContent].
   final Map<String, int> _staleResendAttempts = {};
@@ -321,6 +386,57 @@ class MessagingProvider extends ChangeNotifier {
   /// so this guarantees the effect flips at most once per id. Cleared on
   /// disconnect/fresh-connect with the rest of the transient decrypt state.
   final Set<int> _pingEffectFiredIds = {};
+
+  /// Box messages shown whose plaintext record has not been PROVEN stored
+  /// yet, by local id (`messaging_provider.box.dart`): the only copy until
+  /// the journal's next offer stores it.
+  final Map<int, MessageModel> _boxUnsaved = {};
+
+  /// Fired after every history decrypt pass (`ConnectionProvider` drains the
+  /// box journal): a box message refused for "no session" may decrypt now.
+  void Function()? onHistoryDecryptPassFinished;
+
+  /// Where a text goes when it can go over the box (PR3.1 slice (c));
+  /// `ConnectionProvider` wires the account session's one. Null = old path.
+  BoxOutbox? boxOutbox;
+
+  /// This account's own devices over the box (PR3.1 sibling queues): where a
+  /// sibling's handoff is stored and its ack sent. `ConnectionProvider`
+  /// wires the account session's one; null = sibling entries wait.
+  BoxSiblingLink? boxSiblings;
+
+  /// This account's box attachment copies (item 3 / media wiring, decision
+  /// 40): kept on send and arrival, read to display. `ConnectionProvider`
+  /// wires the one owned beside the account's box session; null = box
+  /// attachments neither download nor show.
+  BoxMediaFetcher? boxMedia;
+
+  /// Box attachments encrypted but not yet uploaded, by tempId (E17b): a
+  /// retry uploads the SAME ciphertext, key and IV — `MediaCryptoService`
+  /// takes no caller key, so re-encrypting would mint new ones. Held from a
+  /// failed route lookup on, too, so that send retries like any other. Gone
+  /// with a successful upload; a restart loses them, and the row stays
+  /// failed for the user to send again.
+  final Map<String, _BoxMediaBody> _boxMediaBodies = {};
+
+  /// Box message actions NO device took (item 4, E19h/E19l), for the chat
+  /// screen.
+  final StreamController<BoxActionFailure> _boxActionFailures =
+      StreamController<BoxActionFailure>.broadcast();
+
+  /// Box actions some device took and some did not (item 4, E19l), by
+  /// [_boxActionKey]: the frames still owed, sent again until taken or
+  /// 30 d. RAM only (decision 19: no persisted outbox).
+  final Map<String, _BoxActionRetry> _boxActionRetries = {};
+
+  /// The newest box action send some device took, per [_boxActionKey]: an
+  /// older send settling after it leaves no retry (E19l).
+  final Map<String, int> _boxActionSends = {};
+  int _boxActionSendSeq = 0;
+
+  /// Each pin, edit or delete-for-everyone of a box message that NO device
+  /// took; its optimistic state is already undone.
+  Stream<BoxActionFailure> get boxActionFailures => _boxActionFailures.stream;
 
   /// Set in [dispose]; lets the overlay's dispose-scheduled onComplete
   /// microtask no-op instead of notifying a disposed ChangeNotifier.
@@ -559,6 +675,11 @@ class MessagingProvider extends ChangeNotifier {
       ),
       senderUsername: rt.senderUsername,
       messageType: rt.messageType,
+      // What a box reply names the quoted message by (E18a).
+      wireId: rt.wireId,
+      senderId: rt.senderId,
+      quotedDisappears:
+          rt.disappearAfterSeconds != null || rt.expiresAt != null,
     );
   }
 
@@ -638,6 +759,9 @@ class MessagingProvider extends ChangeNotifier {
     _incomingSound.setEnabledForTest(enabled);
   }
 
+  @visibleForTesting
+  int get incomingSoundRequestsForTest => _incomingSound.requests;
+
   bool isPartnerTyping(int conversationId) =>
       _typingStatus[conversationId] ?? false;
 
@@ -655,6 +779,29 @@ class MessagingProvider extends ChangeNotifier {
   /// Wire the EncryptionProvider for E2E operations.
   void setEncryptionProvider(EncryptionProvider ep) {
     _encryptionProvider = ep;
+    // A destroyed box record takes this device's copy of its attachment.
+    ep.onBoxMediaDestroyed = _forgetBoxMedia;
+  }
+
+  void _forgetBoxMedia(List<String> urls) {
+    final media = boxMedia;
+    final user = _currentUserId;
+    if (media == null || user == null) return;
+    for (final url in urls) {
+      final id = boxMediaIdOf(url);
+      if (id != null) media.forget(user, id).ignore();
+    }
+  }
+
+  /// The unframed ciphertext of box attachment [url] for the widgets that
+  /// show it (`loadDecryptedMediaBytes`' `BoxCiphertextSource`): this
+  /// device's copy, else a download. Null when there is none.
+  Future<Uint8List?> boxMediaCiphertext(String url) async {
+    final media = boxMedia;
+    final user = _currentUserId;
+    final id = boxMediaIdOf(url);
+    if (media == null || user == null || id == null) return null;
+    return media.ciphertextFor(user, id);
   }
 
   /// Wire the ConversationsProvider for lastMessage/unread updates.
@@ -1090,6 +1237,9 @@ class MessagingProvider extends ChangeNotifier {
       _emittedSendTempIds.clear();
       _identityRefusedSendTempIds.clear();
       _sendTokenByTempId.clear();
+      _boxTempIds.clear();
+      _boxMediaBodies.clear();
+      _boxLists.reset();
       _staleResendAttempts.clear();
       _staleResendTempIds.clear();
       _incomingMessageQueue.clear();
@@ -1098,6 +1248,9 @@ class MessagingProvider extends ChangeNotifier {
       // Fresh connect / user switch: forget which pings already fired.
       // (Reconnect deliberately KEEPS it so resync redelivery stays silent.)
       _pingEffectFiredIds.clear();
+      // Local ids restart at the same base for every account: an unsaved
+      // row of the previous session must never be stored into this one.
+      _boxUnsaved.clear();
       // A different user (or the same user, freshly signed in) must not
       // inherit either the cached `K_react` codecs or the per-conversation
       // "already asked" latch: the codecs are key material for an account
@@ -1123,7 +1276,12 @@ class MessagingProvider extends ChangeNotifier {
           .clear(); // retry was cancelled; orphaned entries serve no purpose
       _emittedSendTempIds.clear();
       _identityRefusedSendTempIds.clear();
-      _sendTokenByTempId.clear();
+      // A box send's retry must reuse its wire id, or a device the failed
+      // attempt reached shows the message twice.
+      _sendTokenByTempId.removeWhere(
+        (tempId, _) => !_boxTempIds.contains(tempId),
+      );
+      _boxLists.reset();
       _staleResendAttempts.clear();
       _staleResendTempIds.clear();
       // Same user, so the codecs stay valid — but every conversation gets
@@ -1191,14 +1349,19 @@ class MessagingProvider extends ChangeNotifier {
     _identityResetRebuildNotified.clear();
     _rebuildRequestedPeers.clear();
     _pingEffectFiredIds.clear();
+    _boxUnsaved.clear();
     _emittedSendTempIds.clear();
     _identityRefusedSendTempIds.clear();
     _sendTokenByTempId.clear();
+    _boxTempIds.clear();
+    _boxMediaBodies.clear();
+    _boxLists.reset();
     _staleResendAttempts.clear();
     _staleResendTempIds.clear();
     // Logout: `K_react` for every visited conversation is in RAM here.
     _resetReactionKeyState();
     _cancelDelayedRetryIfAny();
+    _dropBoxActionRetries();
     _currentUserId = null;
     _tokenForReconnect = null;
     notifyListeners();
@@ -1229,8 +1392,11 @@ class MessagingProvider extends ChangeNotifier {
     // live-decrypt-retry timer would fire past super.dispose() and notify a
     // disposed ChangeNotifier.
     onDisconnect();
+    _boxLists.reset();
+    _dropBoxActionRetries();
     _incomingSound.dispose();
     countdownTickNotifier.dispose();
+    _boxActionFailures.close().ignore();
     super.dispose();
   }
 }
