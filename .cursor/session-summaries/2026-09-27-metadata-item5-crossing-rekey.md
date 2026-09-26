@@ -24,7 +24,7 @@
 - Read only: `box_friend_handoff.dart` (the pass's gates), `connection_provider.dart:492-508` (one BoxSession per account).
 
 ## Verification
-- CI: pending on `da6a63a0` at writing (see Notes).
+- CI: 7/7 green on `5b560057` (the handoff commit, which carries code commit `da6a63a0`; `da6a63a0`'s own run was cancelled by that push).
 - Red before green: with the lib unchanged, the new crossing test failed (`converged` false) and the flipped test failed (`awaiting` empty); both pass after the change.
 - Mutants on `started` (each run as a subprocess, lib hash checked after):
   - `!fresh && …` (fix B) → 4 red.
