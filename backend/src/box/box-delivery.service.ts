@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { Socket } from 'socket.io';
-import { BOX_DELIVERY_WINDOW } from './box.constants';
+import { BOX_DELIVERY_WINDOW, BOX_SOCKET_RID_CAP } from './box.constants';
 import { BoxService } from './box.service';
 
 interface Slot {
@@ -25,7 +25,9 @@ interface Slot {
  *   frame that would stall every ack reply behind it.
  * - Round-robin across the socket's rids, oldest first within a rid.
  * - The NEWEST subscriber of a rid wins it: a device's stale socket loses the
- *   rid (its in-flight copies are released, not acked).
+ *   rid (its in-flight copies are released, not acked), which frees its slot.
+ * - At most 1 024 rids per socket (E10): past it a rid is refused, never
+ *   swapped for one the socket holds.
  * - At-least-once: nothing here deletes; a pushed-but-unacked message is
  *   pushed again on the next subscribe, so the client dedups (PR2.1 wire id).
  */
@@ -38,7 +40,37 @@ export class BoxDelivery {
 
   constructor(private readonly source: BoxService) {}
 
-  attach(socket: Socket, rids: Buffer[]): void {
+  /**
+   * Splits `rids` at the socket's rid cap, in order: `fits` it may hold — a
+   * rid it already holds costs nothing — and `over`, the rest.
+   */
+  fit(socketId: string, rids: Buffer[]): { fits: Buffer[]; over: Buffer[] } {
+    const held = this.slots.get(socketId)?.rids;
+    const added = new Set<string>();
+    const fits: Buffer[] = [];
+    const over: Buffer[] = [];
+    for (const bytes of rids) {
+      const rid = bytes.toString('base64url');
+      if (!held?.has(rid) && !added.has(rid)) {
+        if ((held?.size ?? 0) + added.size >= BOX_SOCKET_RID_CAP) {
+          over.push(bytes);
+          continue;
+        }
+        added.add(rid);
+      }
+      fits.push(bytes);
+    }
+    return { fits, over };
+  }
+
+  /**
+   * Gives the socket every rid that still fits under its cap and returns the
+   * rest. Synchronous, so the cap holds even when several subscribe frames
+   * on one socket passed `fit` before any of them got here.
+   */
+  attach(socket: Socket, rids: Buffer[]): Buffer[] {
+    const { fits, over } = this.fit(socket.id, rids);
+    if (fits.length === 0) return over;
     let slot = this.slots.get(socket.id);
     if (!slot) {
       slot = {
@@ -51,7 +83,7 @@ export class BoxDelivery {
       };
       this.slots.set(socket.id, slot);
     }
-    for (const bytes of rids) {
+    for (const bytes of fits) {
       const rid = bytes.toString('base64url');
       const previous = this.owners.get(rid);
       if (previous !== undefined && previous !== socket.id) {
@@ -64,6 +96,7 @@ export class BoxDelivery {
     // before the backlog, as the contract describes.
     const attached = slot;
     setImmediate(() => this.pump(attached));
+    return over;
   }
 
   /**

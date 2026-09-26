@@ -19,7 +19,7 @@ import {
   notifierActivateFields,
   verifyBoxSignature,
 } from './box-signature';
-import { BoxThrottlerGuard } from './box-throttler.guard';
+import { BoxThrottlerGuard, countRefusal } from './box-throttler.guard';
 import {
   parseAck,
   parseCreateQueue,
@@ -119,12 +119,24 @@ export class BoxGateway implements OnGatewayDisconnect {
     if (!cmd) return INVALID;
     const stored = await this.box.enqueue(cmd.sid, cmd.blob);
     if (stored.result === 'full') return { ok: false, code: 'queue_full' };
+    if (stored.result === 'over_ceiling') {
+      countRefusal('send:ceiling');
+      return { ok: false, code: 'quota_exceeded' };
+    }
     if (stored.result === 'stored' && !this.delivery.onEnqueued(stored.rid)) {
       this.notifier.schedule(stored.nid);
     }
     return { ok: true };
   }
 
+  /**
+   * Each entry stands alone, refusals listed in frame order: `auth_failed`
+   * (unknown rid or wrong signature, one answer) or `limit` (past the
+   * socket's rid cap, E10). A `limit` entry is checked before the claim, so
+   * it claims nothing — unless a concurrent frame on this socket filled the
+   * cap in between; `attach` refuses it then, after its own owner's
+   * signature already claimed the queue (harmless).
+   */
   @Throttle({
     default: { limit: BOX_LIMITS.subscribe, ttl: BOX_THROTTLE_TTL_MS },
   })
@@ -132,23 +144,32 @@ export class BoxGateway implements OnGatewayDisconnect {
   async subscribe(
     @ConnectedSocket() client: Socket,
     @MessageBody() data: unknown,
-  ): Promise<BoxAnswer<{ refused: { rid: string; code: 'auth_failed' }[] }>> {
+  ): Promise<
+    BoxAnswer<{ refused: { rid: string; code: 'auth_failed' | 'limit' }[] }>
+  > {
     const cmd = parseSubscribe(data);
     if (!cmd) return INVALID;
     const keys = await this.box.authKeysByRid(cmd.subs.map((s) => s.rid));
-    const accepted: Buffer[] = [];
-    const refused: { rid: string; code: 'auth_failed' }[] = [];
-    for (const { rid, sig } of cmd.subs) {
+    const signed = cmd.subs.map(({ rid, sig }) => {
       const key = keys.get(rid.toString('base64url'));
       const message = boxSignedMessage('subscribe', client.id, rid);
-      if (key && verifyBoxSignature(key, message, sig)) accepted.push(rid);
-      else
-        refused.push({ rid: rid.toString('base64url'), code: 'auth_failed' });
+      return key !== undefined && verifyBoxSignature(key, message, sig);
+    });
+    const { fits, over } = this.delivery.fit(
+      client.id,
+      cmd.subs.filter((_, i) => signed[i]).map((s) => s.rid),
+    );
+    if (fits.length > 0) {
+      await this.box.markSubscribed(fits);
+      over.push(...this.delivery.attach(client, fits));
     }
-    if (accepted.length > 0) {
-      await this.box.markSubscribed(accepted);
-      this.delivery.attach(client, accepted);
-    }
+    const overRids = new Set(over.map((rid) => rid.toString('base64url')));
+    const refused: { rid: string; code: 'auth_failed' | 'limit' }[] = [];
+    cmd.subs.forEach(({ rid }, i) => {
+      const b64 = rid.toString('base64url');
+      if (!signed[i]) refused.push({ rid: b64, code: 'auth_failed' });
+      else if (overRids.has(b64)) refused.push({ rid: b64, code: 'limit' });
+    });
     return { ok: true, refused };
   }
 

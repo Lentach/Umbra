@@ -10,7 +10,7 @@ Production backend deploy runs on the VM only (`cd ~/fireplace && ./deploy-backe
 
 ## Box module (§2)
 
-The **box** (`src/box/`: `/box` namespace + `/box/media`, metadata-privacy PR1.1) is dark until a client speaks it. It is registered only when `BOX_ENABLED=true` (`ConditionalModule`); dev compose sets it, prod does not until a global storage ceiling lands.
+The **box** (`src/box/`: `/box` namespace + `/box/media`, metadata-privacy PR1.1) is dark until a client speaks it. It is registered only when `BOX_ENABLED=true` (`ConditionalModule`); dev compose sets it, prod pins it off until the owner turns it on after G5. Its global ceiling (60 000 blobs + 2 GiB media, decision 30) is the one-row `box_totals` (migration 0024); lock order `box_queues` → `box_msgs` → `box_totals` (header of `box.service.ts`).
 
 The box has NO account on its path: it imports nothing from `auth/`, `users/`, `chat/`, even transitively (invariant I1, enforced by `scripts/verify-box-imports.mjs` in CI). Contract: `docs/contracts/wire.md` "Box". Suite: `npm run test:int` (real sockets + Postgres, `BOX_IT_DATABASE_URL`).
 

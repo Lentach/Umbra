@@ -26,6 +26,13 @@ export const BOX_REQUEST_QUEUE_CAP = 50;
 export const BOX_DELIVERY_WINDOW = 16;
 /** Rids per `subscribe` frame. */
 export const BOX_SUBSCRIBE_MAX = 256;
+/**
+ * Distinct rids one socket may hold subscribed (E10). A device holds about
+ * one queue per contact plus its self and request queues, so this covers a
+ * thousand contacts; past it an entry is refused alone with `limit`, which
+ * bounds what one flooding socket makes delivery track.
+ */
+export const BOX_SOCKET_RID_CAP = 1024;
 /** Queues per `registerNotifier` activation frame (step 2). */
 export const BOX_NOTIFIER_BATCH_MAX = 256;
 /** A notifier token (FCM token or a Web Push subscription JSON). */
@@ -76,6 +83,16 @@ export const BOX_MEDIA_LADDER: ReadonlyArray<{
  * request sid is served to anyone who can search.
  */
 export const BOX_MEDIA_DAILY_BUDGET_BYTES = 1024 * 1024 * 1024;
+
+/**
+ * The GLOBAL ceiling (owner decision 30, E12): everything the box holds, all
+ * queues together — 2 GiB of media on disk plus 60 000 undelivered 16 KiB
+ * blobs (~0.9 GiB), about 3 GB on the disk Postgres shares. Past either, a
+ * `send` answers `quota_exceeded` and an upload `429 quota_exceeded`. Kept as
+ * running totals in `box_totals` (migration 0024), never counted per send.
+ */
+export const BOX_GLOBAL_MSG_CEILING = 60_000;
+export const BOX_GLOBAL_MEDIA_CEILING_BYTES = 2 * 1024 * 1024 * 1024;
 
 /**
  * Push coalescing per notifier, the existing tuning (design §4.5): wait this

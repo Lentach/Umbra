@@ -5,7 +5,7 @@ import { Test } from '@nestjs/testing';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { generateKeyPairSync, randomBytes, sign, type KeyObject } from 'crypto';
-import { mkdtempSync, readdirSync, rmSync } from 'fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { request as httpRequest } from 'http';
 import { join } from 'path';
@@ -28,13 +28,20 @@ import {
   type BoxSignedVerb,
 } from './box-signature';
 import { takeRefusalCounts } from './box-throttler.guard';
-import { BOX_MEDIA_DAILY_BUDGET_BYTES } from './box.constants';
+import {
+  BOX_GLOBAL_MEDIA_CEILING_BYTES,
+  BOX_GLOBAL_MSG_CEILING,
+  BOX_MEDIA_DAILY_BUDGET_BYTES,
+  BOX_MEDIA_LADDER,
+  BOX_SOCKET_RID_CAP,
+} from './box.constants';
 import { BOX_ENTITIES, BoxModule } from './box.module';
+import { BOX_CEILING, type BoxCeiling } from './box.service';
 
 /**
  * The box end to end: real socket.io connections and HTTP against the real
  * module, on a FRESH Postgres database built by the real migration runner
- * (0001 baseline … 0022). Nothing is mocked but the push relay.
+ * (0001 baseline … the latest). Nothing is mocked but the push relay.
  *
  * `BOX_IT_DATABASE_URL` names a server this suite may create and drop a
  * database on (e.g. `postgres://postgres:postgres@localhost:5433/postgres`
@@ -154,6 +161,15 @@ describeWithDb('box over real sockets and Postgres', () => {
     },
   };
   const sockets: ClientSocket[] = [];
+  /**
+   * The global ceiling the app runs with: the real numbers, which a test
+   * lowers to just above the running totals instead of writing 2 GiB
+   * (restored after every test).
+   */
+  const ceiling: BoxCeiling = {
+    msgs: BOX_GLOBAL_MSG_CEILING,
+    mediaBytes: BOX_GLOBAL_MEDIA_CEILING_BYTES,
+  };
 
   async function connect(ip = nextIp()): Promise<ClientSocket> {
     const socket = io(`${base}/box`, {
@@ -302,6 +318,112 @@ describeWithDb('box over real sockets and Postgres', () => {
     return rows.map((r) => `${r.nid.toString('base64url')}:${r.token}`).sort();
   }
 
+  /** The running totals the global ceiling is checked against (decision 30). */
+  async function totals(): Promise<{ msgs: number; mediaBytes: number }> {
+    const rows: { msgCount: number; mediaBytes: string }[] = await db.query(
+      `SELECT "msgCount", "mediaBytes" FROM box_totals`,
+    );
+    return { msgs: rows[0].msgCount, mediaBytes: Number(rows[0].mediaBytes) };
+  }
+
+  /** Bytes per stored medium, at its rung size. */
+  function mediaBytesOf(media: { sizeBucket: string }[]): number {
+    const rungBytes = new Map(BOX_MEDIA_LADDER.map((r) => [r.bucket, r.bytes]));
+    return media.reduce(
+      (sum, m) => sum + (rungBytes.get(m.sizeBucket) ?? Number.NaN),
+      0,
+    );
+  }
+
+  /** What the tables actually hold, media at their rung sizes. */
+  async function stored(): Promise<{ msgs: number; mediaBytes: number }> {
+    const msgs: { n: number }[] = await db.query(
+      `SELECT count(*)::int AS n FROM box_msgs`,
+    );
+    const media: { sizeBucket: string }[] = await db.query(
+      `SELECT "sizeBucket" FROM box_media`,
+    );
+    return { msgs: msgs[0].n, mediaBytes: mediaBytesOf(media) };
+  }
+
+  /**
+   * `n` normal queues written straight to the table, with real keys: the rid
+   * cap needs more queues than createQueue's throttle gives one address.
+   */
+  async function mintQueues(n: number): Promise<Queue[]> {
+    const minted = Array.from({ length: n }, () => ({
+      key: mintKey(),
+      rid: randomBytes(32),
+      sid: randomBytes(32),
+      nid: randomBytes(16),
+    }));
+    await db.query(
+      `INSERT INTO box_queues (rid, sid, nid, "recipientAuthPub", kind, "claimBy")
+       SELECT r, s, n, k, 'normal', now() + interval '1 day'
+         FROM unnest($1::bytea[], $2::bytea[], $3::bytea[], $4::bytea[])
+           AS t(r, s, n, k)`,
+      [
+        minted.map((q) => q.rid),
+        minted.map((q) => q.sid),
+        minted.map((q) => q.nid),
+        minted.map((q) => q.key.pub),
+      ],
+    );
+    return minted.map((q) => ({
+      key: q.key,
+      rid: q.rid.toString('base64url'),
+      sid: q.sid.toString('base64url'),
+      nid: q.nid.toString('base64url'),
+    }));
+  }
+
+  /** True once a subscribe claimed the queue (`claimBy` cleared). */
+  async function claimed(queue: Queue): Promise<boolean> {
+    const rows: { claimed: boolean }[] = await db.query(
+      `SELECT "claimBy" IS NULL AS claimed FROM box_queues WHERE rid = $1`,
+      [Buffer.from(queue.rid, 'base64url')],
+    );
+    return rows[0].claimed;
+  }
+
+  /**
+   * POSTs an upload's HEADERS only — not one body byte is ever sent — and
+   * resolves with the status, or 0 when the server waits for the body.
+   */
+  async function statusBeforeBody(
+    sid: string,
+    contentLength: number,
+  ): Promise<number> {
+    const url = new URL(`${base}/box/media`);
+    const req = httpRequest({
+      host: url.hostname,
+      port: url.port,
+      path: url.pathname,
+      method: 'POST',
+      headers: {
+        'content-type': 'application/octet-stream',
+        'content-length': String(contentLength),
+        'box-sid': sid,
+        'x-real-ip': nextIp(),
+      },
+    });
+    // Executor form on purpose: the tsconfig lib predates Promise.withResolvers.
+    const status = await new Promise<number>((resolve, reject) => {
+      // A server that waits for the body never answers: fail in 5 s rather
+      // than leave an open request that stalls the suite's teardown.
+      const unanswered = setTimeout(() => resolve(0), 5000);
+      req.on('response', (res) => {
+        clearTimeout(unanswered);
+        res.resume();
+        resolve(res.statusCode ?? 0);
+      });
+      req.on('error', reject);
+      req.flushHeaders();
+    });
+    req.destroy();
+    return status;
+  }
+
   function upload(sid: string, body: Buffer, ip = nextIp()) {
     return fetch(`${base}/box/media`, {
       method: 'POST',
@@ -359,6 +481,8 @@ describeWithDb('box over real sockets and Postgres', () => {
     })
       .overrideProvider(BOX_PUSH_TRANSPORT)
       .useValue(transport)
+      .overrideProvider(BOX_CEILING)
+      .useValue(ceiling)
       .compile();
     app = moduleRef.createNestApplication();
     await app.listen(0, '127.0.0.1');
@@ -369,6 +493,8 @@ describeWithDb('box over real sockets and Postgres', () => {
   afterEach(() => {
     for (const socket of sockets.splice(0)) socket.disconnect();
     pushes.length = 0;
+    ceiling.msgs = BOX_GLOBAL_MSG_CEILING;
+    ceiling.mediaBytes = BOX_GLOBAL_MEDIA_CEILING_BYTES;
   });
 
   afterAll(async () => {
@@ -381,7 +507,7 @@ describeWithDb('box over real sockets and Postgres', () => {
   });
 
   describe('schema', () => {
-    it('migration 0022 and the entities agree: dev synchronize would change nothing', async () => {
+    it('the box migrations and the entities agree: dev synchronize would change nothing', async () => {
       const log = await db.driver.createSchemaBuilder().log();
       expect(log.upQueries.map((q) => q.query)).toEqual([]);
     });
@@ -399,6 +525,7 @@ describeWithDb('box over real sockets and Postgres', () => {
         box_media: ['id', 'path', 'sizeBucket', 'expiresAt'],
         box_msgs: ['id', 'rid', 'blob', 'createdAt', 'expiresAt'],
         box_notifiers: ['nid', 'token', 'platform', 'verifiedAt'],
+        box_totals: ['id', 'msgCount', 'mediaBytes'],
         box_queues: [
           'rid',
           'sid',
@@ -411,6 +538,57 @@ describeWithDb('box over real sockets and Postgres', () => {
           'mediaBytesToday',
         ],
       });
+    });
+
+    it('migration 0024 seeds the totals from what is already stored, every rung at its ladder size', async () => {
+      const runner = db.createQueryRunner();
+      await runner.startTransaction();
+      try {
+        const rid = randomBytes(32);
+        await runner.query(
+          `INSERT INTO box_queues (rid, sid, nid, "recipientAuthPub", kind)
+           VALUES ($1, $2, $3, $4, 'normal')`,
+          [rid, randomBytes(32), randomBytes(16), randomBytes(32)],
+        );
+        for (let i = 0; i < 2; i++) {
+          await runner.query(
+            `INSERT INTO box_msgs (id, rid, blob, "createdAt", "expiresAt")
+             VALUES ($1, $2, $3, now(), now() + interval '1 day')`,
+            [randomBytes(16), rid, randomBytes(16)],
+          );
+        }
+        for (const rung of BOX_MEDIA_LADDER) {
+          await runner.query(
+            `INSERT INTO box_media (id, path, "sizeBucket", "expiresAt")
+             VALUES ($1, 'seed.bin', $2, now() + interval '1 day')`,
+            [randomBytes(32), rung.bucket],
+          );
+        }
+        const msgs: { n: number }[] = await runner.manager.query(
+          `SELECT count(*)::int AS n FROM box_msgs`,
+        );
+        const media: { sizeBucket: string }[] = await runner.manager.query(
+          `SELECT "sizeBucket" FROM box_media`,
+        );
+        await runner.query(`DELETE FROM box_totals`);
+        await runner.query(
+          readFileSync(
+            join(__dirname, '..', '..', 'migrations', '0024_box_totals.sql'),
+            'utf8',
+          ),
+        );
+        const seeded: { msgCount: number; mediaBytes: string }[] =
+          await runner.manager.query(
+            `SELECT "msgCount", "mediaBytes" FROM box_totals`,
+          );
+        expect(msgs[0].n).toBeGreaterThanOrEqual(2);
+        expect(seeded).toEqual([
+          { msgCount: msgs[0].n, mediaBytes: String(mediaBytesOf(media)) },
+        ]);
+      } finally {
+        await runner.rollbackTransaction();
+        await runner.release();
+      }
     });
   });
 
@@ -697,9 +875,66 @@ describeWithDb('box over real sockets and Postgres', () => {
     });
   });
 
+  describe('per-socket rid cap (E10)', () => {
+    it('holds at most 1024 rids per socket: an entry past it is refused alone with limit and claims nothing; a rid it holds costs nothing; a bad signature stays auth_failed', async () => {
+      const bob = await connect();
+      const alice = await connect();
+      const queues = await mintQueues(BOX_SOCKET_RID_CAP + 2);
+      const held = queues.slice(0, BOX_SOCKET_RID_CAP);
+      for (let i = 0; i < held.length; i += 256) {
+        expect(await subscribe(bob, held.slice(i, i + 256))).toEqual({
+          ok: true,
+          refused: [],
+        });
+      }
+      const [extra, other] = queues.slice(BOX_SOCKET_RID_CAP);
+      const forged = { ...other, key: mintKey() };
+      expect(await subscribe(bob, [held[0], extra, forged])).toEqual({
+        ok: true,
+        refused: [
+          { rid: extra.rid, code: 'limit' },
+          { rid: other.rid, code: 'auth_failed' },
+        ],
+      });
+      // Refused means untouched: not claimed, and never delivered here.
+      expect(await claimed(extra)).toBe(false);
+      expect(await claimed(held[0])).toBe(true);
+      const got = collect(bob);
+      await call(alice, 'send', { v: 1, sid: extra.sid, blob: blob() });
+      await sleep(300);
+      expect(got).toEqual([]);
+
+      // A rid a newer socket takes frees its slot on the old one.
+      const fresh = await connect();
+      expect(await subscribe(fresh, [held[0]])).toEqual({
+        ok: true,
+        refused: [],
+      });
+      expect(await subscribe(bob, [extra])).toEqual({ ok: true, refused: [] });
+      await until(() => got.length === 1);
+      expect(got[0].rid).toBe(extra.rid);
+      await ackMessage(bob, extra, got[0].id);
+    });
+
+    it('never lets concurrent subscribe frames on one socket past the cap', async () => {
+      const bob = await connect();
+      const queues = await mintQueues(BOX_SOCKET_RID_CAP + 256);
+      const frames: Queue[][] = [];
+      for (let i = 0; i < queues.length; i += 256) {
+        frames.push(queues.slice(i, i + 256));
+      }
+      const answers = await Promise.all(frames.map((f) => subscribe(bob, f)));
+      expect(answers.every((a) => a.ok)).toBe(true);
+      const refused = answers.flatMap((a) => a.refused ?? []);
+      expect(refused).toHaveLength(256);
+      expect(refused.every((r) => r.code === 'limit')).toBe(true);
+    });
+  });
+
   describe('rate limits and broken clients', () => {
     it('answers a throttled event on its ACK, one bucket per IPv6 /64, while another address proceeds', async () => {
       const first = await connect('2001:db8:77:1::1');
+      takeRefusalCounts();
       const sibling = await connect('2001:db8:77:1::2');
       const other = await connect('198.51.100.77');
       for (let i = 0; i < 30; i++) {
@@ -876,9 +1111,16 @@ describeWithDb('box over real sockets and Postgres', () => {
       const queue = await createQueue(bob);
       await activateNotifier(bob, queue, 'fcm-token_box:4');
       await subscribe(bob, [queue]);
+      // Stored as `enqueue` would have: the counters follow the row.
       await db.query(
-        `INSERT INTO box_msgs (id, rid, blob, "createdAt", "expiresAt")
-         VALUES ($1, $2, $3, now() - interval '31 days', now() - interval '1 day')`,
+        `WITH m AS (
+           INSERT INTO box_msgs (id, rid, blob, "createdAt", "expiresAt")
+           VALUES ($1, $2, $3, now() - interval '31 days', now() - interval '1 day')
+           RETURNING rid),
+         q AS (
+           UPDATE box_queues SET "msgCount" = "msgCount" + 1
+            WHERE rid IN (SELECT rid FROM m))
+         UPDATE box_totals SET "msgCount" = "msgCount" + 1`,
         [randomBytes(16), Buffer.from(queue.rid, 'base64url'), randomBytes(16)],
       );
       pushes.length = 0;
@@ -945,36 +1187,9 @@ describeWithDb('box over real sockets and Postgres', () => {
     it('refuses an off-ladder Content-Length before reading one byte of the unauthenticated body', async () => {
       const bob = await connect();
       const queue = await createQueue(bob);
-      const url = new URL(`${base}/box/media`);
       // Headers only: not one body byte is ever sent. A server that read
       // the body first would never answer.
-      const req = httpRequest({
-        host: url.hostname,
-        port: url.port,
-        path: url.pathname,
-        method: 'POST',
-        headers: {
-          'content-type': 'application/octet-stream',
-          'content-length': String(16 * 1024 * 1024 - 1),
-          'box-sid': queue.sid,
-          'x-real-ip': nextIp(),
-        },
-      });
-      // Executor form on purpose: the tsconfig lib predates Promise.withResolvers.
-      const status = await new Promise<number>((resolve, reject) => {
-        // A server that waits for the body never answers: fail in 5 s rather
-        // than leave an open request that stalls the suite's teardown.
-        const unanswered = setTimeout(() => resolve(0), 5000);
-        req.on('response', (res) => {
-          clearTimeout(unanswered);
-          res.resume();
-          resolve(res.statusCode ?? 0);
-        });
-        req.on('error', reject);
-        req.flushHeaders();
-      });
-      req.destroy();
-      expect(status).toBe(413);
+      expect(await statusBeforeBody(queue.sid, 16 * 1024 * 1024 - 1)).toBe(413);
     });
 
     it('answers an unknown sid 201 with an id that is never stored', async () => {
@@ -991,6 +1206,7 @@ describeWithDb('box over real sockets and Postgres', () => {
       const bob = await connect();
       const request = await createQueue(bob, 'request');
       const normal = await createQueue(bob);
+      takeRefusalCounts();
       await db.query(
         `UPDATE box_queues SET "mediaBytesToday" = $2 WHERE rid = $1`,
         [
@@ -1003,6 +1219,144 @@ describeWithDb('box over real sockets and Postgres', () => {
         expect(res.status).toBe(429);
         expect(await res.json()).toEqual({ error: 'quota_exceeded' });
       }
+      // Counters only, never an address (E11).
+      expect(takeRefusalCounts()).toEqual(new Map([['mediaUpload:budget', 2]]));
+    });
+  });
+
+  describe('global ceiling (decision 30)', () => {
+    const QUOTA = { ok: false, code: 'quota_exceeded' };
+
+    it('refuses a send past the global message ceiling with quota_exceeded — a live sid and an unknown one alike — while a full request queue still rotates; an ack gives the room back', async () => {
+      const bob = await connect();
+      const alice = await connect();
+      const normal = await createQueue(bob);
+      const request = await createQueue(bob, 'request');
+      for (let i = 0; i < 50; i++) {
+        await call(alice, 'send', { v: 1, sid: request.sid, blob: blob() });
+      }
+      takeRefusalCounts();
+      const before = await totals();
+      ceiling.msgs = before.msgs + 1;
+
+      expect(
+        await call(alice, 'send', { v: 1, sid: normal.sid, blob: blob() }),
+      ).toEqual({ ok: true });
+      expect(await totals()).toEqual({ ...before, msgs: before.msgs + 1 });
+      expect(
+        await call(alice, 'send', { v: 1, sid: normal.sid, blob: blob() }),
+      ).toEqual(QUOTA);
+      // No oracle: a dead sid reads exactly like a live one past the ceiling.
+      expect(
+        await call(alice, 'send', {
+          v: 1,
+          sid: randomBytes(32).toString('base64url'),
+          blob: blob(),
+        }),
+      ).toEqual(QUOTA);
+      expect(await storedIds(normal.rid)).toHaveLength(1);
+      expect((await queueRow(normal.rid)).msgCount).toBe(1);
+
+      // Evicting the oldest replaces a message: the total does not grow.
+      const [oldest] = await storedIds(request.rid);
+      expect(
+        await call(alice, 'send', { v: 1, sid: request.sid, blob: blob() }),
+      ).toEqual({ ok: true });
+      expect(await storedIds(request.rid)).not.toContain(oldest);
+      expect((await totals()).msgs).toBe(before.msgs + 1);
+      // Counted, never traced (E11).
+      expect(takeRefusalCounts()).toEqual(new Map([['send:ceiling', 2]]));
+
+      const [id] = await storedIds(normal.rid);
+      expect(await ackMessage(bob, normal, id)).toEqual({ ok: true });
+      expect((await totals()).msgs).toBe(before.msgs);
+      expect(
+        await call(alice, 'send', { v: 1, sid: normal.sid, blob: blob() }),
+      ).toEqual({ ok: true });
+    });
+
+    it('gives the room back on every other path that removes messages: the TTL sweep, deleteQueue and the reaper', async () => {
+      const bob = await connect();
+      const alice = await connect();
+      const expiring = await createQueue(bob);
+      const deleted = await createQueue(bob);
+      const unclaimed = await createQueue(bob);
+      for (const queue of [expiring, deleted, deleted, unclaimed, unclaimed]) {
+        await call(alice, 'send', { v: 1, sid: queue.sid, blob: blob() });
+      }
+      // Whatever earlier tests left expired goes first, so each step below
+      // moves the total by its own messages only.
+      await app.get(BoxReaper).sweep();
+      const before = (await totals()).msgs;
+
+      await db.query(
+        `UPDATE box_msgs SET "expiresAt" = now() - interval '1 second'
+          WHERE rid = $1`,
+        [Buffer.from(expiring.rid, 'base64url')],
+      );
+      await app.get(BoxReaper).sweep();
+      expect((await totals()).msgs).toBe(before - 1);
+
+      expect(
+        await call(bob, 'deleteQueue', {
+          v: 1,
+          rid: deleted.rid,
+          sig: signFor(
+            bob,
+            deleted.key,
+            'deleteQueue',
+            Buffer.from(deleted.rid, 'base64url'),
+          ),
+        }),
+      ).toEqual({ ok: true });
+      expect((await totals()).msgs).toBe(before - 3);
+
+      await db.query(
+        `UPDATE box_queues SET "claimBy" = now() - interval '1 second'
+          WHERE rid = $1`,
+        [Buffer.from(unclaimed.rid, 'base64url')],
+      );
+      await app.get(BoxReaper).sweep();
+      expect(await queueRow(unclaimed.rid)).toBeUndefined();
+      expect((await totals()).msgs).toBe(before - 5);
+    });
+
+    it('refuses an upload past the global media ceiling with 429 quota_exceeded before reading its body — a live sid and an unknown one alike; expired media gives the room back', async () => {
+      const bob = await connect();
+      const queue = await createQueue(bob);
+      takeRefusalCounts();
+      const before = await totals();
+      ceiling.mediaBytes = before.mediaBytes + 16 * 1024;
+
+      const first = await upload(queue.sid, randomBytes(16 * 1024));
+      expect(first.status).toBe(201);
+      const { id } = await readJson<{ id: string }>(first);
+      expect(await totals()).toEqual({
+        ...before,
+        mediaBytes: before.mediaBytes + 16 * 1024,
+      });
+
+      expect(await statusBeforeBody(queue.sid, 4096)).toBe(429);
+      for (const sid of [queue.sid, randomBytes(32).toString('base64url')]) {
+        const res = await upload(sid, randomBytes(4096));
+        expect(res.status).toBe(429);
+        expect(await res.json()).toEqual({ error: 'quota_exceeded' });
+      }
+      // A refused upload charges nothing, the queue's budget included.
+      expect((await queueRow(queue.rid)).mediaBytesToday).toBe(16 * 1024);
+      expect((await totals()).mediaBytes).toBe(before.mediaBytes + 16 * 1024);
+      expect(takeRefusalCounts()).toEqual(
+        new Map([['mediaUpload:ceiling', 3]]),
+      );
+
+      await db.query(
+        `UPDATE box_media SET "expiresAt" = now() - interval '1 second'
+          WHERE id = $1`,
+        [Buffer.from(id, 'base64url')],
+      );
+      await app.get(BoxReaper).sweep();
+      expect((await totals()).mediaBytes).toBe(before.mediaBytes);
+      expect((await upload(queue.sid, randomBytes(4096))).status).toBe(201);
     });
   });
 
@@ -1079,6 +1433,16 @@ describeWithDb('box over real sockets and Postgres', () => {
       expect((await fetch(`${base}/box/media/${expiring.id}`)).status).toBe(
         404,
       );
+    });
+  });
+
+  describe('running totals (decision 30)', () => {
+    it('equal what the tables hold after every path above: sends, evictions, acks, deletes, sweeps, reaps, uploads and refusals', async () => {
+      const held = await stored();
+      // Positive control: the suite left messages and media behind.
+      expect(held.msgs).toBeGreaterThan(0);
+      expect(held.mediaBytes).toBeGreaterThan(0);
+      expect(await totals()).toEqual(held);
     });
   });
 });

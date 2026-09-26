@@ -27,12 +27,19 @@ export function boxTrackerFor(
 }
 
 /**
- * Throttle refusals per event since the last `takeRefusalCounts()`. The one
- * abuse signal for the unauthenticated namespace (nginx keeps no access log,
- * `infra/nginx/fireplace.conf`): a COUNTER, never a tracker, so the prod log
- * says "send was refused 900 times" and never from where.
+ * Refusals since the last `takeRefusalCounts()`: throttles per event
+ * (`send`, `subscribe`, …) and quota refusals as `<event>:<cause>` (E11) —
+ * `send:ceiling`, `mediaUpload:ceiling` (the global ceiling, decision 30)
+ * and `mediaUpload:budget` (a queue's daily budget, or a request queue). The
+ * one abuse signal for the unauthenticated namespace (nginx keeps no access
+ * log, `infra/nginx/fireplace.conf`): a COUNTER, never a tracker, so the
+ * prod log says "send was refused 900 times" and never from where.
  */
 const refusals = new Map<string, number>();
+
+export function countRefusal(key: string): void {
+  refusals.set(key, (refusals.get(key) ?? 0) + 1);
+}
 
 /** The counts since the previous call, which starts a new window. */
 export function takeRefusalCounts(): Map<string, number> {
@@ -105,7 +112,7 @@ export class BoxThrottlerGuard extends ThrottlerGuard {
       context.getHandler(),
     ) as string | undefined;
     const name = event ?? 'unknown';
-    refusals.set(name, (refusals.get(name) ?? 0) + 1);
+    countRefusal(name);
     // Per refusal at debug only: a flood must not amplify itself through prod
     // logs. `BoxReaper` logs the counts every sweep.
     this.boxLogger.debug(`[box-throttle] refused event=${name}`);

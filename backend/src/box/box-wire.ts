@@ -33,6 +33,8 @@ export type BoxCode =
   | 'auth_failed'
   | 'queue_full'
   | 'quota_exceeded'
+  /** A subscribe entry past the socket's rid cap (E10); refused alone. */
+  | 'limit'
   | 'rate_limited'
   | 'internal';
 

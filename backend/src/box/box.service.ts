@@ -1,9 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { randomBytes } from 'crypto';
 import { DataSource } from 'typeorm';
 import {
   BOX_IDLE_REAP_DAYS,
   BOX_MEDIA_DAILY_BUDGET_BYTES,
+  BOX_MEDIA_LADDER,
   BOX_MSG_TTL_MS,
   BOX_NID_BYTES,
   BOX_NORMAL_QUEUE_CAP,
@@ -24,10 +25,36 @@ export interface QueueAddress {
 export type EnqueueResult =
   | { result: 'stored'; rid: Buffer; nid: Buffer }
   | { result: 'full' }
+  /** The global message ceiling is reached (decision 30); nothing was stored. */
+  | { result: 'over_ceiling' }
   /** Unknown or deleted sid: the caller answers `ok` anyway (no block oracle). */
   | { result: 'dropped' };
 
-export type MediaCharge = 'charged' | 'over_budget' | 'unknown_sid';
+export type MediaCharge =
+  'charged' | 'over_budget' | 'over_ceiling' | 'unknown_sid';
+
+/** An upload about to be streamed to `path`, on one ladder rung. */
+export interface NewMedia {
+  id: Buffer;
+  path: string;
+  bucket: string;
+  bytes: number;
+  expiresAt: Date;
+}
+
+const RUNG_BUCKETS = BOX_MEDIA_LADDER.map((r) => r.bucket);
+const RUNG_BYTES = BOX_MEDIA_LADDER.map((r) => r.bytes);
+
+/**
+ * The global ceiling's two numbers (decision 30). Injected, not imported, so
+ * the integration suite can lower them instead of writing 2 GiB; the module
+ * provides `BOX_GLOBAL_MSG_CEILING` / `BOX_GLOBAL_MEDIA_CEILING_BYTES`.
+ */
+export interface BoxCeiling {
+  msgs: number;
+  mediaBytes: number;
+}
+export const BOX_CEILING = Symbol('BOX_CEILING');
 
 /** The UTC calendar day of `at`, as Postgres `date` text. */
 function utcDay(at: Date): string {
@@ -36,25 +63,44 @@ function utcDay(at: Date): string {
 
 /**
  * Every read and write of the box tables. Raw SQL on purpose: each counter
- * change (`msgCount`, `mediaBytesToday`) happens in the SAME statement or
- * transaction as the row change it counts, so a crash or a race can never
- * leave a count that lets a queue exceed its cap.
+ * change (`msgCount`, `mediaBytesToday`, the global totals) happens in the
+ * SAME statement or transaction as the row change it counts, so a crash or a
+ * race can never leave a count that lets a queue — or the box — exceed its
+ * cap.
+ *
+ * THE GLOBAL CEILING (decision 30, E12) is one row, `box_totals` (migration
+ * 0024): `msgCount` = every `box_msgs` row, `mediaBytes` = every `box_media`
+ * row at its rung size. `enqueue` and `chargeMedia` check and bump it with
+ * ONE conditional UPDATE on its primary key; counting the tables instead
+ * would scan up to 60 000 rows on every send. Each path that removes a
+ * message or a medium gives it back in the same statement: ack, the TTL
+ * sweep, `deleteQueue` and the reaper (a queue's `msgCount` is exactly the
+ * rows its FK cascade removes), `deleteMedia`. A request-queue eviction
+ * replaces a message, so the total does not move. The price: every send and
+ * upload serialises on that row for the rest of its three-statement
+ * transaction — accepted at the box's per-IP send rate.
  *
  * `repo.query()` on Postgres answers DELETE/UPDATE with `[rows, rowCount]`
- * and SELECT/INSERT with `rows` (backend/CLAUDE.md §4); every call below
- * destructures accordingly.
+ * and SELECT/INSERT with `rows` (backend/CLAUDE.md §4) — a `WITH` statement
+ * by its OUTER verb; every call below destructures accordingly.
  *
  * LOCK ORDER, everywhere: `box_queues` rows first — several at once only in
- * rid order — then `box_msgs` rows. `enqueue` must hold the queue while it
- * evicts a message, so any writer that deletes a message and then touches
- * the queue's counter (ack, the expiry sweep) takes the queue lock FIRST;
- * the opposite order deadlocks an ack against a flood on a full request
- * queue (40P01, reproduced by the integration suite). The FK cascades
- * (queue → msgs) already follow this order.
+ * rid order — then `box_msgs` rows, then the one `box_totals` row LAST:
+ * after taking it a transaction only writes rows it already holds or inserts
+ * new ones, so it never waits while holding it. `enqueue` must hold the
+ * queue while it evicts a message, so any writer that deletes a message and
+ * then touches the queue's counter (ack, the expiry sweep) takes the queue
+ * lock FIRST; the opposite order deadlocks an ack against a flood on a full
+ * request queue (40P01, reproduced by the integration suite). The FK
+ * cascades (queue → msgs) already follow this order, and a message row is
+ * only ever written under its queue's lock.
  */
 @Injectable()
 export class BoxService {
-  constructor(private readonly db: DataSource) {}
+  constructor(
+    private readonly db: DataSource,
+    @Inject(BOX_CEILING) private readonly ceiling: BoxCeiling,
+  ) {}
 
   /**
    * Idempotent per `authPub`: a client whose answer was lost retries with the
@@ -97,8 +143,12 @@ export class BoxService {
   /**
    * Stores one blob. A normal queue refuses when full; a request queue drops
    * its oldest instead (first contact must never be blocked by a spammer who
-   * holds the public request sid). The queue row is locked for the duration,
-   * so the count check and the insert cannot interleave with another send.
+   * holds the public request sid) — which replaces a message, so it is taken
+   * even at the global ceiling. Any other blob past the ceiling is refused,
+   * and so is one for an unknown sid: at the ceiling a dead sid must read
+   * like a live one (no block oracle). The queue row is locked for the
+   * duration, so the count checks and the insert cannot interleave with
+   * another send.
    */
   async enqueue(sid: Buffer, blob: Buffer): Promise<EnqueueResult> {
     return this.db.transaction(async (tx) => {
@@ -113,7 +163,16 @@ export class BoxService {
         [sid],
       );
       const queue = rows[0];
-      if (!queue) return { result: 'dropped' } as const;
+      if (!queue) {
+        // Read only. A missing totals row fails closed, as in the UPDATE below.
+        const room: { fits: boolean }[] = await tx.query(
+          `SELECT "msgCount" < $1 AS fits FROM public.box_totals WHERE id = 1`,
+          [this.ceiling.msgs],
+        );
+        return room[0]?.fits === true
+          ? ({ result: 'dropped' } as const)
+          : ({ result: 'over_ceiling' } as const);
+      }
       if (queue.kind === 'normal' && queue.msgCount >= BOX_NORMAL_QUEUE_CAP) {
         return { result: 'full' } as const;
       }
@@ -127,6 +186,12 @@ export class BoxService {
         );
       }
       if (evicted === 0) {
+        const [, grown]: [unknown, number] = await tx.query(
+          `UPDATE public.box_totals SET "msgCount" = "msgCount" + 1
+            WHERE id = 1 AND "msgCount" < $1`,
+          [this.ceiling.msgs],
+        );
+        if (grown === 0) return { result: 'over_ceiling' } as const;
         await tx.query(
           `UPDATE public.box_queues SET "msgCount" = "msgCount" + 1
             WHERE rid = $1`,
@@ -219,18 +284,33 @@ export class BoxService {
       );
       await tx.query(
         `WITH gone AS (
-           DELETE FROM public.box_msgs WHERE rid = $1 AND id = $2 RETURNING rid)
-         UPDATE public.box_queues
+           DELETE FROM public.box_msgs WHERE rid = $1 AND id = $2 RETURNING rid),
+         queue AS (
+           UPDATE public.box_queues
+              SET "msgCount" = "msgCount" - (SELECT count(*) FROM gone)
+            WHERE rid = $1 AND EXISTS (SELECT 1 FROM gone))
+         UPDATE public.box_totals
             SET "msgCount" = "msgCount" - (SELECT count(*) FROM gone)
-          WHERE rid = $1 AND EXISTS (SELECT 1 FROM gone)`,
+          WHERE id = 1 AND EXISTS (SELECT 1 FROM gone)`,
         [rid, id],
       );
     });
   }
 
-  /** Messages and the notifier go with it (FK cascades). */
+  /**
+   * Messages and the notifier go with it (FK cascades); the global total
+   * gives back the queue's `msgCount`, which is exactly what the cascade
+   * removes.
+   */
   async deleteQueue(rid: Buffer): Promise<void> {
-    await this.db.query(`DELETE FROM public.box_queues WHERE rid = $1`, [rid]);
+    await this.db.query(
+      `WITH gone AS (
+         DELETE FROM public.box_queues WHERE rid = $1 RETURNING "msgCount")
+       UPDATE public.box_totals
+          SET "msgCount" = "msgCount" - (SELECT sum("msgCount") FROM gone)
+        WHERE id = 1 AND EXISTS (SELECT 1 FROM gone)`,
+      [rid],
+    );
   }
 
   /**
@@ -308,43 +388,72 @@ export class BoxService {
   }
 
   /**
-   * Charges `bytes` to the daily budget of the NORMAL queue behind `sid`.
-   * The check and the charge are one conditional UPDATE, so parallel uploads
-   * cannot overdraw it.
+   * Charges an upload to the daily budget of the NORMAL queue behind `sid`
+   * AND to the global media total, and records it — one transaction, so the
+   * total always counts exactly the `box_media` rows (a crash between a
+   * charge and the row cannot strand bytes). The row names no queue ("budget
+   * without link"). The queue row is locked, so parallel uploads cannot
+   * overdraw either budget. At the ceiling an unknown sid (or none) is
+   * refused like a live one: the answer must not test a sid.
    */
-  async chargeMedia(sid: Buffer, bytes: number): Promise<MediaCharge> {
-    const [, charged]: [unknown, number] = await this.db.query(
-      `UPDATE public.box_queues
-          SET "mediaBytesToday" = "mediaBytesToday" + $2
-        WHERE sid = $1 AND kind = 'normal'
-          AND "mediaBytesToday" + $2 <= $3`,
-      [sid, bytes, BOX_MEDIA_DAILY_BUDGET_BYTES],
-    );
-    if (charged === 1) return 'charged';
-    const known: unknown[] = await this.db.query(
-      `SELECT 1 FROM public.box_queues WHERE sid = $1`,
-      [sid],
-    );
-    return known.length === 1 ? 'over_budget' : 'unknown_sid';
+  async chargeMedia(sid: Buffer | null, media: NewMedia): Promise<MediaCharge> {
+    return this.db.transaction(async (tx) => {
+      const rows: { kind: QueueKind; mediaBytesToday: number }[] = sid
+        ? await tx.query(
+            `SELECT kind, "mediaBytesToday" FROM public.box_queues
+              WHERE sid = $1 FOR UPDATE`,
+            [sid],
+          )
+        : [];
+      const queue = rows[0];
+      if (!queue) {
+        const room: { fits: boolean }[] = await tx.query(
+          `SELECT "mediaBytes" + $1 <= $2 AS fits
+             FROM public.box_totals WHERE id = 1`,
+          [media.bytes, this.ceiling.mediaBytes],
+        );
+        return room[0]?.fits === true ? 'unknown_sid' : 'over_ceiling';
+      }
+      if (
+        queue.kind !== 'normal' ||
+        queue.mediaBytesToday + media.bytes > BOX_MEDIA_DAILY_BUDGET_BYTES
+      ) {
+        return 'over_budget';
+      }
+      const [, grown]: [unknown, number] = await tx.query(
+        `UPDATE public.box_totals SET "mediaBytes" = "mediaBytes" + $1
+          WHERE id = 1 AND "mediaBytes" + $1 <= $2`,
+        [media.bytes, this.ceiling.mediaBytes],
+      );
+      if (grown === 0) return 'over_ceiling';
+      await tx.query(
+        `UPDATE public.box_queues
+            SET "mediaBytesToday" = "mediaBytesToday" + $2
+          WHERE sid = $1`,
+        [sid, media.bytes],
+      );
+      await tx.query(
+        `INSERT INTO public.box_media (id, path, "sizeBucket", "expiresAt")
+         VALUES ($1, $2, $3, $4)`,
+        [media.id, media.path, media.bucket, media.expiresAt],
+      );
+      return 'charged';
+    });
   }
 
-  async insertMedia(
-    id: Buffer,
-    path: string,
-    sizeBucket: string,
-    expiresAt: Date,
-  ): Promise<void> {
-    await this.db.query(
-      `INSERT INTO public.box_media (id, path, "sizeBucket", "expiresAt")
-       VALUES ($1, $2, $3, $4)`,
-      [id, path, sizeBucket, expiresAt],
-    );
-  }
-
+  /** The rows go, and the global total gives back their rung sizes. */
   async deleteMedia(ids: Buffer[]): Promise<void> {
     await this.db.query(
-      `DELETE FROM public.box_media WHERE id = ANY($1::bytea[])`,
-      [ids],
+      `WITH gone AS (
+         DELETE FROM public.box_media WHERE id = ANY($1::bytea[])
+         RETURNING "sizeBucket")
+       UPDATE public.box_totals
+          SET "mediaBytes" = "mediaBytes" - (
+            SELECT COALESCE(sum(l.bytes), 0) FROM gone
+              JOIN unnest($2::text[], $3::bigint[]) AS l(bucket, bytes)
+                ON l.bucket = gone."sizeBucket")
+        WHERE id = 1 AND EXISTS (SELECT 1 FROM gone)`,
+      [ids, RUNG_BUCKETS, RUNG_BYTES],
     );
   }
 
@@ -364,10 +473,11 @@ export class BoxService {
   }
 
   /**
-   * I3: expired messages go, and their queues' counts follow in the same
-   * transaction. The queues are locked first (rid order) and only THEIR
-   * messages are deleted, against one fixed cutoff, so a message expiring
-   * mid-sweep on an unlocked queue cannot reintroduce the msg-then-queue order.
+   * I3: expired messages go, and their queues' counts and the global total
+   * follow in the same statement. The queues are locked first (rid order)
+   * and only THEIR messages are deleted, against one fixed cutoff, so a
+   * message expiring mid-sweep on an unlocked queue cannot reintroduce the
+   * msg-then-queue order.
    */
   async deleteExpiredMessages(): Promise<void> {
     const cutoff = new Date();
@@ -384,11 +494,15 @@ export class BoxService {
         `WITH gone AS (
            DELETE FROM public.box_msgs
             WHERE "expiresAt" <= $1 AND rid = ANY($2::bytea[])
-            RETURNING rid)
-         UPDATE public.box_queues q
-            SET "msgCount" = q."msgCount" - g.n
-           FROM (SELECT rid, count(*)::int AS n FROM gone GROUP BY rid) g
-          WHERE q.rid = g.rid`,
+            RETURNING rid),
+         queues AS (
+           UPDATE public.box_queues q
+              SET "msgCount" = q."msgCount" - g.n
+             FROM (SELECT rid, count(*)::int AS n FROM gone GROUP BY rid) g
+            WHERE q.rid = g.rid)
+         UPDATE public.box_totals
+            SET "msgCount" = "msgCount" - (SELECT count(*) FROM gone)
+          WHERE id = 1 AND EXISTS (SELECT 1 FROM gone)`,
         [cutoff, locked.map((r) => r.rid)],
       );
     });
@@ -397,19 +511,27 @@ export class BoxService {
   /**
    * I3: a queue never subscribed within 24 h of creation, and a queue not
    * subscribed for 90 whole days, are deleted with their messages and
-   * notifier. Returns the rids so live delivery state can forget them.
+   * notifier; the global total gives back their `msgCount`s in the same
+   * statement. Returns the rids so live delivery state can forget them.
    */
   async reapQueues(now: Date): Promise<Buffer[]> {
     const cutoff = new Date(now.getTime());
     cutoff.setUTCDate(cutoff.getUTCDate() - BOX_IDLE_REAP_DAYS);
-    const [rows]: [{ rid: Buffer }[], number] = await this.db.query(
-      `DELETE FROM public.box_queues
-        WHERE rid IN (
-          SELECT rid FROM public.box_queues
-           WHERE ("claimBy" IS NOT NULL AND "claimBy" <= $1)
-              OR ("touchedDay" IS NOT NULL AND "touchedDay" < $2::date)
-           ORDER BY rid FOR UPDATE)
-        RETURNING rid`,
+    // A SELECT outside, so `query()` answers the rows alone.
+    const rows: { rid: Buffer }[] = await this.db.query(
+      `WITH gone AS (
+         DELETE FROM public.box_queues
+          WHERE rid IN (
+            SELECT rid FROM public.box_queues
+             WHERE ("claimBy" IS NOT NULL AND "claimBy" <= $1)
+                OR ("touchedDay" IS NOT NULL AND "touchedDay" < $2::date)
+             ORDER BY rid FOR UPDATE)
+          RETURNING rid, "msgCount"),
+       total AS (
+         UPDATE public.box_totals
+            SET "msgCount" = "msgCount" - (SELECT sum("msgCount") FROM gone)
+          WHERE id = 1 AND EXISTS (SELECT 1 FROM gone))
+       SELECT rid FROM gone`,
       [now, utcDay(cutoff)],
     );
     return rows.map((r) => r.rid);
