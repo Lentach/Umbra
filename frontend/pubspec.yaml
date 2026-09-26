@@ -111,6 +111,13 @@ dependencies:
   pointer_interceptor: ^0.10.1+2
 
 dependency_overrides:
+  # libsignal_protocol_dart 0.8.2 (the latest release) trial-decrypts on a
+  # SHALLOW copy of the session state, so a message that decrypts from an
+  # archived state corrupts the current one and the next message fails
+  # `Bad Mac` (traps.md, E2E group). Vendored with that fixed; patches are
+  # marked `UMBRA PATCH` in third_party/. Drop it once upstream ships a fix.
+  libsignal_protocol_dart:
+    path: third_party/libsignal_protocol_dart
   record_linux: ^1.3.0
 
 dev_dependencies:

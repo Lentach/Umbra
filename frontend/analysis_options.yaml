@@ -6,6 +6,9 @@
 include: package:very_good_analysis/analysis_options.yaml
 
 analyzer:
+  # Vendored upstream code (pubspec dependency_overrides) keeps upstream's style.
+  exclude:
+    - third_party/**
   language:
     # VGA turns these on. strict-casts produced 11 hard errors and strict-inference 59
     # warnings on 2026-09-12, all `dynamic` flowing into typed crypto params

@@ -359,6 +359,28 @@ void main() {
       await a.link.reconnect();
       await b.link.restart();
       expect(mail, isEmpty);
+
+      // Both sides now sit on the session the OTHER started; each one's ack
+      // and hand-back were read from an archived state (traps: libsignal's
+      // shallow-copy trial decrypt). Traffic after that must still read.
+      for (var i = 0; i < 3; i++) {
+        for (final (from, to) in [(a, b), (b, a)]) {
+          final text = '{"t":"m","n":$i,"from":${from.userId}}';
+          final frame = (await from.reader.encryptForFriend(
+            from.peerId,
+            from.peerDevice,
+            text,
+          ))!;
+          expect(
+            await to.enc.encryptionService.decrypt(
+              to.peerId,
+              frame.signalCiphertext,
+              deviceId: to.peerDevice,
+            ),
+            text,
+          );
+        }
+      }
     },
   );
 }

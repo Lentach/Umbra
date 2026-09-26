@@ -5,6 +5,7 @@ WORKDIR /app
 
 # Copy dependency files first for better layer caching
 COPY pubspec.* ./
+COPY third_party ./third_party
 RUN flutter pub get
 
 # Copy source code

@@ -1,4 +1,4 @@
-# A friend re-key now opens the "asked" window (decision 49): the crossing pair swaps queues, but the next message fails — fix owed
+# Friend crossing re-keys now converge AND stay readable: decision 49's window plus a vendored libsignal fix (shallow-copy trial decrypt)
 
 **Date:** 2026-09-27 · **Version:** unchanged · **Tiers deployed:** none (branch `feat/metadata-privacy` only)
 
@@ -15,34 +15,36 @@
   - The fix-B test in `messaging_provider_box_friend_test.dart` is flipped: a re-key opens the window and the replacing PreKey is read.
   - The "session this device did NOT just start" test now also writes on the held session (the 24 h resend) and asserts that no window opens.
   - New in `box_session_friends_test.dart`: the window applies to one device, lasts 10 min, and closes on answer.
-- Docs: decisions log (decision 49, O17, E20c), `wire.md`, `e2e-invariants.md`, remainder plan E20c, `traps.md` (the crossing trap rewritten), and root `CLAUDE.md` Flutter count 2811 → 2813.
-- Out-of-repo: local drive accounts 330 `cxjane` / 331 `cxkurt` (conv 102) remain in `fireplace-mp-db-1`. The Chrome profiles `%TEMP%/umbra-cx-*`, the befriend script `%TEMP%/umbra-crossing-befriend.cjs` and `frontend/build/web` were deleted. No services were left running.
+- Post-convergence traffic exposed a second bug. With decision 49 alone, the pair swapped queues, but the FIRST message after that failed with `No valid sessions` (4× `Bad Mac`). Root cause (proven, see Verification): libsignal 0.8.2 `SessionState.fromSessionState` shares the protobuf, so `SessionCipher._decrypt`'s failed try on the current state advances it before an archived state matches. After a crossing, each side reads the other's ack from an archived state.
+- Fix: `libsignal_protocol_dart` is vendored at `frontend/third_party/libsignal_protocol_dart` (`lib/`, LICENSE GPL-3, README; version `0.8.2+umbra.1`) through `pubspec.yaml` `dependency_overrides`. It carries ONE `UMBRA PATCH`: `fromSessionState` copies via `fromBuffer(writeToBuffer())`. `analysis_options.yaml` excludes `third_party/**`. The (unused) `frontend/Dockerfile` copies `third_party` before `pub get`. 0.8.2 is the latest release. The crossing test now also sends 3 messages each way after convergence.
+- Docs: decisions log (decision 49, O17, E20c, E49a), `wire.md`, `e2e-invariants.md` (the vendoring invariant), remainder plan E20c, `traps.md` (the crossing trap, and the libsignal trap marked FIXED), and root `CLAUDE.md` Flutter count 2811 → 2813.
+- Out-of-repo: local drive accounts 330 `cxjane` / 331 `cxkurt` (conv 102) and 332 `cxlena` / 333 `cxmarc` (conv 103) remain in `fireplace-mp-db-1`. The Chrome profiles `%TEMP%/umbra-cx-*`, the befriend script `%TEMP%/umbra-crossing-befriend.cjs` and `frontend/build/web` were deleted. No services were left running.
 
 ## Key files
 - Edited: `frontend/lib/providers/messaging/messaging_provider.box.dart` (`encryptForFriend`), `frontend/lib/services/box/box_friends.dart`, `box_session.dart`, `frontend/test/providers/messaging_provider_box_friend_test.dart`, `frontend/test/services/box/box_session_friends_test.dart`, docs above.
-- New: `frontend/test/providers/messaging_provider_box_friend_crossing_test.dart`.
+- New: `frontend/test/providers/messaging_provider_box_friend_crossing_test.dart`, `frontend/third_party/libsignal_protocol_dart/` (vendored 0.8.2 + one patch in `lib/src/state/session_state.dart`).
+- Edited (wiring): `frontend/pubspec.yaml` (+lock), `frontend/analysis_options.yaml`, `frontend/Dockerfile`.
 - Read only: `box_friend_handoff.dart` (the pass's gates), `connection_provider.dart:492-508` (one BoxSession per account).
 
 ## Verification
-- CI: 7/7 green on `5b560057` (the handoff commit, which carries code commit `da6a63a0`; `da6a63a0`'s own run was cancelled by that push).
+- CI: decision 49 alone was 7/7 green on `5b560057`. The libsignal commit: see the follow-up line in Notes.
 - Red before green: with the lib unchanged, the new crossing test failed (`converged` false) and the flipped test failed (`awaiting` empty); both pass after the change.
 - Mutants on `started` (each run as a subprocess, lib hash checked after):
   - `!fresh && …` (fix B) → 4 red.
   - `fresh` only → 2 red (first contact).
   - no-session only → 2 red.
   - `true` SURVIVED the first round (a plain write on a held session would open the window). It is now killed by the resend assertion added to the "did NOT just start" test.
-- `flutter test` (full): exit 0, 2813 passed, 14 skipped; `verify-claude-frontend-test-counts` OK. `flutter analyze` on the touched files: no issues. `scripts/dart-lint-ratchet.mjs`: PASS at baseline 3160.
-- Live drive (NO REGRESSION only; the changed line was NOT exercised): release web on the local stack, two headless Chrome profiles on :8080. Setup was the F/G recipe: J 330 online; K 331 offline with its request queue nulled; befriended; J sent an old-path message (row in conv 102).
-  - When K returned, J logged `would_replace`, then `BOX_FRIEND_REKEYED sent:true`, then `BOX_FRIEND_HANDOFF acked:true`. K logged no refusal and no re-key, and `BOX_FRIEND_HANDOFF acked:true, handedBack:true`.
-  - K read J's re-key PreKey through K's OWN first-session window, which predates this change. K's ack and hand-back to J were whispers under J's session and needed no window. So J's re-key window (decision 49) was never consulted. Fix B would have converged this run too.
-  - J's composer notice cleared live; "kurt/jane over the box" went both ways; conv 102 kept 1 `messages` row.
-  - The two-sided crossing (both sides re-key at once, then `prekey_unasked`/`would_replace` both ways) is proven ONLY by the real-Signal harness `…_crossing_test.dart`. No UI or wire action makes both sides re-key at the same moment on demand.
-- NOT verified: the crossing on a device; Android, iOS, prod (box OFF); a revoked friend device actually using the window.
+- libsignal cause, proven: with the round trips added and upstream 0.8.2, the first A→B message failed with `No valid sessions` (4× `Bad Mac`). The one-line copy fix, applied TEMPORARILY in the pub cache (restored, hash checked), made it green. The vendored override with only that patch is green too. A second candidate patch (the stale duplicate archive entry) had no failing test and was dropped.
+- Full `flutter test` with the vendored package: exit 0, 2813 passed, 14 skipped; the count gate OK. `scripts/dart-lint-ratchet.mjs`: PASS at 3160, after sorting `dependency_overrides` (`sort_pub_dependencies` had added +1). `pubspec.lock` switched to the path source.
+- Live drive of the patched build (every decrypt goes through the patched copy): release web with the vendored package, two isolated Chrome profiles, fresh accounts L 332 / M 333 (conv 103).
+  - Old-path messages were read both ways, then box messages both ways; the server rows stayed at 2.
+  - After both profiles reloaded, history was intact and one message each way was read.
+  - "box 2" never left the sender (a headless typing flake), not a lost message.
+- Live drive J 330 / K 331 (conv 102), one-sided re-key: converged live, box both ways, 1 server row. It is a NO-REGRESSION check only: decision 49's window was never consulted, and the two-sided crossing is harness-only. Detail: `.planning/metadata-item5/findings.md` § 2026-09-27.
+- NOT verified: the crossing on a device; the libsignal patch on Android/iOS (it is pure Dart, but the sibling re-key case in the trap was never re-driven); prod (box OFF); a revoked friend device actually using the window.
 
 ## Notes for next session
-- **BROKEN, found after the handoff commits:** 3 round trips each way after `converged()` (uncommitted in the crossing test) fail on the FIRST, A→B: `InvalidMessageException - No valid sessions` (4× `Bad Mac`). After the crossing, A's current state is the session B started and B's is the one A started, and each side's ack was read from an ARCHIVED state. [INFERENCE] That matches the libsignal 0.8.2 shallow-copy trial-decrypt trap. Decision 49 as built is on the branch only (box OFF in prod). The fix direction goes to the owner/user first; see the next bullet.
-- Fix candidates: (i) a tie-break on a crossing: only the lower `(user, device)` side reads the peer's re-key, so the pair keeps ONE session; (ii) fix the trial decrypt (a deep copy of the state before a try), which is the root cause and also covers the sibling case in that trap.
-- Next action: fix the post-crossing `Bad Mac` above, test-first, with the round-trip test as the red guard. Then do the pending pass fixes 1–3 from `2026-09-26-metadata-item5-migration.md` Notes, then slice (e), queue rotation, per the remainder plan:
+- Next action: pending pass fixes 1–3 from `2026-09-26-metadata-item5-migration.md` Notes, then slice (e), queue rotation, per the remainder plan:
   - (1) ensure queues, then ONE subscribe with a retry after `retryAfter`, then the sends;
   - (2) a frame from an unacked friend device clears `handedAt[D]` and calls `friendChanged`, once per device per session;
   - (3) dedupe `BOX_FRIEND_HANDOFF_FAILED` per `user:device:stage:code` per session.
