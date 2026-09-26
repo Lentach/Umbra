@@ -97,6 +97,7 @@ Status: ACTIVE (in force), DONE (carried out, still binding), SUPERSEDED, OPEN (
 | 41 | 09-26 | (O9) Disappearing countdown on box chats, Signal's model: the sender's copies count from the send, each receiving device from the first time it shows the message; an unread message goes 1 d after the send | OWNER | ACTIVE |
 | 42 | 09-26 | (O10) The chat's timer SETTING stays the server column (`setDisappearingTimer`) until PR4.x; each box message carries its own `ttl` inside E2E and the devices enforce it | OWNER | ACTIVE |
 | 43 | 09-26 | (O11) Pings move to the box in item 3 (decision-22 slice) | OWNER | ACTIVE |
+| 44 | 09-26 | (O12) A box attachment is uploaded ONCE, charged to one peer queue, and every addressed device (peer devices and own siblings) downloads the same id. Accepted residual: the box sees several downloads of one id from different devices and IPs, which links the queues that received it | OWNER | ACTIVE |
 
 ## Engineering calls made in the work so far (owner may overrule at the gate)
 

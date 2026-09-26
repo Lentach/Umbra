@@ -74,7 +74,7 @@ O2 → (a) ~3 GB (30) · O3 → (a) honest 429 (31) · O4 → (a) no push on the
 
 ## Item 3 (decision-22 slice): OWNER questions O8–O11 — ANSWERED 2026-09-26 in one pass (decisions 40–43)
 
-O8 → (a) download on arrival, keep a local copy (40) · O9 → (a) Signal's countdown (41) · O10 → (a) setting stays a server column until PR4.x (42) · O11 → (a) pings move now (43).
+O8 → (a) download on arrival, keep a local copy (40) · O9 → (a) Signal's countdown (41) · O10 → (a) setting stays a server column until PR4.x (42) · O11 → (a) pings move now (43) · O12 (asked later the same day, after a review showed it is OWNER-class, not the engineering call E17a first claimed) → (a) one upload, one shared id (44).
 
 What the old path does today, for reference. Media sits on the server for as long as the message exists, and every view downloads it again. A reply names a server message id. A disappearing message's countdown starts when the RECIPIENT reads it: the server stamps `expiresAt` on read and tells both sides, so both copies go at the same moment, and an unread message goes after 1 day. The chat's timer is a server column (`conversations.disappearingTimer`, set with `setDisappearingTimer`). The box changes three of these facts: box media is deleted after 14 days whoever downloaded it (D8); there is no server read event, and receipts are off by default (D5/33); a box message has no server id.
 
@@ -104,8 +104,13 @@ What the old path does today, for reference. Media sits on the server for as lon
 - **E18a. Replies.** The envelope carries `re: {w, s, k, x}`: the quoted message's wire id `w` and sender `s` (a wire id is unique per sender only, traps), its type `k`, and a snippet `x` of at most 256 UTF-8 bytes. The receiver shows its OWN copy of the quoted message when it holds `(s, w)`, and the snippet only when it does not. A quoted row with no wire id (older than PR2.1) sends the snippet alone. Old-path sends keep `replyToMessageId`. *Reason:* a box message's local id differs on every device and names no server row (decision 14). Preferring the local original limits a forged snippet to quotes of messages the receiver never had (the Signal property).
 - **E18b. A timer per message.** The envelope carries `ttl` (seconds, 5 s..30 d, the timer sheet's range). The device that starts the countdown under O9 writes the record's own `_expiresAt` stamp, which the destruction gate already honours (`EncryptionService._recordExpiryDeadlineMs`). The receiver takes the message's `ttl`, not its own view of the chat's setting. A sibling's sent copy counts as the sender's copy. *Reason:* D4, and a stamp this device wrote cannot be lost the way the server's `messageDelivered` stamp can.
 - **E18c. Fitting in one frame.** The quote snippet and `ttl` fit inside the decision-18 bound. The link preview is still the first thing dropped (`boxEnvelope`), and the fit proof (`box_frame_test.dart`) is extended to the longest text with a quote and a preview. *Reason:* a message the composer accepts is never refused for its extras.
+- **E18d. Amendments made in the build (review, 09-26).**
+  - The receiver's unread cap is the message's clamped send time + 1 d, never its arrival + 1 d: a device offline for a week gets no fresh day. It is stamped at receipt, and the first show overwrites it ONCE with show time + `ttl`.
+  - A box retry takes the row's own `disappearAfterSeconds`, never the chat's current setting: the retry reuses the wire id, so the devices that already hold the message would otherwise disagree.
+  - A quote of a message that has a timer carries NO snippet, so a reply never keeps text from a disappearing message.
 
 Accepted residuals, recorded here:
+- A snippet already delivered stays in the reply after its original is deleted-for-everyone. Clearing `re.x` for a deleted `(s, w)` belongs to item 4's delete, and is owed there.
 - A disappearing box attachment's ciphertext stays on the box until its 14-day TTL, since the box has no delete for media (it is ciphertext with no queue link).
 - The Anti-Quantum Note keeps its server-side note (`POST /notes`, authenticated). Only the message carrying it moves.
 - A reply to a box message that has to take the old path still loses its quote, as today (`isServerMessageId` send gate).
