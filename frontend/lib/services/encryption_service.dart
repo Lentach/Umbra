@@ -3816,6 +3816,137 @@ class EncryptionService {
     };
   }
 
+  // ── Box actions parked until their target lands (item 4, E19k) ──────────
+  //
+  // A reaction, pin or edit of a box message often rides a different queue
+  // than its target: our sibling's copy of our reaction on the self-queue,
+  // the peer's message on the contact queue. Read first, it names nothing
+  // held yet, so it waits here until the target is stored in that chat.
+  // `{"<chat>|<s>:<w>": [action + "r": received ms]}`, pruned past the box
+  // TTL and bounded like the tombstones (newest kept). Beside them, under
+  // the cross-context lock AND an in-process queue ([_parkedWrite]), and
+  // like them carried by no backup: machinery.
+
+  static const int _parkedBoxActionCap = 5000;
+
+  String _parkedBoxActionKey(int userId) => 'e2e_${userId}_boxact_v1';
+
+  static String _parkedOf(int conversationId, WireKey wire) =>
+      '$conversationId|${_tombstoneOf(wire)}';
+
+  static const String _parkedReceivedKey = 'r';
+
+  /// Parks [action] (a JSON-safe map) for [wire] in [conversationId],
+  /// received at [receivedAt] — the box TTL counts from there.
+  Future<void> parkBoxAction(
+    int conversationId,
+    WireKey wire,
+    Map<String, Object?> action, {
+    required DateTime receivedAt,
+  }) async {
+    final userId = _userId;
+    if (userId == null) return;
+    await _parkedWrite(userId, () async {
+      try {
+        final prefs = await _sharedPrefs;
+        await _reloadPrefsForCrossContext(prefs);
+        final parked = _readParkedBoxActions(prefs, userId);
+        (parked[_parkedOf(conversationId, wire)] ??= []).add({
+          ...action,
+          _parkedReceivedKey: receivedAt.millisecondsSinceEpoch,
+        });
+        final all = [
+          for (final MapEntry(:key, :value) in parked.entries)
+            for (final a in value) (key, a),
+        ]..sort((a, b) => _parkedAt(b.$2).compareTo(_parkedAt(a.$2)));
+        final kept = <String, List<Map<String, dynamic>>>{};
+        for (final (key, a) in all.take(_parkedBoxActionCap)) {
+          (kept[key] ??= []).add(a);
+        }
+        await prefs.setString(_parkedBoxActionKey(userId), jsonEncode(kept));
+      } on Object catch (_) {}
+    });
+  }
+
+  /// The actions parked for [wire] in [conversationId] and still within
+  /// the box TTL; empty when none or unreadable.
+  Future<List<Map<String, dynamic>>> parkedBoxActions(
+    int conversationId,
+    WireKey wire,
+  ) async {
+    final userId = _userId;
+    if (userId == null) return const [];
+    try {
+      final prefs = await _sharedPrefs;
+      return _readParkedBoxActions(
+            prefs,
+            userId,
+          )[_parkedOf(conversationId, wire)] ??
+          const [];
+    } on Object catch (_) {
+      return const [];
+    }
+  }
+
+  /// Drops what is parked for [wire] in [conversationId]: it was applied.
+  Future<void> dropParkedBoxActions(int conversationId, WireKey wire) async {
+    final userId = _userId;
+    if (userId == null) return;
+    await _parkedWrite(userId, () async {
+      try {
+        final prefs = await _sharedPrefs;
+        await _reloadPrefsForCrossContext(prefs);
+        final parked = _readParkedBoxActions(prefs, userId);
+        if (parked.remove(_parkedOf(conversationId, wire)) == null) return;
+        await prefs.setString(_parkedBoxActionKey(userId), jsonEncode(parked));
+      } on Object catch (_) {}
+    });
+  }
+
+  /// The park's writes, one after another: the cross-context lock passes
+  /// through off web, and the native store shows a write only once it
+  /// committed, so two overlapping read-modify-writes lost one (the peer's
+  /// and the self-queue's reads run side by side).
+  Future<void> _parkedTail = Future<void>.value();
+
+  Future<void> _parkedWrite(int userId, Future<void> Function() write) {
+    final run = _parkedTail.then(
+      (_) => _sessionCrossContextLock('fireplace-e2e-boxact-$userId', write),
+    );
+    _parkedTail = run.then((_) {}, onError: (Object _) {});
+    return run;
+  }
+
+  static int _parkedAt(Map<String, dynamic> action) =>
+      action[_parkedReceivedKey] as int;
+
+  /// Every parked action within the box TTL, by chat and target.
+  Map<String, List<Map<String, dynamic>>> _readParkedBoxActions(
+    ContentKv prefs,
+    int userId,
+  ) {
+    final raw = prefs.getString(_parkedBoxActionKey(userId));
+    if (raw == null) return {};
+    final decoded = jsonDecode(raw);
+    if (decoded is! Map<String, dynamic>) return {};
+    final oldest =
+        DateTime.now().millisecondsSinceEpoch -
+        _boxTombstoneLife.inMilliseconds;
+    final parked = <String, List<Map<String, dynamic>>>{};
+    for (final MapEntry(:key, :value) in decoded.entries) {
+      if (value is! List) continue;
+      final live = [
+        for (final a in value)
+          if (a is Map<String, dynamic> &&
+              a[_parkedReceivedKey] is int &&
+              _parkedAt(a) >= oldest)
+            a,
+      ];
+      if (live.isNotEmpty) parked[key] = live;
+    }
+    return parked;
+  }
+
   // ── Retired ids ──────────────────────────────────────────────────────────
   //
   // Ids whose plaintext this device destroyed while the server may STILL serve

@@ -254,6 +254,8 @@ extension MessagingBox on MessagingProvider {
           parsed,
           plaintext,
           actor: msg.senderId,
+          // `_sentCopyChat` found the chat by `to`, so it is set.
+          peer: parsed.sentTo!,
           conversationId: conversationId,
           receivedAt: msg.createdAt,
         );
@@ -525,6 +527,7 @@ extension MessagingBox on MessagingProvider {
           parsed,
           plaintext,
           actor: msg.senderId,
+          peer: msg.senderId,
           conversationId: msg.conversationId,
           receivedAt: receivedAt,
         );
@@ -790,7 +793,8 @@ extension MessagingBox on MessagingProvider {
   /// store alone.
   ///
   /// Once stored, its attachment starts downloading ([receivedAt]: when the
-  /// box delivered it), off the read chain (E17c, decision 40).
+  /// box delivered it), off the read chain (E17c, decision 40), and the
+  /// actions read before it land on it (item 4, E19k).
   Future<bool> _storeBoxMessage(
     MessageModel msg, {
     required bool alreadyShown,
@@ -807,6 +811,12 @@ extension MessagingBox on MessagingProvider {
     if (stored) {
       _boxUnsaved.remove(msg.id);
       _prefetchBoxMedia(msg, receivedAt);
+      try {
+        await _applyParkedBoxActions(msg);
+      } on Object catch (e) {
+        // Stored all the same: the message is finished, its actions lost.
+        _e2eFlowLog('BOX_PARKED_APPLY_FAILED', {'error': e.runtimeType});
+      }
       return true;
     }
     E2ePersistentDiag.record('BOX_STORE_UNPROVEN', {'msgId': msg.id});

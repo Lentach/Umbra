@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
@@ -301,7 +302,13 @@ class MessagingProvider extends ChangeNotifier {
   /// ready and when the contact store opens late — never by a send
   /// (decision 21). A lookup before E2E is ready fails locally, emits
   /// nothing, and is looked up again when E2E-ready calls this.
-  void refreshBoxDeviceLists() => _boxLists.refresh();
+  ///
+  /// Box ready or reconnected: every box action a device still owes is
+  /// sent again now (E19l).
+  void refreshBoxDeviceLists() {
+    _boxLists.refresh();
+    _retryBoxActionsNow();
+  }
 
   /// The E2E layer dropped [userId]'s verified list (a rebuild request, an
   /// identity change, the own account's `deviceListChanged`): a box send
@@ -412,12 +419,23 @@ class MessagingProvider extends ChangeNotifier {
   /// failed for the user to send again.
   final Map<String, _BoxMediaBody> _boxMediaBodies = {};
 
-  /// Box message actions that failed (item 4, E19h), for the chat screen.
+  /// Box message actions NO device took (item 4, E19h/E19l), for the chat
+  /// screen.
   final StreamController<BoxActionFailure> _boxActionFailures =
       StreamController<BoxActionFailure>.broadcast();
 
-  /// Each pin, edit or delete-for-everyone of a box message that could not
-  /// go over the box; its optimistic state is already undone.
+  /// Box actions some device took and some did not (item 4, E19l), by
+  /// [_boxActionKey]: the frames still owed, sent again until taken or
+  /// 30 d. RAM only (decision 19: no persisted outbox).
+  final Map<String, _BoxActionRetry> _boxActionRetries = {};
+
+  /// The newest box action send some device took, per [_boxActionKey]: an
+  /// older send settling after it leaves no retry (E19l).
+  final Map<String, int> _boxActionSends = {};
+  int _boxActionSendSeq = 0;
+
+  /// Each pin, edit or delete-for-everyone of a box message that NO device
+  /// took; its optimistic state is already undone.
   Stream<BoxActionFailure> get boxActionFailures => _boxActionFailures.stream;
 
   /// Set in [dispose]; lets the overlay's dispose-scheduled onComplete
@@ -1343,6 +1361,7 @@ class MessagingProvider extends ChangeNotifier {
     // Logout: `K_react` for every visited conversation is in RAM here.
     _resetReactionKeyState();
     _cancelDelayedRetryIfAny();
+    _dropBoxActionRetries();
     _currentUserId = null;
     _tokenForReconnect = null;
     notifyListeners();
@@ -1374,6 +1393,7 @@ class MessagingProvider extends ChangeNotifier {
     // disposed ChangeNotifier.
     onDisconnect();
     _boxLists.reset();
+    _dropBoxActionRetries();
     _incomingSound.dispose();
     countdownTickNotifier.dispose();
     _boxActionFailures.close().ignore();

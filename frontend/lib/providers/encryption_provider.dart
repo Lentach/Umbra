@@ -1133,6 +1133,29 @@ class EncryptionProvider extends ChangeNotifier {
   Future<void> addBoxTombstone(WireKey wire) =>
       _encryptionService.addBoxTombstone(wire);
 
+  /// Delegates to [EncryptionService.parkBoxAction] (item 4, E19k).
+  Future<void> parkBoxAction(
+    int conversationId,
+    WireKey wire,
+    Map<String, Object?> action, {
+    required DateTime receivedAt,
+  }) => _encryptionService.parkBoxAction(
+    conversationId,
+    wire,
+    action,
+    receivedAt: receivedAt,
+  );
+
+  /// Delegates to [EncryptionService.parkedBoxActions] (item 4, E19k).
+  Future<List<Map<String, dynamic>>> parkedBoxActions(
+    int conversationId,
+    WireKey wire,
+  ) => _encryptionService.parkedBoxActions(conversationId, wire);
+
+  /// Delegates to [EncryptionService.dropParkedBoxActions] (item 4, E19k).
+  Future<void> dropParkedBoxActions(int conversationId, WireKey wire) =>
+      _encryptionService.dropParkedBoxActions(conversationId, wire);
+
   /// Delegates to [EncryptionService.localMessageRecords].
   Future<Map<int, Map<String, dynamic>>> localMessageRecords(
     int conversationId,
