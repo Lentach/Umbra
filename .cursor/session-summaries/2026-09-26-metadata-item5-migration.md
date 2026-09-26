@@ -19,7 +19,7 @@
 - Docs: `docs/contracts/wire.md`, `frontend/docs/e2e-invariants.md`, decisions log, remainder plan, `traps.md`, root `CLAUDE.md` counts.
 
 ## Verification
-- CI: 7/7 green on `bb8f6f17` (the item-5 commit). The follow-up commit's CI is recorded in LATEST once it reports.
+- CI: 7/7 green on `bb8f6f17` (item 5) and on `1fd2b7f2` (the follow-up).
 - Backend on the final tree (re-run after restoring the `--fix` rewrites): jest 1217/68, int 39/2, `scripts/lint-ratchet.mjs` held at baseline.
 - Flutter: full suite 2809 passed, 14 skipped at `bb8f6f17`; 2811/14 after the follow-up's 2 tests. Analyze showed 0 errors or warnings. `scripts/dart-lint-ratchet.mjs` PASS at 3160; the 8 new infos were fixed, found by diffing against a HEAD worktree.
 - E2E: `box_roundtrip_test.dart` with `BOX_PROBE=true` passed 3/3 on the local stack.
