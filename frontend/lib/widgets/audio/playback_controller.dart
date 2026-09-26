@@ -15,6 +15,8 @@ import '../../services/media_crypto_service.dart';
 import '../../services/encryption/native_content_store.dart';
 import '../../services/encryption/sealed_audio_codec.dart';
 import '../../services/voice_audio_coordinator.dart';
+import '../../utils/encrypted_media_loader.dart';
+import '../message/box_media_source.dart';
 import '../top_snackbar.dart';
 import 'voice_player.dart';
 
@@ -167,6 +169,9 @@ class _PlaybackControllerState extends State<PlaybackController>
       throw Exception('No media URL');
     }
     final token = context.read<AuthProvider>().token ?? '';
+    // A box voice note (item 3 / media wiring) comes from this device's
+    // copy or the box, never `/media` with a token.
+    final box = boxMediaSourceFor(context, mediaUrl);
 
     _loadCancelled = false;
     setState(() {
@@ -180,17 +185,28 @@ class _PlaybackControllerState extends State<PlaybackController>
         // does), decrypt when keyed, and hand the plaintext to the player.
         // The legacy unencrypted (Cloudinary) case fetches the same way, which
         // also avoids the CORS wall a bare fetch+decode would hit.
-        final raw = await ApiService(
-          baseUrl: AppConfig.baseUrl,
-        ).fetchMediaBytes(mediaUrl, token);
-        if (raw.length > MediaCryptoService.maxBytes) {
-          throw Exception('Audio too large');
-        }
         final mk = widget.message.mediaKey;
         final mi = widget.message.mediaIv;
-        final Uint8List plain = (mk != null && mi != null)
-            ? await MediaCryptoService().decrypt(Uint8List.fromList(raw), mk, mi)
-            : Uint8List.fromList(raw);
+        final Uint8List plain;
+        if (box != null) {
+          plain = await loadDecryptedMediaBytes(
+            url: mediaUrl,
+            token: token,
+            key: mk,
+            iv: mi,
+            box: box,
+          );
+        } else {
+          final raw = await ApiService(
+            baseUrl: AppConfig.baseUrl,
+          ).fetchMediaBytes(mediaUrl, token);
+          if (raw.length > MediaCryptoService.maxBytes) {
+            throw Exception('Audio too large');
+          }
+          plain = (mk != null && mi != null)
+              ? await MediaCryptoService().decrypt(Uint8List.fromList(raw), mk, mi)
+              : Uint8List.fromList(raw);
+        }
         await _player.setAudioBytes(plain);
       } else {
         _cachedFilePath = await _getCachedFilePath();
@@ -208,7 +224,7 @@ class _PlaybackControllerState extends State<PlaybackController>
             _cachedFilePath = null;
           }
         }
-        _cachedFilePath ??= await _downloadCacheAndPlay(mediaUrl, token);
+        _cachedFilePath ??= await _downloadCacheAndPlay(mediaUrl, token, box);
       }
 
       if (mounted) setState(() => _isLoading = false);
@@ -263,7 +279,11 @@ class _PlaybackControllerState extends State<PlaybackController>
   /// Downloads, decrypts, seals into the cache when the content store is
   /// armed (plaintext fallback otherwise — same honest rule as the record
   /// path), and starts playback from memory. Returns the cache path.
-  Future<String> _downloadCacheAndPlay(String url, String token) async {
+  Future<String> _downloadCacheAndPlay(
+    String url,
+    String token,
+    BoxCiphertextSource? box,
+  ) async {
     // Native-only: the web branch of _loadAndPlayAudio decrypts into memory
     // and never reaches here.
     final file = await AudioCacheStore.createTarget(widget.message.id);
@@ -271,19 +291,30 @@ class _PlaybackControllerState extends State<PlaybackController>
       throw StateError('Voice-note caching is unavailable on this platform');
     }
 
-    final raw = await ApiService(baseUrl: AppConfig.baseUrl).fetchMediaBytes(
-      url,
-      token,
-    );
-    if (raw.length > MediaCryptoService.maxBytes) {
-      throw Exception('Audio too large');
-    }
-
-    Uint8List plain = Uint8List.fromList(raw);
     final mk = widget.message.mediaKey;
     final mi = widget.message.mediaIv;
-    if (mk != null && mi != null) {
-      plain = await MediaCryptoService().decrypt(plain, mk, mi);
+    Uint8List plain;
+    if (box != null) {
+      plain = await loadDecryptedMediaBytes(
+        url: url,
+        token: token,
+        key: mk,
+        iv: mi,
+        box: box,
+      );
+    } else {
+      final raw = await ApiService(baseUrl: AppConfig.baseUrl).fetchMediaBytes(
+        url,
+        token,
+      );
+      if (raw.length > MediaCryptoService.maxBytes) {
+        throw Exception('Audio too large');
+      }
+
+      plain = Uint8List.fromList(raw);
+      if (mk != null && mi != null) {
+        plain = await MediaCryptoService().decrypt(plain, mk, mi);
+      }
     }
 
     final store = NativeContentStore.instance;

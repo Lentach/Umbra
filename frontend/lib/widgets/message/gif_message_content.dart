@@ -9,6 +9,7 @@ import '../../providers/auth_provider.dart';
 import '../../utils/gif_blob_url_stub.dart'
     if (dart.library.html) '../../utils/gif_blob_url_web.dart'
     as gif_blob;
+import 'box_media_source.dart';
 import 'media_preview_frame.dart';
 import '../../utils/encrypted_media_loader.dart';
 import '../media/fullscreen_image_viewer.dart';
@@ -63,6 +64,7 @@ class _GifMessageContentState extends State<GifMessageContent> {
     }
 
     final token = context.read<AuthProvider>().token ?? '';
+    final box = boxMediaSourceFor(context, url);
     Uint8List bytes;
     try {
       bytes = await loadDecryptedMediaBytes(
@@ -70,6 +72,7 @@ class _GifMessageContentState extends State<GifMessageContent> {
         token: token,
         key: widget.message.mediaKey,
         iv: widget.message.mediaIv,
+        box: box,
       );
     } catch (_) {
       return const _GifDisplay.error();

@@ -398,7 +398,17 @@ extension MessagingDecrypt on MessagingProvider {
   /// [msg] carrying the decrypted [parsed] envelope. Also evaluates the
   /// sender's `senderListInfo` claim (§5.2 layer 2): every decrypt path that
   /// reads an envelope must, or a stale-list signal is silently lost.
-  MessageModel _withEnvelope(MessageModel msg, E2eEnvelopeFields parsed) {
+  ///
+  /// [box]: read by the box reader, where an attachment is named by
+  /// `boxMedia` alone (item 3 / media wiring, E17a) — its `box:<id>`, only
+  /// with its key and IV, never an envelope `mediaUrl`. An old-path
+  /// envelope's `boxMedia` is never read. Without a usable id a media type
+  /// keeps no url: today's broken-media bubble, never a dropped message.
+  MessageModel _withEnvelope(
+    MessageModel msg,
+    E2eEnvelopeFields parsed, {
+    bool box = false,
+  }) {
     // §5.2 layer 2 (amendment (xv)/(xvi)): the sender told us which
     // device-list versions it addressed this message from. Evaluate it
     // against DAK-verified data we already hold. A bare claim NEVER alarms
@@ -417,7 +427,7 @@ extension MessagingDecrypt on MessagingProvider {
     return msg.copyWith(
       content: parsed.content,
       messageType: _parseMessageTypeString(parsed.messageType),
-      mediaUrl: parsed.mediaUrl,
+      mediaUrl: box ? _boxMediaUrlOf(parsed) : parsed.mediaUrl,
       mediaDuration: parsed.mediaDuration,
       mediaKey: parsed.mediaKey,
       mediaIv: parsed.mediaIv,
@@ -431,6 +441,18 @@ extension MessagingDecrypt on MessagingProvider {
       // it: an edit re-decrypts through here with a peer-built envelope.
       wireId: msg.wireId ?? parsed.msgId,
     );
+  }
+
+  String? _boxMediaUrlOf(E2eEnvelopeFields parsed) {
+    final id = parsed.boxMedia;
+    if (id == null || parsed.mediaKey == null || parsed.mediaIv == null) {
+      return null;
+    }
+    final type = _parseMessageTypeString(parsed.messageType);
+    if (type == null || type == MessageType.text || type == MessageType.ping) {
+      return null;
+    }
+    return boxMediaUrl(id);
   }
 
   Future<void> _persistDecryptedContent(MessageModel decrypted) async {

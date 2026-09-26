@@ -48,6 +48,13 @@ class _IdbBoxMediaStore implements BoxMediaStore {
   }
 
   @override
+  Future<bool> has(int userId, Uint8List id) async {
+    final key = _key(userId, id);
+    final result = await _run('readonly', (s) => s.count(key.toJS));
+    return result.isA<JSNumber>() && (result! as JSNumber).toDartInt > 0;
+  }
+
+  @override
   Future<void> delete(int userId, Uint8List id) async {
     final key = _key(userId, id);
     await _run('readwrite', (s) => s.delete(key.toJS));

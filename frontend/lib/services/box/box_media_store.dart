@@ -22,6 +22,10 @@ abstract interface class BoxMediaStore {
 
   Future<Uint8List?> get(int userId, Uint8List id);
 
+  /// Whether a copy of [id] is kept, without reading it: the restore path
+  /// asks this for every attachment row it brings back.
+  Future<bool> has(int userId, Uint8List id);
+
   Future<void> delete(int userId, Uint8List id);
 }
 
@@ -52,6 +56,10 @@ class MemoryBoxMediaStore implements BoxMediaStore {
   @override
   Future<Uint8List?> get(int userId, Uint8List id) async =>
       _copies[_key(userId, id)];
+
+  @override
+  Future<bool> has(int userId, Uint8List id) async =>
+      _copies.containsKey(_key(userId, id));
 
   @override
   Future<void> delete(int userId, Uint8List id) async {

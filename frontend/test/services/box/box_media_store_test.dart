@@ -67,6 +67,16 @@ void main() {
         expect(await store.get(1, _id(1)), [1, 2]);
       });
 
+      test('has answers whether a copy is kept, per account', () async {
+        final store = make();
+        expect(await store.has(1, _id(1)), isFalse);
+        await store.put(1, _id(1), Uint8List.fromList([1]));
+        expect(await store.has(1, _id(1)), isTrue);
+        expect(await store.has(2, _id(1)), isFalse);
+        await store.delete(1, _id(1));
+        expect(await store.has(1, _id(1)), isFalse);
+      });
+
       test('an id that is not 32 bytes is refused', () async {
         final store = make();
         await expectLater(
@@ -88,6 +98,18 @@ void main() {
         for (final e in dir.listSync()) e.uri.pathSegments.last,
       ];
       expect(names, ['-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_s']);
+    },
+  );
+
+  test(
+    "the in-app erase deletes every account's copies, box_media and all",
+    () async {
+      final store = IoBoxMediaStore(root: () async => root);
+      await store.put(7, _id(1), Uint8List.fromList([1]));
+      await store.put(8, _id(2), Uint8List.fromList([2]));
+      expect(await deleteAllBoxMediaCopies(root: () async => root), isTrue);
+      expect(Directory('${root.path}/box_media').existsSync(), isFalse);
+      expect(await deleteAllBoxMediaCopies(root: () async => root), isTrue);
     },
   );
 }

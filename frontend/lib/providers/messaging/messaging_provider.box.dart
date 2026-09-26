@@ -99,7 +99,11 @@ extension MessagingBox on MessagingProvider {
     // the store is owed.
     final unsaved = _boxUnsaved[entry.localId];
     if (unsaved != null && unsaved.senderId == entry.peerUserId) {
-      return _storeBoxMessage(unsaved, alreadyShown: true);
+      return _storeBoxMessage(
+        unsaved,
+        alreadyShown: true,
+        receivedAt: entry.receivedAt,
+      );
     }
     final device = entry.senderDeviceId;
     final msg = MessageModel(
@@ -272,9 +276,9 @@ extension MessagingBox on MessagingProvider {
       // sibling's box took every frame (decision 20).
     );
     return _withBoxExtras(
-      _withEnvelope(row, parsed),
+      _withEnvelope(row, parsed, box: true),
       parsed,
-    ).then(_consumeBoxMessage);
+    ).then((copy) => _consumeBoxMessage(copy, receivedAt: receivedAt));
   }
 
   /// Hands sibling [device]'s self-queue from its handoff to the box, which
@@ -405,7 +409,11 @@ extension MessagingBox on MessagingProvider {
     if (unsaved != null &&
         unsaved.senderId == msg.senderId &&
         unsaved.conversationId == msg.conversationId) {
-      return _storeBoxMessage(unsaved, alreadyShown: true);
+      return _storeBoxMessage(
+        unsaved,
+        alreadyShown: true,
+        receivedAt: receivedAt,
+      );
     }
     final enc = _encryptionProvider;
     if (enc == null) return false;
@@ -446,9 +454,14 @@ extension MessagingBox on MessagingProvider {
             : sentAt;
         return _consumeBoxMessage(
           await _withBoxExtras(
-            _withEnvelope(msg, parsed).copyWith(createdAt: createdAt),
+            _withEnvelope(
+              msg,
+              parsed,
+              box: true,
+            ).copyWith(createdAt: createdAt),
             parsed,
           ),
+          receivedAt: receivedAt,
         );
       default:
         // A type a newer peer speaks: nothing here can show it.
@@ -482,11 +495,12 @@ extension MessagingBox on MessagingProvider {
     );
   }
 
-  /// A box reply's [quote] as the row's preview (E18a). It points at OUR
-  /// copy of the quoted message when this device holds one from that sender
-  /// under that wire id in this chat, so the quote shows what we hold and a
-  /// forged snippet shows only for a message we never had; otherwise at no
-  /// row (id 0), and the snippet shows.
+  /// A box reply's [quote] as the row's preview (E18a). When this device
+  /// holds the quoted message from that sender under that wire id in this
+  /// chat, the preview is OUR copy — its id, type and words (none for a
+  /// message that disappears or is not a text) — and the peer's snippet is
+  /// never read, so a forged one shows only for a message we never had;
+  /// otherwise it points at no row (id 0), and the snippet shows.
   Future<ReplyToPreview> _boxReplyTo(
     E2eReplyQuote quote,
     int conversationId,
@@ -498,38 +512,90 @@ extension MessagingBox on MessagingProvider {
       ?conversation?.userOne,
       ?conversation?.userTwo,
     ].where((u) => u.id == quote.senderId).firstOrNull;
+    final held = await _heldQuote(quote, conversationId);
+    if (held == null) {
+      return ReplyToPreview(
+        id: 0,
+        content: quote.snippet,
+        senderUsername: sender?.username ?? '',
+        messageType: _parseMessageTypeString(quote.type) ?? MessageType.text,
+        wireId: quote.wireId,
+        senderId: quote.senderId,
+      );
+    }
+    final disappears =
+        held.disappearAfterSeconds != null || held.expiresAt != null;
+    const labels = kReplyPreviewLabels;
     return ReplyToPreview(
-      id: await _heldQuoteId(quote, conversationId) ?? 0,
-      content: quote.snippet,
+      id: held.id,
+      content: disappears || held.messageType != MessageType.text
+          ? ''
+          : replyPreviewForMessageModel(
+              held,
+              encryption: _encryptionProvider,
+              encryptedMessageLabel: labels.encryptedMessageLabel,
+              voiceMessageLabel: labels.voiceMessageLabel,
+              imageLabel: labels.imageLabel,
+              gifLabel: labels.gifLabel,
+              documentLabel: labels.documentLabel,
+              pingLabel: labels.pingLabel,
+              videoLabel: labels.videoLabel,
+            ),
       senderUsername: sender?.username ?? '',
-      messageType: _parseMessageTypeString(quote.type) ?? MessageType.text,
+      messageType: held.messageType,
       wireId: quote.wireId,
       senderId: quote.senderId,
+      quotedDisappears: disappears,
     );
   }
 
-  /// The id of the message [quote] names, held in [conversationId]: by
-  /// sender AND wire id, since a wire id is unique per sender only. Null
-  /// when there is no wire id, or no such message here.
-  Future<int?> _heldQuoteId(E2eReplyQuote quote, int conversationId) async {
+  /// The message [quote] names, held in [conversationId] — in the open
+  /// chat, else rebuilt from its record: by sender AND wire id, since a
+  /// wire id is unique per sender only. Null when there is no wire id, or
+  /// no such message here.
+  Future<MessageModel?> _heldQuote(
+    E2eReplyQuote quote,
+    int conversationId,
+  ) async {
     final wireId = quote.wireId;
     if (wireId == null) return null;
     for (final m in _messages) {
       if (m.conversationId == conversationId &&
           m.senderId == quote.senderId &&
           m.wireId == wireId) {
-        return m.id;
+        return m;
       }
     }
     final enc = _encryptionProvider;
     if (enc == null) return null;
     final id = await enc.wireHolder((senderId: quote.senderId, wireId: wireId));
     if (id == null) return null;
-    // Another chat's message is never this one's quote.
     final record = await enc.getDecryptedContent(id);
-    return record?[PlaintextRecordCodec.conversationIdKey] == conversationId
-        ? id
-        : null;
+    // Another chat's message is never this one's quote.
+    if (record == null ||
+        record[PlaintextRecordCodec.conversationIdKey] != conversationId) {
+      return null;
+    }
+    final createdAtMs = record[PlaintextRecordCodec.createdAtKey];
+    final ttl = record[PlaintextRecordCodec.disappearAfterKey];
+    final expiresAtMs = record[PlaintextRecordCodec.expiresAtKey];
+    return _restoreFromPersistedPayload(
+      MessageModel(
+        id: id,
+        content: '',
+        senderId: quote.senderId,
+        senderUsername: '',
+        conversationId: conversationId,
+        createdAt: createdAtMs is int
+            ? DateTime.fromMillisecondsSinceEpoch(createdAtMs, isUtc: true)
+            : DateTime.now().toUtc(),
+        disappearAfterSeconds: ttl is int ? ttl : null,
+        expiresAt: expiresAtMs is int
+            ? DateTime.fromMillisecondsSinceEpoch(expiresAtMs, isUtc: true)
+            : null,
+      ),
+      record,
+    );
   }
 
   /// The destruction stamp of box message [msg]'s record (decision 41): its
@@ -620,7 +686,10 @@ extension MessagingBox on MessagingProvider {
     return true;
   }
 
-  Future<bool> _consumeBoxMessage(MessageModel decrypted) async {
+  Future<bool> _consumeBoxMessage(
+    MessageModel decrypted, {
+    required DateTime receivedAt,
+  }) async {
     final enc = _encryptionProvider!;
     final wire = _wireKey(decrypted.senderId, decrypted.wireId);
     if (wire != null) {
@@ -636,7 +705,11 @@ extension MessagingBox on MessagingProvider {
         decrypted.messageType == MessageType.text) {
       return true;
     }
-    return _storeBoxMessage(decrypted, alreadyShown: false);
+    return _storeBoxMessage(
+      decrypted,
+      alreadyShown: false,
+      receivedAt: receivedAt,
+    );
   }
 
   /// Stores [msg]'s plaintext and shows it. True only once the record is
@@ -645,21 +718,37 @@ extension MessagingBox on MessagingProvider {
   /// then, because its ciphertext's ratchet key is already spent. Until
   /// then the message is shown from RAM and the next offer retries the
   /// store alone.
+  ///
+  /// Once stored, its attachment starts downloading ([receivedAt]: when the
+  /// box delivered it), off the read chain (E17c, decision 40).
   Future<bool> _storeBoxMessage(
     MessageModel msg, {
     required bool alreadyShown,
+    required DateTime receivedAt,
   }) async {
     final enc = _encryptionProvider!..cacheDecryption(msg.id, msg);
     await _persistDecryptedContent(msg);
     final stored = await enc.recordExists(msg.id) == true;
+    // Held BEFORE it is shown: showing starts its countdown
+    // ([_startBoxCountdowns]), which updates the held row, so the next
+    // store keeps the start instead of resetting it to the unread cap.
+    if (!stored) _boxUnsaved[msg.id] = msg;
     if (!alreadyShown) _showBoxMessage(msg);
     if (stored) {
       _boxUnsaved.remove(msg.id);
+      _prefetchBoxMedia(msg, receivedAt);
       return true;
     }
     E2ePersistentDiag.record('BOX_STORE_UNPROVEN', {'msgId': msg.id});
-    _boxUnsaved[msg.id] = msg;
     return false;
+  }
+
+  /// Queues [msg]'s box attachment for download; never awaited.
+  void _prefetchBoxMedia(MessageModel msg, DateTime receivedAt) {
+    final id = boxMediaIdOf(msg.mediaUrl);
+    final user = _currentUserId;
+    if (id == null || user == null) return;
+    boxMedia?.prefetch(user, id, receivedAt: receivedAt);
   }
 
   void _showBoxMessage(MessageModel msg) {
@@ -699,12 +788,25 @@ extension MessagingBox on MessagingProvider {
     if (viewing != conversationId) return;
     final held = {for (final m in _messages) m.id};
     final now = DateTime.now();
-    final missing = [
+    final live = [
       for (final row in rows)
-        if (!held.contains(row.id) &&
-            !_deletedMessageIds.contains(row.id) &&
-            !isMessageExpired(row, now))
+        if (!_deletedMessageIds.contains(row.id) && !isMessageExpired(row, now))
           row,
+    ];
+    // An attachment whose download never finished (the app closed first)
+    // is fetched again (E17c); its copy's presence is checked, not read.
+    final user = _currentUserId;
+    final media = boxMedia;
+    if (user != null && media != null) {
+      for (final row in live) {
+        final id = boxMediaIdOf(row.mediaUrl);
+        if (id == null) continue;
+        unawaited(media.prefetchIfMissing(user, id, receivedAt: row.createdAt));
+      }
+    }
+    final missing = [
+      for (final row in live)
+        if (!held.contains(row.id)) row,
     ];
     if (missing.isNotEmpty) {
       _messages = [..._messages, ...missing]
@@ -887,6 +989,189 @@ extension MessagingBox on MessagingProvider {
     );
   }
 
+  /// Whether media send [tempId] to [recipientId] tries the box first (item
+  /// 3 / media wiring): the peer has box addresses and, as for a text, a
+  /// reply's quote can be named. Synchronous on purpose: an uncovered
+  /// peer's old path keeps exactly the turns it always had (traps: "image
+  /// emits before caption").
+  bool _boxMayCarryMedia(int recipientId, String tempId) {
+    final outbox = boxOutbox;
+    if (outbox == null || outbox.addressesFor(recipientId).isEmpty) {
+      return false;
+    }
+    final row = _messages.where((m) => m.tempId == tempId).firstOrNull;
+    return row?.replyToMessageId == null || _boxQuoteOf(row?.replyTo) != null;
+  }
+
+  /// Sends attachment [tempId] to a peer the box covers (item 3 / media
+  /// wiring, E17a): the route is decided BEFORE anything is uploaded, then
+  /// the file is encrypted whole, padded to a ladder rung, uploaded ONCE and
+  /// sent as frames carrying its id ([_uploadBoxMediaAndSend]).
+  ///
+  /// [bytes] is the plaintext of a first send, whose null answer is the old
+  /// path — only on evidence ([_boxRoute]). Without [bytes] this is a retry
+  /// of an upload that never succeeded (E17b): it uploads the SAME held
+  /// ciphertext, key and IV, and a route gone since fails the row. A list
+  /// that cannot be verified, a refused upload or no answer fails it too
+  /// (decisions 19, 31), never the old path.
+  Future<bool?> _sendMediaOverBox({
+    required int recipientId,
+    required String tempId,
+    required String messageType,
+    Uint8List? bytes,
+    String content = '',
+    int? effectiveExpiresIn,
+    int? effectiveReplyToId,
+    int? mediaDuration,
+    int? mediaWidth,
+    int? mediaHeight,
+    String? mediaThumbHash,
+  }) async {
+    // An account-socket error says nothing about the box: the row is not
+    // failed under an upload in flight.
+    _boxInFlight.add(tempId);
+    try {
+      final outbox = boxOutbox;
+      final addresses = outbox?.addressesFor(recipientId) ?? const {};
+      final route = outbox == null || addresses.isEmpty
+          ? null
+          : await _boxRoute(recipientId, outbox, addresses);
+      if (route == null) {
+        if (bytes != null) return null;
+        _e2eFlowLog('BOX_RETRY_NO_ROUTE', {'tempId': tempId});
+        _markMessageFailed(tempId, 'Could not send. Try again.');
+        return false;
+      }
+      var body = _boxMediaBodies[tempId];
+      if (bytes != null) {
+        final encrypted = await _mediaUpload.encrypt(bytes);
+        body = (
+          ciphertext: encrypted.ciphertext,
+          key: encrypted.keyBase64,
+          iv: encrypted.ivBase64,
+        );
+        _boxMediaBodies[tempId] = body;
+      }
+      if (body == null) throw StateError('no held attachment');
+      // The key before any further await (the durability invariant).
+      _pendingSendContent[tempId] = <String, dynamic>{
+        'content': content,
+        'messageType': messageType,
+        'mediaKey': body.key,
+        'mediaIv': body.iv,
+        'mediaDuration': ?mediaDuration,
+        'mediaWidth': ?mediaWidth,
+        'mediaHeight': ?mediaHeight,
+        'mediaThumbHash': ?mediaThumbHash,
+      };
+      return await _uploadBoxMediaAndSend(
+        route,
+        body,
+        recipientId: recipientId,
+        tempId: tempId,
+        messageType: messageType,
+        content: content,
+        effectiveExpiresIn: effectiveExpiresIn,
+        effectiveReplyToId: effectiveReplyToId,
+        mediaDuration: mediaDuration,
+        mediaWidth: mediaWidth,
+        mediaHeight: mediaHeight,
+        mediaThumbHash: mediaThumbHash,
+      );
+    } on Object catch (e) {
+      _e2eFlowLog('BOX_MEDIA_SEND_FAILED', {
+        'tempId': tempId,
+        'error': e.runtimeType.toString(),
+      });
+      _markMessageFailed(tempId, 'Could not send. Try again.');
+      return false;
+    } finally {
+      _boxInFlight.remove(tempId);
+    }
+  }
+
+  /// Uploads [body] ONCE, padded to a ladder rung, against the FIRST live
+  /// peer device's queue, whose daily budget pays (decision 44), then sends
+  /// the frames — the same id to every peer device and sibling — through
+  /// the box path of [_encryptAndSend]. The row names the id before
+  /// anything else can fail, so a retry re-sends frames and never uploads
+  /// again (E17b); the sender keeps its own copy (decision 40).
+  Future<bool> _uploadBoxMediaAndSend(
+    _BoxRoute route,
+    ({Uint8List ciphertext, String key, String iv}) body, {
+    required int recipientId,
+    required String tempId,
+    required String messageType,
+    required String content,
+    int? effectiveExpiresIn,
+    int? effectiveReplyToId,
+    int? mediaDuration,
+    int? mediaWidth,
+    int? mediaHeight,
+    String? mediaThumbHash,
+  }) async {
+    final answer = await route.outbox.uploadMedia(
+      route.targets.first,
+      frameMediaToRung(body.ciphertext),
+    );
+    final Uint8List id;
+    switch (answer) {
+      case BoxOk(:final value):
+        id = value.id;
+      case BoxRefused(:final code):
+        // quota_exceeded / rate_limited included: 'Ponów' (decision 31).
+        _e2eFlowLog('BOX_MEDIA_UPLOAD_REFUSED', {
+          'tempId': tempId,
+          'code': code.wire,
+        });
+        _markMessageFailed(tempId, 'Could not send. Try again.');
+        return false;
+      case BoxUnknown(:final reason):
+        _e2eFlowLog('BOX_MEDIA_UPLOAD_UNKNOWN', {
+          'tempId': tempId,
+          'reason': reason.name,
+        });
+        _markMessageFailed(tempId, 'Could not send. Try again.');
+        return false;
+    }
+    _boxMediaBodies.remove(tempId);
+    final url = boxMediaUrl(boxB64(id));
+    final user = _currentUserId;
+    // A copy that fails to write is downloaded like anyone's at a restore.
+    if (user != null) boxMedia?.keep(user, id, body.ciphertext).ignore();
+    final index = _messages.indexWhere((m) => m.tempId == tempId);
+    if (index != -1) {
+      _messages[index] = _messages[index].copyWith(
+        mediaUrl: url,
+        mediaKey: body.key,
+        mediaIv: body.iv,
+        mediaDuration: mediaDuration,
+        mediaWidth: mediaWidth,
+        mediaHeight: mediaHeight,
+        mediaThumbHash: mediaThumbHash,
+      );
+      notifyListeners();
+    }
+    final pending = _pendingAfterUpload(tempId);
+    if (pending == null) return false;
+    pending['mediaUrl'] = url;
+    return _encryptAndSend(
+      recipientId: recipientId,
+      content: content,
+      tempId: tempId,
+      effectiveExpiresIn: effectiveExpiresIn,
+      effectiveReplyToId: effectiveReplyToId,
+      messageType: messageType,
+      mediaUrl: url,
+      mediaDuration: mediaDuration,
+      mediaKey: body.key,
+      mediaIv: body.iv,
+      mediaWidth: mediaWidth,
+      mediaHeight: mediaHeight,
+      mediaThumbHash: mediaThumbHash,
+    );
+  }
+
   /// The session pre-build for [user] (decision 38, E38a), run by the box
   /// list refresh right after it verified [user]'s list — at a connect, a
   /// list change or a backoff retry, never at a send: every box-covered
@@ -983,6 +1268,11 @@ extension MessagingBox on MessagingProvider {
   /// (each would take its own local id and store a second copy). It joins
   /// [_boxTempIds] only just before the first frame goes out — the first
   /// moment a device may hold the message.
+  ///
+  /// An attachment (item 3 / media wiring) is already uploaded: [mediaUrl]
+  /// is its `box:<id>`, and the frames carry the id with its key and
+  /// metadata — the SAME id in the peer frames and every sent copy
+  /// (decision 44).
   Future<bool> _sendOverBox(
     _BoxRoute route, {
     required int recipientId,
@@ -993,6 +1283,13 @@ extension MessagingBox on MessagingProvider {
     String messageType = 'TEXT',
     int? ttl,
     ReplyToPreview? replyTo,
+    String? mediaUrl,
+    String? mediaKey,
+    String? mediaIv,
+    int? mediaDuration,
+    int? mediaWidth,
+    int? mediaHeight,
+    String? mediaThumbHash,
   }) async {
     _boxInFlight.add(tempId);
     try {
@@ -1002,16 +1299,24 @@ extension MessagingBox on MessagingProvider {
         DateTime.now().millisecondsSinceEpoch,
         isUtc: true,
       );
+      final quote = _boxQuoteOf(replyTo);
       final envelope = boxEnvelope(
         content,
         linkPreview: linkPreview,
         messageType: messageType,
         ttl: ttl,
-        replyQuote: _boxQuoteOf(replyTo),
+        replyQuote: quote,
         senderListInfo: route.senderListInfo.toJson(),
         msgId: sendToken,
         sentAt: sentAt,
         sentTo: recipientId,
+        boxMedia: mediaUrl?.substring(kBoxMediaUrlPrefix.length),
+        mediaKey: mediaKey,
+        mediaIv: mediaIv,
+        mediaDuration: mediaDuration,
+        mediaWidth: mediaWidth,
+        mediaHeight: mediaHeight,
+        mediaThumbHash: mediaThumbHash,
       );
       final ownUserId = _currentUserId!;
       final frames = <(ContactOutbound, Uint8List)>[];
@@ -1076,12 +1381,31 @@ extension MessagingBox on MessagingProvider {
         conversationId: route.conversationId,
         createdAt: sentAt,
         messageType: _parseMessageTypeString(messageType) ?? MessageType.text,
+        mediaUrl: mediaUrl,
+        mediaKey: mediaKey,
+        mediaIv: mediaIv,
+        mediaDuration: mediaDuration,
+        mediaWidth: mediaWidth,
+        mediaHeight: mediaHeight,
+        mediaThumbHash: mediaThumbHash,
         // Decision 41: the sender's copy counts from the send.
         disappearAfterSeconds: ttl,
         expiresAt: ttl == null ? null : sentAt.add(Duration(seconds: ttl)),
         tempId: tempId,
         wireId: sendToken,
-        replyTo: replyTo,
+        // The quote the wire carried (E18a): no words of a message that
+        // itself disappears, in RAM or in the record.
+        replyTo: replyTo != null && replyTo.quotedDisappears
+            ? ReplyToPreview(
+                id: replyTo.id,
+                content: '',
+                senderUsername: replyTo.senderUsername,
+                messageType: replyTo.messageType,
+                wireId: replyTo.wireId,
+                senderId: replyTo.senderId,
+                quotedDisappears: true,
+              )
+            : replyTo,
         linkPreviewUrl: preview?['url'],
         linkPreviewTitle: preview?['title'],
         linkPreviewImageUrl: preview?['imageUrl'],

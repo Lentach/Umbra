@@ -31,6 +31,11 @@ class EncryptedMediaUploadService {
   })  : _api = api,
         _crypto = crypto ?? MediaCryptoService();
 
+  /// Encrypts [bytes] alone (fresh key and IV, refused past
+  /// [MediaCryptoService.maxBytes]): a box attachment is uploaded through
+  /// the box, never `/media/upload` (item 3 / media wiring, E17a).
+  Future<EncryptedMedia> encrypt(Uint8List bytes) => _crypto.encrypt(bytes);
+
   /// Encrypts [bytes], invokes [onEncrypted] with the freshly minted key/iv
   /// (so callers can persist them into `_pendingSendContent` BEFORE the upload
   /// await — preserving the documented invariant), then uploads the ciphertext.

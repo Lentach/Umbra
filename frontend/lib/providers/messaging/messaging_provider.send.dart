@@ -254,6 +254,22 @@ extension MessagingSend on MessagingProvider {
           notifyListeners();
         }
       }
+      // Item 3 / media wiring: a peer the box covers gets the image over the
+      // box, uploaded there once; null = the old path below.
+      if (_boxMayCarryMedia(recipientId, tempId)) {
+        final sent = await _sendMediaOverBox(
+          recipientId: recipientId,
+          tempId: tempId,
+          messageType: 'IMAGE',
+          bytes: Uint8List.fromList(rawBytes),
+          effectiveExpiresIn: effectiveExpiresIn,
+          effectiveReplyToId: effectiveReplyToId,
+          mediaWidth: preview?.width,
+          mediaHeight: preview?.height,
+          mediaThumbHash: preview?.thumbHash,
+        );
+        if (sent != null) return sent;
+      }
       final upload = await _mediaUpload.encryptAndUpload(
         bytes: Uint8List.fromList(rawBytes),
         token: token,
@@ -380,6 +396,28 @@ extension MessagingSend on MessagingProvider {
       }
       if (rawBytes.length > MediaCryptoService.maxBytes) {
         throw Exception('Voice file too large');
+      }
+
+      if (_boxMayCarryMedia(recipientId, tempId)) {
+        final sent = await _sendMediaOverBox(
+          recipientId: recipientId,
+          tempId: tempId,
+          messageType: 'VOICE',
+          bytes: Uint8List.fromList(rawBytes),
+          effectiveExpiresIn: effectiveExpiresIn,
+          effectiveReplyToId: effectiveReplyToId,
+          mediaDuration: duration,
+        );
+        if (sent != null) {
+          // Uploaded: the box copy and this device's replace the recording.
+          final row = _messages.where((m) => m.tempId == tempId).firstOrNull;
+          if (!kIsWeb &&
+              localAudioPath != null &&
+              isBoxMediaUrl(row?.mediaUrl)) {
+            await file_utils.deleteFileIfExists(localAudioPath);
+          }
+          return;
+        }
       }
 
       final upload = await _mediaUpload.encryptAndUpload(
@@ -511,6 +549,22 @@ extension MessagingSend on MessagingProvider {
           '${MediaCryptoService.maxVideoDurationSeconds} seconds)',
         );
         return false;
+      }
+
+      if (_boxMayCarryMedia(recipientId, tempId)) {
+        final sent = await _sendMediaOverBox(
+          recipientId: recipientId,
+          tempId: tempId,
+          messageType: 'VIDEO',
+          bytes: Uint8List.fromList(videoBytes),
+          effectiveExpiresIn: effectiveExpiresIn,
+          effectiveReplyToId: effectiveReplyToId,
+          mediaDuration: duration,
+          mediaWidth: width,
+          mediaHeight: height,
+          mediaThumbHash: thumbHash,
+        );
+        if (sent != null) return sent;
       }
 
       final upload = await _mediaUpload.encryptAndUpload(
@@ -662,6 +716,21 @@ extension MessagingSend on MessagingProvider {
         }
       }
 
+      if (_boxMayCarryMedia(recipientId, tempId)) {
+        final sent = await _sendMediaOverBox(
+          recipientId: recipientId,
+          tempId: tempId,
+          messageType: 'GIF',
+          bytes: Uint8List.fromList(gifBytes),
+          effectiveExpiresIn: effectiveExpiresIn,
+          effectiveReplyToId: effectiveReplyToId,
+          mediaWidth: preview?.width,
+          mediaHeight: preview?.height,
+          mediaThumbHash: preview?.thumbHash,
+        );
+        if (sent != null) return;
+      }
+
       final upload = await _mediaUpload.encryptAndUpload(
         bytes: Uint8List.fromList(gifBytes),
         token: token,
@@ -754,6 +823,19 @@ extension MessagingSend on MessagingProvider {
       if (fileBytes.length > MediaCryptoService.maxBytes) {
         _markMessageFailed(tempId, 'File too large (max 20 MB)');
         return;
+      }
+
+      if (_boxMayCarryMedia(recipientId, tempId)) {
+        final sent = await _sendMediaOverBox(
+          recipientId: recipientId,
+          tempId: tempId,
+          messageType: 'FILE',
+          bytes: Uint8List.fromList(fileBytes),
+          content: fileName,
+          effectiveExpiresIn: effectiveExpiresIn,
+          effectiveReplyToId: effectiveReplyToId,
+        );
+        if (sent != null) return;
       }
 
       final upload = await _mediaUpload.encryptAndUpload(
@@ -1050,6 +1132,33 @@ extension MessagingSend on MessagingProvider {
     if (conv == null) return;
     final recipientId = conv_helpers.getOtherUserId(conv, _currentUserId);
 
+    // A box attachment whose upload never succeeded (item 3 / media wiring,
+    // E17b): the SAME held ciphertext, key and IV go up again, under the
+    // row's own timer and quote. One uploaded already (`box:<id>` + keys)
+    // takes its type's branch below and re-sends the frames only.
+    if (message.messageType != MessageType.text &&
+        message.messageType != MessageType.ping &&
+        !isBoxMediaUrl(message.mediaUrl) &&
+        _boxMediaBodies.containsKey(tempId)) {
+      _messages[index] = _messages[index].copyWith(
+        deliveryStatus: MessageDeliveryStatus.sending,
+      );
+      notifyListeners();
+      await _sendMediaOverBox(
+        recipientId: recipientId,
+        tempId: tempId,
+        messageType: message.messageType.name.toUpperCase(),
+        content: message.content,
+        effectiveExpiresIn: message.disappearAfterSeconds,
+        effectiveReplyToId: message.replyToMessageId,
+        mediaDuration: message.mediaDuration,
+        mediaWidth: message.mediaWidth,
+        mediaHeight: message.mediaHeight,
+        mediaThumbHash: message.mediaThumbHash,
+      );
+      return;
+    }
+
     if (message.messageType == MessageType.ping) {
       _messages[index] = _messages[index].copyWith(
         deliveryStatus: MessageDeliveryStatus.sending,
@@ -1077,7 +1186,7 @@ extension MessagingSend on MessagingProvider {
           vUrl.isNotEmpty &&
           vKey != null &&
           vIv != null &&
-          vUrl.startsWith('http')) {
+          (vUrl.startsWith('http') || isBoxMediaUrl(vUrl))) {
         _messages[index] = _messages[index].copyWith(
           deliveryStatus: MessageDeliveryStatus.sending,
         );
@@ -1499,18 +1608,23 @@ extension MessagingSend on MessagingProvider {
       // 2b. The box (metadata-privacy PR3.1 slice (c), item 3). A text or a
       // ping (decision 43) — a reply and a disappearing one included — goes
       // there, and ONLY there (decision 15), when every live device on both
-      // sides has a box address; otherwise the old path below, as ever.
-      // Media stays on the old path: the box envelope carries none yet. So
+      // sides has a box address; otherwise the old path below, as ever. So
       // does a reply the row holds no quote of: the box would name nothing.
+      // An attachment already uploaded to the box (`box:<id>`, item 3 /
+      // media wiring) goes nowhere else; any other media url is the old
+      // path's.
+      final onBox = isBoxMediaUrl(mediaUrl);
       final outbox = boxOutbox;
       final addresses = outbox?.addressesFor(recipientId) ?? const {};
       if (outbox != null &&
           addresses.isNotEmpty &&
-          (messageType == 'TEXT' || messageType == 'PING') &&
-          // The box envelope carries no media fields: a TEXT that ever did
-          // carry a `mediaUrl` would lose it silently.
-          mediaUrl == null &&
-          (effectiveReplyToId == null || _boxQuoteOf(replyTo) != null)) {
+          (onBox ||
+              ((messageType == 'TEXT' || messageType == 'PING') &&
+                  // A TEXT that ever did carry an old-path `mediaUrl` would
+                  // lose it silently.
+                  mediaUrl == null &&
+                  (effectiveReplyToId == null ||
+                      _boxQuoteOf(replyTo) != null)))) {
         final route = await _boxRoute(recipientId, outbox, addresses);
         if (route != null) {
           final ttl = boxTtl;
@@ -1533,14 +1647,23 @@ extension MessagingSend on MessagingProvider {
                 ? ttl
                 : null,
             replyTo: replyTo,
+            mediaUrl: onBox ? mediaUrl : null,
+            mediaKey: onBox ? mediaKey : null,
+            mediaIv: onBox ? mediaIv : null,
+            mediaDuration: onBox ? mediaDuration : null,
+            mediaWidth: onBox ? mediaWidth : null,
+            mediaHeight: onBox ? mediaHeight : null,
+            mediaThumbHash: onBox ? mediaThumbHash : null,
           );
         }
       }
-      if (_boxTempIds.contains(tempId)) {
+      if (_boxTempIds.contains(tempId) || onBox) {
         // A retry of a box send whose route is gone (a peer device lost its
         // address, ours gained a sibling): the box may already have handed
         // it to some devices, and the old path's reader would show those a
-        // second copy. It stays failed; nothing goes to the server.
+        // second copy. It stays failed; nothing goes to the server
+        // (decision 25). A box attachment is pinned from its upload: the
+        // old path could not even name it.
         _e2eFlowLog('BOX_RETRY_NO_ROUTE', {'tempId': tempId});
         _markMessageFailed(tempId, 'Could not send. Try again.');
         return false;

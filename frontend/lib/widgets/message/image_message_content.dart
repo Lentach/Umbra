@@ -7,6 +7,7 @@ import '../../l10n/app_localizations.dart';
 import '../../models/message_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../theme/rpg_theme.dart';
+import 'box_media_source.dart';
 import 'media_preview_frame.dart';
 import '../../utils/encrypted_media_loader.dart';
 import '../../utils/download_utils_web.dart'
@@ -50,12 +51,14 @@ class _ImageMessageContentState extends State<ImageMessageContent> {
     final url = widget.message.mediaUrl;
     if (url == null || url.isEmpty) return null;
     final token = context.read<AuthProvider>().token ?? '';
+    final box = boxMediaSourceFor(context, url);
     try {
       return await loadDecryptedMediaBytes(
         url: url,
         token: token,
         key: widget.message.mediaKey,
         iv: widget.message.mediaIv,
+        box: box,
       );
     } catch (_) {
       // Any failure (fetch, oversize, decrypt) renders the same failure text

@@ -16,7 +16,9 @@ const int kBoxEnvelopeMaxBytes =
 /// peer [sentTo] — for the sender's own other devices (sibling queues part
 /// B, E5), and the link preview both actually carry. Both carry the
 /// message's type, its own timer [ttl] and a reply's [replyQuote] (item 3,
-/// E18a/E18b).
+/// E18a/E18b) and, for an attachment, its box id [boxMedia] with today's
+/// key, IV, duration, dimensions and thumbhash — never a `mediaUrl` (item 3
+/// / media wiring, E17a).
 ///
 /// The composer bounds the user's TEXT to one frame
 /// (`AppConstants.maxEnvelopeBytes`), and the quote's snippet and the timer
@@ -36,6 +38,13 @@ const int kBoxEnvelopeMaxBytes =
   String messageType = 'TEXT',
   int? ttl,
   E2eReplyQuote? replyQuote,
+  String? boxMedia,
+  String? mediaKey,
+  String? mediaIv,
+  int? mediaDuration,
+  int? mediaWidth,
+  int? mediaHeight,
+  String? mediaThumbHash,
 }) {
   String build(Map<String, String?>? preview, {int? to}) => jsonEncode(
     E2eEnvelope.build(
@@ -48,6 +57,13 @@ const int kBoxEnvelopeMaxBytes =
       sentTo: to,
       ttl: ttl,
       replyQuote: replyQuote,
+      boxMedia: boxMedia,
+      mediaKey: mediaKey,
+      mediaIv: mediaIv,
+      mediaDuration: mediaDuration,
+      mediaWidth: mediaWidth,
+      mediaHeight: mediaHeight,
+      mediaThumbHash: mediaThumbHash,
     ),
   );
   final fits =

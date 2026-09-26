@@ -28,11 +28,12 @@ enum _Outcome {
   /// The copy is in the store.
   kept,
 
-  /// Asking again cannot help: the box no longer holds the file, or holds
-  /// bytes that are not a file we sent.
+  /// Not worth a background retry: the box no longer holds the file, holds
+  /// bytes that are not a file we sent, or the store could not keep a good
+  /// download (a full disk would be re-filled hourly for 14 days).
   gone,
 
-  /// No answer, a rate limit, or a copy the store could not keep.
+  /// No answer, or a rate limit.
   retry,
 }
 
@@ -84,6 +85,10 @@ class BoxMediaFetcher {
   bool _draining = false;
   bool _disposed = false;
 
+  /// Ids whose message is destroyed ([forget]): never downloaded or kept
+  /// again.
+  final Set<String> _forgotten = {};
+
   static String _key(int userId, Uint8List id) => '$userId:${boxB64(id)}';
 
   /// The kept copy, else a download (which is then kept). Null when there is
@@ -98,11 +103,43 @@ class BoxMediaFetcher {
   void prefetch(int userId, Uint8List id, {required DateTime receivedAt}) {
     if (_disposed) return;
     final key = _key(userId, id);
-    if (_pending.containsKey(key)) return;
+    if (_pending.containsKey(key) || _forgotten.contains(key)) return;
     final job = _Job(userId, Uint8List.fromList(id), receivedAt);
     _pending[key] = job;
     _queue.add(job);
     unawaited(_drain());
+  }
+
+  /// [prefetch], unless a copy is already kept: the restore path's check
+  /// (E17c), which never reads the copy itself. A store that cannot answer
+  /// leaves it to the download path, which reads the store first anyway.
+  Future<void> prefetchIfMissing(
+    int userId,
+    Uint8List id, {
+    required DateTime receivedAt,
+  }) async {
+    try {
+      if (await _store.has(userId, id)) return;
+    } on Object {
+      // Unknown: prefetch decides.
+    }
+    prefetch(userId, id, receivedAt: receivedAt);
+  }
+
+  /// Keeps [ciphertext] (unframed) as this device's copy of [id]: the
+  /// sender's own, which it never downloads (decision 40).
+  Future<void> keep(int userId, Uint8List id, Uint8List ciphertext) =>
+      _store.put(userId, id, ciphertext);
+
+  /// Drops this device's copy of [id] and any background download of it:
+  /// the message record, which held its only key, is destroyed.
+  Future<void> forget(int userId, Uint8List id) async {
+    final key = _key(userId, id);
+    _forgotten.add(key);
+    _retries.remove(key)?.cancel();
+    final job = _pending.remove(key);
+    if (job != null) _queue.remove(job);
+    await _store.delete(userId, id);
   }
 
   void dispose() {
@@ -131,7 +168,7 @@ class BoxMediaFetcher {
         }
         final fetch = await _shared(job.userId, job.id);
         if (_disposed) return;
-        if (fetch.outcome != _Outcome.retry) {
+        if (fetch.outcome != _Outcome.retry || _forgotten.contains(key)) {
           _pending.remove(key);
           continue;
         }
@@ -170,6 +207,7 @@ class BoxMediaFetcher {
   }
 
   Future<_Fetch> _load(int userId, Uint8List id) async {
+    final key = _key(userId, id);
     try {
       final kept = await _store.get(userId, id);
       if (kept != null) return _Fetch(_Outcome.kept, ciphertext: kept);
@@ -190,10 +228,15 @@ class BoxMediaFetcher {
             ciphertext.length > MediaCryptoService.maxCiphertextBytes) {
           return const _Fetch(_Outcome.gone);
         }
+        // Destroyed meanwhile: its copy must not come back.
+        if (_forgotten.contains(key)) return const _Fetch(_Outcome.gone);
         try {
           await _store.put(userId, id, ciphertext);
         } on Object {
-          return _Fetch(_Outcome.retry, ciphertext: ciphertext);
+          // The bytes are good; only keeping them failed. Given up here, so a
+          // full store is not re-downloaded for 14 days: the viewer's
+          // [ciphertextFor] fetches it again when shown.
+          return _Fetch(_Outcome.gone, ciphertext: ciphertext);
         }
         return _Fetch(_Outcome.kept, ciphertext: ciphertext);
       // `GET /box/media` is limited per IP: a burst of arrivals waits it out.

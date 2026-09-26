@@ -830,5 +830,101 @@ void main() {
         expect(provider.showPingEffect, isFalse);
       },
     );
+
+    test(
+      'a reply to a message this device holds but has not loaded shows OUR '
+      "copy's words, never the peer's snippet — on screen, in its record and "
+      'after a restart; a held message that disappears lends no words (E18a)',
+      () async {
+        await encryption.store.saveDecryptedContent(
+          500,
+          {'content': 'what bob really said', 'senderId': 2},
+          conversationId: 10,
+          wire: (senderId: 2, wireId: wire),
+        );
+        await encryption.store.saveDecryptedContent(
+          501,
+          {'content': 'fleeting words', 'senderId': 2},
+          conversationId: 10,
+          disappearAfterSeconds: 60,
+          wire: (senderId: 2, wireId: 'wire-fleet-001'),
+        );
+        expect(provider.messages.where((m) => m.id >= 500), isEmpty);
+
+        inbound(
+          text: 'reply',
+          quote: (wireId: wire, senderId: 2, type: 'TEXT', snippet: 'forged'),
+        );
+        final reply = await receive();
+        expect(reply.replyTo?.id, 500);
+        expect(reply.replyTo?.content, 'what bob really said');
+        final record = await encryption.store.getDecryptedContent(reply.id);
+        expect(
+          record?['replyTo'],
+          containsPair('content', 'what bob really said'),
+        );
+
+        inbound(
+          text: 'reply 2',
+          quote: (
+            wireId: 'wire-fleet-001',
+            senderId: 2,
+            type: 'TEXT',
+            snippet: 'fleeting words',
+          ),
+        );
+        final toFleeting = await receive();
+        expect(toFleeting.replyTo?.id, 501);
+        expect(toFleeting.replyTo?.content, isEmpty);
+        expect(toFleeting.replyTo?.quotedDisappears, isTrue);
+
+        await restart();
+        expect(
+          provider.messages.singleWhere((m) => m.id == reply.id).replyTo?.content,
+          'what bob really said',
+        );
+        expect(
+          provider.messages
+              .singleWhere((m) => m.id == toFleeting.id)
+              .replyTo
+              ?.content,
+          isEmpty,
+        );
+      },
+    );
+
+    test(
+      'a message whose first store is unproven keeps the countdown its show '
+      'started: the store retried on the next offer records that start, and '
+      'a restart keeps the same deadline (decision 41)',
+      () async {
+        encryption.dropSaves = true;
+        inbound(text: 'seen once', ttl: 60);
+        final e = BoxInboxEntry(
+          rid: 'rid',
+          id: 'm${nextLocal - kFirstLocalMessageId}',
+          localId: nextLocal++,
+          peerUserId: 2,
+          senderDeviceId: 1,
+          signal: '2:AQID',
+          receivedAt: DateTime.now().toUtc(),
+          acked: true,
+        );
+        expect(await deliver(e, _peer(2, conversationId: 10)), isFalse);
+        final deadline = provider.messages
+            .singleWhere((m) => m.id == e.localId)
+            .expiresAt;
+        expect(deadline, isNotNull, reason: 'shown in the open chat');
+
+        encryption.dropSaves = false;
+        expect(await deliver(e, _peer(2, conversationId: 10)), isTrue);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+        await restart();
+        expect(
+          provider.messages.singleWhere((m) => m.id == e.localId).expiresAt,
+          deadline,
+        );
+      },
+    );
   });
 }

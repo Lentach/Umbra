@@ -7,6 +7,8 @@ import '../config/app_config.dart';
 import '../constants/app_constants.dart';
 import '../services/api_service.dart';
 import '../services/box/box_client.dart';
+import '../services/box/box_media_fetcher.dart';
+import '../services/box/box_media_store.dart';
 import '../services/box/box_session.dart';
 import '../services/contacts/contact_backup.dart';
 import '../services/contacts/contact_backup_service.dart';
@@ -115,6 +117,10 @@ class ConnectionProvider extends ChangeNotifier {
   /// account connects, disposed on logout.
   BoxSession? _box;
   int? _boxUserId;
+
+  /// That account's box attachment copies and downloads (item 3 / media
+  /// wiring, decision 40): made with its session, gone with it.
+  BoxMediaFetcher? _boxMedia;
 
   /// Whether this connect's account socket has seen `socketReady`. The box
   /// device-list refresh (decision 21) waits for it: a `getDeviceList` sent
@@ -491,6 +497,7 @@ class ConnectionProvider extends ChangeNotifier {
     if (boxClient != null && contacts != null) {
       if (_box == null || _boxUserId != userId) {
         _box?.dispose();
+        _boxMedia?.dispose();
         _boxUserId = userId;
         _box = BoxSession(
           box: boxClient(baseUrl),
@@ -499,6 +506,11 @@ class ConnectionProvider extends ChangeNotifier {
           // E9: box push registration on every contact queue.
           push: PushBoxSource(),
         )..start();
+        final session = _box!;
+        _boxMedia = BoxMediaFetcher(
+          store: BoxMediaStore.device(),
+          download: session.downloadMedia,
+        );
         // Slice (b): every box delivery is read by the messaging provider,
         // which knows the peer only through the contact record. Slice (c):
         // it sends through the same session. Sibling queues: it encrypts
@@ -515,7 +527,8 @@ class ConnectionProvider extends ChangeNotifier {
             ..ownLiveDevices = messaging.ownLiveDevices;
           messaging
             ..boxOutbox = _box
-            ..boxSiblings = _box;
+            ..boxSiblings = _box
+            ..boxMedia = _boxMedia;
         }
         if (_encryptionProvider?.isE2EReady == true) _box!.e2eReady();
       } else {
@@ -969,9 +982,12 @@ class ConnectionProvider extends ChangeNotifier {
       _contactStore?.close();
       _box?.dispose();
       _box = null;
+      _boxMedia?.dispose();
+      _boxMedia = null;
       _messagingProvider
         ?..boxOutbox = null
-        ..boxSiblings = null;
+        ..boxSiblings = null
+        ..boxMedia = null;
       _boxUserId = null;
     }
 
@@ -1681,6 +1697,7 @@ class ConnectionProvider extends ChangeNotifier {
     _reconnectManager.cancel();
     _socketService.disconnect();
     _box?.dispose();
+    _boxMedia?.dispose();
     super.dispose();
   }
 }

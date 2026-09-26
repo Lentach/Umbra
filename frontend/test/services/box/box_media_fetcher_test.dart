@@ -249,19 +249,29 @@ void main() {
       });
     });
 
-    test('a copy the store could not keep is fetched again later', () {
-      fakeAsync((clock) {
-        final flaky = _FlakyStore();
-        fetcher(clock: clock, on: flaky).prefetch(1, _id(1), receivedAt: start);
-        clock.flushMicrotasks();
-        flaky.healthy = true;
-        clock.elapse(const Duration(seconds: 30));
-        expect(downloads, hasLength(2));
-        unawaited(flaky.get(1, _id(1)).then((kept) => expect(kept, ct)));
-        clock.elapse(const Duration(days: 1));
-        expect(downloads, hasLength(2));
-      });
-    });
+    test(
+      'a good download the store could not keep is given up, not re-fetched '
+      'on the retry ladder for 14 days; the viewer still gets the bytes and '
+      'downloads again when shown',
+      () {
+        fakeAsync((clock) {
+          final flaky = _FlakyStore();
+          final f = fetcher(clock: clock, on: flaky)
+            ..prefetch(1, _id(1), receivedAt: start);
+          clock.flushMicrotasks();
+          expect(downloads, hasLength(1));
+          clock.elapse(const Duration(days: 15));
+          expect(downloads, hasLength(1), reason: 'no background re-download');
+          expect(clock.pendingTimers, isEmpty);
+
+          Uint8List? shown;
+          unawaited(f.ciphertextFor(1, _id(1)).then((c) => shown = c));
+          clock.flushMicrotasks();
+          expect(shown, ct);
+          expect(downloads, hasLength(2));
+        });
+      },
+    );
 
     test(
       'a rate limit waits at least as long as the box asked, then tries again',

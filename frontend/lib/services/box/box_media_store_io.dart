@@ -7,6 +7,22 @@ import 'box_media_store.dart';
 
 BoxMediaStore deviceBoxMediaStore() => IoBoxMediaStore();
 
+/// Deletes every account's copies (`<app support>/box_media`), for the
+/// in-app erase (`deleteLocalMessageStoreFiles`). True once the directory is
+/// confirmed gone.
+Future<bool> deleteAllBoxMediaCopies({
+  Future<Directory> Function()? root,
+}) async {
+  try {
+    final dir = await (root ?? getApplicationSupportDirectory)();
+    final media = Directory('${dir.path}${Platform.pathSeparator}box_media');
+    if (media.existsSync()) await media.delete(recursive: true);
+    return !media.existsSync();
+  } on Object {
+    return false;
+  }
+}
+
 /// Native: one file per copy, `<app support>/box_media/<userId>/<id>`.
 class IoBoxMediaStore implements BoxMediaStore {
   IoBoxMediaStore({Future<Directory> Function()? root})
@@ -54,6 +70,10 @@ class IoBoxMediaStore implements BoxMediaStore {
       return null;
     }
   }
+
+  @override
+  Future<bool> has(int userId, Uint8List id) async =>
+      (await _file(userId, id)).existsSync();
 
   @override
   Future<void> delete(int userId, Uint8List id) async {

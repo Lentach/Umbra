@@ -15,8 +15,12 @@ import '../services/api_service.dart';
 import '../services/box/box_device_list_refresh.dart';
 import '../services/box/box_envelope.dart';
 import '../services/box/box_frame.dart';
+import '../services/box/box_media_fetcher.dart';
+import '../services/box/box_media_frame.dart';
+import '../services/box/box_media_url.dart';
 import '../services/box/box_outbox.dart';
 import '../services/box/box_siblings.dart';
+import '../services/box/box_wire.dart';
 import '../services/contacts/contact_record.dart';
 import '../services/contacts/contact_store.dart';
 import '../services/device_list/device_list_cache.dart';
@@ -391,6 +395,20 @@ class MessagingProvider extends ChangeNotifier {
   /// wires the account session's one; null = sibling entries wait.
   BoxSiblingLink? boxSiblings;
 
+  /// This account's box attachment copies (item 3 / media wiring, decision
+  /// 40): kept on send and arrival, read to display. `ConnectionProvider`
+  /// wires the one owned beside the account's box session; null = box
+  /// attachments neither download nor show.
+  BoxMediaFetcher? boxMedia;
+
+  /// Box attachments encrypted but not yet uploaded, by tempId (E17b): a
+  /// retry uploads the SAME ciphertext, key and IV — `MediaCryptoService`
+  /// takes no caller key, so re-encrypting would mint new ones. Gone with a
+  /// successful upload; a restart loses them, and the row stays failed for
+  /// the user to send again.
+  final Map<String, ({Uint8List ciphertext, String key, String iv})>
+  _boxMediaBodies = {};
+
   /// Set in [dispose]; lets the overlay's dispose-scheduled onComplete
   /// microtask no-op instead of notifying a disposed ChangeNotifier.
   bool _pingEffectConsumerDisposed = false;
@@ -732,6 +750,29 @@ class MessagingProvider extends ChangeNotifier {
   /// Wire the EncryptionProvider for E2E operations.
   void setEncryptionProvider(EncryptionProvider ep) {
     _encryptionProvider = ep;
+    // A destroyed box record takes this device's copy of its attachment.
+    ep.onBoxMediaDestroyed = _forgetBoxMedia;
+  }
+
+  void _forgetBoxMedia(List<String> urls) {
+    final media = boxMedia;
+    final user = _currentUserId;
+    if (media == null || user == null) return;
+    for (final url in urls) {
+      final id = boxMediaIdOf(url);
+      if (id != null) media.forget(user, id).ignore();
+    }
+  }
+
+  /// The unframed ciphertext of box attachment [url] for the widgets that
+  /// show it (`loadDecryptedMediaBytes`' `BoxCiphertextSource`): this
+  /// device's copy, else a download. Null when there is none.
+  Future<Uint8List?> boxMediaCiphertext(String url) async {
+    final media = boxMedia;
+    final user = _currentUserId;
+    final id = boxMediaIdOf(url);
+    if (media == null || user == null || id == null) return null;
+    return media.ciphertextFor(user, id);
   }
 
   /// Wire the ConversationsProvider for lastMessage/unread updates.
@@ -1168,6 +1209,7 @@ class MessagingProvider extends ChangeNotifier {
       _identityRefusedSendTempIds.clear();
       _sendTokenByTempId.clear();
       _boxTempIds.clear();
+      _boxMediaBodies.clear();
       _boxLists.reset();
       _staleResendAttempts.clear();
       _staleResendTempIds.clear();
@@ -1283,6 +1325,7 @@ class MessagingProvider extends ChangeNotifier {
     _identityRefusedSendTempIds.clear();
     _sendTokenByTempId.clear();
     _boxTempIds.clear();
+    _boxMediaBodies.clear();
     _boxLists.reset();
     _staleResendAttempts.clear();
     _staleResendTempIds.clear();

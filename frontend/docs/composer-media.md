@@ -29,6 +29,13 @@
 - Ping and web voice playback use Web Audio (`ping_sound_web.dart`, `voice_player_web.dart`) to avoid iOS MediaSession cards.
 - Web voice codec limit remains: Safari can decode AAC/MP4/MP3/WAV; WebM/Opus may not play on iOS.
 - File/media helpers use conditional imports. Guard `dart:io`/`Platform` with `!kIsWeb`.
+- **Media to a box-covered peer (metadata-privacy item 3, decisions 40 and 44; `MessagingProvider._sendMediaOverBox`)** — all five senders share one helper:
+  - A synchronous `_boxMayCarryMedia` check runs first, so an uncovered peer reaches the old path's emit with no extra await; the image-before-caption order holds.
+  - For a covered peer the route is decided BEFORE the upload. There is ONE upload per message, charged to the first live peer device, and the sender keeps its own copy.
+  - `quota_exceeded`, `rate_limited` or no answer fails the row ('Ponów'), never the old path.
+  - A retry after the upload re-sends the frames only. Before it, a retry re-uploads the same in-RAM ciphertext; a restart loses that, and the user sends again.
+  - Widgets load a `box:` url through `boxMediaSourceFor(context, url)` → `MessagingProvider.boxMediaCiphertext` (the fetcher), with no Bearer token. The size cap applies to the UNFRAMED ciphertext, so a 16.1–20 MiB file on the 32 MiB rung displays.
+  - The video `_hasUploadedBlob` check, `VideoPlaybackSession`'s still-sending check and the voice retry all treat `box:` as uploaded.
 - `webcrypto` Android 16KB page-size patch: `patch_webcrypto_16k.ps1` edits the PUB CACHE (dropped by `pub cache repair`/SDK upgrade, PowerShell-only). `build-android.ps1` applies it best-effort; the HARD gate is the post-build ELF check `scripts/verify-apk-16k.mjs`. `flutter pub run webcrypto:setup` is for native test setup, not APK/AAB packaging.
 - `MainActivity` package declaration must be `com.fireplace.app` even though the file path is still old.
 - `kotlin.incremental=false` in `android/gradle.properties` is intentional mixed-drive cache damage control.

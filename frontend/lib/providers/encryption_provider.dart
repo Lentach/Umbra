@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import '../models/message_model.dart';
 import '../services/account_enrolled_hint.dart';
 import '../services/audio_cache_store.dart';
+import '../services/box/box_media_url.dart';
 import '../services/e2e_lock_revoker.dart';
 import '../services/encryption_service.dart';
 import '../services/device_link/dak_store.dart';
@@ -116,6 +117,13 @@ class EncryptionProvider extends ChangeNotifier {
   /// `ConnectionProvider`: a box send never looks a list up
   /// (metadata-privacy decision 21), so the box refresh looks it up again.
   void Function(int userId)? onDeviceListInvalidated;
+
+  /// Called with the box attachment urls (`box:<id>`) of records a purge
+  /// destroyed — timer, delete-for-me, clear history, reconcile: every path
+  /// ends in [purgeLocalPlaintext]. The record held the only key, so this
+  /// device's copy goes too (item 3 / media wiring, decision 40). Set by
+  /// `MessagingProvider`, which owns the copies.
+  void Function(List<String> boxMediaUrls)? onBoxMediaDestroyed;
 
   // ---------- Public Getters ----------
 
@@ -1249,6 +1257,20 @@ class EncryptionProvider extends ChangeNotifier {
     for (final id in ids) {
       _decryptedContentCache.remove(id);
     }
+    // Read before the records go: only a box record (local id) can name a
+    // box attachment, and nothing else would remember its url.
+    final boxMedia = <int, String>{};
+    for (final id in ids) {
+      if (!isLocalMessageId(id)) continue;
+      try {
+        final url = (await _encryptionService.getDecryptedContent(
+          id,
+        ))?['mediaUrl'];
+        if (url is String && isBoxMediaUrl(url)) boxMedia[id] = url;
+      } on Object {
+        // Unreadable: the copy stays, ciphertext without a key.
+      }
+    }
 
     final failedCiphertexts = <String>{};
     for (final ciphertext in ciphertexts) {
@@ -1276,6 +1298,11 @@ class EncryptionProvider extends ChangeNotifier {
       _decryptedLedger.removeAll(settled);
       await _encryptionService.forgetDecryptedMany(settled);
     }
+    final released = [
+      for (final MapEntry(key: id, value: url) in boxMedia.entries)
+        if (settled.contains(id)) url,
+    ];
+    if (released.isNotEmpty) onBoxMediaDestroyed?.call(released);
 
     final result = PlaintextPurgeResult(
       removed: disk.removed,
