@@ -9,7 +9,7 @@
 | 1 | **Sibling queues part B**: sent copies to own devices over the box, rotation on revoke, pruning, no-session policy | part A (`a8a4e560`) | unblocks multi-device senders on the box |
 | 2 | **Box push registration** | 1 | a box-only message wakes no closed app until this lands (23) |
 | 3 | **Decision-22 slice**: disappearing timers, replies and media over the box | 1, 2 | decision 22: "their own slice right after sibling queues + push" |
-| 4 | **Message actions over E2E**: reactions (plain emoji), pin, edit, delete-for-everyone | 3 | BUILT 09-26 (`81b795e8`, decisions 45–46, E19a–E19j) |
+| 4 | **Message actions over E2E**: reactions (plain emoji), pin, edit, delete-for-everyone | 3 | DONE 09-26 (`81b795e8`, decisions 45–46, E19a–E19j; web drive a–f passed; CI 7/7 on `c7f4abd0`) |
 | 5 | **Slice (d)**: migration handoff over the old path | (c) | moves existing friendships onto the box |
 | 6 | **Slice (e)**: `device_added` / `device_removed` / `list_update` over the box | (b), (c) | replaces the server's `staleLists` bounce |
 | 7 | **Slice (f)**: first contact over request queues | (a), part A frames | friend requests over the box |
