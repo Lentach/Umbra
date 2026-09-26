@@ -10,6 +10,22 @@ typedef _BoxRoute = ({
   SenderListInfo senderListInfo,
 });
 
+/// A box attachment encrypted but not yet uploaded (item 3 / media wiring,
+/// E17b), with the plaintext `recording` a voice note was read from: the
+/// upload that succeeds deletes it, whichever attempt that is.
+typedef _BoxMediaBody = ({
+  Uint8List ciphertext,
+  String key,
+  String iv,
+  String? recording,
+});
+
+/// A box message's quote and timer, read from its row when the send
+/// started: an attachment's row may leave `_messages` during its upload
+/// (the user opens another chat), and its frames must still quote and time
+/// it (E18a/E18b).
+typedef _BoxRowAtSend = ({ReplyToPreview? replyTo, int? ttl});
+
 /// The payload key of a box message's record holding when its countdown
 /// started, whole ms (item 3, decision 41): the send for our own copies,
 /// the first time this device showed it for a received one. Absent = not
@@ -1009,16 +1025,21 @@ extension MessagingBox on MessagingProvider {
   /// sent as frames carrying its id ([_uploadBoxMediaAndSend]).
   ///
   /// [bytes] is the plaintext of a first send, whose null answer is the old
-  /// path — only on evidence ([_boxRoute]). Without [bytes] this is a retry
-  /// of an upload that never succeeded (E17b): it uploads the SAME held
-  /// ciphertext, key and IV, and a route gone since fails the row. A list
-  /// that cannot be verified, a refused upload or no answer fails it too
-  /// (decisions 19, 31), never the old path.
+  /// path — only on evidence ([_boxRoute]), with nothing encrypted for the
+  /// box. Without [bytes] this is a retry of an upload that never succeeded
+  /// (E17b): it uploads the SAME held ciphertext, key and IV, and a route
+  /// gone since fails the row. A list that cannot be verified, a refused
+  /// upload or no answer fails it too (decisions 19, 31), never the old
+  /// path, and so does a reply whose quote cannot be named: it is never
+  /// sent without it. Each of those holds the encrypted file for its retry.
+  /// [recording] is a voice note's plaintext file, deleted once the upload
+  /// succeeds.
   Future<bool?> _sendMediaOverBox({
     required int recipientId,
     required String tempId,
     required String messageType,
     Uint8List? bytes,
+    String? recording,
     String content = '',
     int? effectiveExpiresIn,
     int? effectiveReplyToId,
@@ -1031,28 +1052,44 @@ extension MessagingBox on MessagingProvider {
     // failed under an upload in flight.
     _boxInFlight.add(tempId);
     try {
+      // Before the first await: the row leaves [_messages] once the user
+      // opens another chat, and the frames still quote and time it.
+      final row = _messages.where((m) => m.tempId == tempId).firstOrNull;
+      final atSend = (
+        replyTo: row?.replyTo,
+        ttl: row == null ? effectiveExpiresIn : row.disappearAfterSeconds,
+      );
       final outbox = boxOutbox;
       final addresses = outbox?.addressesFor(recipientId) ?? const {};
-      final route = outbox == null || addresses.isEmpty
-          ? null
-          : await _boxRoute(recipientId, outbox, addresses);
+      if (outbox == null || addresses.isEmpty) {
+        if (bytes != null) return null;
+        _e2eFlowLog('BOX_RETRY_NO_ROUTE', {'tempId': tempId});
+        _markMessageFailed(tempId, 'Could not send. Try again.');
+        return false;
+      }
+      final _BoxRoute? route;
+      try {
+        route = await _boxRoute(recipientId, outbox, addresses);
+      } on Object {
+        // The row fails for a retry, which uploads what is held here.
+        if (bytes != null) await _holdBoxMedia(tempId, bytes, recording);
+        rethrow;
+      }
       if (route == null) {
         if (bytes != null) return null;
         _e2eFlowLog('BOX_RETRY_NO_ROUTE', {'tempId': tempId});
         _markMessageFailed(tempId, 'Could not send. Try again.');
         return false;
       }
-      var body = _boxMediaBodies[tempId];
-      if (bytes != null) {
-        final encrypted = await _mediaUpload.encrypt(bytes);
-        body = (
-          ciphertext: encrypted.ciphertext,
-          key: encrypted.keyBase64,
-          iv: encrypted.ivBase64,
-        );
-        _boxMediaBodies[tempId] = body;
-      }
+      final body = bytes != null
+          ? await _holdBoxMedia(tempId, bytes, recording)
+          : _boxMediaBodies[tempId];
       if (body == null) throw StateError('no held attachment');
+      if (effectiveReplyToId != null && _boxQuoteOf(atSend.replyTo) == null) {
+        _e2eFlowLog('BOX_MEDIA_NO_QUOTE', {'tempId': tempId});
+        _markMessageFailed(tempId, 'Could not send. Try again.');
+        return false;
+      }
       // The key before any further await (the durability invariant).
       _pendingSendContent[tempId] = <String, dynamic>{
         'content': content,
@@ -1067,6 +1104,7 @@ extension MessagingBox on MessagingProvider {
       return await _uploadBoxMediaAndSend(
         route,
         body,
+        atSend,
         recipientId: recipientId,
         tempId: tempId,
         messageType: messageType,
@@ -1090,15 +1128,33 @@ extension MessagingBox on MessagingProvider {
     }
   }
 
+  /// Encrypts [bytes] once for the box and holds them under [tempId] for
+  /// every attempt to come (E17b), with the voice note's [recording].
+  Future<_BoxMediaBody> _holdBoxMedia(
+    String tempId,
+    Uint8List bytes,
+    String? recording,
+  ) async {
+    final encrypted = await _mediaUpload.encrypt(bytes);
+    return _boxMediaBodies[tempId] = (
+      ciphertext: encrypted.ciphertext,
+      key: encrypted.keyBase64,
+      iv: encrypted.ivBase64,
+      recording: recording,
+    );
+  }
+
   /// Uploads [body] ONCE, padded to a ladder rung, against the FIRST live
   /// peer device's queue, whose daily budget pays (decision 44), then sends
-  /// the frames — the same id to every peer device and sibling — through
-  /// the box path of [_encryptAndSend]. The row names the id before
-  /// anything else can fail, so a retry re-sends frames and never uploads
-  /// again (E17b); the sender keeps its own copy (decision 40).
+  /// the frames — the same id to every peer device and sibling, quoting and
+  /// timed by [atSend] — through the box path of [_encryptAndSend]. The row
+  /// names the id before anything else can fail, so a retry re-sends frames
+  /// and never uploads again (E17b); the sender keeps its own copy
+  /// (decision 40), which replaces a voice note's plaintext recording.
   Future<bool> _uploadBoxMediaAndSend(
     _BoxRoute route,
-    ({Uint8List ciphertext, String key, String iv}) body, {
+    _BoxMediaBody body,
+    _BoxRowAtSend atSend, {
     required int recipientId,
     required String tempId,
     required String messageType,
@@ -1152,6 +1208,19 @@ extension MessagingBox on MessagingProvider {
       );
       notifyListeners();
     }
+    final recording = body.recording;
+    if (!kIsWeb && recording != null) {
+      try {
+        await file_utils.deleteFileIfExists(recording);
+      } on Object catch (e) {
+        // Left behind like the old path's on a failed delete; the send goes
+        // on.
+        _e2eFlowLog('BOX_RECORDING_NOT_DELETED', {
+          'tempId': tempId,
+          'error': e.runtimeType.toString(),
+        });
+      }
+    }
     final pending = _pendingAfterUpload(tempId);
     if (pending == null) return false;
     pending['mediaUrl'] = url;
@@ -1169,6 +1238,7 @@ extension MessagingBox on MessagingProvider {
       mediaWidth: mediaWidth,
       mediaHeight: mediaHeight,
       mediaThumbHash: mediaThumbHash,
+      boxRowAtSend: atSend,
     );
   }
 

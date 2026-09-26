@@ -238,6 +238,16 @@ class BoxMediaFetcher {
           // [ciphertextFor] fetches it again when shown.
           return _Fetch(_Outcome.gone, ciphertext: ciphertext);
         }
+        // Destroyed while it was being written: [forget]'s delete ran before
+        // the write landed.
+        if (_forgotten.contains(key)) {
+          try {
+            await _store.delete(userId, id);
+          } on Object {
+            // Unreadable anyway: its only key went with the record.
+          }
+          return const _Fetch(_Outcome.gone);
+        }
         return _Fetch(_Outcome.kept, ciphertext: ciphertext);
       // `GET /box/media` is limited per IP: a burst of arrivals waits it out.
       case BoxRefused(code: BoxCode.rateLimited, :final retryAfter):

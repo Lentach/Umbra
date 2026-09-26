@@ -402,8 +402,11 @@ extension MessagingDecrypt on MessagingProvider {
   /// [box]: read by the box reader, where an attachment is named by
   /// `boxMedia` alone (item 3 / media wiring, E17a) — its `box:<id>`, only
   /// with its key and IV, never an envelope `mediaUrl`. An old-path
-  /// envelope's `boxMedia` is never read. Without a usable id a media type
-  /// keeps no url: today's broken-media bubble, never a dropped message.
+  /// envelope's `boxMedia` is never read, and a `box:` url in its
+  /// `mediaUrl` is no url: a server row's attachment is never the box's,
+  /// whose copy no purge of a server row would forget. Without a usable id
+  /// a media type keeps no url: today's broken-media bubble, never a
+  /// dropped message.
   MessageModel _withEnvelope(
     MessageModel msg,
     E2eEnvelopeFields parsed, {
@@ -427,7 +430,11 @@ extension MessagingDecrypt on MessagingProvider {
     return msg.copyWith(
       content: parsed.content,
       messageType: _parseMessageTypeString(parsed.messageType),
-      mediaUrl: box ? _boxMediaUrlOf(parsed) : parsed.mediaUrl,
+      mediaUrl: box
+          ? _boxMediaUrlOf(parsed)
+          : isBoxMediaUrl(parsed.mediaUrl)
+          ? null
+          : parsed.mediaUrl,
       mediaDuration: parsed.mediaDuration,
       mediaKey: parsed.mediaKey,
       mediaIv: parsed.mediaIv,

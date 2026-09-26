@@ -37,6 +37,32 @@ class _Encryption extends EncryptionProvider {
   String inbound = '';
   final Map<int, VerifiedDeviceList> lists = {};
 
+  /// Plaintext writes that silently do not commit (quota, a locked vault):
+  /// the save path reports nothing either way.
+  bool dropSaves = false;
+
+  @override
+  Future<void> saveDecryptedContent(
+    int messageId,
+    Map<String, dynamic> data, {
+    int? conversationId,
+    DateTime? createdAt,
+    DateTime? expiresAt,
+    int? disappearAfterSeconds,
+    WireKey? wire,
+  }) async {
+    if (dropSaves) return;
+    await super.saveDecryptedContent(
+      messageId,
+      data,
+      conversationId: conversationId,
+      createdAt: createdAt,
+      expiresAt: expiresAt,
+      disappearAfterSeconds: disappearAfterSeconds,
+      wire: wire,
+    );
+  }
+
   @override
   bool get isE2EReady => true;
 
@@ -371,6 +397,123 @@ void main() {
       await pump();
       expect(downloads, isEmpty);
       expect(await encryption.store.getDecryptedContent(e.localId), isNotNull);
+    },
+  );
+
+  test(
+    'an old-path message whose envelope names a box: url keeps no url — a '
+    "server row's attachment is never the box's, whose copy nothing would "
+    'ever forget',
+    () async {
+      final url = 'box:${boxB64(_id(8))}';
+      encryption.inbound = jsonEncode(
+        E2eEnvelope.build(
+          '',
+          messageType: 'IMAGE',
+          mediaUrl: url,
+          mediaKey: 'S0VZ',
+          mediaIv: 'SVY=',
+        ),
+      );
+      provider.onNewMessage({
+        'id': 700,
+        'senderId': 2,
+        'senderUsername': 'bob',
+        'content': '[encrypted]',
+        'encryptedContent': '2:AQID',
+        'originDeviceId': 1,
+        'conversationId': 10,
+        'deliveryStatus': 'DELIVERED',
+        'messageType': 'TEXT',
+        'createdAt': DateTime.now().toUtc().toIso8601String(),
+      });
+      await pump();
+
+      final shown = row(700);
+      expect(shown.messageType, MessageType.image);
+      expect(shown.mediaUrl, isNull);
+      final record = await encryption.store.getDecryptedContent(700);
+      expect(record, isNotNull);
+      expect(record?['mediaUrl'], isNull);
+    },
+  );
+
+  test(
+    'an attachment whose record is not proven stored is not downloaded: the '
+    'download starts only once a later offer proves the store (E17c)',
+    () async {
+      final ct = Uint8List.fromList(List.generate(64, (i) => i));
+      outbox.media[boxB64(_id(9))] = frameMediaToRung(ct);
+      encryption.dropSaves = true;
+      final (e, done) = await receive(_id(9));
+      expect(done, isFalse, reason: 'the store is unproven');
+      expect(row(e.localId).mediaUrl, 'box:${boxB64(_id(9))}');
+      await pump();
+      expect(downloads, isEmpty);
+      expect(await store.get(1, _id(9)), isNull);
+
+      encryption.dropSaves = false;
+      final again = await provider.consumeBoxEntry(
+        e,
+        const ContactRecord(
+          userId: 2,
+          username: 'bob',
+          tag: '0002',
+          state: ContactState.friend,
+          legacy: ContactLegacy(conversationId: 10),
+        ),
+      );
+      expect(again, isTrue);
+      await pump();
+      expect(downloads, [_id(9)]);
+      expect(await store.get(1, _id(9)), ct);
+    },
+  );
+
+  test(
+    "an old-path message's envelope never names a box attachment: its "
+    'boxMedia is ignored — the row keeps its own mediaUrl, or none (E17a)',
+    () async {
+      Map<String, dynamic> socketRow(int id) => {
+        'id': id,
+        'senderId': 2,
+        'senderUsername': 'bob',
+        'content': '[encrypted]',
+        'encryptedContent': '2:old-path-$id',
+        'originDeviceId': 1,
+        'conversationId': 10,
+        'deliveryStatus': 'DELIVERED',
+        'messageType': 'IMAGE',
+        'createdAt': DateTime.now().toUtc().toIso8601String(),
+      };
+      encryption.inbound = jsonEncode(
+        E2eEnvelope.build(
+          '',
+          messageType: 'IMAGE',
+          mediaUrl: 'http://test/media/msgs/x.bin',
+          boxMedia: boxB64(_id(10)),
+          mediaKey: 'S0VZ',
+          mediaIv: 'SVY=',
+        ),
+      );
+      provider.onNewMessage(socketRow(9001));
+      await pump();
+      expect(row(9001).mediaUrl, 'http://test/media/msgs/x.bin');
+
+      encryption.inbound = jsonEncode(
+        E2eEnvelope.build(
+          '',
+          messageType: 'IMAGE',
+          boxMedia: boxB64(_id(11)),
+          mediaKey: 'S0VZ',
+          mediaIv: 'SVY=',
+        ),
+      );
+      provider.onNewMessage(socketRow(9002));
+      await pump();
+      expect(row(9002).messageType, MessageType.image);
+      expect(row(9002).mediaUrl, isNull);
+      expect(downloads, isEmpty);
     },
   );
 

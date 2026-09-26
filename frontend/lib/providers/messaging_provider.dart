@@ -403,11 +403,11 @@ class MessagingProvider extends ChangeNotifier {
 
   /// Box attachments encrypted but not yet uploaded, by tempId (E17b): a
   /// retry uploads the SAME ciphertext, key and IV — `MediaCryptoService`
-  /// takes no caller key, so re-encrypting would mint new ones. Gone with a
-  /// successful upload; a restart loses them, and the row stays failed for
-  /// the user to send again.
-  final Map<String, ({Uint8List ciphertext, String key, String iv})>
-  _boxMediaBodies = {};
+  /// takes no caller key, so re-encrypting would mint new ones. Held from a
+  /// failed route lookup on, too, so that send retries like any other. Gone
+  /// with a successful upload; a restart loses them, and the row stays
+  /// failed for the user to send again.
+  final Map<String, _BoxMediaBody> _boxMediaBodies = {};
 
   /// Set in [dispose]; lets the overlay's dispose-scheduled onComplete
   /// microtask no-op instead of notifying a disposed ChangeNotifier.

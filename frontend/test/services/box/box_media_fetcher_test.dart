@@ -22,6 +22,19 @@ class _FlakyStore extends MemoryBoxMediaStore {
   }
 }
 
+/// A store whose writes wait for [gate]; [writing] completes as one starts.
+class _HeldStore extends MemoryBoxMediaStore {
+  final writing = Completer<void>();
+  final gate = Completer<void>();
+
+  @override
+  Future<void> put(int userId, Uint8List id, Uint8List ciphertext) async {
+    if (!writing.isCompleted) writing.complete();
+    await gate.future;
+    await super.put(userId, id, ciphertext);
+  }
+}
+
 void main() {
   final start = DateTime.utc(2026, 9, 26, 12);
   final ct = Uint8List.fromList([5, 6, 7, 8]);
@@ -133,6 +146,23 @@ void main() {
         final kept = await store.get(1, _id(1));
         expect(kept?.length, big.length);
         expect(kept, big);
+      },
+    );
+
+    test(
+      'a message destroyed while its download is being written keeps no '
+      'copy: the write that lands after the forget is removed',
+      () async {
+        final held = _HeldStore();
+        final f = fetcher(on: held);
+        final shown = f.ciphertextFor(1, _id(1));
+        await held.writing.future;
+        await f.forget(1, _id(1));
+        held.gate.complete();
+
+        final got = await shown;
+        expect(await held.get(1, _id(1)), isNull);
+        expect(got, isNull);
       },
     );
   });

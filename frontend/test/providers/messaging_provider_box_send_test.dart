@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:fireplace/models/message_model.dart';
@@ -174,6 +175,9 @@ class _Outbox implements BoxOutbox {
   /// When set, the media route answers this instead of storing the body.
   BoxResult<BoxMediaRef>? uploadAnswer;
 
+  /// When set, every `POST /box/media` waits for it: an upload in flight.
+  Completer<void>? uploadHold;
+
   @override
   Map<int, ContactOutbound> addressesFor(int peerUserId) =>
       addresses[peerUserId] ?? const {};
@@ -203,6 +207,7 @@ class _Outbox implements BoxOutbox {
     Uint8List framed,
   ) async {
     uploads.add((to, framed));
+    await uploadHold?.future;
     final answer = uploadAnswer;
     if (answer != null) return answer;
     final id = Uint8List(kBoxMediaIdBytes)..[0] = media.length + 1;
@@ -1574,6 +1579,38 @@ void main() {
     );
 
     test(
+      'a retried upload whose row leaves the open chat meanwhile still goes '
+      "under the row's OWN timer, not the chat's changed since (E17b, E18b)",
+      () async {
+        await setUpWith(timer: 30);
+        bob([1]);
+        outbox.uploadAnswer = const BoxRefused(BoxCode.quotaExceeded);
+        expect(await sendImage(), isFalse);
+        final failed = rowOf(MessageType.image);
+        expect(failed.disappearAfterSeconds, 30);
+
+        conversations.onDisappearingTimerUpdated({
+          'conversationId': 10,
+          'seconds': 3600,
+        });
+        outbox.uploadAnswer = null;
+        final hold = outbox.uploadHold = Completer<void>();
+        final retry = provider.retryFailedMessage(failed.tempId!);
+        await pump();
+        expect(outbox.uploads, hasLength(2), reason: 'the upload is in flight');
+        // The user leaves the chat: its rows leave the provider.
+        provider.clearMessages();
+        hold.complete();
+        await retry;
+        await pump();
+
+        final envelope = envelopeOf(outbox.delivered.single.$2);
+        expect(envelope, containsPair('ttl', 30));
+        expect(emitted, isNot(contains('sendMessage')));
+      },
+    );
+
+    test(
       'an uploaded attachment whose route is gone at the retry stays failed '
       'and never reaches the server, even when no frame went out before: the '
       'old path cannot name a box id (decision 25)',
@@ -1601,5 +1638,171 @@ void main() {
         expect(emitted, isNot(contains('sendMessage')));
       },
     );
+
+    test(
+      'a box reply whose row leaves the chat during the upload still quotes '
+      'and times it: the frames carry the row as it was when the send '
+      'started (E18a, E18b)',
+      () async {
+        await setUpWith(timer: 30);
+        bob([1]);
+        provider.setReplyingTo(quotable(5, wireId: 'wire-00000005'));
+        outbox.uploadHold = Completer<void>();
+        final sending = provider.sendImageMessage(
+          'tok',
+          XFile.fromData(Uint8List.fromList(photo), name: 'a.jpg'),
+          2,
+        );
+        await pump();
+        expect(outbox.uploads, hasLength(1));
+        provider.clearMessages();
+        outbox.uploadHold!.complete();
+        expect(await sending, isTrue);
+
+        final envelope = envelopeOf(outbox.delivered.single.$2);
+        expect(envelope['re'], {
+          'w': 'wire-00000005',
+          's': 2,
+          'k': 'TEXT',
+          'x': 'the original words',
+        });
+        expect(envelope, containsPair('ttl', 30));
+        expect(emitted, isNot(contains('sendMessage')));
+      },
+    );
+
+    test(
+      'a box reply whose row left the chat before its quote could be read '
+      'fails rather than go out without it',
+      () async {
+        bob([1]);
+        await pump();
+        provider.setReplyingTo(quotable(5, wireId: 'wire-00000005'));
+        final sending = provider.sendImageMessage(
+          'tok',
+          XFile.fromData(Uint8List.fromList(photo), name: 'a.jpg'),
+          2,
+        );
+        provider.clearMessages();
+
+        final ok = await sending;
+        await pump();
+        expect(outbox.delivered, isEmpty, reason: 'never without its quote');
+        expect(ok, isFalse);
+        expect(outbox.uploads, isEmpty);
+        expect(mediaUpload.oldPathUploads, isEmpty);
+        expect(emitted, isNot(contains('sendMessage')));
+      },
+    );
+
+    test(
+      'an attachment failed because this connect has not verified the lists '
+      'is held for its retry: once they are, the retry uploads it once, '
+      'never re-encrypted, and sends it over the box — a voice note with no '
+      'second bubble (E17b)',
+      () async {
+        final dir = Directory.systemTemp.createTempSync('box_voice_');
+        addTearDown(() => dir.deleteSync(recursive: true));
+        final recording = File('${dir.path}/rec.m4a')
+          ..writeAsBytesSync([1, 2, 3, 4]);
+        bob([1], connected: false);
+        expect(await sendImage(), isFalse);
+        await Future<void>.delayed(const Duration(milliseconds: 2));
+        await provider.sendVoiceMessage(
+          recipientId: 2,
+          duration: 7,
+          conversationId: 10,
+          localAudioPath: recording.path,
+        );
+        await pump();
+        for (final type in [MessageType.image, MessageType.voice]) {
+          expect(rowOf(type).deliveryStatus, MessageDeliveryStatus.failed);
+        }
+        expect(outbox.uploads, isEmpty);
+
+        provider.refreshBoxDeviceLists();
+        await pump();
+        for (final type in [MessageType.image, MessageType.voice]) {
+          await provider.retryFailedMessage(rowOf(type).tempId!);
+          await pump();
+        }
+
+        expect(outbox.uploads, hasLength(2));
+        expect(mediaUpload.encrypted, hasLength(2), reason: 'not re-encrypted');
+        expect(
+          provider.messages.where((m) => m.messageType == MessageType.voice),
+          hasLength(1),
+        );
+        expect(outbox.delivered, hasLength(2));
+        for (final type in [MessageType.image, MessageType.voice]) {
+          final sent = rowOf(type);
+          expect(sent.deliveryStatus, MessageDeliveryStatus.sent);
+          expect(sent.mediaUrl, startsWith('box:'));
+        }
+        expect(mediaUpload.oldPathUploads, isEmpty);
+        expect(emitted, isNot(contains('sendMessage')));
+      },
+    );
+
+    group("a voice note's plaintext recording is deleted once uploaded", () {
+      late File recording;
+
+      setUp(() {
+        final dir = Directory.systemTemp.createTempSync('box_voice_');
+        addTearDown(() => dir.deleteSync(recursive: true));
+        recording = File('${dir.path}/rec.m4a')
+          ..writeAsBytesSync([1, 2, 3, 4]);
+      });
+
+      Future<void> sendVoice() => provider.sendVoiceMessage(
+        recipientId: 2,
+        duration: 7,
+        conversationId: 10,
+        localAudioPath: recording.path,
+      );
+
+      test('on the retry that uploads it', () async {
+        bob([1]);
+        outbox.uploadAnswer = const BoxRefused(BoxCode.quotaExceeded);
+        await sendVoice();
+        await pump();
+        final failed = rowOf(MessageType.voice);
+        expect(failed.deliveryStatus, MessageDeliveryStatus.failed);
+        expect(recording.existsSync(), isTrue, reason: 'nothing uploaded yet');
+
+        outbox.uploadAnswer = null;
+        await provider.retryFailedMessage(failed.tempId!);
+        await pump();
+        expect(recording.existsSync(), isFalse);
+        expect(
+          rowOf(MessageType.voice).deliveryStatus,
+          MessageDeliveryStatus.sent,
+        );
+      });
+
+      test(
+        'when its row left the chat during the upload, even though the '
+        'frames then failed: a retry re-sends them, never the recording',
+        () async {
+          bob([1]);
+          outbox
+            ..uploadHold = Completer<void>()
+            ..refuse.add(1);
+          final sending = sendVoice();
+          // Reading the recording is real I/O, not a microtask.
+          for (var i = 0; i < 1000 && outbox.uploads.isEmpty; i++) {
+            await Future<void>.delayed(const Duration(milliseconds: 1));
+          }
+          expect(outbox.uploads, hasLength(1));
+          provider.clearMessages();
+          outbox.uploadHold!.complete();
+          await sending;
+          await pump();
+          expect(recording.existsSync(), isFalse);
+          expect(outbox.delivered, hasLength(1));
+          expect(provider.messages, isEmpty);
+        },
+      );
+    });
   });
 }

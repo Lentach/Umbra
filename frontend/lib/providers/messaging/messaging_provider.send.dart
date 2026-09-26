@@ -404,20 +404,12 @@ extension MessagingSend on MessagingProvider {
           tempId: tempId,
           messageType: 'VOICE',
           bytes: Uint8List.fromList(rawBytes),
+          recording: localAudioPath,
           effectiveExpiresIn: effectiveExpiresIn,
           effectiveReplyToId: effectiveReplyToId,
           mediaDuration: duration,
         );
-        if (sent != null) {
-          // Uploaded: the box copy and this device's replace the recording.
-          final row = _messages.where((m) => m.tempId == tempId).firstOrNull;
-          if (!kIsWeb &&
-              localAudioPath != null &&
-              isBoxMediaUrl(row?.mediaUrl)) {
-            await file_utils.deleteFileIfExists(localAudioPath);
-          }
-          return;
-        }
+        if (sent != null) return;
       }
 
       final upload = await _mediaUpload.encryptAndUpload(
@@ -1506,6 +1498,7 @@ extension MessagingSend on MessagingProvider {
     int? mediaWidth,
     int? mediaHeight,
     String? mediaThumbHash,
+    _BoxRowAtSend? boxRowAtSend,
   }) async {
     final e2eReady = _encryptionProvider?.isE2EReady ?? false;
     _e2eFlowLog('SEND_START', {
@@ -1543,12 +1536,15 @@ extension MessagingSend on MessagingProvider {
     // the user opens another chat. A box send quotes and times the message
     // from its row, a retry included (E18a/E18b): a retry reuses the wire
     // id, so a device already holding the message drops the copy, and a
-    // timer changed since would differ between devices.
+    // timer changed since would differ between devices. A box attachment
+    // read its row before its upload ([boxRowAtSend]).
     final row = _messages.where((m) => m.tempId == tempId).firstOrNull;
-    final replyTo = row?.replyTo;
-    final boxTtl = row == null
-        ? effectiveExpiresIn
-        : row.disappearAfterSeconds;
+    final (:replyTo, ttl: boxTtl) =
+        boxRowAtSend ??
+        (
+          replyTo: row?.replyTo,
+          ttl: row == null ? effectiveExpiresIn : row.disappearAfterSeconds,
+        );
 
     try {
       // 1. Fetch client-side link preview before encrypting (TEXT only).
