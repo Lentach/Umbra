@@ -326,8 +326,7 @@ void main() {
   });
 
   test(
-    'a friend request on the request queue is acked, not offered — first '
-    'contact is slice (f)',
+    'a frame naming no account on the request queue is acked, not offered',
     () async {
       final request = _queue(0x60);
       await store.claimRequestQueue(request);
@@ -456,8 +455,9 @@ void main() {
     );
 
     test(
-      "on the REQUEST queue, a stranger's account-bearing frame is still "
-      'acked and dropped — first contact is slice (f)',
+      "on the REQUEST queue, a stranger's account-bearing frame WITHOUT a "
+      'claim is acked and dropped — only a claim-bearing request opens first '
+      'contact',
       () async {
         final request = _queue(0x60);
         await store.claimRequestQueue(request);
@@ -511,6 +511,136 @@ void main() {
         expect(offered.single.peerUserId, 1);
         expect(ackedIds(), hasLength(2));
         expect(kv.getKeys().where((k) => k.contains('boxin')), isEmpty);
+      },
+    );
+  });
+
+  group('first contact on the REQUEST queue (slice (f), E15c–E15e)', () {
+    const claim = '{"u":"eve","g":"0007"}';
+    late ContactQueue request;
+
+    setUp(() async {
+      request = _queue(0x60);
+      await store.claimRequestQueue(request);
+      // Keep every journaled row pending, so the journal itself is what the
+      // tests read.
+      verdict = (_) => false;
+    });
+
+    Future<void> record(int userId, ContactState state, {bool box = true}) =>
+        store.update(
+          userId,
+          (_) => ContactRecord(
+            userId: userId,
+            username: 'eve',
+            tag: '0007',
+            state: state,
+            boxOrigin: box
+                ? ContactBoxOrigin(at: DateTime.utc(2026, 9, 20))
+                : null,
+          ),
+        );
+
+    Future<void> pushFrom(
+      int account, {
+      BoxFrameKind kind = BoxFrameKind.preKey,
+      String? carriedClaim = claim,
+    }) async => push(
+      request,
+      1,
+      await sealed(
+        request,
+        BoxFrame(
+          kind: kind,
+          senderDeviceId: 5,
+          senderUserId: account,
+          signal: Uint8List.fromList([7, 7]),
+          carriedClaim: carriedClaim,
+        ).encode(),
+      ),
+    );
+
+    Matcher journaledFrom(int account, {String? carriedClaim = claim}) =>
+        equals([
+          isA<BoxInboxEntry>()
+              .having((e) => e.peerUserId, 'peerUserId', account)
+              .having((e) => e.senderDeviceId, 'senderDeviceId', 5)
+              .having((e) => e.viaRequestQueue, 'viaRequestQueue', isTrue)
+              .having((e) => e.carriedClaim, 'carriedClaim', carriedClaim),
+        ]);
+
+    void expectDropped() {
+      expect(store.pendingInbox, isEmpty);
+      expect(offered, isEmpty);
+      expect(ackedIds(), hasLength(1));
+      expect(kv.getKeys().where((k) => k.contains('boxin')), isEmpty);
+    }
+
+    test(
+      "a stranger's claim-bearing PreKey request is journaled with its claim",
+      () async {
+        await pushFrom(99);
+        expect(store.pendingInbox, journaledFrom(99));
+        expect(ackedIds(), hasLength(1));
+      },
+    );
+
+    test(
+      "a FORMER contact's claim-bearing PreKey request is journaled",
+      () async {
+        await record(99, ContactState.former, box: false);
+        await pushFrom(99);
+        expect(store.pendingInbox, journaledFrom(99));
+      },
+    );
+
+    test(
+      'a claim-bearing PreKey request from a box pendingIn (a resend) is '
+      'journaled',
+      () async {
+        await record(99, ContactState.pendingIn);
+        await pushFrom(99);
+        expect(store.pendingInbox, journaledFrom(99));
+      },
+    );
+
+    test(
+      "a stranger's claim-bearing WHISPER frame is no request: dropped",
+      () async {
+        await pushFrom(99, kind: BoxFrameKind.whisper);
+        expectDropped();
+      },
+    );
+
+    test('a claim-bearing request from a BLOCKED account is dropped', () async {
+      await record(99, ContactState.blocked);
+      await pushFrom(99);
+      expectDropped();
+    });
+
+    test('a claim-bearing request from a FRIEND is dropped', () async {
+      await record(99, ContactState.friend);
+      await pushFrom(99);
+      expectDropped();
+    });
+
+    test(
+      'a claimless account-bearing frame from a box pendingOut (their queue '
+      'handoff = the accept, E15d/E15e) is journaled',
+      () async {
+        await record(99, ContactState.pendingOut);
+        await pushFrom(99, carriedClaim: null);
+        expect(store.pendingInbox, journaledFrom(99, carriedClaim: null));
+      },
+    );
+
+    test(
+      'a claimless account-bearing frame from a FRIEND (its queue handoff) '
+      'is journaled',
+      () async {
+        await record(99, ContactState.friend);
+        await pushFrom(99, carriedClaim: null);
+        expect(store.pendingInbox, journaledFrom(99, carriedClaim: null));
       },
     );
   });

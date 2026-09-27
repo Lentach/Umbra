@@ -164,6 +164,7 @@ class EncryptionService {
   /// concurrent first touches must not race two backends into existence.
   ContentKv? _prefs;
   Future<ContentKv>? _prefsOpening;
+
   ///
   /// A REJECTED opening is NOT memoized. On web a locked passcode vault makes
   /// the opener rethrow instead of falling back (`frontend/docs/e2e-invariants.md`
@@ -319,8 +320,7 @@ class EncryptionService {
   /// one shape with no message flow and therefore no other visible door.
   /// Cleared by a successful [acknowledgePeerIdentity].
   final Set<int> _peersRefusedIdentity = <int>{};
-  Set<int> get peersRefusedIdentity =>
-      Set.unmodifiable(_peersRefusedIdentity);
+  Set<int> get peersRefusedIdentity => Set.unmodifiable(_peersRefusedIdentity);
 
   static const int _identityChangedCap = 200;
 
@@ -1413,7 +1413,10 @@ class EncryptionService {
         'v': final int version,
         'live': final List<dynamic> live,
       }) {
-        _announcedOwnList = (version: version, live: [...live.whereType<int>()]);
+        _announcedOwnList = (
+          version: version,
+          live: [...live.whereType<int>()],
+        );
       }
     } on Object catch (e) {
       E2ePersistentDiag.record('BOX_LISTS_LOAD_FAILED', {
@@ -1557,7 +1560,9 @@ class EncryptionService {
         });
         throw const E2eIdentityCheckUnavailableException();
       }
-      E2ePersistentDiag.record('IDENTITY_RESIDUE_DISCARDED', {'userId': userId});
+      E2ePersistentDiag.record('IDENTITY_RESIDUE_DISCARDED', {
+        'userId': userId,
+      });
       _buildStores(p);
       // Warnings about peers and rebuild intents were recorded against the
       // discarded material; both name nothing now.
@@ -1907,8 +1912,10 @@ class EncryptionService {
     bool disposeStaleMaterial = false,
   }) async {
     if (payload.userId != userId) {
-      throw StateError('adoptRestoredIdentity: backup belongs to another '
-          'account (${payload.userId} != $userId)');
+      throw StateError(
+        'adoptRestoredIdentity: backup belongs to another '
+        'account (${payload.userId} != $userId)',
+      );
     }
     final existingPrefix = 'e2e_${userId}_';
     final heldRecord = await _storage.read(
@@ -2697,6 +2704,23 @@ class EncryptionService {
     }
   }
 
+  /// Pins [peerId]'s ACCOUNT anchor to [identityKeyBase64] when none is
+  /// held (metadata-privacy slice (f): a first contact's served identity,
+  /// E15b/E15e). True when the anchor now equals it; false when another key
+  /// is pinned — that is a key change, a human's call (xlvi), never moved
+  /// here. Throws before initialization or on an unreadable key.
+  Future<bool> stageAccountAnchor(int peerId, String identityKeyBase64) {
+    if (!_initialized) {
+      throw StateError(
+        'account anchor staged for $peerId before initialization',
+      );
+    }
+    return _identityStore.stageAccountIdentity(
+      peerId.toString(),
+      IdentityKey.fromBytes(base64Decode(identityKeyBase64), 0),
+    );
+  }
+
   /// The account anchor for the (xxxix)/(lvi) SESSION GATE, where a failed read
   /// MUST NOT look like an absence ((lxii)).
   ///
@@ -3167,8 +3191,9 @@ class EncryptionService {
           stampedBy is int &&
           claims != null &&
           claims.userId == userId) {
-        (claims.claims[(senderId: stampedBy, wireId: stamped)] ??= <int>{})
-            .add(id);
+        (claims.claims[(senderId: stampedBy, wireId: stamped)] ??= <int>{}).add(
+          id,
+        );
       }
       await _pruneDecryptedContentCache(prefs, userId);
     } catch (_) {}
@@ -3791,8 +3816,9 @@ class EncryptionService {
       return {};
     }
     if (ids.isEmpty) return {};
-    return (await getDecryptedContentMany(ids))
-      ..removeWhere((_, record) => record[_metaConversationId] != conversationId);
+    return (await getDecryptedContentMany(ids))..removeWhere(
+      (_, record) => record[_metaConversationId] != conversationId,
+    );
   }
 
   /// Every `(sender, wire id)` stamp → the record ids holding it.
@@ -3890,8 +3916,7 @@ class EncryptionService {
 
   String _boxTombstoneKey(int userId) => 'e2e_${userId}_boxdel_v1';
 
-  static String _tombstoneOf(WireKey wire) =>
-      '${wire.senderId}:${wire.wireId}';
+  static String _tombstoneOf(WireKey wire) => '${wire.senderId}:${wire.wireId}';
 
   /// Whether a delete-for-everyone of [wire] reached this device within the
   /// box TTL. False when it cannot tell (no account, unreadable row): the

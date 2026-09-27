@@ -557,9 +557,7 @@ class BoxSession
   Future<SiblingWrite> siblingAcked(int deviceId, String sid) async {
     if (_disposed) return SiblingWrite.retryLater;
     final written = await _store.markSiblingAcked(deviceId, sid);
-    return written == SiblingWrite.refused
-        ? _staleAck(deviceId, sid)
-        : written;
+    return written == SiblingWrite.refused ? _staleAck(deviceId, sid) : written;
   }
 
   /// Sibling [deviceId] acked [sid], which is not our current self-queue: it
@@ -629,6 +627,32 @@ class BoxSession
     int deviceId, {
     required String sid,
     required String sealPub,
+  }) => _takeHandoff(userId, deviceId, sid: sid, sealPub: sealPub);
+
+  @override
+  Future<FriendWrite> acceptFirstContact(
+    int userId,
+    int deviceId, {
+    required String sid,
+    required String sealPub,
+    required E2eProfile profile,
+  }) => _takeHandoff(
+    userId,
+    deviceId,
+    sid: sid,
+    sealPub: sealPub,
+    profile: profile,
+  );
+
+  /// Store → ack → hand-back (item 5): [userId]'s [deviceId] address, on a
+  /// record already `friend`; our hand-back carries [profile] when this is
+  /// the accept of a first contact (slice (f), decision 55).
+  Future<FriendWrite> _takeHandoff(
+    int userId,
+    int deviceId, {
+    required String sid,
+    required String sealPub,
+    E2eProfile? profile,
   }) async {
     if (_disposed) return FriendWrite.retryLater;
     final address = ContactOutbound(
@@ -672,6 +696,7 @@ class BoxSession
           E2eEnvelope.buildQueueHandoff(
             sid: queue.sid,
             sealPub: queue.sealPub,
+            profile: profile,
           ),
         );
         if (handedBack) _friends.noteHanded(userId, deviceId, queue.sid);
@@ -681,6 +706,7 @@ class BoxSession
       'device': deviceId,
       'acked': acked,
       'handedBack': ?handedBack,
+      if (profile != null) 'accept': true,
     });
     return FriendWrite.stored;
   }
@@ -808,10 +834,66 @@ class BoxSession
   @override
   Future<void> retireFirstContact(int userId) async {
     if (_disposed) return;
+    var deleted = true;
+    for (final queue in [...?_store.byUserId(userId)?.queues]) {
+      deleted = await _keys.retireInbound(userId, queue) && deleted;
+    }
+    // A queue the box did not delete keeps its record: the record is the
+    // only holder of that queue's auth key, and the next run deletes it.
+    if (deleted) await firstContact.forget([userId]);
+  }
+
+  @override
+  Future<void> endBoxFriendship(int userId, {required bool block}) async {
+    if (_disposed) return;
     for (final queue in [...?_store.byUserId(userId)?.queues]) {
       await _keys.retireInbound(userId, queue);
     }
-    await firstContact.forget([userId]);
+    if (!block) {
+      if (_store.byUserId(userId)?.boxOrigin != null) {
+        await _store.remove(userId);
+      }
+      return;
+    }
+    await _store.update(userId, (current) {
+      final origin = current?.boxOrigin;
+      if (current == null || origin == null) return null;
+      // Nothing the friendship held stays: no queue, no address, no chat,
+      // no request kept. The origin mark keeps the record out of every
+      // server list's sweep (E15g).
+      return ContactRecord(
+        userId: userId,
+        username: current.username,
+        tag: current.tag,
+        avatarUrl: current.avatarUrl,
+        state: ContactState.blocked,
+        boxOrigin: ContactBoxOrigin(at: origin.at),
+      );
+    });
+  }
+
+  /// Called when a box-made record changed outside the messaging reader —
+  /// a pending request expired (E15i) — so the lists and chats re-read the
+  /// store. Wired by `ConnectionProvider`.
+  void Function()? onFirstContactsChanged;
+
+  DateTime? _expiryRanAt;
+
+  /// E15i, whenever the box and the store are ready and at most once a day
+  /// (a long-lived tab outlives a request's lifetime): every pending box
+  /// request older than [BoxFirstContact.lifetime] retires.
+  Future<void> _expireFirstContacts() async {
+    final last = _expiryRanAt;
+    if (last != null && _now().difference(last) < const Duration(days: 1)) {
+      return;
+    }
+    _expiryRanAt = _now();
+    final expired = await firstContact.expired();
+    for (final userId in expired) {
+      if (_disposed) return;
+      await retireFirstContact(userId);
+    }
+    if (expired.isNotEmpty && !_disposed) onFirstContactsChanged?.call();
   }
 
   void dispose() {
@@ -841,6 +923,7 @@ class BoxSession
     ];
     if (missing.isNotEmpty) await _box.subscribe(missing);
     if (!_disposed) await _inbox.drain();
+    if (!_disposed) await _expireFirstContacts();
   }
 
   Future<void> _ensure() async {

@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 
+import '../../utils/e2e_envelope.dart';
 import '../../utils/message_ids.dart';
 import '../contacts/contact_record.dart';
 import '../contacts/contact_store.dart';
+import 'box_friends.dart';
 
 /// What the messaging side needs from the box session for a first contact
 /// (metadata-privacy slice (f)). `BoxSession` is the one implementation.
@@ -20,10 +22,42 @@ abstract interface class BoxFirstContactLink {
   /// covers its devices from the request addresses the record holds (E15d).
   void firstContactFriend(int userId);
 
+  /// The accept of [userId]'s request from its [deviceId] (E15d): the queue
+  /// its request offered is stored as that device's address, acked, and
+  /// ours handed into it with our [profile] (decision 55) — the item-5
+  /// handoff's store → ack → hand-back, on a record already `friend`.
+  Future<FriendWrite> acceptFirstContact(
+    int userId,
+    int deviceId, {
+    required String sid,
+    required String sealPub,
+    required E2eProfile profile,
+  });
+
   /// A pending request of [userId]'s expired (E15i): this device's queues
-  /// for it are deleted from the box, then the record is forgotten.
+  /// for it are deleted from the box, then the record is forgotten — kept
+  /// when a queue could not be deleted now, so the next run tries again.
   Future<void> retireFirstContact(int userId);
+
+  /// The end of a friendship made over the box (E15j): every queue this
+  /// device holds for [userId] is deleted from the box (best effort: one the
+  /// box does not answer is left to its reaper), then the record goes — or,
+  /// for a [block], stays as `blocked`, so the box drops its frames.
+  Future<void> endBoxFriendship(int userId, {required bool block});
 }
+
+/// How a friend request sent from a search answer went (E15a): over the box,
+/// or — some device on either side is not on the box — back to the old
+/// path, which the caller then takes as today; [failed]: the box could not
+/// take every frame, and nothing is sent the old way (a request never goes
+/// out on both paths).
+enum FirstContactSend { sent, oldPath, failed }
+
+/// How accepting a box request went (E15d, decision 53): [unverified] — the
+/// accept-time lookup did not vouch for the key the request carries, so it
+/// was dropped unaccepted; [failed] — nothing could be decided now (no
+/// answer, the box or E2E not ready), and the request stays.
+enum FirstContactAccept { accepted, unverified, failed }
 
 /// What a first contact's request CLAIMS its sender is, carried outside
 /// Signal (`BoxFrame.carriedClaim`): unauthenticated until the accept-time
@@ -31,7 +65,7 @@ abstract interface class BoxFirstContactLink {
 typedef FirstContactClaim = ({String username, String tag});
 
 /// One device of an account as a search answer serves it: its CLAIMED
-/// pre-key [bundle] (wire.md "First contact") and its [request] address,
+/// pre-key `bundle` (wire.md "First contact") and its `request` address,
 /// null until that device publishes one (an app that predates the box).
 typedef FirstContactDevice = ({
   int deviceId,
@@ -125,29 +159,41 @@ class FirstContactPeer {
     for (final d in devices) ?d.request,
   ];
 
-  /// The answer as a sibling gets it (E15e), in the search entry's own
-  /// shape: every bundle WITHOUT its one-time pre-key, which the searcher's
-  /// own session already spent — a sibling builds from the signed pre-key.
-  Map<String, dynamic> toSiblingJson() => {
-    'id': userId,
-    'username': profile.username,
-    'tag': profile.tag,
-    'profilePictureUrl': ?avatarUrl,
-    'authorization': authorization,
-    'devices': [
-      for (final d in devices)
-        {
-          'deviceId': d.deviceId,
-          'bundle': {
-            for (final MapEntry(:key, :value) in d.bundle.entries)
-              if (key != 'oneTimePreKeyId' && key != 'oneTimePreKeyPublic')
-                key: value,
-          },
-          'requestSid': d.request?.sid,
-          'sealPub': d.request?.sealPub,
-        },
-    ],
+  /// Every served device's bundle WITHOUT its one-time pre-key, by device:
+  /// what the contact record keeps to build a session later with no bundle
+  /// fetch ([ContactBoxOrigin.bundles]). The searcher's own first session
+  /// spends the one-time pre-key; any later one builds from the signed
+  /// pre-key.
+  Map<int, Map<String, dynamic>> get servedBundles => {
+    for (final d in devices)
+      d.deviceId: {
+        for (final MapEntry(:key, :value) in d.bundle.entries)
+          if (key != 'oneTimePreKeyId' && key != 'oneTimePreKeyPublic')
+            key: value,
+      },
   };
+
+  /// The answer as a sibling gets it (E15e), in the search entry's own
+  /// shape: every bundle as [servedBundles] keeps it.
+  Map<String, dynamic> toSiblingJson() {
+    final bundles = servedBundles;
+    return {
+      'id': userId,
+      'username': profile.username,
+      'tag': profile.tag,
+      'profilePictureUrl': ?avatarUrl,
+      'authorization': authorization,
+      'devices': [
+        for (final d in devices)
+          {
+            'deviceId': d.deviceId,
+            'bundle': bundles[d.deviceId],
+            'requestSid': d.request?.sid,
+            'sealPub': d.request?.sealPub,
+          },
+      ],
+    };
+  }
 }
 
 /// First contact over request queues (metadata-privacy PR3.1 slice (f),
@@ -178,6 +224,41 @@ class BoxFirstContact {
 
   static const int _maxUsername = 64;
   static const int _maxTag = 16;
+
+  /// [userId]'s record as the store holds it now.
+  ContactRecord? contactOf(int userId) => _store.byUserId(userId);
+
+  /// This account's own profile as a request and an accept carry it
+  /// (decision 55): the store's self row, seeded from the auth profile.
+  /// Null before the store knows it.
+  E2eProfile? get ownProfile {
+    final self = _store.self;
+    return self == null
+        ? null
+        : (
+            username: self.username,
+            tag: self.tag,
+            avatarUrl: self.profilePictureUrl,
+          );
+  }
+
+  /// A fresh search answer for [peer], a friendship or request made over
+  /// the box (the list lookup of E15h): its devices' request addresses and
+  /// served bundles replace the held ones, so a later session builds from
+  /// the newest signed pre-key. Anything else a record is, is left alone.
+  Future<bool> refreshServed(FirstContactPeer peer) => _store.update(
+    peer.userId,
+    (current) {
+      final origin = current?.boxOrigin;
+      if (current == null || origin == null) return null;
+      return current.copyWith(
+        boxOrigin: origin.copyWith(
+          addresses: peer.addresses,
+          bundles: peer.servedBundles,
+        ),
+      );
+    },
+  );
 
   /// The claim in [raw], or null for anything but `{u, g}` with two
   /// non-empty strings in bounds.
@@ -211,26 +292,42 @@ class BoxFirstContact {
       record.legacy.requestId == null;
 
   /// Keeps [userId]'s device [deviceId]'s request [signal] undecrypted
-  /// under the [claim] it carries. False — nothing written — for an account
-  /// this device already stands with otherwise: a friend, a blocked one,
-  /// one we asked (the caller reads that as an accept, E15f), or one whose
-  /// request the server carries (the old path's own).
+  /// under the [claim] it carries, with the journal's [localId] as the id
+  /// its later decrypt is replayed under (an accept that fails after the
+  /// decrypt reads the same plaintext again, never a spent ratchet). False —
+  /// nothing written — for an account this device already stands with
+  /// otherwise (E15c): a friend, a blocked one, one we asked (the caller
+  /// reads that as an accept, E15f), one whose request the server carries,
+  /// and a `former` contact — its queues are material no server can
+  /// re-supply, and an unauthenticated frame must never be able to make it
+  /// a request someone then declines or lets expire.
   Future<bool> keep({
     required int userId,
     required int deviceId,
     required String signal,
     required FirstContactClaim claim,
+    int? localId,
   }) async {
     final at = _now();
     var kept = false;
     final ok = await _store.update(userId, (current) {
       final state = current?.state;
-      if (current != null &&
-          state != ContactState.former &&
-          !_boxRequest(current)) {
-        return null;
-      }
-      final request = KeptRequest(deviceId: deviceId, signal: signal, at: at);
+      // A request we sent that is no longer shown (decision 54: it expired
+      // on our side) is not an ask any more: their request is a new one,
+      // and the record keeps the old request's queues so they can still
+      // be deleted (review of the 60-d sent lifetime).
+      final lapsedAsk =
+          current != null &&
+          _pendingOverBox(current) &&
+          state == ContactState.pendingOut &&
+          !shownPending(current, at);
+      if (current != null && !_boxRequest(current) && !lapsedAsk) return null;
+      final request = KeptRequest(
+        deviceId: deviceId,
+        signal: signal,
+        at: at,
+        localId: localId,
+      );
       final origin = current?.boxOrigin;
       final base =
           current ??
@@ -283,18 +380,33 @@ class BoxFirstContact {
     return true;
   }
 
-  /// The pending box requests, either way, that began more than [lifetime]
-  /// ago.
+  /// A request this device SENT stays until an accept sent on its last day
+  /// could still be read: [lifetime] plus the box TTL, so the queue it
+  /// offered is never deleted under an accept in flight (E15i, review;
+  /// traps: never delete a queue anyone may still send into). The requests
+  /// screen stops showing it after [lifetime] ([shownPending]).
+  static const Duration sentLifetime = Duration(days: 60);
+
+  /// Whether [record], a pending box request, is still shown to the user
+  /// at [now]: until [lifetime] after it began (decision 54).
+  static bool shownPending(ContactRecord record, DateTime now) {
+    final at = record.boxOrigin?.at;
+    return at != null && !now.isAfter(at.add(lifetime));
+  }
+
+  /// The pending box requests that are over: one received more than
+  /// [lifetime] ago, one sent more than [sentLifetime] ago.
   Future<List<int>> expired() async {
     await _store.settled;
-    final cutoff = _now().subtract(lifetime);
+    final now = _now();
     return [
       for (final r in _store.all)
-        if ((r.state == ContactState.pendingIn ||
-                r.state == ContactState.pendingOut) &&
-            r.boxOrigin != null &&
-            r.legacy.requestId == null &&
-            r.boxOrigin!.at.isBefore(cutoff))
+        if (_pendingOverBox(r) &&
+            r.boxOrigin!.at.isBefore(
+              now.subtract(
+                r.state == ContactState.pendingOut ? sentLifetime : lifetime,
+              ),
+            ))
           r.userId,
     ];
   }
@@ -323,12 +435,15 @@ class BoxFirstContact {
 
   /// This account asked [userId] over the box (E15b) — or a sibling did and
   /// said so (E15e): a `pendingOut` record under [profile], holding the
-  /// peer devices' request [addresses] from the search answer. False for a
-  /// friend, a blocked account, and a request the server carries.
+  /// peer devices' request [addresses] and served [bundles] from the search
+  /// answer. False for a friend, a blocked account, and a request the
+  /// server carries.
   Future<bool> asked({
     required int userId,
     required FirstContactClaim profile,
     required List<ContactOutbound> addresses,
+    Map<int, Map<String, dynamic>> bundles = const {},
+    String? avatarUrl,
   }) async {
     var asked = false;
     final ok = await _store.update(userId, (current) {
@@ -349,13 +464,21 @@ class BoxFirstContact {
             tag: profile.tag,
             state: ContactState.pendingOut,
           );
+      // Asking again keeps the request's age only while it is still shown:
+      // a re-send after it lapsed (decision 54) is a new request, and its
+      // queue must live its own full span (review).
+      final now = _now();
+      final keepAge =
+          state == ContactState.pendingOut && shownPending(current!, now);
       return base.copyWith(
         state: ContactState.pendingOut,
         username: profile.username,
         tag: profile.tag,
+        avatarUrl: avatarUrl,
         boxOrigin: ContactBoxOrigin(
-          at: state == ContactState.pendingOut ? current!.boxOrigin!.at : _now(),
+          at: keepAge ? current.boxOrigin!.at : now,
           addresses: addresses,
+          bundles: bundles,
         ),
       );
     });
@@ -365,13 +488,15 @@ class BoxFirstContact {
   /// [userId]'s pending box request — either way — became a friendship
   /// (E15d, E15e, E15f): `friend` under its local chat id (decision 52),
   /// with the VERIFIED [profile] and [avatarUrl] when the accept looked it
-  /// up, and the peer's request [addresses] when known; the kept frames go.
-  /// False for anything that is not a pending box request.
+  /// up, and the peer's request [addresses] and served [bundles] when
+  /// known; the kept frames go. False for anything that is not a pending
+  /// box request.
   Future<bool> befriend(
     int userId, {
     FirstContactClaim? profile,
     String? avatarUrl,
     List<ContactOutbound>? addresses,
+    Map<int, Map<String, dynamic>>? bundles,
   }) async {
     var befriended = false;
     final ok = await _store.update(userId, (current) {
@@ -392,6 +517,7 @@ class BoxFirstContact {
         boxOrigin: ContactBoxOrigin(
           at: origin.at,
           addresses: addresses ?? origin.addresses,
+          bundles: bundles ?? origin.bundles,
         ),
       );
     });

@@ -187,8 +187,7 @@ class EncryptionProvider extends ChangeNotifier {
   /// setting: a refusal blocks sending, so it must always have a visible
   /// door to the ceremony. Change notifications ride the service's
   /// onPeerIdentityChanged wire, same as the warning set.
-  Set<int> get peersRefusedIdentity =>
-      _encryptionService.peersRefusedIdentity;
+  Set<int> get peersRefusedIdentity => _encryptionService.peersRefusedIdentity;
 
   /// One-shot muted key-change notes (amendment (lxxix)): peerId → ISO-8601
   /// instant of the auto-acknowledged change. Rendered as a calm system line
@@ -348,6 +347,40 @@ class EncryptionProvider extends ChangeNotifier {
       _e2eFlowLog('SESSION_ARCHIVED_FOR_REBUILD', {'recipientId': recipientId});
     }
 
+    // A friendship made over the box (owner decision 52) is never named to
+    // the server by a bundle fetch: its sessions are built from the bundle a
+    // search answer served ([servedBundleFor]), under the same anchor check
+    // as a fetched one. None held: the session cannot be built — never a
+    // fetch.
+    if (isBoxOnlyPeer?.call(recipientId) ?? false) {
+      try {
+        final bundle = servedBundleFor?.call(recipientId, deviceId);
+        if (bundle == null) {
+          throw StateError(
+            'no served bundle for box peer $recipientId device $deviceId',
+          );
+        }
+        await _encryptionService.buildSession(
+          recipientId,
+          bundle,
+          deviceId: deviceId,
+          expectedIdentityBase64: await _accountIdentityAnchor(
+            recipientId,
+            skipDeviceId: deviceId,
+          ),
+        );
+      } catch (_) {
+        if (needsRebuild) _forceSessionRebuild.add(addressKey);
+        rethrow;
+      }
+      _e2eFlowLog('SESSION_BUILT_SERVED', {
+        'recipientId': recipientId,
+        'deviceId': deviceId,
+      });
+      await _encryptionService.clearSessionRebuild(recipientId, deviceId);
+      return;
+    }
+
     // Check if we already have a pending fetch for this address
     if (_pendingPreKeyFetches.containsKey(addressKey)) {
       await _pendingPreKeyFetches[addressKey]!.future;
@@ -419,12 +452,13 @@ class EncryptionProvider extends ChangeNotifier {
     await _encryptionService.clearSessionRebuild(recipientId, deviceId);
   }
 
-  /// Builds a session with [userId]'s device [deviceId] from a [bundle] the
-  /// server served in a SEARCH answer — or a sibling relayed from one
-  /// (metadata-privacy slice (f), E15b/E15d/E15e) — under the same anchor
-  /// check [ensureSession] applies to a fetched bundle. A friendship made
-  /// over the box never fetches a bundle later: the server does not know the
-  /// pair, and a fetch would name it. A session already held is kept.
+  /// Builds a FRESH session with [userId]'s device [deviceId] from a
+  /// [bundle] a SEARCH answer served (metadata-privacy slice (f), E15b) —
+  /// under the same anchor check [ensureSession] applies to a fetched
+  /// bundle — so the next message to it is a PreKey message whatever an
+  /// earlier friendship left (libsignal archives that state, it is not
+  /// lost). A friendship made over the box never fetches a bundle: the
+  /// server does not know the pair, and a fetch would name it.
   Future<void> buildSessionFromServedBundle(
     int userId,
     int deviceId,
@@ -432,9 +466,6 @@ class EncryptionProvider extends ChangeNotifier {
   ) async {
     if (!_e2eInitialized || _currentUserId == null) {
       throw StateError('E2E not initialized or user not authenticated');
-    }
-    if (await _encryptionService.hasSession(userId, deviceId: deviceId)) {
-      return;
     }
     await _encryptionService.buildSession(
       userId,
@@ -678,6 +709,70 @@ class EncryptionProvider extends ChangeNotifier {
   /// unwired, nothing a server served is kept.
   bool Function(int userId)? keepsDeviceListFor;
 
+  /// Whether `userId` is a friendship made over the box, or a request
+  /// pending over it (metadata-privacy slice (f), owner decision 52): the
+  /// server does not know the pair, and no lookup of this device may name it
+  /// — no `fetchPreKeyBundle`, no `getDeviceList`. Wired by
+  /// `ConnectionProvider` from the contact store.
+  bool Function(int userId)? isBoxOnlyPeer;
+
+  /// The bundle a search answer served for a box-only peer's device
+  /// (`ContactBoxOrigin.bundles`), which [ensureSession] builds from.
+  Map<String, dynamic>? Function(int userId, int deviceId)? servedBundleFor;
+
+  /// A box-only peer's `authorization` record, from one `searchUsers` of
+  /// its handle — the one lookup design §4.2 keeps for a friend whose list
+  /// this device does not hold (E15h). Throws when nothing answered.
+  Future<Map<String, dynamic>?> Function(int userId)? lookupBoxPeerList;
+
+  final Map<int, Future<Map<String, dynamic>?>> _boxListLookups = {};
+
+  /// [userId]'s account as a search answer served it — or as an own
+  /// sibling relayed that answer (metadata-privacy slice (f), E15b/E15d/
+  /// E15e): its [identityKey] and DAK-signed [authorization], the server's
+  /// word, which is what the old path trusts when it fetches a bundle. The
+  /// list is I7-verified under [identityKey] — or under the anchor held, which
+  /// must BE [identityKey] — adopted as the list the server served (E50a's
+  /// DAK pin), and kept across restarts (decision 51). Then [identityKey]
+  /// becomes the account anchor when none is held. Throws, adopting nothing,
+  /// when another key is pinned (a key change is a human's call, (xlvi)) or
+  /// the list does not verify.
+  Future<VerifiedDeviceList> adoptServedAccount(
+    int userId, {
+    required String identityKey,
+    required Map<String, dynamic>? authorization,
+  }) async {
+    if (!_e2eInitialized ||
+        _currentUserId == null ||
+        userId == _currentUserId) {
+      throw StateError('served account $userId: E2E not ready');
+    }
+    // One spelling for the comparison and the pin: the stored anchor is the
+    // canonical base64 of the key's bytes, a served one may be spelled
+    // otherwise (padding, url-safe) and must not read as a key change.
+    final String served;
+    try {
+      served = base64Encode(base64Decode(base64.normalize(identityKey)));
+    } on FormatException {
+      throw DeviceListVerificationException(userId, 'served_identity_invalid');
+    }
+    final held = await _encryptionService.peerAccountAnchorForGate(userId);
+    if (held != null && held != served) {
+      throw DeviceListVerificationException(userId, 'served_identity_mismatch');
+    }
+    final verified = await _adoptDeviceListAnswer(
+      userId,
+      authorization,
+      anchor: served,
+    );
+    if (held == null &&
+        !await _encryptionService.stageAccountAnchor(userId, served)) {
+      throw DeviceListVerificationException(userId, 'served_identity_mismatch');
+    }
+    unawaited(_encryptionService.recordPeerDeviceList(userId, authorization));
+    return verified;
+  }
+
   /// Decision 51 / E50c: when this device finds itself off the box longer
   /// than the box TTL — at start or on a reconnect of a long-lived process —
   /// an announcement may have expired unread, so each box peer's list is
@@ -801,13 +896,18 @@ class EncryptionProvider extends ChangeNotifier {
 
   Future<VerifiedDeviceList> _adoptDeviceListAnswer(
     int userId,
-    Map<String, dynamic>? authorization,
-  ) async {
+    Map<String, dynamic>? authorization, {
+    String? anchor,
+  }) async {
     // The chain anchors on the identity THIS device holds: own identity for
-    // the own account's list, the TOFU-pinned peer key otherwise.
-    final tofu = userId == _currentUserId
-        ? await _encryptionService.currentIdentityPublicKeyBase64()
-        : await _encryptionService.peerTofuIdentityBase64(userId);
+    // the own account's list, the TOFU-pinned peer key otherwise — or, for a
+    // first contact's served account ([adoptServedAccount]), the identity
+    // the same answer served, which the caller checked against any pin.
+    final tofu =
+        anchor ??
+        (userId == _currentUserId
+            ? await _encryptionService.currentIdentityPublicKeyBase64()
+            : await _encryptionService.peerTofuIdentityBase64(userId));
     try {
       final verified = _deviceListCache.adopt(
         userId: userId,
@@ -883,11 +983,31 @@ class EncryptionProvider extends ChangeNotifier {
   }
 
   /// One in-flight `getDeviceList` per userId; concurrent callers share it.
+  /// A box-only peer ([isBoxOnlyPeer]) is never named to `getDeviceList`:
+  /// its list comes from one search of its handle ([lookupBoxPeerList]),
+  /// at most once per account per process — each spends a one-time pre-key
+  /// of every device of the peer and names the pair (E15h).
   Future<Map<String, dynamic>?> _fetchDeviceListAnswer(
     int userId,
     Duration timeout, {
     bool batched = false,
   }) {
+    if (isBoxOnlyPeer?.call(userId) ?? false) {
+      final lookup = lookupBoxPeerList;
+      if (lookup == null) {
+        return Future.error(StateError('box peer $userId: no lookup wired'));
+      }
+      final pending = _boxListLookups[userId];
+      if (pending != null) return pending;
+      if (!_boxListLookupSpent.add(userId)) {
+        return Future.error(StateError('box peer $userId: lookup spent'));
+      }
+      _e2eFlowLog('DEVICE_LIST_BOX_LOOKUP', {'userId': userId});
+      final answer = lookup(userId).timeout(timeout);
+      _boxListLookups[userId] = answer;
+      answer.whenComplete(() => _boxListLookups.remove(userId)).ignore();
+      return answer;
+    }
     final existing = _pendingDeviceListFetches[userId];
     if (existing != null) return existing.future;
     final completer = Completer<Map<String, dynamic>?>();
@@ -911,6 +1031,9 @@ class EncryptionProvider extends ChangeNotifier {
       },
     );
   }
+
+  /// Box-only peers whose one lookup of this process is spent.
+  final Set<int> _boxListLookupSpent = {};
 
   /// Sends this turn's batched lookups: one user as the plain
   /// `getDeviceList`, more as `getDeviceLists` frames of at most
@@ -1358,8 +1481,7 @@ class EncryptionProvider extends ChangeNotifier {
       _encryptionService.wireHeldByOther(wire, messageId);
 
   /// Delegates to [EncryptionService.wireHolder] (box reply quotes).
-  Future<int?> wireHolder(WireKey wire) =>
-      _encryptionService.wireHolder(wire);
+  Future<int?> wireHolder(WireKey wire) => _encryptionService.wireHolder(wire);
 
   /// Delegates to [EncryptionService.boxTombstoned] (item 4, E19g).
   Future<bool> boxTombstoned(WireKey wire) =>
@@ -2072,6 +2194,7 @@ class EncryptionProvider extends ChangeNotifier {
 
   IdentityRestoreStage _restoreStage = IdentityRestoreStage.idle;
   IdentityRestoreFailure? _restoreFailure;
+
   /// (lxxx) clause 7: true from the moment `adoptRestoredIdentity` returned
   /// until `done`. This — not the stage — is what holds the gate: before it,
   /// nothing is half-done; after it, the install holds an identity whose
@@ -2914,7 +3037,9 @@ class EncryptionProvider extends ChangeNotifier {
     // guards key minting and must not claim enrolment for copy.
     final uid = _currentUserId;
     if (uid != null && data is Map && data['linkingEnabled'] is bool) {
-      unawaited(AccountEnrolledHint.write(userId: uid, enrolled: linkingEnabled));
+      unawaited(
+        AccountEnrolledHint.write(userId: uid, enrolled: linkingEnabled),
+      );
     }
     if (data is Map) {
       _hydrateIdentityResetState(data);
@@ -3143,6 +3268,7 @@ class EncryptionProvider extends ChangeNotifier {
       // their rollback pins (they are per-account TOFU state).
       _deviceListCache.clear();
       _carriedLookupSpent.clear();
+      _boxListLookupSpent.clear();
       _cancelPendingFetches();
     }
     // On reconnect: preserve _e2eInitialized and caches
@@ -3194,6 +3320,7 @@ class EncryptionProvider extends ChangeNotifier {
     _identityCheckUnavailable = false;
     _deviceListCache.clear();
     _carriedLookupSpent.clear();
+    _boxListLookupSpent.clear();
     // The phrase/backup flags are per ACCOUNT too: left standing, user A's
     // `false` puts the Chats line over user B's list until B's first status
     // corrects it — the same class of stale-singleton defect as the ceremony
@@ -3444,12 +3571,16 @@ class EncryptionProvider extends ChangeNotifier {
   /// early when it joins an in-flight fetch, because the joined caller builds
   /// the session. This one needs the bundle itself. Joining rather than
   /// replacing matters — the completer map is keyed by address, so registering a
-  /// second completer would strand the first until its timeout.
+  /// second completer would strand the first until its timeout. Never for a
+  /// box-only peer ([isBoxOnlyPeer]): a fetch would name the pair.
   Future<Map<String, dynamic>> _fetchBundleAnswer(
     int userId,
     int deviceId,
     Duration timeout,
   ) {
+    if (isBoxOnlyPeer?.call(userId) ?? false) {
+      return Future.error(StateError('box peer $userId: no bundle fetch'));
+    }
     final addressKey = (userId, deviceId);
     final existing = _pendingIdentityProbes[addressKey];
     if (existing != null) return existing.future;

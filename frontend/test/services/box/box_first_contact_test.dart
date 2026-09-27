@@ -139,8 +139,8 @@ void main() {
     );
 
     test(
-      'a former friend asking again is a request, and the queue material '
-      'the record holds stays',
+      'a claim naming a former contact is not kept: an unauthenticated frame '
+      'cannot turn the queue material the record holds into a request',
       () async {
         const queue = ContactQueue(
           rid: 'r',
@@ -160,9 +160,18 @@ void main() {
             queues: [queue],
           ),
         );
-        await contact.keep(userId: 20, deviceId: 1, signal: '3:X', claim: ana);
+        expect(
+          await contact.keep(
+            userId: 20,
+            deviceId: 1,
+            signal: '3:X',
+            claim: ana,
+          ),
+          isFalse,
+        );
         final record = store.byUserId(20)!;
-        expect(record.state, ContactState.pendingIn);
+        expect(record.state, ContactState.former);
+        expect(record.boxOrigin, isNull);
         expect(record.queues.single.rid, 'r');
       },
     );
@@ -454,8 +463,9 @@ void main() {
     );
 
     test(
-      'a pending request either way is forgotten once the box TTL has passed '
-      'since it began; a younger one and a friendship are kept',
+      'a received request is forgotten 30 d after it began, a sent one only '
+      'once an accept sent on its last day could no longer arrive (60 d); '
+      'a younger one and a friendship are kept',
       () async {
         await contact.keep(userId: 342, deviceId: 2, signal: '3:A', claim: ana);
         await store.update(
@@ -489,7 +499,20 @@ void main() {
 
         expect(await contact.expired(), isEmpty, reason: 'exactly 30 d: kept');
         now = now.add(const Duration(milliseconds: 1));
-        expect(await contact.expired(), unorderedEquals([342, 400]));
+        expect(await contact.expired(), [342], reason: 'the sent one waits');
+        expect(
+          BoxFirstContact.shownPending(store.byUserId(400)!, now),
+          isFalse,
+          reason: 'but is no longer shown as pending (decision 54)',
+        );
+        now = t0.add(BoxFirstContact.sentLifetime);
+        expect(await contact.expired(), [342]);
+        now = now.add(const Duration(milliseconds: 1));
+        expect(
+          await contact.expired(),
+          unorderedEquals([342, 400, 500]),
+          reason: '500 is 30 d old by now too',
+        );
         await contact.forget([342, 400]);
         expect(store.byUserId(342), isNull);
         expect(store.byUserId(400), isNull);

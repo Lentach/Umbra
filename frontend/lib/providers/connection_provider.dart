@@ -23,6 +23,7 @@ import '../services/server_clock.dart';
 import '../services/socket_service.dart';
 import '../utils/e2e_diag_log.dart';
 import '../utils/e2e_persistent_diag.dart';
+import '../utils/message_ids.dart';
 import 'chat_reconnect_manager.dart';
 import 'conversations_provider.dart';
 import 'encryption_provider.dart';
@@ -189,7 +190,10 @@ class ConnectionProvider extends ChangeNotifier {
         final convs = _conversationsProvider?.conversations ?? const [];
         return [
           for (final c in convs)
-            c.userOne.id == uid ? c.userTwo.id : c.userOne.id,
+            // A chat made over the box (decision 52): the server does not
+            // know the pair, and `requestSessionRebuild` would name it.
+            if (!isLocalConversationId(c.id))
+              c.userOne.id == uid ? c.userTwo.id : c.userOne.id,
         ];
       }
       // The reconcile destroys stored plaintext the server no longer serves;
@@ -496,12 +500,21 @@ class ConnectionProvider extends ChangeNotifier {
     final contacts = _contactStore;
     if (boxClient != null && contacts != null) {
       // Decision 51: a box peer's verified list is kept across restarts —
-      // one this device holds a queue for, or an address of.
-      _encryptionProvider?.keepsDeviceListFor = (peer) {
-        final record = contacts.byUserId(peer);
-        return record != null &&
-            (record.queues.isNotEmpty || record.outbound.isNotEmpty);
-      };
+      // one this device holds a queue for, or an address of, or one met
+      // over the box (slice (f): no lookup may name that pair again).
+      _encryptionProvider
+        ?..keepsDeviceListFor = (peer) {
+          final record = contacts.byUserId(peer);
+          return record != null &&
+              (record.queues.isNotEmpty ||
+                  record.outbound.isNotEmpty ||
+                  record.boxOrigin != null);
+        }
+        // Slice (f), decision 52: a friendship or request made over the box
+        // is never named to the server by a lookup of this device.
+        ..isBoxOnlyPeer = ((peer) => contacts.byUserId(peer)?.boxOrigin != null)
+        ..servedBundleFor = ((peer, device) =>
+            contacts.byUserId(peer)?.boxOrigin?.bundles[device]);
       if (_box == null || _boxUserId != userId) {
         _box?.dispose();
         _boxMedia?.dispose();
@@ -538,12 +551,19 @@ class ConnectionProvider extends ChangeNotifier {
             // Slice (e): a new device's handoff carries its account's list.
             ..ownDeviceList = messaging.ownDeviceList
             ..friendRevokedDevices = messaging.friendRevokedDevices
-            ..onBoxReady = messaging.onBoxReady;
+            ..onBoxReady = messaging.onBoxReady
+            // Slice (f): a pending request that expired left the store.
+            ..onFirstContactsChanged = () {
+              _friendsProvider?.onBoxContactsChanged();
+              _conversationsProvider?.refreshLocalChats();
+            };
           messaging
             ..boxOutbox = _box
             ..boxSiblings = _box
             ..boxFriends = _box
+            ..boxFirstContact = _box
             ..boxMedia = _boxMedia;
+          _encryptionProvider?.lookupBoxPeerList = messaging.lookupBoxPeerList;
         }
         if (_encryptionProvider?.isE2EReady == true) _box!.e2eReady();
       } else {
@@ -583,6 +603,24 @@ class ConnectionProvider extends ChangeNotifier {
     _messagingProvider?.onHistoryDecryptPassFinished = () => _box?.drainInbox();
 
     // 6. Wire cross-provider callbacks (friends -> conversations)
+    // Slice (f): first contact over the box, between the friends lists,
+    // the chats and the messaging side (which holds the box session).
+    final messaging = _messagingProvider;
+    final friends = _friendsProvider;
+    if (messaging != null && friends != null) {
+      friends
+        ..boxSendRequest = messaging.sendBoxFriendRequest
+        ..boxAcceptRequest = messaging.acceptBoxFriendRequest
+        ..boxDeclineRequest = messaging.declineBoxFriendRequest
+        ..boxEndFriendship = messaging.endBoxFriendship;
+      messaging
+        ..lookupHandle = friends.lookupHandle
+        ..onBoxContactsChanged = friends.onBoxContactsChanged
+        ..onBoxFriendshipMade = friends.onBoxFriendshipMade
+        ..onBoxFriendshipEnded = friends.onBoxFriendshipEnded;
+      _conversationsProvider?.onLocalChatTimerChanged = (peer, seconds, at) =>
+          unawaited(messaging.sendBoxChatTimer(peer, seconds, at));
+    }
     _friendsProvider?.onRemoveConversationsForUser = (uid) {
       final removed = uid == -1
           ? _conversationsProvider?.removeConversationsForUser(
@@ -1008,6 +1046,7 @@ class ConnectionProvider extends ChangeNotifier {
         ?..boxOutbox = null
         ..boxSiblings = null
         ..boxFriends = null
+        ..boxFirstContact = null
         ..boxMedia = null;
       _boxUserId = null;
     }

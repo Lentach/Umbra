@@ -48,6 +48,11 @@ typedef E2eBoxAction = ({
   bool? on,
 });
 
+/// A profile carried inside E2E (metadata-privacy slice (f), decision 55):
+/// the sender's name and tag and its photo's server path. Authenticated by
+/// the Signal session, still only the sender's own word.
+typedef E2eProfile = ({String username, String tag, String? avatarUrl});
+
 /// E2E encrypted message envelope format. Single source of truth for build/parse.
 class E2eEnvelope {
   E2eEnvelope._();
@@ -113,9 +118,53 @@ class E2eEnvelope {
   static const String typeListUpdate = 'list_update';
   static const String _keyAuth = 'auth';
 
+  /// First contact (metadata-privacy slice (f), E15b): `{t, sid, sealPub, p}`
+  /// — the queue the requester made for this account and its profile `p`
+  /// (decision 55) — inside Signal, in the claim-bearing PreKey frame on each
+  /// target device's request queue. The accept is a [typeQueueHandoff]
+  /// carrying the accepter's `p` too.
+  static const String typeFriendRequest = 'friend_request';
+  static const String _keyProfile = 'p';
+  static const String _keyProfileUsername = 'u';
+  static const String _keyProfileTag = 'g';
+  static const String _keyProfileAvatar = 'a';
+
+  /// A photo is only ever a file on OUR server's avatar path: the server
+  /// serves `<its base>/media/avatars/<file>` (`LocalStorageService
+  /// .uploadAvatar`). Only that PATH is kept — the reader puts its own
+  /// server in front — so a peer can never make the app fetch from a host
+  /// it picked.
+  static final RegExp _avatarPath = RegExp(
+    r'^/media/avatars/[A-Za-z0-9._-]{1,128}$',
+  );
+
+  /// What a device tells its own siblings about a first contact, over the
+  /// self-queues (E15e): `{t, peer}`, where `peer` is the search answer for
+  /// the other account as this device holds it (`FirstContactPeer
+  /// .toSiblingJson`). [typeFriendRequestSent]: this account asked it;
+  /// [typeFriendAccepted]: this account accepted its request.
+  static const String typeFriendRequestSent = 'friend_request_sent';
+  static const String typeFriendAccepted = 'friend_accepted';
+  static const String _keyPeer = 'peer';
+
+  /// `{t, to}`: this account declined `to`'s request (E15e; decision 54: the
+  /// requester is told nothing, only our siblings are).
+  static const String typeFriendDeclined = 'friend_declined';
+
+  /// The end of a friendship made over the box (E15j): `{t}` to each of the
+  /// friend's devices; `{t, to, b?}` to our siblings, `b` when it is a block.
+  static const String typeGoodbye = 'goodbye';
+  static const String _keyBlock = 'b';
+
+  /// The timer SETTING of a chat made over the box (E15k): `{t, ttl, ts}`,
+  /// `ttl` null = off; to our siblings with `to`. Last writer wins on `ts`.
+  static const String typeTimer = 'timer';
+
   /// The box's one spelling of a 32-byte id or key: unpadded base64url whose
   /// last char carries no spare bits (wire.md "First contact").
-  static final RegExp _boxId32 = RegExp(r'^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$');
+  static final RegExp _boxId32 = RegExp(
+    r'^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$',
+  );
 
   /// When the sender sent it, whole ms since the epoch (decision 13): a box
   /// message has no server `createdAt`. Peer-claimed, so the receiver clamps
@@ -342,11 +391,156 @@ class E2eEnvelope {
   }
 
   /// A [typeQueueHandoff] envelope handing over the queue [sid] and the key
-  /// its seal layer expects.
+  /// its seal layer expects; an accept (slice (f), E15d) carries the
+  /// accepter's [profile] too (decision 55).
   static Map<String, dynamic> buildQueueHandoff({
     required String sid,
     required String sealPub,
-  }) => {_keyType: typeQueueHandoff, _keySid: sid, _keySealPub: sealPub};
+    E2eProfile? profile,
+  }) => {
+    _keyType: typeQueueHandoff,
+    _keySid: sid,
+    _keySealPub: sealPub,
+    if (profile != null) _keyProfile: _profileJson(profile),
+  };
+
+  /// A [typeFriendRequest] envelope (E15b): our queue [sid]/[sealPub] for
+  /// the account asked, and our [profile].
+  static Map<String, dynamic> buildFriendRequest({
+    required String sid,
+    required String sealPub,
+    required E2eProfile profile,
+  }) => {
+    _keyType: typeFriendRequest,
+    _keySid: sid,
+    _keySealPub: sealPub,
+    _keyProfile: _profileJson(profile),
+  };
+
+  /// The queue a [typeFriendRequest] envelope offers and the profile it
+  /// carries (null when absent or not sound); null for any other type or
+  /// an address not spelled as the box spells a 32-byte id.
+  static ({String sid, String sealPub, E2eProfile? profile})?
+  parseFriendRequest(String jsonStr) {
+    final envelope = _object(jsonStr);
+    if (envelope == null || envelope[_keyType] != typeFriendRequest) {
+      return null;
+    }
+    final sid = envelope[_keySid];
+    final sealPub = envelope[_keySealPub];
+    if (sid is! String || !_boxId32.hasMatch(sid)) return null;
+    if (sealPub is! String || !_boxId32.hasMatch(sealPub)) return null;
+    return (sid: sid, sealPub: sealPub, profile: _profileOf(envelope));
+  }
+
+  /// The profile `p` any envelope carries (a request, an accept's handoff);
+  /// null when absent or not sound. Its photo is the PATH of a file on our
+  /// server's avatar route (host and query dropped), or null.
+  static E2eProfile? profileOf(String jsonStr) {
+    final envelope = _object(jsonStr);
+    return envelope == null ? null : _profileOf(envelope);
+  }
+
+  static E2eProfile? _profileOf(Map<String, dynamic> envelope) {
+    if (envelope[_keyProfile]
+        case {
+              _keyProfileUsername: final String username,
+              _keyProfileTag: final String tag,
+            } &&
+            final Map<String, dynamic> raw
+        when username.isNotEmpty &&
+            username.length <= 64 &&
+            tag.isNotEmpty &&
+            tag.length <= 16) {
+      final avatar = raw[_keyProfileAvatar];
+      final path = avatar is String ? Uri.tryParse(avatar)?.path : null;
+      return (
+        username: username,
+        tag: tag,
+        avatarUrl: path != null && _avatarPath.hasMatch(path) ? path : null,
+      );
+    }
+    return null;
+  }
+
+  static Map<String, dynamic> _profileJson(E2eProfile profile) => {
+    _keyProfileUsername: profile.username,
+    _keyProfileTag: profile.tag,
+    _keyProfileAvatar: ?profile.avatarUrl,
+  };
+
+  /// A sibling copy of a first contact (E15e): [type] is
+  /// [typeFriendRequestSent] or [typeFriendAccepted], [peer] the search
+  /// answer for the other account.
+  static Map<String, dynamic> buildFriendRelay(
+    String type,
+    Map<String, dynamic> peer,
+  ) => {_keyType: type, _keyPeer: peer};
+
+  /// The search answer a [typeFriendRequestSent] or [typeFriendAccepted]
+  /// envelope relays; null for any other type. Checked by its reader.
+  static Map<String, dynamic>? relayedPeer(String jsonStr) {
+    final envelope = _object(jsonStr);
+    final type = envelope?[_keyType];
+    if (type != typeFriendRequestSent && type != typeFriendAccepted) {
+      return null;
+    }
+    final peer = envelope![_keyPeer];
+    return peer is Map<String, dynamic> ? peer : null;
+  }
+
+  /// A [typeFriendDeclined] envelope: we declined [userId]'s request.
+  static Map<String, dynamic> buildFriendDeclined(int userId) => {
+    _keyType: typeFriendDeclined,
+    _keySentTo: userId,
+  };
+
+  /// A [typeGoodbye] envelope; to a sibling it names the friend [sentTo]
+  /// and whether it is a [block].
+  static Map<String, dynamic> buildGoodbye({int? sentTo, bool block = false}) =>
+      {
+        _keyType: typeGoodbye,
+        _keySentTo: ?sentTo,
+        if (block) _keyBlock: true,
+      };
+
+  /// Whether [jsonStr]'s [typeGoodbye] is a block (a sibling copy only);
+  /// null for any other type.
+  static bool? goodbyeBlocks(String jsonStr) {
+    final envelope = _object(jsonStr);
+    if (envelope == null || envelope[_keyType] != typeGoodbye) return null;
+    return envelope[_keyBlock] == true;
+  }
+
+  /// A [typeTimer] envelope: the chat's timer [ttl] (null = off) as set at
+  /// [sentAt]; a sibling copy names the peer in [sentTo].
+  static Map<String, dynamic> buildTimer({
+    required int? ttl,
+    required DateTime sentAt,
+    int? sentTo,
+  }) => {
+    _keyType: typeTimer,
+    _keyTtl: ttl,
+    _keySentAt: sentAt.millisecondsSinceEpoch,
+    _keySentTo: ?sentTo,
+  };
+
+  /// The setting a [typeTimer] envelope carries; null for any other type,
+  /// a `ttl` outside the timer sheet's range, or no sound `ts`.
+  static ({int? ttl, DateTime sentAt})? parseTimer(String jsonStr) {
+    final envelope = _object(jsonStr);
+    if (envelope case {
+      _keyType: typeTimer,
+      _keyTtl: final int? ttl,
+      _keySentAt: final int ts,
+    } when (ttl == null || _isValidTtl(ttl)) && ts > 0 && ts <= _maxEpochMs) {
+      return (
+        ttl: ttl,
+        sentAt: DateTime.fromMillisecondsSinceEpoch(ts, isUtc: true),
+      );
+    }
+    return null;
+  }
 
   /// A [typeListUpdate] envelope carrying this account's device list [auth].
   static Map<String, dynamic> buildListUpdate(Map<String, dynamic> auth) => {

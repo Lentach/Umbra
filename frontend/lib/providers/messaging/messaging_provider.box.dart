@@ -56,17 +56,23 @@ extension MessagingBox on MessagingProvider {
     // the contact-record refusals — the own account has no contact record.
     final own = _currentUserId;
     if (own != null && entry.peerUserId == own) {
-      return _runDecryptSerialized(own, () => _consumeSiblingBox(entry, signal));
+      return _runDecryptSerialized(
+        own,
+        () => _consumeSiblingBox(entry, signal),
+      );
     }
-    // A friend's queue handoff from our public REQUEST queue (item 5): the
-    // one thing read from it, under its own checks.
+    // A friend's queue handoff from our public REQUEST queue (item 5), or a
+    // first contact's request (slice (f)): the only things read from it,
+    // under their own checks.
     if (entry.viaRequestQueue) {
       return _runDecryptSerialized(
         entry.peerUserId,
         () => _consumeFriendRequest(entry, signal, peer),
       );
     }
-    final conversationId = peer?.legacy.conversationId;
+    // A friendship made over the box keys its chat by its local id, which a
+    // restored contact backup (no `legacy`) must still find.
+    final conversationId = MessagingFirstContact._boxChatOf(peer);
     // The chat list still hangs off server conversation ids (release N).
     // A contact this account blocked gets nothing read; a friend without a
     // conversation yet gets only its queue handoff and ack read (item 5: a
@@ -143,6 +149,10 @@ extension MessagingBox on MessagingProvider {
     String signal,
     ContactRecord? peer,
   ) async {
+    // A first contact's request carries its claim outside Signal (E15c).
+    if (entry.carriedClaim != null) {
+      return _readFirstContact(entry, signal, peer);
+    }
     final enc = _encryptionProvider;
     final link = boxFriends;
     if (enc == null || link == null || !enc.isE2EReady) return false;
@@ -153,7 +163,10 @@ extension MessagingBox on MessagingProvider {
       'device': device,
       'why': why,
     });
-    if (peer?.state != ContactState.friend) {
+    // An account we asked over the box hands its queues to our other
+    // devices here: that is the accept of our request (E15d/E15e).
+    if (peer?.state != ContactState.friend &&
+        !MessagingFirstContact._boxPending(peer, ContactState.pendingOut)) {
       refused('not_friend');
       return true;
     }
@@ -211,8 +224,14 @@ extension MessagingBox on MessagingProvider {
     // PreKey message that would replace our session with that device is read
     // only when this device asked for it — it started that session to hand
     // off, or re-keyed it; otherwise it is answered by our re-key, built from
-    // that device's real bundle (decision 37's rule).
+    // that device's real bundle (decision 37's rule). An account this
+    // account asked over the box counts as asked: our request built the
+    // session its accept may replace (slice (f), E15f).
     if (!link.awaitingFriendRekeyFrom(user, device) &&
+        !MessagingFirstContact._boxPending(
+          link.contactOf(user),
+          ContactState.pendingOut,
+        ) &&
         await enc.preKeyWouldReplaceSession(user, device, signal)) {
       refused('would_replace');
       await link.rekeyFriend(user, device);
@@ -235,14 +254,18 @@ extension MessagingBox on MessagingProvider {
   }
 
   /// Whether friend [userId]'s VERIFIED list names [deviceId] live: the held
-  /// list, else one batched lookup. False when it cannot be verified.
+  /// list, else one batched lookup. False when it cannot be verified. A
+  /// friend made over the box is never looked up here: its lookup is a
+  /// search that spends one-time pre-keys and names the pair (E15h), and
+  /// this runs on frame reads.
   Future<bool> _friendDeviceIsLive(int userId, int deviceId) async {
     final enc = _encryptionProvider;
     if (enc == null) return false;
     try {
+      final held = enc.cachedDeviceList(userId);
+      if (held == null && _boxOnlyPeer(userId)) return false;
       final list =
-          enc.cachedDeviceList(userId) ??
-          await enc.getVerifiedDeviceList(userId, batched: true);
+          held ?? await enc.getVerifiedDeviceList(userId, batched: true);
       return list.isLiveDevice(deviceId);
     } on Object {
       return false;
@@ -400,6 +423,9 @@ extension MessagingBox on MessagingProvider {
       });
       return true;
     }
+    // The first handoff of an account we asked over the box is its accept:
+    // the record becomes a friend before the handoff is taken (E15d/E15e).
+    if (!await _befriendOnHandoff(userId, plaintext)) return false;
     switch (await link.takeFriendHandoff(
       userId,
       device,
@@ -638,8 +664,7 @@ extension MessagingBox on MessagingProvider {
           });
           return true;
         }
-        return await link.siblingAcked(device, sid) !=
-            SiblingWrite.retryLater;
+        return await link.siblingAcked(device, sid) != SiblingWrite.retryLater;
       case E2eEnvelope.typeMessage:
         // A sent copy travels only into our self-queue.
         if (!viaSelf) {
@@ -669,6 +694,32 @@ extension MessagingBox on MessagingProvider {
           conversationId: conversationId,
           receivedAt: msg.createdAt,
         );
+      // Our own first contact, as a sibling made it (slice (f), E15e), the
+      // end of one (E15j) or its chat's timer (E15k): only through our
+      // self-queue, like every other copy.
+      case E2eEnvelope.typeFriendRequestSent ||
+          E2eEnvelope.typeFriendAccepted ||
+          E2eEnvelope.typeFriendDeclined ||
+          E2eEnvelope.typeGoodbye ||
+          E2eEnvelope.typeTimer:
+        if (!viaSelf) {
+          _e2eFlowLog('BOX_SIBLING_COPY_REFUSED', {'why': 'request_queue'});
+          return true;
+        }
+        final to = parsed.sentTo;
+        return switch (parsed.type) {
+          E2eEnvelope.typeGoodbye when to != null => _takeGoodbye(
+            to,
+            block: E2eEnvelope.goodbyeBlocks(plaintext) ?? false,
+          ),
+          E2eEnvelope.typeTimer when to != null => Future.value(
+            _takeBoxTimer(to, plaintext, msg.createdAt),
+          ),
+          E2eEnvelope.typeGoodbye || E2eEnvelope.typeTimer => Future.value(
+            true,
+          ),
+          _ => _takeFirstContactCopy(parsed.type, plaintext),
+        };
       default:
         _e2eFlowLog('BOX_UNKNOWN_TYPE', {
           'msgId': entry.localId,
@@ -696,7 +747,7 @@ extension MessagingBox on MessagingProvider {
       return done;
     }
     final peer = link.contactOf(to);
-    final conversationId = peer?.legacy.conversationId;
+    final conversationId = MessagingFirstContact._boxChatOf(peer);
     if (peer?.state == ContactState.blocked) {
       _e2eFlowLog('BOX_SIBLING_COPY_REFUSED', {'why': 'blocked'});
       return done;
@@ -930,8 +981,14 @@ extension MessagingBox on MessagingProvider {
       // would otherwise move a live device's address to its own queue.
       case E2eEnvelope.typeQueueHandoff when link != null:
         final device = msg.originDeviceId ?? 1;
+        // An account we asked over the box answers from the session our
+        // request built: its accept counts as asked (slice (f), E15f).
         if (msg.encryptedContent!.startsWith('${BoxFrameKind.preKey.byte}:') &&
-            !link.awaitingFriendRekeyFrom(msg.senderId, device)) {
+            !link.awaitingFriendRekeyFrom(msg.senderId, device) &&
+            !MessagingFirstContact._boxPending(
+              link.contactOf(msg.senderId),
+              ContactState.pendingOut,
+            )) {
           _e2eFlowLog('BOX_FRIEND_HANDOFF_REFUSED', {
             'peer': msg.senderId,
             'device': device,
@@ -969,6 +1026,13 @@ extension MessagingBox on MessagingProvider {
           link?.friendDevicesChanged(msg.senderId);
         }
         return true;
+      // A friend made over the box ended the friendship (E15j), or set the
+      // chat's timer (E15k). A friendship the server knows keeps the
+      // server's events for both.
+      case E2eEnvelope.typeGoodbye:
+        return _takeGoodbye(msg.senderId, block: false);
+      case E2eEnvelope.typeTimer:
+        return _takeBoxTimer(msg.senderId, plaintext, receivedAt);
       case _ when controlOnly:
         // No conversation to show it in yet (release N's chat list hangs off
         // server conversation ids). A friend always has one on the server,
@@ -1224,6 +1288,17 @@ extension MessagingBox on MessagingProvider {
       'senderId': msg.senderId,
       'rule': decision.rule.name,
     });
+    // A friend made over the box has no server to carry a re-key request
+    // (decision 52): this device re-keys that device itself, over the box —
+    // once per box session; the device's own refusal of our fresh session
+    // re-keys us back, and the pair converges (decision 49).
+    final friendLink = boxFriends;
+    if (friendLink != null &&
+        _boxOnlyPeer(msg.senderId) &&
+        (decision.rule == DecryptionFailureRule.noSession ||
+            decision.rule == DecryptionFailureRule.badMac)) {
+      unawaited(friendLink.rekeyFriend(msg.senderId, msg.originDeviceId ?? 1));
+    }
     _askPeerToRekey(decision, msg.senderId);
     if (decision.rule == DecryptionFailureRule.noSession) {
       _requestSessionRebuildForPeer(msg.senderId, trigger: 'boxNoSession');
@@ -1316,6 +1391,11 @@ extension MessagingBox on MessagingProvider {
   void _showBoxMessage(MessageModel msg) {
     final viewing = _effectiveActiveConversationId ?? _paginationConversationId;
     final inView = msg.conversationId == viewing;
+    // A chat made over the box that was deleted here comes back with its
+    // next message, as a server chat does (owner decision 52).
+    if (isLocalConversationId(msg.conversationId)) {
+      _conversationsProvider?.revealLocalChat(msg.conversationId);
+    }
     // A sibling's sent ping is ours: nothing arrived, as for an old-path
     // self-sync copy.
     if (inView &&
@@ -1436,7 +1516,10 @@ extension MessagingBox on MessagingProvider {
         senderId: senderId,
         senderUsername: sender?.id == senderId ? sender!.username : '',
         conversationId: conversationId,
-        createdAt: DateTime.fromMillisecondsSinceEpoch(createdAtMs, isUtc: true),
+        createdAt: DateTime.fromMillisecondsSinceEpoch(
+          createdAtMs,
+          isUtc: true,
+        ),
         // Ours went out when the box took every frame (decision 20); no
         // receipt comes back over the box yet.
         deliveryStatus: senderId == _currentUserId
@@ -1966,7 +2049,10 @@ extension MessagingBox on MessagingProvider {
           _markMessageFailed(tempId, 'Could not send. Try again.');
           return false;
         case _BoxSealFailure.tooLong:
-          _e2eFlowLog('BOX_SEND_TOO_LONG', {'tempId': tempId, ...sealed.detail});
+          _e2eFlowLog('BOX_SEND_TOO_LONG', {
+            'tempId': tempId,
+            ...sealed.detail,
+          });
           _markMessageFailed(tempId, 'Message is too long to send.');
           return false;
         case null:

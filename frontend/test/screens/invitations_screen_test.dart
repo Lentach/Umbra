@@ -549,53 +549,6 @@ void main() {
     );
   });
 
-  testWidgets('reciprocal send replaces stale inbound with one Sent outcome',
-      (tester) async {
-    final friends = FriendsProvider()..setCurrentUserId(1);
-    friends.onFriendRequestsList([
-      _request(
-        id: 41,
-        senderId: 2,
-        senderName: 'bob',
-        receiverId: 1,
-        receiverName: 'alice',
-      ),
-    ]);
-    friends.onSentRequestsList([]);
-    await _pumpInvitations(tester, friends);
-
-    await tester.enterText(
-      find.byKey(const Key('invitation-handle-field')),
-      'bob#0002',
-    );
-    await tester.tap(find.byKey(const Key('invitation-handle-submit')));
-    friends.onSearchUsersResult([_user(2, 'bob')]);
-    await tester.pump();
-    await tester.tap(find.byKey(const Key('invitation-send-2')));
-    await tester.pump();
-    expect(find.byKey(const Key('invitation-send-progress')), findsOneWidget);
-
-    friends.onFriendRequestAccepted(
-      _request(
-        id: 99,
-        senderId: 1,
-        senderName: 'alice',
-        receiverId: 2,
-        receiverName: 'bob',
-        conversationId: 44,
-        chatReady: true,
-      ),
-    );
-    await tester.pump();
-
-    _expectExactlyOnePeerRow(tester, 2);
-    expect(find.byKey(const Key('invitation-send-2')), findsNothing);
-    expect(
-      tester.getTopLeft(find.byKey(const ValueKey(2))).dy,
-      greaterThan(tester.getTopLeft(find.text('Sent')).dy),
-    );
-  });
-
   testWidgets('reduce motion makes invitation state transition instantaneous',
       (tester) async {
     final friends = FriendsProvider();

@@ -639,6 +639,16 @@ extension MessagingDecrypt on MessagingProvider {
   }
 
   void _requestSessionRebuildForPeer(int peerId, {required String trigger}) {
+    // A friendship made over the box (owner decision 52): the server does
+    // not know the pair, and `requestSessionRebuild` would name it.
+    if (_boxOnlyPeer(peerId)) {
+      _e2eFlowLog('SESSION_RESET_SKIPPED', {
+        'peerId': peerId,
+        'trigger': trigger,
+        'reason': 'boxOnly',
+      });
+      return;
+    }
     // Once per peer until a decrypt from them succeeds: every emit forces the
     // peer to re-key on their next send (OTP burn; on pre-fix clients a
     // lossful local delete), so the old per-pass dedupe re-spammed it on
@@ -671,7 +681,8 @@ extension MessagingDecrypt on MessagingProvider {
   void _askPeerToRekey(DecryptionFailureDecision decision, int senderId) {
     if (!decision.notifyPeerRebuild) return;
     if (decision.rule == DecryptionFailureRule.identityReset) {
-      if (_identityResetRebuildNotified.add(senderId)) {
+      if (!_boxOnlyPeer(senderId) &&
+          _identityResetRebuildNotified.add(senderId)) {
         // Identity reset: tell the peer to re-key on their next send. No
         // local state is touched (there is none to protect — the old
         // identity is gone); without this the peer keeps sending
@@ -982,8 +993,7 @@ extension MessagingDecrypt on MessagingProvider {
           if (cached.content == kDecryptionFailedLabel) {
             // Terminal failure cached — restore and skip without live decrypt.
             final idx = _messages.indexWhere((m) => m.id == msg.id);
-            if (idx != -1 &&
-                _messages[idx].content != kDecryptionFailedLabel) {
+            if (idx != -1 && _messages[idx].content != kDecryptionFailedLabel) {
               _messages[idx] = _messages[idx].copyWith(
                 content: kDecryptionFailedLabel,
               );
@@ -1029,8 +1039,7 @@ extension MessagingDecrypt on MessagingProvider {
           if (pContent == kDecryptionFailedLabel) {
             // Terminal failure persisted — restore and skip without live decrypt.
             final idx = _messages.indexWhere((m) => m.id == msg.id);
-            if (idx != -1 &&
-                _messages[idx].content != kDecryptionFailedLabel) {
+            if (idx != -1 && _messages[idx].content != kDecryptionFailedLabel) {
               _messages[idx] = _messages[idx].copyWith(
                 content: kDecryptionFailedLabel,
               );

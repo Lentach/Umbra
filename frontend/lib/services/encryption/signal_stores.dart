@@ -584,6 +584,24 @@ class SecureIdentityKeyStore extends IdentityKeyStore {
     return legacy;
   }
 
+  /// Sets [name]'s ACCOUNT pin to [identityKey] when none is held, as a
+  /// session's first contact would (metadata-privacy slice (f), E15e): a
+  /// sibling that relays the server's search answer must be able to judge
+  /// the peer's first PreKey frame BEFORE any session with it exists. Never
+  /// moves a pin already set ([saveIdentity]'s rule). True when the pin now
+  /// equals [identityKey].
+  Future<bool> stageAccountIdentity(
+    String name,
+    IdentityKey identityKey,
+  ) async {
+    final held = await getAccountIdentity(name);
+    if (held != null) return _sameIdentity(held, identityKey);
+    final key = _accountKey(name);
+    await _storage.write(key: key, value: encodedOf(identityKey));
+    _trustedMemo[key] = identityKey;
+    return true;
+  }
+
   @override
   Future<bool> isTrustedIdentity(
     SignalProtocolAddress address,

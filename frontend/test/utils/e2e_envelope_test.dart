@@ -347,6 +347,78 @@ void main() {
       });
     });
 
+    group('first contact p / timer (slice (f), decision 55, E15k)', () {
+      final sid = '${'A' * 42}E';
+      final sealPub = '${'b' * 42}w';
+
+      String requestWith(String? avatar) => jsonEncode(
+        E2eEnvelope.buildFriendRequest(
+          sid: sid,
+          sealPub: sealPub,
+          profile: (username: 'ann', tag: '1412', avatarUrl: avatar),
+        ),
+      );
+
+      test('a photo is kept as the path of a file on our avatar route, '
+          'whatever host it names', () {
+        for (final (sent, kept) in [
+          ('https://fireplace.example/media/avatars/a1b2.jpg', '/media/avatars/a1b2.jpg'),
+          ('http://127.0.0.1:3000/media/avatars/x_y-z.png', '/media/avatars/x_y-z.png'),
+          ('https://evil.example/media/avatars/a.jpg?t=1', '/media/avatars/a.jpg'),
+          ('/media/avatars/a.jpg', '/media/avatars/a.jpg'),
+        ]) {
+          expect(
+            E2eEnvelope.parseFriendRequest(requestWith(sent))?.profile,
+            (username: 'ann', tag: '1412', avatarUrl: kept),
+            reason: sent,
+          );
+        }
+      });
+
+      test('a photo anywhere else is dropped, the name kept', () {
+        for (final sent in [
+          'https://evil.example/track.png',
+          '/media/msgs/a.bin',
+          '/media/avatars/../msgs/a.bin',
+          '/avatars/a.jpg',
+        ]) {
+          expect(
+            E2eEnvelope.parseFriendRequest(requestWith(sent))?.profile,
+            (username: 'ann', tag: '1412', avatarUrl: null),
+            reason: sent,
+          );
+        }
+      });
+
+      test('a timer round-trips its setting and time; off is null; a ttl '
+          'outside the sheet is refused', () {
+        final at = DateTime.utc(2026, 9, 27, 12);
+        expect(
+          E2eEnvelope.parseTimer(
+            jsonEncode(E2eEnvelope.buildTimer(ttl: 3600, sentAt: at)),
+          ),
+          (ttl: 3600, sentAt: at),
+        );
+        expect(
+          E2eEnvelope.parseTimer(
+            jsonEncode(E2eEnvelope.buildTimer(ttl: null, sentAt: at)),
+          ),
+          (ttl: null, sentAt: at),
+        );
+        expect(
+          E2eEnvelope.parseTimer(
+            jsonEncode({'t': 'timer', 'ttl': 1, 'ts': at.millisecondsSinceEpoch}),
+          ),
+          isNull,
+        );
+        expect(
+          E2eEnvelope.parseTimer(jsonEncode({'t': 'timer', 'ts': 5})),
+          isNull,
+          reason: 'no ttl key at all is not "off"',
+        );
+      });
+    });
+
     group('ttl / re / boxMedia (item 3, E17a/E18a/E18b)', () {
       final boxMedia = '${'A' * 42}E';
       const quote = (

@@ -46,7 +46,9 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:fireplace/models/user_model.dart';
 import 'package:fireplace/services/box/box_client.dart';
+import 'package:fireplace/services/box/box_first_contact.dart';
 import 'package:fireplace/services/box/box_frame.dart';
 import 'package:fireplace/services/box/box_friends.dart';
 import 'package:fireplace/services/box/box_session.dart';
@@ -56,6 +58,7 @@ import 'package:fireplace/services/box/queue_seal.dart';
 import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/services/contacts/contact_store.dart';
 import 'package:fireplace/services/encryption/content_kv.dart';
+import 'package:fireplace/services/encryption/prekey_identity.dart';
 import 'package:fireplace/utils/e2e_envelope.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -300,6 +303,128 @@ class _AppSide {
   ContactRecord get record => store.byUserId(friend.userId)!;
 
   ContactOutbound? get address => record.outbound.firstOrNull;
+}
+
+/// One account's app for slice (f)'s first contact (decision 6), strangers
+/// as far as its store knows: the real `BoxSession`, `BoxInbox` gate and
+/// `BoxFirstContact` records against the real server's `searchUsers`
+/// answer and the real box. The reader is stood in, like [_AppSide]'s:
+/// `messaging_provider_box_first_contact_test` drives the shipped reader's
+/// checks on real Signal; what is proven here is the wire.
+class _FirstContactSide {
+  _FirstContactSide(this.me, this.peer, this.client);
+
+  final E2eClient me;
+  final E2eClient peer;
+  final BoxClient client;
+  late final ContactStore store;
+  late final BoxSession session;
+  final List<String> read = [];
+
+  Future<void> start() async {
+    store = ContactStore(
+      open: () async => _MemKv(),
+      lock: <T>(_, action) => action(),
+      accepts: (_) => true,
+    );
+    await store.open(me.userId);
+    await store.setSelf(
+      UserModel(id: me.userId, username: me.username, tag: me.tag),
+    );
+    me.events.discard('requestQueueSet');
+    session = BoxSession(
+      box: client,
+      store: store,
+      emit: (event, data) => me.socketService.socket!.emit(event, data),
+      seal: QueueSeal(cipher: PointyGcmSealer()),
+    )..start();
+    session
+      ..consumer = _read
+      ..encryptForFriend = _encrypt
+      ..friendLiveDevices = ((user) async => user == peer.userId ? {1} : null)
+      ..e2eReady()
+      ..accountReady(1);
+    final published =
+        await me.events.next(
+              'requestQueueSet',
+              where: (p) => p is Map && p['success'] == true,
+              reason: '${me.label} publishes its request queue',
+            )
+            as Map;
+    session.onRequestQueueSet(published);
+  }
+
+  /// One `searchUsers` of [who]'s handle, as the server answers it.
+  Future<FirstContactPeer> search(E2eClient who) async {
+    me.events.discard('searchUsersResult');
+    me.socketService.socket!.emit('searchUsers', {
+      'handle': '${who.username}#${who.tag}',
+    });
+    final answer =
+        await me.events.next('searchUsersResult', reason: '${me.label} search')
+            as List;
+    final found = FirstContactPeer.fromSearchEntry(answer.single);
+    expect(found, isNotNull, reason: 'the answer names a reachable device');
+    return found!;
+  }
+
+  Future<BoxFrame?> _encrypt(
+    int user,
+    int device,
+    String json, {
+    bool fresh = false,
+  }) async => BoxFrame.fromSignalCiphertext(
+    await me.encryption.encrypt(user, json, deviceId: device),
+    senderDeviceId: 1,
+  );
+
+  /// A request is kept undecrypted (E15c); from the account we asked, a
+  /// handoff is the accept (E15d) and an ack is taken; a message is read.
+  Future<bool> _read(BoxInboxEntry entry) async {
+    if (entry.peerUserId != peer.userId) return true;
+    if (entry.carriedClaim case final claim?) {
+      await session.firstContact.keep(
+        userId: entry.peerUserId,
+        deviceId: entry.senderDeviceId,
+        signal: entry.signal!,
+        claim: BoxFirstContact.parseClaim(claim)!,
+      );
+      return true;
+    }
+    final json = await me.encryption.decrypt(
+      entry.peerUserId,
+      entry.signal!,
+      deviceId: entry.senderDeviceId,
+    );
+    if (E2eEnvelope.parseQueueHandoff(json) case final handoff?) {
+      await session.firstContact.befriend(
+        entry.peerUserId,
+        avatarUrl: E2eEnvelope.profileOf(json)?.avatarUrl,
+      );
+      return await session.takeFriendHandoff(
+            entry.peerUserId,
+            entry.senderDeviceId,
+            sid: handoff.sid,
+            sealPub: handoff.sealPub,
+          ) !=
+          FriendWrite.retryLater;
+    }
+    if (E2eEnvelope.parseQueueHandoffAck(json) case final acked?) {
+      return await session.friendAcked(
+            entry.peerUserId,
+            entry.senderDeviceId,
+            acked,
+          ) !=
+          FriendWrite.retryLater;
+    }
+    read.add(E2eEnvelope.parse(json).content);
+    return true;
+  }
+
+  ContactRecord? get record => store.byUserId(peer.userId);
+
+  E2eProfile get profile =>
+      (username: me.username, tag: me.tag, avatarUrl: null);
 }
 
 void main() {
@@ -633,6 +758,180 @@ void main() {
               );
             }
           }
+          a.session.dispose();
+          b.session.dispose();
+        },
+        timeout: const Timeout(Duration(minutes: 2)),
+      );
+
+      test(
+        'slice (f), first contact (decision 6): a search names the request '
+        'queue, a claim-bearing request is kept unread, the accept checks it '
+        'against the key a second search serves and hands a queue back, a '
+        'message goes each way — and no server row is written for any of it',
+        () async {
+          // Runs after item 5 on the same two accounts (their keys, uploaded
+          // there; no registration is spent): the box knows neither side,
+          // since each store here starts empty.
+          Future<int> count(String table, String where) async => int.parse(
+            (await e2eSql(
+              'SELECT count(*) FROM public.$table WHERE $where',
+            )).single.single,
+          );
+          final pair = '(${alice.userId}, ${bob.userId})';
+          Future<List<int>> serverRows() async => [
+            await count(
+              'friend_requests',
+              'sender_id IN $pair AND receiver_id IN $pair',
+            ),
+            await count(
+              'conversations',
+              'user_one_id IN $pair AND user_two_id IN $pair',
+            ),
+            await count('messages', 'sender_id IN $pair'),
+          ];
+          final before = await serverRows();
+
+          final a = _FirstContactSide(alice, bob, box(ip: _randomIp()));
+          final b = _FirstContactSide(bob, alice, box(ip: _randomIp()));
+          await a.start();
+          await b.start();
+
+          // A searches: the answer names B's device and its request queue.
+          final bobServed = await a.search(bob);
+          expect(bobServed.userId, bob.userId);
+          expect(bobServed.allOnBox, isTrue);
+          expect(bobServed.addresses.single.sid, b.store.requestQueue!.sid);
+
+          // The request (E15b): our queue, and the claim outside Signal.
+          expect(
+            await a.session.firstContact.asked(
+              userId: bob.userId,
+              profile: bobServed.profile,
+              addresses: bobServed.addresses,
+              bundles: bobServed.servedBundles,
+            ),
+            isTrue,
+          );
+          final ours = (await a.session.firstContactQueue(bob.userId))!;
+          await alice.encryption.buildSession(
+            bob.userId,
+            bobServed.devices.single.bundle,
+            expectedIdentityBase64: bobServed.identityKey,
+          );
+          final signal = BoxFrame.fromSignalCiphertext(
+            await alice.encryption.encrypt(
+              bob.userId,
+              jsonEncode(
+                E2eEnvelope.buildFriendRequest(
+                  sid: ours.sid,
+                  sealPub: ours.sealPub,
+                  profile: a.profile,
+                ),
+              ),
+            ),
+            senderDeviceId: 1,
+          )!;
+          expect(signal.kind, BoxFrameKind.preKey);
+          expect(
+            await a.session.deliver(
+              bobServed.addresses.single,
+              BoxFrame(
+                kind: signal.kind,
+                senderDeviceId: 1,
+                senderUserId: alice.userId,
+                signal: signal.signal,
+                carriedClaim: BoxFirstContact.encodeClaim((
+                  username: alice.username,
+                  tag: alice.tag,
+                )),
+              ).encode(),
+            ),
+            isTrue,
+          );
+
+          // B's inbox journals it; the request is KEPT, not decrypted.
+          await _until(
+            () => b.record?.boxOrigin?.kept.length == 1,
+            'bob keeps the request',
+          );
+          expect(b.record!.state, ContactState.pendingIn);
+          expect(b.record!.username, alice.username);
+
+          // The accept (E15d): one search of the claimed handle; the kept
+          // frame must carry the key the server serves for that account.
+          final aliceServed = await b.search(alice);
+          expect(aliceServed.userId, alice.userId);
+          final kept = b.record!.boxOrigin!.kept.single;
+          expect(
+            ciphertextMatchesIdentity(kept.signal, aliceServed.identityKey!),
+            isTrue,
+          );
+          final offered = E2eEnvelope.parseFriendRequest(
+            await bob.encryption.decrypt(alice.userId, kept.signal),
+          )!;
+          expect(offered.sid, ours.sid);
+          expect(
+            await b.session.firstContact.befriend(
+              alice.userId,
+              profile: aliceServed.profile,
+              addresses: aliceServed.addresses,
+              bundles: aliceServed.servedBundles,
+            ),
+            isTrue,
+          );
+          expect(
+            await b.session.acceptFirstContact(
+              alice.userId,
+              1,
+              sid: offered.sid,
+              sealPub: offered.sealPub,
+              profile: b.profile,
+            ),
+            FriendWrite.stored,
+          );
+
+          // A reads the accept from its own queue and becomes a friend.
+          await _until(
+            () =>
+                a.record?.state == ContactState.friend &&
+                a.record!.outbound.isNotEmpty &&
+                (a.record!.queues.first.ackedBy.contains(1)),
+            'alice takes the accept',
+          );
+          expect(a.record!.outbound.single.sid, b.record!.queues.single.sid);
+
+          // A message each way on the addresses first contact gave.
+          final hello = 'fc-${_randomIp()}';
+          final back = 'fc-${_randomIp()}';
+          final toBob = (await a._encrypt(
+            bob.userId,
+            1,
+            jsonEncode(E2eEnvelope.build(hello)),
+          ))!;
+          expect(
+            await a.session.deliver(a.record!.outbound.single, toBob.encode()),
+            isTrue,
+          );
+          final toAlice = (await b._encrypt(
+            alice.userId,
+            1,
+            jsonEncode(E2eEnvelope.build(back)),
+          ))!;
+          expect(
+            await b.session.deliver(
+              b.record!.outbound.single,
+              toAlice.encode(),
+            ),
+            isTrue,
+          );
+          await _until(
+            () => b.read.contains(hello) && a.read.contains(back),
+            'a message each way',
+          );
+
+          // The server wrote nothing for the friendship or the messages.
+          expect(await serverRows(), before);
           a.session.dispose();
           b.session.dispose();
         },

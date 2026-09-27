@@ -308,12 +308,19 @@ class _InvitationContent extends StatelessWidget {
     final outgoingOutcomes = friends.acceptedOutcomesFor(
       InvitationDirection.outgoing,
     );
+    // The server answers a known contact like anyone (owner decision 4; a
+    // box friendship has no server row), so "add" is offered here to
+    // strangers only. "Not found" stays tied to an EMPTY raw answer.
+    final knownIds = {
+      for (final user in friends.friends) user.id,
+      for (final request in friends.friendRequests) request.sender.id,
+      for (final request in friends.sentRequests) request.receiver.id,
+      for (final user in friends.blockedUsers) user.id,
+    };
     final visibleSearchResults = (friends.searchResults ?? const <UserModel>[])
         .where(
           (user) =>
-              !friends.sentRequests.any(
-                (request) => request.receiver.id == user.id,
-              ) &&
+              !knownIds.contains(user.id) &&
               friends.acceptedOutcomeForPeer(user.id) == null,
         )
         .toList(growable: false);

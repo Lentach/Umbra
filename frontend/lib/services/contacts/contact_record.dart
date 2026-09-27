@@ -51,7 +51,10 @@ class ContactQueue {
           device: DateTime.fromMillisecondsSinceEpoch(value, isUtc: true),
     },
     retiredAt: j['retiredAt'] is int
-        ? DateTime.fromMillisecondsSinceEpoch(j['retiredAt'] as int, isUtc: true)
+        ? DateTime.fromMillisecondsSinceEpoch(
+            j['retiredAt'] as int,
+            isUtc: true,
+          )
         : null,
   );
 
@@ -176,15 +179,21 @@ class KeptRequest {
     required this.deviceId,
     required this.signal,
     required this.at,
+    this.localId,
   });
 
   /// Null for a shape this build cannot read: the request is then absent.
   static KeptRequest? fromJson(Object? raw) => switch (raw) {
-    {'dev': final int deviceId, 'sig': final String signal, 'at': final int at} =>
+    {
+      'dev': final int deviceId,
+      'sig': final String signal,
+      'at': final int at,
+    } =>
       KeptRequest(
         deviceId: deviceId,
         signal: signal,
         at: DateTime.fromMillisecondsSinceEpoch(at, isUtc: true),
+        localId: (raw as Map)['lid'] as int?,
       ),
     _ => null,
   };
@@ -196,10 +205,16 @@ class KeptRequest {
   /// When this device took the frame in.
   final DateTime at;
 
+  /// The local id its delivery was journaled under: the key its decrypt's
+  /// plaintext is replayed under, so an accept that fails after the
+  /// decrypt reads it again instead of a spent ratchet (review).
+  final int? localId;
+
   Map<String, dynamic> toJson() => {
     'dev': deviceId,
     'sig': signal,
     'at': at.millisecondsSinceEpoch,
+    'lid': ?localId,
   };
 }
 
@@ -213,12 +228,16 @@ class KeptRequest {
 /// search answer ([ContactOutbound.sid] is the request sid) — where the
 /// handoff pass reaches a device no queue handoff came from yet, since the
 /// server's friends list never names this peer. [kept]: requests held
-/// undecrypted on the receiving device ([KeptRequest]).
+/// undecrypted on the receiving device ([KeptRequest]). [bundles]: each peer
+/// device's pre-key bundle as a search answer served it, WITHOUT its
+/// one-time pre-key — what a session with that device is built from, since
+/// a bundle fetch would name the pair to the server (E15b/E15e).
 class ContactBoxOrigin {
   const ContactBoxOrigin({
     required this.at,
     this.addresses = const [],
     this.kept = const [],
+    this.bundles = const {},
   });
 
   /// Null for a shape this build cannot read.
@@ -235,6 +254,15 @@ class ContactBoxOrigin {
           for (final k in json['kept'] as List<dynamic>? ?? const [])
             ?KeptRequest.fromJson(k),
         ],
+        bundles: {
+          if (json['bundles'] case final Map<String, dynamic> bundles)
+            for (final MapEntry(:key, :value) in bundles.entries)
+              if ((int.tryParse(key), value) case (
+                final int deviceId,
+                final Map<String, dynamic> bundle,
+              ))
+                deviceId: bundle,
+        },
       );
     }
     return null;
@@ -245,21 +273,27 @@ class ContactBoxOrigin {
   final DateTime at;
   final List<ContactOutbound> addresses;
   final List<KeptRequest> kept;
+  final Map<int, Map<String, dynamic>> bundles;
 
   Map<String, dynamic> toJson() => {
     'at': at.millisecondsSinceEpoch,
-    if (addresses.isNotEmpty)
-      'addr': [for (final a in addresses) a.toJson()],
+    if (addresses.isNotEmpty) 'addr': [for (final a in addresses) a.toJson()],
     if (kept.isNotEmpty) keptKey: [for (final k in kept) k.toJson()],
+    if (bundles.isNotEmpty)
+      'bundles': {
+        for (final MapEntry(:key, :value) in bundles.entries) '$key': value,
+      },
   };
 
   ContactBoxOrigin copyWith({
     List<ContactOutbound>? addresses,
     List<KeptRequest>? kept,
+    Map<int, Map<String, dynamic>>? bundles,
   }) => ContactBoxOrigin(
     at: at,
     addresses: addresses ?? this.addresses,
     kept: kept ?? this.kept,
+    bundles: bundles ?? this.bundles,
   );
 }
 
@@ -332,6 +366,8 @@ class ContactSettings {
     this.mutedUntil,
     this.pinnedMessageId,
     this.boxPin,
+    this.timerAt,
+    this.chatHidden = false,
   });
 
   factory ContactSettings.fromJson(Map<String, dynamic> j) => ContactSettings(
@@ -342,6 +378,11 @@ class ContactSettings {
         : DateTime.parse(j['mutedUntil'] as String),
     pinnedMessageId: j['pinnedMessageId'] as int?,
     boxPin: BoxPin.fromJson(j[boxPinKey]),
+    timerAt: switch (j['timerAt']) {
+      final int ms => DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true),
+      _ => null,
+    },
+    chatHidden: j['chatHidden'] as bool? ?? false,
   );
 
   /// Seconds; null = off.
@@ -353,6 +394,18 @@ class ContactSettings {
   /// The chat's E2E pin register ([BoxPin]); null = never written.
   final BoxPin? boxPin;
 
+  /// When [disappearingTimer] was last set, for a chat made over the box
+  /// only (slice (f), E15k): the setting travels between the devices, and
+  /// the latest write wins, as the E2E pin does. Null: never set over the
+  /// box.
+  final DateTime? timerAt;
+
+  /// A chat made over the box that the user deleted on this device (slice
+  /// (f), decision 52): its history went, and the row stays out of the
+  /// list until its next message or the user opens it again. A server
+  /// chat's delete is the server's.
+  final bool chatHidden;
+
   /// Its key: [ContactRecord.toBackupJson] drops it (E19f).
   static const String boxPinKey = 'boxPin';
 
@@ -362,6 +415,8 @@ class ContactSettings {
     if (mutedUntil != null) 'mutedUntil': mutedUntil!.toIso8601String(),
     if (pinnedMessageId != null) 'pinnedMessageId': pinnedMessageId,
     if (boxPin != null) boxPinKey: boxPin!.toJson(),
+    if (timerAt != null) 'timerAt': timerAt!.millisecondsSinceEpoch,
+    if (chatHidden) 'chatHidden': true,
   };
 
   ContactSettings copyWith({
@@ -373,6 +428,8 @@ class ContactSettings {
     int? pinnedMessageId,
     bool clearPinnedMessageId = false,
     BoxPin? boxPin,
+    DateTime? timerAt,
+    bool? chatHidden,
   }) => ContactSettings(
     disappearingTimer: clearDisappearingTimer
         ? null
@@ -383,6 +440,8 @@ class ContactSettings {
         ? null
         : pinnedMessageId ?? this.pinnedMessageId,
     boxPin: boxPin ?? this.boxPin,
+    timerAt: timerAt ?? this.timerAt,
+    chatHidden: chatHidden ?? this.chatHidden,
   );
 }
 

@@ -74,7 +74,9 @@ class ConversationsProvider extends ChangeNotifier {
     if (self == null) return;
     final rows = <ConversationModel>[
       for (final r in store.all)
-        if (r.state == ContactState.friend && _chatIdOf(r) != null)
+        if (r.state == ContactState.friend &&
+            _chatIdOf(r) != null &&
+            !(r.boxOrigin != null && r.settings.chatHidden))
           _chatOf(r, self),
     ];
     if (rows.isEmpty) return;
@@ -111,16 +113,43 @@ class ConversationsProvider extends ChangeNotifier {
       );
 
   /// Every chat made over the box, from the store: no server list names one,
-  /// so each snapshot keeps them beside the server's rows.
+  /// so each snapshot keeps them beside the server's rows. One deleted on
+  /// this device stays out until it is revealed ([revealLocalChat]).
   List<ConversationModel> _localChats() {
     final store = _store;
     final self = store?.self;
     if (store == null || self == null) return const [];
     return [
       for (final r in store.all)
-        if (r.state == ContactState.friend && r.boxOrigin != null)
+        if (r.state == ContactState.friend &&
+            r.boxOrigin != null &&
+            !r.settings.chatHidden)
           _chatOf(r, self),
     ];
+  }
+
+  /// The local chat [conversationId] (a friendship made over the box) shows
+  /// again after a delete on this device: its next message arrived, or the
+  /// user opened it.
+  void revealLocalChat(int conversationId) {
+    final store = _store;
+    if (store == null || !isLocalConversationId(conversationId)) return;
+    final peer = store.all
+        .where((r) => r.boxOrigin != null && _chatIdOf(r) == conversationId)
+        .firstOrNull;
+    if (peer == null || !peer.settings.chatHidden) return;
+    unawaited(
+      store
+          .update(
+            peer.userId,
+            (record) => record?.settings.chatHidden ?? false
+                ? record!.copyWith(
+                    settings: record.settings.copyWith(chatHidden: false),
+                  )
+                : null,
+          )
+          .then((_) => refreshLocalChats()),
+    );
   }
 
   /// A friendship made over the box began or ended (slice (f)): the chat
@@ -157,8 +186,7 @@ class ConversationsProvider extends ChangeNotifier {
     unawaited(
       store.update(
         peerId,
-        (record) =>
-            record?.copyWith(settings: mutate(record.settings)),
+        (record) => record?.copyWith(settings: mutate(record.settings)),
       ),
     );
   }
@@ -214,7 +242,9 @@ class ConversationsProvider extends ChangeNotifier {
           final peer = getOtherUser(c)!;
           final base =
               record ?? ContactRecord.fromUser(peer, ContactState.friend);
-          return base.withProfile(peer).copyWith(
+          return base
+              .withProfile(peer)
+              .copyWith(
                 settings: ContactSettings(
                   disappearingTimer: c.disappearingTimer,
                   muted: c.muted,
@@ -712,7 +742,10 @@ class ConversationsProvider extends ChangeNotifier {
       }
       _prePinState.remove(conversationId);
     }
-    _storeSettings(conversationId, (s) => s.copyWith(clearPinnedMessageId: true));
+    _storeSettings(
+      conversationId,
+      (s) => s.copyWith(clearPinnedMessageId: true),
+    );
     notifyListeners();
   }
 
@@ -798,7 +831,10 @@ class ConversationsProvider extends ChangeNotifier {
   ConversationModel _withBoxPinShown(ConversationModel conv) {
     final shown = _boxPinShown[conv.id];
     if (shown == null || !(_boxPins[conv.id]?.pinned ?? false)) return conv;
-    return conv.copyWith(pinnedMessageId: shown.id, pinnedMessagePreview: shown);
+    return conv.copyWith(
+      pinnedMessageId: shown.id,
+      pinnedMessagePreview: shown,
+    );
   }
 
   // ---------- Action Methods ----------
@@ -808,8 +844,26 @@ class ConversationsProvider extends ChangeNotifier {
     _emit?.call('getConversations', null);
   }
 
-  /// Emit startConversation socket event.
+  /// Emit startConversation socket event. A friend made over the box (owner
+  /// decision 52) is never named to the server: its chat is its local id,
+  /// shown again if it was deleted here, and opened at once.
   void startConversation(int recipientId) {
+    final record = _store?.byUserId(recipientId);
+    if (record != null && record.boxOrigin != null) {
+      if (record.state != ContactState.friend) return;
+      final id = localConversationIdFor(recipientId);
+      revealLocalChat(id);
+      final self = _store?.self;
+      if (self != null && !_conversations.any((c) => c.id == id)) {
+        _conversations = [
+          ..._conversations,
+          _withBoxPinShown(_chatOf(record, self)),
+        ];
+      }
+      _pendingOpenConversationId = id;
+      notifyListeners();
+      return;
+    }
     _emit?.call('startConversation', {'recipientId': recipientId});
   }
 
@@ -818,22 +872,29 @@ class ConversationsProvider extends ChangeNotifier {
   /// Swipe [Dismissible] must remove the row from the list in the same frame as
   /// [onDismissed]; otherwise the tile stays in the tree while the dismiss
   /// animation completes and the widget can rebuild with a stuck red background.
-  /// A local chat (owner decision 52) has no server row: only this device's
-  /// row goes, and the friendship stays.
+  /// A local chat (owner decision 52) has no server row: this device's row
+  /// and history go, the friendship stays, and the row is kept out of the
+  /// list ([ContactSettings.chatHidden]) until it is revealed.
   void deleteConversation(int conversationId) {
+    if (isLocalConversationId(conversationId)) {
+      _storeSettings(conversationId, (s) => s.copyWith(chatHidden: true));
+    }
     _removeConversationById(conversationId);
     notifyListeners();
     if (isLocalConversationId(conversationId)) return;
     _emit?.call('deleteConversationOnly', {'conversationId': conversationId});
   }
 
-  /// A local chat's timer was set here (slice (f), E15k): the peer's devices
-  /// and our siblings are told over the box. Wired by the box layer.
-  void Function(int peerUserId, int? seconds)? onLocalChatTimerChanged;
+  /// A local chat's timer was set here at `at` (slice (f), E15k): the
+  /// peer's devices and our siblings are told over the box. Wired by the
+  /// box layer.
+  void Function(int peerUserId, int? seconds, DateTime at)?
+  onLocalChatTimerChanged;
 
   /// Emit setDisappearingTimer socket event (optimistic local update). A
   /// local chat keeps its timer on the devices (owner decision 52): stored
-  /// here, sent over the box by [onLocalChatTimerChanged], never emitted.
+  /// here with the time it was set, sent over the box by
+  /// [onLocalChatTimerChanged], never emitted.
   void setDisappearingTimer(int conversationId, int? timer) {
     final local = isLocalConversationId(conversationId);
     final index = _conversations.indexWhere((c) => c.id == conversationId);
@@ -856,17 +917,20 @@ class ConversationsProvider extends ChangeNotifier {
       notifyListeners();
     }
     if (local) {
+      final at = DateTime.now().toUtc();
       _storeSettings(
         conversationId,
         (s) => s.copyWith(
           disappearingTimer: timer,
           clearDisappearingTimer: timer == null,
+          timerAt: at,
         ),
       );
       if (index != -1) {
         onLocalChatTimerChanged?.call(
           getOtherUserId(_conversations[index]),
           timer,
+          at,
         );
       }
       return;
@@ -875,6 +939,46 @@ class ConversationsProvider extends ChangeNotifier {
       'conversationId': conversationId,
       'seconds': timer,
     });
+  }
+
+  /// The timer of the local chat with [peerUserId] as another device set it
+  /// at [at] — the friend, or a sibling of ours (E15k): taken only when
+  /// newer than the one held, decided on the stored record, so every device
+  /// ends on the latest write.
+  Future<void> applyLocalChatTimer(
+    int peerUserId,
+    int? seconds,
+    DateTime at,
+  ) async {
+    final store = _store;
+    if (store == null) return;
+    var applied = false;
+    await store.update(peerUserId, (record) {
+      final held = record?.settings.timerAt;
+      if (record == null ||
+          record.boxOrigin == null ||
+          (held != null && !at.isAfter(held))) {
+        return null;
+      }
+      applied = true;
+      return record.copyWith(
+        settings: record.settings.copyWith(
+          disappearingTimer: seconds,
+          clearDisappearingTimer: seconds == null,
+          timerAt: at,
+        ),
+      );
+    });
+    if (!applied) return;
+    final index = _conversations.indexWhere(
+      (c) => c.id == localConversationIdFor(peerUserId),
+    );
+    if (index == -1) return;
+    _conversations[index] = _conversations[index].copyWith(
+      disappearingTimer: seconds,
+      clearDisappearingTimer: seconds == null,
+    );
+    notifyListeners();
   }
 
   /// A local chat mutes on this device only (owner decision 52, E15k), with

@@ -15,6 +15,7 @@ import '../models/message_model.dart';
 import '../services/api_service.dart';
 import '../services/box/box_device_list_refresh.dart';
 import '../services/box/box_envelope.dart';
+import '../services/box/box_first_contact.dart';
 import '../services/box/box_frame.dart';
 import '../services/box/box_friends.dart';
 import '../services/box/box_media_fetcher.dart';
@@ -58,6 +59,7 @@ part 'messaging/messaging_provider.events.dart';
 part 'messaging/messaging_provider.send.dart';
 part 'messaging/messaging_provider.decrypt.dart';
 part 'messaging/messaging_provider.actions.dart';
+part 'messaging/messaging_provider.first_contact.dart';
 
 // ---------- Library-private top-level helpers ----------
 // Hoisted from MessagingProvider statics so the part-file extensions can
@@ -312,7 +314,11 @@ class MessagingProvider extends ChangeNotifier {
       final enc = _encryptionProvider;
       if (enc == null) throw StateError('no encryption provider');
       if (user == _currentUserId) {
-        await enc.getVerifiedDeviceList(user, forceRefresh: true, batched: true);
+        await enc.getVerifiedDeviceList(
+          user,
+          forceRefresh: true,
+          batched: true,
+        );
         _markBoxListsReady(enc);
         unawaited(_announceOwnListIfRevoked());
         return;
@@ -455,6 +461,27 @@ class MessagingProvider extends ChangeNotifier {
   /// the box at all. `ConnectionProvider` wires the account session's one;
   /// null = friend handoffs wait and no composer notice shows.
   BoxFriendLink? boxFriends;
+
+  /// First contact over the box (slice (f), decisions 52–55): the records a
+  /// request makes and the queue it offers. `ConnectionProvider` wires the
+  /// account session's one; null = every request takes the old path.
+  BoxFirstContactLink? boxFirstContact;
+
+  /// One `searchUsers` of a handle and its raw answer (null: none came) —
+  /// the accept-time check of decision 53 and a box friend's list lookup
+  /// (E15h). `ConnectionProvider` wires `FriendsProvider.lookupHandle`.
+  Future<List<Object?>?> Function(String handle)? lookupHandle;
+
+  /// A record made over the box changed (a request kept, sent, declined or
+  /// accepted): the friends lists re-read the store.
+  void Function()? onBoxContactsChanged;
+
+  /// A friendship over the box began — `outgoing` when this account asked.
+  void Function(int userId, {required bool outgoing})? onBoxFriendshipMade;
+
+  /// A friendship over the box ended from another device (a friend's
+  /// `goodbye`, a sibling's copy of ours, E15j): its chat and history go.
+  void Function(int userId)? onBoxFriendshipEnded;
 
   /// This account's box attachment copies (item 3 / media wiring, decision
   /// 40): kept on send and arrival, read to display. `ConnectionProvider`
