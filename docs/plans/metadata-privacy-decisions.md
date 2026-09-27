@@ -109,6 +109,11 @@ Status: ACTIVE (in force), DONE (carried out, still binding), SUPERSEDED, OPEN (
 | 53 | 09-27 | (O21) The receiver verifies a request at ACCEPT: one `searchUsers` of the claimed handle, whose answer pins the account key and DAK (E50a); a key mismatch drops the request unaccepted. Before that the requests screen shows only the name (username#tag) the request claims, no photo: fetching its avatar would tell the server the pair early; the photo comes with the verified profile at accept (E15b). Residual: the server sees "B looked up A" once per accepted request | OWNER — changes approved design §4.4's residual | ACTIVE |
 | 54 | 09-27 | (O22) A decline tells the requester nothing: the request stays pending on the requester's side until it expires after 30 d | OWNER | ACTIVE |
 | 55 | 09-27 | (O23) The request and the accept carry each side's name and photo; later profile changes reach friends made over the box in a later slice (stale until then) | OWNER | ACTIVE |
+| 56 | 09-28 | (O24) An accept does one `searchUsers` per TAP: a mismatch drops only that claimed name's frames and shows the next claimed name, whose tap is a second lookup. Refines decision 53's "one lookup per accept" | OWNER | ACTIVE |
+| 57 | 09-28 | (O25) Accepted residual for release N: unauthenticated kept frames (≤ 3 per device) and claims (≤ 50 requests) let forged frames crowd a real request out, as I3 already allows; no request tokens | OWNER | ACTIVE |
+| 58 | 09-28 | (O26) Accepted: a partial sibling relay on box unfriend/block leaves our own devices split until the user retries (`boxEndNotSynced` shown); no automatic retry | OWNER | ACTIVE |
+| 59 | 09-28 | (O27) Accepted residual on decisions 50–51: a missed revoke announcement (or a tab whose list predates it) keeps addressing the revoked device until the friend's next frame draws our stale-view answer (E50f) or a >30-d gap forces a lookup; no periodic server lookup | OWNER | ACTIVE |
+| 60 | 09-28 | (O28) Accepted: the first carried list after an account enrolls or changes its DAK costs one server lookup naming the pair (E50a narrows decision 50) | OWNER | ACTIVE |
 
 ## Engineering calls made in the work so far (owner may overrule at the gate)
 
@@ -175,6 +180,11 @@ Status: ACTIVE (in force), DONE (carried out, still binding), SUPERSEDED, OPEN (
 | O21 | (ANSWERED 09-27 → decision 53.) How the receiver knows a request comes from the account it names: (a) one `searchUsers` at accept, a key mismatch drops it; (b) a lookup on arrival; (c) trust on first use. Recommendation: (a) | Slice (f) | same |
 | O22 | (ANSWERED 09-27 → decision 54.) What a requester sees on a decline: (a) nothing; (b) a "declined" frame removes it. Recommendation: (a) | Slice (f) | same |
 | O23 | (ANSWERED 09-27 → decision 55.) Name and photo of a friend made over the box: (a) carried in the request and the accept; (b) an E2E profile update in (f). Recommendation: (a) | Slice (f) | same |
+| O24 | (ANSWERED 09-28 → decision 56.) Decision 53 says ONE lookup per accept; the code does one per TAP (a second tap after a mismatch is a second `searchUsers`). Options: (a) keep per tap; (b) a mismatch drops the whole request. Recommendation: (a) | G5 | `2026-09-27-metadata-slice-f-first-contact.md` |
+| O25 | (ANSWERED 09-28 → decision 57.) Forged kept frames/claims can crowd a real request out (as I3). Options: (a) accept for release N; (b) request tokens. Recommendation: (a) | G5 | same |
+| O26 | (ANSWERED 09-28 → decision 58.) A partial sibling relay on unfriend/block splits our own devices until the user retries. Options: (a) accept; (b) auto-retry at the next connect. Recommendation: (a) | G5 | same |
+| O27 | (ANSWERED 09-28 → decision 59.) A missed revoke announcement keeps addressing the revoked device until a stale-view answer or a >30-d lookup. Options: (a) accept; (b) periodic server lookup. Recommendation: (a) | G5 | `2026-09-27-metadata-slice-e-announcements.md` |
+| O28 | (ANSWERED 09-28 → decision 60.) The first carried list after an enroll/DAK change costs one lookup (E50a). Options: (a) accept; (b) adopt under the identity alone. Recommendation: (a) | G5 | same |
 
 ## Contradictions found while building this log
 
