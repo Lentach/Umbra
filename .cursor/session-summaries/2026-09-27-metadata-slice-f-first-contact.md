@@ -38,7 +38,9 @@
   - Bob2 → ana and ana2 → bob messages reached all 4. A 1-minute timer set on ana1 showed on all 4. Unfriend from bob1 removed the chat on all 4.
   - After the folds: decline on ana2 hid the request on both ana devices; a re-ask then worked with messages both ways. Block from ana2 cleared the other 3 and put bob in ana1's blocked list. Unblock worked. Re-friend and unfriend from ana1 cleared all 4.
   - `friend_requests`, `conversations` and `messages` rows for 350/351: 0 at every check.
-- NOT verified: Android/iOS; the crossing (E15f) on a device (real-Signal unit test only); expiry at 30/60 d (clock tests); a failed sibling relay on a device.
+  - Third drive (same build): local chat delete on ana1 stayed hidden across a reload (ana2 kept it, per-device), then came back with bob's next message. Ana blocked bob; bob's NEW request (sent, shown pending on bob) never appeared on either ana device after reloads. 0 server rows.
+  - The crossing (E15f) was driven in the second drive: bob's request was pending when ana asked him, and ana's request was accepted at once as the crossing.
+- NOT verified: Android/iOS; expiry at 30/60 d (clock tests only); a failed or partial sibling relay on unfriend/block (R5a–R5c unit tests cover only the abort); blocking a still-pending request from the requests screen (no UI entry; the user card is reachable only for friends).
 
 ## Notes for next session
 - Next action: the owner answers the Open items (batch). Then plan row 8, slice (g): receipts and typing.
