@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
+import '../../utils/message_ids.dart';
 import '../encryption_service.dart';
 import 'reaction_key_lookup.dart';
 import 'reaction_token_codec.dart';
@@ -139,6 +140,12 @@ class ReactionKeyService {
     required int peerUserId,
     bool mayCreate = false,
   }) async {
+    // A local chat (owner decision 52) has no server row and its reactions
+    // are plain emoji over the box: no key exists, and asking the server for
+    // one would name the pair.
+    if (isLocalConversationId(conversationId)) {
+      return (codec: null, failure: ReactionKeyFailure.noKeyYet);
+    }
     // A mutex, not a best-effort share. Two `mayCreate` callers — an ordinary
     // double tap — used to fall past a single `await` and run two acquisitions
     // at once; the provider then handed both the SAME mailbox ciphertext, the

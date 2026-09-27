@@ -42,6 +42,7 @@ class BoxInboxEntry {
     this.viaSelfQueue = false,
     this.viaRequestQueue = false,
     this.carriedList,
+    this.carriedClaim,
   });
 
   /// The queue (base64url) and the box's message id on it.
@@ -73,6 +74,12 @@ class BoxInboxEntry {
   /// null for every other delivery. Dropped with [signal] once consumed.
   final String? carriedList;
 
+  /// A first contact's claimed name, carried outside Signal on its
+  /// claim-bearing request (slice (f), E15c; `BoxFrame.carriedClaim`), as
+  /// JSON, unauthenticated; null for every other delivery. Dropped with
+  /// [signal] once consumed.
+  final String? carriedClaim;
+
   bool get consumed => signal == null;
 
   String get _slot => '$rid.$id';
@@ -90,6 +97,7 @@ class BoxInboxEntry {
     if (viaSelfQueue) 'self': true,
     if (viaRequestQueue) 'req': true,
     'list': ?carriedList,
+    'claim': ?carriedClaim,
   };
 
   BoxInboxEntry _with({bool? acked, bool consume = false}) => BoxInboxEntry(
@@ -104,6 +112,7 @@ class BoxInboxEntry {
     viaSelfQueue: viaSelfQueue,
     viaRequestQueue: viaRequestQueue,
     carriedList: consume ? null : carriedList,
+    carriedClaim: consume ? null : carriedClaim,
   );
 
   /// Null for anything this build cannot read — a newer `v`, a web row whose
@@ -136,6 +145,9 @@ class BoxInboxEntry {
           viaSelfQueue: json['self'] == true,
           viaRequestQueue: json['req'] == true,
           carriedList: json['list'] is String ? json['list'] as String : null,
+          carriedClaim: json['claim'] is String
+              ? json['claim'] as String
+              : null,
         );
       }
     } on FormatException {
@@ -184,6 +196,7 @@ extension ContactStoreInbox on ContactStore {
     bool viaSelfQueue = false,
     bool viaRequestQueue = false,
     String? carriedList,
+    String? carriedClaim,
   }) {
     final kv = _kv;
     final userId = _userId;
@@ -217,6 +230,7 @@ extension ContactStoreInbox on ContactStore {
             viaSelfQueue: viaSelfQueue,
             viaRequestQueue: viaRequestQueue,
             carriedList: carriedList,
+            carriedClaim: carriedClaim,
           );
           if (!await kv.setString(key, jsonEncode(entry._toJson()))) {
             return false;

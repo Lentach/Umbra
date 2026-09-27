@@ -447,6 +447,99 @@ void main() {
         reason: 'no length',
       );
     });
+
+    test('a CLAIM-BEARING frame (slice (f), E15b) is v ‖ kind|0x50 ‖ u16be '
+        'device ‖ u32be account ‖ u16be len ‖ the claim JSON ‖ Signal', () {
+      const claim = '{"u":"ana","g":"0342"}';
+      final signal = _bytes(3);
+      final body = BoxFrame(
+        kind: BoxFrameKind.preKey,
+        senderDeviceId: 2,
+        senderUserId: 342,
+        signal: signal,
+        carriedClaim: claim,
+      ).encode();
+      expect(body, [
+        0x01,
+        0x53,
+        0x00,
+        0x02,
+        0,
+        0,
+        0x01,
+        0x56,
+        0x00,
+        claim.length,
+        ...utf8.encode(claim),
+        ...signal,
+      ]);
+      final back = BoxFrame.decode(body)!;
+      expect(back.kind, BoxFrameKind.preKey);
+      expect(back.senderUserId, 342);
+      expect(back.carriedClaim, claim);
+      expect(back.carriedList, isNull);
+      expect(back.signal, signal);
+    });
+
+    test('a claim rides only on an account-bearing frame and never beside a '
+        'list; every other frame carries none', () {
+      expect(
+        () => BoxFrame(
+          kind: BoxFrameKind.preKey,
+          senderDeviceId: 1,
+          signal: _bytes(4),
+          carriedClaim: '{}',
+        ).encode(),
+        throwsArgumentError,
+        reason: 'no account',
+      );
+      expect(
+        () => BoxFrame(
+          kind: BoxFrameKind.preKey,
+          senderDeviceId: 1,
+          senderUserId: 5,
+          signal: _bytes(4),
+          carriedList: '{}',
+          carriedClaim: '{}',
+        ).encode(),
+        throwsArgumentError,
+        reason: 'a list and a claim',
+      );
+      final listed = BoxFrame.decode(
+        BoxFrame(
+          kind: BoxFrameKind.preKey,
+          senderDeviceId: 1,
+          senderUserId: 5,
+          signal: _bytes(4),
+          carriedList: '{}',
+        ).encode(),
+      )!;
+      expect(listed.carriedClaim, isNull);
+    });
+
+    test('decode refuses a claim beside a list, and a claim-bearing frame '
+        'whose claim is empty or leaves no Signal byte', () {
+      List<int> head(int kind) => [0x01, kind, 0x00, 0x01, 0, 0, 0, 1];
+      for (final kind in [0x72, 0x73]) {
+        expect(
+          BoxFrame.decode(
+            Uint8List.fromList([...head(kind), 0, 2, 0x7b, 0x7d, ..._bytes(8)]),
+          ),
+          isNull,
+          reason: 'kind $kind: both a list and a claim',
+        );
+      }
+      expect(
+        BoxFrame.decode(Uint8List.fromList([...head(0x53), 0, 0, ..._bytes(8)])),
+        isNull,
+        reason: 'an empty claim',
+      );
+      expect(
+        BoxFrame.decode(Uint8List.fromList([...head(0x53), 0, 9, ..._bytes(8)])),
+        isNull,
+        reason: 'the claim takes every byte left: no Signal',
+      );
+    });
   });
 
   group('decode answers null for anything else', () {

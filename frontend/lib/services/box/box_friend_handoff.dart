@@ -232,15 +232,21 @@ class BoxFriendHandoff {
   }
 
   /// Where [userId]'s [deviceId] takes a handoff: the queue it handed us,
-  /// else its request queue (account-bearing). Null: nowhere yet.
+  /// else its request queue (account-bearing) — as the friends list names
+  /// it, or, for a friendship made over the box that no server list names,
+  /// as the search answer did ([ContactBoxOrigin.addresses], slice (f)).
+  /// Null: nowhere yet.
   ({ContactOutbound to, bool viaRequest})? targetOf(int userId, int deviceId) {
-    final held = _store
-        .byUserId(userId)
-        ?.outbound
+    final record = _store.byUserId(userId);
+    final held = record?.outbound
         .where((o) => o.peerDeviceId == deviceId)
         .firstOrNull;
     if (held != null) return (to: held, viaRequest: false);
-    final request = _requestQueues[userId]?[deviceId];
+    final request =
+        _requestQueues[userId]?[deviceId] ??
+        record?.boxOrigin?.addresses
+            .where((a) => a.peerDeviceId == deviceId)
+            .firstOrNull;
     return request == null ? null : (to: request, viaRequest: true);
   }
 
@@ -322,7 +328,8 @@ class BoxFriendHandoff {
       for (final record in _store.all)
         if (record.state == ContactState.friend &&
             (record.outbound.isNotEmpty ||
-                (_requestQueues[record.userId]?.isNotEmpty ?? false)))
+                (_requestQueues[record.userId]?.isNotEmpty ?? false) ||
+                (record.boxOrigin?.addresses.isNotEmpty ?? false)))
           record.userId,
     ];
     // Every lookup starts in this one turn, so a connect's lists leave as

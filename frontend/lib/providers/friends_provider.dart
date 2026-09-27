@@ -7,6 +7,7 @@ import '../models/user_model.dart';
 import '../models/invitation_state.dart';
 import '../services/contacts/contact_record.dart';
 import '../services/contacts/contact_store.dart';
+import '../utils/message_ids.dart';
 
 /// FriendsProvider — owns all friends, friend requests, blocking, and
 /// user search state. [ConnectionProvider] coordinates; this provider holds friends/requests/blocked/search.
@@ -579,11 +580,18 @@ class FriendsProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// The server answers a friend like anyone since owner decision 4 (a
+  /// friendship made over the box has no server row to filter on), so the
+  /// app drops known friends here: the invitations screen offers "add" to
+  /// strangers only, as before.
   void onSearchUsersResult(dynamic data) {
     final list = data as List<dynamic>;
-    _searchResults = list
-        .map((u) => UserModel.fromJson(u as Map<String, dynamic>))
-        .toList();
+    _searchResults = [
+      for (final u in list)
+        if (UserModel.fromJson(u as Map<String, dynamic>) case final user
+            when !_friends.any((friend) => friend.id == user.id))
+          user,
+    ];
     notifyListeners();
   }
 
@@ -683,9 +691,22 @@ class FriendsProvider extends ChangeNotifier {
     }
   }
 
+  /// A friendship made over the box (owner decision 52) has its chat
+  /// already: its local id, with nothing to ask the server for.
   void ensureInvitationChat(int peerUserId) {
     final outcome = _acceptedOutcomes[peerUserId];
     if (outcome == null) return;
+
+    if (_store?.byUserId(peerUserId)?.boxOrigin != null) {
+      _acceptedOutcomes[peerUserId] = outcome.copyWith(
+        conversationId: localConversationIdFor(peerUserId),
+        chatReady: true,
+        retryToken: null,
+        retrying: false,
+      );
+      notifyListeners();
+      return;
+    }
 
     final correlationId =
         '$_invitationSessionNonce-${++_invitationCorrelationCounter}';

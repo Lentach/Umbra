@@ -41,8 +41,21 @@ enum BoxFrameKind {
 ///          ‖ u16be len ‖ len bytes of the list JSON ‖ raw Signal bytes
 ///
 /// Outside Signal because it must be judged before Signal sees the frame:
-/// the list is DAK-signed, so the seal is all it needs. Every other kind
-/// from 0x10 up stays reserved and decodes to null.
+/// the list is DAK-signed, so the seal is all it needs.
+///
+/// A first contact's request (slice (f), E15b) carries the sender's CLAIMED
+/// name the same way — the CLAIM-BEARING kinds, the account-bearing kind
+/// with 0x40 set (0x52 whisper, 0x53 PreKey):
+///
+///   body = u8 v=1 ‖ u8 kind|0x50 ‖ u16be senderDeviceId ‖ u32be senderUserId
+///          ‖ u16be len ‖ len bytes of the claim JSON ‖ raw Signal bytes
+///
+/// Outside Signal because a stranger's PreKey message is not decrypted
+/// before the accept-time check (a decrypt would pin the key it brings), yet
+/// the requests screen must name someone. Unauthenticated by design: it is
+/// what the request CLAIMS until then (decision 53). A frame carries a list
+/// or a claim, never both. Every other kind from 0x10 up stays reserved and
+/// decodes to null.
 class BoxFrame {
   const BoxFrame({
     required this.kind,
@@ -50,6 +63,7 @@ class BoxFrame {
     required this.signal,
     this.senderUserId,
     this.carriedList,
+    this.carriedClaim,
   });
 
   static const int _version = 0x01;
@@ -58,6 +72,7 @@ class BoxFrame {
   static const int _lengthBytes = 2;
   static const int _accountBit = 0x10;
   static const int _listBit = 0x20;
+  static const int _claimBit = 0x40;
 
   /// The wire's device id range (`fetchPreKeyBundle`, wire.md).
   static const int _minDevice = 1;
@@ -89,6 +104,10 @@ class BoxFrame {
   /// record, on a list-bearing frame; null on every other frame. Unchecked
   /// here: only its adoption can say what it is worth.
   final String? carriedList;
+
+  /// The sender's claimed name, as JSON, on a claim-bearing frame (a first
+  /// contact's request); null on every other frame. Unauthenticated.
+  final String? carriedClaim;
 
   /// What `EncryptionService.decrypt` reads.
   String get signalCiphertext => '${kind.byte}:${base64Encode(signal)}';
@@ -124,9 +143,9 @@ class BoxFrame {
   }
 
   /// Throws [ArgumentError] for a device id outside 1..100, an account
-  /// outside 1..2^32-1, a list on a frame without an account, an empty or
-  /// over-long list, or more bytes than the frame holds: caller bugs, never
-  /// runtime conditions.
+  /// outside 1..2^32-1, a list or claim on a frame without an account, both
+  /// on one frame, an empty or over-long one, or more bytes than the frame
+  /// holds: caller bugs, never runtime conditions.
   Uint8List encode() {
     if (senderDeviceId < _minDevice || senderDeviceId > _maxDevice) {
       throw ArgumentError.value(senderDeviceId, 'senderDeviceId');
@@ -135,15 +154,19 @@ class BoxFrame {
     if (account != null && (account < 1 || account > _maxAccount)) {
       throw ArgumentError.value(account, 'senderUserId');
     }
-    final list = carriedList == null ? null : utf8.encode(carriedList!);
-    if (list != null &&
-        (account == null || list.isEmpty || list.length > 0xffff)) {
-      throw ArgumentError.value(carriedList, 'carriedList');
+    if (carriedList != null && carriedClaim != null) {
+      throw ArgumentError.value(carriedClaim, 'carriedClaim', 'beside a list');
+    }
+    final carried = carriedList ?? carriedClaim;
+    final extra = carried == null ? null : utf8.encode(carried);
+    if (extra != null &&
+        (account == null || extra.isEmpty || extra.length > 0xffff)) {
+      throw ArgumentError.value(carried, 'carried');
     }
     final header =
         _headerBytes +
         (account == null ? 0 : _accountBytes) +
-        (list == null ? 0 : _lengthBytes + list.length);
+        (extra == null ? 0 : _lengthBytes + extra.length);
     final max = QueueSeal.maxBodyBytes - header;
     if (signal.length > max) {
       throw ArgumentError.value(signal.length, 'signal', 'over $max');
@@ -153,29 +176,34 @@ class BoxFrame {
       ..[1] =
           kind.byte |
           (account == null ? 0 : _accountBit) |
-          (list == null ? 0 : _listBit)
+          (carriedList == null ? 0 : _listBit) |
+          (carriedClaim == null ? 0 : _claimBit)
       ..[2] = (senderDeviceId >> 8) & 0xff
       ..[3] = senderDeviceId & 0xff
       ..setRange(header, header + signal.length, signal);
     if (account != null) {
       ByteData.sublistView(body).setUint32(_headerBytes, account);
     }
-    if (list != null) {
+    if (extra != null) {
       const at = _headerBytes + _accountBytes;
-      ByteData.sublistView(body).setUint16(at, list.length);
-      body.setRange(at + _lengthBytes, at + _lengthBytes + list.length, list);
+      ByteData.sublistView(body).setUint16(at, extra.length);
+      body.setRange(at + _lengthBytes, at + _lengthBytes + extra.length, extra);
     }
     return body;
   }
 
   /// Null for anything but a version-1 Signal frame from a device in range
-  /// (and, account-bearing, an account ≥ 1; list-bearing, a list of at
-  /// least one byte that is UTF-8) carrying at least one Signal byte.
+  /// (and, account-bearing, an account ≥ 1; list- or claim-bearing, one of
+  /// at least one byte that is UTF-8) carrying at least one Signal byte.
   static BoxFrame? decode(Uint8List body) {
     if (body.length <= _headerBytes || body[0] != _version) return null;
     final flags = body[1] & 0xf0;
-    final bearing = flags == _accountBit || flags == _accountBit | _listBit;
+    final bearing =
+        flags == _accountBit ||
+        flags == _accountBit | _listBit ||
+        flags == _accountBit | _claimBit;
     final listed = flags == _accountBit | _listBit;
+    final claimed = flags == _accountBit | _claimBit;
     if (flags != 0 && !bearing) return null;
     final byte = body[1] & 0x0f;
     final kind = BoxFrameKind.values.where((k) => k.byte == byte);
@@ -188,14 +216,16 @@ class BoxFrame {
         ? ByteData.sublistView(body).getUint32(_headerBytes)
         : null;
     if (account == 0) return null;
-    String? list;
-    if (listed) {
+    String? carried;
+    if (listed || claimed) {
       if (body.length < header + _lengthBytes) return null;
       final length = ByteData.sublistView(body).getUint16(header);
       header += _lengthBytes;
       if (length == 0 || body.length <= header + length) return null;
       try {
-        list = utf8.decode(Uint8List.sublistView(body, header, header + length));
+        carried = utf8.decode(
+          Uint8List.sublistView(body, header, header + length),
+        );
       } on FormatException {
         return null;
       }
@@ -206,7 +236,8 @@ class BoxFrame {
       senderDeviceId: device,
       senderUserId: account,
       signal: Uint8List.fromList(Uint8List.sublistView(body, header)),
-      carriedList: list,
+      carriedList: listed ? carried : null,
+      carriedClaim: claimed ? carried : null,
     );
   }
 }

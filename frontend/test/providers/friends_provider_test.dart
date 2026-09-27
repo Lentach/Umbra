@@ -89,6 +89,24 @@ void main() {
       expect(provider.consumePendingFriendAccepted(), isNull);
     });
 
+    test(
+      'a search answer naming a friend shows only the strangers (decision 4)',
+      () {
+        final provider = FriendsProvider()
+          ..onFriendsList([
+            {'id': 2, 'username': 'bob'},
+          ])
+          ..onSearchUsersResult([
+            {'id': 2, 'username': 'bob'},
+            {'id': 4, 'username': 'dave'},
+          ]);
+
+        expect(provider.searchResults, [
+          isA<UserModel>().having((u) => u.id, 'id', 4),
+        ]);
+      },
+    );
+
     test('onYouWereBlocked adds to blockedByUserIds and removes friend', () {
       final provider = FriendsProvider();
       provider.onConnect(false);

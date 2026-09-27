@@ -1553,12 +1553,24 @@ extension MessagingBox on MessagingProvider {
     );
   }
 
+  /// Whether [peerUserId] is a friend made over the box (owner decision
+  /// 52): the server does not know the pair, so nothing sent to it may take
+  /// the old path — a send the box cannot carry FAILS instead.
+  bool _boxOnlyPeer(int peerUserId) =>
+      boxFriends?.contactOf(peerUserId)?.boxOrigin != null ||
+      _conversationsProvider?.getConversationById(
+            localConversationIdFor(peerUserId),
+          ) !=
+          null;
+
   /// Whether media send [tempId] to [recipientId] tries the box first (item
   /// 3 / media wiring): the peer has box addresses and, as for a text, a
   /// reply's quote can be named. Synchronous on purpose: an uncovered
   /// peer's old path keeps exactly the turns it always had (traps: "image
-  /// emits before caption").
+  /// emits before caption"). A friend made over the box always goes there:
+  /// it has no old path ([_sendMediaOverBox] fails what the box cannot carry).
   bool _boxMayCarryMedia(int recipientId, String tempId) {
+    if (_boxOnlyPeer(recipientId)) return true;
     final outbox = boxOutbox;
     if (outbox == null || outbox.addressesFor(recipientId).isEmpty) {
       return false;
@@ -1609,8 +1621,10 @@ extension MessagingBox on MessagingProvider {
       );
       final outbox = boxOutbox;
       final addresses = outbox?.addressesFor(recipientId) ?? const {};
+      // A friend made over the box has no old path to fall back to.
+      final oldPath = bytes != null && !_boxOnlyPeer(recipientId);
       if (outbox == null || addresses.isEmpty) {
-        if (bytes != null) return null;
+        if (oldPath) return null;
         _e2eFlowLog('BOX_RETRY_NO_ROUTE', {'tempId': tempId});
         _markMessageFailed(tempId, 'Could not send. Try again.');
         return false;
@@ -1624,7 +1638,7 @@ extension MessagingBox on MessagingProvider {
         rethrow;
       }
       if (route == null) {
-        if (bytes != null) return null;
+        if (oldPath) return null;
         _e2eFlowLog('BOX_RETRY_NO_ROUTE', {'tempId': tempId});
         _markMessageFailed(tempId, 'Could not send. Try again.');
         return false;

@@ -1,7 +1,6 @@
 import { Server, Socket } from 'socket.io';
 import { ChatSearchService } from './chat-search.service';
 import { UsersService } from '../../users/users.service';
-import { FriendsService } from '../../friends/friends.service';
 import { DevicesService } from '../../key-bundles/devices.service';
 import { DeviceListService } from '../../key-bundles/device-list.service';
 import { PreKeyBundleResponse } from '../../key-bundles/key-bundles.service';
@@ -28,7 +27,6 @@ describe('ChatSearchService', () => {
 
   let service: ChatSearchService;
   let users: { findByUsernameAndTag: jest.Mock };
-  let friends: { getFriends: jest.Mock };
   let devices: {
     firstContactDevices: jest.Mock<Promise<Address[]>, [number]>;
     setRequestQueue: jest.Mock<
@@ -77,7 +75,6 @@ describe('ChatSearchService', () => {
 
   beforeEach(() => {
     users = { findByUsernameAndTag: jest.fn() };
-    friends = { getFriends: jest.fn().mockResolvedValue([]) };
     devices = {
       firstContactDevices: jest.fn().mockResolvedValue([]),
       setRequestQueue: jest.fn().mockResolvedValue(true),
@@ -94,7 +91,6 @@ describe('ChatSearchService', () => {
     };
     service = new ChatSearchService(
       users as unknown as UsersService,
-      friends as unknown as FriendsService,
       devices as unknown as DevicesService,
       deviceLists as unknown as DeviceListService,
       keyExchange as unknown as ChatKeyExchangeService,
@@ -109,7 +105,9 @@ describe('ChatSearchService', () => {
       expect(client.emit).not.toHaveBeenCalled();
     });
 
-    it('serves every addressable device of a stranger: its bundle, its request queue, and the signed list', async () => {
+    it('serves every addressable device of any other account, a friend exactly like a stranger (owner decision 4): its bundle, its request queue, and the signed list', async () => {
+      // A friendship made over the box has no server row, so the answer cannot
+      // (and must not) depend on one — no friends lookup, no `[]` for a friend.
       users.findByUsernameAndTag.mockResolvedValue(stranger);
       devices.firstContactDevices.mockResolvedValue([
         { deviceId: 1, requestSid: sid, requestSealPub: sealPub },
@@ -227,16 +225,6 @@ describe('ChatSearchService', () => {
       await search('nobody#9999');
 
       expect(payloadOf('searchUsersResult')).toEqual([]);
-    });
-
-    it('answers empty for a friend and claims none of their pre-keys', async () => {
-      users.findByUsernameAndTag.mockResolvedValue(stranger);
-      friends.getFriends.mockResolvedValue([{ id: 2 }]);
-
-      await search('alice#1234');
-
-      expect(payloadOf('searchUsersResult')).toEqual([]);
-      expect(keyExchange.claimBundle).not.toHaveBeenCalled();
     });
 
     it('answers an invalid handle with the format hint', async () => {

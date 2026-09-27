@@ -166,6 +166,103 @@ class ContactOutbound {
   };
 }
 
+/// A first contact's request THIS device holds undecrypted until the
+/// accept-time check (metadata-privacy slice (f), E15c): libsignal's PreKey
+/// decrypt would pin whatever identity key the frame brings, so its bytes
+/// wait here. [signal] is `"{type}:{base64}"`, readable by this device alone
+/// (the requester sealed one per device), so no backup carries it.
+class KeptRequest {
+  const KeptRequest({
+    required this.deviceId,
+    required this.signal,
+    required this.at,
+  });
+
+  /// Null for a shape this build cannot read: the request is then absent.
+  static KeptRequest? fromJson(Object? raw) => switch (raw) {
+    {'dev': final int deviceId, 'sig': final String signal, 'at': final int at} =>
+      KeptRequest(
+        deviceId: deviceId,
+        signal: signal,
+        at: DateTime.fromMillisecondsSinceEpoch(at, isUtc: true),
+      ),
+    _ => null,
+  };
+
+  /// The requesting device.
+  final int deviceId;
+  final String signal;
+
+  /// When this device took the frame in.
+  final DateTime at;
+
+  Map<String, dynamic> toJson() => {
+    'dev': deviceId,
+    'sig': signal,
+    'at': at.millisecondsSinceEpoch,
+  };
+}
+
+/// How a friendship made over the box began (metadata-privacy slice (f),
+/// decisions 52–55): its presence is what marks the record as one the server
+/// knows nothing of — its chat is `localConversationIdFor(userId)`, and no
+/// server list may sweep it (E15g).
+///
+/// [at]: when the request was sent or first received; a pending one ends 30 d
+/// later (E15i). [addresses]: each peer device's REQUEST queue from the
+/// search answer ([ContactOutbound.sid] is the request sid) — where the
+/// handoff pass reaches a device no queue handoff came from yet, since the
+/// server's friends list never names this peer. [kept]: requests held
+/// undecrypted on the receiving device ([KeptRequest]).
+class ContactBoxOrigin {
+  const ContactBoxOrigin({
+    required this.at,
+    this.addresses = const [],
+    this.kept = const [],
+  });
+
+  /// Null for a shape this build cannot read.
+  static ContactBoxOrigin? fromJson(Object? raw) {
+    if (raw case {'at': final int at}) {
+      final json = raw as Map<String, dynamic>;
+      return ContactBoxOrigin(
+        at: DateTime.fromMillisecondsSinceEpoch(at, isUtc: true),
+        addresses: [
+          for (final a in json['addr'] as List<dynamic>? ?? const [])
+            ContactOutbound.fromJson(a as Map<String, dynamic>),
+        ],
+        kept: [
+          for (final k in json['kept'] as List<dynamic>? ?? const [])
+            ?KeptRequest.fromJson(k),
+        ],
+      );
+    }
+    return null;
+  }
+
+  static const String keptKey = 'kept';
+
+  final DateTime at;
+  final List<ContactOutbound> addresses;
+  final List<KeptRequest> kept;
+
+  Map<String, dynamic> toJson() => {
+    'at': at.millisecondsSinceEpoch,
+    if (addresses.isNotEmpty)
+      'addr': [for (final a in addresses) a.toJson()],
+    if (kept.isNotEmpty) keptKey: [for (final k in kept) k.toJson()],
+  };
+
+  ContactBoxOrigin copyWith({
+    List<ContactOutbound>? addresses,
+    List<KeptRequest>? kept,
+  }) => ContactBoxOrigin(
+    at: at,
+    addresses: addresses ?? this.addresses,
+    kept: kept ?? this.kept,
+  );
+}
+
 /// The chat's E2E pin (metadata-privacy item 4, decision 45, E19f): ONE
 /// last-writer-wins register — the pinned message as its sender and wire id
 /// (`(s, w)` names the same box message on every device), or none, written
@@ -364,6 +461,7 @@ class ContactRecord {
     this.settings = const ContactSettings(),
     this.queues = const [],
     this.legacy = const ContactLegacy(),
+    this.boxOrigin,
   });
 
   factory ContactRecord.fromUser(UserModel user, ContactState state) =>
@@ -403,6 +501,7 @@ class ContactRecord {
       legacy: ContactLegacy.fromJson(
         j['legacy'] as Map<String, dynamic>? ?? const {},
       ),
+      boxOrigin: ContactBoxOrigin.fromJson(j['box']),
     );
   }
 
@@ -422,6 +521,10 @@ class ContactRecord {
   final List<ContactQueue> queues;
   final ContactLegacy legacy;
 
+  /// Set when the friendship was made over the box (slice (f)); null for
+  /// every friendship the server knows of.
+  final ContactBoxOrigin? boxOrigin;
+
   Map<String, dynamic> toJson() => {
     'v': currentVersion,
     'userId': userId,
@@ -435,6 +538,7 @@ class ContactRecord {
     'settings': settings.toJson(),
     if (queues.isNotEmpty) 'queues': queues.map((q) => q.toJson()).toList(),
     'legacy': legacy.toJson(),
+    if (boxOrigin != null) 'box': boxOrigin!.toJson(),
   };
 
   /// The half of this record another device of the same account could hold —
@@ -447,10 +551,18 @@ class ContactRecord {
   /// The E2E pin ([ContactSettings.boxPin]) is dropped too: a pin would move
   /// the backup's `rev`/`updatedAt` — a per-pin activity clock on the
   /// server (item 4, E19f).
-  Map<String, dynamic> toBackupJson() => toJson()
-    ..remove('queues')
-    ..remove('legacy')
-    ..['settings'] = (settings.toJson()..remove(ContactSettings.boxPinKey));
+  /// The kept requests of a friendship made over the box go too: their
+  /// Signal bytes are this device's alone (E15c).
+  Map<String, dynamic> toBackupJson() {
+    final json = toJson()
+      ..remove('queues')
+      ..remove('legacy')
+      ..['settings'] = (settings.toJson()..remove(ContactSettings.boxPinKey));
+    if (boxOrigin case final origin?) {
+      json['box'] = origin.toJson()..remove(ContactBoxOrigin.keptKey);
+    }
+    return json;
+  }
 
   UserModel toUser() => UserModel(
     id: userId,
@@ -470,6 +582,8 @@ class ContactRecord {
     ContactSettings? settings,
     List<ContactQueue>? queues,
     ContactLegacy? legacy,
+    ContactBoxOrigin? boxOrigin,
+    bool clearBoxOrigin = false,
   }) => ContactRecord(
     userId: userId,
     username: username ?? this.username,
@@ -481,6 +595,7 @@ class ContactRecord {
     settings: settings ?? this.settings,
     queues: queues ?? this.queues,
     legacy: legacy ?? this.legacy,
+    boxOrigin: clearBoxOrigin ? null : boxOrigin ?? this.boxOrigin,
   );
 
   /// Profile fields from a fresh server [user], everything else kept.

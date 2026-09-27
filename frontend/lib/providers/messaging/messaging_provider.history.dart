@@ -518,6 +518,18 @@ extension MessagingHistory on MessagingProvider {
       'seq': _historyFetchSeq,
       'emitWired': _emit != null,
     });
+    // A local chat (owner decision 52) has no server history: its first page
+    // is empty by definition, and the merge after it serves the chat's box
+    // messages from their records (`_mergeLocalBoxRows`).
+    if (isLocalConversationId(conversationId)) {
+      unawaited(
+        onMessageHistory({
+          'conversationId': conversationId,
+          'messages': const <Object?>[],
+        }),
+      );
+      return;
+    }
     _emit?.call('getMessages', {
       'conversationId': conversationId,
       'limit': _pageSize,
@@ -526,7 +538,9 @@ extension MessagingHistory on MessagingProvider {
   }
 
   Future<void> loadOlderMessages(int conversationId) {
-    if (!_hasMore) return Future<void>.value();
+    if (!_hasMore || isLocalConversationId(conversationId)) {
+      return Future<void>.value();
+    }
     if (_isLoadingMore) {
       return _paginationCompleter?.future ?? Future<void>.value();
     }

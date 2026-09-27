@@ -20,3 +20,22 @@ bool isLocalMessageId(int id) => id >= kFirstLocalMessageId;
 /// message by its sender's [wireId] (item 4, E19a) — never an unsent row.
 bool hasActionTarget(int id, {String? wireId}) =>
     isServerMessageId(id) || (isLocalMessageId(id) && wireId != null);
+
+/// The first LOCAL conversation id (metadata-privacy owner decision 52): a
+/// friendship made over the box has no server `conversations` row, so its
+/// chat is keyed by [localConversationIdFor]. 2^48, as [kFirstLocalMessageId]
+/// (a separate namespace: a conversation id is never compared with a
+/// message id), far above any server id and exact on web.
+const int kFirstLocalConversationId = 281_474_976_710_656;
+
+/// The chat id of a friendship made over the box with [peerUserId]: derived,
+/// not counted, so every device of the account and the history file agree on
+/// it with nothing to sync.
+int localConversationIdFor(int peerUserId) =>
+    kFirstLocalConversationId + peerUserId;
+
+/// Whether [conversationId] names a chat with no server row — the ONE test
+/// every server event keyed by a conversation id (history, read marks, the
+/// timer, mute, clear, delete, reaction keys) must fail before it is emitted.
+bool isLocalConversationId(int conversationId) =>
+    conversationId >= kFirstLocalConversationId;

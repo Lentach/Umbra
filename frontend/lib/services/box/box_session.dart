@@ -8,6 +8,7 @@ import '../../utils/e2e_envelope.dart';
 import '../contacts/contact_record.dart';
 import '../contacts/contact_store.dart';
 import 'box_client.dart';
+import 'box_first_contact.dart';
 import 'box_friend_handoff.dart';
 import 'box_friends.dart';
 import 'box_inbox.dart';
@@ -55,10 +56,15 @@ import 'queue_seal.dart';
 /// ([BoxFriendHandoff]) and, as the [BoxFriendLink], stores what the
 /// messaging reader learns from a friend's handoff.
 ///
+/// And first contact (slice (f), decisions 52–55): as the
+/// [BoxFirstContactLink] it holds the records a request makes
+/// ([BoxFirstContact]) and the queue our request offers.
+///
 /// And it registers box push (E9): with a [BoxPushSource], every contact
 /// queue gets a notifier ([BoxNotifiers]) once the box is ready and the
 /// store open, and again whenever the push target changes.
-class BoxSession implements BoxOutbox, BoxSiblingLink, BoxFriendLink {
+class BoxSession
+    implements BoxOutbox, BoxSiblingLink, BoxFriendLink, BoxFirstContactLink {
   BoxSession({
     required BoxClient box,
     required ContactStore store,
@@ -102,7 +108,11 @@ class BoxSession implements BoxOutbox, BoxSiblingLink, BoxFriendLink {
       seal: _seal,
       queueCreated: () => _notifiers?.run(),
     );
+    firstContact = BoxFirstContact(store: store, now: now);
   }
+
+  @override
+  late final BoxFirstContact firstContact;
 
   final BoxClient _box;
   final ContactStore _store;
@@ -774,6 +784,34 @@ class BoxSession implements BoxOutbox, BoxSiblingLink, BoxFriendLink {
   @override
   void handOffTo(int userId) {
     if (!_disposed) _friends.friendChanged(userId);
+  }
+
+  @override
+  Future<ContactQueue?> firstContactQueue(int userId) async {
+    if (_disposed) return null;
+    switch (await _keys.ensureInbound(userId)) {
+      case InboundQueueCreated(:final queue):
+        // A new contact queue gets its push notifier (E9) like any other.
+        _notifiers?.run();
+        return queue;
+      case InboundQueueNotCreated():
+      case InboundQueueNotStored():
+        return null;
+    }
+  }
+
+  @override
+  void firstContactFriend(int userId) {
+    if (!_disposed) _friends.friendChanged(userId);
+  }
+
+  @override
+  Future<void> retireFirstContact(int userId) async {
+    if (_disposed) return;
+    for (final queue in [...?_store.byUserId(userId)?.queues]) {
+      await _keys.retireInbound(userId, queue);
+    }
+    await firstContact.forget([userId]);
   }
 
   void dispose() {

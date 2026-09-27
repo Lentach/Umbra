@@ -1,7 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { UsersService } from '../../users/users.service';
-import { FriendsService } from '../../friends/friends.service';
 import { DevicesService } from '../../key-bundles/devices.service';
 import { DeviceListService } from '../../key-bundles/device-list.service';
 import {
@@ -28,12 +27,12 @@ function socketUser(client: Socket): AuthenticatedSocketData['user'] {
 /**
  * First contact (metadata-privacy PR3.2, design §4.4).
  *
- * `searchUsers` answers a stranger's handle with everything a first contact
- * needs in ONE identity call: per addressable device a bundle (its next
- * one-time pre-key spent), the request queue that device published, and the
- * account's DAK-signed list so the searcher verifies the device set instead of
- * taking the server's word. Residual (design §5): identity sees "A looked up
- * B", once — the search is not logged.
+ * `searchUsers` answers any other account's handle, stranger or friend alike,
+ * with everything a first contact needs in ONE identity call: per addressable
+ * device a bundle (its next one-time pre-key spent), the request queue that
+ * device published, and the account's DAK-signed list so the searcher
+ * verifies the device set instead of taking the server's word. Residual
+ * (design §5): identity sees "A looked up B", once — the search is not logged.
  *
  * `setRequestQueue` is how a device publishes that queue.
  */
@@ -43,7 +42,6 @@ export class ChatSearchService {
 
   constructor(
     private readonly usersService: UsersService,
-    private readonly friendsService: FriendsService,
     private readonly devicesService: DevicesService,
     private readonly deviceListService: DeviceListService,
     private readonly chatKeyExchangeService: ChatKeyExchangeService,
@@ -61,14 +59,11 @@ export class ChatSearchService {
       const dto = validateDto(SearchUsersDto, data);
       const [username, tag] = dto.handle.split('#');
       const user = await this.usersService.findByUsernameAndTag(username, tag);
-      // Self and friends answer empty BEFORE anything is claimed: a search
-      // must never spend a pre-key it is not going to hand out.
+      // Self answers empty BEFORE anything is claimed: a search must never
+      // spend a pre-key it is not going to hand out. A friend is answered like
+      // anyone (owner decision 4): a friendship made over the box has no
+      // server row, so the server cannot tell, and must not appear to.
       if (!user || user.id === currentUserId) {
-        client.emit('searchUsersResult', []);
-        return;
-      }
-      const friends = await this.friendsService.getFriends(currentUserId);
-      if (friends.some((friend) => friend.id === user.id)) {
         client.emit('searchUsersResult', []);
         return;
       }

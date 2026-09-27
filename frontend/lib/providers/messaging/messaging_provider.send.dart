@@ -932,9 +932,12 @@ extension MessagingSend on MessagingProvider {
   /// Typing rides the ACCOUNT socket, so it names the pair to the server at
   /// the moment of typing. A box-covered peer gets none: decision 33 turns
   /// typing off on box chats until both sides enable it, and item 8 sends
-  /// it inside E2E.
+  /// it inside E2E. A local chat (owner decision 52) never gets one, covered
+  /// or not: the server does not know the pair at all.
   void sendTypingIndicator(int recipientId, int conversationId) {
-    if (_boxCovers(recipientId)) return;
+    if (isLocalConversationId(conversationId) || _boxCovers(recipientId)) {
+      return;
+    }
     _emit?.call('typing', {
       'recipientId': recipientId,
       'conversationId': conversationId,
@@ -948,7 +951,9 @@ extension MessagingSend on MessagingProvider {
     int conversationId, {
     required bool isRecording,
   }) {
-    if (_boxCovers(recipientId)) return;
+    if (isLocalConversationId(conversationId) || _boxCovers(recipientId)) {
+      return;
+    }
     _emit?.call('recordingVoice', {
       'recipientId': recipientId,
       'conversationId': conversationId,
@@ -1678,13 +1683,15 @@ extension MessagingSend on MessagingProvider {
           );
         }
       }
-      if (_boxTempIds.contains(tempId) || onBox) {
+      if (_boxTempIds.contains(tempId) || onBox || _boxOnlyPeer(recipientId)) {
         // A retry of a box send whose route is gone (a peer device lost its
         // address, ours gained a sibling): the box may already have handed
         // it to some devices, and the old path's reader would show those a
         // second copy. It stays failed; nothing goes to the server
         // (decision 25). A box attachment is pinned from its upload: the
-        // old path could not even name it.
+        // old path could not even name it. A friend made over the box has
+        // no old path at all (owner decision 52): the server does not know
+        // the pair, and a row naming it must never be attempted.
         _e2eFlowLog('BOX_RETRY_NO_ROUTE', {'tempId': tempId});
         _markMessageFailed(tempId, 'Could not send. Try again.');
         return false;

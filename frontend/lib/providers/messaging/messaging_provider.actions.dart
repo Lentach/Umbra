@@ -21,10 +21,18 @@ extension MessagingActions on MessagingProvider {
     // A box message has no server read mark: its countdown starts here, at
     // the same moments (decision 41).
     _startBoxCountdowns(conversationId);
+    // A local chat has no server row to mark (owner decision 52).
+    if (isLocalConversationId(conversationId)) return;
     _emit?.call('markConversationRead', {'conversationId': conversationId});
   }
 
+  /// A local chat (owner decision 52) is cleared on this device alone: its
+  /// records and rows go as a server `chatHistoryCleared` would take them.
   void clearChatHistory(int conversationId) {
+    if (isLocalConversationId(conversationId)) {
+      _handleChatHistoryCleared({'conversationId': conversationId});
+      return;
+    }
     _emit?.call('clearChatHistory', {'conversationId': conversationId});
   }
 
@@ -258,6 +266,8 @@ extension MessagingActions on MessagingProvider {
       _unpinOverBox(conversationId, pin).ignore();
       return;
     }
+    // A local chat has no server pin to clear (decision 45 needs one).
+    if (isLocalConversationId(conversationId)) return;
     _emit?.call('unpinMessage', {'conversationId': conversationId});
   }
 

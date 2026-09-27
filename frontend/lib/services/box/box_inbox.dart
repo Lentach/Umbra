@@ -178,10 +178,13 @@ class BoxInbox {
   }
 
   /// A delivery on this device's request queue: journaled only when it is an
-  /// account-bearing frame from THIS account (a sibling's handoff) or from a
-  /// FRIEND (their queue handoff, item 5); any other — a stranger's first
-  /// contact, a frame naming no account, one that does not open — is acked
-  /// and dropped, as before sibling queues.
+  /// account-bearing frame from THIS account (a sibling's handoff), from a
+  /// FRIEND or an account we asked (a `pendingOut` one: their queue handoff,
+  /// item 5 and slice (f)'s accept, E15d/E15e), or a first contact's
+  /// claim-bearing PreKey request from an account that is not a friend and
+  /// not blocked (E15c). Anything else — a frame naming no account, one that
+  /// does not open, a stranger's frame that is no request — is acked and
+  /// dropped.
   Future<void> _intakeRequest(
     BoxDelivery delivery,
     String slot,
@@ -199,7 +202,13 @@ class BoxInbox {
       await _journal(delivery, slot, own, frame, auth);
       return;
     }
-    if (_store.byUserId(sender)?.state != ContactState.friend) {
+    final state = _store.byUserId(sender)?.state;
+    final taken = frame.carriedClaim == null
+        ? state == ContactState.friend || state == ContactState.pendingOut
+        : frame.kind == BoxFrameKind.preKey &&
+              state != ContactState.friend &&
+              state != ContactState.blocked;
+    if (!taken) {
       await _ackAndDrop(delivery, slot, auth);
       return;
     }
@@ -228,8 +237,10 @@ class BoxInbox {
       viaSelfQueue: viaSelf,
       viaRequestQueue: viaRequest,
       // Only a friend's request-queue frame may carry its account's list
-      // (decision 50); an own sibling's list comes from identity.
+      // (decision 50), only a first contact its claimed name (E15c); an own
+      // sibling's list comes from identity.
       carriedList: viaRequest ? frame.carriedList : null,
+      carriedClaim: viaRequest ? frame.carriedClaim : null,
     );
     if (entry == null) {
       _held[slot] = delivery;
