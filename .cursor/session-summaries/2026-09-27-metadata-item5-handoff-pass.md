@@ -20,6 +20,7 @@
 - Out-of-repo:
   - local DB `fireplace-mp-db-1` keeps drive accounts 334/335 (pia/qed, abandoned) and 336/337 (rho/sig, conv with 1 `messages` row);
   - `.planning/metadata-item5/befriend.cjs` (gitignored) was kept;
+  - uma 339's `key_bundles` signature is left CORRUPT in the local DB (fix-3 drive); accounts 338–341 are drive leftovers;
   - `frontend/build/web` and the `%TEMP%/umbra-cx-*` profiles were deleted;
   - the web server was stopped.
 
@@ -51,9 +52,9 @@
     - `BOX_FRIEND_HANDOFF_SENT {device: 1, viaRequest: true}` 03:09:27;
     - `BOX_FRIEND_HANDOFF {acked: true}` 03:09:27.
   - Then "rho over the box" and "sig over the box" went both ways; `messages` rows stayed at 1, and sig's notice was gone.
+- Fix 3 drive (same build, tau 338 / uma 339): uma's bundle signature was corrupted in `key_bundles`, so tau's session build failed. Two passes in one session: the ring logged `BOX_FRIEND_HANDOFF_FAILED {device: 1, stage: encrypt, code: no_frame}` at 03:27:56 and 03:28:37; `flutter.e2e_diag_persist_v1` held only the 03:27:56 line.
 - NOT verified on a device:
   - the subscribe-before-hand ORDER (a normal pass ran it; no refused or rate-limited subscribe was provoked live);
-  - the durable-log dedupe (no failure happened live);
   - Android, iOS, prod.
 
 ## Notes for next session
