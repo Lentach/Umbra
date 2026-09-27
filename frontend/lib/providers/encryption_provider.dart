@@ -419,6 +419,38 @@ class EncryptionProvider extends ChangeNotifier {
     await _encryptionService.clearSessionRebuild(recipientId, deviceId);
   }
 
+  /// Builds a session with [userId]'s device [deviceId] from a [bundle] the
+  /// server served in a SEARCH answer — or a sibling relayed from one
+  /// (metadata-privacy slice (f), E15b/E15d/E15e) — under the same anchor
+  /// check [ensureSession] applies to a fetched bundle. A friendship made
+  /// over the box never fetches a bundle later: the server does not know the
+  /// pair, and a fetch would name it. A session already held is kept.
+  Future<void> buildSessionFromServedBundle(
+    int userId,
+    int deviceId,
+    Map<String, dynamic> bundle,
+  ) async {
+    if (!_e2eInitialized || _currentUserId == null) {
+      throw StateError('E2E not initialized or user not authenticated');
+    }
+    if (await _encryptionService.hasSession(userId, deviceId: deviceId)) {
+      return;
+    }
+    await _encryptionService.buildSession(
+      userId,
+      bundle,
+      deviceId: deviceId,
+      expectedIdentityBase64: await _accountIdentityAnchor(
+        userId,
+        skipDeviceId: deviceId,
+      ),
+    );
+    _e2eFlowLog('SESSION_BUILT_SERVED', {
+      'recipientId': userId,
+      'deviceId': deviceId,
+    });
+  }
+
   /// The identity key already trusted for [recipientId] — from any of its
   /// devices other than [skipDeviceId], else from the ACCOUNT anchor — or null
   /// only when this device has never trusted this account at all.
