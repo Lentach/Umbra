@@ -164,6 +164,35 @@ void main() {
     );
 
     test(
+      'an accept that could not vouch for the shown name drops only the '
+      'frames under it: a request other frames claim stays, shown under '
+      'their name; with none left nothing is kept',
+      () async {
+        const mallory = (username: 'mallory', tag: '0001');
+        await contact.keep(
+          userId: 342,
+          deviceId: 2,
+          signal: '3:M',
+          claim: mallory,
+        );
+        await contact.keep(userId: 342, deviceId: 2, signal: '3:A', claim: ana);
+        expect(store.byUserId(342)?.username, 'mallory');
+
+        expect(await contact.dropClaim(342, mallory), isTrue);
+        final record = store.byUserId(342)!;
+        expect((record.username, record.tag), ('ana', '0342'));
+        expect([for (final k in record.boxOrigin!.kept) k.signal], ['3:A']);
+
+        expect(await contact.dropClaim(342, ana), isFalse);
+        expect(
+          store.byUserId(342)?.boxOrigin?.kept.single.signal,
+          '3:A',
+          reason: 'the caller drops the request itself',
+        );
+      },
+    );
+
+    test(
       'a friend, a blocked account, an account we asked and a request the '
       'server carries are never turned into a box request',
       () async {
@@ -528,6 +557,46 @@ void main() {
 
   group('forgetting (decision 54, E15i)', () {
     test(
+      'the same frame delivered again is kept once and pushes nothing out',
+      () async {
+        for (final s in ['3:A', '3:B', '3:C']) {
+          await contact.keep(userId: 342, deviceId: 2, signal: s, claim: ana);
+        }
+        await contact.keep(userId: 342, deviceId: 2, signal: '3:A', claim: ana);
+        expect(
+          [for (final k in store.byUserId(342)!.boxOrigin!.kept) k.signal],
+          ['3:A', '3:B', '3:C'],
+        );
+      },
+    );
+
+    test(
+      'a blocked box record still holding a queue is due for deletion',
+      () async {
+        const queue = ContactQueue(
+          rid: 'r',
+          sid: 's',
+          nid: 'n',
+          authPriv: 'a',
+          sealPriv: 'sp',
+          sealPub: 'p',
+        );
+        await store.update(
+          77,
+          (_) => ContactRecord(
+            userId: 77,
+            username: 'b',
+            tag: '0077',
+            state: ContactState.blocked,
+            queues: const [queue],
+            boxOrigin: ContactBoxOrigin(at: t0),
+          ),
+        );
+        expect(await contact.expired(), [77]);
+      },
+    );
+
+    test(
       'a decline drops the request and tells nobody; a request the server '
       'carries is not ours to drop',
       () async {
@@ -644,6 +713,13 @@ void main() {
           reason: 'a hidden record takes no new frame',
         );
 
+        await contact.forget([343]);
+        expect(
+          store.byUserId(343)?.queues.single.rid,
+          'r',
+          reason: 'never forgotten while it holds a queue',
+        );
+        await store.update(343, (r) => r!.copyWith(queues: const []));
         await contact.forget([343]);
         expect(store.byUserId(343), isNull);
       },

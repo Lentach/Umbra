@@ -389,7 +389,7 @@ class BoxFirstContact {
     ];
     if (requests.length <= maxKept) return;
     requests.sort((a, b) => a.boxOrigin!.at.compareTo(b.boxOrigin!.at));
-    await _drop([
+    await drop([
       for (final r in requests.take(requests.length - maxKept)) r.userId,
     ]);
   }
@@ -399,22 +399,52 @@ class BoxFirstContact {
   Future<bool> decline(int userId) async {
     final record = _store.byUserId(userId);
     if (record == null || !_boxRequest(record)) return false;
-    await _drop([userId]);
+    await drop([userId]);
     return true;
   }
 
-  /// Ends the box requests of [userIds]. A record still holding a queue of
-  /// ours — our own earlier request that lapsed into theirs — is not
-  /// forgotten: it holds the only copy of that queue's auth key. It turns
-  /// `former` instead, hidden from every list and refusing new frames,
-  /// until the box confirmed the queue deleted ([expired] lists it at once).
-  Future<void> _drop(Iterable<int> userIds) async {
+  /// An accept looked [claim] up and the answer did not vouch for it: the
+  /// frames under that claim go (a frame with none is under the record's
+  /// name). True when the request stays — other frames claim another name,
+  /// which the record now shows, for another accept; false when nothing of
+  /// it is left to keep (the caller then drops the request).
+  Future<bool> dropClaim(int userId, FirstContactClaim claim) async {
+    var remains = false;
+    await _store.update(userId, (current) {
+      final origin = current?.boxOrigin;
+      if (current == null || origin == null || !_boxRequest(current)) {
+        return null;
+      }
+      final shown = (username: current.username, tag: current.tag);
+      final left = [
+        for (final k in origin.kept)
+          if ((k.claim ?? shown) != claim) k,
+      ];
+      final next = left.firstOrNull?.claim;
+      if (next == null) return null;
+      remains = true;
+      return current.copyWith(
+        username: next.username,
+        tag: next.tag,
+        boxOrigin: origin.copyWith(kept: left),
+      );
+    });
+    return remains;
+  }
+
+  /// Ends the box requests of [userIds], either way. A record still holding
+  /// a queue of ours — our request's, or our earlier one that lapsed into
+  /// theirs — is not forgotten: it holds the only copy of that queue's auth
+  /// key. It turns `former` instead, hidden from every list and refusing
+  /// new frames, until the box confirmed the queue deleted ([expired] lists
+  /// it at once).
+  Future<void> drop(Iterable<int> userIds) async {
     final ids = userIds.toSet();
     await _store.reconcile(
       const [],
       (_, current) => current,
       sweep: (record) {
-        if (!ids.contains(record.userId) || !_boxRequest(record)) {
+        if (!ids.contains(record.userId) || !_pendingOverBox(record)) {
           return record;
         }
         if (record.queues.isEmpty) return null;
@@ -442,7 +472,7 @@ class BoxFirstContact {
 
   /// The box records whose queues are due for deletion: a pending request
   /// received more than [lifetime] ago, one sent more than [sentLifetime]
-  /// ago, and a dropped one still holding a queue ([_drop]).
+  /// ago, and a dropped one still holding a queue ([drop]).
   Future<List<int>> expired() async {
     await _store.settled;
     final now = _now();
@@ -462,9 +492,11 @@ class BoxFirstContact {
   }
 
   /// Removes the records of [userIds] still pending over the box, or
-  /// dropped ([_drop]); anything else a record became meanwhile is left
-  /// alone. Decided on disk state inside the store's lock (a sweep:
-  /// `reconcile`'s mutate never erases).
+  /// dropped ([drop]), that hold no queue of ours any more — a record is
+  /// the only holder of its queues' auth keys, so one still holding a
+  /// queue stays for the next retire; anything else a record became
+  /// meanwhile is left alone. Decided on disk state inside the store's
+  /// lock (a sweep: `reconcile`'s mutate never erases).
   Future<void> forget(Iterable<int> userIds) {
     final ids = userIds.toSet();
     if (ids.isEmpty) return Future.value();
@@ -473,6 +505,7 @@ class BoxFirstContact {
       (_, current) => current,
       sweep: (record) =>
           ids.contains(record.userId) &&
+              record.queues.isEmpty &&
               (_pendingOverBox(record) || _dropped(record))
           ? null
           : record,

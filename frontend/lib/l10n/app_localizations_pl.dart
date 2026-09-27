@@ -883,6 +883,10 @@ class AppLocalizationsPl extends AppLocalizations {
   String get cantMessageThisUser => 'Nie możesz pisać do tego użytkownika';
 
   @override
+  String get boxEndNotSynced =>
+      'Nie udało się połączyć z Twoimi innymi urządzeniami. Nic się nie zmieniło — spróbuj ponownie.';
+
+  @override
   String get cantTypeToThisUser => 'Nie możesz pisać do tego użytkownika';
 
   @override

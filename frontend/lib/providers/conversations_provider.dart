@@ -264,7 +264,9 @@ class ConversationsProvider extends ChangeNotifier {
                 ),
               );
         },
-        sweep: convs.isEmpty ? null : (r) => _withoutChat(r) ?? r,
+        // Gated on SERVER rows: a RAM list holding only local chats is an
+        // empty server list, which changes the store not at all.
+        sweep: byPeer.isEmpty ? null : (r) => _withoutChat(r) ?? r,
       ),
     );
   }

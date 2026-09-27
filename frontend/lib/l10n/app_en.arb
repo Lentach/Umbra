@@ -342,6 +342,8 @@
   "conversationDeletedByOther": "Conversation deleted by the other user",
   "noMessagesYet": "No messages yet",
   "cantMessageThisUser": "You can't message this user",
+  "boxEndNotSynced": "Couldn't reach your other devices. Nothing changed — try again.",
+  "@boxEndNotSynced": {"description": "Shown when removing or blocking a contact made over the box fails because this account's other devices could not be told (metadata-privacy E15j): nothing was ended, so the user retries."},
   "cantTypeToThisUser": "You can't type to this user",
   "recordingVoice": "Recording voice…",
   "typing": "typing…",

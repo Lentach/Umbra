@@ -871,6 +871,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get cantMessageThisUser => 'You can\'t message this user';
 
   @override
+  String get boxEndNotSynced =>
+      'Couldn\'t reach your other devices. Nothing changed — try again.';
+
+  @override
   String get cantTypeToThisUser => 'You can\'t type to this user';
 
   @override

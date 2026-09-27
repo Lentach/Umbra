@@ -341,6 +341,23 @@ void main() {
         );
       },
     );
+
+    test(
+      'a rewrite of a list holding only local chats is an empty server list: '
+      "no server chat's link is swept",
+      () async {
+        conversations
+          ..hydrateFromStore()
+          ..onConversationsList(const <dynamic>[])
+          ..refreshLocalChats();
+        await store.settled;
+        expect(conversations.getConversationById(_localChat), isNotNull);
+
+        conversations.rewriteStore();
+        await store.settled;
+        expect(store.byUserId(_carol)?.legacy.conversationId, _serverChat);
+      },
+    );
   });
 
   group('server events keyed by a conversation id', () {

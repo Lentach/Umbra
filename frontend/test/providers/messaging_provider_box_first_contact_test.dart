@@ -799,4 +799,51 @@ void main() {
     expect(alice.recordOf(5), isNull);
     expect(bob.recordOf(1), isNull);
   });
+
+  test('an unfriend whose sibling copy cannot go throws before any goodbye: '
+      'both sides stay friends', () async {
+    await befriend();
+    alice.enc
+      ..ownId = 1
+      ..ownLive = [1, 2];
+    await expectLater(
+      alice.reader.endBoxFriendship(5, block: false),
+      throwsStateError,
+    );
+    await settle();
+    expect(alice.recordOf(5)?.state, ContactState.friend);
+    expect(bob.recordOf(1)?.state, ContactState.friend);
+  });
+
+  test('an unfriend whose queue the box would not delete keeps the record as '
+      'former with that queue', () async {
+    await befriend();
+    final rid = alice.recordOf(5)!.queues.single.rid;
+    final inner = box.sockets.respond!;
+    box.sockets.respond = (s, f) =>
+        f.event == 'deleteQueue' && f.frame['rid'] == rid
+        ? {'ok': false, 'code': 'internal'}
+        : inner(s, f);
+    await alice.endWith(5, block: false);
+    await settle();
+    final record = alice.recordOf(5);
+    expect(record?.state, ContactState.former);
+    expect(record?.queues.map((q) => q.rid), [rid]);
+  });
+
+  test('a block whose queue the box would not delete keeps the record blocked '
+      'with that queue', () async {
+    await befriend();
+    final rid = alice.recordOf(5)!.queues.single.rid;
+    final inner = box.sockets.respond!;
+    box.sockets.respond = (s, f) =>
+        f.event == 'deleteQueue' && f.frame['rid'] == rid
+        ? {'ok': false, 'code': 'internal'}
+        : inner(s, f);
+    await alice.endWith(5, block: true);
+    await settle();
+    final record = alice.recordOf(5);
+    expect(record?.state, ContactState.blocked);
+    expect(record?.queues.map((q) => q.rid), [rid]);
+  });
 }

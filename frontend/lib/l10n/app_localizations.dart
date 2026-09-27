@@ -1556,6 +1556,12 @@ abstract class AppLocalizations {
   /// **'Nie możesz pisać do tego użytkownika'**
   String get cantMessageThisUser;
 
+  /// Shown when removing or blocking a contact made over the box fails because this account's other devices could not be told (metadata-privacy E15j): nothing was ended, so the user retries.
+  ///
+  /// In pl, this message translates to:
+  /// **'Nie udało się połączyć z Twoimi innymi urządzeniami. Nic się nie zmieniło — spróbuj ponownie.'**
+  String get boxEndNotSynced;
+
   /// No description provided for @cantTypeToThisUser.
   ///
   /// In pl, this message translates to:

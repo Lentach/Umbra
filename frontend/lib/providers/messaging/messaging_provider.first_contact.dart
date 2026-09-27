@@ -20,12 +20,6 @@ part of '../messaging_provider.dart';
 ///   (E15j), and its chat's timer setting travels between the devices
 ///   (E15k).
 extension MessagingFirstContact on MessagingProvider {
-  /// The most handles one accept looks up: the record's own claim and the
-  /// distinct ones its kept frames carry (a forged frame adds one, never
-  /// replaces one). Each search spends one-time pre-keys of every device
-  /// of the account it names.
-  static const int _maxClaimLookups = 3;
-
   /// Whether [record] is a request pending over the box in [state]
   /// (`pendingIn` or `pendingOut`): no request the server carries.
   static bool _boxPending(ContactRecord? record, ContactState state) =>
@@ -519,42 +513,33 @@ extension MessagingFirstContact on MessagingProvider {
     // decrypted, since a decrypt spends the frame's one-time pre-key.
     if (link.firstContact.ownProfile == null) return FirstContactAccept.failed;
     var peer = served;
+    FirstContactClaim? asked;
     if (peer == null) {
       final lookup = lookupHandle;
       if (lookup == null) return FirstContactAccept.failed;
-      // Every handle a kept frame claims, the record's first: a forged
-      // frame naming this account can add a claim but never replace one,
-      // so the real requester's handle is always among them (review). At
-      // most [_maxClaimLookups]: each search spends one-time pre-keys.
-      final claims = <String>{
-        '${record!.username}#${record.tag}',
-        for (final k in record.boxOrigin!.kept)
-          if (k.claim case final c?) '${c.username}#${c.tag}',
-      }.take(_maxClaimLookups);
-      var answered = false;
-      for (final handle in claims) {
-        final answer = await lookup(handle);
-        // No answer, or an empty one — the handle may be gone, or the
-        // answer was another search's (the server correlates none).
-        if (answer == null || answer.isEmpty) continue;
-        answered = true;
-        final found = FirstContactPeer.fromSearchEntry(answer.first);
-        if (found?.userId == userId) {
-          peer = found;
-          break;
-        }
-      }
-      // Nothing answered at all: nothing is decided, the request stays
-      // until it expires.
-      if (peer == null && !answered) return FirstContactAccept.failed;
+      // ONE search per accept (decision 53), of the name the request shows.
+      asked = (username: record!.username, tag: record.tag);
+      final answer = await lookup('${asked.username}#${asked.tag}');
+      // No answer, or an empty one — the handle may be gone, or the answer
+      // was another search's (the server correlates none): nothing is
+      // decided, the request stays until it expires.
+      if (answer == null || answer.isEmpty) return FirstContactAccept.failed;
+      peer = FirstContactPeer.fromSearchEntry(answer.first);
     }
+    final looked = asked;
     Future<FirstContactAccept> unverified(String why) async {
       _firstContactLog('BOX_REQUEST_UNVERIFIED', userId, {'why': why});
       E2ePersistentDiag.record('BOX_REQUEST_UNVERIFIED', {
         'peer': userId,
         'why': why,
       });
-      await _dropBoxRequest(link, userId);
+      // Frame and claim are unauthenticated: only the frames under the
+      // name just looked up go, and a request other frames still claim
+      // stays, shown under their name, for another accept (review).
+      if (looked == null ||
+          !await link.firstContact.dropClaim(userId, looked)) {
+        await _dropBoxRequest(link, userId);
+      }
       onBoxContactsChanged?.call();
       return FirstContactAccept.unverified;
     }

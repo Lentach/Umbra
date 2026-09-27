@@ -838,9 +838,14 @@ class BoxSession
     for (final queue in [...?_store.byUserId(userId)?.queues]) {
       deleted = await _keys.retireInbound(userId, queue) && deleted;
     }
-    // A queue the box did not delete keeps its record: the record is the
-    // only holder of that queue's auth key, and the next run deletes it.
-    if (deleted) await firstContact.forget([userId]);
+    // A queue the box did not delete keeps its record — the record is the
+    // only holder of that queue's auth key — hidden, and the next expiry
+    // pass deletes it.
+    if (deleted) {
+      await firstContact.forget([userId]);
+    } else {
+      await firstContact.drop([userId]);
+    }
   }
 
   @override

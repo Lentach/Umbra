@@ -340,6 +340,8 @@
   "conversationDeletedByOther": "Rozmowa usunięta przez drugą osobę",
   "noMessagesYet": "Brak wiadomości",
   "cantMessageThisUser": "Nie możesz pisać do tego użytkownika",
+  "boxEndNotSynced": "Nie udało się połączyć z Twoimi innymi urządzeniami. Nic się nie zmieniło — spróbuj ponownie.",
+  "@boxEndNotSynced": {"description": "Shown when removing or blocking a contact made over the box fails because this account's other devices could not be told (metadata-privacy E15j): nothing was ended, so the user retries."},
   "cantTypeToThisUser": "Nie możesz pisać do tego użytkownika",
   "recordingVoice": "Nagrywanie głosu…",
   "typing": "pisze…",

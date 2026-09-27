@@ -1092,22 +1092,26 @@ class FriendsProvider extends ChangeNotifier {
     });
   }
 
-  void unfriend(int userId) {
+  /// Ends the friendship with [userId]. False when a friendship made over
+  /// the box could not end — our other devices could not be told, so
+  /// nothing was ended or sent (E15j); the caller tells the user to retry.
+  Future<bool> unfriend(int userId) async {
     final end = boxEndFriendship;
     if (end != null && _endsOverBox(userId, block: false)) {
-      unawaited(_endOverBox(end, userId, block: false));
-      return;
+      return _endOverBox(end, userId, block: false);
     }
     _emit?.call('unfriend', {'userId': userId});
+    return true;
   }
 
-  void blockUser(int userId) {
+  /// Blocks [userId]; false as for [unfriend].
+  Future<bool> blockUser(int userId) async {
     final end = boxEndFriendship;
     if (end != null && _endsOverBox(userId, block: true)) {
-      unawaited(_endOverBox(end, userId, block: true));
-      return;
+      return _endOverBox(end, userId, block: true);
     }
     _emit?.call('blockUser', {'userId': userId});
+    return true;
   }
 
   /// A box friend (for a block also a box request): the server has no row
@@ -1121,7 +1125,7 @@ class FriendsProvider extends ChangeNotifier {
                 _isBoxRequest(record, ContactState.pendingOut));
   }
 
-  Future<void> _endOverBox(
+  Future<bool> _endOverBox(
     Future<void> Function(int userId, {required bool block}) end,
     int userId, {
     required bool block,
@@ -1131,20 +1135,33 @@ class FriendsProvider extends ChangeNotifier {
       await end(userId, block: block);
     } on Object catch (e) {
       debugPrint('[FriendsProvider] box end of $userId threw: $e');
-      return;
+      return false;
     }
-    if (!_isLiveFor(account)) return;
+    if (!_isLiveFor(account)) return true;
     onRemoveConversationsForUser?.call(userId);
     notifyListeners();
+    return true;
   }
 
-  /// A box-blocked record exists on the devices only: unblocking deletes it.
+  /// A box-blocked record exists on the devices only: unblocking deletes it
+  /// — unless it still holds a queue the box has not confirmed deleted (the
+  /// record holds its only auth key): then it turns `former`, hidden, and
+  /// the next expiry pass deletes the queue and the record.
   void unblockUser(int userId) {
     final store = _store;
-    if (store != null && _boxRecord(userId)?.state == ContactState.blocked) {
+    final record = _boxRecord(userId);
+    if (store != null && record?.state == ContactState.blocked) {
       final account = _currentUserId;
+      final done = record!.queues.isEmpty
+          ? store.remove(userId)
+          : store.update(
+              userId,
+              (r) => r?.state == ContactState.blocked
+                  ? r!.copyWith(state: ContactState.former)
+                  : null,
+            );
       unawaited(
-        store.remove(userId).then((_) {
+        done.then((_) {
           if (_isLiveFor(account)) notifyListeners();
         }),
       );

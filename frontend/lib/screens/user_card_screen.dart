@@ -236,7 +236,15 @@ class _UserCardScreenState extends State<UserCardScreen> {
       return;
     }
     if (!mounted) return;
-    context.read<FriendsProvider>().unfriend(userId);
+    final friends = context.read<FriendsProvider>();
+    final error = Theme.of(context).colorScheme.error;
+    if (!await friends.unfriend(userId)) {
+      if (mounted) {
+        showTopSnackBar(context, l10n.boxEndNotSynced, backgroundColor: error);
+      }
+      return;
+    }
+    if (!mounted) return;
     Navigator.of(context).pop();
   }
 
@@ -252,7 +260,15 @@ class _UserCardScreenState extends State<UserCardScreen> {
       return;
     }
     if (!mounted) return;
-    context.read<FriendsProvider>().blockUser(userId);
+    final friends = context.read<FriendsProvider>();
+    final error = Theme.of(context).colorScheme.error;
+    if (!await friends.blockUser(userId)) {
+      if (mounted) {
+        showTopSnackBar(context, l10n.boxEndNotSynced, backgroundColor: error);
+      }
+      return;
+    }
+    if (!mounted) return;
     Navigator.of(context).pop();
   }
 

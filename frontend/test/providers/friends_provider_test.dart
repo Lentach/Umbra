@@ -628,17 +628,34 @@ void main() {
         await seed([record(7, ContactState.friend)]);
         final ended = <(int, bool)>[];
         final purged = <int>[];
-        provider()
+        final friends = provider()
           ..boxEndFriendship = ((userId, {required block}) async =>
               ended.add((userId, block)))
-          ..onRemoveConversationsForUser = purged.add
-          ..unfriend(7);
-        await pumpEventQueue();
+          ..onRemoveConversationsForUser = purged.add;
+        expect(await friends.unfriend(7), isTrue);
 
         expect(ended, [(7, false)]);
         expect(purged, [7]);
         expect(events(), isEmpty);
       });
+
+      test(
+        'an unfriend over the box our other devices could not be told of '
+        'reports the failure and keeps the chat',
+        () async {
+          await seed([record(7, ContactState.friend)]);
+          final purged = <int>[];
+          final friends = provider()
+            ..boxEndFriendship = ((userId, {required block}) async =>
+                throw StateError('a sibling was not told'))
+            ..onRemoveConversationsForUser = purged.add;
+
+          expect(await friends.unfriend(7), isFalse);
+          expect(await friends.blockUser(7), isFalse);
+          expect(purged, isEmpty);
+          expect(events(), isEmpty);
+        },
+      );
 
       test('unblocking a box-blocked contact deletes it locally', () async {
         await seed([record(10, ContactState.blocked)]);
@@ -649,6 +666,33 @@ void main() {
         expect(friends.blockedUsers, isEmpty);
         expect(events(), isEmpty);
       });
+
+      test(
+        'unblocking a box-blocked contact that still holds an undeleted queue '
+        'hides it and keeps the queue for the next expiry pass',
+        () async {
+          const queue = ContactQueue(
+            rid: 'r',
+            sid: 's',
+            nid: 'n',
+            authPriv: 'a',
+            sealPriv: 'sp',
+            sealPub: 'p',
+          );
+          await seed([
+            record(10, ContactState.blocked).copyWith(queues: const [queue]),
+          ]);
+          final friends = provider()..unblockUser(10);
+          await store.settled;
+          await pumpEventQueue();
+
+          final kept = store.byUserId(10);
+          expect(kept?.state, ContactState.former);
+          expect(kept?.queues.single.rid, 'r');
+          expect(friends.blockedUsers, isEmpty);
+          expect(events(), isEmpty);
+        },
+      );
     });
   });
 }
