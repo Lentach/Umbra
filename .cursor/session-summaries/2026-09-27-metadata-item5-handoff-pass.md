@@ -20,7 +20,7 @@
 - Out-of-repo:
   - local DB `fireplace-mp-db-1` keeps drive accounts 334/335 (pia/qed, abandoned) and 336/337 (rho/sig, conv with 1 `messages` row);
   - `.planning/metadata-item5/befriend.cjs` (gitignored) was kept;
-  - uma 339's `key_bundles` signature is left CORRUPT in the local DB (fix-3 drive); accounts 338–341 are drive leftovers;
+  - uma 339's corrupted `key_bundles` row was deleted after the fix-3 drive (its next login republishes one); accounts 338–341 are drive leftovers;
   - `frontend/build/web` and the `%TEMP%/umbra-cx-*` profiles were deleted;
   - the web server was stopped.
 
