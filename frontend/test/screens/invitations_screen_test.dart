@@ -746,4 +746,57 @@ void main() {
     await tester.pump();
     expect(find.text('Accept'), findsNothing);
   });
+
+  testWidgets(
+    'search results offer add only to strangers: a friend, a requester and '
+    'a blocked account get none',
+    (tester) async {
+      final friends = FriendsProvider()
+        ..setCurrentUserId(1)
+        ..onFriendsList([_user(2, 'bob')])
+        ..onFriendRequestsList([
+          _request(
+            id: 31,
+            senderId: 3,
+            senderName: 'cat',
+            receiverId: 1,
+            receiverName: 'alice',
+          ),
+        ])
+        ..onSentRequestsList([])
+        ..onBlockedList([_user(4, 'dan')]);
+      await _pumpInvitations(tester, friends);
+      friends.onSearchUsersResult([
+        _user(2, 'bob'),
+        _user(3, 'cat'),
+        _user(4, 'dan'),
+        _user(5, 'eve'),
+      ]);
+      await tester.pump();
+      for (final id in [2, 3, 4]) {
+        expect(
+          find.byKey(Key('invitation-send-$id')),
+          findsNothing,
+          reason: 'known $id',
+        );
+      }
+      expect(find.byKey(const Key('invitation-send-5')), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'a raw answer naming only a known contact is not "User not found"',
+    (tester) async {
+      final friends = FriendsProvider()
+        ..setCurrentUserId(1)
+        ..onFriendsList([_user(2, 'bob')])
+        ..onFriendRequestsList([])
+        ..onSentRequestsList([]);
+      await _pumpInvitations(tester, friends);
+      friends.onSearchUsersResult([_user(2, 'bob')]);
+      await tester.pump();
+      expect(find.text('User not found'), findsNothing);
+      expect(find.byKey(const Key('invitation-send-2')), findsNothing);
+    },
+  );
 }

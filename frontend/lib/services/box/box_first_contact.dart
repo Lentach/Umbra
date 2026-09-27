@@ -86,7 +86,9 @@ class FirstContactPeer {
     this.authorization,
   });
 
-  static final RegExp _boxId32 = RegExp(r'^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$');
+  static final RegExp _boxId32 = RegExp(
+    r'^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$',
+  );
 
   /// Null for an entry naming no device (the server served nothing to
   /// reach, amendment (xlv)) or not shaped as the wire says.
@@ -112,7 +114,11 @@ class FirstContactPeer {
                     sealPub is String &&
                     _boxId32.hasMatch(sid) &&
                     _boxId32.hasMatch(sealPub)
-                ? ContactOutbound(peerDeviceId: deviceId, sid: sid, sealPub: sealPub)
+                ? ContactOutbound(
+                    peerDeviceId: deviceId,
+                    sid: sid,
+                    sealPub: sealPub,
+                  )
                 : null,
           ));
         }
@@ -270,13 +276,15 @@ class BoxFirstContact {
     } on FormatException {
       return null;
     }
-    if (json case {
-      'u': final String username,
-      'g': final String tag,
-    } when username.isNotEmpty &&
-        username.length <= _maxUsername &&
-        tag.isNotEmpty &&
-        tag.length <= _maxTag) {
+    if (json
+        case {
+          'u': final String username,
+          'g': final String tag,
+        }
+        when username.isNotEmpty &&
+            username.length <= _maxUsername &&
+            tag.isNotEmpty &&
+            tag.length <= _maxTag) {
       return (username: username, tag: tag);
     }
     return null;
@@ -291,16 +299,23 @@ class BoxFirstContact {
       record.boxOrigin != null &&
       record.legacy.requestId == null;
 
+  /// The most frames kept per requesting device: a re-sent request joins
+  /// the earlier one, and a forged frame naming the account cannot push the
+  /// real one out (review), while a flood from one "device" stays bounded.
+  static const int maxFramesPerDevice = 3;
+
   /// Keeps [userId]'s device [deviceId]'s request [signal] undecrypted
   /// under the [claim] it carries, with the journal's [localId] as the id
   /// its later decrypt is replayed under (an accept that fails after the
-  /// decrypt reads the same plaintext again, never a spent ratchet). False —
-  /// nothing written — for an account this device already stands with
-  /// otherwise (E15c): a friend, a blocked one, one we asked (the caller
-  /// reads that as an accept, E15f), one whose request the server carries,
-  /// and a `former` contact — its queues are material no server can
-  /// re-supply, and an unauthenticated frame must never be able to make it
-  /// a request someone then declines or lets expire.
+  /// decrypt reads the same plaintext again, never a spent ratchet). The
+  /// frame and its claim are unauthenticated: a record that exists keeps
+  /// its name and its frames, and the new one joins them. False — nothing
+  /// written — for an account this device already stands with otherwise
+  /// (E15c): a friend, a blocked one, one we asked (the caller reads that
+  /// as an accept, E15f), one whose request the server carries, and a
+  /// `former` contact — its queues are material no server can re-supply,
+  /// and an unauthenticated frame must never be able to make it a request
+  /// someone then declines or lets expire.
   Future<bool> keep({
     required int userId,
     required int deviceId,
@@ -327,31 +342,39 @@ class BoxFirstContact {
         signal: signal,
         at: at,
         localId: localId,
+        claim: claim,
       );
       final origin = current?.boxOrigin;
-      final base =
-          current ??
-          ContactRecord(
-            userId: userId,
-            username: claim.username,
-            tag: claim.tag,
-            state: ContactState.pendingIn,
-          );
       kept = true;
-      return base.copyWith(
-        state: ContactState.pendingIn,
-        username: claim.username,
-        tag: claim.tag,
-        boxOrigin: origin != null && state == ContactState.pendingIn
-            ? origin.copyWith(
-                kept: [
-                  for (final k in origin.kept)
-                    if (k.deviceId != deviceId) k,
-                  request,
-                ],
-              )
-            : ContactBoxOrigin(at: at, kept: [request]),
-      );
+      if (current != null &&
+          origin != null &&
+          state == ContactState.pendingIn) {
+        if (origin.kept.any((k) => k.signal == signal)) return null;
+        final own = origin.kept.where((k) => k.deviceId == deviceId).length;
+        var drop = own + 1 - maxFramesPerDevice;
+        return current.copyWith(
+          boxOrigin: origin.copyWith(
+            kept: [
+              for (final k in origin.kept)
+                if (k.deviceId != deviceId || drop-- <= 0) k,
+              request,
+            ],
+          ),
+        );
+      }
+      // A new request — or theirs after ours lapsed, which keeps the name
+      // our own search verified.
+      return (current ??
+              ContactRecord(
+                userId: userId,
+                username: claim.username,
+                tag: claim.tag,
+                state: ContactState.pendingIn,
+              ))
+          .copyWith(
+            state: ContactState.pendingIn,
+            boxOrigin: ContactBoxOrigin(at: at, kept: [request]),
+          );
     });
     if (!ok || !kept) return false;
     await _trim();
@@ -366,21 +389,44 @@ class BoxFirstContact {
     ];
     if (requests.length <= maxKept) return;
     requests.sort((a, b) => a.boxOrigin!.at.compareTo(b.boxOrigin!.at));
-    await forget([
+    await _drop([
       for (final r in requests.take(requests.length - maxKept)) r.userId,
     ]);
   }
 
-  /// The user declined [userId]'s request: it is forgotten, and nothing is
-  /// sent anywhere (decision 54). False for a request the server carries.
+  /// The user declined [userId]'s request: it goes, and nothing is sent
+  /// anywhere (decision 54). False for a request the server carries.
   Future<bool> decline(int userId) async {
     final record = _store.byUserId(userId);
     if (record == null || !_boxRequest(record)) return false;
-    await forget([userId]);
+    await _drop([userId]);
     return true;
   }
 
-  /// A request this device SENT stays until an accept sent on its last day
+  /// Ends the box requests of [userIds]. A record still holding a queue of
+  /// ours — our own earlier request that lapsed into theirs — is not
+  /// forgotten: it holds the only copy of that queue's auth key. It turns
+  /// `former` instead, hidden from every list and refusing new frames,
+  /// until the box confirmed the queue deleted ([expired] lists it at once).
+  Future<void> _drop(Iterable<int> userIds) async {
+    final ids = userIds.toSet();
+    await _store.reconcile(
+      const [],
+      (_, current) => current,
+      sweep: (record) {
+        if (!ids.contains(record.userId) || !_boxRequest(record)) {
+          return record;
+        }
+        if (record.queues.isEmpty) return null;
+        return record.copyWith(
+          state: ContactState.former,
+          boxOrigin: ContactBoxOrigin(at: record.boxOrigin!.at),
+        );
+      },
+    );
+  }
+
+  /// A request THIS device SENT stays until an accept sent on its last day
   /// could still be read: [lifetime] plus the box TTL, so the queue it
   /// offered is never deleted under an accept in flight (E15i, review;
   /// traps: never delete a queue anyone may still send into). The requests
@@ -394,26 +440,31 @@ class BoxFirstContact {
     return at != null && !now.isAfter(at.add(lifetime));
   }
 
-  /// The pending box requests that are over: one received more than
-  /// [lifetime] ago, one sent more than [sentLifetime] ago.
+  /// The box records whose queues are due for deletion: a pending request
+  /// received more than [lifetime] ago, one sent more than [sentLifetime]
+  /// ago, and a dropped one still holding a queue ([_drop]).
   Future<List<int>> expired() async {
     await _store.settled;
     final now = _now();
     return [
       for (final r in _store.all)
-        if (_pendingOverBox(r) &&
-            r.boxOrigin!.at.isBefore(
-              now.subtract(
-                r.state == ContactState.pendingOut ? sentLifetime : lifetime,
-              ),
-            ))
+        if (_droppedHolding(r) ||
+            _pendingOverBox(r) &&
+                r.boxOrigin!.at.isBefore(
+                  now.subtract(
+                    r.state == ContactState.pendingOut
+                        ? sentLifetime
+                        : lifetime,
+                  ),
+                ))
           r.userId,
     ];
   }
 
-  /// Removes the records of [userIds] still pending over the box; anything
-  /// else a record became meanwhile is left alone. Decided on disk state
-  /// inside the store's lock (a sweep: `reconcile`'s mutate never erases).
+  /// Removes the records of [userIds] still pending over the box, or
+  /// dropped ([_drop]); anything else a record became meanwhile is left
+  /// alone. Decided on disk state inside the store's lock (a sweep:
+  /// `reconcile`'s mutate never erases).
   Future<void> forget(Iterable<int> userIds) {
     final ids = userIds.toSet();
     if (ids.isEmpty) return Future.value();
@@ -421,11 +472,23 @@ class BoxFirstContact {
       const [],
       (_, current) => current,
       sweep: (record) =>
-          ids.contains(record.userId) && _pendingOverBox(record)
+          ids.contains(record.userId) &&
+              (_pendingOverBox(record) || _dropped(record))
           ? null
           : record,
     );
   }
+
+  static bool _dropped(ContactRecord record) =>
+      record.state == ContactState.former && record.boxOrigin != null;
+
+  /// A dropped request or an ended box friendship (former or blocked) still
+  /// holding a queue the box did not confirm deleted.
+  static bool _droppedHolding(ContactRecord record) =>
+      (record.state == ContactState.former ||
+          record.state == ContactState.blocked) &&
+      record.boxOrigin != null &&
+      record.queues.isNotEmpty;
 
   static bool _pendingOverBox(ContactRecord record) =>
       (record.state == ContactState.pendingIn ||
@@ -475,6 +538,9 @@ class BoxFirstContact {
         username: profile.username,
         tag: profile.tag,
         avatarUrl: avatarUrl,
+        // A `former` record swept from a server request still names it: a
+        // box request never does (every box rule reads `requestId == null`).
+        legacy: base.legacy.copyWith(clearRequest: true),
         boxOrigin: ContactBoxOrigin(
           at: keepAge ? current.boxOrigin!.at : now,
           addresses: addresses,

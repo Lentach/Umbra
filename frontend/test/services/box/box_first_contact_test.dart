@@ -84,20 +84,82 @@ void main() {
     );
 
     test(
-      "a second device's request joins the first; the same device's newer "
-      'one replaces its own, and the request keeps its first time',
+      "a second device's request joins the first, a device's newer one joins "
+      'its own (the oldest beyond three goes), and the request keeps its '
+      'first time',
       () async {
         await contact.keep(userId: 342, deviceId: 2, signal: '3:A', claim: ana);
         now = t0.add(const Duration(hours: 1));
         await contact.keep(userId: 342, deviceId: 3, signal: '3:B', claim: ana);
-        await contact.keep(userId: 342, deviceId: 2, signal: '3:C', claim: ana);
+        for (final signal in ['3:C', '3:D', '3:E']) {
+          await contact.keep(
+            userId: 342,
+            deviceId: 2,
+            signal: signal,
+            claim: ana,
+          );
+        }
 
         final origin = store.byUserId(342)!.boxOrigin!;
         expect(origin.at, t0);
         expect(
-          {for (final k in origin.kept) k.deviceId: k.signal},
-          {2: '3:C', 3: '3:B'},
+          [
+            for (final k in origin.kept)
+              if (k.deviceId == 2) k.signal,
+          ],
+          ['3:C', '3:D', '3:E'],
         );
+        expect(
+          [
+            for (final k in origin.kept)
+              if (k.deviceId == 3) k.signal,
+          ],
+          ['3:B'],
+        );
+      },
+    );
+
+    test(
+      'a later frame naming a pending requester never renames it nor pushes '
+      'its frame out: the frame and its claim are unauthenticated',
+      () async {
+        await contact.keep(userId: 342, deviceId: 2, signal: '3:A', claim: ana);
+        await contact.keep(
+          userId: 342,
+          deviceId: 2,
+          signal: '3:M',
+          claim: (username: 'mallory', tag: '0001'),
+        );
+
+        final record = store.byUserId(342)!;
+        expect(record.username, 'ana');
+        expect(record.tag, '0342');
+        expect(
+          [for (final k in record.boxOrigin!.kept) (k.signal, k.claim)],
+          [
+            ('3:A', ana),
+            ('3:M', (username: 'mallory', tag: '0001')),
+          ],
+        );
+      },
+    );
+
+    test(
+      'a request from an account we asked long ago keeps the name our own '
+      'search verified, not the claim',
+      () async {
+        await contact.asked(userId: 343, profile: ana, addresses: const []);
+        now = t0.add(BoxFirstContact.lifetime + const Duration(days: 1));
+        await contact.keep(
+          userId: 343,
+          deviceId: 1,
+          signal: '3:M',
+          claim: (username: 'mallory', tag: '0001'),
+        );
+
+        final record = store.byUserId(343)!;
+        expect(record.state, ContactState.pendingIn);
+        expect((record.username, record.tag), ('ana', '0342'));
       },
     );
 
@@ -187,10 +249,12 @@ void main() {
             username: 'asked',
             tag: '0999',
             state: ContactState.pendingOut,
-            boxOrigin: ContactBoxOrigin(at: t0.subtract(const Duration(days: 1))),
+            boxOrigin: ContactBoxOrigin(
+              at: t0.subtract(const Duration(days: 1)),
+            ),
           ),
         );
-        for (var i = 0; i < BoxFirstContact.maxKept + 1; i++) {
+        for (var i = 0; i < 51; i++) {
           now = t0.add(Duration(minutes: i));
           await contact.keep(
             userId: 100 + i,
@@ -203,9 +267,9 @@ void main() {
           for (final r in store.all)
             if (r.state == ContactState.pendingIn) r.userId,
         ];
-        expect(kept, hasLength(BoxFirstContact.maxKept));
+        expect(kept, hasLength(50));
         expect(kept, isNot(contains(100)), reason: 'the oldest');
-        expect(kept, contains(100 + BoxFirstContact.maxKept));
+        expect(kept, contains(150));
         expect(store.byUserId(999)?.state, ContactState.pendingOut);
       },
     );
@@ -216,6 +280,30 @@ void main() {
       peerDeviceId: 2,
       sid: 'req-sid',
       sealPub: 'pub',
+    );
+
+    test(
+      'asking a former contact swept from a server request makes a box '
+      'request: the old request id goes',
+      () async {
+        await store.update(
+          30,
+          (_) => const ContactRecord(
+            userId: 30,
+            username: 'old',
+            tag: '0030',
+            state: ContactState.former,
+            legacy: ContactLegacy(requestId: 77),
+          ),
+        );
+        expect(
+          await contact.asked(userId: 30, profile: ana, addresses: [address]),
+          isTrue,
+        );
+        final record = store.byUserId(30)!;
+        expect(record.state, ContactState.pendingOut);
+        expect(record.legacy.requestId, isNull);
+      },
     );
 
     test(
@@ -518,6 +606,77 @@ void main() {
         expect(store.byUserId(400), isNull);
         expect(store.byUserId(500)?.state, ContactState.pendingIn);
         expect(store.byUserId(401)?.state, ContactState.friend);
+      },
+    );
+
+    test(
+      "a decline of a request whose record holds our lapsed request's queue "
+      'hides it but keeps the queue, so it can still be deleted: the record '
+      'is due at once and goes only once forgotten',
+      () async {
+        const queue = ContactQueue(
+          rid: 'r',
+          sid: 's',
+          nid: 'n',
+          authPriv: 'a',
+          sealPriv: 'sp',
+          sealPub: 'p',
+        );
+        await contact.asked(userId: 343, profile: ana, addresses: const []);
+        await store.update(343, (r) => r!.copyWith(queues: [queue]));
+        now = t0.add(BoxFirstContact.lifetime + const Duration(days: 1));
+        await contact.keep(userId: 343, deviceId: 1, signal: '3:A', claim: ana);
+
+        expect(await contact.decline(343), isTrue);
+        final record = store.byUserId(343)!;
+        expect(record.state, ContactState.former);
+        expect(record.queues.single.rid, 'r');
+        expect(record.boxOrigin?.kept, isEmpty);
+        expect(await contact.expired(), [343]);
+        expect(
+          await contact.keep(
+            userId: 343,
+            deviceId: 1,
+            signal: '3:B',
+            claim: ana,
+          ),
+          isFalse,
+          reason: 'a hidden record takes no new frame',
+        );
+
+        await contact.forget([343]);
+        expect(store.byUserId(343), isNull);
+      },
+    );
+
+    test(
+      'the cap evicts a request holding a queue the same way: hidden, its '
+      'queue kept for deletion',
+      () async {
+        const queue = ContactQueue(
+          rid: 'r',
+          sid: 's',
+          nid: 'n',
+          authPriv: 'a',
+          sealPriv: 'sp',
+          sealPub: 'p',
+        );
+        await contact.asked(userId: 99, profile: ana, addresses: const []);
+        await store.update(99, (r) => r!.copyWith(queues: [queue]));
+        now = t0.add(BoxFirstContact.lifetime + const Duration(days: 1));
+        await contact.keep(userId: 99, deviceId: 1, signal: '3:A', claim: ana);
+        for (var i = 0; i < BoxFirstContact.maxKept; i++) {
+          now = now.add(const Duration(minutes: 1));
+          await contact.keep(
+            userId: 100 + i,
+            deviceId: 1,
+            signal: '3:$i',
+            claim: (username: 'u$i', tag: '$i'),
+          );
+        }
+        final record = store.byUserId(99)!;
+        expect(record.state, ContactState.former);
+        expect(record.queues.single.rid, 'r');
       },
     );
   });

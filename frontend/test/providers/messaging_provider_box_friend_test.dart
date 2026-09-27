@@ -53,13 +53,13 @@ class _Link implements BoxFriendLink {
   final List<(int, int)> rekeyed = [];
   final List<int> handedOffTo = [];
   final Set<(int, int)> awaiting = {};
+  ContactRecord record = _friendRecord;
 
   @override
   bool get onBox => true;
 
   @override
-  ContactRecord? contactOf(int userId) =>
-      userId == _friend ? _friendRecord : null;
+  ContactRecord? contactOf(int userId) => userId == _friend ? record : null;
 
   @override
   Future<FriendWrite> takeFriendHandoff(
@@ -464,6 +464,46 @@ void main() {
       );
       expect(await s.consumeBoxEntry(entry, linked), isTrue);
       expect(await enc.recordExists(entry.localId), isTrue);
+    },
+  );
+
+  test('a replacing PreKey handoff on the request queue from an account we '
+      'asked over the box is its accept (E15f)', () async {
+    await s.encryptForFriend(_friend, 3, '{"t":"x"}');
+    link.awaiting.clear();
+    final asked = ContactRecord(
+      userId: _friend,
+      username: 'fred',
+      tag: '0005',
+      state: ContactState.pendingOut,
+      boxOrigin: ContactBoxOrigin(at: DateTime.now().toUtc()),
+    );
+    link.record = asked;
+    final viaRequest = await fromFreshF(handoff(_sid('R')), 0);
+    expect(await deliver(viaRequest, peer: asked), isTrue);
+    expect(link.learned, [_sid('R')]);
+    expect(link.rekeyed, isEmpty);
+  });
+
+  test(
+    'the same handoff over our own queue for it is taken too (E15f)',
+    () async {
+      await s.encryptForFriend(_friend, 3, '{"t":"x"}');
+      link.awaiting.clear();
+      final asked = ContactRecord(
+        userId: _friend,
+        username: 'fred',
+        tag: '0005',
+        state: ContactState.pendingOut,
+        boxOrigin: ContactBoxOrigin(at: DateTime.now().toUtc()),
+      );
+      link.record = asked;
+      final viaOurQueue = await fromFreshF(handoff(_sid('Q')), 1);
+      expect(
+        await deliver(viaOurQueue, viaRequest: false, peer: asked),
+        isTrue,
+      );
+      expect(link.learned, [_sid('Q')]);
     },
   );
 }

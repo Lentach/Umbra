@@ -180,6 +180,7 @@ class KeptRequest {
     required this.signal,
     required this.at,
     this.localId,
+    this.claim,
   });
 
   /// Null for a shape this build cannot read: the request is then absent.
@@ -194,6 +195,13 @@ class KeptRequest {
         signal: signal,
         at: DateTime.fromMillisecondsSinceEpoch(at, isUtc: true),
         localId: (raw as Map)['lid'] as int?,
+        claim: switch (raw) {
+          {'u': final String username, 'g': final String tag} => (
+            username: username,
+            tag: tag,
+          ),
+          _ => null,
+        },
       ),
     _ => null,
   };
@@ -210,11 +218,17 @@ class KeptRequest {
   /// decrypt reads it again instead of a spent ratchet (review).
   final int? localId;
 
+  /// The handle this frame claims, unauthenticated like the frame: a
+  /// later frame never renames the record, so the accept looks each
+  /// distinct claim up until one answer names the account (review).
+  final ({String username, String tag})? claim;
+
   Map<String, dynamic> toJson() => {
     'dev': deviceId,
     'sig': signal,
     'at': at.millisecondsSinceEpoch,
     'lid': ?localId,
+    if (claim case final c?) ...{'u': c.username, 'g': c.tag},
   };
 }
 

@@ -20,6 +20,12 @@ part of '../messaging_provider.dart';
 ///   (E15j), and its chat's timer setting travels between the devices
 ///   (E15k).
 extension MessagingFirstContact on MessagingProvider {
+  /// The most handles one accept looks up: the record's own claim and the
+  /// distinct ones its kept frames carry (a forged frame adds one, never
+  /// replaces one). Each search spends one-time pre-keys of every device
+  /// of the account it names.
+  static const int _maxClaimLookups = 3;
+
   /// Whether [record] is a request pending over the box in [state]
   /// (`pendingIn` or `pendingOut`): no request the server carries.
   static bool _boxPending(ContactRecord? record, ContactState state) =>
@@ -315,7 +321,8 @@ extension MessagingFirstContact on MessagingProvider {
   Future<void> _relayFriendship(int userId, {FirstContactPeer? served}) async {
     final record = boxFirstContact?.firstContact.contactOf(userId);
     final origin = record?.boxOrigin;
-    final peer = served ??
+    final peer =
+        served ??
         (record == null || origin == null
             ? null
             : FirstContactPeer.fromSearchEntry({
@@ -323,8 +330,9 @@ extension MessagingFirstContact on MessagingProvider {
                 'username': record.username,
                 'tag': record.tag,
                 'profilePictureUrl': ?record.avatarUrl,
-                'authorization':
-                    _encryptionProvider?.cachedDeviceList(userId)?.authorization,
+                'authorization': _encryptionProvider
+                    ?.cachedDeviceList(userId)
+                    ?.authorization,
                 'devices': [
                   for (final MapEntry(key: device, value: bundle)
                       in origin.bundles.entries)
@@ -514,12 +522,31 @@ extension MessagingFirstContact on MessagingProvider {
     if (peer == null) {
       final lookup = lookupHandle;
       if (lookup == null) return FirstContactAccept.failed;
-      final answer = await lookup('${record!.username}#${record.tag}');
-      // No answer, or an empty one — the handle may be gone, or the answer
-      // was another search's (the server correlates none): nothing is
-      // decided, the request stays until it expires.
-      if (answer == null || answer.isEmpty) return FirstContactAccept.failed;
-      peer = FirstContactPeer.fromSearchEntry(answer.first);
+      // Every handle a kept frame claims, the record's first: a forged
+      // frame naming this account can add a claim but never replace one,
+      // so the real requester's handle is always among them (review). At
+      // most [_maxClaimLookups]: each search spends one-time pre-keys.
+      final claims = <String>{
+        '${record!.username}#${record.tag}',
+        for (final k in record.boxOrigin!.kept)
+          if (k.claim case final c?) '${c.username}#${c.tag}',
+      }.take(_maxClaimLookups);
+      var answered = false;
+      for (final handle in claims) {
+        final answer = await lookup(handle);
+        // No answer, or an empty one — the handle may be gone, or the
+        // answer was another search's (the server correlates none).
+        if (answer == null || answer.isEmpty) continue;
+        answered = true;
+        final found = FirstContactPeer.fromSearchEntry(answer.first);
+        if (found?.userId == userId) {
+          peer = found;
+          break;
+        }
+      }
+      // Nothing answered at all: nothing is decided, the request stays
+      // until it expires.
+      if (peer == null && !answered) return FirstContactAccept.failed;
     }
     Future<FirstContactAccept> unverified(String why) async {
       _firstContactLog('BOX_REQUEST_UNVERIFIED', userId, {'why': why});
@@ -527,7 +554,7 @@ extension MessagingFirstContact on MessagingProvider {
         'peer': userId,
         'why': why,
       });
-      await link.firstContact.decline(userId);
+      await _dropBoxRequest(link, userId);
       onBoxContactsChanged?.call();
       return FirstContactAccept.unverified;
     }
@@ -554,9 +581,7 @@ extension MessagingFirstContact on MessagingProvider {
       // A frame that would not decrypt may heal (the store, the session);
       // only when every kept frame is under another key or device is the
       // request somebody else's.
-      return opened.failed
-          ? FirstContactAccept.failed
-          : unverified('no_frame');
+      return opened.failed ? FirstContactAccept.failed : unverified('no_frame');
     }
     final made = await _befriendServed(link, peer, opened.offered);
     if (!made) return FirstContactAccept.failed;
@@ -671,24 +696,30 @@ extension MessagingFirstContact on MessagingProvider {
     return true;
   }
 
-  /// Declines [userId]'s request kept over the box: forgotten here, and on
-  /// our siblings; the requester is told nothing (decision 54).
+  /// Declines [userId]'s request kept over the box: gone here, and on our
+  /// siblings; the requester is told nothing (decision 54).
   Future<void> declineBoxFriendRequest(int userId) async {
     final link = boxFirstContact;
     final record = link?.firstContact.contactOf(userId);
     if (link == null || !_boxPending(record, ContactState.pendingIn)) return;
-    if (record!.queues.isEmpty) {
-      if (!await link.firstContact.decline(userId)) return;
-    } else {
-      // Our own earlier request to them lapsed into this one (its queue is
-      // still here): the queue is deleted with the record.
-      await link.retireFirstContact(userId);
-    }
+    if (!await _dropBoxRequest(link, userId)) return;
     onBoxContactsChanged?.call();
     await _relayToAllSiblings(
       jsonEncode(E2eEnvelope.buildFriendDeclined(userId)),
       peer: userId,
     );
+  }
+
+  /// Ends [userId]'s box request here. A record still holding a queue of
+  /// ours — our own earlier request lapsed into theirs — is hidden at once
+  /// and its queue deleted now; one the box did not confirm deleted stays
+  /// hidden for the next expiry pass (the record holds its only auth key).
+  Future<bool> _dropBoxRequest(BoxFirstContactLink link, int userId) async {
+    if (!await link.firstContact.decline(userId)) return false;
+    if (link.firstContact.contactOf(userId)?.queues.isNotEmpty ?? false) {
+      await link.retireFirstContact(userId);
+    }
+    return true;
   }
 
   /// A friendship over the box began here: the lists, the chat list and the
@@ -736,7 +767,7 @@ extension MessagingFirstContact on MessagingProvider {
     if (link == null || enc == null || own == null) return false;
     if (type == E2eEnvelope.typeFriendDeclined) {
       final to = E2eEnvelope.parse(plaintext).sentTo;
-      if (to != null && await link.firstContact.decline(to)) {
+      if (to != null && await _dropBoxRequest(link, to)) {
         onBoxContactsChanged?.call();
       }
       return true;
@@ -808,10 +839,13 @@ extension MessagingFirstContact on MessagingProvider {
   // ---------- The end of a friendship (E15j) ----------
 
   /// Ends the friendship made over the box with [userId] — or, for a
-  /// [block], any request pending over the box with it: a `goodbye` to each
-  /// of its devices this device holds an address for (best effort), a copy
-  /// to our siblings, then our queues for it are deleted and the record goes
-  /// or stays `blocked`. The chat and its history are the caller's
+  /// [block], any request pending over the box with it: our siblings are
+  /// told FIRST, then a `goodbye` goes to each of its devices this device
+  /// holds an address for (best effort), then our queues for it are deleted
+  /// and the record goes or stays `blocked`. Throws [StateError] — nothing
+  /// ended, nothing sent to the peer — when a sibling's copy did not go: a
+  /// sibling that never hears of it would keep writing into queues the
+  /// peer deletes (review). The chat and its history are the caller's
   /// (`FriendsProvider` removes them right after, while the chat row still
   /// names the peer).
   Future<void> endBoxFriendship(int userId, {required bool block}) async {
@@ -820,6 +854,12 @@ extension MessagingFirstContact on MessagingProvider {
     final outbox = boxOutbox;
     final record = friends?.contactOf(userId);
     if (link == null || record?.boxOrigin == null) return;
+    if (!await _relayToAllSiblings(
+      jsonEncode(E2eEnvelope.buildGoodbye(sentTo: userId, block: block)),
+      peer: userId,
+    )) {
+      throw StateError('box end of $userId: a sibling was not told');
+    }
     if (record!.state == ContactState.friend && outbox != null) {
       final goodbye = jsonEncode(E2eEnvelope.buildGoodbye());
       for (final MapEntry(key: device, value: to)
@@ -831,10 +871,6 @@ extension MessagingFirstContact on MessagingProvider {
         }
       }
     }
-    await _relayToAllSiblings(
-      jsonEncode(E2eEnvelope.buildGoodbye(sentTo: userId, block: block)),
-      peer: userId,
-    );
     await link.endBoxFriendship(userId, block: block);
     _afterBoxFriendshipEnded(userId);
   }

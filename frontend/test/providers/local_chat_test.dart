@@ -471,6 +471,38 @@ void main() {
     );
 
     test(
+      'a deleted local chat stays out of the list across a server snapshot, '
+      'a rewrite and a hydrate, and shows again once revealed; a rewrite '
+      'never touches its timer stamp',
+      () async {
+        conversations.setDisappearingTimer(_localChat, 60);
+        await store.settled;
+        final stamp = store.byUserId(_bob)?.settings.timerAt;
+        expect(stamp, isNotNull);
+
+        conversations
+          ..onConversationsList([_conv(_serverChat, _carol, 'carol')])
+          ..rewriteStore();
+        await store.settled;
+        expect(store.byUserId(_bob)?.settings.timerAt, stamp);
+
+        conversations.deleteConversation(_localChat);
+        await store.settled;
+        conversations
+          ..onConversationsList([_conv(_serverChat, _carol, 'carol')])
+          ..refreshLocalChats()
+          ..hydrateFromStore();
+        await store.settled;
+        expect(conversations.getConversationById(_localChat), isNull);
+
+        conversations.revealLocalChat(_localChat);
+        await store.settled;
+        await pump();
+        expect(conversations.getConversationById(_localChat), isNotNull);
+      },
+    );
+
+    test(
       'the socket-ready and resume refetches of an open local chat never ask '
       'the server for its history',
       () async {
@@ -508,7 +540,10 @@ void main() {
         friends.ensureInvitationChat(_bob);
         expect(events(), isEmpty);
         expect(friends.acceptedOutcomeForPeer(_bob)?.chatReady, isTrue);
-        expect(friends.acceptedOutcomeForPeer(_bob)?.conversationId, _localChat);
+        expect(
+          friends.acceptedOutcomeForPeer(_bob)?.conversationId,
+          _localChat,
+        );
 
         friends.ensureInvitationChat(_carol);
         expect(events(), ['ensureInvitationChat']);

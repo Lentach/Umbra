@@ -846,10 +846,13 @@ class BoxSession
   @override
   Future<void> endBoxFriendship(int userId, {required bool block}) async {
     if (_disposed) return;
+    // Each queue the box confirmed deleted leaves the record
+    // (`retireInbound`); one it did not stays, since the record holds its
+    // only auth key, and the next expiry pass deletes it (review).
     for (final queue in [...?_store.byUserId(userId)?.queues]) {
       await _keys.retireInbound(userId, queue);
     }
-    if (!block) {
+    if (!block && (_store.byUserId(userId)?.queues.isEmpty ?? true)) {
       if (_store.byUserId(userId)?.boxOrigin != null) {
         await _store.remove(userId);
       }
@@ -858,15 +861,17 @@ class BoxSession
     await _store.update(userId, (current) {
       final origin = current?.boxOrigin;
       if (current == null || origin == null) return null;
-      // Nothing the friendship held stays: no queue, no address, no chat,
-      // no request kept. The origin mark keeps the record out of every
-      // server list's sweep (E15g).
+      // Nothing the friendship held stays but an undeleted queue: no
+      // address, no chat, no request kept. The origin mark keeps the record
+      // out of every server list's sweep (E15g); an unfriend that left a
+      // queue is `former` until the queue is gone.
       return ContactRecord(
         userId: userId,
         username: current.username,
         tag: current.tag,
         avatarUrl: current.avatarUrl,
-        state: ContactState.blocked,
+        state: block ? ContactState.blocked : ContactState.former,
+        queues: current.queues,
         boxOrigin: ContactBoxOrigin(at: origin.at),
       );
     });

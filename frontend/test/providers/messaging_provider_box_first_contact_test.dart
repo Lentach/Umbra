@@ -12,6 +12,8 @@ import 'package:fireplace/services/box/box_wire.dart';
 import 'package:fireplace/services/box/queue_seal.dart';
 import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/services/contacts/contact_store.dart';
+import 'package:fireplace/services/device_list/device_list_cache.dart';
+import 'package:fireplace/services/device_list/device_list_canonical.dart';
 import 'package:fireplace/services/encryption/content_kv.dart';
 import 'package:fireplace/utils/e2e_envelope.dart';
 import 'package:fireplace/utils/message_ids.dart';
@@ -40,6 +42,44 @@ class _Enc extends EncryptionProvider {
 
   @override
   bool get ownDeviceIdConfirmed => true;
+
+  List<int>? ownLive;
+  int? ownId;
+  final Set<int> extraChanged = {};
+  VerifiedDeviceList? servedList;
+
+  @override
+  Future<VerifiedDeviceList> adoptServedAccount(
+    int userId, {
+    required String identityKey,
+    required Map<String, dynamic>? authorization,
+  }) async {
+    final real = await super.adoptServedAccount(
+      userId,
+      identityKey: identityKey,
+      authorization: authorization,
+    );
+    return servedList ?? real;
+  }
+
+  @override
+  Set<int> get peersWithChangedIdentity => {
+    ...super.peersWithChangedIdentity,
+    ...extraChanged,
+  };
+
+  @override
+  VerifiedDeviceList? cachedDeviceList(int userId) =>
+      ownLive != null && userId == ownId
+      ? VerifiedDeviceList.enrolled(
+          version: 1,
+          listHash: 'H' * 44,
+          devices: [
+            for (final d in ownLive!)
+              DeviceListEntry(deviceId: d, platform: 'test', addedAtMs: 0),
+          ],
+        )
+      : super.cachedDeviceList(userId);
 }
 
 class _MemKv implements ContentKv {
@@ -234,8 +274,9 @@ class _Side {
   }
 
   /// `ConnectionProvider`'s `onRemoveConversationsForUser` for [peer].
-  void removeChatWith(int peer) =>
-      reader.onConversationsRemovedForUser(chats.removeConversationsForUser(peer));
+  void removeChatWith(int peer) => reader.onConversationsRemovedForUser(
+    chats.removeConversationsForUser(peer),
+  );
 
   /// `FriendsProvider.unfriend` / `blockUser` for a friend made over the box.
   Future<void> endWith(int peer, {required bool block}) async {
@@ -595,4 +636,167 @@ void main() {
       expect(bob.namedToServer(1), isEmpty);
     },
   );
+
+  test('an accept whose lookup names another account drops the request '
+      'undecrypted', () async {
+    await alice.reader.sendBoxFriendRequest(bob.searchEntry);
+    await settle();
+    bob.answer = (_) => [
+      {...alice.searchEntry, 'id': 9},
+    ];
+    expect(
+      await bob.reader.acceptBoxFriendRequest(1),
+      FirstContactAccept.unverified,
+    );
+    expect(bob.recordOf(1), isNull);
+    expect(await bob.enc.hasSessionWith(1), isFalse);
+  });
+
+  test('an accept whose lookup serves a key other than the one already pinned '
+      'for that account drops the request', () async {
+    final real = alice.searchEntry;
+    final key =
+        (((real['devices'] as List).first as Map)['bundle']
+                as Map)['identityPublicKey']
+            as String;
+    await bob.enc.adoptServedAccount(1, identityKey: key, authorization: null);
+    await alice.reader.sendBoxFriendRequest(bob.searchEntry);
+    await settle();
+    final mallory = _Side(9, 'alice', _RoutingBox());
+    await mallory.start();
+    bob.answer = (_) => [
+      {...mallory.searchEntry, 'id': 1, 'tag': alice.tag},
+    ];
+    expect(
+      await bob.reader.acceptBoxFriendRequest(1),
+      FirstContactAccept.unverified,
+    );
+    expect(bob.recordOf(1), isNull);
+  });
+
+  test('a request to an account one of whose devices publishes no request '
+      'address takes the old path (E15a)', () async {
+    final entry = bob.searchEntry;
+    final d1 = (entry['devices'] as List).first as Map<String, dynamic>;
+    final partial = {
+      ...entry,
+      'devices': [
+        d1,
+        {'deviceId': 2, 'bundle': d1['bundle']},
+      ],
+    };
+    expect(
+      await alice.reader.sendBoxFriendRequest(partial),
+      FirstContactSend.oldPath,
+    );
+    await settle();
+    expect(alice.recordOf(5), isNull);
+    expect(bob.recordOf(1), isNull);
+  });
+
+  test('a request from an account with a live sibling this device holds no '
+      'self-queue address for takes the old path (E15a)', () async {
+    alice.enc
+      ..ownId = 1
+      ..ownLive = [1, 2];
+    expect(
+      await alice.reader.sendBoxFriendRequest(bob.searchEntry),
+      FirstContactSend.oldPath,
+    );
+    await settle();
+    expect(alice.recordOf(5), isNull);
+    expect(bob.recordOf(1), isNull);
+  });
+
+  test('a first contact whose queue the box would not delete keeps its '
+      'record until a later retire deletes it', () async {
+    await alice.reader.sendBoxFriendRequest(bob.searchEntry);
+    await settle();
+    final queue = alice.recordOf(5)!.queues.single;
+    final inner = box.sockets.respond!;
+    box.sockets.respond = (s, f) => f.event == 'deleteQueue'
+        ? {'ok': false, 'code': 'internal'}
+        : inner(s, f);
+    await alice.session.retireFirstContact(5);
+    expect(alice.recordOf(5)?.queues.map((q) => q.rid), [queue.rid]);
+    box.sockets.respond = inner;
+    await alice.session.retireFirstContact(5);
+    expect(alice.recordOf(5), isNull);
+  });
+
+  test('one undeleted queue among several keeps the record', () async {
+    await alice.reader.sendBoxFriendRequest(bob.searchEntry);
+    await settle();
+    final real = alice.recordOf(5)!.queues.single;
+    final other = ContactQueue.fromJson({
+      ...real.toJson(),
+      'rid': boxB64(List.filled(32, 7)),
+    });
+    await alice.store.update(5, (r) => r!.copyWith(queues: [real, other]));
+    final inner = box.sockets.respond!;
+    box.sockets.respond = (s, f) =>
+        f.event == 'deleteQueue' && f.frame['rid'] == real.rid
+        ? {'ok': false, 'code': 'internal'}
+        : inner(s, f);
+    await alice.session.retireFirstContact(5);
+    expect(alice.recordOf(5), isNotNull);
+  });
+
+  test("a box friend's list refresh is one handle lookup, never "
+      'getDeviceList (E15h)', () async {
+    await befriend();
+    alice.answer = (_) => [bob.searchEntry];
+    try {
+      await alice.enc.getVerifiedDeviceList(
+        5,
+        forceRefresh: true,
+        timeout: const Duration(seconds: 1),
+      );
+    } on Object catch (_) {}
+    expect(alice.lookups, ['bob#0005']);
+    expect(alice.namedToServer(5), isEmpty);
+  });
+
+  test(
+    "a box friend's identity dialog never fetches a pre-key bundle",
+    () async {
+      await befriend();
+      alice.answer = (_) => [bob.searchEntry];
+      alice.enc.extraChanged.add(5);
+      await alice.enc.loadPeerIdentityVerification(
+        5,
+        timeout: const Duration(seconds: 1),
+      );
+      expect(alice.namedToServer(5), isEmpty);
+    },
+  );
+
+  test('a lost session with a box friend is rebuilt from the served bundle, '
+      'never fetchPreKeyBundle', () async {
+    await befriend();
+    await alice.enc.encryptionService.deleteSession(5);
+    expect(await alice.enc.hasSessionWith(5), isFalse);
+    await alice.enc.ensureSession(5);
+    expect(await alice.enc.hasSessionWith(5), isTrue);
+    expect(alice.namedToServer(5), isEmpty);
+  });
+
+  test('a request whose verified list names a live device the answer did not '
+      'serve takes the old path (E15a)', () async {
+    alice.enc.servedList = VerifiedDeviceList.enrolled(
+      version: 1,
+      listHash: 'H' * 44,
+      devices: const [
+        DeviceListEntry(deviceId: 1, platform: 'test', addedAtMs: 0),
+        DeviceListEntry(deviceId: 2, platform: 'test', addedAtMs: 0),
+      ],
+    );
+    expect(
+      await alice.reader.sendBoxFriendRequest(bob.searchEntry),
+      FirstContactSend.oldPath,
+    );
+    await settle();
+    expect(alice.recordOf(5), isNull);
+    expect(bob.recordOf(1), isNull);
+  });
 }

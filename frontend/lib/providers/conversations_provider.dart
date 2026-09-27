@@ -231,6 +231,10 @@ class ConversationsProvider extends ChangeNotifier {
     UserModel? self;
     for (final c in convs) {
       self ??= c.userOne.id == _currentUserId ? c.userOne : c.userTwo;
+      // A local chat (decision 52) is no server row: its settings live on
+      // the record as the devices set them (E15k's `timerAt` included), and
+      // a rewrite of the RAM list must not replace them (review).
+      if (isLocalConversationId(c.id)) continue;
       byPeer[getOtherUserId(c)] = c;
     }
     if (self != null) unawaited(store.setSelf(self));
