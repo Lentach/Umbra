@@ -30,6 +30,7 @@ class ContactQueue {
     required this.sealPub,
     this.ackedBy = const [],
     this.handedAt = const {},
+    this.retiredAt,
   });
 
   factory ContactQueue.fromJson(Map<String, dynamic> j) => ContactQueue(
@@ -49,6 +50,9 @@ class ContactQueue {
         if (int.tryParse(key) case final int device when value is int)
           device: DateTime.fromMillisecondsSinceEpoch(value, isUtc: true),
     },
+    retiredAt: j['retiredAt'] is int
+        ? DateTime.fromMillisecondsSinceEpoch(j['retiredAt'] as int, isUtc: true)
+        : null,
   );
 
   final String rid;
@@ -70,6 +74,26 @@ class ContactQueue {
   /// answers is sent again only after `kFriendHandoffResend`, since every
   /// one is a blob left in that device's queue. Additive, like [ackedBy].
   final Map<int, DateTime> handedAt;
+
+  /// When this queue stopped being the one handed out, because the peer
+  /// revoked a device that held it (slice (e), E50e): a newer queue leads
+  /// [ContactRecord.queues], and this one stays subscribed and read until
+  /// the box TTL has passed, then is deleted. Null for the current queue.
+  /// Additive, like [ackedBy].
+  final DateTime? retiredAt;
+
+  /// This queue, retired at [at] (E50e).
+  ContactQueue retired(DateTime at) => ContactQueue(
+    rid: rid,
+    sid: sid,
+    nid: nid,
+    authPriv: authPriv,
+    sealPriv: sealPriv,
+    sealPub: sealPub,
+    ackedBy: ackedBy,
+    handedAt: handedAt,
+    retiredAt: at,
+  );
 
   /// This queue, acknowledged by the peer's [deviceId] as well.
   ContactQueue withAck(int deviceId) => ackedBy.contains(deviceId)
@@ -96,6 +120,7 @@ class ContactQueue {
         sealPub: sealPub,
         ackedBy: ackedBy ?? this.ackedBy,
         handedAt: handedAt ?? this.handedAt,
+        retiredAt: retiredAt,
       );
 
   Map<String, dynamic> toJson() => {
@@ -111,6 +136,7 @@ class ContactQueue {
         for (final MapEntry(:key, :value) in handedAt.entries)
           '$key': value.millisecondsSinceEpoch,
       },
+    if (retiredAt != null) 'retiredAt': retiredAt!.millisecondsSinceEpoch,
   };
 }
 

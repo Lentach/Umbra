@@ -102,6 +102,17 @@ class E2eEnvelope {
   static const String _keySid = 'sid';
   static const String _keySealPub = 'sealPub';
 
+  /// A device's account device list, carried to a friend's LIVE device
+  /// inside E2E over a normal queue (metadata-privacy slice (e), E50b):
+  /// `{t, auth}`, where `auth` is the authorization record exactly as
+  /// `getDeviceList` serves it. Sent by every surviving device after a
+  /// revoke (E50d) and in answer to a frame that shows a stale view of our
+  /// list (E50f). A newly linked device's list rides OUTSIDE Signal, in its
+  /// handoff's list-bearing request-queue frame (`BoxFrame.carriedList`,
+  /// decision 50): it must be judged before Signal sees the frame.
+  static const String typeListUpdate = 'list_update';
+  static const String _keyAuth = 'auth';
+
   /// The box's one spelling of a 32-byte id or key: unpadded base64url whose
   /// last char carries no spare bits (wire.md "First contact").
   static final RegExp _boxId32 = RegExp(r'^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$');
@@ -330,12 +341,18 @@ class E2eEnvelope {
     return text;
   }
 
-  /// A [typeQueueHandoff] envelope handing over the self-queue [sid] and the
-  /// key its seal layer expects.
+  /// A [typeQueueHandoff] envelope handing over the queue [sid] and the key
+  /// its seal layer expects.
   static Map<String, dynamic> buildQueueHandoff({
     required String sid,
     required String sealPub,
   }) => {_keyType: typeQueueHandoff, _keySid: sid, _keySealPub: sealPub};
+
+  /// A [typeListUpdate] envelope carrying this account's device list [auth].
+  static Map<String, dynamic> buildListUpdate(Map<String, dynamic> auth) => {
+    _keyType: typeListUpdate,
+    _keyAuth: auth,
+  };
 
   /// A [typeQueueHandoffAck] envelope acknowledging the handed-over [sid].
   static Map<String, dynamic> buildQueueHandoffAck({required String sid}) => {
@@ -423,6 +440,16 @@ class E2eEnvelope {
     }
     final sid = envelope[_keySid];
     return sid is String && _boxId32.hasMatch(sid) ? sid : null;
+  }
+
+  /// The device list a [typeListUpdate] envelope carries (E50b); null for
+  /// any other type, or one not carried as an object. What it holds is
+  /// checked by the adoption, never here.
+  static Map<String, dynamic>? carriedDeviceList(String jsonStr) {
+    final envelope = _object(jsonStr);
+    if (envelope == null || envelope[_keyType] != typeListUpdate) return null;
+    final auth = envelope[_keyAuth];
+    return auth is Map<String, dynamic> ? auth : null;
   }
 
   static Map<String, dynamic>? _object(String jsonStr) {

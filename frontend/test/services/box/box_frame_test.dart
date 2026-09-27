@@ -368,6 +368,85 @@ void main() {
         reason: 'device 0',
       );
     });
+
+    test('a LIST-BEARING frame (slice (e), E50b) is v ‖ kind|0x30 ‖ u16be '
+        'device ‖ u32be account ‖ u16be len ‖ the list JSON ‖ Signal', () {
+      const list = '{"listVersion":2}';
+      final signal = _bytes(3);
+      final body = BoxFrame(
+        kind: BoxFrameKind.preKey,
+        senderDeviceId: 3,
+        senderUserId: 9,
+        signal: signal,
+        carriedList: list,
+      ).encode();
+      expect(body, [
+        0x01,
+        0x33,
+        0x00,
+        0x03,
+        0,
+        0,
+        0,
+        9,
+        0x00,
+        list.length,
+        ...utf8.encode(list),
+        ...signal,
+      ]);
+      final back = BoxFrame.decode(body)!;
+      expect(back.kind, BoxFrameKind.preKey);
+      expect(back.senderUserId, 9);
+      expect(back.carriedList, list);
+      expect(back.signal, signal);
+    });
+
+    test('a list rides only on an account-bearing frame, and every other '
+        'frame carries none', () {
+      expect(
+        () => BoxFrame(
+          kind: BoxFrameKind.whisper,
+          senderDeviceId: 1,
+          signal: _bytes(4),
+          carriedList: '{}',
+        ).encode(),
+        throwsArgumentError,
+      );
+      final plain = BoxFrame.decode(
+        BoxFrame(
+          kind: BoxFrameKind.whisper,
+          senderDeviceId: 1,
+          senderUserId: 5,
+          signal: _bytes(4),
+        ).encode(),
+      )!;
+      expect(plain.carriedList, isNull);
+    });
+
+    test('decode refuses a list-bearing frame whose list is empty, runs past '
+        'the body or leaves no Signal byte', () {
+      List<int> head(int kind) => [0x01, kind, 0x00, 0x01, 0, 0, 0, 1];
+      expect(
+        BoxFrame.decode(Uint8List.fromList([...head(0x32), 0, 0, ..._bytes(8)])),
+        isNull,
+        reason: 'an empty list',
+      );
+      expect(
+        BoxFrame.decode(Uint8List.fromList([...head(0x32), 0, 9, ..._bytes(8)])),
+        isNull,
+        reason: 'the list takes every byte left: no Signal',
+      );
+      expect(
+        BoxFrame.decode(Uint8List.fromList([...head(0x33), 0, 50, ..._bytes(8)])),
+        isNull,
+        reason: 'past the body',
+      );
+      expect(
+        BoxFrame.decode(Uint8List.fromList([...head(0x33), 0])),
+        isNull,
+        reason: 'no length',
+      );
+    });
   });
 
   group('decode answers null for anything else', () {
@@ -381,7 +460,21 @@ void main() {
 
     test('a kind that is not a Signal message — the reserved range beside '
         'the account-bearing kinds included', () {
-      for (final kind in [0x00, 0x01, 0x04, 0x10, 0x11, 0x14, 0x22, 0xff]) {
+      for (final kind in [
+        0x00,
+        0x01,
+        0x04,
+        0x10,
+        0x11,
+        0x14,
+        0x22,
+        0x23,
+        0x30,
+        0x31,
+        0x34,
+        0x42,
+        0xff,
+      ]) {
         expect(BoxFrame.decode(body([0x01, kind, 0x00, 0x01])), isNull);
       }
     });

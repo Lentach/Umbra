@@ -247,6 +247,20 @@ class _Link implements BoxFriendLink {
     _handed = false;
     unawaited(_pass());
   }
+
+  // Slice (e): the crossing never moves a device list.
+  @override
+  void friendDevicesChanged(int userId) {}
+
+  @override
+  Future<bool> sendListUpdate(
+    int userId,
+    int deviceId,
+    Map<String, dynamic> auth,
+  ) async => false;
+
+  @override
+  Future<bool> announceOwnList(Map<String, dynamic> auth) async => false;
 }
 
 void main() {

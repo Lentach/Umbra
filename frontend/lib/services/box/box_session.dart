@@ -238,6 +238,24 @@ class BoxSession implements BoxOutbox, BoxSiblingLink, BoxFriendLink {
       ..run();
   }
 
+  /// This account's device list, carried on request-queue frames to
+  /// friends (slice (e), decision 50; `MessagingProvider`).
+  Future<Map<String, dynamic>?> Function()? get ownDeviceList =>
+      _friends.ownDeviceList;
+
+  set ownDeviceList(Future<Map<String, dynamic>?> Function()? lookup) {
+    _friends.ownDeviceList = lookup;
+  }
+
+  /// The devices friends' verified lists name revoked, for the rotation
+  /// (slice (e), E50e; `MessagingProvider`).
+  Future<Set<int>?> Function(int userId)? get friendRevokedDevices =>
+      _friends.revokedDevices;
+
+  set friendRevokedDevices(Future<Set<int>?> Function(int userId)? lookup) {
+    _friends.revokedDevices = lookup;
+  }
+
   /// E2E is ready on this connect: the request queue may be published, a
   /// handoff encrypted and the own list read now.
   void e2eReady() {
@@ -281,11 +299,36 @@ class BoxSession implements BoxOutbox, BoxSiblingLink, BoxFriendLink {
     );
   }
 
-  /// Friend [userId]'s verified device list was dropped (a device linked or
-  /// revoked): its devices may have changed, so the handoff runs again.
+  /// Friend [userId]'s verified device list was dropped or moved (a device
+  /// linked or revoked): its devices may have changed, so the handoff runs
+  /// again — and rotates our queue away from a revoked one (E50e).
+  @override
   void friendDevicesChanged(int userId) {
     if (!_disposed) _friends.friendChanged(userId);
   }
+
+  @override
+  Future<bool> sendListUpdate(
+    int userId,
+    int deviceId,
+    Map<String, dynamic> auth,
+  ) async {
+    final target = _friends.targetOf(userId, deviceId);
+    final encrypt = _friends.encrypt;
+    if (_disposed || encrypt == null || target == null || target.viaRequest) {
+      return false;
+    }
+    final frame = await encrypt(
+      userId,
+      deviceId,
+      jsonEncode(E2eEnvelope.buildListUpdate(auth)),
+    );
+    return frame != null && await _friends.send(target, frame) is BoxOk;
+  }
+
+  @override
+  Future<bool> announceOwnList(Map<String, dynamic> auth) =>
+      _disposed ? Future.value(false) : _friends.announceOwnList(auth);
 
   /// Connects the box and starts following it.
   void start() {

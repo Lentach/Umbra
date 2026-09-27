@@ -495,6 +495,13 @@ class ConnectionProvider extends ChangeNotifier {
     final boxClient = _boxClient;
     final contacts = _contactStore;
     if (boxClient != null && contacts != null) {
+      // Decision 51: a box peer's verified list is kept across restarts —
+      // one this device holds a queue for, or an address of.
+      _encryptionProvider?.keepsDeviceListFor = (peer) {
+        final record = contacts.byUserId(peer);
+        return record != null &&
+            (record.queues.isNotEmpty || record.outbound.isNotEmpty);
+      };
       if (_box == null || _boxUserId != userId) {
         _box?.dispose();
         _boxMedia?.dispose();
@@ -528,6 +535,9 @@ class ConnectionProvider extends ChangeNotifier {
             // Item 5: existing friendships move onto the box.
             ..encryptForFriend = messaging.encryptForFriend
             ..friendLiveDevices = messaging.friendLiveDevices
+            // Slice (e): a new device's handoff carries its account's list.
+            ..ownDeviceList = messaging.ownDeviceList
+            ..friendRevokedDevices = messaging.friendRevokedDevices
             ..onBoxReady = messaging.onBoxReady;
           messaging
             ..boxOutbox = _box

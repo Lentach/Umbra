@@ -157,6 +157,32 @@ extension MessagingBox on MessagingProvider {
       refused('not_friend');
       return true;
     }
+    // A newly linked device of the friend announces itself (decision 50):
+    // its frame carries the account's DAK-signed list OUTSIDE Signal,
+    // judged here before anything below — the liveness check then reads
+    // the adopted list. Under a DAK the server never served, the one
+    // lookup of E50a decides instead.
+    final revokedSome = await _adoptCarriedList(user, entry.carriedList);
+    try {
+      return await _readFriendHandoff(link, enc, entry, signal, refused);
+    } finally {
+      // After the read, whatever became of it: a revoke the frame carried
+      // stands even when the handoff itself is refused (E50e), and a pass
+      // started earlier could hand this very device our queue beside the
+      // hand-back.
+      if (revokedSome) link.friendDevicesChanged(user);
+    }
+  }
+
+  Future<bool> _readFriendHandoff(
+    BoxFriendLink link,
+    EncryptionProvider enc,
+    BoxInboxEntry entry,
+    String signal,
+    void Function(String why) refused,
+  ) async {
+    final user = entry.peerUserId;
+    final device = entry.senderDeviceId;
     // A request queue is public: anyone can seal a frame naming a friend's
     // account. A PreKey message must carry that friend's pinned identity,
     // checked BEFORE Signal sees it — decrypting a stranger's would replace
@@ -221,6 +247,137 @@ extension MessagingBox on MessagingProvider {
     } on Object {
       return false;
     }
+  }
+
+  /// Adopts the device list friend [userId]'s device carried ([json]: the
+  /// authorization record) — outside Signal on a request-queue handoff, or
+  /// a `list_update` inside it (slice (e), E50a/E50b). A list that moved
+  /// re-reads what the box derives from it: this connect's entry for the
+  /// user and the session pre-build ([refreshBoxDeviceLists]). Never a
+  /// server lookup unless the DAK is not the one the server served. True
+  /// when a device the held list named live no longer is (a revoke: the
+  /// caller runs the handoff pass, which rotates our queue, E50e).
+  Future<bool> _adoptCarriedList(int userId, Object? json) async {
+    final enc = _encryptionProvider;
+    if (enc == null || json == null) return false;
+    Object? auth = json;
+    if (json is String) {
+      try {
+        auth = jsonDecode(json);
+      } on FormatException {
+        auth = null;
+      }
+    }
+    final before = enc.cachedDeviceList(userId)?.liveDeviceIds ?? const [];
+    final outcome = await enc.adoptCarriedDeviceList(userId, auth);
+    _e2eFlowLog('BOX_LIST_CARRIED', {'peer': userId, 'outcome': outcome.name});
+    if (outcome != CarriedListOutcome.adopted &&
+        outcome != CarriedListOutcome.refetched) {
+      return false;
+    }
+    _boxLists.invalidate(userId);
+    refreshBoxDeviceLists();
+    final after = enc.cachedDeviceList(userId)?.liveDeviceIds ?? const [];
+    return before.any((d) => !after.contains(d));
+  }
+
+  /// The device ids friend [userId]'s HELD verified list names revoked —
+  /// what the box's handoff pass rotates our queue away from (slice (e),
+  /// E50e). Never a lookup: a list not held names nothing.
+  Future<Set<int>?> friendRevokedDevices(int userId) async {
+    final list = _encryptionProvider?.cachedDeviceList(userId);
+    if (list == null) return null;
+    return {
+      for (final d in list.devices)
+        if (d.revokedAtMs != null) d.deviceId,
+    };
+  }
+
+  /// This account's device list as its authorization record — what a
+  /// request-queue handoff carries (decision 50). Null when not enrolled or
+  /// not verifiable now. The own list names only the caller.
+  Future<Map<String, dynamic>?> ownDeviceList() async {
+    final enc = _encryptionProvider;
+    final own = _currentUserId;
+    if (enc == null || own == null || !enc.isE2EReady) return null;
+    try {
+      final list =
+          enc.cachedDeviceList(own) ?? await enc.getVerifiedDeviceList(own);
+      return list.authorization;
+    } on Object {
+      return null;
+    }
+  }
+
+  /// E50d: the own list was just verified; when it no longer names live a
+  /// device the last fully announced own list did (a revoke), this
+  /// surviving device sends it to every live device of every friend it
+  /// holds an address for, and records it once the box took every frame
+  /// (else the next connect's own lookup tries again). A list that only
+  /// ADDED devices is recorded unsent: the new device's own handoff carries
+  /// it (decision 50). The first list this device ever sees is recorded as
+  /// the baseline.
+  Future<void> _announceOwnListIfRevoked() async {
+    final enc = _encryptionProvider;
+    final own = _currentUserId;
+    final link = boxFriends;
+    if (enc == null || own == null || link == null || _announcingOwnList) {
+      return;
+    }
+    final list = enc.cachedDeviceList(own);
+    final version = list?.version;
+    final auth = list?.authorization;
+    if (list == null || version == null || auth == null) return;
+    // A device the list no longer names live is not a survivor.
+    if (!enc.ownDeviceIdConfirmed || !list.isLiveDevice(enc.ownDeviceId)) {
+      return;
+    }
+    final live = list.liveDeviceIds;
+    final last = enc.announcedOwnList;
+    if (last != null && last.version >= version) return;
+    final revoked = last != null && last.live.any((d) => !live.contains(d));
+    if (!revoked) {
+      await enc.recordAnnouncedOwnList(version, live);
+      return;
+    }
+    _announcingOwnList = true;
+    try {
+      if (await link.announceOwnList(auth)) {
+        await enc.recordAnnouncedOwnList(version, live);
+      }
+    } finally {
+      _announcingOwnList = false;
+    }
+  }
+
+  /// E50f: friend [peer]'s box frame from [device] shows its view of OUR
+  /// list, [claimedVersion], older than ours: answered with our list into
+  /// that device's queue — once per device and own version this session —
+  /// so it stops addressing a device we revoked, or learns one we linked,
+  /// without asking the server.
+  void _answerStaleView(int peer, int device, int? claimedVersion) {
+    final enc = _encryptionProvider;
+    final own = _currentUserId;
+    final link = boxFriends;
+    if (enc == null || own == null || link == null || claimedVersion == null) {
+      return;
+    }
+    final ours = enc.cachedDeviceList(own);
+    final version = ours?.version;
+    final auth = ours?.authorization;
+    if (version == null || auth == null || claimedVersion >= version) return;
+    if (!_staleViewsAnswered.add('$peer:$device:$version')) return;
+    unawaited(
+      link.sendListUpdate(peer, device, auth).then((sent) {
+        _e2eFlowLog('BOX_LIST_UPDATE_ANSWERED', {
+          'peer': peer,
+          'device': device,
+          'sent': sent,
+        });
+        // Not taken: the next frame from that device may ask again.
+        if (!sent) _staleViewsAnswered.remove('$peer:$device:$version');
+      }),
+    );
   }
 
   /// Stores friend [userId]'s [device] address from its handoff
@@ -734,8 +891,11 @@ extension MessagingBox on MessagingProvider {
     // Not ready: hand it back at once. The E2E-ready drain offers it again,
     // and waiting here would hold every read queued behind it.
     if (!enc.isE2EReady) return false;
-    // Accept-side revocation (spec §12 (e)/(xxvii)), as for a server row.
-    if (!await _originDeviceIsLive(msg)) return false;
+    // Accept-side revocation (spec §12 (e)/(xxvii)), as for a server row —
+    // against the list HELD: a lookup timed by a box frame would name the
+    // pair at that moment (E50f). A device the list does not name yet is
+    // announced by its own handoff (decision 50) before it can write here.
+    if (!await _originDeviceIsLive(msg, refetch: false)) return false;
 
     final String plaintext;
     try {
@@ -795,6 +955,20 @@ extension MessagingBox on MessagingProvider {
           FriendWrite.retryLater => false,
           FriendWrite.stored || FriendWrite.refused => true,
         };
+      // The friend's device list, from one of its live devices (slice (e):
+      // a revoke announced by a survivor, E50d, or its answer to our stale
+      // view, E50f). Adopted only under the DAK the server served (E50a);
+      // a revoke rotates our queue away from that device (E50e).
+      case E2eEnvelope.typeListUpdate:
+        final auth = E2eEnvelope.carriedDeviceList(plaintext);
+        if (auth == null) {
+          _e2eFlowLog('BOX_ENVELOPE_UNREADABLE', {'msgId': msg.id});
+          return true;
+        }
+        if (await _adoptCarriedList(msg.senderId, auth)) {
+          link?.friendDevicesChanged(msg.senderId);
+        }
+        return true;
       case _ when controlOnly:
         // No conversation to show it in yet (release N's chat list hangs off
         // server conversation ids). A friend always has one on the server,

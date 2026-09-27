@@ -11,7 +11,7 @@
 | 3 | **Decision-22 slice**: disappearing timers, replies and media over the box | 1, 2 | decision 22: "their own slice right after sibling queues + push" |
 | 4 | **Message actions over E2E**: reactions (plain emoji), pin, edit, delete-for-everyone | 3 | DONE 09-26 (`81b795e8`, decisions 45–46, E19a–E19j; web drive a–f passed; CI 7/7 on `c7f4abd0`) |
 | 5 | **Slice (d)**: migration handoff over the old path | (c) | moves existing friendships onto the box |
-| 6 | **Slice (e)**: `device_added` / `device_removed` / `list_update` over the box | (b), (c) | replaces the server's `staleLists` bounce |
+| 6 | **Slice (e)**: `device_added` / `device_removed` / `list_update` over the box | (b), (c) | DONE 09-27 (decisions 50–51, E50a–E50f; web drive of a link and a revoke with no friend-list lookup) |
 | 7 | **Slice (f)**: first contact over request queues | (a), part A frames | friend requests over the box |
 | 8 | **Slice (g)**: receipts and typing (D5, 33) | 3 | |
 | 9 | **Prod prerequisites** for `BOX_ENABLED`: global ceiling (30), per-socket rid cap, media refusals counted | — | DONE 09-26 (`box_totals` migration 0024, E10–E12; client reads `limit` as not gone); prod still `BOX_ENABLED: 'false'` until G5 |
@@ -156,6 +156,16 @@ What a handoff over the old `sendMessage` costs, read from the code:
 - **E20g. Not in (d).** No queue rotation (slice (e), `device_removed`). A friend's newly linked device is covered by the next connect's retry (decision 24's residual, until slice (e)).
 
 Proof beyond the ladder: `test_e2e/box_roundtrip_test.dart` case 3 (the task_plan's `box_migration_test`, folded into the file that already holds the box probe's two accounts, so the register bucket is not spent twice). A and B become friends on the old path; A's box session starts while B "predates the box" and A hands nothing; B starts, hands off into A's request queue, A hands back with no reconnect; a box message round-trips; no `messages` row appears and neither queue row names an account.
+
+## Item 6 (slice (e), device announcements): OWNER questions O18–O19 — ANSWERED 2026-09-27 in one pass (decisions 50–51)
+
+O18 → (a) the new device's own handoff carries the signed list (50; changes design §4.2) · O19 → (a) the per-connect lookup of box friends' lists stops (51).
+
+What exists today. A box device learns a friend's list change only at its next connect (decision 21's lookup) or through a server lookup timed by a received box frame: a newer `senderListInfo` claim (`refreshPeerList`) or the accept gate's absent-origin re-fetch. A friend's newly linked device's handoff is refused `not_live` against the stale cached list (decision 24's residual). Nothing rotates our queue when a friend revokes a device.
+
+Engineering calls: E50a–E50f in the decision log. E50a (the DAK pin) was added after the answers: every linked device holds the account `ikPriv`, so without it a revoked device could sign a list of its own and have it adopted over the box.
+
+Proof beyond the ladder: falsification tests for E50a (a list under a forged DAK' on `list_update` and on the handoff is refused, red first); a live drive of a link and a revoke with no `getDeviceList` from the friend's device between connects.
 
 ## Proof per item (unchanged ladder)
 

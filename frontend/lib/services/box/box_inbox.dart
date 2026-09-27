@@ -227,6 +227,9 @@ class BoxInbox {
       receivedAt: _now().toUtc(),
       viaSelfQueue: viaSelf,
       viaRequestQueue: viaRequest,
+      // Only a friend's request-queue frame may carry its account's list
+      // (decision 50); an own sibling's list comes from identity.
+      carriedList: viaRequest ? frame.carriedList : null,
     );
     if (entry == null) {
       _held[slot] = delivery;

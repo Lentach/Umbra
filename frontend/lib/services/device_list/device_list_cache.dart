@@ -26,6 +26,7 @@ class VerifiedDeviceList {
     required this.version,
     required this.devices,
     this.listHash,
+    this.authorization,
   });
 
   /// The verified view of an enrolled account.
@@ -33,11 +34,13 @@ class VerifiedDeviceList {
     required int version,
     required List<DeviceListEntry> devices,
     String? listHash,
+    Map<String, dynamic>? authorization,
   }) : this._(
          enrolled: true,
          version: version,
          devices: devices,
          listHash: listHash,
+         authorization: authorization,
        );
 
   /// The server explicitly answered `authorization: null`: no enrollment row
@@ -65,6 +68,13 @@ class VerifiedDeviceList {
   /// signed list to hash. Never recomputed from [devices]: a re-serialization
   /// would drift and produce phantom mismatches.
   final String? listHash;
+
+  /// The authorization record this list verified from, exactly as it was
+  /// transported (`dakPub`, `enrollmentSig`, `enrollmentCreatedAt`,
+  /// `listVersion`, `listSignature`, `listCanonical`) — what a device
+  /// carries inside E2E to a friend (slice (e), E50b) and what is kept
+  /// across restarts (E50c). Null for a non-enrolled account.
+  final Map<String, dynamic>? authorization;
 
   /// Devices a send must address: every entry not revoked.
   List<int> get liveDeviceIds => [
@@ -100,10 +110,38 @@ class DeviceListVerificationException implements Exception {
       'DeviceListVerificationException(userId=$userId, reason=$reason)';
 }
 
+/// What [DeviceListCache.adoptCarried] did with a list a peer carried inside
+/// E2E (metadata-privacy slice (e), E50a/E50b).
+enum CarriedAdoption {
+  /// Verified under the pinned DAK and cached.
+  adopted,
+
+  /// At or below the version already held: nothing checked, nothing done.
+  stale,
+
+  /// Not signed under the DAK the SERVER last served for this account (or
+  /// none was ever served): only the server can say whether it is real.
+  unpinned,
+
+  /// Malformed, `not enrolled`, or its chain failed.
+  refused,
+}
+
 /// Per-account cache of verified lists. Pure state + verification — the
 /// fetch round trip (emit/completer/timeout) lives with the socket owner.
 class DeviceListCache {
   final Map<int, VerifiedDeviceList> _byUser = {};
+
+  /// The `dakPub` and `enrollmentSig` of the last list the SERVER served per
+  /// userId (E50a) — the only DAK a list carried inside E2E may be signed
+  /// by. Every linked device, a revoked one too, holds the account identity
+  /// key (link blob), and the I7 chain accepts ANY DAK that identity
+  /// endorsed: without this pin a revoked device could mint its own DAK and
+  /// sign a newer list naming itself live. The server only serves the
+  /// enrolled record, behind an authenticated upload. Like
+  /// [_pinnedVersion], kept across [invalidate]; restored at start from the
+  /// kept lists ([adopt] of each).
+  final Map<int, ({String dakPub, String enrollmentSig})> _serverDak = {};
 
   /// Highest verified version ever seen per userId. Deliberately NOT dropped
   /// by [invalidate]: rollback detection must survive cache invalidation, or
@@ -150,6 +188,78 @@ class DeviceListCache {
   void clear() {
     _byUser.clear();
     _pinnedVersion.clear();
+    _serverDak.clear();
+  }
+
+  /// Adopts a list [userId]'s own device carried inside E2E (slice (e):
+  /// a `list_update`, or a new device's handoff) — never the server's word,
+  /// so it is held to more than [adopt]:
+  ///  * at or below the version held it is [CarriedAdoption.stale] BEFORE
+  ///    any check, never a rollback: anyone who ever held an old signed
+  ///    list can replay it;
+  ///  * `not enrolled`, or anything unparseable, is refused: enrollment is
+  ///    durable, and only the server may say an account has none;
+  ///  * its `dakPub` and `enrollmentSig` must be the ones the server last
+  ///    served ([_serverDak]), else [CarriedAdoption.unpinned] (E50a);
+  ///  * then the full I7 chain, anchored on [tofuIdentityKeyBase64].
+  ({CarriedAdoption outcome, VerifiedDeviceList? list, String? reason})
+  adoptCarried({
+    required int userId,
+    required Object? authorization,
+    required String? tofuIdentityKeyBase64,
+  }) {
+    if (authorization is! Map<String, dynamic>) {
+      return (
+        outcome: CarriedAdoption.refused,
+        list: null,
+        reason: 'not_enrolled',
+      );
+    }
+    final version = authorization['listVersion'];
+    final dakPub = authorization['dakPub'];
+    final enrollmentSig = authorization['enrollmentSig'];
+    if (version is! int || dakPub is! String || enrollmentSig is! String) {
+      return (
+        outcome: CarriedAdoption.refused,
+        list: null,
+        reason: 'malformed_answer',
+      );
+    }
+    final pinned = _pinnedVersion[userId];
+    if (pinned != null && version <= pinned) {
+      return (outcome: CarriedAdoption.stale, list: null, reason: null);
+    }
+    final dak = _serverDak[userId];
+    if (dak == null ||
+        dak.dakPub != dakPub ||
+        dak.enrollmentSig != enrollmentSig) {
+      return (outcome: CarriedAdoption.unpinned, list: null, reason: null);
+    }
+    if (tofuIdentityKeyBase64 == null || tofuIdentityKeyBase64.isEmpty) {
+      return (
+        outcome: CarriedAdoption.refused,
+        list: null,
+        reason: 'no_tofu_identity',
+      );
+    }
+    final verification = DeviceAuthorityEngine.verifyPeerDeviceList(
+      authorization: authorization,
+      tofuIdentityKeyBase64: tofuIdentityKeyBase64,
+      expectedUserId: userId,
+      previousVersion: pinned,
+    );
+    if (!verification.ok) {
+      return (
+        outcome: CarriedAdoption.refused,
+        list: null,
+        reason: verification.reason ?? 'verification_failed',
+      );
+    }
+    return (
+      outcome: CarriedAdoption.adopted,
+      list: _keep(userId, authorization, verification.deviceList!, pinned),
+      reason: null,
+    );
   }
 
   /// Verifies a `getDeviceList`/`deviceListStale` answer along the I7 chain
@@ -207,7 +317,20 @@ class DeviceListCache {
         verification.reason ?? 'verification_failed',
       );
     }
-    final deviceList = verification.deviceList!;
+    final dakPub = authorization['dakPub'];
+    final enrollmentSig = authorization['enrollmentSig'];
+    if (dakPub is String && enrollmentSig is String) {
+      _serverDak[userId] = (dakPub: dakPub, enrollmentSig: enrollmentSig);
+    }
+    return _keep(userId, authorization, verification.deviceList!, pinned);
+  }
+
+  VerifiedDeviceList _keep(
+    int userId,
+    Map<String, dynamic> authorization,
+    DeviceList deviceList,
+    int? pinned,
+  ) {
     // Hash what was TRANSPORTED and verified, not a re-encoding of it.
     final canonical = authorization['listCanonical'];
     final verified = VerifiedDeviceList.enrolled(
@@ -216,6 +339,7 @@ class DeviceListCache {
       listHash: canonical is String && canonical.isNotEmpty
           ? SenderListInfo.hashListCanonical(canonical)
           : null,
+      authorization: Map.unmodifiable(authorization),
     );
     _byUser[userId] = verified;
     if (pinned == null || deviceList.version > pinned) {

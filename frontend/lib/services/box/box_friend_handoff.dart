@@ -73,6 +73,17 @@ class BoxFriendHandoff {
   FriendEncrypt? encrypt;
   FriendLiveDevices? liveDevices;
 
+  /// This account's device list as its authorization record, carried
+  /// outside Signal on every request-queue frame (slice (e), decision 50):
+  /// a newly linked device announces itself to a friend whose list predates
+  /// it. Null, or answering null (not enrolled, not verifiable now): the
+  /// frame carries none.
+  Future<Map<String, dynamic>?> Function()? ownDeviceList;
+
+  /// The device ids a friend's VERIFIED list names REVOKED (slice
+  /// (e), E50e); null or empty: none known.
+  Future<Set<int>?> Function(int userId)? revokedDevices;
+
   /// Each friend device's request queue as the last friends list named it,
   /// by friend and device. Replaced whole by every list.
   Map<int, Map<int, ContactOutbound>> _requestQueues = const {};
@@ -83,6 +94,9 @@ class BoxFriendHandoff {
   /// `user:device` handed our queue again because it was heard from, this
   /// session ([friendHeard]).
   final Set<String> _heard = {};
+
+  /// `user:device:listVersion` our own list was announced to (E50d).
+  final Set<String> _announced = {};
 
   /// `user:device:stage:code` already in the durable log this session.
   final Set<String> _failures = {};
@@ -240,12 +254,27 @@ class BoxFriendHandoff {
     final sid = boxB64Decode(target.to.sid, kBoxSidBytes);
     final sealPub = boxB64Decode(target.to.sealPub, 32);
     if (own == null || sid == null || sealPub == null) return null;
+    String? list;
+    if (target.viaRequest) {
+      final auth = await ownDeviceList?.call();
+      final json = auth == null ? null : jsonEncode(auth);
+      if (json != null && BoxFrame.carriedListFits(json, frame.signal.length)) {
+        list = json;
+      } else if (json != null) {
+        // A device history too long for the frame: the handoff goes out
+        // without it, and the friend learns this device from the answer our
+        // other devices give its next frame's stale view (E50f).
+        E2eDiagLog.add('BOX_OWN_LIST_TOO_LONG', {'chars': json.length});
+      }
+    }
+    if (_disposed) return null;
     final body = target.viaRequest
         ? BoxFrame(
             kind: frame.kind,
             senderDeviceId: frame.senderDeviceId,
             senderUserId: own,
             signal: frame.signal,
+            carriedList: list,
           ).encode()
         : frame.encode();
     final blob = await _seal.seal(sealPub, body);
@@ -308,6 +337,13 @@ class BoxFriendHandoff {
       final live = lists[i];
       if (live == null) continue;
       final userId = friends[i];
+      // Slice (e): a device the friend revoked loses its address here and,
+      // when it held our queue, our queue moves on without it (E50e).
+      final revoked = await revokedDevices?.call(userId);
+      if (revoked != null && revoked.isNotEmpty) {
+        await _rotateAwayFromRevoked(userId, revoked);
+      }
+      await _retireExpired(userId);
       final targets = {for (final d in live) d: ?targetOf(userId, d)};
       if (targets.isEmpty) continue;
       final hadQueue = _store.byUserId(userId)?.queues.isNotEmpty ?? false;
@@ -351,6 +387,116 @@ class BoxFriendHandoff {
       if (_unsubscribed.containsKey(plan.queue.rid)) continue;
       if (!await _handTo(plan.userId, plan.queue, plan.to)) return;
     }
+  }
+
+  /// Slice (e), E50e, for friend [userId] whose verified list names the
+  /// devices [revoked] REVOKED:
+  ///  * the address of a revoked device is dropped (E7's rule);
+  ///  * when our current queue was handed to (or acked by) one, it ROTATES:
+  ///    a new queue leads, subscribed with this pass's others and handed
+  ///    below to the live devices; the old one retires — still read, so what
+  ///    a live device sent before it learned the new one arrives — and is
+  ///    deleted once the box TTL has passed since
+  ///    ([QueueKeys.retireInbound]).
+  /// Only a device the list NAMES revoked counts, never one it merely does
+  /// not name: another tab of this device may have adopted a newer list
+  /// (a new device's handoff) that this tab's list predates.
+  Future<void> _rotateAwayFromRevoked(int userId, Set<int> revoked) async {
+    final record = _store.byUserId(userId);
+    if (record == null) return;
+    if (record.outbound.any((o) => revoked.contains(o.peerDeviceId))) {
+      await _store.update(userId, (current) {
+        if (current == null) return null;
+        final kept = [
+          for (final o in current.outbound)
+            if (!revoked.contains(o.peerDeviceId)) o,
+        ];
+        return kept.length == current.outbound.length
+            ? null
+            : current.copyWith(outbound: kept);
+      });
+    }
+    final lead = record.queues.firstOrNull;
+    if (lead != null &&
+        lead.retiredAt == null &&
+        {...lead.ackedBy, ...lead.handedAt.keys}.any(revoked.contains)) {
+      final next = await _keys.rotateInbound(userId, lead, now: _now());
+      if (next != null) {
+        if (QueueKeys.authOf(next) case final auth?) {
+          _unsubscribed[next.rid] = auth;
+        }
+        _queueCreated();
+        E2eDiagLog.add('BOX_FRIEND_QUEUE_ROTATED', {'peer': userId});
+      }
+    }
+  }
+
+  /// Deletes friend [userId]'s queues retired more than the box TTL ago
+  /// (E50e): nothing a live device sent there can still arrive.
+  Future<void> _retireExpired(int userId) async {
+    final queues = _store.byUserId(userId)?.queues ?? const <ContactQueue>[];
+    for (final queue in queues.skip(1)) {
+      final at = queue.retiredAt;
+      if (at != null && _now().difference(at) > kBoxRedeliveryWindow) {
+        await _keys.retireInbound(userId, queue);
+      }
+    }
+  }
+
+  /// Sends [auth] — this account's device list — as a `list_update` to
+  /// every live device of every friend this device holds an address for
+  /// (E50d: a revoke, sent by every surviving device). True only when the
+  /// box took every frame; a live device with no address is skipped (a
+  /// request queue reads only handoffs; its own next handoff to us, or
+  /// the stale-view answer of E50f, carries our list instead). A device
+  /// that took this version is not sent it again by a retry in this
+  /// process: one friend that cannot be reached must not cost every other
+  /// friend a blob per connect.
+  Future<bool> announceOwnList(Map<String, dynamic> auth) async {
+    final lookup = liveDevices;
+    final seal = encrypt;
+    if (_disposed ||
+        lookup == null ||
+        seal == null ||
+        _box.state != BoxState.ready ||
+        !_store.isOpen) {
+      return false;
+    }
+    final version = auth['listVersion'];
+    final json = jsonEncode(E2eEnvelope.buildListUpdate(auth));
+    var all = true;
+    for (final record in _store.all) {
+      if (record.state != ContactState.friend || record.outbound.isEmpty) {
+        continue;
+      }
+      final live = await lookup(record.userId);
+      if (live == null) {
+        all = false;
+        continue;
+      }
+      for (final to in record.outbound) {
+        if (!live.contains(to.peerDeviceId)) continue;
+        final key = '${record.userId}:${to.peerDeviceId}:$version';
+        if (_announced.contains(key)) continue;
+        final frame = await seal(record.userId, to.peerDeviceId, json);
+        final answer = frame == null
+            ? null
+            : await send((to: to, viaRequest: false), frame);
+        if (answer is BoxOk) {
+          _announced.add(key);
+        } else {
+          all = false;
+          _failed(
+            'announce',
+            _codeOf(answer),
+            userId: record.userId,
+            device: to.peerDeviceId,
+          );
+        }
+      }
+    }
+    E2eDiagLog.add('BOX_OWN_LIST_ANNOUNCED', {'all': all});
+    return all;
   }
 
   /// Hands [queue], our queue for [userId], to each device in [targets]

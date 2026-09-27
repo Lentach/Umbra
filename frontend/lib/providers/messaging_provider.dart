@@ -280,11 +280,25 @@ class MessagingProvider extends ChangeNotifier {
   /// them until the box has answered.
   final Set<String> _boxInFlight = {};
 
+  /// A revoke announcement is running (E50d): one at a time.
+  bool _announcingOwnList = false;
+
+  /// `peer:device:ownVersion` this session already answered with our list
+  /// because its frame showed a stale view of it (E50f).
+  final Set<String> _staleViewsAnswered = {};
+
   /// This connect's lookups of every device list a box send reads (decision
   /// 21): each box-covered peer's, plus the account's own once any peer is
   /// covered — each followed by the session pre-build for that user's
   /// box-covered devices (decision 38). Run by [refreshBoxDeviceLists], only
   /// awaited by a box send. Reset on every connect and on logout.
+  ///
+  /// Decision 51: a peer's list is asked of the server only when none is
+  /// held, or when this device was off the box longer than the box TTL (an
+  /// announcement may have expired unread, E50c); otherwise the held one —
+  /// kept across restarts, moved by E2E announcements — stands. The own
+  /// list is looked up every time (it names only the caller) and is what
+  /// a revoke announcement is decided on (E50d).
   late final BoxDeviceListRefresh _boxLists = BoxDeviceListRefresh(
     users: () {
       final covered = boxOutbox?.coveredPeers().toList() ?? const <int>[];
@@ -297,10 +311,32 @@ class MessagingProvider extends ChangeNotifier {
     fetch: (user) async {
       final enc = _encryptionProvider;
       if (enc == null) throw StateError('no encryption provider');
-      await enc.getVerifiedDeviceList(user, forceRefresh: true, batched: true);
+      if (user == _currentUserId) {
+        await enc.getVerifiedDeviceList(user, forceRefresh: true, batched: true);
+        _markBoxListsReady(enc);
+        unawaited(_announceOwnListIfRevoked());
+        return;
+      }
+      await enc.getVerifiedDeviceList(
+        user,
+        forceRefresh: enc.peerListOwedByServer(user),
+        batched: true,
+      );
+      // The last owed peer answering is what lets the stamp be written.
+      _markBoxListsReady(enc);
     },
     prebuild: _prebuildBoxSessions,
   );
+
+  /// E50c's "box-ready" stamp, written only while this device is on the box
+  /// (its request queue is published): an account socket that keeps
+  /// reconnecting while the box stays unreachable must not keep the stamp
+  /// fresh.
+  void _markBoxListsReady(EncryptionProvider enc) {
+    if (boxFriends?.onBox ?? false) {
+      enc.markBoxListsReady(boxOutbox?.coveredPeers() ?? const <int>[]);
+    }
+  }
 
   /// Looks up every device list a box send reads, unless this connect
   /// already verified it. Called when E2E or the account socket becomes
@@ -1251,6 +1287,7 @@ class MessagingProvider extends ChangeNotifier {
       _boxTempIds.clear();
       _boxMediaBodies.clear();
       _boxLists.reset();
+      _staleViewsAnswered.clear();
       _staleResendAttempts.clear();
       _staleResendTempIds.clear();
       _incomingMessageQueue.clear();
@@ -1367,6 +1404,7 @@ class MessagingProvider extends ChangeNotifier {
     _boxTempIds.clear();
     _boxMediaBodies.clear();
     _boxLists.reset();
+    _staleViewsAnswered.clear();
     _staleResendAttempts.clear();
     _staleResendTempIds.clear();
     // Logout: `K_react` for every visited conversation is in RAM here.

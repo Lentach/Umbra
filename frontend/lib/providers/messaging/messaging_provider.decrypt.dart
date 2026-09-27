@@ -91,7 +91,10 @@ extension MessagingDecrypt on MessagingProvider {
   ///
   /// Own rows never reach here — the (xi) own-row branches run first — so this
   /// gates genuine inbound envelopes only.
-  Future<bool> _originDeviceIsLive(MessageModel m) async {
+  Future<bool> _originDeviceIsLive(
+    MessageModel m, {
+    bool refetch = true,
+  }) async {
     final enc = _encryptionProvider;
     if (enc == null) return false;
     final originDeviceId = m.originDeviceId ?? 1;
@@ -105,8 +108,10 @@ extension MessagingDecrypt on MessagingProvider {
       // refresh the list rides INSIDE the plaintext of the very row we refuse,
       // so a cache HIT could never heal itself. ONE rate-limited re-verify
       // before the refusal, and only when the device is ABSENT: a list that
-      // names it REVOKED is a verdict, not ignorance.
-      if (!verified.devices.any((d) => d.deviceId == originDeviceId) &&
+      // names it REVOKED is a verdict, not ignorance. Old-path rows only
+      // ([refetch]): a box frame never times a lookup (E50f).
+      if (refetch &&
+          !verified.devices.any((d) => d.deviceId == originDeviceId) &&
           _listRefreshLimiter.tryBegin(m.senderId)) {
         try {
           // forceRefresh, never invalidate-then-fetch: a FAILING refetch must
@@ -197,12 +202,25 @@ extension MessagingDecrypt on MessagingProvider {
   /// (I7) — an injected claim would otherwise be a remote off switch for this
   /// client's warnings, or a way to make us cry wolf until the user stops
   /// listening.
-  void _evaluateSenderListInfo(int senderId, Object? rawClaim) {
+  ///
+  /// [boxDevice]: the claim came in a box frame from that device of the
+  /// sender (slice (e), E50f). A view of OUR list older than ours is then
+  /// answered with our list into that device's queue, and a newer list of
+  /// the SENDER's is never looked up: a lookup timed by a box frame names
+  /// the pair; the sender's own announcements carry it (decision 51).
+  void _evaluateSenderListInfo(
+    int senderId,
+    Object? rawClaim, {
+    int? boxDevice,
+  }) {
     final enc = _encryptionProvider;
     final me = _currentUserId;
     if (enc == null || me == null || senderId == me) return;
     final claim = SenderListInfo.fromJson(rawClaim);
     if (claim == null) return;
+    if (boxDevice != null) {
+      _answerStaleView(senderId, boxDevice, claim.peerVersion);
+    }
 
     final ourPeerView = enc.cachedDeviceList(senderId);
     final ourOwnView = enc.cachedDeviceList(me);
@@ -224,7 +242,10 @@ extension MessagingDecrypt on MessagingProvider {
         // it pin "syncing devices…" on forever as a nuisance. Bounded by the
         // same limiter as the fetch: one window per cooldown, cleared as soon as
         // our own list comes back.
-        if (_listRefreshLimiter.tryBegin(me)) {
+        // A box frame never times a lookup, not even of our own list: it
+        // would tell the server when this account reads the box. Our own
+        // list moves by the own-room `deviceListChanged`.
+        if (boxDevice == null && _listRefreshLimiter.tryBegin(me)) {
           _setDevicesSyncing(true);
           enc.invalidateDeviceList(me);
           enc
@@ -239,7 +260,12 @@ extension MessagingDecrypt on MessagingProvider {
         // The peer claims a newer list than we hold — the common, legitimate
         // case (it linked a device). ONE re-fetch, then the claim is discarded;
         // a parallel re-fetch would let a stale answer overwrite a fresh one.
-        if (_listRefreshLimiter.tryBegin(senderId)) {
+        if (boxDevice != null) {
+          _e2eFlowLog('SENDER_LIST_INFO_NEWER_ON_BOX', {
+            'senderId': senderId,
+            'claimedVersion': claim.ownVersion,
+          });
+        } else if (_listRefreshLimiter.tryBegin(senderId)) {
           enc.invalidateDeviceList(senderId);
           enc
               .getVerifiedDeviceList(senderId)
@@ -416,7 +442,11 @@ extension MessagingDecrypt on MessagingProvider {
     // device-list versions it addressed this message from. Evaluate it
     // against DAK-verified data we already hold. A bare claim NEVER alarms
     // and NEVER changes trust (I7) — it can only make us re-check.
-    _evaluateSenderListInfo(msg.senderId, parsed.senderListInfo);
+    _evaluateSenderListInfo(
+      msg.senderId,
+      parsed.senderListInfo,
+      boxDevice: box ? msg.originDeviceId ?? 1 : null,
+    );
     // SSRF: validate imageUrl before storing
     final safeImageUrl =
         parsed.linkPreviewImageUrl != null &&

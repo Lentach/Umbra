@@ -1311,6 +1311,117 @@ class EncryptionService {
     });
   }
 
+  // ---------- Kept peer device lists (metadata-privacy slice (e), E50c) ------
+  //
+  // Decision 51: a box device no longer asks the server for its friends'
+  // lists on every connect. The last verified authorization record of each
+  // peer is kept here (null = verified NOT enrolled) and re-verified into the
+  // cache at start, beside `r` — the last connect this device was box-ready
+  // (past the 30-d box TTL an announcement may have expired unread, so the
+  // server is asked once) — and `a`, the own list this device last announced
+  // to every friend (E50d). Machinery: no backup carries it. Unreadable, it
+  // reads as empty, which only costs server lookups.
+
+  final Map<int, Map<String, dynamic>?> _peerDeviceLists = {};
+  int? _boxListsReadyAtMs;
+  ({int version, List<int> live})? _announcedOwnList;
+
+  String _peerDeviceListsKey(int userId) => 'e2e_${userId}_boxlists_v1';
+
+  /// The kept authorization record per peer (null: not enrolled).
+  Map<int, Map<String, dynamic>?> get peerDeviceLists =>
+      Map.unmodifiable(_peerDeviceLists);
+
+  /// When this device was last box-ready on a connect, local-clock ms.
+  int? get boxListsReadyAtMs => _boxListsReadyAtMs;
+
+  /// The own list this device last announced to every friend (E50d).
+  ({int version, List<int> live})? get announcedOwnList => _announcedOwnList;
+
+  /// Keeps [peerId]'s verified [authorization] (null: not enrolled). A
+  /// no-change refresh (same version under the same DAK) writes nothing:
+  /// every write serialises the whole row.
+  Future<void> recordPeerDeviceList(
+    int peerId,
+    Map<String, dynamic>? authorization,
+  ) async {
+    final held = _peerDeviceLists[peerId];
+    if (_peerDeviceLists.containsKey(peerId) &&
+        held?['listVersion'] == authorization?['listVersion'] &&
+        held?['dakPub'] == authorization?['dakPub']) {
+      return;
+    }
+    _peerDeviceLists[peerId] = authorization;
+    await _writePeerDeviceLists();
+  }
+
+  Future<void> markBoxListsReady(int atMs) {
+    _boxListsReadyAtMs = atMs;
+    return _writePeerDeviceLists();
+  }
+
+  Future<void> recordAnnouncedOwnList(int version, List<int> live) {
+    _announcedOwnList = (version: version, live: [...live]..sort());
+    return _writePeerDeviceLists();
+  }
+
+  Future<void> _writePeerDeviceLists() async {
+    final userId = _userId;
+    if (userId == null) return;
+    final announced = _announcedOwnList;
+    try {
+      final prefs = await _sharedPrefs;
+      await prefs.setString(
+        _peerDeviceListsKey(userId),
+        jsonEncode({
+          'u': {
+            for (final MapEntry(:key, :value) in _peerDeviceLists.entries)
+              '$key': value,
+          },
+          'r': ?_boxListsReadyAtMs,
+          if (announced != null)
+            'a': {'v': announced.version, 'live': announced.live},
+        }),
+      );
+    } on Object catch (e) {
+      E2ePersistentDiag.record('BOX_LISTS_WRITE_FAILED', {
+        'error': e.runtimeType.toString(),
+      });
+    }
+  }
+
+  Future<void> _loadPeerDeviceLists(int userId) async {
+    try {
+      final prefs = await _sharedPrefs;
+      final raw = prefs.getString(_peerDeviceListsKey(userId));
+      if (raw == null) return;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) return;
+      if (decoded['u'] case final Map<String, dynamic> users) {
+        for (final MapEntry(:key, :value) in users.entries) {
+          final peerId = int.tryParse(key);
+          if (peerId == null) continue;
+          if (value == null) {
+            _peerDeviceLists[peerId] = null;
+          } else if (value is Map<String, dynamic>) {
+            _peerDeviceLists[peerId] = value;
+          }
+        }
+      }
+      if (decoded['r'] case final int readyAt) _boxListsReadyAtMs = readyAt;
+      if (decoded['a'] case {
+        'v': final int version,
+        'live': final List<dynamic> live,
+      }) {
+        _announcedOwnList = (version: version, live: [...live.whereType<int>()]);
+      }
+    } on Object catch (e) {
+      E2ePersistentDiag.record('BOX_LISTS_LOAD_FAILED', {
+        'error': e.runtimeType.toString(),
+      });
+    }
+  }
+
   /// Construct the four Signal stores for prefix [p].
   ///
   /// Single place on purpose: the identity store carries the
@@ -1361,6 +1472,9 @@ class EncryptionService {
       _peersRefusedIdentity.clear();
       _pendingSessionRebuilds.clear();
       _deviceListPins.clear();
+      _peerDeviceLists.clear();
+      _boxListsReadyAtMs = null;
+      _announcedOwnList = null;
     }
     _userId = userId;
     final p = 'e2e_${userId}_'; // per-user storage key prefix
@@ -1378,6 +1492,7 @@ class EncryptionService {
     // Rollback floors from previous launches (clause 3), before any device list
     // can be adopted against an empty floor.
     await _loadDeviceListPins(userId);
+    await _loadPeerDeviceLists(userId);
 
     // A THROWING read propagates: a storage error must never be read as "no
     // keys". Only a definitive outcome reaches the server-backed guard.

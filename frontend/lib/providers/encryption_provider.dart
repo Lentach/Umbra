@@ -8,6 +8,7 @@ import '../models/message_model.dart';
 import '../services/account_enrolled_hint.dart';
 import '../services/audio_cache_store.dart';
 import '../services/box/box_media_url.dart';
+import '../services/contacts/contact_store.dart' show kBoxRedeliveryWindow;
 import '../services/e2e_lock_revoker.dart';
 import '../services/encryption/prekey_identity.dart' show FriendFrameIdentity;
 import '../services/encryption_service.dart';
@@ -636,6 +637,136 @@ class EncryptionProvider extends ChangeNotifier {
     Map<String, dynamic>? authorization,
   ) => _adoptDeviceListAnswer(userId, authorization);
 
+  /// Accounts whose carried list could not be judged without the server and
+  /// already cost this process its one lookup (E50a).
+  final Set<int> _carriedLookupSpent = {};
+
+  /// Whether a peer's verified list is kept across restarts (decision 51:
+  /// a box peer's). Wired by `ConnectionProvider` from the contact store;
+  /// unwired, nothing a server served is kept.
+  bool Function(int userId)? keepsDeviceListFor;
+
+  /// Decision 51 / E50c: when this device finds itself off the box longer
+  /// than the box TTL — at start or on a reconnect of a long-lived process —
+  /// an announcement may have expired unread, so each box peer's list is
+  /// asked of the server once. [_boxGapSince] is when that was noticed;
+  /// null while the stamp is fresh.
+  DateTime? _boxGapSince;
+
+  /// When the server last verified each peer's list, this process.
+  final Map<int, DateTime> _serverVerifiedAt = {};
+
+  DateTime? _boxListsStampedAt;
+
+  void _noteBoxGap() {
+    if (_boxGapSince != null) return;
+    final readyAt = _encryptionService.boxListsReadyAtMs;
+    final now = DateTime.now();
+    if (readyAt == null ||
+        now.millisecondsSinceEpoch - readyAt >
+            kBoxRedeliveryWindow.inMilliseconds) {
+      _boxGapSince = now;
+    }
+  }
+
+  /// Whether the box's connect refresh must ask the server for [userId]'s
+  /// list rather than keep the one held (decision 51): only after a gap
+  /// longer than the box TTL, and only until the server has answered for
+  /// it since.
+  bool peerListOwedByServer(int userId) {
+    _noteBoxGap();
+    final gap = _boxGapSince;
+    if (gap == null) return false;
+    final at = _serverVerifiedAt[userId];
+    return at == null || at.isBefore(gap);
+  }
+
+  /// The box's lookups for [peers] (every box-covered peer) are done: the
+  /// stamp the next check reads (E50c). Written only once none of them is
+  /// still owed a server answer after a gap — a stamp written first would
+  /// waive the re-check for good — and then at most once an hour.
+  void markBoxListsReady(Iterable<int> peers) {
+    if (peers.any(peerListOwedByServer)) return;
+    final now = DateTime.now();
+    final last = _boxListsStampedAt;
+    if (_boxGapSince == null &&
+        last != null &&
+        now.difference(last) < const Duration(hours: 1)) {
+      return;
+    }
+    _boxGapSince = null;
+    _boxListsStampedAt = now;
+    unawaited(
+      _encryptionService.markBoxListsReady(now.millisecondsSinceEpoch),
+    );
+  }
+
+  /// The own list this device last announced to every friend (E50d).
+  ({int version, List<int> live})? get announcedOwnList =>
+      _encryptionService.announcedOwnList;
+
+  Future<void> recordAnnouncedOwnList(int version, List<int> live) =>
+      _encryptionService.recordAnnouncedOwnList(version, live);
+
+  /// Adopts a list [userId]'s device carried inside E2E — a `list_update`,
+  /// or a new device's `queue_handoff` (metadata-privacy slice (e),
+  /// decisions 50–51). No server lookup, as long as it is signed under the
+  /// DAK the server last served for [userId] (E50a): every linked device,
+  /// a revoked one too, holds the account identity key and could endorse a
+  /// DAK of its own. A list under any other DAK — or for an account this
+  /// device never verified from the server — costs ONE lookup per account
+  /// per process, which then decides; a carried list never raises the I7
+  /// surface (the peer is its source, not the server).
+  Future<CarriedListOutcome> adoptCarriedDeviceList(
+    int userId,
+    Object? authorization,
+  ) async {
+    if (!_e2eInitialized || userId == _currentUserId) {
+      return CarriedListOutcome.refused;
+    }
+    final tofu = await _encryptionService.peerTofuIdentityBase64(userId);
+    final result = _deviceListCache.adoptCarried(
+      userId: userId,
+      authorization: authorization,
+      tofuIdentityKeyBase64: tofu,
+    );
+    switch (result.outcome) {
+      case CarriedAdoption.adopted:
+        final list = result.list!;
+        _e2eFlowLog('DEVICE_LIST_CARRIED', {
+          'userId': userId,
+          'version': list.version,
+          'liveDevices': list.liveDeviceIds,
+        });
+        unawaited(
+          _encryptionService.recordPeerDeviceList(userId, list.authorization),
+        );
+        return CarriedListOutcome.adopted;
+      case CarriedAdoption.stale:
+        return CarriedListOutcome.stale;
+      case CarriedAdoption.refused:
+        _e2eFlowLog('DEVICE_LIST_CARRIED_REFUSED', {
+          'userId': userId,
+          'reason': result.reason,
+        });
+        return CarriedListOutcome.refused;
+      case CarriedAdoption.unpinned:
+        if (!_carriedLookupSpent.add(userId)) {
+          _e2eFlowLog('DEVICE_LIST_CARRIED_REFUSED', {
+            'userId': userId,
+            'reason': 'unpinned_lookup_spent',
+          });
+          return CarriedListOutcome.refused;
+        }
+        try {
+          await getVerifiedDeviceList(userId, forceRefresh: true);
+        } on Object {
+          // The held list stands; the caller re-reads the cache either way.
+        }
+        return CarriedListOutcome.refetched;
+    }
+  }
+
   Future<VerifiedDeviceList> _adoptDeviceListAnswer(
     int userId,
     Map<String, dynamic>? authorization,
@@ -657,8 +788,23 @@ class EncryptionProvider extends ChangeNotifier {
         'version': verified.version,
         'liveDevices': verified.liveDeviceIds,
       });
+      if (userId != _currentUserId) {
+        _serverVerifiedAt[userId] = DateTime.now();
+        // Kept only for a box peer (decision 51): an old-path peer's list
+        // stays memory-only, so its first row after a restart is checked
+        // against a fresh lookup, as before slice (e).
+        if (keepsDeviceListFor?.call(userId) ?? false) {
+          unawaited(
+            _encryptionService.recordPeerDeviceList(userId, authorization),
+          );
+        }
+      }
       return verified;
     } on DeviceListVerificationException catch (e) {
+      // The server answered, even if the answer is refused: the gap check
+      // (E50c) is about whether the server was asked, and one peer whose
+      // list does not verify must not keep every restart asking again.
+      if (userId != _currentUserId) _serverVerifiedAt[userId] = DateTime.now();
       E2ePersistentDiag.record('DEVICE_LIST_REJECTED', {
         'userId': userId,
         'reason': e.reason,
@@ -1611,6 +1757,30 @@ class EncryptionProvider extends ChangeNotifier {
         _deviceListCache.onPinAdvanced = (peerId, version) {
           _encryptionService.recordDeviceListPin(peerId, version);
         };
+        // Decision 51 / E50c: the peers' lists kept by the last process, each
+        // re-verified against the identity this device holds now — a peer
+        // whose key changed since drops out and is looked up again. Straight
+        // into the cache: a kept list that no longer verifies is not news
+        // about anyone's key (no I7 surface).
+        for (final MapEntry(:key, :value)
+            in _encryptionService.peerDeviceLists.entries) {
+          try {
+            _deviceListCache.adopt(
+              userId: key,
+              authorization: value,
+              tofuIdentityKeyBase64: value == null
+                  ? null
+                  : await _encryptionService.peerTofuIdentityBase64(key),
+            );
+          } on DeviceListVerificationException {
+            // Looked up from the server at the next connect instead.
+          }
+        }
+        // Off the box past the TTL (or never stamped) at start: every box
+        // peer is owed one server answer this process (E50c).
+        _boxGapSince = null;
+        _serverVerifiedAt.clear();
+        _noteBoxGap();
         _e2eInitialized = true;
         debugPrint('[E2E] Encryption service initialized');
         _e2eFlowLog('E2E_INIT_DONE', {
@@ -2940,6 +3110,7 @@ class EncryptionProvider extends ChangeNotifier {
       // Fresh connect may be a different account: forget verified lists AND
       // their rollback pins (they are per-account TOFU state).
       _deviceListCache.clear();
+      _carriedLookupSpent.clear();
       _cancelPendingFetches();
     }
     // On reconnect: preserve _e2eInitialized and caches
@@ -2990,6 +3161,7 @@ class EncryptionProvider extends ChangeNotifier {
     _identityUploadLocked = false;
     _identityCheckUnavailable = false;
     _deviceListCache.clear();
+    _carriedLookupSpent.clear();
     // The phrase/backup flags are per ACCOUNT too: left standing, user A's
     // `false` puts the Chats line over user B's list until B's first status
     // corrects it — the same class of stale-singleton defect as the ceremony
@@ -3324,6 +3496,24 @@ class EncryptionProvider extends ChangeNotifier {
     _pendingDeviceListFetches.clear();
     _deviceListBatch.clear();
   }
+}
+
+/// What [EncryptionProvider.adoptCarriedDeviceList] did with a list a
+/// peer's device carried inside E2E (metadata-privacy slice (e)).
+enum CarriedListOutcome {
+  /// Verified under the server's DAK and cached; nothing asked the server.
+  adopted,
+
+  /// At or below the version held; nothing done.
+  stale,
+
+  /// Not signed under the server's DAK: this process's one server lookup
+  /// for the account ran instead, and the cache holds its answer.
+  refetched,
+
+  /// Not adopted, and no lookup: malformed, `not enrolled`, a failed chain,
+  /// or the lookup was already spent.
+  refused,
 }
 
 /// Where the (lxxviii) clause-3 phrase restore stands.

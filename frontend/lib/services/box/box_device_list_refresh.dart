@@ -10,16 +10,17 @@ const List<Duration> kBoxDeviceListRetryDelays = [
   Duration(minutes: 5),
 ];
 
-/// Re-verifies every device list a box send reads — the covered peers' and
-/// the account's own (metadata-privacy PR3.1 slice (c), owner decision 21) —
-/// and ONLY at moments that are not a send: each connect once E2E and the
-/// account socket are ready, a contact store that opened late, a list the
-/// E2E layer dropped, and this class's own retry backoff. A box send waits
-/// for its lists' entries here and never looks a list up itself: a lookup
-/// on the account socket timed by a send names the pair (a peer's list) or
-/// the sender (the own list) at the moment of an otherwise unlinkable box
-/// frame. The price: a device linked mid-session is seen at the next connect
-/// (E2E device announcements, slice (e), replace this).
+/// Makes sure every device list a box send reads — the covered peers' and
+/// the account's own — is verified this connect (metadata-privacy PR3.1
+/// slice (c), owner decision 21), and ONLY at moments that are not a send:
+/// each connect once E2E and the account socket are ready, a contact store
+/// that opened late, a list the E2E layer dropped, and this class's own
+/// retry backoff. A box send waits for its lists' entries here and never
+/// looks a list up itself: a lookup on the account socket timed by a send
+/// names the pair (a peer's list) or the sender (the own list) at the
+/// moment of an otherwise unlinkable box frame. What `fetch` asks the
+/// server is its owner's call: since slice (e) (decision 51) a peer's list
+/// that is already held is kept, and E2E announcements move it.
 ///
 /// Each verified list is followed by that user's session PRE-BUILD
 /// (decision 38, E38a): every box-covered device on it that has no usable

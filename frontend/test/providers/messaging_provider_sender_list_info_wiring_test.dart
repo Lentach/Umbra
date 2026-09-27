@@ -4,10 +4,14 @@ import 'dart:convert';
 import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
+import 'package:fireplace/services/box/box_friends.dart';
+import 'package:fireplace/services/contacts/contact_record.dart';
+import 'package:fireplace/services/contacts/contact_store.dart';
 import 'package:fireplace/services/device_list/device_list_cache.dart';
 import 'package:fireplace/services/device_list/device_list_canonical.dart';
 import 'package:fireplace/services/device_list/sender_list_info.dart';
 import 'package:fireplace/utils/e2e_envelope.dart';
+import 'package:fireplace/utils/message_ids.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -307,4 +311,156 @@ void main() {
       },
     );
   });
+
+  group('senderListInfo on a BOX frame (slice (e), E50f)', () {
+    late MessagingProvider provider;
+    late _ClaimEncryption encryption;
+    late _Link link;
+    var nextLocal = kFirstLocalMessageId;
+
+    const peer = ContactRecord(
+      userId: 2,
+      username: 'bob',
+      tag: '0002',
+      state: ContactState.friend,
+      legacy: ContactLegacy(conversationId: 10),
+    );
+
+    setUp(() {
+      FlutterSecureStorage.setMockInitialValues({});
+      SharedPreferences.setMockInitialValues({});
+      final conversations = ConversationsProvider()
+        ..setCurrentUserId(1)
+        ..onConversationsList([_convJson()]);
+      encryption = _ClaimEncryption();
+      link = _Link();
+      provider = MessagingProvider()
+        ..setConversationsProvider(conversations)
+        ..setEncryptionProvider(encryption)
+        ..setCurrentUserId(1)
+        ..setIncomingMessageSoundEnabledForTest(false)
+        ..onConnect(false)
+        ..setEmitCallback((event, data) {})
+        ..boxFriends = link;
+    });
+
+    Future<void> receiveBox({int device = 1}) async {
+      final localId = nextLocal++;
+      await provider.consumeBoxEntry(
+        BoxInboxEntry(
+          rid: 'peer-rid',
+          id: 'm$localId',
+          localId: localId,
+          peerUserId: 2,
+          senderDeviceId: device,
+          signal: '2:box-ciphertext-$localId',
+          receivedAt: DateTime.now().toUtc(),
+          acked: true,
+        ),
+        peer,
+      );
+      for (var i = 0; i < 30; i++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+    }
+
+    test('a NEWER claim of the sender is never looked up: its own '
+        'announcements carry it (decision 51)', () async {
+      encryption
+        ..seed(2, _enrolled(3, 'peer'))
+        ..claim = const SenderListInfo(ownVersion: 99);
+
+      await receiveBox();
+
+      expect(encryption.refreshes, isEmpty);
+    });
+
+    test('a view of OUR list older than ours is answered with our list into '
+        "that device's queue — once per device and version", () async {
+      encryption
+        ..seed(2, _enrolled(3, 'peer'))
+        ..seed(
+          1,
+          const VerifiedDeviceList.enrolled(
+            version: 5,
+            listHash: 'mine',
+            devices: [
+              DeviceListEntry(deviceId: 1, platform: 'test', addedAtMs: 0),
+            ],
+            authorization: {'listVersion': 5},
+          ),
+        )
+        ..claim = const SenderListInfo(ownVersion: 3, peerVersion: 5);
+
+      await receiveBox();
+      expect(link.listUpdates, isEmpty, reason: 'a current view: nothing');
+
+      encryption.claim = const SenderListInfo(ownVersion: 3, peerVersion: 4);
+      await receiveBox();
+      await receiveBox();
+
+      expect(link.listUpdates, hasLength(1));
+      final (to, device, auth) = link.listUpdates.single;
+      expect((to, device), (2, 1));
+      expect(auth, {'listVersion': 5});
+      expect(encryption.refreshes, isEmpty, reason: 'no server lookup');
+    });
+  });
+}
+
+/// The box's friend side, as far as a list answer goes.
+class _Link implements BoxFriendLink {
+  final List<(int, int, Map<String, dynamic>)> listUpdates = [];
+
+  @override
+  Future<bool> sendListUpdate(
+    int userId,
+    int deviceId,
+    Map<String, dynamic> auth,
+  ) async {
+    listUpdates.add((userId, deviceId, auth));
+    return true;
+  }
+
+  @override
+  Future<bool> announceOwnList(Map<String, dynamic> auth) async => true;
+
+  @override
+  void friendDevicesChanged(int userId) {}
+
+  @override
+  bool get onBox => true;
+
+  @override
+  ContactRecord? contactOf(int userId) => null;
+
+  @override
+  Future<FriendWrite> takeFriendHandoff(
+    int userId,
+    int deviceId, {
+    required String sid,
+    required String sealPub,
+  }) async => FriendWrite.refused;
+
+  @override
+  Future<FriendWrite> friendAcked(int userId, int deviceId, String sid) async =>
+      FriendWrite.refused;
+
+  @override
+  Future<void> rekeyFriend(int userId, int deviceId) async {}
+
+  @override
+  void friendSessionStarted(int userId, int deviceId) {}
+
+  @override
+  bool awaitingFriendRekeyFrom(int userId, int deviceId) => false;
+
+  @override
+  void friendRekeyAnswered(int userId, int deviceId) {}
+
+  @override
+  void friendHeard(int userId, int deviceId) {}
+
+  @override
+  void handOffTo(int userId) {}
 }

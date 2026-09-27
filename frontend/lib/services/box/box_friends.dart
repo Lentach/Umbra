@@ -113,4 +113,24 @@ abstract interface class BoxFriendLink {
   /// anchor for that account yet, and building our session with it pins one
   /// from the server's bundle (the old path's trust).
   void handOffTo(int userId);
+
+  /// Friend [userId]'s verified list stopped naming some device live (a
+  /// revoke, slice (e)): the handoff pass runs, which drops that device's
+  /// address and rotates our queue away from it (E50e).
+  void friendDevicesChanged(int userId);
+
+  /// Sends [auth] — this account's device list — to friend [userId]'s
+  /// device [deviceId] as a `list_update` (E50f), into the queue that device
+  /// handed us; true only when the box took it. False when this device
+  /// holds no address for it: a request queue reads only handoffs.
+  Future<bool> sendListUpdate(
+    int userId,
+    int deviceId,
+    Map<String, dynamic> auth,
+  );
+
+  /// Sends [auth] as a `list_update` to every live device of every friend
+  /// this device holds an address for (a revoke, E50d); true only when the
+  /// box took every frame.
+  Future<bool> announceOwnList(Map<String, dynamic> auth);
 }

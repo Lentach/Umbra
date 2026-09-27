@@ -91,6 +91,9 @@ class _RoutingBox {
           }
           return {'ok': true, 'refused': <Object?>[]};
         case 'send':
+          if (refuseSendsTo.contains(f.frame['sid'])) {
+            return {'ok': false, 'code': 'queue_full'};
+          }
           sent.add(f.frame['sid']! as String);
           final rid = _ridOfSid[f.frame['sid']];
           final reader = rid == null ? null : _reader[rid];
@@ -116,6 +119,9 @@ class _RoutingBox {
   /// Answers every `subscribe` from [subscribeRefusedOn] instead, while set.
   Map<String, Object?>? subscribeRefusal;
   FakeBoxSocket? subscribeRefusedOn;
+
+  /// Sids whose `send` is refused (`queue_full`), while named.
+  final Set<String> refuseSendsTo = {};
 
   /// Every sid a `send` went to, in order.
   final List<String> sent = [];
@@ -145,6 +151,9 @@ class _Device {
 
   /// What the friend's VERIFIED list names live; null = not known now.
   Set<int>? friendLive;
+
+  /// What the friend's verified list names REVOKED (slice (e)).
+  Set<int> friendRevoked = {};
 
   /// The friend's state on this device's record; null = no record yet.
   ContactState? friendState = ContactState.friend;
@@ -185,11 +194,18 @@ class _Device {
     );
   }
 
+  /// Every list a friend's frame carried outside Signal (decision 50).
+  final List<String> carried = [];
+
+  /// Every `list_update` a friend device sent here (E50d/E50f).
+  final List<Map<String, dynamic>> listUpdates = [];
+
   /// What `MessagingProvider.consumeBoxEntry` does with a friend's entry
   /// once decrypted: the reaction itself is the box's own
   /// [BoxSession.takeFriendHandoff] / [BoxSession.friendAcked].
   Future<bool> read(BoxInboxEntry entry) async {
     if (deaf || entry.peerUserId != friendId) return true;
+    if (entry.carriedList case final list?) carried.add(list);
     final json = utf8.decode(base64Decode(entry.signal!.split(':')[1]));
     final handoff = E2eEnvelope.parseQueueHandoff(json);
     if (handoff != null) {
@@ -203,6 +219,10 @@ class _Device {
     }
     // Only a handoff is read from the request queue.
     if (entry.viaRequestQueue) return true;
+    if (E2eEnvelope.carriedDeviceList(json) case final auth?) {
+      listUpdates.add(auth);
+      return true;
+    }
     final acked = E2eEnvelope.parseQueueHandoffAck(json);
     if (acked != null) {
       return await session.friendAcked(
@@ -255,6 +275,8 @@ class _Device {
       ..encryptForFriend = encrypt
       ..friendLiveDevices = ((user) async =>
           user == friendId ? friendLive : null)
+      ..friendRevokedDevices = ((user) async =>
+          user == friendId ? friendRevoked : null)
       ..e2eReady();
     started = true;
     socket.serverConnect('S$userId.$deviceId');
@@ -791,4 +813,210 @@ void main() {
       expect(b.outboundOf(2)?.sid, a.friend.queues.single.sid);
     },
   );
+
+  group('slice (e): device announcements', () {
+    Map<String, Object?> listed(List<_Device> devices) => {
+      'id': devices.first.userId,
+      'devices': [
+        for (final d in devices) ...(d.listed['devices']! as List<Object?>),
+      ],
+    };
+
+    test(
+      "a handoff into a friend's REQUEST queue carries this account's list "
+      'outside Signal; a hand-back into the queue the friend handed us '
+      'carries none (decision 50)',
+      () async {
+        await a.start();
+        await b.start();
+        a.session.ownDeviceList = () async => {'listVersion': 7};
+        b.session.ownDeviceList = () async => {'listVersion': 9};
+
+        a.session.onFriendsList([b.listed]);
+        await settle();
+
+        expect(b.carried, [jsonEncode({'listVersion': 7})]);
+        expect(a.carried, isEmpty, reason: "b's hand-back rode a's queue");
+        expect(b.outboundOf(2)?.sid, a.friend.queues.single.sid);
+      },
+    );
+
+    group('with a friend on two devices', () {
+      late _Device b2;
+
+      setUp(() async {
+        b2 = _Device(5, 4, 1, box)..friendLive = {2};
+        a.friendLive = {3, 4};
+        await a.start();
+        await b.start();
+        await b2.start();
+        a.session.onFriendsList([
+          listed([b, b2]),
+        ]);
+        await settle();
+        expect(a.friend.queues.single.ackedBy, unorderedEquals([3, 4]));
+      });
+
+      tearDown(() => b2.session.dispose());
+
+      test(
+        'a device the held list merely does not name — another tab may hold '
+        'a newer list — keeps its address and our queue (E50e names only '
+        'REVOKED devices)',
+        () async {
+          final old = a.friend.queues.single;
+          a.friendLive = {4};
+          a.session.friendDevicesChanged(5);
+          await settle();
+
+          expect(a.friend.queues.single.sid, old.sid);
+          expect(a.outboundOf(3), isNotNull);
+        },
+      );
+
+      test(
+        'a revoke drops the revoked address and ROTATES our queue: the new '
+        'one goes to the surviving device only, the old one retires, still '
+        'read, and is deleted once the box TTL has passed (E50e)',
+        () async {
+          final old = a.friend.queues.single;
+          a
+            ..friendLive = {4}
+            ..friendRevoked = {3};
+          a.session.friendDevicesChanged(5);
+          await settle();
+
+          final queues = a.friend.queues;
+          expect(queues, hasLength(2));
+          expect(queues.first.sid, isNot(old.sid));
+          expect(queues.first.retiredAt, isNull);
+          expect(queues.first.ackedBy, [4]);
+          expect(queues.last.rid, old.rid);
+          expect(queues.last.retiredAt, a.clock);
+          expect(b2.outboundOf(2)?.sid, queues.first.sid);
+          expect(
+            b.outboundOf(2)?.sid,
+            old.sid,
+            reason: 'the revoked device never learns the new queue',
+          );
+          expect(a.outboundOf(3), isNull);
+          expect(a.outboundOf(4), isNotNull);
+
+          // Once rotated, a later pass leaves it be.
+          a.session.friendDevicesChanged(5);
+          await settle();
+          expect(a.friend.queues, hasLength(2));
+
+          a.clock = a.clock.add(kBoxRedeliveryWindow);
+          a.session.friendDevicesChanged(5);
+          await settle();
+          expect(a.friend.queues, hasLength(2), reason: 'not past it yet');
+
+          a.clock = a.clock.add(const Duration(minutes: 1));
+          a.session.friendDevicesChanged(5);
+          await settle();
+          expect(a.friend.queues.single.sid, queues.first.sid);
+          expect(
+            a.socket.emitted.where((f) => f.event == 'deleteQueue'),
+            hasLength(1),
+          );
+        },
+      );
+
+      test(
+        'our list goes as a list_update to every live device of the friend '
+        'we hold an address for, and only a box that took every frame '
+        'counts as announced (E50d)',
+        () async {
+          expect(await a.session.announceOwnList({'listVersion': 4}), isTrue);
+          await settle();
+          expect(b.listUpdates, [
+            {'listVersion': 4},
+          ]);
+          expect(b2.listUpdates, [
+            {'listVersion': 4},
+          ]);
+
+          a.friendLive = {3};
+          expect(await a.session.announceOwnList({'listVersion': 5}), isTrue);
+          await settle();
+          expect(b2.listUpdates, hasLength(1), reason: 'no longer live');
+
+          a.encryptFails = true;
+          expect(await a.session.announceOwnList({'listVersion': 6}), isFalse);
+        },
+      );
+
+      test(
+        'a retried announcement goes only to the devices that did not take '
+        'it: one unreachable friend device costs the others no second blob',
+        () async {
+          final b2Sid = a.outboundOf(4)!.sid;
+          box.refuseSendsTo.add(b2Sid);
+          expect(await a.session.announceOwnList({'listVersion': 4}), isFalse);
+          await settle();
+          expect(b.listUpdates, hasLength(1));
+          expect(b2.listUpdates, isEmpty);
+
+          box.refuseSendsTo.clear();
+          expect(await a.session.announceOwnList({'listVersion': 4}), isTrue);
+          await settle();
+          expect(b.listUpdates, hasLength(1));
+          expect(b2.listUpdates, hasLength(1));
+        },
+      );
+
+      test(
+        'an own list too long for the frame never stops a handoff: it goes '
+        'out without the list',
+        () async {
+          final b3 = _Device(5, 6, 1, box)..friendLive = {2};
+          await b3.start();
+          addTearDown(b3.session.dispose);
+          a
+            ..friendLive = {3, 4, 6}
+            ..session.ownDeviceList = () async => {'pad': 'x' * 20000};
+          a.session.onFriendsList([
+            listed([b, b2, b3]),
+          ]);
+          await settle();
+
+          expect(b3.outboundOf(2)?.sid, a.friend.queues.single.sid);
+          expect(b3.carried, isEmpty);
+        },
+      );
+
+      test(
+        'a stale-view answer goes only into the queue that device handed '
+        'us, never its request queue (E50f)',
+        () async {
+          expect(
+            await a.session.sendListUpdate(5, 4, {'listVersion': 2}),
+            isTrue,
+          );
+          await settle();
+          expect(b2.listUpdates, [
+            {'listVersion': 2},
+          ]);
+
+          // Device 4's queue forgotten: only its request queue is known.
+          await a.store.update(
+            5,
+            (current) => current!.copyWith(
+              outbound: [
+                for (final o in current.outbound)
+                  if (o.peerDeviceId != 4) o,
+              ],
+            ),
+          );
+          expect(
+            await a.session.sendListUpdate(5, 4, {'listVersion': 3}),
+            isFalse,
+          );
+          await settle();
+          expect(b2.listUpdates, hasLength(1));
+        },
+      );
+    });
+  });
 }

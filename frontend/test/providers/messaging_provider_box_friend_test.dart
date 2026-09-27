@@ -97,6 +97,29 @@ class _Link implements BoxFriendLink {
 
   @override
   void handOffTo(int userId) => handedOffTo.add(userId);
+
+  final List<int> devicesChanged = [];
+  final List<(int, int, Map<String, dynamic>)> listUpdates = [];
+  final List<Map<String, dynamic>> announced = [];
+
+  @override
+  void friendDevicesChanged(int userId) => devicesChanged.add(userId);
+
+  @override
+  Future<bool> sendListUpdate(
+    int userId,
+    int deviceId,
+    Map<String, dynamic> auth,
+  ) async {
+    listUpdates.add((userId, deviceId, auth));
+    return true;
+  }
+
+  @override
+  Future<bool> announceOwnList(Map<String, dynamic> auth) async {
+    announced.add(auth);
+    return true;
+  }
 }
 
 const int _friend = 5;

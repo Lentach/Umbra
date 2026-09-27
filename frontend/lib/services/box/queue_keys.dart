@@ -103,6 +103,61 @@ class QueueKeys {
     return InboundQueueCreated(queue);
   }
 
+  /// Replaces [current], this device's queue for [peerUserId], because the
+  /// peer revoked a device that held it (slice (e), E50e; decision 29: the
+  /// revoked device keeps the sid, so only a new queue shuts it out). The
+  /// new queue leads the record's queues; [current] stays, retired at [now]
+  /// — subscribed and read until [retireInbound] deletes it after the box
+  /// TTL. NOT subscribed here: the caller batches it ([ensureInbound]'s
+  /// `subscribe: false`). Null when nothing rotated — the box did not
+  /// create one, or the record no longer leads with [current] (another tab
+  /// rotated first; the new queue is deleted again).
+  Future<ContactQueue?> rotateInbound(
+    int peerUserId,
+    ContactQueue current, {
+    required DateTime now,
+  }) async {
+    final auth = _signer.mint();
+    final seal = QueueSeal.mintKeyPair();
+    final created = await _box.createQueue(QueueKind.normal, auth);
+    if (created is! BoxOk<QueueAddress>) return null;
+    final queue = _material(created.value, auth, seal);
+    var kept = false;
+    final committed = await _store.update(peerUserId, (record) {
+      final lead = record?.queues.firstOrNull;
+      if (record == null || lead?.rid != current.rid) return null;
+      kept = true;
+      return record.copyWith(
+        queues: [queue, lead!.retired(now), ...record.queues.skip(1)],
+      );
+    });
+    if (!committed || !kept) {
+      await _box.deleteQueue(BoxQueueAuth(rid: created.value.rid, key: auth));
+      return null;
+    }
+    return queue;
+  }
+
+  /// Deletes [queue], a retired queue of [peerUserId] ([rotateInbound]),
+  /// from the box and then from the record; false when the box did not
+  /// confirm (tried again on a later pass). One the box no longer knows
+  /// counts as deleted.
+  Future<bool> retireInbound(int peerUserId, ContactQueue queue) async {
+    final owned = authOf(queue);
+    if (owned != null && await _box.deleteQueue(owned) is! BoxOk) return false;
+    return _store.update(peerUserId, (record) {
+      if (record == null || !record.queues.any((q) => q.rid == queue.rid)) {
+        return null;
+      }
+      return record.copyWith(
+        queues: [
+          for (final q in record.queues)
+            if (q.rid != queue.rid) q,
+        ],
+      );
+    });
+  }
+
   /// This DEVICE's request queue (design §4.4; wire.md "First contact"): the
   /// one a stranger who searched this account seals a friend request into.
   /// Loaded from the store, or created, stored and only then subscribed, the
