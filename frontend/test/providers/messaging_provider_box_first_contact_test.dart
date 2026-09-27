@@ -381,6 +381,16 @@ void main() {
     await bob.start();
   });
 
+  // Every test's last step may leave a delivery in flight (an accept's
+  // handoff into the requester's queue): it must be read before the next
+  // setUp resets the secure-storage mock under its decrypt.
+  tearDown(() async {
+    await settle();
+    alice.session.dispose();
+    bob.session.dispose();
+    await settle();
+  });
+
   /// Alice asks, Bob accepts: both friends over the box.
   Future<void> befriend() async {
     await alice.reader.sendBoxFriendRequest(bob.searchEntry);
