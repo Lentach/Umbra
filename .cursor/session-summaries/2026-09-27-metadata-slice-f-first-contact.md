@@ -25,7 +25,7 @@
 - New: `messaging_provider.first_contact.dart`, `box_first_contact.dart`, `local_chat_test.dart`, `box_first_contact_test.dart`, `messaging_provider_box_first_contact_test.dart`, `contact_record_box_origin_test.dart`.
 
 ## Verification
-- CI: `edfe8c70` 6/7: Flutter failed on one test that ran "after completion" (an accept's handoff decrypting into the next setUp). Fixed with a draining `tearDown` in the follow-up commit; that commit's CI result is in LATEST and the baton.
+- CI: `edfe8c70` 6/7: Flutter failed on one test that ran "after completion" (an accept's handoff decrypting into the next setUp). Fixed with a draining `tearDown`: CI 7/7 success on `a8884429`.
 - flutter test 2946 passed / 14 skipped (full run on the final tree). Dart ratchet PASS 3160 → 3158. Jest 1216/68. `flutter analyze`: 0 errors or warnings.
 - `test_e2e/box_roundtrip_test.dart` with BOX_PROBE: 4/4, including the slice (f) case: search, kept request, accept via a second search, a message each way, 0 server rows.
 - Mutants:
