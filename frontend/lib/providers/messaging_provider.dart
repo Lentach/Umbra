@@ -317,13 +317,17 @@ class MessagingProvider extends ChangeNotifier {
         unawaited(_announceOwnListIfRevoked());
         return;
       }
-      await enc.getVerifiedDeviceList(
-        user,
-        forceRefresh: enc.peerListOwedByServer(user),
-        batched: true,
-      );
-      // The last owed peer answering is what lets the stamp be written.
-      _markBoxListsReady(enc);
+      try {
+        await enc.getVerifiedDeviceList(
+          user,
+          forceRefresh: enc.peerListOwedByServer(user),
+          batched: true,
+        );
+      } finally {
+        // Every answer — a refused list throws but still counts as answered
+        // (E50c) — may be the last owed one that lets the stamp be written.
+        _markBoxListsReady(enc);
+      }
     },
     prebuild: _prebuildBoxSessions,
   );

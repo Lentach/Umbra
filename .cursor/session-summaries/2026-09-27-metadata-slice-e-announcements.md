@@ -17,7 +17,7 @@
 - Read only: `.planning/metadata-privacy/design-candidate.md` §4.2, `device_authority_engine.dart:345-406` (the chain accepts any IK-endorsed DAK).
 
 ## Verification
-- `flutter test`: 2848 passed, 14 skipped. `flutter analyze`: 0 errors/warnings. Lint ratchet PASS at 3160.
+- `flutter test`: 2849 passed, 14 skipped after the follow-up commit (stamp attempt in a `finally` so a refused last answer still stamps, killed by mutant; box-frame cache-miss hold tried and REVERTED — it broke 32 receive tests by stranding frames — recorded as an E50f residual; F2 trap amended for the box gate). `flutter analyze`: 0 errors/warnings. Lint ratchet PASS at 3160.
 - Mutants: 22/22 then 9/9 on the review folds — killed (DAK pin off, stale off, lookup unbounded, no seed, reader no adopt, frame list ignored, no rotate/prune/retire, announce dead devices/links/untaken/revoked, stale-view always (killed after a test reorder)/no dedupe, box peer/own refetch, connect forces peers, list_update to request queue, no journal/send list, gap/stamp/keep/absence/refused/dedupe/fit).
 - Live drive, release web of the working tree + a throwaway `DRIVE_LOG` print (reverted before commit), one managed Chrome, origins 8091 (ana 342) / 8092–8094 (bob 343 devices 1, 2, 4), local stack:
   - Bob enabled linking and linked #2: ana had bob as not-enrolled (no pin) → `BOX_LIST_CARRIED refetched` (E50a's one lookup) → handoff taken, handed back.

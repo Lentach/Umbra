@@ -140,11 +140,14 @@ extension MessagingDecrypt on MessagingProvider {
       });
       return false;
     }
-    // No verified list held for this sender yet — the normal state after any
-    // reload, since the cache is memory-only. AWAIT one round trip rather than
-    // deferring the row: deferring would leave the first inbound message of
-    // every session sitting at `[encrypted]` until something else happened to
-    // re-trigger a decrypt pass.
+    // No verified list held for this sender yet: AWAIT one round trip rather
+    // than deferring the row — deferring would leave the first inbound message
+    // of every session at `[encrypted]` until something else re-triggered a
+    // decrypt pass. An old-path peer's list is memory-only (E50c); a box
+    // peer's is kept, so on the box this lookup runs only for a list never
+    // kept (the first start after upgrading) or dropped since — a named
+    // residual of E50f, since nothing re-offers a held box frame once the
+    // connect refresh lands.
     try {
       final fetched = await enc.getVerifiedDeviceList(m.senderId);
       if (fetched.isLiveDevice(originDeviceId)) {

@@ -517,6 +517,51 @@ void main() {
       return next;
     }
 
+    test('a box peer whose list the server answers but that never verifies '
+        'still lets the stamp be written, even when its answer comes last — '
+        'else every later start would re-ask for every friend', () async {
+      final broken = {
+        ...genuine(2, devices({3})),
+        'listSignature': genuine(3, devices({3, 4}))['listSignature'],
+      };
+      final next = _Me()..keepsDeviceListFor = (peer) => peer == _friend;
+      next.setEmitCallback((event, data) {
+        if (event == 'checkOwnKeyBundle') {
+          next.onOwnKeyBundleStatus({'exists': false});
+        }
+        if (event == 'getDeviceList' || event == 'getDeviceLists') {
+          final d = data as Map;
+          final users = d['userIds'] as List? ?? [d['userId']];
+          for (final user in users.cast<int>()) {
+            // Our own answer first; the friend's refused one arrives last.
+            Future<void>.delayed(
+              Duration(milliseconds: user == _friend ? 50 : 0),
+              () => next.onDeviceList({
+                'userId': user,
+                'authorization': user == _friend ? broken : null,
+              }),
+            );
+          }
+        }
+      });
+      await next.initializeE2E(1);
+      next.invalidateDeviceList(_friend);
+      expect(next.encryptionService.boxListsReadyAtMs, isNull);
+      final m = MessagingProvider()
+        ..setEncryptionProvider(next)
+        ..setCurrentUserId(1)
+        ..onConnect(false)
+        ..setEmitCallback((event, data) {})
+        ..boxFriends = link
+        ..boxOutbox = _Outbox()
+        ..refreshBoxDeviceLists();
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+
+      expect(next.cachedDeviceList(_friend), isNull, reason: 'refused');
+      expect(next.encryptionService.boxListsReadyAtMs, isNotNull);
+      m.dispose();
+    });
+
     test('a device never stamped box-ready owes each box peer one server '
         'answer, and is stamped only once none is owed — a stamp written '
         'first would waive the check for good', () async {

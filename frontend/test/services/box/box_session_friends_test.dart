@@ -103,6 +103,8 @@ class _RoutingBox {
             Timer.run(() => reader.push({'rid': rid, 'id': id, 'blob': blob}));
           }
           return {'ok': true};
+        case 'deleteQueue':
+          return deleteRefusal ?? {'ok': true};
         default:
           return {'ok': true};
       }
@@ -111,6 +113,9 @@ class _RoutingBox {
 
   final FakeBoxSockets sockets = FakeBoxSockets();
   final Map<String, String> _ridOfSid = {};
+
+  /// Answers every `deleteQueue` instead, while set.
+  Map<String, Object?>? deleteRefusal;
   final Map<String, FakeBoxSocket> _reader = {};
   int _queues = 0;
   int _messages = 0;
@@ -912,6 +917,9 @@ void main() {
           await settle();
           expect(a.friend.queues, hasLength(2), reason: 'not past it yet');
 
+          // The box already reaped it: a delete answers `auth_failed`
+          // ("gone", decision 10), which still counts as deleted.
+          box.deleteRefusal = {'ok': false, 'code': 'auth_failed'};
           a.clock = a.clock.add(const Duration(minutes: 1));
           a.session.friendDevicesChanged(5);
           await settle();
