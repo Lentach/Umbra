@@ -93,6 +93,9 @@ class _Link implements BoxFriendLink {
       awaiting.add((userId, deviceId));
 
   @override
+  void friendHeard(int userId, int deviceId) {}
+
+  @override
   void handOffTo(int userId) => handedOffTo.add(userId);
 }
 

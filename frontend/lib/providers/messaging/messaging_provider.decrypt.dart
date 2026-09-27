@@ -1589,6 +1589,9 @@ extension MessagingDecrypt on MessagingProvider {
       // Decrypt from this peer works again — allow a future failure to issue
       // a fresh rebuild request.
       _rebuildRequestedPeers.remove(msg.senderId);
+      // A friend device still on the old path may have lost our box
+      // handoff: it is handed our queue again now (item 5).
+      boxFriends?.friendHeard(msg.senderId, msg.originDeviceId ?? 1);
       try {
         final parsed = E2eEnvelope.parse(plaintext);
         _e2eFlowLog('DECRYPT_OK', {

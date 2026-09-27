@@ -749,6 +749,8 @@ extension MessagingBox on MessagingProvider {
       return _boxDecryptFailed(msg, e);
     }
     _rebuildRequestedPeers.remove(msg.senderId);
+    // A friend device that writes to us may have lost our handoff (item 5).
+    boxFriends?.friendHeard(msg.senderId, msg.originDeviceId ?? 1);
 
     final E2eEnvelopeFields parsed;
     try {

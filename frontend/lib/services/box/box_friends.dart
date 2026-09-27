@@ -101,6 +101,13 @@ abstract interface class BoxFriendLink {
   /// device started with it, if any, is answered.
   void friendRekeyAnswered(int userId, int deviceId);
 
+  /// A message from [userId]'s device [deviceId] was read, on the box or the
+  /// old path: that device is not silent. When it has not acknowledged our
+  /// queue, the day between handoffs (`kFriendHandoffResend`) is for devices
+  /// that are, so it is handed our queue again now — once per device per
+  /// session, and not while this connect's own handoff may be in flight.
+  void friendHeard(int userId, int deviceId);
+
   /// Hand our queue to [userId]'s devices now, whatever this connect already
   /// sent: a handoff from it could not be read because this device holds no
   /// anchor for that account yet, and building our session with it pins one

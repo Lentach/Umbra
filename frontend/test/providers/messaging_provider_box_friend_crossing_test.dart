@@ -128,6 +128,7 @@ class _Link implements BoxFriendLink {
 
   final Set<int> _rekeyed = {};
   final Map<int, DateTime> _asked = {};
+  final Set<int> _heard = {};
 
   /// Re-keys that went out, over every session.
   int rekeys = 0;
@@ -179,6 +180,7 @@ class _Link implements BoxFriendLink {
   Future<void> restart() {
     _rekeyed.clear();
     _asked.clear();
+    _heard.clear();
     return reconnect();
   }
 
@@ -225,12 +227,20 @@ class _Link implements BoxFriendLink {
   }
 
   @override
-  void friendRekeyAnswered(int userId, int deviceId) =>
-      _asked.remove(deviceId);
+  void friendRekeyAnswered(int userId, int deviceId) => _asked.remove(deviceId);
 
   @override
   void friendSessionStarted(int userId, int deviceId) =>
       _asked[deviceId] = _now;
+
+  /// `BoxFriendHandoff.friendHeard`: an unacked device that is heard from
+  /// is handed our queue again now, once per session.
+  @override
+  void friendHeard(int userId, int deviceId) {
+    if (acked || handedAt == null || _handed || !_heard.add(deviceId)) return;
+    handedAt = null;
+    handOffTo(userId);
+  }
 
   @override
   void handOffTo(int userId) {
@@ -330,9 +340,17 @@ void main() {
     // The old path: a wrote to b, b answered — an established session each
     // way, and no window open on either side.
     final first = (await a.reader.encryptForFriend(5, 3, '{"t":"x"}'))!;
-    await b.enc.encryptionService.decrypt(1, first.signalCiphertext, deviceId: 2);
+    await b.enc.encryptionService.decrypt(
+      1,
+      first.signalCiphertext,
+      deviceId: 2,
+    );
     final reply = (await b.reader.encryptForFriend(1, 2, '{"t":"y"}'))!;
-    await a.enc.encryptionService.decrypt(5, reply.signalCiphertext, deviceId: 3);
+    await a.enc.encryptionService.decrypt(
+      5,
+      reply.signalCiphertext,
+      deviceId: 3,
+    );
     a.link._asked.clear();
     b.link._asked.clear();
     E2eDiagLog.clear();

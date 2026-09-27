@@ -41,8 +41,10 @@ const Duration kFriendHandoffResend = Duration(hours: 24);
 /// list arrives and when a friend's device list changes. A device is handed
 /// a given queue at most once per connect, and again only
 /// [kFriendHandoffResend] after the last time ([ContactQueue.handedAt],
-/// kept across connects). No queue is created for a friend with no device
-/// to hand it to; a pass's new queues are subscribed in one frame.
+/// kept across connects) — sooner once it is heard from ([friendHeard]). No
+/// queue is created for a friend with no device to hand it to. A pass makes
+/// its queues first, subscribes the new ones in ONE frame, and only then
+/// hands them: a queue the box does not follow yet is never handed.
 /// `rate_limited` stops the pass and runs it again after `retryAfter`.
 class BoxFriendHandoff {
   BoxFriendHandoff({
@@ -77,6 +79,17 @@ class BoxFriendHandoff {
 
   /// `user:device:sid` handed this connect.
   final Set<String> _handed = {};
+
+  /// `user:device` handed our queue again because it was heard from, this
+  /// session ([friendHeard]).
+  final Set<String> _heard = {};
+
+  /// `user:device:stage:code` already in the durable log this session.
+  final Set<String> _failures = {};
+
+  /// Queues a pass made that the box has not taken a subscribe for yet, by
+  /// rid. None is handed until it has: every later pass asks again first.
+  final Map<String, BoxQueueAuth> _unsubscribed = {};
 
   bool _accountReady = false;
   bool _e2eReady = false;
@@ -118,15 +131,20 @@ class BoxFriendHandoff {
     if (data is! List) return;
     final queues = <int, Map<int, ContactOutbound>>{};
     for (final user in data) {
-      if (user case {'id': final int userId, 'devices': final List<Object?> devices}) {
+      if (user case {
+        'id': final int userId,
+        'devices': final List<Object?> devices,
+      }) {
         queues[userId] = {
           for (final device in devices)
-            if (device case {
-              'deviceId': final int deviceId,
-              'requestSid': final String sid,
-              'sealPub': final String sealPub,
-            } when boxB64Decode(sid, kBoxSidBytes) != null &&
-                boxB64Decode(sealPub, 32) != null)
+            if (device
+                case {
+                  'deviceId': final int deviceId,
+                  'requestSid': final String sid,
+                  'sealPub': final String sealPub,
+                }
+                when boxB64Decode(sid, kBoxSidBytes) != null &&
+                    boxB64Decode(sealPub, 32) != null)
               deviceId: ContactOutbound(
                 peerDeviceId: deviceId,
                 sid: sid,
@@ -144,6 +162,38 @@ class BoxFriendHandoff {
   void friendChanged(int userId) {
     _handed.removeWhere((key) => key.startsWith('$userId:'));
     run();
+  }
+
+  /// A message from friend [userId]'s device [deviceId] was read
+  /// ([BoxFriendLink.friendHeard]): a device that has not acknowledged our
+  /// queue, was handed it on an earlier connect and still talks to us lost
+  /// that handoff, so it gets it again now rather than a day later — once
+  /// per device per session.
+  void friendHeard(int userId, int deviceId) {
+    if (_disposed) return;
+    final record = _store.byUserId(userId);
+    final queue = record?.queues.firstOrNull;
+    if (record?.state != ContactState.friend ||
+        queue == null ||
+        queue.ackedBy.contains(deviceId) ||
+        !queue.handedAt.containsKey(deviceId) ||
+        _handed.contains('$userId:$deviceId:${queue.sid}') ||
+        !_heard.add('$userId:$deviceId')) {
+      return;
+    }
+    unawaited(
+      _store
+          .update(userId, (current) {
+            final i =
+                current?.queues.indexWhere((q) => q.sid == queue.sid) ?? -1;
+            if (current == null || i < 0) return null;
+            return current.copyWith(
+              queues: [...current.queues]
+                ..[i] = current.queues[i].withoutHanded(deviceId),
+            );
+          })
+          .then((_) => friendChanged(userId)),
+    );
   }
 
   /// Records that [userId]'s [deviceId] was handed [sid] outside a pass (a
@@ -249,59 +299,69 @@ class BoxFriendHandoff {
     // Every lookup starts in this one turn, so a connect's lists leave as
     // one batched frame (E20a).
     final lists = await Future.wait([for (final f in friends) lookup(f)]);
-    final created = <BoxQueueAuth>[];
-    try {
-      for (var i = 0; i < friends.length; i++) {
-        if (_disposed || !_accountReady) return;
-        final live = lists[i];
-        if (live == null) continue;
-        if (!await _handTo(friends[i], live, created)) return;
+    // Every queue the pass hands is made first, so its new ones go out in
+    // ONE subscribe frame (chunked by the client past 256): the box counts
+    // subscribe frames, 60 per 15 min per IP.
+    final plans = <({int userId, ContactQueue queue, Map<int, _Target> to})>[];
+    for (var i = 0; i < friends.length; i++) {
+      if (_disposed || !_accountReady) return;
+      final live = lists[i];
+      if (live == null) continue;
+      final userId = friends[i];
+      final targets = {for (final d in live) d: ?targetOf(userId, d)};
+      if (targets.isEmpty) continue;
+      final hadQueue = _store.byUserId(userId)?.queues.isNotEmpty ?? false;
+      switch (await _keys.ensureInbound(userId, subscribe: false)) {
+        case InboundQueueCreated(:final queue):
+          if (!hadQueue) {
+            if (QueueKeys.authOf(queue) case final auth?) {
+              _unsubscribed[queue.rid] = auth;
+            }
+            // A new queue gets its push notifier (E9) like every contact
+            // queue.
+            _queueCreated();
+          }
+          plans.add((userId: userId, queue: queue, to: targets));
+        case InboundQueueNotCreated(:final answer):
+          if (!_refused(answer, 'create', userId: userId)) return;
+        case InboundQueueNotStored():
+          continue;
       }
-    } finally {
-      // One frame for the whole pass (chunked by the client past 256): the
-      // box counts subscribe frames, 60 per 15 min per IP. A refused frame
-      // leaves the rids in the client's set for its next reconnect.
-      if (created.isNotEmpty && !_disposed) {
-        final answer = await _box.subscribe(created);
-        if (answer is! BoxOk) {
-          E2ePersistentDiag.record('BOX_FRIEND_HANDOFF_FAILED', {
-            'stage': 'subscribe',
-            'queues': created.length,
-          });
-        }
+    }
+    // A handoff invites that device to write into the queue: it goes out
+    // only once the box follows the queue, or what the device writes is not
+    // read before the next connect. A queue an earlier pass could not
+    // subscribe is asked for again here.
+    if (_unsubscribed.isNotEmpty) {
+      if (_disposed) return;
+      final asked = {..._unsubscribed};
+      final answer = await _box.subscribe(asked.values);
+      if (answer is BoxOk) {
+        _unsubscribed.removeWhere((rid, _) => asked.containsKey(rid));
+      } else if (!_refused(
+        answer,
+        'subscribe',
+        extra: {'queues': asked.length},
+      )) {
+        return;
       }
+    }
+    for (final plan in plans) {
+      if (_disposed || !_accountReady) return;
+      if (_unsubscribed.containsKey(plan.queue.rid)) continue;
+      if (!await _handTo(plan.userId, plan.queue, plan.to)) return;
     }
   }
 
-  /// Hands our queue for [userId] to each of its [live] devices that has a
-  /// target and has not acknowledged it; a queue made for it goes into
-  /// [created], to be subscribed with the rest of the pass. False to stop
-  /// the pass (rate limited: a retry is armed).
+  /// Hands [queue], our queue for [userId], to each device in [targets]
+  /// that has not acknowledged it, at most once per connect and once per
+  /// [kFriendHandoffResend]. False to stop the pass (rate limited: a retry
+  /// is armed).
   Future<bool> _handTo(
     int userId,
-    Set<int> live,
-    List<BoxQueueAuth> created,
+    ContactQueue queue,
+    Map<int, _Target> targets,
   ) async {
-    final targets = {
-      for (final d in live) d: ?targetOf(userId, d),
-    };
-    if (targets.isEmpty) return true;
-    final hadQueue = _store.byUserId(userId)?.queues.isNotEmpty ?? false;
-    final ensured = await _keys.ensureInbound(userId, subscribe: false);
-    final ContactQueue queue;
-    switch (ensured) {
-      case InboundQueueCreated(queue: final q):
-        queue = q;
-      case InboundQueueNotCreated(:final answer):
-        return _refused(answer, 'create');
-      case InboundQueueNotStored():
-        return true;
-    }
-    if (!hadQueue) {
-      if (QueueKeys.authOf(queue) case final auth?) created.add(auth);
-      // A new queue gets its push notifier (E9) like every contact queue.
-      _queueCreated();
-    }
     final handoff = jsonEncode(
       E2eEnvelope.buildQueueHandoff(sid: queue.sid, sealPub: queue.sealPub),
     );
@@ -317,10 +377,7 @@ class BoxFriendHandoff {
       if (_disposed || seal == null) return false;
       final frame = await seal(userId, device, handoff);
       if (frame == null) {
-        E2ePersistentDiag.record('BOX_FRIEND_HANDOFF_FAILED', {
-          'device': device,
-          'stage': 'encrypt',
-        });
+        _failed('encrypt', 'no_frame', userId: userId, device: device);
         continue;
       }
       final answer = await send(target, frame);
@@ -334,31 +391,32 @@ class BoxFriendHandoff {
         continue;
       }
       if (answer is BoxRefused<void> && answer.code == BoxCode.rateLimited) {
-        return _refused(answer, 'send');
+        return _refused(answer, 'send', userId: userId, device: device);
       }
-      E2ePersistentDiag.record('BOX_FRIEND_HANDOFF_FAILED', {
-        'device': device,
-        'stage': 'send',
-        'answer': switch (answer) {
-          BoxRefused<void>(:final code) => code.wire,
-          BoxUnknown<void>(:final reason) => reason.name,
-          _ => 'seal',
-        },
-      });
+      _failed('send', _codeOf(answer), userId: userId, device: device);
     }
     return true;
   }
 
   /// A refusal while handing off: a rate limit stops the pass and arms a
-  /// retry; anything else is recorded and the pass goes on.
-  bool _refused(BoxResult<Object?> answer, String stage) {
-    final limited = answer is BoxRefused<Object?> &&
-        answer.code == BoxCode.rateLimited;
-    E2ePersistentDiag.record('BOX_FRIEND_HANDOFF_FAILED', {
-      'stage': stage,
-      if (limited) 'rateLimited': true,
-    });
-    if (answer is! BoxRefused<Object?> || !limited) return true;
+  /// retry; anything else is logged and the pass goes on.
+  bool _refused(
+    BoxResult<Object?> answer,
+    String stage, {
+    int? userId,
+    int? device,
+    Map<String, Object?> extra = const {},
+  }) {
+    _failed(
+      stage,
+      _codeOf(answer),
+      userId: userId,
+      device: device,
+      extra: extra,
+    );
+    if (answer is! BoxRefused<Object?> || answer.code != BoxCode.rateLimited) {
+      return true;
+    }
     _retry?.cancel();
     _retry = Timer(answer.retryAfter ?? kFriendHandoffRetry, () {
       _retry = null;
@@ -366,4 +424,38 @@ class BoxFriendHandoff {
     });
     return false;
   }
+
+  /// Logs a failed step durably once per friend device, stage and code per
+  /// session: a pass repeats on every connect and friends list, and the
+  /// durable log keeps only [E2ePersistentDiag.kMaxEntries] lines. A repeat
+  /// goes to the in-memory ring only.
+  void _failed(
+    String stage,
+    String code, {
+    int? userId,
+    int? device,
+    Map<String, Object?> extra = const {},
+  }) {
+    final data = {
+      'device': ?device,
+      'stage': stage,
+      'code': code,
+      ...extra,
+    };
+    if (_failures.add('${userId ?? '-'}:${device ?? '-'}:$stage:$code')) {
+      E2ePersistentDiag.record('BOX_FRIEND_HANDOFF_FAILED', data);
+    } else {
+      E2eDiagLog.add('BOX_FRIEND_HANDOFF_FAILED', data);
+    }
+  }
+
+  /// A box answer as the log names it; null is a blob that could not be
+  /// sealed.
+  static String _codeOf(BoxResult<Object?>? answer) => switch (answer) {
+    BoxRefused<Object?>(:final code) => code.wire,
+    BoxUnknown<Object?>(:final reason) => reason.name,
+    _ => 'seal',
+  };
 }
+
+typedef _Target = ({ContactOutbound to, bool viaRequest});

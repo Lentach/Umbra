@@ -12,6 +12,7 @@ import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/services/contacts/contact_store.dart';
 import 'package:fireplace/services/encryption/content_kv.dart';
 import 'package:fireplace/utils/e2e_envelope.dart';
+import 'package:fireplace/utils/e2e_persistent_diag.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../support/box_fakes.dart';
@@ -81,6 +82,10 @@ class _RoutingBox {
             'nid': boxB64(_bytes(16, 0x40 + n)),
           };
         case 'subscribe':
+          final refused = subscribeRefusal;
+          if (refused != null && identical(socket, subscribeRefusedOn)) {
+            return refused;
+          }
           for (final s in f.frame['subs']! as List<Object?>) {
             _reader[(s! as Map)['rid']! as String] = socket;
           }
@@ -107,6 +112,10 @@ class _RoutingBox {
   int _queues = 0;
   int _messages = 0;
   Map<String, Object?>? createRefusal;
+
+  /// Answers every `subscribe` from [subscribeRefusedOn] instead, while set.
+  Map<String, Object?>? subscribeRefusal;
+  FakeBoxSocket? subscribeRefusedOn;
 
   /// Every sid a `send` went to, in order.
   final List<String> sent = [];
@@ -143,6 +152,9 @@ class _Device {
   /// Reads nothing: a device that has not answered yet.
   bool deaf = false;
 
+  /// Every encrypt fails: no session could be built.
+  bool encryptFails = false;
+
   /// This device's clock.
   DateTime clock = DateTime.utc(2026, 9, 26, 12);
 
@@ -159,7 +171,10 @@ class _Device {
     bool fresh = false,
   }) async {
     final live = friendLive;
-    if (toUser != friendId || live == null || !live.contains(toDevice)) {
+    if (encryptFails ||
+        toUser != friendId ||
+        live == null ||
+        !live.contains(toDevice)) {
       return null;
     }
     if (fresh) freshFor.add(toDevice);
@@ -238,7 +253,8 @@ class _Device {
     session
       ..consumer = read
       ..encryptForFriend = encrypt
-      ..friendLiveDevices = ((user) async => user == friendId ? friendLive : null)
+      ..friendLiveDevices = ((user) async =>
+          user == friendId ? friendLive : null)
       ..e2eReady();
     started = true;
     socket.serverConnect('S$userId.$deviceId');
@@ -287,7 +303,8 @@ void main() {
   late _Device a;
   late _Device b;
 
-  setUp(() {
+  setUp(() async {
+    await E2ePersistentDiag.clear();
     box = _RoutingBox();
     a = _Device(1, 2, 5, box)..friendLive = {3};
     b = _Device(5, 3, 1, box)..friendLive = {2};
@@ -452,6 +469,136 @@ void main() {
   );
 
   test(
+    'a device that has not acknowledged our queue but is heard from is '
+    'handed it again at once, not a day later — once per device per '
+    'session, and not while this connect has just handed it',
+    () async {
+      await a.start();
+      await b.start();
+      b.deaf = true;
+      a.session.onFriendsList([b.listed]);
+      await settle();
+      final toB = b.store.requestQueue!.sid;
+      int handoffs() => box.sent.where((sid) => sid == toB).length;
+      expect(handoffs(), 1);
+
+      Future<void> reconnect() async {
+        a.session
+          ..accountLost()
+          ..accountReady(2)
+          ..e2eReady()
+          ..onFriendsList([b.listed]);
+        await settle();
+      }
+
+      // Heard while the handoff this connect sent may still be in flight.
+      a.session.friendHeard(5, 3);
+      await settle();
+      expect(handoffs(), 1);
+
+      a.clock = a.clock.add(const Duration(hours: 1));
+      await reconnect();
+      expect(handoffs(), 1, reason: 'silent so far: the day holds');
+      a.session.friendHeard(5, 3);
+      await settle();
+      expect(handoffs(), 2);
+      expect(a.friend.queues.single.handedAt[3], a.clock);
+
+      a.clock = a.clock.add(const Duration(hours: 1));
+      await reconnect();
+      a.session.friendHeard(5, 3);
+      await settle();
+      expect(handoffs(), 2, reason: 'once per device per session');
+
+      // A device never handed anything, or someone who is no contact.
+      a.session
+        ..friendHeard(5, 9)
+        ..friendHeard(7, 3);
+      await settle();
+      expect(handoffs(), 2);
+    },
+  );
+
+  test(
+    'a handoff goes out only once its new queue is subscribed: a subscribe '
+    'that is rate limited holds every send, and the pass runs again after '
+    'the wait — so the answer into that queue is read',
+    () async {
+      await a.start();
+      await b.start();
+      box
+        ..subscribeRefusal = {
+          'ok': false,
+          'code': 'rate_limited',
+          'retryAfterMs': 1000,
+        }
+        ..subscribeRefusedOn = a.socket;
+      a.session.onFriendsList([b.listed]);
+      await settle();
+      expect(a.friend.queues, hasLength(1));
+      expect(box.sent, isEmpty);
+
+      box.subscribeRefusal = null;
+      await Future<void>.delayed(const Duration(milliseconds: 1500));
+      await settle();
+
+      final queue = a.friend.queues.single;
+      expect(b.outboundOf(2)?.sid, queue.sid);
+      expect(queue.ackedBy, [3], reason: "b's ack came into our new queue");
+    },
+  );
+
+  test(
+    'a subscribe the box refuses outright holds that queue back too, and the '
+    'next pass subscribes it before handing it',
+    () async {
+      await a.start();
+      await b.start();
+      box
+        ..subscribeRefusal = {'ok': false, 'code': 'internal'}
+        ..subscribeRefusedOn = a.socket;
+      a.session.onFriendsList([b.listed]);
+      await settle();
+      expect(a.friend.queues, hasLength(1));
+      expect(box.sent, isEmpty);
+
+      box.subscribeRefusal = null;
+      a.session.onFriendsList([b.listed]);
+      await settle();
+
+      final queue = a.friend.queues.single;
+      expect(b.outboundOf(2)?.sid, queue.sid);
+      expect(queue.ackedBy, [3], reason: "b's ack came into our new queue");
+    },
+  );
+
+  test(
+    'a handoff failure is logged durably once per friend device, stage and '
+    'code per session, however many passes repeat it',
+    () async {
+      a.encryptFails = true;
+      await a.start();
+      await b.start();
+      a.session.onFriendsList([b.listed]);
+      await settle();
+      a.session.handOffTo(5);
+      await settle();
+      a.session
+        ..accountLost()
+        ..accountReady(2)
+        ..e2eReady()
+        ..onFriendsList([b.listed]);
+      await settle();
+
+      final failed = E2ePersistentDiag.entries
+          .where((e) => e.contains('BOX_FRIEND_HANDOFF_FAILED'))
+          .toList();
+      expect(failed, hasLength(1));
+      expect(failed.single, contains('stage: encrypt'));
+    },
+  );
+
+  test(
     "many friends' new queues are subscribed in ONE frame: the box allows "
     '60 subscribe frames per 15 min per IP, and one frame per queue left '
     'every friend past the 60th unsubscribed (review)',
@@ -480,8 +627,16 @@ void main() {
             {
               'deviceId': 1,
               // Nothing the fake box hands out (its sids fill 0x80 + n).
-              'requestSid': boxB64(Uint8List(32)..[0] = 0xEE..[1] = f),
-              'sealPub': boxB64(Uint8List(32)..[0] = 0xEE..[1] = f),
+              'requestSid': boxB64(
+                Uint8List(32)
+                  ..[0] = 0xEE
+                  ..[1] = f,
+              ),
+              'sealPub': boxB64(
+                Uint8List(32)
+                  ..[0] = 0xEE
+                  ..[1] = f,
+              ),
             },
           ],
         });
@@ -519,7 +674,8 @@ void main() {
       }
 
       final rids = {
-        for (final f in list) store.byUserId(f['id']! as int)!.queues.single.rid,
+        for (final f in list)
+          store.byUserId(f['id']! as int)!.queues.single.rid,
       };
       expect(rids, hasLength(count));
       final frames = socket.emitted

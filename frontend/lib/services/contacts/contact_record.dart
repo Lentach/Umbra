@@ -80,6 +80,12 @@ class ContactQueue {
   ContactQueue withHanded(int deviceId, DateTime at) =>
       _with(handedAt: {...handedAt, deviceId: at});
 
+  /// This queue, its last handoff to the peer's [deviceId] forgotten: that
+  /// device is heard from, so the day between handoffs no longer applies.
+  ContactQueue withoutHanded(int deviceId) => handedAt.containsKey(deviceId)
+      ? _with(handedAt: {...handedAt}..remove(deviceId))
+      : this;
+
   ContactQueue _with({List<int>? ackedBy, Map<int, DateTime>? handedAt}) =>
       ContactQueue(
         rid: rid,

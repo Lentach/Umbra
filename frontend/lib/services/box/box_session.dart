@@ -724,6 +724,11 @@ class BoxSession implements BoxOutbox, BoxSiblingLink, BoxFriendLink {
       _friendRekeyAsked.remove('$userId:$deviceId');
 
   @override
+  void friendHeard(int userId, int deviceId) {
+    if (!_disposed) _friends.friendHeard(userId, deviceId);
+  }
+
+  @override
   void handOffTo(int userId) {
     if (!_disposed) _friends.friendChanged(userId);
   }
