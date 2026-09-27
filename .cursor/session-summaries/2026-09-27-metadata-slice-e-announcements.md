@@ -23,7 +23,7 @@
   - Bob enabled linking and linked #2: ana had bob as not-enrolled (no pin) → `BOX_LIST_CARRIED refetched` (E50a's one lookup) → handoff taken, handed back.
   - Bob linked #4: ana `DEVICE_LIST_CARRIED {version: 3, [1,2,4]}` → `adopted`, handoff taken, NO `DEVICE_LIST_FETCH_EMIT`. Ana's send: `BOX_SEND frames 3`.
   - Bob revoked #2: bob1 and bob4 `BOX_OWN_LIST_ANNOUNCED {all: true}`; ana adopted v4 [1,4] (second copy `stale`), `BOX_FRIEND_QUEUE_ROTATED`, new queue handed to 1 and 4 over their queues; ana's next send `frames 2`, both received. `messages` rows for the chat: 0.
-- CI on `cdc1f179` (branch push, draft PR #185): 7/7 success — Backend tests, Flutter analyze and tests, E2E wire harness, E2E isolated probes, Web Lock probe, CodeQL, Analyze (actions).
+- CI 7/7 on `a74d0ae5` (follow-up; `18b73152` after it is docs-only). Earlier, CI on `cdc1f179` (branch push, draft PR #185): 7/7 success — Backend tests, Flutter analyze and tests, E2E wire harness, E2E isolated probes, Web Lock probe, CodeQL, Analyze (actions).
 - NOT verified: E50f's stale-view answer live (unit-tested only); the 30-d retire and the gap re-check live (clock tests); Android/iOS; prod (box OFF).
 
 ## Notes for next session
