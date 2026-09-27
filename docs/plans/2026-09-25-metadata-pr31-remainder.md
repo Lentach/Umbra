@@ -12,7 +12,7 @@
 | 4 | **Message actions over E2E**: reactions (plain emoji), pin, edit, delete-for-everyone | 3 | DONE 09-26 (`81b795e8`, decisions 45–46, E19a–E19j; web drive a–f passed; CI 7/7 on `c7f4abd0`) |
 | 5 | **Slice (d)**: migration handoff over the old path | (c) | moves existing friendships onto the box |
 | 6 | **Slice (e)**: `device_added` / `device_removed` / `list_update` over the box | (b), (c) | DONE 09-27 (decisions 50–51, E50a–E50f; web drive of a link and a revoke with no friend-list lookup) |
-| 7 | **Slice (f)**: first contact over request queues | (a), part A frames | friend requests over the box; OWNER questions O20–O23 asked 09-27 (§ Item 7), build waits for the answers |
+| 7 | **Slice (f)**: first contact over request queues | (a), part A frames | friend requests over the box; O20–O23 ANSWERED 09-27 (decisions 52–55, § Item 7) |
 | 8 | **Slice (g)**: receipts and typing (D5, 33) | 3 | |
 | 9 | **Prod prerequisites** for `BOX_ENABLED`: global ceiling (30), per-socket rid cap, media refusals counted | — | DONE 09-26 (`box_totals` migration 0024, E10–E12; client reads `limit` as not gone); prod still `BOX_ENABLED: 'false'` until G5 |
 | 10 | **G5**: gate review, migration rehearsal on a device (master APK, then the branch APK over it), then release N | 1–9 | owner gate |
@@ -167,7 +167,9 @@ Engineering calls: E50a–E50f in the decision log. E50a (the DAK pin) was added
 
 Proof beyond the ladder: falsification tests for E50a (a list under a forged DAK' on `list_update` and on the handoff is refused, red first); a live drive of a link and a revoke with no `getDeviceList` from the friend's device between connects.
 
-## Item 7 (slice (f), first contact): OWNER questions O20–O23 — OPEN (asked 2026-09-27)
+## Item 7 (slice (f), first contact): OWNER questions O20–O23 — ANSWERED 2026-09-27 in one pass (decisions 52–55)
+
+O20 → (a) on the devices only, local chat id (52) · O21 → (a) one `searchUsers` at accept (53; changes design §4.4's residual) · O22 → (a) a decline tells the requester nothing (54) · O23 → (a) the request and the accept carry the profiles (55).
 
 What exists today. Search already hands the searcher every device of the target with a claimed bundle (one OTP each), its request address and the byte-exact `authorization` (PR3.2). But the request itself, the accept and the decline are old-path server events (`sendFriendRequest` / `acceptFriendRequest` / `rejectFriendRequest`, `chat-friend-request.service.ts:245-607`). They write a `friend_requests` row, and the accept creates a `conversations` row (`findOrCreate`, :452; the mutual auto-accept at :197). Every one of them names the pair to the server. The box reader finishes any request-queue frame from an account that is not a friend or our own (`MessagingBox._readFriendRequest`). The server's `searchUsers` still answers `[]` for a friend (`chat-search.service.ts:70-74`), so decision 4 is not built yet; it lands in this slice.
 
@@ -191,7 +193,7 @@ What the approved design assumes, and what it does not say. Design §4.4 puts th
 - (a) **The request and the accept carry each side's profile.** Later changes reach these friends in a later slice (an E2E profile update, needed by every friend in release N+1). Until then a photo or bio changed after the add stays as it was on the other side. *Recommended:* this keeps (f) to first contact.
 - (b) Build the E2E profile update in (f) too, sent on every own profile change to every friend made over the box.
 
-### ENGINEERING calls for item 7 (agent's, with the reason; written for O20 (a), revisited after the answers)
+### ENGINEERING calls for item 7 (agent's, with the reason)
 
 - **E15a. When the box carries a request.** A request goes over the box only when EVERY live device in the target's search result has a request address AND every live own sibling has a self-queue address. Otherwise it goes over the old path, as today, never split per device. *Reason:* decision 16's all-or-nothing rule. A device on an older app would never learn the friendship.
 - **E15b. The request.** For each live target device: verify the search's `authorization` with the I7 chain and pin it as the server-served DAK (E50a). Build the session from that device's claimed bundle; the anchor is pinned from the server's answer, which is the old path's trust. Then send one list-bearing PreKey frame (0x33, own list outside Signal, E50b) into its request queue. The envelope is `{t: 'friend_request', sid, sealPub, p}`: our new inbound queue for that account (`QueueKeys.ensureInbound` on a `pendingOut` record) and our profile (O23). *Reason:* design §4.4; the searcher already holds everything the server would have vouched for.
