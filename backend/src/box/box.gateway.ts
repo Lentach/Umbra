@@ -69,7 +69,7 @@ export class BoxGateway implements OnGatewayDisconnect {
    * A queue the socket owned that still holds messages wakes its device:
    * those went to this socket instead of to a push, and it may never have
    * read them. Like `send`'s push, it fires even if the device resubscribes
-   * within the coalescing wait.
+   * within the coalescing wait. `quiet` messages never wake (decision 61).
    */
   async handleDisconnect(client: Socket): Promise<void> {
     const owned = this.delivery.detachSocket(client.id);
@@ -112,18 +112,35 @@ export class BoxGateway implements OnGatewayDisconnect {
     };
   }
 
+  /**
+   * `mode` (decision 61, E61a): `live` is never stored or counted and never
+   * wakes — one push to the rid's socket of this moment, if any; `quiet` is
+   * stored like any send but never schedules the notifier. Both answer like
+   * an ordinary send; `live` answers `{ok:true}` whether or not a socket got
+   * it, and for an unknown sid (no presence or block oracle).
+   */
   @Throttle({ default: { limit: BOX_LIMITS.send, ttl: BOX_THROTTLE_TTL_MS } })
   @SubscribeMessage('send')
   async send(@MessageBody() data: unknown): Promise<BoxAnswer> {
     const cmd = parseSend(data);
     if (!cmd) return INVALID;
-    const stored = await this.box.enqueue(cmd.sid, cmd.blob);
+    if (cmd.mode === 'live') {
+      const rid = await this.box.ridBySid(cmd.sid);
+      if (rid) this.delivery.pushLive(rid, cmd.blob);
+      return { ok: true };
+    }
+    const quiet = cmd.mode === 'quiet';
+    const stored = await this.box.enqueue(cmd.sid, cmd.blob, quiet);
     if (stored.result === 'full') return { ok: false, code: 'queue_full' };
     if (stored.result === 'over_ceiling') {
       countRefusal('send:ceiling');
       return { ok: false, code: 'quota_exceeded' };
     }
-    if (stored.result === 'stored' && !this.delivery.onEnqueued(stored.rid)) {
+    if (
+      stored.result === 'stored' &&
+      !this.delivery.onEnqueued(stored.rid) &&
+      !quiet
+    ) {
       this.notifier.schedule(stored.nid);
     }
     return { ok: true };

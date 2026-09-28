@@ -433,6 +433,32 @@ void main() {
       },
     );
 
+    test(
+      "deliver without a mode sends exactly today's frame; with one, the "
+      'frame carries `mode` (decision 61, E61a)',
+      () async {
+        await boxUp('S1');
+        expect(await session.deliver(address, Uint8List(4)), isTrue);
+        expect(
+          await session.deliver(address, Uint8List(4), mode: BoxSendMode.live),
+          isTrue,
+        );
+        expect(
+          await session.deliver(
+            address,
+            Uint8List(4),
+            mode: BoxSendMode.quiet,
+          ),
+          isTrue,
+        );
+
+        final frames = [for (final f in sends()) f.frame];
+        expect(frames[0].keys, unorderedEquals(['v', 'sid', 'blob']));
+        expect(frames[1], containsPair('mode', 'live'));
+        expect(frames[2], containsPair('mode', 'quiet'));
+      },
+    );
+
     test('a refused send is false', () async {
       await boxUp('S1');
       sendAnswer = {'ok': false, 'code': 'queue_full'};

@@ -24,10 +24,10 @@ abstract interface class BoxOutbox {
   /// lists the connect re-verifies (decision 21).
   Iterable<int> coveredPeers();
 
-  /// Seals [body] (a `BoxFrame`) to [to] and sends it. True only when the
-  /// box answered ok; a refusal, no answer and a seal that failed are all
-  /// false.
-  Future<bool> deliver(ContactOutbound to, Uint8List body);
+  /// Seals [body] (a `BoxFrame`) to [to] and sends it, kept as [mode] says
+  /// (none = an ordinary send). True only when the box answered ok; a
+  /// refusal, no answer and a seal that failed are all false.
+  Future<bool> deliver(ContactOutbound to, Uint8List body, {BoxSendMode? mode});
 
   /// A fresh local message id (decision 14) for a message this device
   /// sends, from the counter box deliveries draw on; null when the store

@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:fireplace/l10n/app_localizations.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
+import 'package:fireplace/providers/settings_provider.dart';
 import 'package:fireplace/screens/privacy_safety_screen.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
 
@@ -11,8 +12,13 @@ void main() {
     tester,
   ) async {
     await tester.pumpWidget(
-      ChangeNotifierProvider(
-        create: (_) => EncryptionProvider(),
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider(create: (_) => EncryptionProvider()),
+          ChangeNotifierProvider(
+            create: (_) => SettingsProvider(initialThemePreference: 'dark'),
+          ),
+        ],
         child: MaterialApp(
           theme: RpgTheme.themeDataDarkGray,
           localizationsDelegates: AppLocalizations.localizationsDelegates,

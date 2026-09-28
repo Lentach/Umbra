@@ -148,9 +148,14 @@ export class BoxService {
    * and so is one for an unknown sid: at the ceiling a dead sid must read
    * like a live one (no block oracle). The queue row is locked for the
    * duration, so the count checks and the insert cannot interleave with
-   * another send.
+   * another send. `quiet` (decision 61) only marks the row so the
+   * socket-gone wake skips it; caps, expiry and delivery are the same.
    */
-  async enqueue(sid: Buffer, blob: Buffer): Promise<EnqueueResult> {
+  async enqueue(
+    sid: Buffer,
+    blob: Buffer,
+    quiet = false,
+  ): Promise<EnqueueResult> {
     return this.db.transaction(async (tx) => {
       const rows: {
         rid: Buffer;
@@ -200,18 +205,32 @@ export class BoxService {
       }
       const now = Date.now();
       await tx.query(
-        `INSERT INTO public.box_msgs (id, rid, blob, "createdAt", "expiresAt")
-         VALUES ($1, $2, $3, $4, $5)`,
+        `INSERT INTO public.box_msgs
+           (id, rid, blob, "createdAt", "expiresAt", quiet)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
         [
           randomBytes(BOX_MSG_ID_BYTES),
           queue.rid,
           blob,
           new Date(now),
           new Date(now + BOX_MSG_TTL_MS),
+          quiet,
         ],
       );
       return { result: 'stored', rid: queue.rid, nid: queue.nid } as const;
     });
+  }
+
+  /**
+   * The rid behind `sid`, or null for an unknown sid. Read only: a `live`
+   * send (decision 61) stores and counts nothing.
+   */
+  async ridBySid(sid: Buffer): Promise<Buffer | null> {
+    const rows: { rid: Buffer }[] = await this.db.query(
+      `SELECT rid FROM public.box_queues WHERE sid = $1`,
+      [sid],
+    );
+    return rows[0]?.rid ?? null;
   }
 
   /** The auth key of each rid that exists, keyed by its base64url form. */
@@ -242,16 +261,18 @@ export class BoxService {
 
   /**
    * The nid of each queue in `rids` still holding a message delivery would
-   * hand out (not expired): a socket that owned them went away, and what it
-   * was handed may be unread. Read-only, so the lock order (queue rows
-   * before msg rows) is not involved.
+   * hand out (not expired) that may wake a device (not `quiet`, decision
+   * 61): a socket that owned them went away, and what it was handed may be
+   * unread. Read-only, so the lock order (queue rows before msg rows) is not
+   * involved.
    */
   async waitingNids(rids: Buffer[]): Promise<Buffer[]> {
     const rows: { nid: Buffer }[] = await this.db.query(
       `SELECT q.nid FROM public.box_queues q
         WHERE q.rid = ANY($1::bytea[])
           AND EXISTS (SELECT 1 FROM public.box_msgs m
-                       WHERE m.rid = q.rid AND m."expiresAt" > now())`,
+                       WHERE m.rid = q.rid AND m."expiresAt" > now()
+                         AND NOT m.quiet)`,
       [rids],
     );
     return rows.map((r) => r.nid);

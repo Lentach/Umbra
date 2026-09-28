@@ -1,6 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { randomBytes } from 'crypto';
 import type { Socket } from 'socket.io';
-import { BOX_DELIVERY_WINDOW, BOX_SOCKET_RID_CAP } from './box.constants';
+import {
+  BOX_DELIVERY_WINDOW,
+  BOX_MSG_ID_BYTES,
+  BOX_SOCKET_RID_CAP,
+} from './box.constants';
 import { BoxService } from './box.service';
 
 interface Slot {
@@ -30,6 +35,11 @@ interface Slot {
  *   swapped for one the socket holds.
  * - At-least-once: nothing here deletes; a pushed-but-unacked message is
  *   pushed again on the next subscribe, so the client dedups (PR2.1 wire id).
+ * - A `live` blob (decision 61) is the exception: never stored, so pushed at
+ *   most once, and only to the rid's socket of that moment. It takes a
+ *   window slot like any frame until acked or the socket goes; with the
+ *   window full it is dropped, so a sid holder cannot pile frames onto a
+ *   socket that does not ack.
  */
 @Injectable()
 export class BoxDelivery {
@@ -132,6 +142,23 @@ export class BoxDelivery {
     if (!slot) return false;
     this.pump(slot);
     return true;
+  }
+
+  /** A `live` blob for `rid`: one push to its socket now, if it has one with room. */
+  pushLive(ridBytes: Buffer, blob: Buffer): void {
+    const rid = ridBytes.toString('base64url');
+    const owner = this.owners.get(rid);
+    const slot = owner === undefined ? undefined : this.slots.get(owner);
+    if (
+      !slot ||
+      !this.isLive(slot) ||
+      slot.inFlight.size >= BOX_DELIVERY_WINDOW
+    ) {
+      return;
+    }
+    const id = randomBytes(BOX_MSG_ID_BYTES).toString('base64url');
+    slot.inFlight.set(id, rid);
+    slot.socket.emit('msg', { rid, id, blob: blob.toString('base64url') });
   }
 
   /** The socket acked `id`: its window slot frees and the next one goes out. */

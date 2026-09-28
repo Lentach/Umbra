@@ -84,6 +84,32 @@ describe('box wire parser (strict: exact keys, v:1, canonical fixed-length base6
     expect(parseSend({ v: 1, sid, blob: b64(16385) })).toBeNull();
   });
 
+  it('reads an optional send mode, live or quiet; absent is an ordinary send, anything else is refused', () => {
+    const sid = randomBytes(32);
+    const blob = randomBytes(16384);
+    const frame = {
+      v: 1,
+      sid: sid.toString('base64url'),
+      blob: blob.toString('base64url'),
+    };
+    expect(parseSend(frame)).toEqual({ sid, blob });
+    expect(parseSend(frame)).not.toHaveProperty('mode');
+    expect(parseSend({ ...frame, mode: 'live' })).toEqual({
+      sid,
+      blob,
+      mode: 'live',
+    });
+    expect(parseSend({ ...frame, mode: 'quiet' })).toEqual({
+      sid,
+      blob,
+      mode: 'quiet',
+    });
+    for (const mode of ['LIVE', 'loud', '', null, undefined, 1, true, {}]) {
+      expect(parseSend({ ...frame, mode })).toBeNull();
+    }
+    expect(parseSend({ ...frame, mode: 'live', extra: 1 })).toBeNull();
+  });
+
   it('bounds subscribe to 1..256 entries, each exactly {rid, sig}', () => {
     const sub = () => ({ rid: b64(32), sig: b64(64) });
     expect(parseSubscribe({ v: 1, subs: [] })).toBeNull();

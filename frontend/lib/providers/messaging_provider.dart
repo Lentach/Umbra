@@ -54,6 +54,7 @@ import 'encryption_provider.dart';
 
 part 'messaging/messaging_provider.box.dart';
 part 'messaging/messaging_provider.box_actions.dart';
+part 'messaging/messaging_provider.box_receipts.dart';
 part 'messaging/messaging_provider.history.dart';
 part 'messaging/messaging_provider.events.dart';
 part 'messaging/messaging_provider.send.dart';
@@ -515,6 +516,33 @@ class MessagingProvider extends ChangeNotifier {
   /// Each pin, edit or delete-for-everyone of a box message that NO device
   /// took; its optimistic state is already undone.
   Stream<BoxActionFailure> get boxActionFailures => _boxActionFailures.stream;
+
+  // ---------- Box receipts and typing (slice (g), decisions 61–62) ----------
+
+  /// The device-local switch (E61c), read live: `ConversationsScreen` wires
+  /// `SettingsProvider.receiptsAndTyping`. OFF: no `rcpt`/`typ` is sent and
+  /// every one received is ignored.
+  bool Function() receiptsAndTyping = () => false;
+
+  /// Wire ids of each peer's box messages this device took since the inbox
+  /// last went idle: the next `rcpt d` to that peer (E61d).
+  final Map<int, Set<String>> _boxDeliveredOwed = {};
+
+  /// `peer|wire` of every peer box message named in a `rcpt r` this
+  /// process, in flight or taken: never named twice at once, and left out
+  /// of the drain's `rcpt d` (E61d). One no device took leaves the set; one
+  /// taken is `read` in its record for every later launch.
+  final Set<String> _boxReadReported = {};
+
+  /// When this device last sent typing `on` into each chat (E61e).
+  final Map<int, DateTime> _boxTypingSentAt = {};
+
+  /// Per chat, while this device records a voice note: `typ v on` again
+  /// every 5 s (E61e).
+  final Map<int, Timer> _boxVoiceResends = {};
+
+  /// Per chat, when the peer's voice indicator expires without an `off`.
+  final Map<int, Timer> _boxVoiceTimers = {};
 
   /// Set in [dispose]; lets the overlay's dispose-scheduled onComplete
   /// microtask no-op instead of notifying a disposed ChangeNotifier.
@@ -1307,6 +1335,7 @@ class MessagingProvider extends ChangeNotifier {
         t.cancel();
       }
       _typingTimers.clear();
+      _cancelBoxVoiceTimers();
       _partnerRecordingVoice.clear();
       _replyingToMessage = null;
       _editingMessage = null;
@@ -1319,6 +1348,9 @@ class MessagingProvider extends ChangeNotifier {
       _boxMediaBodies.clear();
       _boxLists.reset();
       _staleViewsAnswered.clear();
+      _boxDeliveredOwed.clear();
+      _boxReadReported.clear();
+      _boxTypingSentAt.clear();
       _staleResendAttempts.clear();
       _staleResendTempIds.clear();
       _incomingMessageQueue.clear();
@@ -1347,6 +1379,7 @@ class MessagingProvider extends ChangeNotifier {
         t.cancel();
       }
       _typingTimers.clear();
+      _cancelBoxVoiceTimers();
       _partnerRecordingVoice.clear();
       _replyingToMessage = null;
       _editingMessage = null;
@@ -1397,6 +1430,7 @@ class MessagingProvider extends ChangeNotifier {
       t.cancel();
     }
     _typingTimers.clear();
+    _cancelBoxVoiceTimers();
   }
 
   /// Full reset — called on logout / account deletion.
@@ -1410,6 +1444,7 @@ class MessagingProvider extends ChangeNotifier {
       t.cancel();
     }
     _typingTimers.clear();
+    _cancelBoxVoiceTimers();
     _partnerRecordingVoice.clear();
     _replyingToMessage = null;
     _editingMessage = null;
@@ -1436,6 +1471,9 @@ class MessagingProvider extends ChangeNotifier {
     _boxMediaBodies.clear();
     _boxLists.reset();
     _staleViewsAnswered.clear();
+    _boxDeliveredOwed.clear();
+    _boxReadReported.clear();
+    _boxTypingSentAt.clear();
     _staleResendAttempts.clear();
     _staleResendTempIds.clear();
     // Logout: `K_react` for every visited conversation is in RAM here.

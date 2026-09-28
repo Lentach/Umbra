@@ -206,6 +206,12 @@ class BoxSession
     if (read != null) unawaited(_inbox.drain());
   }
 
+  /// Called when the inbox has read everything queued so far (slice (g),
+  /// E61d: one delivered receipt per drain).
+  void Function()? get onReadsIdle => _inbox.onReadsIdle;
+
+  set onReadsIdle(void Function()? idle) => _inbox.onReadsIdle = idle;
+
   /// Offers the journal again — the reader may be able to read what it
   /// refused (E2E just became ready).
   void drainInbox() {
@@ -461,13 +467,17 @@ class BoxSession
         ];
 
   @override
-  Future<bool> deliver(ContactOutbound to, Uint8List body) async {
+  Future<bool> deliver(
+    ContactOutbound to,
+    Uint8List body, {
+    BoxSendMode? mode,
+  }) async {
     final sid = boxB64Decode(to.sid, kBoxSidBytes);
     final sealPub = boxB64Decode(to.sealPub, 32);
     if (_disposed || sid == null || sealPub == null) return false;
     final blob = await _seal.seal(sealPub, body);
     if (blob == null || _disposed) return false;
-    return await _box.send(sid, blob) is BoxOk;
+    return await _box.send(sid, blob, mode: mode) is BoxOk;
   }
 
   @override

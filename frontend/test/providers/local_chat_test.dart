@@ -110,7 +110,11 @@ class _Outbox implements BoxOutbox {
   Iterable<int> coveredPeers() => addresses.keys;
 
   @override
-  Future<bool> deliver(ContactOutbound to, Uint8List body) async => true;
+  Future<bool> deliver(
+    ContactOutbound to,
+    Uint8List body, {
+    BoxSendMode? mode,
+  }) async => true;
 
   @override
   Future<int?> nextLocalId() async => null;

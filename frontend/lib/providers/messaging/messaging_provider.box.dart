@@ -35,6 +35,12 @@ enum _BoxSealFailure { noSession, tooLong }
 /// started, so only the 1-day unread cap runs.
 const String _boxCountdownFromKey = 'ttlFrom';
 
+/// The payload key of a box message's record holding its tick (slice (g)):
+/// OUR message's `delivered` or `read`, as a peer's receipt moved it (E61f;
+/// absent = sent); a PEER's `read` once this device's read receipt was
+/// taken (E61d; absent = delivered).
+const String _boxTickKey = 'tick';
+
 /// Box deliveries (metadata-privacy PR3.1 slice (b)): the ONE dispatcher. A
 /// journaled delivery is decrypted here, NOW — unlike a server row, nothing
 /// can serve its ciphertext again — and routed on the envelope's `t`.
@@ -720,6 +726,11 @@ extension MessagingBox on MessagingProvider {
           ),
           _ => _takeFirstContactCopy(parsed.type, plaintext),
         };
+      // Receipts and typing go to the peer's devices only (E61b): a copy
+      // on our own queues is not one we send, and is dropped.
+      case E2eEnvelope.typeReceipt || E2eEnvelope.typeTyping:
+        _e2eFlowLog('BOX_SIBLING_COPY_REFUSED', {'why': parsed.type});
+        return true;
       default:
         _e2eFlowLog('BOX_UNKNOWN_TYPE', {
           'msgId': entry.localId,
@@ -1033,6 +1044,11 @@ extension MessagingBox on MessagingProvider {
         return _takeGoodbye(msg.senderId, block: false);
       case E2eEnvelope.typeTimer:
         return _takeBoxTimer(msg.senderId, plaintext, receivedAt);
+      // The peer's receipt or typing (slice (g), E61b): shown in its chat,
+      // never held for a chat this device has not linked yet.
+      case E2eEnvelope.typeReceipt || E2eEnvelope.typeTyping:
+        if (controlOnly) return true;
+        return _takeBoxSignal(msg, parsed.type, plaintext);
       case _ when controlOnly:
         // No conversation to show it in yet (release N's chat list hangs off
         // server conversation ids). A friend always has one on the server,
@@ -1367,6 +1383,7 @@ extension MessagingBox on MessagingProvider {
     if (!alreadyShown) _showBoxMessage(msg);
     if (stored) {
       _boxUnsaved.remove(msg.id);
+      _owedBoxDelivered(msg);
       _prefetchBoxMedia(msg, receivedAt);
       try {
         await _applyParkedBoxActions(msg);
@@ -1461,6 +1478,8 @@ extension MessagingBox on MessagingProvider {
       }
       notifyListeners();
     }
+    // Shown now: what it holds of the peer's is read (slice (g), E61d).
+    _sendBoxReadReceipt(conversationId);
     // Shown now: a disappearing one not started yet starts (decision 41).
     _startBoxCountdowns(conversationId);
     // The chat's E2E pin names one of these (item 4, E19f).
@@ -1520,11 +1539,18 @@ extension MessagingBox on MessagingProvider {
           createdAtMs,
           isUtc: true,
         ),
-        // Ours went out when the box took every frame (decision 20); no
-        // receipt comes back over the box yet.
-        deliveryStatus: senderId == _currentUserId
-            ? MessageDeliveryStatus.sent
-            : MessageDeliveryStatus.delivered,
+        // Ours went out when the box took every frame (decision 20), and
+        // is as far on as a peer's receipt moved it (slice (g), E61f); the
+        // peer's is `read` once this device's read receipt was taken (E61d).
+        deliveryStatus: switch ((
+          senderId == _currentUserId,
+          record[_boxTickKey],
+        )) {
+          (true, 'delivered') => MessageDeliveryStatus.delivered,
+          (_, 'read') => MessageDeliveryStatus.read,
+          (true, _) => MessageDeliveryStatus.sent,
+          (false, _) => MessageDeliveryStatus.delivered,
+        },
         disappearAfterSeconds: ttl,
         expiresAt: ttl != null && countdownFrom is int
             ? DateTime.fromMillisecondsSinceEpoch(
@@ -1560,11 +1586,16 @@ extension MessagingBox on MessagingProvider {
   /// ones THIS connect verified ([refreshBoxDeviceLists], decision 21); a
   /// send never looks one up, which would hand the server the pair (the
   /// peer's list) or the sender (the own list) at the time of the message.
+  ///
+  /// [peerOnly] (receipts and typing, slice (g), E61b): the peer half alone
+  /// — no sent copy goes to our siblings, so their coverage is not asked
+  /// and the route names none.
   Future<_BoxRoute?> _boxRoute(
     int recipientId,
     BoxOutbox outbox,
-    Map<int, ContactOutbound> addresses,
-  ) async {
+    Map<int, ContactOutbound> addresses, {
+    bool peerOnly = false,
+  }) async {
     final enc = _encryptionProvider;
     final ownUserId = _currentUserId;
     if (enc == null || ownUserId == null) return null;
@@ -1607,8 +1638,9 @@ extension MessagingBox on MessagingProvider {
       rethrow;
     }
     final siblingIds = [
-      for (final d in own.liveDeviceIds)
-        if (d != enc.ownDeviceId) d,
+      if (!peerOnly)
+        for (final d in own.liveDeviceIds)
+          if (d != enc.ownDeviceId) d,
     ];
     final siblingAddresses = outbox.siblingAddresses();
     final siblings = [for (final d in siblingIds) ?siblingAddresses[d]];

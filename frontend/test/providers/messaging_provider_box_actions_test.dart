@@ -129,7 +129,11 @@ class _Outbox implements BoxOutbox {
   ];
 
   @override
-  Future<bool> deliver(ContactOutbound to, Uint8List body) async {
+  Future<bool> deliver(
+    ContactOutbound to,
+    Uint8List body, {
+    BoxSendMode? mode,
+  }) async {
     delivered.add((to, BoxFrame.decode(body)!));
     final held = gate;
     if (held != null) await held.future;

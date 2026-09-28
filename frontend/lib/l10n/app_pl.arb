@@ -811,6 +811,10 @@
   "@peerIdentityChangedSystemLine": {"placeholders": {"name": {"type": "String"}}},
   "settingsKeyChangeWarnings": "Ostrzegaj o zmianie kluczy kontaktów",
   "settingsKeyChangeWarningsSubtitle": "Domyślnie nowe klucze są przyjmowane, a w czacie pojawia się krótka notatka.",
+  "privacyReceiptsAndTyping": "Potwierdzenia odczytu i pisanie",
+  "@privacyReceiptsAndTyping": {"description": "Privacy & Safety switch (metadata-privacy decision 62, E61c): read receipts, delivered ticks and typing on chats that moved to the box. Device-local, default off."},
+  "privacyReceiptsAndTypingSubtitle": "Działa tylko, gdy oboje je włączycie. Dotyczy czatów przeniesionych na nowe prywatne doręczanie.",
+  "@privacyReceiptsAndTypingSubtitle": {"description": "One line under the switch: it is mutual (both sides must turn it on) and applies only to chats on the box (the new private delivery)."},
   "devicesRenameAction": "Zmień nazwę",
   "@devicesRenameAction": {
     "description": "Button/tooltip that opens the rename sheet for one device row ((lxxx) clause 1)."

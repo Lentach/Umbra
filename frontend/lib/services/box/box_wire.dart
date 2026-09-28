@@ -42,6 +42,21 @@ enum QueueKind { normal, request }
 
 enum NotifierPlatform { fcm, webpush }
 
+/// How the box keeps one `send` (decision 61, E61a); no mode is today's
+/// frame, byte for byte.
+enum BoxSendMode {
+  /// Pushed once to a socket subscribed to the queue NOW; never stored,
+  /// never counted, never wakes a device.
+  live('live'),
+
+  /// Stored and delivered like any blob, but never wakes a device.
+  quiet('quiet');
+
+  const BoxSendMode(this.wire);
+
+  final String wire;
+}
+
 enum BoxState {
   /// No connection, or the last one dropped.
   offline,

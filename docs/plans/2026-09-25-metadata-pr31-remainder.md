@@ -7,13 +7,13 @@
 | # | Work | Built on | Notes |
 |---|---|---|---|
 | 1 | **Sibling queues part B**: sent copies to own devices over the box, rotation on revoke, pruning, no-session policy | part A (`a8a4e560`) | DONE 09-25 (`59e141de`, decision 27; revoke driven; `2026-09-25-metadata-sibling-queues-b.md`) |
-| 2 | **Box push registration** | 1 | DONE 09-25 (decisions 35–36, 39; `2026-09-25-metadata-e9-box-push.md`, `2026-09-25-metadata-e9-batch-per-token.md`); the Android/FCM path is verified at G5 |
+| 2 | **Box push registration** | 1 | DONE 09-25 (decisions 34–36, 39; `2026-09-25-metadata-e9-box-push.md`, `2026-09-25-metadata-e9-batch-per-token.md`); the Android/FCM path is verified at G5 |
 | 3 | **Decision-22 slice**: disappearing timers, replies and media over the box | 1, 2 | DONE 09-26 (decisions 40–44; `2026-09-26-metadata-item3-decision22.md`) |
 | 4 | **Message actions over E2E**: reactions (plain emoji), pin, edit, delete-for-everyone | 3 | DONE 09-26 (`81b795e8`, decisions 45–46, E19a–E19j; web drive a–f passed; CI 7/7 on `c7f4abd0`) |
 | 5 | **Slice (d)**: migration handoff over the old path | (c) | DONE 09-26/27 (decisions 47–49; `2026-09-26-metadata-item5-migration.md`, handoff pass and crossing re-key 09-27) |
 | 6 | **Slice (e)**: `device_added` / `device_removed` / `list_update` over the box | (b), (c) | DONE 09-27 (decisions 50–51, E50a–E50f; web drive of a link and a revoke with no friend-list lookup) |
 | 7 | **Slice (f)**: first contact over request queues | (a), part A frames | DONE 09-27 (decisions 52–55, 56–58; review, mutants and a 4-device web drive; `2026-09-27-metadata-slice-f-first-contact.md`) |
-| 8 | **Slice (g)**: receipts and typing (D5, 33) | 3 | |
+| 8 | **Slice (g)**: receipts and typing (D5, 33) | 3 | DONE 09-28 (decisions 61–62, E61a–E61f; box `send.mode`, migration 0025; web drive; `2026-09-28-metadata-slice-g-receipts-typing.md`) |
 | 9 | **Prod prerequisites** for `BOX_ENABLED`: global ceiling (30), per-socket rid cap, media refusals counted | — | DONE 09-26 (`box_totals` migration 0024, E10–E12; client reads `limit` as not gone); prod still `BOX_ENABLED: 'false'` until G5 |
 | 10 | **G5**: gate review, migration rehearsal on a device (master APK, then the branch APK over it), then release N | 1–9 | owner gate |
 

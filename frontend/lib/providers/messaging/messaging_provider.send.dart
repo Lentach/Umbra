@@ -930,12 +930,13 @@ extension MessagingSend on MessagingProvider {
       boxOutbox?.addressesFor(peerUserId).isNotEmpty ?? false;
 
   /// Typing rides the ACCOUNT socket, so it names the pair to the server at
-  /// the moment of typing. A box-covered peer gets none: decision 33 turns
-  /// typing off on box chats until both sides enable it, and item 8 sends
-  /// it inside E2E. A local chat (owner decision 52) never gets one, covered
-  /// or not: the server does not know the pair at all.
+  /// the moment of typing. A box-covered peer never gets it there (decision
+  /// 33): with the switch on it goes inside E2E over the box instead (slice
+  /// (g), E61e), and otherwise not at all. A local chat (owner decision 52)
+  /// is a box chat: the server does not know the pair at all.
   void sendTypingIndicator(int recipientId, int conversationId) {
     if (isLocalConversationId(conversationId) || _boxCovers(recipientId)) {
+      _sendBoxTyping(recipientId, conversationId);
       return;
     }
     _emit?.call('typing', {
@@ -945,13 +946,18 @@ extension MessagingSend on MessagingProvider {
   }
 
   /// The voice-recording indicator: the same account-socket signal as
-  /// typing, under the same rule (decision 33, until item 8).
+  /// typing, under the same rule (decision 33, E61e).
   void sendRecordingVoiceIndicator(
     int recipientId,
     int conversationId, {
     required bool isRecording,
   }) {
     if (isLocalConversationId(conversationId) || _boxCovers(recipientId)) {
+      _sendBoxRecordingVoice(
+        recipientId,
+        conversationId,
+        isRecording: isRecording,
+      );
       return;
     }
     _emit?.call('recordingVoice', {

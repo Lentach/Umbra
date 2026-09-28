@@ -71,6 +71,11 @@ class BoxInbox {
   /// wait in the journal.
   BoxInboxConsumer? consumer;
 
+  /// Called once the reads queued so far are all done — the end of one
+  /// drain's batch, where the reader sends its one delivered receipt per
+  /// peer (slice (g), E61d). Never between two queued reads.
+  void Function()? onReadsIdle;
+
   StreamSubscription<BoxDelivery>? _deliveries;
   bool _disposed = false;
 
@@ -300,6 +305,7 @@ class BoxInbox {
         .then((_) async {
           _readQueued.remove(slot);
           await _read(entry);
+          if (_readQueued.isEmpty && !_disposed) onReadsIdle?.call();
         })
         .catchError((Object e) {
           E2ePersistentDiag.record('BOX_CONSUME_FAILED', {

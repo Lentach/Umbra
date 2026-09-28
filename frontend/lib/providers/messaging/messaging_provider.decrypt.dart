@@ -536,6 +536,13 @@ extension MessagingDecrypt on MessagingProvider {
       if (box && ttl != null && expiresAt != null)
         _boxCountdownFromKey:
             expiresAt.toUtc().millisecondsSinceEpoch - ttl * 1000,
+      // How far a peer's receipt moved OUR box message, and whether this
+      // device reported a PEER's box message read (slice (g), E61d/E61f).
+      if (box &&
+          (decrypted.deliveryStatus == MessageDeliveryStatus.read ||
+              (decrypted.senderId == _currentUserId &&
+                  decrypted.deliveryStatus == MessageDeliveryStatus.delivered)))
+        _boxTickKey: decrypted.deliveryStatus.name,
       if (decrypted.editedAt != null)
         'editedAt': decrypted.editedAt!.toIso8601String(),
       if (decrypted.messageType != MessageType.text)

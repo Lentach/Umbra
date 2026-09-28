@@ -3764,6 +3764,18 @@ abstract class AppLocalizations {
   /// **'Domyślnie nowe klucze są przyjmowane, a w czacie pojawia się krótka notatka.'**
   String get settingsKeyChangeWarningsSubtitle;
 
+  /// Privacy & Safety switch (metadata-privacy decision 62, E61c): read receipts, delivered ticks and typing on chats that moved to the box. Device-local, default off.
+  ///
+  /// In pl, this message translates to:
+  /// **'Potwierdzenia odczytu i pisanie'**
+  String get privacyReceiptsAndTyping;
+
+  /// One line under the switch: it is mutual (both sides must turn it on) and applies only to chats on the box (the new private delivery).
+  ///
+  /// In pl, this message translates to:
+  /// **'Działa tylko, gdy oboje je włączycie. Dotyczy czatów przeniesionych na nowe prywatne doręczanie.'**
+  String get privacyReceiptsAndTypingSubtitle;
+
   /// Button/tooltip that opens the rename sheet for one device row ((lxxx) clause 1).
   ///
   /// In pl, this message translates to:

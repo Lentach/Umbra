@@ -708,6 +708,7 @@ extension MessagingHistory on MessagingProvider {
       _typingStatus[msg.conversationId] = false;
     }
     _partnerRecordingVoice.remove(msg.conversationId);
+    _boxVoiceTimers.remove(msg.conversationId)?.cancel();
     notifyListeners();
   }
 }

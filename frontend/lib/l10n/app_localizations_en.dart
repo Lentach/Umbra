@@ -2140,6 +2140,13 @@ class AppLocalizationsEn extends AppLocalizations {
       'By default new keys are accepted and a short note appears in the chat.';
 
   @override
+  String get privacyReceiptsAndTyping => 'Read receipts and typing';
+
+  @override
+  String get privacyReceiptsAndTypingSubtitle =>
+      'Works only when you both turn it on. Applies to chats moved to the new private delivery.';
+
+  @override
   String get devicesRenameAction => 'Rename';
 
   @override

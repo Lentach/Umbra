@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../theme/rpg_theme.dart';
@@ -87,6 +89,7 @@ class SettingsProvider extends ChangeNotifier {
     _loadContactsListView();
     _loadAutoplayVideos();
     _loadKeyChangeWarnings();
+    unawaited(_loadReceiptsAndTyping());
   }
 
   Future<void> _loadLocalePreference() async {
@@ -181,6 +184,32 @@ class SettingsProvider extends ChangeNotifier {
   }
 
   static const String _keyChangeWarningsKey = 'key_change_warnings';
+
+  /// Read receipts and typing on chats that moved to the box (metadata
+  /// privacy decision 62, E61c): OFF by default, and mutual — while off this
+  /// device sends none and ignores every one it receives. Device-local:
+  /// another device of the account keeps its own choice.
+  bool _receiptsAndTyping = false;
+
+  bool get receiptsAndTyping => _receiptsAndTyping;
+
+  Future<void> _loadReceiptsAndTyping() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getBool(_receiptsAndTypingKey);
+    if (saved == null || saved == _receiptsAndTyping) return;
+    _receiptsAndTyping = saved;
+    notifyListeners();
+  }
+
+  Future<void> setReceiptsAndTyping({required bool enabled}) async {
+    if (_receiptsAndTyping == enabled) return;
+    _receiptsAndTyping = enabled;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_receiptsAndTypingKey, enabled);
+  }
+
+  static const String _receiptsAndTypingKey = 'receipts_and_typing';
 
   Future<void> _loadThemePreference() async {
     final prefs = await SharedPreferences.getInstance();

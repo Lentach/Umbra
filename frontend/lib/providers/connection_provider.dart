@@ -552,6 +552,8 @@ class ConnectionProvider extends ChangeNotifier {
             ..ownDeviceList = messaging.ownDeviceList
             ..friendRevokedDevices = messaging.friendRevokedDevices
             ..onBoxReady = messaging.onBoxReady
+            // Slice (g): one delivered receipt per drain (E61d).
+            ..onReadsIdle = messaging.onBoxReadsIdle
             // Slice (f): a pending request that expired left the store.
             ..onFirstContactsChanged = () {
               _friendsProvider?.onBoxContactsChanged();

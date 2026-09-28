@@ -294,6 +294,39 @@ void main() {
   });
 
   test(
+    'onReadsIdle fires once a batch of reads is done, not between them '
+    '(one delivered receipt per drain, E61d)',
+    () async {
+      final gate = Completer<void>();
+      final idleAt = <int>[];
+      inbox
+        ..consumer = (entry) async {
+          offered.add(entry);
+          await gate.future;
+          return true;
+        }
+        ..onReadsIdle = () => idleAt.add(offered.length);
+      for (final fill in [1, 2, 3]) {
+        sockets.last.push({
+          'rid': bobQueue.rid,
+          'id': boxB64(_bytes(16, fill)),
+          'blob': boxB64(await signalBlob(bobQueue, signal: [fill])),
+        });
+      }
+      for (var i = 0; i < 50 && ackedIds().length < 3; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      gate.complete();
+      await inbox.idle;
+      expect(offered, hasLength(3));
+      expect(idleAt, [3]);
+
+      await push(bobQueue, 4, await signalBlob(bobQueue, signal: [4]));
+      expect(idleAt, [3, 4], reason: 'the next batch ends in its own call');
+    },
+  );
+
+  test(
     'a dropped blob whose ack the box refused is acked again once allowed — '
     'no journal row remembers it',
     () async {

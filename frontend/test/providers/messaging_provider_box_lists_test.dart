@@ -122,7 +122,11 @@ class _Outbox implements BoxOutbox {
   Iterable<int> coveredPeers() => const [_friend];
 
   @override
-  Future<bool> deliver(ContactOutbound to, Uint8List body) async => true;
+  Future<bool> deliver(
+    ContactOutbound to,
+    Uint8List body, {
+    BoxSendMode? mode,
+  }) async => true;
 
   @override
   Future<int?> nextLocalId() async => null;
@@ -588,6 +592,9 @@ void main() {
         'reconnect of a process that slept through it — owes every peer '
         'again, whatever this process verified before', () async {
       enc.markBoxListsReady(const [_friend]);
+      // The stamp write above is not awaited: let it land before the older
+      // stamp below, or it can overwrite that one and the test reads fresh.
+      await pumpEventQueue();
       expect(enc.peerListOwedByServer(_friend), isFalse);
 
       await enc.encryptionService.markBoxListsReady(

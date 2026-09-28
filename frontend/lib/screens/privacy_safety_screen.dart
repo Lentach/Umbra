@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../l10n/app_localizations.dart';
 import '../providers/auth_provider.dart';
 import '../providers/encryption_provider.dart';
+import '../providers/settings_provider.dart';
 import '../services/backup/history_backup.dart';
 import '../services/backup/history_backup_service.dart';
 import '../theme/rpg_theme.dart';
@@ -199,6 +200,23 @@ class _PrivacySafetyScreenState extends State<PrivacySafetyScreen> {
               glyph: ConsoleGlyph.metadata,
               title: l10n.serverStoresMetadata,
               body: l10n.serverStoresMetadataDescription,
+            ),
+            // Decision 62 (E61c): receipts and typing on box chats, OFF by
+            // default and mutual; device-local.
+            Consumer<SettingsProvider>(
+              builder: (context, settings, _) => SettingsConsoleRow(
+                key: const ValueKey('privacy-receipts-and-typing-row'),
+                glyph: ConsoleGlyph.chats,
+                title: l10n.privacyReceiptsAndTyping,
+                subtitle: l10n.privacyReceiptsAndTypingSubtitle,
+                trailing: Switch(
+                  value: settings.receiptsAndTyping,
+                  onChanged: (v) => settings.setReceiptsAndTyping(enabled: v),
+                ),
+                onTap: () => settings.setReceiptsAndTyping(
+                  enabled: !settings.receiptsAndTyping,
+                ),
+              ),
             ),
             _buildAntiQuantumNoteExplainer(context),
             SettingsSectionCaption(label: l10n.settingsSectionPreferences),

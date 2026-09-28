@@ -523,7 +523,7 @@ describeWithDb('box over real sockets and Postgres', () => {
       for (const r of rows) (columns[r.table_name] ??= []).push(r.column_name);
       expect(columns).toEqual({
         box_media: ['id', 'path', 'sizeBucket', 'expiresAt'],
-        box_msgs: ['id', 'rid', 'blob', 'createdAt', 'expiresAt'],
+        box_msgs: ['id', 'rid', 'blob', 'createdAt', 'expiresAt', 'quiet'],
         box_notifiers: ['nid', 'token', 'platform', 'verifiedAt'],
         box_totals: ['id', 'msgCount', 'mediaBytes'],
         box_queues: [
@@ -1128,6 +1128,213 @@ describeWithDb('box over real sockets and Postgres', () => {
       bob.disconnect();
       await sleep(3500);
       expect(pushes).toEqual([]);
+    });
+  });
+
+  describe('send modes (decision 61, E61a)', () => {
+    it('live: pushed once as an ordinary msg to the subscribed socket, never stored or counted; its ack answers ok', async () => {
+      const bob = await connect();
+      const alice = await connect();
+      const queue = await createQueue(bob);
+      const got = collect(bob);
+      expect(await subscribe(bob, [queue])).toEqual({ ok: true, refused: [] });
+      const before = await totals();
+
+      const payload = blob();
+      expect(
+        await call(alice, 'send', {
+          v: 1,
+          sid: queue.sid,
+          blob: payload,
+          mode: 'live',
+        }),
+      ).toEqual({ ok: true });
+      await until(() => got.length === 1);
+      expect(got[0].rid).toBe(queue.rid);
+      expect(got[0].blob).toBe(payload);
+      expect(got[0].id).toMatch(/^[A-Za-z0-9_-]{22}$/);
+      expect(await storedIds(queue.rid)).toEqual([]);
+      expect((await queueRow(queue.rid)).msgCount).toBe(0);
+      expect(await totals()).toEqual(before);
+
+      // The client acks it like any msg: ok, and the socket stays up.
+      expect(await ackMessage(bob, queue, got[0].id)).toEqual({ ok: true });
+      expect(bob.connected).toBe(true);
+      await sleep(300);
+      expect(got).toHaveLength(1);
+
+      // Nothing was stored, so a new subscriber gets nothing.
+      const carol = await connect();
+      const again = collect(carol);
+      expect(await subscribe(carol, [queue])).toEqual({
+        ok: true,
+        refused: [],
+      });
+      await sleep(300);
+      expect(again).toEqual([]);
+    });
+
+    it('live goes to the socket that owns the rid alone: never to another subscribed socket, and after a takeover only to the new owner', async () => {
+      const bob = await connect();
+      const dave = await connect();
+      const alice = await connect();
+      const queue = await createQueue(bob);
+      const other = await createQueue(dave);
+      const toBob = collect(bob);
+      const toDave = collect(dave);
+      await subscribe(bob, [queue]);
+      // Subscribed after bob: the most recent socket, owning another rid.
+      await subscribe(dave, [other]);
+
+      const live = (payload: string) =>
+        call(alice, 'send', {
+          v: 1,
+          sid: queue.sid,
+          blob: payload,
+          mode: 'live',
+        });
+      const first = blob();
+      expect(await live(first)).toEqual({ ok: true });
+      await until(() => toBob.length === 1);
+      await sleep(300);
+      expect(toBob.map((m) => m.blob)).toEqual([first]);
+      expect(toDave).toEqual([]);
+
+      // Carol takes bob's queue over: the next live frame is hers alone.
+      const carol = await connect();
+      const toCarol = collect(carol);
+      await subscribe(carol, [queue]);
+      const second = blob();
+      expect(await live(second)).toEqual({ ok: true });
+      await until(() => toCarol.length === 1);
+      await sleep(300);
+      expect(toCarol.map((m) => m.blob)).toEqual([second]);
+      expect(toBob).toHaveLength(1);
+      expect(toDave).toEqual([]);
+    });
+
+    it('live to a queue nobody is subscribed to (or an unknown sid) answers ok, stores nothing and wakes nobody', async () => {
+      const bob = await connect();
+      const alice = await connect();
+      const queue = await createQueue(bob);
+      const token = 'fcm-token_box:6';
+      await activateNotifier(bob, queue, token);
+      pushes.length = 0;
+      const before = await totals();
+
+      const live = (sid: string) =>
+        call(alice, 'send', { v: 1, sid, blob: blob(), mode: 'live' });
+      expect(await live(queue.sid)).toEqual({ ok: true });
+      expect(await live(randomBytes(32).toString('base64url'))).toEqual({
+        ok: true,
+      });
+      await sleep(3000);
+      expect(pushes).toEqual([]);
+      expect(await storedIds(queue.rid)).toEqual([]);
+      expect((await queueRow(queue.rid)).msgCount).toBe(0);
+      expect(await totals()).toEqual(before);
+
+      // Control: the same queue's notifier is armed — an ordinary send wakes.
+      const ordinary = blob();
+      await call(alice, 'send', { v: 1, sid: queue.sid, blob: ordinary });
+      await until(() => pushes.length === 1, 8000);
+      expect(pushes).toEqual([
+        { platform: 'fcm', token, data: { type: 'new_message' } },
+      ]);
+
+      // The subscribe hands out only what was stored.
+      const got = collect(bob);
+      await subscribe(bob, [queue]);
+      await until(() => got.length === 1);
+      await sleep(300);
+      expect(got.map((m) => m.blob)).toEqual([ordinary]);
+      await ackMessage(bob, queue, got[0].id);
+    });
+
+    it('live frames count against the 16-unacked window: one past it is dropped, an ack frees a slot, and a new socket is never handed one', async () => {
+      const bob = await connect();
+      const alice = await connect();
+      const queue = await createQueue(bob);
+      const got = collect(bob);
+      await subscribe(bob, [queue]);
+      const live = () =>
+        call(alice, 'send', {
+          v: 1,
+          sid: queue.sid,
+          blob: blob(),
+          mode: 'live',
+        });
+      for (let i = 0; i < 16; i++) await live();
+      await until(() => got.length === 16);
+
+      const stored = blob();
+      await call(alice, 'send', { v: 1, sid: queue.sid, blob: stored });
+      await live();
+      await sleep(300);
+      expect(got).toHaveLength(16);
+
+      expect(await ackMessage(bob, queue, got[0].id)).toEqual({ ok: true });
+      await until(() => got.length === 17);
+      await sleep(300);
+      expect(got).toHaveLength(17);
+      expect(got[16].blob).toBe(stored);
+
+      // The socket goes with 15 live frames and the stored one unacked: a
+      // new socket gets the stored one alone, with a full window for it.
+      bob.disconnect();
+      const carol = await connect();
+      const again = collect(carol);
+      await subscribe(carol, [queue]);
+      await until(() => again.length === 1);
+      await sleep(300);
+      expect(again.map((m) => m.blob)).toEqual([stored]);
+    });
+
+    it('quiet: stored and delivered like any send, but wakes nobody — not at send, not when the socket that held it goes', async () => {
+      const bob = await connect();
+      const alice = await connect();
+      const queue = await createQueue(bob);
+      const token = 'fcm-token_box:7';
+      await activateNotifier(bob, queue, token);
+      pushes.length = 0;
+
+      const receipt = blob();
+      expect(
+        await call(alice, 'send', {
+          v: 1,
+          sid: queue.sid,
+          blob: receipt,
+          mode: 'quiet',
+        }),
+      ).toEqual({ ok: true });
+      expect(await storedIds(queue.rid)).toHaveLength(1);
+      expect((await queueRow(queue.rid)).msgCount).toBe(1);
+      await sleep(3000);
+      expect(pushes).toEqual([]);
+
+      const got = collect(bob);
+      await subscribe(bob, [queue]);
+      await until(() => got.length === 1);
+      expect(got[0].blob).toBe(receipt);
+      // Handed out, never acked, and the socket goes.
+      bob.disconnect();
+      await sleep(3500);
+      expect(pushes).toEqual([]);
+
+      // Control: re-pushed like today on the next subscribe, and an ordinary
+      // message left beside it does wake when that socket goes.
+      const carol = await connect();
+      const again = collect(carol);
+      await subscribe(carol, [queue]);
+      await until(() => again.length === 1);
+      expect(again[0].blob).toBe(receipt);
+      await call(alice, 'send', { v: 1, sid: queue.sid, blob: blob() });
+      await until(() => again.length === 2);
+      carol.disconnect();
+      await until(() => pushes.length === 1, 8000);
+      expect(pushes).toEqual([
+        { platform: 'fcm', token, data: { type: 'new_message' } },
+      ]);
     });
   });
 

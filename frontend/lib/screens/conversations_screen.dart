@@ -94,6 +94,9 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       // (lxxix): the encryption layer decides between the manual key-change
       // ceremony and the demoted auto-acknowledge off this live setting.
       enc.keyChangeWarnings = () => settings.keyChangeWarnings;
+      // Decision 62 (E61c): box receipts and typing follow this live,
+      // device-local switch.
+      msg.receiptsAndTyping = () => settings.receiptsAndTyping;
 
       // Start connection via ConnectionProvider (owns socket lifecycle)
       await auth.ensureSessionReady();

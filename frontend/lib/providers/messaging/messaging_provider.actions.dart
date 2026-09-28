@@ -19,8 +19,10 @@ extension MessagingActions on MessagingProvider {
   void markConversationRead(int conversationId) {
     if (_conversationsProvider?.isClientVisible == false) return;
     // A box message has no server read mark: its countdown starts here, at
-    // the same moments (decision 41).
+    // the same moments (decision 41), and the peer is told it was read when
+    // the switch is on (slice (g), E61d).
     _startBoxCountdowns(conversationId);
+    _sendBoxReadReceipt(conversationId);
     // A local chat has no server row to mark (owner decision 52).
     if (isLocalConversationId(conversationId)) return;
     _emit?.call('markConversationRead', {'conversationId': conversationId});

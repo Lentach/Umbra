@@ -36,4 +36,11 @@ export class BoxMsg {
 
   @Column({ type: 'timestamptz' })
   expiresAt: Date;
+
+  /**
+   * Sent with `mode: 'quiet'` (decision 61, migration 0025): delivered like
+   * any blob, never wakes a device.
+   */
+  @Column({ type: 'boolean', default: false })
+  quiet: boolean;
 }

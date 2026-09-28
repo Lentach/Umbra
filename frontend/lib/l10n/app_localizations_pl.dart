@@ -2175,6 +2175,13 @@ class AppLocalizationsPl extends AppLocalizations {
       'Domyślnie nowe klucze są przyjmowane, a w czacie pojawia się krótka notatka.';
 
   @override
+  String get privacyReceiptsAndTyping => 'Potwierdzenia odczytu i pisanie';
+
+  @override
+  String get privacyReceiptsAndTypingSubtitle =>
+      'Działa tylko, gdy oboje je włączycie. Dotyczy czatów przeniesionych na nowe prywatne doręczanie.';
+
+  @override
   String get devicesRenameAction => 'Zmień nazwę';
 
   @override

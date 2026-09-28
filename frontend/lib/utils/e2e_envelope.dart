@@ -53,6 +53,34 @@ typedef E2eBoxAction = ({
 /// the Signal session, still only the sender's own word.
 typedef E2eProfile = ({String username, String tag, String? avatarUrl});
 
+/// What a box receipt reports (metadata-privacy slice (g), E61b): the
+/// messages reached this device, or were shown on it.
+enum E2eReceiptKind {
+  delivered('d'),
+  read('r');
+
+  const E2eReceiptKind(this.wire);
+
+  final String wire;
+}
+
+/// Which composer a box typing frame speaks for (E61b, E61e).
+enum E2eTypingKind {
+  text('t'),
+  voice('v');
+
+  const E2eTypingKind(this.wire);
+
+  final String wire;
+}
+
+/// A box receipt: its kind and the wire ids — of messages the RECIPIENT of
+/// the receipt sent — it names.
+typedef E2eReceipt = ({E2eReceiptKind kind, List<String> wireIds});
+
+/// A box typing frame: its kind and whether it starts or stops.
+typedef E2eTyping = ({E2eTypingKind kind, bool on});
+
 /// E2E encrypted message envelope format. Single source of truth for build/parse.
 class E2eEnvelope {
   E2eEnvelope._();
@@ -222,6 +250,17 @@ class E2eEnvelope {
   /// The most UTF-8 bytes a reaction's emoji may take: room for the longest
   /// ZWJ sequences with skin tones, not for text.
   static const int maxReactionEmojiBytes = 64;
+
+  /// Receipts and typing over the box (slice (g), decisions 61–62, E61b):
+  /// `{t: 'rcpt', k: 'd'|'r', w: [1..100 wire ids]}` and
+  /// `{t: 'typ', k: 't'|'v', on}`. Sent only to the peer's devices.
+  static const String typeReceipt = 'rcpt';
+  static const String typeTyping = 'typ';
+  static const String _keyKind = 'k';
+  static const String _keyWireIds = 'w';
+
+  /// The most wire ids one receipt names.
+  static const int maxReceiptWireIds = 100;
 
   static Map<String, dynamic> build(
     String content, {
@@ -611,6 +650,62 @@ class E2eEnvelope {
       emoji: type == typeReact ? emoji as String : null,
       on: on is bool ? on : null,
     );
+  }
+
+  /// A [typeReceipt] envelope naming [wireIds] — 1 to [maxReceiptWireIds];
+  /// anything else throws a [RangeError].
+  static Map<String, dynamic> buildReceipt(
+    E2eReceiptKind kind,
+    List<String> wireIds,
+  ) {
+    RangeError.checkValueInInterval(
+      wireIds.length,
+      1,
+      maxReceiptWireIds,
+      'wireIds.length',
+    );
+    return {_keyType: typeReceipt, _keyKind: kind.wire, _keyWireIds: wireIds};
+  }
+
+  /// The receipt a peer's envelope carries; null — dropped whole — for any
+  /// other type, an unknown kind, or a `w` that is not 1 to
+  /// [maxReceiptWireIds] ids each in the wire-id shape.
+  static E2eReceipt? parseReceipt(String jsonStr) {
+    if (_object(jsonStr) case {
+      _keyType: typeReceipt,
+      _keyKind: final String k,
+      _keyWireIds: final List<dynamic> w,
+    } when w.isNotEmpty && w.length <= maxReceiptWireIds) {
+      final kind = E2eReceiptKind.values.where((v) => v.wire == k).firstOrNull;
+      if (kind == null) return null;
+      final wireIds = <String>[];
+      for (final id in w) {
+        if (id is! String || !_msgIdShape.hasMatch(id)) return null;
+        wireIds.add(id);
+      }
+      return (kind: kind, wireIds: wireIds);
+    }
+    return null;
+  }
+
+  /// A [typeTyping] envelope.
+  static Map<String, dynamic> buildTyping(
+    E2eTypingKind kind, {
+    required bool on,
+  }) => {_keyType: typeTyping, _keyKind: kind.wire, _keyOn: on};
+
+  /// The typing frame a peer's envelope carries; null for any other type,
+  /// an unknown kind or an `on` that is not a bool.
+  static E2eTyping? parseTyping(String jsonStr) {
+    if (_object(jsonStr) case {
+      _keyType: typeTyping,
+      _keyKind: final String k,
+      _keyOn: final bool on,
+    }) {
+      final kind = E2eTypingKind.values.where((v) => v.wire == k).firstOrNull;
+      return kind == null ? null : (kind: kind, on: on);
+    }
+    return null;
   }
 
   /// The address a [typeQueueHandoff] envelope carries; null for any other

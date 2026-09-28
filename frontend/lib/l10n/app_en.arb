@@ -819,6 +819,10 @@
   "@peerIdentityChangedSystemLine": {"placeholders": {"name": {"type": "String"}}},
   "settingsKeyChangeWarnings": "Warn when a contact's keys change",
   "settingsKeyChangeWarningsSubtitle": "By default new keys are accepted and a short note appears in the chat.",
+  "privacyReceiptsAndTyping": "Read receipts and typing",
+  "@privacyReceiptsAndTyping": {"description": "Privacy & Safety switch (metadata-privacy decision 62, E61c): read receipts, delivered ticks and typing on chats that moved to the box. Device-local, default off."},
+  "privacyReceiptsAndTypingSubtitle": "Works only when you both turn it on. Applies to chats moved to the new private delivery.",
+  "@privacyReceiptsAndTypingSubtitle": {"description": "One line under the switch: it is mutual (both sides must turn it on) and applies only to chats on the box (the new private delivery)."},
   "devicesRenameAction": "Rename",
   "@devicesRenameAction": {
     "description": "Button/tooltip that opens the rename sheet for one device row ((lxxx) clause 1)."

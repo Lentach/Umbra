@@ -54,9 +54,17 @@ export interface CreateQueueCmd {
   authPub: Buffer;
   sig: Buffer;
 }
+/**
+ * How a `send` is handled (decision 61, E61a). Absent: stored, and a queue
+ * nobody is subscribed to wakes its device. `live`: never stored, pushed once
+ * to the rid's subscribed socket if there is one now. `quiet`: stored like an
+ * ordinary send, but never wakes a device.
+ */
+export type SendMode = 'live' | 'quiet';
 export interface SendCmd {
   sid: Buffer;
   blob: Buffer;
+  mode?: SendMode;
 }
 export interface SubscribeCmd {
   subs: { rid: Buffer; sig: Buffer }[];
@@ -125,11 +133,18 @@ export function parseCreateQueue(data: unknown): CreateQueueCmd | null {
 }
 
 export function parseSend(data: unknown): SendCmd | null {
-  const o = command(data, ['sid', 'blob']);
+  const withMode = typeof data === 'object' && data !== null && 'mode' in data;
+  const o = command(data, withMode ? ['sid', 'blob', 'mode'] : ['sid', 'blob']);
   if (!o) return null;
+  let mode: SendMode | undefined;
+  if (withMode) {
+    if (o.mode !== 'live' && o.mode !== 'quiet') return null;
+    mode = o.mode;
+  }
   const sid = decodeFixedB64(o.sid, BOX_SID_BYTES);
   const blob = decodeFixedB64(o.blob, BOX_BLOB_BYTES);
-  return sid && blob ? { sid, blob } : null;
+  if (!sid || !blob) return null;
+  return mode ? { sid, blob, mode } : { sid, blob };
 }
 
 export function parseSubscribe(data: unknown): SubscribeCmd | null {

@@ -401,13 +401,23 @@ class BoxClient {
 
   /// Stores one sealed [blob] in the queue [sid] addresses. Unsigned: the sid
   /// is the bearer credential. An unknown or deleted sid ALSO answers
-  /// [BoxOk] (the box has no block oracle).
-  Future<BoxResult<void>> send(Uint8List sid, Uint8List blob) async {
+  /// [BoxOk] (the box has no block oracle). [mode] adds the frame's `mode`
+  /// (decision 61); without it the frame is today's.
+  Future<BoxResult<void>> send(
+    Uint8List sid,
+    Uint8List blob, {
+    BoxSendMode? mode,
+  }) async {
     _requireLength(sid, kBoxSidBytes, 'sid');
     _requireLength(blob, kBoxBlobBytes, 'blob');
     final result = await _call(
       'send',
-      (_) => {'v': 1, 'sid': boxB64(sid), 'blob': boxB64(blob)},
+      (_) => {
+        'v': 1,
+        'sid': boxB64(sid),
+        'blob': boxB64(blob),
+        'mode': ?mode?.wire,
+      },
     );
     return _void(result);
   }
