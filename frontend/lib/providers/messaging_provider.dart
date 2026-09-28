@@ -337,6 +337,9 @@ class MessagingProvider extends ChangeNotifier {
       }
     },
     prebuild: _prebuildBoxSessions,
+    // A chat shown before this connect's lookups landed had no route for
+    // its read receipt (slice (g), E61d).
+    onReady: (_) => _reportShownBoxChatRead(),
   );
 
   /// E50c's "box-ready" stamp, written only while this device is on the box
@@ -913,6 +916,9 @@ class MessagingProvider extends ChangeNotifier {
   /// Wire the ConversationsProvider for lastMessage/unread updates.
   void setConversationsProvider(ConversationsProvider cp) {
     _conversationsProvider = cp;
+    // The app is looked at again: the chat on screen is read now (slice
+    // (g), E61d).
+    cp.onClientVisible = _reportShownBoxChatRead;
   }
 
   /// Wire the socket emit callback so MessagingProvider can send events

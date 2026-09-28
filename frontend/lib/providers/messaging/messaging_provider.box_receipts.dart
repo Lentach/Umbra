@@ -62,9 +62,15 @@ extension MessagingBoxReceipts on MessagingProvider {
   /// 41). A message is reported once a device took the receipt: its row is
   /// then `read`, kept in its record, so no later launch names it again;
   /// one no device took is named again the next time the chat is shown.
+  ///
+  /// With the switch OFF the shown messages are marked `read` here and
+  /// nothing is sent: only a message read while the switch is on is ever
+  /// reported (owner, Signal's rule), so turning it on later names none of
+  /// them.
   void _sendBoxReadReceipt(int conversationId) {
     final own = _currentUserId;
-    if (own == null || !receiptsAndTyping()) return;
+    if (own == null) return;
+    final on = receiptsAndTyping();
     if (_conversationsProvider?.isClientVisible == false) return;
     final viewing = _effectiveActiveConversationId ?? _paginationConversationId;
     if (conversationId != viewing) return;
@@ -85,9 +91,23 @@ extension MessagingBoxReceipts on MessagingProvider {
       }
       // In flight or reported: a second show before it settles names it
       // no second time, and the drain's `rcpt d` leaves it out.
-      if (_boxReadReported.add(_boxWireKey(peer, wire))) wires.add(wire);
+      if (!on || _boxReadReported.add(_boxWireKey(peer, wire))) {
+        wires.add(wire);
+      }
     }
-    unawaited(_reportBoxRead(conversationId, peer, wires));
+    unawaited(
+      on
+          ? _reportBoxRead(conversationId, peer, wires)
+          : _markBoxRead(conversationId, peer, wires),
+    );
+  }
+
+  /// [_sendBoxReadReceipt] for the chat on screen, if any: its lists became
+  /// ready this connect, or the app is visible again.
+  void _reportShownBoxChatRead() {
+    _sendBoxReadReceipt(
+      _effectiveActiveConversationId ?? _paginationConversationId,
+    );
   }
 
   /// Sends [wires] as `rcpt r` to [peer]; each frame some device took marks
@@ -110,19 +130,29 @@ extension MessagingBoxReceipts on MessagingProvider {
         }
         continue;
       }
-      for (final wire in chunk) {
-        // The row as it is NOW: its countdown may have started meanwhile.
-        final row = await _heldBoxTarget((
-          senderId: peer,
-          wireId: wire,
-        ), conversationId);
-        if (row == null || row.deliveryStatus == MessageDeliveryStatus.read) {
-          continue;
-        }
-        await _replaceBoxRow(
-          row.copyWith(deliveryStatus: MessageDeliveryStatus.read),
-        );
+      await _markBoxRead(conversationId, peer, chunk);
+    }
+  }
+
+  /// [peer]'s box messages [wires] in [conversationId] become `read`, in RAM
+  /// and in their records, so no later show or launch names them again.
+  Future<void> _markBoxRead(
+    int conversationId,
+    int peer,
+    List<String> wires,
+  ) async {
+    for (final wire in wires) {
+      // The row as it is NOW: its countdown may have started meanwhile.
+      final row = await _heldBoxTarget((
+        senderId: peer,
+        wireId: wire,
+      ), conversationId);
+      if (row == null || row.deliveryStatus == MessageDeliveryStatus.read) {
+        continue;
       }
+      await _replaceBoxRow(
+        row.copyWith(deliveryStatus: MessageDeliveryStatus.read),
+      );
     }
   }
 

@@ -12,6 +12,7 @@ void main() {
   late Set<int> failing;
   late List<int> prebuilt;
   late Set<int> prebuildFailing;
+  late List<int> readied;
   Completer<void>? prebuildHold;
   late BoxDeviceListRefresh lists;
 
@@ -22,6 +23,7 @@ void main() {
     prebuilt = [];
     prebuildFailing = {};
     prebuildHold = null;
+    readied = [];
     lists = BoxDeviceListRefresh(
       users: () => covered,
       fetch: (peer) async {
@@ -34,6 +36,7 @@ void main() {
         if (prebuildFailing.contains(peer)) throw _Refused();
       },
       retryDelays: const [Duration(seconds: 5), Duration(seconds: 30)],
+      onReady: readied.add,
     );
   });
 
@@ -57,6 +60,25 @@ void main() {
     lists.refresh();
     await pumpEventQueue();
     expect(fetched, [2, 3]);
+  });
+
+  test('onReady names each user once its pass — lookup and pre-build — '
+      'went through, a failed one only once its retry does', () {
+    fakeAsync((clock) {
+      failing.add(2);
+      prebuildHold = Completer<void>();
+      lists.refresh();
+      clock.flushMicrotasks();
+      expect(readied, isEmpty, reason: '3 is still pre-building');
+
+      prebuildHold!.complete();
+      clock.flushMicrotasks();
+      expect(readied, [3]);
+
+      failing.clear();
+      clock.elapse(const Duration(seconds: 5));
+      expect(readied, [3, 2]);
+    });
   });
 
   test('a peer no refresh covered has no entry — a send must fail, not fetch', () {

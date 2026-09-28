@@ -33,15 +33,22 @@ class BoxDeviceListRefresh {
     required Iterable<int> Function() users,
     required Future<void> Function(int userId) fetch,
     Future<void> Function(int userId)? prebuild,
+    void Function(int userId)? onReady,
     List<Duration> retryDelays = kBoxDeviceListRetryDelays,
   }) : _users = users,
        _fetch = fetch,
        _prebuild = prebuild,
+       _onReady = onReady,
        _retryDelays = retryDelays;
 
   final Iterable<int> Function() _users;
   final Future<void> Function(int userId) _fetch;
   final Future<void> Function(int userId)? _prebuild;
+
+  /// Told each time a pass of a user — lookup and pre-build — went
+  /// through: what waited on no route may go now (slice (g): a read receipt
+  /// for the chat on screen).
+  final void Function(int userId)? _onReady;
   final List<Duration> _retryDelays;
 
   final Map<int, Future<void>> _entries = {};
@@ -96,6 +103,7 @@ class BoxDeviceListRefresh {
           if (identical(_entries[user], lookup) && _failed.isEmpty) {
             _retries = 0;
           }
+          _onReady?.call(user);
         },
         onError: (Object _) {
           // A lookup a reset or a newer lookup replaced decides nothing.

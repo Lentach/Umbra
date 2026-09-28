@@ -517,6 +517,72 @@ void main() {
     setUp(() => switchOn = true);
 
     test(
+      'a message shown while the switch was OFF is never reported, even '
+      'after it is turned on and across a restart; one arriving after is',
+      () async {
+        switchOn = false;
+        final early = await fromBob('m1', wire: _wire(1));
+        expect(outbox.delivered, isEmpty);
+        expect(row(early)!.deliveryStatus, MessageDeliveryStatus.read);
+
+        switchOn = true;
+        provider.markConversationRead(10);
+        await pump();
+        expect(outbox.delivered, isEmpty);
+        await restart();
+        expect(row(early)!.deliveryStatus, MessageDeliveryStatus.read);
+        expect(outbox.delivered, isEmpty);
+
+        await fromBob('m2', wire: _wire(2));
+        expect(outbox.delivered, hasLength(2));
+        for (final sent in outbox.delivered) {
+          expect(envelopeOf(sent), {
+            't': 'rcpt',
+            'k': 'r',
+            'w': [_wire(2)],
+          });
+        }
+      },
+    );
+
+    test(
+      'a chat shown before this connect looked its lists up sends its read '
+      'receipt once they are ready — once',
+      () async {
+        provider.dispose();
+        provider = newProvider();
+        final bobs = await fromBob('m1', wire: _wire(1));
+        expect(outbox.delivered, isEmpty, reason: 'no route yet');
+
+        provider.refreshBoxDeviceLists();
+        await pump();
+        expect(outbox.delivered, hasLength(2));
+        for (final sent in outbox.delivered) {
+          expect(envelopeOf(sent)['w'], [_wire(1)]);
+        }
+        expect(row(bobs)!.deliveryStatus, MessageDeliveryStatus.read);
+
+        outbox.delivered.clear();
+        provider.onDeviceListInvalidated(2);
+        await pump();
+        expect(outbox.delivered, isEmpty);
+      },
+    );
+
+    test('a chat on screen while the app was hidden is reported once the '
+        'app is visible again', () async {
+      conversations.setClientVisible(false);
+      final bobs = await fromBob('m1', wire: _wire(1));
+      expect(outbox.delivered, isEmpty);
+      expect(row(bobs)!.deliveryStatus, MessageDeliveryStatus.delivered);
+
+      conversations.setClientVisible(true);
+      await pump();
+      expect(outbox.delivered, hasLength(2));
+      expect(row(bobs)!.deliveryStatus, MessageDeliveryStatus.read);
+    });
+
+    test(
       "showing Bob's chat sends one quiet rcpt r naming his box messages not "
       'yet reported read; a later drain sends no d for them',
       () async {

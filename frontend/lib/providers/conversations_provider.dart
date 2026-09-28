@@ -311,7 +311,12 @@ class ConversationsProvider extends ChangeNotifier {
     if (_clientVisible == visible) return;
     _clientVisible = visible;
     reemitPushClientState();
+    if (visible) onClientVisible?.call();
   }
+
+  /// Told when the app becomes visible again (`MessagingProvider`: the chat
+  /// on screen owes its box read receipt, metadata-privacy slice (g)).
+  void Function()? onClientVisible;
 
   /// Re-sends the visibility (to the server) and the open chat (to the push
   /// SW) without changing state.
