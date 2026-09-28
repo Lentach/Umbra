@@ -26,7 +26,8 @@
   - Both ON: opening the chat sent `rcpt` and the sender's messages turned read ✓✓; typing showed "pisze…" and cleared ~6 s later.
   - Delivered: the peer on the chat list sent `rcpt` on receipt; the sender shows ✓ — `delivered` renders as ✓ like the old path (`message_metadata_row.dart`), so the step is not visible.
   - Server: with the sender's tab closed, the reader's `rcpt` landed as ONE `box_msgs` row `quiet = t`; its typing left no row.
-- Second drive, release web of `493d294c` (review fixes in): Bob read Ana's `rr1` and it turned read ✓✓ on Ana; with Ana's tab closed, Bob reloaded and reopened the chat: `box_msgs` quiet rows 0 → 0 (no read receipt re-sent).
+- Second drive, release web of `493d294c` (review fixes in): Bob read Ana's `rr1` and it turned read ✓✓ on Ana; with Ana's tab closed, Bob reloaded and reopened the chat: `box_msgs` quiet rows 0 → 0 (no read receipt re-sent). Positive control (`29637cd3`, service workers unregistered): Ana sent `r2` and closed; Bob's next chat show stored exactly ONE quiet row (the `rcpt r` for r2), and two more reload+reopen cycles added none (1 → 1 → 1). The count before that show was not captured, only the earlier 0.
+- Wake suppression is proven by the int tests only: the drive tabs never registered a push notifier.
 - NOT verified: the voice-indicator refresh/expiry on a device (unit + mutant only); Android/iOS; a wake push suppressed on a device with a registered notifier (int-tested only); the mutual OFF side on a device; voice-recording indicator.
 
 ## Notes for next session
