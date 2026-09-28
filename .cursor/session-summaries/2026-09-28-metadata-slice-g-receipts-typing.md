@@ -26,11 +26,12 @@
   - Both ON: opening the chat sent `rcpt` and the sender's messages turned read ✓✓; typing showed "pisze…" and cleared ~6 s later.
   - Delivered: the peer on the chat list sent `rcpt` on receipt; the sender shows ✓ — `delivered` renders as ✓ like the old path (`message_metadata_row.dart`), so the step is not visible.
   - Server: with the sender's tab closed, the reader's `rcpt` landed as ONE `box_msgs` row `quiet = t`; its typing left no row.
-- NOT verified: the two review fixes on a device (unit + mutant only); Android/iOS; a wake push suppressed on a device with a registered notifier (int-tested only); the mutual OFF side on a device; voice-recording indicator.
+- Second drive, release web of `493d294c` (review fixes in): Bob read Ana's `rr1` and it turned read ✓✓ on Ana; with Ana's tab closed, Bob reloaded and reopened the chat: `box_msgs` quiet rows 0 → 0 (no read receipt re-sent).
+- NOT verified: the voice-indicator refresh/expiry on a device (unit + mutant only); Android/iOS; a wake push suppressed on a device with a registered notifier (int-tested only); the mutual OFF side on a device; voice-recording indicator.
 
 ## Notes for next session
 - Next action: G5 prep — plan row 10 (gate review, migration rehearsal on a device: master APK, then the branch APK over it). Every PR3.1 slice is done.
-- Owner-owed: `delivered` renders the same ✓ as `sent` (the old path's look, `message_metadata_row.dart`), so decision 62's delivered tick is invisible — a distinct delivered icon, or accept. Decision 59: the 09-28 question omitted the queue-handoff clause; the log now states it for G5.
+- Owner-owed: (1) turning the switch on reports as read the messages already open or read while it was off (seen in the drive: `off-1` turned read); accept or limit to messages received after it was turned on. (2) `delivered` renders the same ✓ as `sent` (the old path's look, `message_metadata_row.dart`), so decision 62's delivered tick is invisible — a distinct delivered icon, or accept. Decision 59: the 09-28 question omitted the queue-handoff clause; the log now states it for G5.
 - Known UI gap (pre-existing): unfriending the only chat leaves a blank "?" chat.
 - Drive recipe: register via `/auth/register`, tokens from `/auth/login` into `localStorage` `flutter.jwt_token`/`flutter.refresh_token` (JSON strings), click `flt-semantics-placeholder`. The composer often keeps only the first typed character after the textarea is focused, switch ON or OFF alike (A/B run); retry the click and type with ~700 ms between characters. Managed tabs FREEZE between turns: run send→observe inside one eval cell.
 - Traps → `docs/agents/traps.md`: E2E ×1, Tests ×1, Agent tooling ×2.
