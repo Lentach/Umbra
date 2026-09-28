@@ -30,7 +30,7 @@
 
 ## Notes for next session
 - Next action: G5 prep — plan row 10 (gate review, migration rehearsal on a device: master APK, then the branch APK over it). Every PR3.1 slice is done.
-- Owner-owed: none open. Decision 59: the 09-28 question omitted the queue-handoff clause; the log now states it for G5.
+- Owner-owed: `delivered` renders the same ✓ as `sent` (the old path's look, `message_metadata_row.dart`), so decision 62's delivered tick is invisible — a distinct delivered icon, or accept. Decision 59: the 09-28 question omitted the queue-handoff clause; the log now states it for G5.
 - Known UI gap (pre-existing): unfriending the only chat leaves a blank "?" chat.
 - Drive recipe: register via `/auth/register`, tokens from `/auth/login` into `localStorage` `flutter.jwt_token`/`flutter.refresh_token` (JSON strings), click `flt-semantics-placeholder`. The composer often keeps only the first typed character after the textarea is focused, switch ON or OFF alike (A/B run); retry the click and type with ~700 ms between characters. Managed tabs FREEZE between turns: run send→observe inside one eval cell.
 - Traps → `docs/agents/traps.md`: E2E ×1, Tests ×1, Agent tooling ×2.
