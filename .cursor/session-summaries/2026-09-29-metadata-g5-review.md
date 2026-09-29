@@ -19,7 +19,7 @@
 - Read only (load-bearing): `docs/plans/metadata-privacy-decisions.md` (64–69), `docs/contracts/wire.md` Items 5–8.
 
 ## Verification
-- CI: see Notes (pushed `85e3a490`).
+- CI: 7/7 success on `dd4935c5` (draft PR #187, CI only; same code as `85e3a490`).
 - Backend on `36451db8` tree: tsc clean; Jest 1222/68; int 50/50 (one run had 1 failure under heavy parallel load, rerun alone 50/50, test not identified); ESLint ratchet 850 held; knip, box-imports, no-user-logs OK.
 - Flutter on `85e3a490`: analyze 3156 infos (Dart ratchet held); 3033 passed / 14 skipped; count verifier OK.
 - Mutants: all killed. FixClientFallbacks M1 (drop `isE2EReady`) is equivalent, because `ownLiveDevices` also checks it. FixRevert68 M3/M4 survived the restored tests; tests were added and they kill both now.
@@ -32,7 +32,7 @@
 - NOT verified: history import timing (native-only per review, not driven); old APK decision-66 UI (server answer is client-independent); typing to a partly covered friend (tests only); deferred re-key paths (reverted); release-signed APK; FCM; iOS; prod.
 
 ## Notes for next session
-- Next action: once CI is green on `85e3a490`, get the owner's go, then ff master from `fireplace-0a` and redeploy prod backend (`deploy-backend.sh`, box stays OFF) and web (`deploy-web.ps1`, smoke `--commit`). Then publish the 0.2.52 APK from the main checkout (NEXT.md recipe of 6adf09b4 still holds).
+- Next action: CI is green (PR #187). Get the owner's go, then ff master from `fireplace-0a` and redeploy prod backend (`deploy-backend.sh`, box stays OFF) and web (`deploy-web.ps1`, smoke `--commit`). Then publish the 0.2.52 APK from the main checkout (NEXT.md recipe of 6adf09b4 still holds).
 - Step B runbook additions: flip, then a plain backend restart ~2 min later (E69a). Never set `BOX_ENABLED=false` afterwards (E69b). Week-one `box_totals` / ceiling-refusal watch (E65b). Then the FCM check (69).
 - Owner-owed (delegated calls; may overrule): 68 is now a residual; E69c (no box badge after restart) is accepted for N, and its fix needs a per-chat "seen" marker in N+1.
 - Recipe: in the browser device, only the FRONT tab paints. `page.bringToFront()` before typing, `page.keyboard.sendCharacter` for text, and the send button, not Enter.
