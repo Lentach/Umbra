@@ -3186,14 +3186,17 @@ class EncryptionService {
       _noteDecrypted(id, data);
       final stamped = record[_metaWireId];
       final stampedBy = record[_metaWireSender];
-      final claims = _wireClaims;
-      if (stamped is String &&
-          stampedBy is int &&
-          claims != null &&
-          claims.userId == userId) {
-        (claims.claims[(senderId: stampedBy, wireId: stamped)] ??= <int>{}).add(
-          id,
-        );
+      if (stamped is String && stampedBy is int) {
+        final wire = (senderId: stampedBy, wireId: stamped);
+        final claims = _wireClaims;
+        if (claims != null && claims.userId == userId) {
+          (claims.claims[wire] ??= <int>{}).add(id);
+        }
+        // The running scan's read may predate this write.
+        final scan = _wireScan;
+        if (scan != null && scan.userId == userId) {
+          (scan.saved[wire] ??= <int>{}).add(id);
+        }
       }
       await _pruneDecryptedContentCache(prefs, userId);
     } catch (_) {}
@@ -3776,31 +3779,47 @@ class EncryptionService {
     return ids != null && ids.length == 1 ? ids.single : null;
   }
 
-  Future<Map<WireKey, Set<int>>?> _cachedWireClaims() async {
+  /// The cache when it is built; else the ONE scan in flight, which every
+  /// caller shares — a second scan finishing later would put back a view
+  /// older than the stamps the first one's cache has gained since.
+  Future<Map<WireKey, Set<int>>?> _cachedWireClaims() {
     final userId = _userId;
-    if (userId == null) return null;
-    var cache = _wireClaims;
-    if (cache == null || cache.userId != userId) {
-      final generation = _wireClaimsGeneration;
-      final scanned = await _scanWireClaims();
-      if (scanned == null || _userId != userId) return null;
-      cache = (userId: userId, claims: scanned);
-      // A scan that began before [forgetWireClaims] may predate the rows
-      // that call was for: answer with it, never keep it.
-      if (generation == _wireClaimsGeneration) _wireClaims = cache;
+    if (userId == null) return Future.value();
+    final cache = _wireClaims;
+    if (cache != null && cache.userId == userId) {
+      return Future.value(cache.claims);
     }
-    return cache.claims;
+    final running = _wireScan;
+    if (running != null && running.userId == userId) return running.claims;
+    final scan = _wireScan = _WireClaimsScan(userId);
+    return scan.claims = _installWireClaims(scan);
+  }
+
+  Future<Map<WireKey, Set<int>>?> _installWireClaims(
+    _WireClaimsScan scan,
+  ) async {
+    final scanned = await _scanWireClaims();
+    // A scan dropped by [forgetWireClaims] may predate the rows that call
+    // was for: answer with it, never keep it.
+    final kept = identical(_wireScan, scan);
+    if (kept) _wireScan = null;
+    if (scanned == null || _userId != scan.userId) return null;
+    for (final MapEntry(key: wire, value: ids) in scan.saved.entries) {
+      (scanned[wire] ??= <int>{}).addAll(ids);
+    }
+    if (kept) _wireClaims = (userId: scan.userId, claims: scanned);
+    return scanned;
   }
 
   ({int userId, Map<WireKey, Set<int>> claims})? _wireClaims;
-  int _wireClaimsGeneration = 0;
+  _WireClaimsScan? _wireScan;
 
-  /// Drops the wire-id cache behind [wireHeldByOther]/[wireHolder]: records
-  /// were written past [saveDecryptedContent] (a history-file import), so
-  /// the next lookup rescans the store.
+  /// Drops the wire-id cache behind [wireHeldByOther]/[wireHolder], and the
+  /// scan building it: records were written past [saveDecryptedContent] (a
+  /// history-file import), so the next lookup rescans the store.
   void forgetWireClaims() {
     _wireClaims = null;
-    _wireClaimsGeneration++;
+    _wireScan = null;
   }
 
   /// Every box message stored for [conversationId] — LOCAL ids (decision
@@ -5429,6 +5448,16 @@ class LocalHistoryWipeResult {
 
   /// Only this licenses telling the user their history is gone.
   bool get isComplete => failedKeys.isEmpty;
+}
+
+/// The one store scan building [EncryptionService]'s wire-id cache for
+/// [userId], with every stamp saved while it runs: its read may predate them.
+class _WireClaimsScan {
+  _WireClaimsScan(this.userId);
+
+  final int userId;
+  final Map<WireKey, Set<int>> saved = {};
+  late final Future<Map<WireKey, Set<int>>?> claims;
 }
 
 /// Both sides of the verify-security-keys ceremony (spec §12 amendment
