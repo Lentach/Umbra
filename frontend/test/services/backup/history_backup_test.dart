@@ -3,7 +3,11 @@ import 'dart:typed_data';
 
 import 'package:fireplace/services/backup/history_backup.dart';
 import 'package:fireplace/services/backup/history_backup_service.dart';
+import 'package:fireplace/services/contacts/contact_store.dart';
 import 'package:fireplace/services/encryption/content_kv.dart';
+import 'package:fireplace/services/encryption_service.dart';
+import 'package:fireplace/utils/message_ids.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -261,6 +265,286 @@ void main() {
       // The share sheet hands this string to Drive/Gmail/Downloads in
       // cleartext; an account id there undoes the sealing it sits next to.
       expect(name, isNot(contains('7')));
+    });
+  });
+
+  // After a storage loss the box hands out local ids from 2^48 again, and the
+  // file's box messages hold ids from the same range: the file must never
+  // lose a message to a live one that happens to share its id.
+  group('HistoryBackupService local ids', () {
+    const cid = 281474976710658;
+    const x = kFirstLocalMessageId;
+    late EncryptionService enc;
+    late ContactStore store;
+    late HistoryBackupService service;
+    late int allocations;
+    late int tombstoneReads;
+
+    Future<Uint8List> file(Map<String, String> records) => _codec().seal(
+      HistoryBackupPayload(userId: 7, records: records, contacts: const {}),
+      'pw',
+    );
+
+    Future<String?> content(int id) async =>
+        (await enc.getDecryptedContent(id))?['content'] as String?;
+
+    setUp(() async {
+      FlutterSecureStorage.setMockInitialValues({});
+      SharedPreferences.setMockInitialValues({});
+      enc = EncryptionService();
+      await enc.initialize(
+        7,
+        checkServerIdentity: () async =>
+            const ServerIdentityGuard(exists: false),
+      );
+      store = ContactStore(
+        open: () => enc.contentKv,
+        lock: <T>(_, action) => action(),
+        accepts: (_) => true,
+      );
+      await store.open(7);
+      allocations = 0;
+      tombstoneReads = 0;
+      service = HistoryBackupService(
+        open: () => enc.contentKv,
+        codec: _codec(),
+        allocateLocalIds: (count) {
+          allocations++;
+          return store.allocateLocalIds(count);
+        },
+        tombstones: () {
+          tombstoneReads++;
+          return enc.boxTombstoneSnapshot();
+        },
+        onImported: enc.forgetWireClaims,
+      );
+      // A box message received after the loss, before the import, and the
+      // wire-id cache the box dedups against, built while it is the only one.
+      expect(await store.allocateLocalId(), x);
+      await enc.saveDecryptedContent(
+        x,
+        {'content': 'live', 'senderId': 2},
+        conversationId: cid,
+        wire: (senderId: 2, wireId: 'live-wire'),
+      );
+      expect(await enc.wireHolder((senderId: 2, wireId: 'live-wire')), x);
+    });
+
+    test('every local id in the file comes from ONE allocation, each unique '
+        'and past every id the device holds', () async {
+      final bytes = await file({
+        for (var i = 0; i < 3; i++)
+          'e2e_7_decrypted_${x + i}': jsonEncode({
+            'content': 'file-$i',
+            '_cid': cid,
+            '_wid': 'file-wire-$i',
+            '_wsid': 2,
+          }),
+        // A replay row alone: no record key names its new id, so only the
+        // allocator's counter keeps the box from handing that id out again.
+        'e2e_7_decrypt_raw_v1_${x + 7}': jsonEncode({
+          'ciphertext': '3:old-device',
+          'plaintext': 'x',
+        }),
+      });
+
+      await service.importBytes(userId: 7, bytes: bytes, passphrase: 'pw');
+
+      expect(allocations, 1);
+      final moved = [
+        for (var i = 0; i < 3; i++)
+          await enc.wireHolder((senderId: 2, wireId: 'file-wire-$i')),
+      ].whereType<int>().toList();
+      expect(moved.toSet(), hasLength(3));
+      expect(moved, everyElement(greaterThan(x)));
+      expect(
+        [for (final id in moved) await content(id)],
+        ['file-0', 'file-1', 'file-2'],
+      );
+      final imported = [
+        for (final key in (await enc.contentKv).getKeys())
+          if (RegExp(r'^e2e_7_decrypt(ed|_raw_v1)_(\d+)$').firstMatch(key)
+              case final m?)
+            int.parse(m.group(2)!),
+      ];
+      final highest = imported.reduce((a, b) => a > b ? a : b);
+      expect(await store.allocateLocalId(), greaterThan(highest));
+    });
+
+    test('a message deleted for everyone on this device stays out, and the '
+        'tombstones are read once per import', () async {
+      const gone = (senderId: 2, wireId: 'gone-wire');
+      await enc.addBoxTombstone(gone);
+      final bytes = await file({
+        'e2e_7_decrypted_${x + 3}': jsonEncode({
+          'content': 'deleted words',
+          '_cid': cid,
+          '_wid': 'gone-wire',
+          '_wsid': 2,
+        }),
+        'e2e_7_decrypted_${x + 4}': jsonEncode({
+          'content': 'kept words',
+          '_cid': cid,
+          '_wid': 'kept-wire',
+          '_wsid': 2,
+        }),
+      });
+
+      final counts = await service.importBytes(
+        userId: 7,
+        bytes: bytes,
+        passphrase: 'pw',
+      );
+
+      expect(counts.records, 1);
+      expect(await enc.wireHolder(gone), isNull);
+      expect(await enc.wireHolder((senderId: 2, wireId: 'kept-wire')), isNotNull);
+      expect(tombstoneReads, 1);
+    });
+
+    test('a file message at a live local id moves to a fresh one, and what '
+        'the file names it by follows', () async {
+      final bytes = await file({
+        'e2e_7_decrypted_$x': jsonEncode({
+          'content': 'from-file',
+          'senderId': 2,
+          '_cid': cid,
+          '_wid': 'file-wire',
+          '_wsid': 2,
+        }),
+        'e2e_7_decrypted_${x + 1}': jsonEncode({
+          'content': 'reply',
+          'senderId': 7,
+          'replyTo': {
+            'id': x,
+            'content': 'from-file',
+            'senderUsername': 'peer',
+            'messageType': 'TEXT',
+            'wireId': 'file-wire',
+            'senderId': 2,
+          },
+          '_cid': cid,
+          '_wid': 'reply-wire',
+          '_wsid': 7,
+        }),
+      });
+
+      final counts = await service.importBytes(
+        userId: 7,
+        bytes: bytes,
+        passphrase: 'pw',
+      );
+
+      expect(counts.records, 2);
+      expect(await content(x), 'live');
+      final moved = await enc.wireHolder((senderId: 2, wireId: 'file-wire'));
+      expect(moved, isNotNull);
+      expect(moved, isNot(x));
+      expect(await content(moved!), 'from-file');
+      final reply = await enc.wireHolder((senderId: 7, wireId: 'reply-wire'));
+      final quoted = (await enc.getDecryptedContent(reply!))!['replyTo'];
+      expect(quoted, containsPair('id', moved));
+      // The allocator's counter moved past both: the next box message can
+      // never land on an imported one.
+      expect(await store.allocateLocalId(), greaterThan(moved > reply ? moved : reply));
+    });
+
+    test('importing the same file twice writes its messages once', () async {
+      final bytes = await file({
+        'e2e_7_decrypted_$x': jsonEncode({
+          'content': 'from-file',
+          '_cid': cid,
+          '_wid': 'file-wire',
+          '_wsid': 2,
+        }),
+      });
+
+      await service.importBytes(userId: 7, bytes: bytes, passphrase: 'pw');
+      final again = await service.importBytes(
+        userId: 7,
+        bytes: bytes,
+        passphrase: 'pw',
+      );
+
+      expect(again.records, 0);
+      expect(await enc.wireHolder((senderId: 2, wireId: 'file-wire')), isNotNull);
+    });
+
+    test('a message the device already holds by its wire id is not imported '
+        'again', () async {
+      final bytes = await file({
+        'e2e_7_decrypted_${x + 5}': jsonEncode({
+          'content': 'live',
+          '_cid': cid,
+          '_wid': 'live-wire',
+          '_wsid': 2,
+        }),
+        // Its replay row goes with it: nothing of it is written again.
+        'e2e_7_decrypt_raw_v1_${x + 5}': jsonEncode({
+          'ciphertext': '3:old-device',
+          'plaintext': 'live',
+        }),
+      });
+
+      final counts = await service.importBytes(
+        userId: 7,
+        bytes: bytes,
+        passphrase: 'pw',
+      );
+
+      expect(counts.records, 0);
+      expect(await enc.wireHolder((senderId: 2, wireId: 'live-wire')), x);
+    });
+
+    test('with no allocator answering, a file holding local ids is refused '
+        'before anything is written', () async {
+      store.close();
+      final bytes = await file({
+        'e2e_7_decrypted_1': jsonEncode({'content': 'server-row'}),
+        'e2e_7_decrypted_$x': jsonEncode({'content': 'from-file'}),
+      });
+
+      await expectLater(
+        service.importBytes(userId: 7, bytes: bytes, passphrase: 'pw'),
+        throwsA(isA<HistoryBackupLocalIdsUnavailable>()),
+      );
+      expect(await enc.getDecryptedContent(1), isNull);
+      expect(await content(x), 'live');
+    });
+
+    test("a kept request's replay id moves off a live one", () async {
+      // Its accept replays the decrypt under `lid`, and drops the replay row
+      // there afterwards: left at x, it would drop the live message's row.
+      final bytes = await _codec().seal(
+        HistoryBackupPayload(
+          userId: 7,
+          records: const {},
+          contacts: {
+            'e2e_7_contact_v1_42': jsonEncode({
+              'userId': 42,
+              'box': {
+                'at': 0,
+                'kept': [
+                  {'dev': 1, 'sig': '3:AAAA', 'at': 0, 'lid': x},
+                ],
+              },
+            }),
+          },
+        ),
+        'pw',
+      );
+
+      await service.importBytes(userId: 7, bytes: bytes, passphrase: 'pw');
+
+      final row = jsonDecode(
+        (await enc.contentKv).getString('e2e_7_contact_v1_42')!,
+      );
+      final lid = switch (row) {
+        {'box': {'kept': [{'lid': final Object? lid}]}} => lid,
+        _ => null,
+      };
+      expect(lid, isA<int>().having(isLocalMessageId, 'local', isTrue));
+      expect(lid, isNot(x));
     });
   });
 }

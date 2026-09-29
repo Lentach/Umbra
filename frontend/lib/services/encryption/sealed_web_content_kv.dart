@@ -75,8 +75,12 @@ class SealedWebContentKv implements ContentKv {
   /// `boxntf_v1` (`ContactStore.notifiersKey`) ties every contact queue's
   /// nid to this device's push token; a lost-kid row reads undecodable and
   /// only costs one challenge per queue.
+  /// `boxact_v1` (parked box actions: edit text, emoji), `boxlists_v1`
+  /// (every box friend's user id + authorization, E50c) and `boxdel_v1`
+  /// (tombstones naming senders), all `EncryptionService`: a lost-kid row
+  /// reads as empty and the next write replaces it.
   static final RegExp _familyKey = RegExp(
-    r'^e2e_\d+_(decrypted_|decrypt_raw_v1_|pendsend_v1_|contact_v1_|boxreq_v1|boxin_v1_|boxsib_v1|boxntf_v1)',
+    r'^e2e_\d+_(decrypted_|decrypt_raw_v1_|pendsend_v1_|contact_v1_|boxreq_v1|boxin_v1_|boxsib_v1|boxntf_v1|boxact_v1|boxlists_v1|boxdel_v1)',
   );
   static final RegExp _retireIdKey = RegExp(
     r'^e2e_(\d+)_(?:decrypted_|decrypt_raw_v1_)(\d+)$',

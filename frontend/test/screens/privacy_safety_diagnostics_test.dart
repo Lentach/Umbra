@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:fireplace/l10n/app_localizations.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
+import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/providers/settings_provider.dart';
 import 'package:fireplace/screens/privacy_safety_screen.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
@@ -18,6 +19,7 @@ void main() {
           ChangeNotifierProvider(
             create: (_) => SettingsProvider(initialThemePreference: 'dark'),
           ),
+          ChangeNotifierProvider(create: (_) => MessagingProvider()),
         ],
         child: MaterialApp(
           theme: RpgTheme.themeDataDarkGray,

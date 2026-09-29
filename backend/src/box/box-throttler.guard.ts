@@ -1,13 +1,19 @@
 import { ExecutionContext, Injectable, Logger } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 import {
+  InjectThrottlerOptions,
+  InjectThrottlerStorage,
   normalizeIp,
   ThrottlerGuard,
   type ThrottlerLimitDetail,
+  type ThrottlerModuleOptions,
+  type ThrottlerStorage,
 } from '@nestjs/throttler';
 import { MESSAGE_METADATA } from '@nestjs/websockets/constants';
 import type { Socket } from 'socket.io';
 import { proxiedClientIp } from '../common/client-ip';
-import type { BoxRefusal } from './box-wire';
+import { BoxDelivery } from './box-delivery.service';
+import { parseAck, type BoxRefusal } from './box-wire';
 
 /**
  * Who a box caller is, for throttling: its client IP as nginx reported it
@@ -59,10 +65,25 @@ export function takeRefusalCounts(): Map<string, number> {
  * An event WITHOUT an ack has no reply channel at all: every answer, the
  * refusals included, would be silence. That is a broken client, and it is
  * disconnected (`io server disconnect`) before it spends a bucket.
+ *
+ * An `ack` naming a message the box pushed to THIS socket and not yet acked
+ * skips the limit, once per push (`BoxDelivery.claimAck`): the victim of a
+ * junk flood on its public request sid acks every frame, and a per-address
+ * bucket spent on those would hold every queue on its socket behind a full
+ * window. Any other ack — a stale id, a forgery, a repeat — is counted.
  */
 @Injectable()
 export class BoxThrottlerGuard extends ThrottlerGuard {
   private readonly boxLogger = new Logger(BoxThrottlerGuard.name);
+
+  constructor(
+    @InjectThrottlerOptions() options: ThrottlerModuleOptions,
+    @InjectThrottlerStorage() storageService: ThrottlerStorage,
+    reflector: Reflector,
+    private readonly delivery: BoxDelivery,
+  ) {
+    super(options, storageService, reflector);
+  }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const ack: unknown = context.getArgs()[2];
@@ -71,6 +92,15 @@ export class BoxThrottlerGuard extends ThrottlerGuard {
       return false;
     }
     return super.canActivate(context);
+  }
+
+  protected shouldSkip(context: ExecutionContext): Promise<boolean> {
+    if (eventOf(context) !== 'ack') return Promise.resolve(false);
+    const ws = context.switchToWs();
+    const cmd = parseAck(ws.getData());
+    return Promise.resolve(
+      cmd !== null && this.delivery.claimAck(ws.getClient<Socket>().id, cmd.id),
+    );
   }
 
   protected getRequestResponse(context: ExecutionContext) {
@@ -107,15 +137,16 @@ export class BoxThrottlerGuard extends ThrottlerGuard {
       retryAfterMs: Math.max(0, detail.timeToBlockExpire * 1000),
     };
     ack(refusal);
-    const event = Reflect.getMetadata(
-      MESSAGE_METADATA,
-      context.getHandler(),
-    ) as string | undefined;
-    const name = event ?? 'unknown';
+    const name = eventOf(context) ?? 'unknown';
     countRefusal(name);
     // Per refusal at debug only: a flood must not amplify itself through prod
     // logs. `BoxReaper` logs the counts every sweep.
     this.boxLogger.debug(`[box-throttle] refused event=${name}`);
     return super.throwThrottlingException(context, detail);
   }
+}
+
+function eventOf(context: ExecutionContext): string | undefined {
+  return Reflect.getMetadata(MESSAGE_METADATA, context.getHandler()) as
+    string | undefined;
 }

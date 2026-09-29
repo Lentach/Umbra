@@ -1,6 +1,8 @@
+import { ConfigService } from '@nestjs/config';
 import { Server, Socket } from 'socket.io';
 import { ChatSearchService } from './chat-search.service';
 import { UsersService } from '../../users/users.service';
+import { FriendsService } from '../../friends/friends.service';
 import { DevicesService } from '../../key-bundles/devices.service';
 import { DeviceListService } from '../../key-bundles/device-list.service';
 import { PreKeyBundleResponse } from '../../key-bundles/key-bundles.service';
@@ -27,6 +29,9 @@ describe('ChatSearchService', () => {
 
   let service: ChatSearchService;
   let users: { findByUsernameAndTag: jest.Mock };
+  let friends: { getFriends: jest.Mock };
+  // The env as `ConfigService` serves it; `BOX_ENABLED` set per test.
+  let env: Record<string, string | undefined>;
   let devices: {
     firstContactDevices: jest.Mock<Promise<Address[]>, [number]>;
     setRequestQueue: jest.Mock<
@@ -75,6 +80,8 @@ describe('ChatSearchService', () => {
 
   beforeEach(() => {
     users = { findByUsernameAndTag: jest.fn() };
+    friends = { getFriends: jest.fn().mockResolvedValue([]) };
+    env = { BOX_ENABLED: 'true' };
     devices = {
       firstContactDevices: jest.fn().mockResolvedValue([]),
       setRequestQueue: jest.fn().mockResolvedValue(true),
@@ -91,9 +98,11 @@ describe('ChatSearchService', () => {
     };
     service = new ChatSearchService(
       users as unknown as UsersService,
+      friends as unknown as FriendsService,
       devices as unknown as DevicesService,
       deviceLists as unknown as DeviceListService,
       keyExchange as unknown as ChatKeyExchangeService,
+      { get: (key: string) => env[key] } as unknown as ConfigService,
     );
     client = { data: { user: { id: 1, deviceId: 1 } }, emit: jest.fn() };
   });
@@ -106,8 +115,8 @@ describe('ChatSearchService', () => {
     });
 
     it('serves every addressable device of any other account, a friend exactly like a stranger (owner decision 4): its bundle, its request queue, and the signed list', async () => {
-      // A friendship made over the box has no server row, so the answer cannot
-      // (and must not) depend on one — no friends lookup, no `[]` for a friend.
+      // Box on (the default here): a friendship made over the box has no
+      // server row, so the answer cannot (and must not) depend on one.
       users.findByUsernameAndTag.mockResolvedValue(stranger);
       devices.firstContactDevices.mockResolvedValue([
         { deviceId: 1, requestSid: sid, requestSealPub: sealPub },
@@ -210,7 +219,68 @@ describe('ChatSearchService', () => {
       ]);
     });
 
+    describe('a friend while the box is off (release N step A, G5 owner call)', () => {
+      // Old clients (web 0.2.50, APK 0.2.51) do not filter friends out of a
+      // search: served, a friend would show a dead invitation and cost one
+      // one-time pre-key per device per search.
+      beforeEach(() => {
+        users.findByUsernameAndTag.mockResolvedValue(stranger);
+        friends.getFriends.mockResolvedValue([{ id: 2 }]);
+        devices.firstContactDevices.mockResolvedValue([
+          { deviceId: 1, requestSid: sid, requestSealPub: sealPub },
+        ]);
+      });
+
+      it.each([
+        ['BOX_ENABLED=false', 'false'],
+        ['BOX_ENABLED unset', undefined],
+      ])(
+        '%s: answers empty and claims none of their pre-keys',
+        async (_label, value) => {
+          env = { BOX_ENABLED: value };
+
+          await search('alice#1234');
+
+          expect(payloadOf('searchUsersResult')).toEqual([]);
+          expect(keyExchange.claimBundle).not.toHaveBeenCalled();
+        },
+      );
+
+      it('still answers a stranger in full', async () => {
+        env = { BOX_ENABLED: 'false' };
+        friends.getFriends.mockResolvedValue([{ id: 3 }]);
+
+        await search('alice#1234');
+
+        const [result] = payloadOf('searchUsersResult') as Array<{
+          id: number;
+          devices: unknown[];
+        }>;
+        expect([result.id, result.devices.length]).toEqual([2, 1]);
+      });
+
+      it('BOX_ENABLED=true: answers the friend like anyone (decision 4)', async () => {
+        await search('alice#1234');
+
+        const [result] = payloadOf('searchUsersResult') as Array<{
+          id: number;
+          devices: unknown[];
+        }>;
+        expect([result.id, result.devices.length]).toEqual([2, 1]);
+        expect(keyExchange.claimBundle).toHaveBeenCalledWith(2, 1, server);
+      });
+    });
     it('answers empty for yourself and claims none of your own pre-keys', async () => {
+      users.findByUsernameAndTag.mockResolvedValue({ ...stranger, id: 1 });
+
+      await search('myself#1001');
+
+      expect(payloadOf('searchUsersResult')).toEqual([]);
+      expect(keyExchange.claimBundle).not.toHaveBeenCalled();
+    });
+
+    it('answers empty for yourself with the box off too', async () => {
+      env = { BOX_ENABLED: 'false' };
       users.findByUsernameAndTag.mockResolvedValue({ ...stranger, id: 1 });
 
       await search('myself#1001');

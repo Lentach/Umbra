@@ -8,12 +8,19 @@ import {
 } from './box.constants';
 import { BoxService } from './box.service';
 
+interface InFlight {
+  /** base64url */
+  rid: string;
+  /** Its one ack outside the ack limit is spent (`claimAck`). */
+  claimed: boolean;
+}
+
 interface Slot {
   socket: Socket;
   /** Subscribed rids in rotation order: base64url → bytes. */
   rids: Map<string, Buffer>;
-  /** Pushed, not yet acked on this socket: message id → rid (base64url). */
-  inFlight: Map<string, string>;
+  /** Pushed, not yet acked on this socket, by message id (base64url). */
+  inFlight: Map<string, InFlight>;
   /** Where the next round-robin pass starts. */
   cursor: number;
   running: boolean;
@@ -40,6 +47,9 @@ interface Slot {
  *   window slot like any frame until acked or the socket goes; with the
  *   window full it is dropped, so a sid holder cannot pile frames onto a
  *   socket that does not ack.
+ * - Each push earns its socket ONE ack outside the per-address ack limit
+ *   (`claimAck`): only that socket learned the id, so nobody else — not a
+ *   sender flooding a public request sid — can spend its owner's budget.
  */
 @Injectable()
 export class BoxDelivery {
@@ -157,8 +167,20 @@ export class BoxDelivery {
       return;
     }
     const id = randomBytes(BOX_MSG_ID_BYTES).toString('base64url');
-    slot.inFlight.set(id, rid);
-    slot.socket.emit('msg', { rid, id, blob: blob.toString('base64url') });
+    this.hand(slot, rid, id, blob);
+  }
+
+  /**
+   * True once per push: `id` is in flight on this socket, so its ack answers
+   * a frame the box handed THIS socket. Bounded by the window, and by the
+   * pushes a sender's own `send` limit pays for.
+   */
+  claimAck(socketId: string, id: Buffer): boolean {
+    const slot = this.slots.get(socketId);
+    const frame = slot?.inFlight.get(id.toString('base64url'));
+    if (!frame || frame.claimed) return false;
+    frame.claimed = true;
+    return true;
   }
 
   /** The socket acked `id`: its window slot frees and the next one goes out. */
@@ -167,12 +189,17 @@ export class BoxDelivery {
     if (slot?.inFlight.delete(id.toString('base64url'))) this.pump(slot);
   }
 
+  private hand(slot: Slot, rid: string, id: string, blob: Buffer): void {
+    slot.inFlight.set(id, { rid, claimed: false });
+    slot.socket.emit('msg', { rid, id, blob: blob.toString('base64url') });
+  }
+
   private release(socketId: string, rid: string): void {
     const slot = this.slots.get(socketId);
     if (!slot) return;
     slot.rids.delete(rid);
-    for (const [id, owner] of slot.inFlight) {
-      if (owner === rid) slot.inFlight.delete(id);
+    for (const [id, frame] of slot.inFlight) {
+      if (frame.rid === rid) slot.inFlight.delete(id);
     }
     slot.cursor = 0;
     this.pump(slot);
@@ -257,12 +284,7 @@ export class BoxDelivery {
         ) {
           continue;
         }
-        slot.inFlight.set(key, rid);
-        slot.socket.emit('msg', {
-          rid,
-          id: key,
-          blob: blob.toString('base64url'),
-        });
+        this.hand(slot, rid, key, blob);
         sent++;
       }
       if (sent === 0) return;

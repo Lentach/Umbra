@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../l10n/app_localizations.dart';
+import '../providers/conversations_provider.dart';
 import '../providers/encryption_provider.dart';
 import '../services/backup/history_backup.dart';
 import '../services/backup/history_backup_service.dart';
 import '../services/backup/storage_loss.dart';
+import '../services/contacts/contact_store.dart';
 import '../theme/rpg_theme.dart';
 import '../widgets/dialogs/backup_passphrase_dialog.dart';
 import '../widgets/settings_console.dart';
@@ -56,8 +58,13 @@ class _StorageLossScreenState extends State<StorageLossScreen> {
     final injected = widget.service;
     if (injected != null) return injected;
     final encryption = context.read<EncryptionProvider>();
+    final conversations = context.read<ConversationsProvider>();
     return HistoryBackupService(
       open: () => encryption.encryptionService.contentKv,
+      allocateLocalIds: (count) async =>
+          conversations.contactStore?.allocateLocalIds(count),
+      tombstones: encryption.encryptionService.boxTombstoneSnapshot,
+      onImported: encryption.encryptionService.forgetWireClaims,
     );
   }
 

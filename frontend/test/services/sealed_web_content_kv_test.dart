@@ -624,6 +624,22 @@ void main() {
       expect(kv.getString('e2e_37_boxntf_v1'), '{"v":1,"nids":[]}');
     });
 
+    // Parked actions hold edit text and emoji, the kept lists name every box
+    // friend's user id and authorization (E50c), the tombstones name senders.
+    for (final key in [
+      'e2e_37_boxact_v1',
+      'e2e_37_boxlists_v1',
+      'e2e_37_boxdel_v1',
+    ]) {
+      test('$key is sealed, never cleartext', () async {
+        final kv = await openStore();
+        const value = '{"u":{"42":{"listVersion":3}},"c":"edited words"}';
+        await kv.setString(key, value);
+        expect(prefs.getString(key), startsWith('fps1:'));
+        expect(kv.getString(key), value);
+      });
+    }
+
     test('remove drops the row and the view', () async {
       final kv = await openStore();
       await kv.setString('e2e_37_decrypted_43', '{"c":"x"}');

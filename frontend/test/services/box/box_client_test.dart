@@ -416,6 +416,36 @@ void main() {
   );
 
   test(
+    'a backend with no box (Invalid namespace) is retried only every '
+    'kBoxAbsentRetryDelay, and a later switch-on is still picked up',
+    () {
+      fakeAsync((clock) {
+        final box = client()..connect();
+        for (var i = 0; i < 3; i++) {
+          final before = sockets.sockets.length;
+          sockets.last.refuseConnection({'message': 'Invalid namespace'});
+          clock.elapse(kBoxAbsentRetryDelay - const Duration(seconds: 1));
+          expect(sockets.sockets, hasLength(before), reason: 'no fast retry');
+          clock.elapse(const Duration(seconds: 1));
+          expect(sockets.sockets, hasLength(before + 1), reason: 'still retried');
+        }
+
+        // Switched on: the next retry connects.
+        sockets.respond = (_, f) => _subscribed();
+        sockets.last.serverConnect('S-on');
+        clock.flushMicrotasks();
+        expect(box.state, BoxState.ready);
+
+        // Any other failure keeps the fast cadence.
+        final before = sockets.sockets.length;
+        sockets.last.serverDrop();
+        clock.elapse(const Duration(seconds: 31));
+        expect(sockets.sockets.length, greaterThan(before));
+      });
+    },
+  );
+
+  test(
     'deleteQueue reads auth_failed as already gone, and the rid leaves the set',
     () async {
       final box = client();

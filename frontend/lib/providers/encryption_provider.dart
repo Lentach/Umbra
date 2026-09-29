@@ -842,8 +842,11 @@ class EncryptionProvider extends ChangeNotifier {
   /// a revoked one too, holds the account identity key and could endorse a
   /// DAK of its own. A list under any other DAK — or for an account this
   /// device never verified from the server — costs ONE lookup per account
-  /// per process, which then decides; a carried list never raises the I7
-  /// surface (the peer is its source, not the server).
+  /// per process, which then decides, and only when the pinned identity
+  /// endorsed that DAK and the list verifies under it: an unvouched list is
+  /// refused with no lookup, or the server could probe which accounts are
+  /// our box friends (BOX-CARRIED-LIST-ORACLE). A carried list never raises
+  /// the I7 surface (the peer is its source, not the server).
   Future<CarriedListOutcome> adoptCarriedDeviceList(
     int userId,
     Object? authorization,

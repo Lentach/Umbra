@@ -114,10 +114,11 @@ export class BoxGateway implements OnGatewayDisconnect {
 
   /**
    * `mode` (decision 61, E61a): `live` is never stored or counted and never
-   * wakes — one push to the rid's socket of this moment, if any; `quiet` is
-   * stored like any send but never schedules the notifier. Both answer like
-   * an ordinary send; `live` answers `{ok:true}` whether or not a socket got
-   * it, and for an unknown sid (no presence or block oracle).
+   * wakes — one push to the rid's socket of this moment, if any, and never
+   * on a request queue; `quiet` is stored like any send but never schedules
+   * the notifier. Both answer like an ordinary send; `live` answers
+   * `{ok:true}` whether or not a socket got it, and for an unknown sid (no
+   * presence or block oracle).
    */
   @Throttle({ default: { limit: BOX_LIMITS.send, ttl: BOX_THROTTLE_TTL_MS } })
   @SubscribeMessage('send')
@@ -125,7 +126,7 @@ export class BoxGateway implements OnGatewayDisconnect {
     const cmd = parseSend(data);
     if (!cmd) return INVALID;
     if (cmd.mode === 'live') {
-      const rid = await this.box.ridBySid(cmd.sid);
+      const rid = await this.box.liveRidBySid(cmd.sid);
       if (rid) this.delivery.pushLive(rid, cmd.blob);
       return { ok: true };
     }

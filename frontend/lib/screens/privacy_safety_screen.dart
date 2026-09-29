@@ -6,10 +6,13 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../l10n/app_localizations.dart';
 import '../providers/auth_provider.dart';
+import '../providers/conversations_provider.dart';
 import '../providers/encryption_provider.dart';
+import '../providers/messaging_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/backup/history_backup.dart';
 import '../services/backup/history_backup_service.dart';
+import '../services/contacts/contact_store.dart';
 import '../theme/rpg_theme.dart';
 import '../utils/e2e_diag_log.dart';
 import '../utils/e2e_persistent_diag.dart';
@@ -202,22 +205,27 @@ class _PrivacySafetyScreenState extends State<PrivacySafetyScreen> {
               body: l10n.serverStoresMetadataDescription,
             ),
             // Decision 62 (E61c): receipts and typing on box chats, OFF by
-            // default and mutual; device-local.
-            Consumer<SettingsProvider>(
-              builder: (context, settings, _) => SettingsConsoleRow(
-                key: const ValueKey('privacy-receipts-and-typing-row'),
-                glyph: ConsoleGlyph.chats,
-                title: l10n.privacyReceiptsAndTyping,
-                subtitle: l10n.privacyReceiptsAndTypingSubtitle,
-                trailing: Switch(
-                  value: settings.receiptsAndTyping,
-                  onChanged: (v) => settings.setReceiptsAndTyping(enabled: v),
-                ),
-                onTap: () => settings.setReceiptsAndTyping(
-                  enabled: !settings.receiptsAndTyping,
+            // default and mutual; device-local. Shown only once this device
+            // is on the box (G5 owner call, 2026-09-29): before that the
+            // switch does nothing. `onBoxReady` notifies, so it appears live.
+            if (context.select<MessagingProvider, bool>(
+              (messaging) => messaging.boxFriends?.onBox ?? false,
+            ))
+              Consumer<SettingsProvider>(
+                builder: (context, settings, _) => SettingsConsoleRow(
+                  key: const ValueKey('privacy-receipts-and-typing-row'),
+                  glyph: ConsoleGlyph.chats,
+                  title: l10n.privacyReceiptsAndTyping,
+                  subtitle: l10n.privacyReceiptsAndTypingSubtitle,
+                  trailing: Switch(
+                    value: settings.receiptsAndTyping,
+                    onChanged: (v) => settings.setReceiptsAndTyping(enabled: v),
+                  ),
+                  onTap: () => settings.setReceiptsAndTyping(
+                    enabled: !settings.receiptsAndTyping,
+                  ),
                 ),
               ),
-            ),
             _buildAntiQuantumNoteExplainer(context),
             SettingsSectionCaption(label: l10n.settingsSectionPreferences),
             _buildDeleteAllLocalHistoryCard(context),
@@ -546,8 +554,13 @@ class _PrivacySafetyScreenState extends State<PrivacySafetyScreen> {
     // Captured now, not inside the closure: the closure runs after an await,
     // and reading a provider off a disposed element would throw there.
     final encryption = context.read<EncryptionProvider>();
+    final conversations = context.read<ConversationsProvider>();
     return HistoryBackupService(
       open: () => encryption.encryptionService.contentKv,
+      allocateLocalIds: (count) async =>
+          conversations.contactStore?.allocateLocalIds(count),
+      tombstones: encryption.encryptionService.boxTombstoneSnapshot,
+      onImported: encryption.encryptionService.forgetWireClaims,
     );
   }
 

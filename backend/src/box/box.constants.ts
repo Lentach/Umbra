@@ -95,6 +95,23 @@ export const BOX_GLOBAL_MSG_CEILING = 60_000;
 export const BOX_GLOBAL_MEDIA_CEILING_BYTES = 2 * 1024 * 1024 * 1024;
 
 /**
+ * The OPEN band of each global ceiling (G5, BOX-CEILING-DOS): what any store
+ * may fill. The rest, up to the ceiling, is reserved for stores into an
+ * ESTABLISHED normal queue (`BOX_PROBATION_DAYS`), so whoever mints queues
+ * to fill the box stops here while existing friendships keep sending. A
+ * request queue never reaches the reserve: its sid is public.
+ */
+export const BOX_OPEN_MSG_CEILING = 30_000;
+export const BOX_OPEN_MEDIA_CEILING_BYTES = 1024 * 1024 * 1024;
+
+/**
+ * A new normal queue is on probation until the UTC day this many days after
+ * its creation; its owner's first ack on or after that day establishes it
+ * (`box_queues."probationUntil"`, migration 0026).
+ */
+export const BOX_PROBATION_DAYS = 7;
+
+/**
  * Push coalescing per notifier, the existing tuning (design §4.5): wait this
  * long after the last send, but never longer than the max since the first.
  */

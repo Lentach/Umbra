@@ -462,5 +462,5 @@ class _Link implements BoxFriendLink {
   void friendHeard(int userId, int deviceId) {}
 
   @override
-  void handOffTo(int userId) {}
+  void rekeyFriendNextConnect(int userId, int deviceId) {}
 }

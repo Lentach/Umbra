@@ -8,6 +8,7 @@ import '../models/invitation_state.dart';
 import '../services/box/box_first_contact.dart';
 import '../services/contacts/contact_record.dart';
 import '../services/contacts/contact_store.dart';
+import '../utils/e2e_persistent_diag.dart';
 import '../utils/message_ids.dart';
 
 /// FriendsProvider — owns all friends, friend requests, blocking, and
@@ -753,10 +754,7 @@ class FriendsProvider extends ChangeNotifier {
   /// purge every chat.
   void onBoxFriendshipEnded(int userId) {
     if (_currentUserId != null && userId == _currentUserId) {
-      debugPrint(
-        '[FriendsProvider] Ignoring self-addressed box goodbye '
-        '(userId=$userId) — would purge all local history',
-      );
+      E2ePersistentDiag.record('BOX_GOODBYE_SELF_IGNORED');
       return;
     }
     onRemoveConversationsForUser?.call(userId);
@@ -944,7 +942,9 @@ class FriendsProvider extends ChangeNotifier {
     try {
       result = await boxSend(entry);
     } on Object catch (e) {
-      debugPrint('[FriendsProvider] box send to $userId threw: $e');
+      E2ePersistentDiag.record('BOX_FRIEND_SEND_THREW', {
+        'error': e.runtimeType.toString(),
+      });
       result = FirstContactSend.failed;
     }
     if (!_isLiveFor(account)) return;
@@ -992,7 +992,9 @@ class FriendsProvider extends ChangeNotifier {
       try {
         result = await accept(-requestId);
       } on Object catch (e) {
-        debugPrint('[FriendsProvider] box accept of ${-requestId} threw: $e');
+        E2ePersistentDiag.record('BOX_FRIEND_ACCEPT_THREW', {
+          'error': e.runtimeType.toString(),
+        });
       }
     }
     if (!_isLiveFor(account)) return;
@@ -1036,7 +1038,9 @@ class FriendsProvider extends ChangeNotifier {
         await decline(-requestId);
         declined = true;
       } on Object catch (e) {
-        debugPrint('[FriendsProvider] box decline of ${-requestId} threw: $e');
+        E2ePersistentDiag.record('BOX_FRIEND_DECLINE_THREW', {
+          'error': e.runtimeType.toString(),
+        });
       }
     }
     if (!_isLiveFor(account)) return;
@@ -1134,7 +1138,9 @@ class FriendsProvider extends ChangeNotifier {
     try {
       await end(userId, block: block);
     } on Object catch (e) {
-      debugPrint('[FriendsProvider] box end of $userId threw: $e');
+      E2ePersistentDiag.record('BOX_FRIEND_END_THREW', {
+        'error': e.runtimeType.toString(),
+      });
       return false;
     }
     if (!_isLiveFor(account)) return true;

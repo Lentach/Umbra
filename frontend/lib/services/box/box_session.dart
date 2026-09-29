@@ -107,7 +107,7 @@ class BoxSession
       keys: _keys,
       seal: _seal,
       queueCreated: () => _notifiers?.run(),
-    );
+    )..rekey = rekeyFriend;
     firstContact = BoxFirstContact(store: store, now: now);
   }
 
@@ -128,10 +128,11 @@ class BoxSession
   /// once each.
   final Set<String> _friendRekeyed = {};
 
-  /// When this device started a session with a friend's device it has not
-  /// read since ([friendSessionStarted], [awaitingFriendRekeyFrom]), by
+  /// Until when this device awaits the own PreKey answer of a friend's
+  /// device it started a session with and has not read since
+  /// ([friendSessionStarted], [rekeyFriend], [awaitingFriendRekeyFrom]), by
   /// `user:device`.
-  final Map<String, DateTime> _friendRekeyAsked = {};
+  final Map<String, DateTime> _friendRekeyAskedUntil = {};
 
   /// Called when this device first counts as on the box ([onBox]): its
   /// request queue was published. The composer notice (decision 48) reads it.
@@ -777,9 +778,10 @@ class BoxSession
     final ensured = await _keys.ensureInbound(userId);
     if (ensured is! InboundQueueCreated || _disposed) return;
     final queue = ensured.queue;
-    // The fresh session counts as asked (`friendSessionStarted`, set by the
-    // encrypt side): two devices that re-key each other at once read each
-    // other's re-key (decision 49).
+    // The fresh session counts as asked (decision 49): two devices that
+    // re-key each other at once read each other's re-key — and so does one
+    // whose answering re-key waits for ITS next connect, hence the longer
+    // window ([kFriendRekeyAnswerWindow]).
     final frame = await encrypt(
       userId,
       deviceId,
@@ -788,6 +790,9 @@ class BoxSession
       ),
       fresh: true,
     );
+    if (frame != null && !_disposed) {
+      _friendRekeyAskedUntil[key] = _now().add(kFriendRekeyAnswerWindow);
+    }
     final sent = frame != null && await _friends.send(target, frame) is BoxOk;
     if (sent) _friends.noteHanded(userId, deviceId, queue.sid);
     E2eDiagLog.add('BOX_FRIEND_REKEYED', {'device': deviceId, 'sent': sent});
@@ -795,22 +800,26 @@ class BoxSession
 
   @override
   void friendSessionStarted(int userId, int deviceId) {
-    if (!_disposed) _friendRekeyAsked['$userId:$deviceId'] = _now();
+    if (!_disposed) {
+      _friendRekeyAskedUntil['$userId:$deviceId'] = _now().add(
+        kFriendRekeyWindow,
+      );
+    }
   }
 
   @override
   bool awaitingFriendRekeyFrom(int userId, int deviceId) {
     final key = '$userId:$deviceId';
-    final at = _friendRekeyAsked[key];
-    if (at == null) return false;
-    if (_now().difference(at) <= kFriendRekeyWindow) return true;
-    _friendRekeyAsked.remove(key);
+    final until = _friendRekeyAskedUntil[key];
+    if (until == null) return false;
+    if (!_now().isAfter(until)) return true;
+    _friendRekeyAskedUntil.remove(key);
     return false;
   }
 
   @override
   void friendRekeyAnswered(int userId, int deviceId) =>
-      _friendRekeyAsked.remove('$userId:$deviceId');
+      _friendRekeyAskedUntil.remove('$userId:$deviceId');
 
   @override
   void friendHeard(int userId, int deviceId) {
@@ -818,9 +827,8 @@ class BoxSession
   }
 
   @override
-  void handOffTo(int userId) {
-    if (!_disposed) _friends.friendChanged(userId);
-  }
+  void rekeyFriendNextConnect(int userId, int deviceId) =>
+      _friends.rekeyNextConnect(userId, deviceId);
 
   @override
   Future<ContactQueue?> firstContactQueue(int userId) async {

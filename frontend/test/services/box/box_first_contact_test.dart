@@ -1,11 +1,49 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:fireplace/services/box/box_first_contact.dart';
 import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/services/contacts/contact_store.dart';
 import 'package:fireplace/services/encryption/content_kv.dart';
+import 'package:fireplace/utils/e2e_envelope.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:libsignal_protocol_dart/libsignal_protocol_dart.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+/// [plaintext] as a first contact sends it: the FIRST Signal message of a
+/// fresh session, `"{type}:{base64}"`.
+Future<String> _firstContactSignal(String plaintext) async {
+  final bobIdentity = generateIdentityKeyPair();
+  final bobPreKey = generatePreKeys(1, 1).single;
+  final bobSigned = generateSignedPreKey(bobIdentity, 1);
+  final alice = InMemorySignalProtocolStore(
+    generateIdentityKeyPair(),
+    generateRegistrationId(false),
+  );
+  const bob = SignalProtocolAddress('bob', 1);
+  await SessionBuilder.fromSignalStore(alice, bob).processPreKeyBundle(
+    PreKeyBundle(
+      generateRegistrationId(false),
+      1,
+      bobPreKey.id,
+      bobPreKey.getKeyPair().publicKey,
+      bobSigned.id,
+      bobSigned.getKeyPair().publicKey,
+      bobSigned.signature,
+      bobIdentity.getPublicKey(),
+    ),
+  );
+  final message = await SessionCipher.fromStore(
+    alice,
+    bob,
+  ).encrypt(Uint8List.fromList(utf8.encode(plaintext)));
+  return '${message.getType()}:${base64Encode(message.serialize())}';
+}
+
+/// A PreKey frame of exactly [bytes] Signal bytes, distinct per [seed].
+String _frame(int bytes, int seed) => '3:${base64Encode(
+  Uint8List.fromList(List.generate(bytes, (i) => (i * 7 + seed) & 0xff)),
+)}';
 
 /// First contact over request queues (metadata-privacy slice (f), E15c,
 /// E15i, decision 54): a stranger's request is kept undecrypted, capped, and
@@ -300,6 +338,129 @@ void main() {
         expect(kept, isNot(contains(100)), reason: 'the oldest');
         expect(kept, contains(150));
         expect(store.byUserId(999)?.state, ContactState.pendingOut);
+      },
+    );
+  });
+
+  group('kept requests cannot exhaust storage (G5, BOX-KEPT-STORAGE)', () {
+    const cap = BoxFirstContact.maxKeptSignalBytes;
+
+    test(
+      'a real request carrying the largest profile a request can hold is '
+      'kept',
+      () async {
+        final signal = await _firstContactSignal(
+          jsonEncode(
+            E2eEnvelope.buildFriendRequest(
+              sid: '${'A' * 42}E',
+              sealPub: '${'b' * 42}w',
+              profile: (
+                username: 'ż' * 64,
+                tag: '9' * 16,
+                avatarUrl:
+                    'https://${'h' * 200}.example/media/avatars/${'a' * 128}',
+              ),
+            ),
+          ),
+        );
+
+        expect(
+          await contact.keep(
+            userId: 342,
+            deviceId: 2,
+            signal: signal,
+            claim: ana,
+          ),
+          isTrue,
+        );
+        expect(store.byUserId(342)?.boxOrigin?.kept.single.signal, signal);
+      },
+    );
+
+    test(
+      'a frame of more Signal bytes than a request needs is not kept; one '
+      'at the bound is',
+      () async {
+        expect(
+          await contact.keep(
+            userId: 342,
+            deviceId: 2,
+            signal: _frame(cap + 1, 0),
+            claim: ana,
+          ),
+          isFalse,
+        );
+        expect(store.byUserId(342), isNull);
+
+        expect(
+          await contact.keep(
+            userId: 342,
+            deviceId: 2,
+            signal: _frame(cap, 0),
+            claim: ana,
+          ),
+          isTrue,
+        );
+      },
+    );
+
+    test(
+      'a request keeps at most six frames across its devices: the newest, '
+      'under the name it was kept under',
+      () async {
+        final sent = <String>[];
+        for (final (device, s) in [
+          (2, 'A'),
+          (2, 'B'),
+          (3, 'C'),
+          (3, 'D'),
+          (4, 'E'),
+          (4, 'F'),
+          (5, 'G'),
+        ]) {
+          sent.add('3:$s');
+          await contact.keep(
+            userId: 342,
+            deviceId: device,
+            signal: '3:$s',
+            claim: device == 2 ? ana : (username: 'mallory', tag: '0001'),
+          );
+        }
+
+        final record = store.byUserId(342)!;
+        expect(
+          [for (final k in record.boxOrigin!.kept) k.signal],
+          sent.skip(1),
+        );
+        expect(record.username, 'ana');
+      },
+    );
+
+    test(
+      'every kept request shares one byte budget: past it the oldest '
+      'requests go',
+      () async {
+        const frames = BoxFirstContact.maxFramesPerRequest;
+        const fits = BoxFirstContact.maxKeptBytes ~/ (frames * cap);
+        for (var r = 0; r <= fits; r++) {
+          now = t0.add(Duration(minutes: r));
+          for (var f = 0; f < frames; f++) {
+            await contact.keep(
+              userId: 100 + r,
+              deviceId: 1 + f ~/ BoxFirstContact.maxFramesPerDevice,
+              signal: _frame(cap, r * frames + f),
+              claim: (username: 'u$r', tag: '$r'),
+            );
+          }
+        }
+
+        final kept = [
+          for (final r in store.all)
+            if (r.state == ContactState.pendingIn) r.userId,
+        ];
+        expect(kept, hasLength(fits));
+        expect(kept, isNot(contains(100)), reason: 'the oldest');
+        expect(kept, contains(100 + fits), reason: 'the newest');
       },
     );
   });

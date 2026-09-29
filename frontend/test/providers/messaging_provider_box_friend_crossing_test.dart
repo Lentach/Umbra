@@ -127,7 +127,9 @@ class _Link implements BoxFriendLink {
   // One box session.
 
   final Set<int> _rekeyed = {};
-  final Map<int, DateTime> _asked = {};
+
+  /// Until when each peer device's own PreKey answer is read.
+  final Map<int, DateTime> _askedUntil = {};
   final Set<int> _heard = {};
 
   /// Re-keys that went out, over every session.
@@ -170,16 +172,22 @@ class _Link implements BoxFriendLink {
     if (await _send(_handoff)) _noteHanded();
   }
 
-  /// The account socket came back: the same box session resumes.
-  Future<void> reconnect() {
+  /// The account socket came back: the same box session resumes, and its
+  /// pass first runs the re-keys an earlier connect owes.
+  Future<void> reconnect() async {
     _handed = false;
+    final owed = [..._rekeyNextConnect];
+    _rekeyNextConnect.clear();
+    for (final device in owed) {
+      await rekeyFriend(side.peerId, device);
+    }
     return _pass();
   }
 
   /// A new box session (the app started again, or another login).
   Future<void> restart() {
     _rekeyed.clear();
-    _asked.clear();
+    _askedUntil.clear();
     _heard.clear();
     return reconnect();
   }
@@ -215,23 +223,32 @@ class _Link implements BoxFriendLink {
   Future<void> rekeyFriend(int userId, int deviceId) async {
     if (!_rekeyed.add(deviceId)) return;
     if (await _send(_handoff, fresh: true)) {
+      // A re-key waits for its answer longer than a first session.
+      _askedUntil[deviceId] = _now.add(kFriendRekeyAnswerWindow);
       rekeys++;
       _noteHanded();
     }
   }
 
+  final Set<int> _rekeyNextConnect = {};
+
+  @override
+  void rekeyFriendNextConnect(int userId, int deviceId) =>
+      _rekeyNextConnect.add(deviceId);
+
   @override
   bool awaitingFriendRekeyFrom(int userId, int deviceId) {
-    final at = _asked[deviceId];
-    return at != null && _now.difference(at) <= kFriendRekeyWindow;
+    final until = _askedUntil[deviceId];
+    return until != null && !_now.isAfter(until);
   }
 
   @override
-  void friendRekeyAnswered(int userId, int deviceId) => _asked.remove(deviceId);
+  void friendRekeyAnswered(int userId, int deviceId) =>
+      _askedUntil.remove(deviceId);
 
   @override
   void friendSessionStarted(int userId, int deviceId) =>
-      _asked[deviceId] = _now;
+      _askedUntil[deviceId] = _now.add(kFriendRekeyWindow);
 
   /// `BoxFriendHandoff.friendHeard`: an unacked device that is heard from
   /// is handed our queue again now, once per session.
@@ -239,11 +256,6 @@ class _Link implements BoxFriendLink {
   void friendHeard(int userId, int deviceId) {
     if (acked || handedAt == null || _handed || !_heard.add(deviceId)) return;
     handedAt = null;
-    handOffTo(userId);
-  }
-
-  @override
-  void handOffTo(int userId) {
     _handed = false;
     unawaited(_pass());
   }
@@ -365,8 +377,8 @@ void main() {
       reply.signalCiphertext,
       deviceId: 3,
     );
-    a.link._asked.clear();
-    b.link._asked.clear();
+    a.link._askedUntil.clear();
+    b.link._askedUntil.clear();
     E2eDiagLog.clear();
   });
 
@@ -412,6 +424,47 @@ void main() {
             text,
           );
         }
+      }
+    },
+  );
+
+  test(
+    'a re-key refused on the request queue converges although every connect '
+    'lands more than the 10 min window after the last: the refusal defers '
+    'its answering re-key to the next connect (BOX-FORGED-PREKEY-LOOKUP), '
+    'and that answer must still be read',
+    () async {
+      // Neither side holds the other's queue: every frame rides the
+      // friend's REQUEST queue. S (a) re-keys R (b) — R did not ask.
+      await a.link.rekeyFriend(5, 3);
+      await pump();
+      expect(b.refusals, ['would_replace']);
+
+      for (var round = 0; round < 3 && !converged(); round++) {
+        _now = _now.add(const Duration(minutes: 11));
+        await b.link.reconnect();
+        await pump();
+        _now = _now.add(const Duration(minutes: 11));
+        await a.link.reconnect();
+        await pump();
+      }
+
+      expect(converged(), isTrue);
+      for (final (from, to) in [(a, b), (b, a)]) {
+        final text = '{"t":"m","from":${from.userId}}';
+        final frame = (await from.reader.encryptForFriend(
+          from.peerId,
+          from.peerDevice,
+          text,
+        ))!;
+        expect(
+          await to.enc.encryptionService.decrypt(
+            to.peerId,
+            frame.signalCiphertext,
+            deviceId: to.peerDevice,
+          ),
+          text,
+        );
       }
     },
   );

@@ -1,0 +1,25 @@
+-- G5 gate review (BOX-CEILING-DOS): the global ceiling (decision 30,
+-- `box_totals`) keeps its top band for ESTABLISHED normal queues, so whoever
+-- mints queues to fill the box cannot refuse every existing friendship's
+-- send, receipt and upload for the 14-30 d until the blobs expire.
+--
+--   "probationUntil"  a NORMAL queue's creation UTC day plus 7 (a DAY, like
+--                     "touchedDay"). Its owner's first ack on or after that
+--                     day sets it back to NULL; a normal queue whose value is
+--                     NULL is established (`BoxService.enqueue` /
+--                     `chargeMedia`). NULL on every request queue: its sid is
+--                     public, so it never reaches the reserve and needs no
+--                     creation trace.
+--
+-- One nullable day per queue; it names no account, device or sender (I2),
+-- and like "claimBy" the creation trace is gone once it has served. Queues
+-- that exist before this file stay NULL, i.e. established: the box has never
+-- been switched on in prod.
+--
+-- Names match `backend/src/box/entities/box-queue.entity.ts` exactly (dev
+-- `synchronize` runs after this file).
+--
+-- Inverse (add it as the NEXT numbered file, never edit this one):
+--   ALTER TABLE public.box_queues DROP COLUMN "probationUntil";
+ALTER TABLE public.box_queues
+  ADD COLUMN IF NOT EXISTS "probationUntil" date NULL;

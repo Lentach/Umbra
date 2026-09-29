@@ -256,17 +256,6 @@ void main() {
   );
 
   test(
-    'a sender device that cannot be verified yet is offered again later — '
-    'nothing decrypted, nothing shown',
-    () async {
-      final e = entry(device: 2);
-      expect(await deliver(e, _peer(2, conversationId: 10)), isFalse);
-      expect(encryption.decryptedIds, isEmpty);
-      expect(provider.messages, isEmpty);
-    },
-  );
-
-  test(
     'no session yet: the peer is asked (once) to re-key, and the delivery '
     'waits to be offered again; a spent key is finished with',
     () async {

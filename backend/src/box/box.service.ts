@@ -8,6 +8,7 @@ import {
   BOX_MSG_TTL_MS,
   BOX_NID_BYTES,
   BOX_NORMAL_QUEUE_CAP,
+  BOX_PROBATION_DAYS,
   BOX_REQUEST_QUEUE_CAP,
   BOX_RID_BYTES,
   BOX_SID_BYTES,
@@ -46,15 +47,24 @@ const RUNG_BUCKETS = BOX_MEDIA_LADDER.map((r) => r.bucket);
 const RUNG_BYTES = BOX_MEDIA_LADDER.map((r) => r.bytes);
 
 /**
- * The global ceiling's two numbers (decision 30). Injected, not imported, so
- * the integration suite can lower them instead of writing 2 GiB; the module
- * provides `BOX_GLOBAL_MSG_CEILING` / `BOX_GLOBAL_MEDIA_CEILING_BYTES`.
+ * The global ceiling's numbers (decision 30), each with its OPEN band: what a
+ * store into anything but an established normal queue may fill (G5). Injected,
+ * not imported, so the integration suite can lower them instead of writing
+ * 2 GiB; the module provides the `box.constants.ts` values.
  */
 export interface BoxCeiling {
   msgs: number;
   mediaBytes: number;
+  openMsgs: number;
+  openMediaBytes: number;
 }
 export const BOX_CEILING = Symbol('BOX_CEILING');
+
+/**
+ * SQL over a `box_queues` row: a NORMAL queue whose owner acked it after its
+ * probation (`ack`). Only its stores may use the top band of the ceiling.
+ */
+const ESTABLISHED = `(kind = 'normal' AND "probationUntil" IS NULL)`;
 
 /** The UTC calendar day of `at`, as Postgres `date` text. */
 function utcDay(at: Date): string {
@@ -78,7 +88,10 @@ function utcDay(at: Date): string {
  * rows its FK cascade removes), `deleteMedia`. A request-queue eviction
  * replaces a message, so the total does not move. The price: every send and
  * upload serialises on that row for the rest of its three-statement
- * transaction — accepted at the box's per-IP send rate.
+ * transaction — accepted at the box's per-IP send rate. Its top band is
+ * reserved (G5): the same UPDATE's bound is the whole ceiling only for a
+ * store into an ESTABLISHED normal queue, read under that queue's lock, and
+ * the open band (`BoxCeiling.openMsgs` / `openMediaBytes`) for every other.
  *
  * `repo.query()` on Postgres answers DELETE/UPDATE with `[rows, rowCount]`
  * and SELECT/INSERT with `rows` (backend/CLAUDE.md §4) — a `WITH` statement
@@ -106,17 +119,21 @@ export class BoxService {
    * Idempotent per `authPub`: a client whose answer was lost retries with the
    * same key and gets the SAME queue back rather than an orphan. Only the key
    * holder can sign for it, so returning the existing address leaks nothing.
-   * `null` when that key already owns a queue of the other kind.
+   * `null` when that key already owns a queue of the other kind. A normal
+   * queue starts on probation (`ack` ends it); a request queue never needs
+   * it, so it keeps no creation trace.
    */
   async createQueue(
     kind: QueueKind,
     authPub: Buffer,
   ): Promise<QueueAddress | null> {
+    const probationUntil = new Date();
+    probationUntil.setUTCDate(probationUntil.getUTCDate() + BOX_PROBATION_DAYS);
     const inserted: { rid: Buffer; sid: Buffer; nid: Buffer }[] =
       await this.db.query(
         `INSERT INTO public.box_queues
-           (rid, sid, nid, "recipientAuthPub", kind, "claimBy")
-         VALUES ($1, $2, $3, $4, $5, $6)
+           (rid, sid, nid, "recipientAuthPub", kind, "claimBy", "probationUntil")
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT ("recipientAuthPub") DO NOTHING
          RETURNING rid, sid, nid`,
         [
@@ -126,6 +143,7 @@ export class BoxService {
           authPub,
           kind,
           new Date(Date.now() + BOX_UNCLAIMED_TTL_MS),
+          kind === 'normal' ? utcDay(probationUntil) : null,
         ],
       );
     if (inserted.length === 1) return inserted[0];
@@ -144,9 +162,11 @@ export class BoxService {
    * Stores one blob. A normal queue refuses when full; a request queue drops
    * its oldest instead (first contact must never be blocked by a spammer who
    * holds the public request sid) — which replaces a message, so it is taken
-   * even at the global ceiling. Any other blob past the ceiling is refused,
-   * and so is one for an unknown sid: at the ceiling a dead sid must read
-   * like a live one (no block oracle). The queue row is locked for the
+   * even at the global ceiling. Any other blob past its share of the ceiling
+   * is refused: all of it for an ESTABLISHED normal queue, the open band for
+   * every other (G5). So is a blob for an unknown sid past the whole ceiling:
+   * a dead sid must read like the live queue a block deletes, a friend's
+   * established one (no block oracle). The queue row is locked for the
    * duration, so the count checks and the insert cannot interleave with
    * another send. `quiet` (decision 61) only marks the row so the
    * socket-gone wake skips it; caps, expiry and delivery are the same.
@@ -162,9 +182,10 @@ export class BoxService {
         nid: Buffer;
         kind: QueueKind;
         msgCount: number;
+        established: boolean;
       }[] = await tx.query(
-        `SELECT rid, nid, kind, "msgCount" FROM public.box_queues
-          WHERE sid = $1 FOR UPDATE`,
+        `SELECT rid, nid, kind, "msgCount", ${ESTABLISHED} AS established
+           FROM public.box_queues WHERE sid = $1 FOR UPDATE`,
         [sid],
       );
       const queue = rows[0];
@@ -194,7 +215,11 @@ export class BoxService {
         const [, grown]: [unknown, number] = await tx.query(
           `UPDATE public.box_totals SET "msgCount" = "msgCount" + 1
             WHERE id = 1 AND "msgCount" < $1`,
-          [this.ceiling.msgs],
+          [
+            queue.established
+              ? this.ceiling.msgs
+              : Math.min(this.ceiling.openMsgs, this.ceiling.msgs),
+          ],
         );
         if (grown === 0) return { result: 'over_ceiling' } as const;
         await tx.query(
@@ -222,12 +247,14 @@ export class BoxService {
   }
 
   /**
-   * The rid behind `sid`, or null for an unknown sid. Read only: a `live`
+   * Where a `live` blob for `sid` goes: its rid, or null for an unknown sid
+   * AND for a request queue — a public sid, and first contact is never live,
+   * so it is no free channel into its owner's socket. Read only: a `live`
    * send (decision 61) stores and counts nothing.
    */
-  async ridBySid(sid: Buffer): Promise<Buffer | null> {
+  async liveRidBySid(sid: Buffer): Promise<Buffer | null> {
     const rows: { rid: Buffer }[] = await this.db.query(
-      `SELECT rid FROM public.box_queues WHERE sid = $1`,
+      `SELECT rid FROM public.box_queues WHERE sid = $1 AND kind = 'normal'`,
       [sid],
     );
     return rows[0]?.rid ?? null;
@@ -296,7 +323,11 @@ export class BoxService {
     );
   }
 
-  /** Idempotent: acking a message that is already gone changes nothing. */
+  /**
+   * Idempotent: acking a message that is already gone changes nothing. An
+   * ack that removes one on or after the queue's probation day ESTABLISHES
+   * it (clears `probationUntil`): its owner still reads it a week on.
+   */
   async ack(rid: Buffer, id: Buffer): Promise<void> {
     await this.db.transaction(async (tx) => {
       await tx.query(
@@ -308,12 +339,14 @@ export class BoxService {
            DELETE FROM public.box_msgs WHERE rid = $1 AND id = $2 RETURNING rid),
          queue AS (
            UPDATE public.box_queues
-              SET "msgCount" = "msgCount" - (SELECT count(*) FROM gone)
+              SET "msgCount" = "msgCount" - (SELECT count(*) FROM gone),
+                  "probationUntil" = CASE WHEN "probationUntil" <= $3::date
+                    THEN NULL ELSE "probationUntil" END
             WHERE rid = $1 AND EXISTS (SELECT 1 FROM gone))
          UPDATE public.box_totals
             SET "msgCount" = "msgCount" - (SELECT count(*) FROM gone)
           WHERE id = 1 AND EXISTS (SELECT 1 FROM gone)`,
-        [rid, id],
+        [rid, id, utcDay(new Date())],
       );
     });
   }
@@ -414,15 +447,21 @@ export class BoxService {
    * total always counts exactly the `box_media` rows (a crash between a
    * charge and the row cannot strand bytes). The row names no queue ("budget
    * without link"). The queue row is locked, so parallel uploads cannot
-   * overdraw either budget. At the ceiling an unknown sid (or none) is
-   * refused like a live one: the answer must not test a sid.
+   * overdraw either budget. Past its share of the global ceiling — all of it
+   * for an ESTABLISHED queue, the open band for a new one (G5) — an upload is
+   * refused; past the whole ceiling an unknown sid (or none) is refused like
+   * an established one: the answer must not test a sid.
    */
   async chargeMedia(sid: Buffer | null, media: NewMedia): Promise<MediaCharge> {
     return this.db.transaction(async (tx) => {
-      const rows: { kind: QueueKind; mediaBytesToday: number }[] = sid
+      const rows: {
+        kind: QueueKind;
+        mediaBytesToday: number;
+        established: boolean;
+      }[] = sid
         ? await tx.query(
-            `SELECT kind, "mediaBytesToday" FROM public.box_queues
-              WHERE sid = $1 FOR UPDATE`,
+            `SELECT kind, "mediaBytesToday", ${ESTABLISHED} AS established
+               FROM public.box_queues WHERE sid = $1 FOR UPDATE`,
             [sid],
           )
         : [];
@@ -444,7 +483,12 @@ export class BoxService {
       const [, grown]: [unknown, number] = await tx.query(
         `UPDATE public.box_totals SET "mediaBytes" = "mediaBytes" + $1
           WHERE id = 1 AND "mediaBytes" + $1 <= $2`,
-        [media.bytes, this.ceiling.mediaBytes],
+        [
+          media.bytes,
+          queue.established
+            ? this.ceiling.mediaBytes
+            : Math.min(this.ceiling.openMediaBytes, this.ceiling.mediaBytes),
+        ],
       );
       if (grown === 0) return 'over_ceiling';
       await tx.query(

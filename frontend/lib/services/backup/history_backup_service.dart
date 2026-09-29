@@ -1,8 +1,13 @@
+import 'dart:convert';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 
 import '../../utils/e2e_persistent_diag.dart';
+import '../../utils/message_ids.dart';
+import '../contacts/contact_record.dart';
 import '../encryption/content_kv.dart';
+import '../plaintext_record_codec.dart';
 import 'backup_file_out_stub.dart'
     if (dart.library.io) 'backup_file_out_io.dart'
     show emitBackupFile;
@@ -10,6 +15,9 @@ import 'history_backup.dart';
 
 /// How much a backup carries, or restored.
 typedef HistoryBackupCounts = ({int records, int contacts});
+
+/// A message's wire identity: `(_wsid, _wid)` (`PlaintextRecordCodec`).
+typedef _Wire = ({int senderId, String wireId});
 
 /// Export and import of the user-held history backup (PR2.3).
 ///
@@ -31,12 +39,35 @@ class HistoryBackupService {
     required Future<ContentKv> Function() open,
     HistoryBackupCodec? codec,
     Future<void> Function(Uint8List bytes, String filename)? emit,
+    Future<int?> Function(int count)? allocateLocalIds,
+    Future<bool Function(({int senderId, String wireId}) wire)> Function()?
+    tombstones,
+    void Function()? onImported,
   }) : _open = open,
        _codec = codec ?? HistoryBackupCodec(),
-       _emit = emit ?? emitBackupFile;
+       _emit = emit ?? emitBackupFile,
+       _allocateLocalIds = allocateLocalIds,
+       _tombstones = tombstones,
+       _onImported = onImported;
 
   final Future<ContentKv> Function() _open;
   final HistoryBackupCodec _codec;
+
+  /// The box's local-id allocator (`ContactStore.allocateLocalIds`: the
+  /// first of `count` consecutive ids): every local id the file names is
+  /// re-issued from it, so an imported message never shares an id with one
+  /// this device already holds, and the box's next id lands past it. Null,
+  /// or answering null (a closed store), means a file naming local ids
+  /// cannot be imported now.
+  final Future<int?> Function(int count)? _allocateLocalIds;
+
+  /// The messages deleted for everyone on this device, read ONCE per import
+  /// (`EncryptionService.boxTombstoneSnapshot`): their file copies stay out.
+  final Future<bool Function(_Wire wire)> Function()? _tombstones;
+
+  /// Told once rows were written behind the store's back — the owner of the
+  /// wire-id cache (`EncryptionService.forgetWireClaims`) must rescan.
+  final void Function()? _onImported;
 
   /// Hands the finished file to the platform — a share sheet on native, a
   /// browser download on web. Injectable because the VM test host has
@@ -117,6 +148,12 @@ class HistoryBackupService {
   /// record is one-shot — overwriting a live one with an older snapshot is
   /// the one mistake here that cannot be undone.
   ///
+  /// A box message's LOCAL id (decision 14) is this device's name for it,
+  /// not the message's: after a storage loss the box hands the same ids out
+  /// again, so a file id can name a different live message. Every local id
+  /// the file names is therefore re-issued ([_mapLocalIds]); a message the
+  /// device already holds by its wire id is not written a second time.
+  ///
   /// Throws [StateError] when the picker was cancelled, so the surface can
   /// stay silent instead of reporting a failure the user caused on purpose.
   Future<HistoryBackupCounts> pickAndImport({
@@ -141,34 +178,195 @@ class HistoryBackupService {
     if (payload.userId != userId) throw HistoryBackupForeignAccount();
 
     final kv = await _open();
-    final existing = (await _readAll(kv)).keys.toSet();
-    var records = 0;
-    var contacts = 0;
+    final live = await _readAll(kv);
     // EXACTLY the two prefixes `exportAndShare` produces — never the rest of
     // the `e2e_<uid>_` namespace. Signal key material, the identity and the
     // passcode verifier live there too and are out of scope by contract; the
     // device this path targets has a store that was just destroyed, so
-    // `existing` is empty and nothing else would stop a crafted file from
+    // `live` is empty and nothing else would stop a crafted file from
     // planting them.
     final recordPre = recordPrefix(userId);
     final rawPre = rawRecordPrefix(userId);
-    for (final entry in payload.records.entries) {
-      if (existing.contains(entry.key)) continue;
-      if (!entry.key.startsWith(recordPre) && !entry.key.startsWith(rawPre)) {
-        continue;
-      }
-      if (await kv.setString(entry.key, entry.value)) records++;
+    final contactPre = contactPrefix(userId);
+    final rows = {
+      for (final MapEntry(:key, :value) in payload.records.entries)
+        if (key.startsWith(recordPre) || key.startsWith(rawPre)) key: value,
+    };
+    final contactRows = {
+      for (final MapEntry(:key, :value) in payload.contacts.entries)
+        if (key.startsWith(contactPre) && !live.containsKey(key)) key: value,
+    };
+    // Every id is issued BEFORE the first write: a refused allocation leaves
+    // the store exactly as it was.
+    final ids = await _mapLocalIds(
+      rows: rows,
+      contactRows: contactRows,
+      live: live,
+      recordPre: recordPre,
+      rawPre: rawPre,
+    );
+
+    var records = 0;
+    var contacts = 0;
+    for (final MapEntry(:key, :value) in rows.entries) {
+      final prefix = key.startsWith(recordPre) ? recordPre : rawPre;
+      final local = _localIdOf(key, prefix);
+      if (local != null && ids.skip.contains(local)) continue;
+      final target = local == null ? key : '$prefix${ids.to[local]}';
+      if (live.containsKey(target)) continue;
+      final row = prefix == recordPre ? _withReplyMoved(value, ids.to) : value;
+      if (await kv.setString(target, row)) records++;
     }
-    for (final entry in payload.contacts.entries) {
-      if (existing.contains(entry.key)) continue;
-      if (!entry.key.startsWith(contactPrefix(userId))) continue;
-      if (await kv.setString(entry.key, entry.value)) contacts++;
+    for (final MapEntry(:key, :value) in contactRows.entries) {
+      if (await kv.setString(key, _withKeptMoved(value, ids.to))) contacts++;
     }
+    if (records > 0) _onImported?.call();
     E2ePersistentDiag.record('HISTORY_BACKUP_IMPORTED', {
       'records': records,
       'contacts': contacts,
+      'reissued': ids.reissued,
     });
     return (records: records, contacts: contacts);
+  }
+
+  /// Where each LOCAL id the file names lands on this device.
+  ///
+  /// `skip`: a file message this device already holds — the same `(_wsid,
+  /// _wid)` stamp on any live record, or, unstamped, a byte-identical live
+  /// record — is not written again (a second import of the same file, a
+  /// message the box re-delivered); nor is one deleted for everyone here
+  /// ([_tombstones]). `to`: the id every reference is rewritten to — the
+  /// held message's own id when exactly one record holds it, else a FRESH
+  /// id from the box's allocator, in file order, all in one block.
+  ///
+  /// Fresh even where the old id is free right now: the box can journal a
+  /// delivery under it before this import writes, and a pending journal row
+  /// owns its id before any record exists. The allocator bumps its counter
+  /// under the store's lock, so nothing else is ever handed these ids.
+  Future<({Map<int, int> to, Set<int> skip, int reissued})> _mapLocalIds({
+    required Map<String, String> rows,
+    required Map<String, String> contactRows,
+    required Map<String, Object?> live,
+    required String recordPre,
+    required String rawPre,
+  }) async {
+    final liveWires = <_Wire, Set<int>>{};
+    final liveBodies = <String, Set<int>>{};
+    for (final MapEntry(:key, :value) in live.entries) {
+      if (value is! String || !key.startsWith(recordPre)) continue;
+      final id = int.tryParse(key.substring(recordPre.length));
+      if (id == null) continue;
+      final wire = _wireOf(_decode(value));
+      if (wire != null) (liveWires[wire] ??= <int>{}).add(id);
+      if (isLocalMessageId(id)) (liveBodies[value] ??= <int>{}).add(id);
+    }
+
+    final tombstoned = await _tombstones?.call() ?? ((_) => false);
+
+    final to = <int, int>{};
+    final skip = <int>{};
+    final named = <int>{};
+    void name(Object? id) {
+      if (id is int && isLocalMessageId(id)) named.add(id);
+    }
+
+    for (final MapEntry(:key, :value) in rows.entries) {
+      if (key.startsWith(rawPre)) {
+        name(_localIdOf(key, rawPre));
+        continue;
+      }
+      final local = _localIdOf(key, recordPre);
+      final record = _decode(value);
+      if (local != null) {
+        final wire = _wireOf(record);
+        final holders = wire != null ? liveWires[wire] : liveBodies[value];
+        if (holders != null && holders.isNotEmpty) {
+          skip.add(local);
+          if (holders.length == 1) to[local] = holders.single;
+        } else if (wire != null && tombstoned(wire)) {
+          skip.add(local);
+        }
+        name(local);
+      }
+      if (local == null || !skip.contains(local)) {
+        if (record?['replyTo'] case {'id': final Object? quoted}) name(quoted);
+      }
+    }
+    for (final value in contactRows.values) {
+      for (final kept in _keptOf(_decode(value))) {
+        if (kept case {'lid': final Object? lid}) name(lid);
+      }
+    }
+
+    final fresh = [
+      for (final id in named.toList()..sort())
+        if (!to.containsKey(id)) id,
+    ];
+    if (fresh.isNotEmpty) {
+      final first = await _allocateLocalIds?.call(fresh.length);
+      if (first == null) throw HistoryBackupLocalIdsUnavailable();
+      for (final (i, id) in fresh.indexed) {
+        to[id] = first + i;
+      }
+    }
+    return (to: to, skip: skip, reissued: fresh.length);
+  }
+
+  static int? _localIdOf(String key, String prefix) {
+    if (!key.startsWith(prefix)) return null;
+    final id = int.tryParse(key.substring(prefix.length));
+    return id != null && isLocalMessageId(id) ? id : null;
+  }
+
+  static Map<String, dynamic>? _decode(String raw) {
+    try {
+      final decoded = jsonDecode(raw);
+      return decoded is Map<String, dynamic> ? decoded : null;
+    } on FormatException {
+      return null;
+    }
+  }
+
+  static _Wire? _wireOf(Map<String, dynamic>? record) => switch (record) {
+    {
+      PlaintextRecordCodec.wireIdKey: final String wireId,
+      PlaintextRecordCodec.wireSenderKey: final int senderId,
+    } =>
+      (senderId: senderId, wireId: wireId),
+    _ => null,
+  };
+
+  static List<Object?> _keptOf(Map<String, dynamic>? contact) =>
+      switch (contact) {
+        {'box': {ContactBoxOrigin.keptKey: final List<Object?> kept}} => kept,
+        _ => const [],
+      };
+
+  /// [raw] with its quote's local id moved per [to]; verbatim otherwise.
+  static String _withReplyMoved(String raw, Map<int, int> to) {
+    final record = _decode(raw);
+    if (record?['replyTo'] case final Map<String, dynamic> quote) {
+      if (to[quote['id']] case final int moved) {
+        quote['id'] = moved;
+        return jsonEncode(record);
+      }
+    }
+    return raw;
+  }
+
+  /// [raw] with its kept requests' replay ids (`lid`) moved per [to].
+  static String _withKeptMoved(String raw, Map<int, int> to) {
+    final contact = _decode(raw);
+    var moved = false;
+    for (final kept in _keptOf(contact)) {
+      if (kept is Map<String, dynamic>) {
+        if (to[kept['lid']] case final int lid) {
+          kept['lid'] = lid;
+          moved = true;
+        }
+      }
+    }
+    return moved ? jsonEncode(contact) : raw;
   }
 
   /// Ground truth where the backend has a stale-able read view (web), the
@@ -181,4 +379,13 @@ class HistoryBackupService {
     if (snapshot != null) return snapshot;
     return {for (final key in kv.getKeys()) key: kv.getString(key)};
   }
+}
+
+/// The file names box messages by LOCAL id, and no allocator answered (the
+/// contact store is closed or was never wired). Thrown before anything is
+/// written: importing them under their old ids could overwrite or shadow a
+/// message this device received since. Retry once the store is open.
+class HistoryBackupLocalIdsUnavailable implements Exception {
+  @override
+  String toString() => 'HistoryBackupLocalIdsUnavailable';
 }

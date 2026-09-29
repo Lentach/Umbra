@@ -300,22 +300,40 @@ class BoxFirstContact {
       record.legacy.requestId == null;
 
   /// The most frames kept per requesting device: a re-sent request joins
-  /// the earlier one, and a forged frame naming the account cannot push the
-  /// real one out (review), while a flood from one "device" stays bounded.
+  /// the earlier one, and a forged frame naming the account never REPLACES
+  /// the real one (review), while a flood from one "device" stays bounded.
   static const int maxFramesPerDevice = 3;
+
+  /// The most frames one request keeps, whichever devices they claim (the
+  /// device id is an unauthenticated header, 1..100): the newest stay, as a
+  /// device's own do. Forged frames may crowd a real one out (decision 57);
+  /// they may not fill this device's storage (G5, BOX-KEPT-STORAGE).
+  static const int maxFramesPerRequest = 6;
+
+  /// The most Signal bytes one kept frame may carry. A real request — a
+  /// PreKey message around the largest profile a request can hold — is
+  /// about 800 B (measured on real Signal, G5); a larger frame is no
+  /// request of ours and is not kept.
+  static const int maxKeptSignalBytes = 4096;
+
+  /// The Signal bytes every kept request together may hold; past it the
+  /// oldest requests go, as past [maxKept].
+  static const int maxKeptBytes = 256 * 1024;
 
   /// Keeps [userId]'s device [deviceId]'s request [signal] undecrypted
   /// under the [claim] it carries, with the journal's [localId] as the id
   /// its later decrypt is replayed under (an accept that fails after the
   /// decrypt reads the same plaintext again, never a spent ratchet). The
   /// frame and its claim are unauthenticated: a record that exists keeps
-  /// its name and its frames, and the new one joins them. False — nothing
-  /// written — for an account this device already stands with otherwise
-  /// (E15c): a friend, a blocked one, one we asked (the caller reads that
-  /// as an accept, E15f), one whose request the server carries, and a
-  /// `former` contact — its queues are material no server can re-supply,
-  /// and an unauthenticated frame must never be able to make it a request
-  /// someone then declines or lets expire.
+  /// its name and its frames, and the new one joins them — the newest
+  /// [maxFramesPerDevice] of a device, [maxFramesPerRequest] of the request.
+  /// False — nothing written — for a frame of more than
+  /// [maxKeptSignalBytes], and for an account this device already stands
+  /// with otherwise (E15c): a friend, a blocked one, one we asked (the
+  /// caller reads that as an accept, E15f), one whose request the server
+  /// carries, and a `former` contact — its queues are material no server
+  /// can re-supply, and an unauthenticated frame must never be able to make
+  /// it a request someone then declines or lets expire.
   Future<bool> keep({
     required int userId,
     required int deviceId,
@@ -323,6 +341,7 @@ class BoxFirstContact {
     required FirstContactClaim claim,
     int? localId,
   }) async {
+    if (_signalBytes(signal) > maxKeptSignalBytes) return false;
     final at = _now();
     var kept = false;
     final ok = await _store.update(userId, (current) {
@@ -352,13 +371,15 @@ class BoxFirstContact {
         if (origin.kept.any((k) => k.signal == signal)) return null;
         final own = origin.kept.where((k) => k.deviceId == deviceId).length;
         var drop = own + 1 - maxFramesPerDevice;
+        final joined = [
+          for (final k in origin.kept)
+            if (k.deviceId != deviceId || drop-- <= 0) k,
+          request,
+        ];
+        final excess = joined.length - maxFramesPerRequest;
         return current.copyWith(
           boxOrigin: origin.copyWith(
-            kept: [
-              for (final k in origin.kept)
-                if (k.deviceId != deviceId || drop-- <= 0) k,
-              request,
-            ],
+            kept: excess > 0 ? joined.sublist(excess) : joined,
           ),
         );
       }
@@ -381,17 +402,36 @@ class BoxFirstContact {
     return true;
   }
 
-  /// Drops the oldest box requests beyond [maxKept].
+  /// Drops the oldest box requests beyond [maxKept], and beyond
+  /// [maxKeptBytes] of kept Signal bytes.
   Future<void> _trim() async {
+    int bytesOf(ContactRecord r) =>
+        r.boxOrigin!.kept.fold(0, (sum, k) => sum + _signalBytes(k.signal));
     final requests = [
       for (final r in _store.all)
         if (_boxRequest(r)) r,
-    ];
-    if (requests.length <= maxKept) return;
-    requests.sort((a, b) => a.boxOrigin!.at.compareTo(b.boxOrigin!.at));
-    await drop([
-      for (final r in requests.take(requests.length - maxKept)) r.userId,
-    ]);
+    ]..sort((a, b) => a.boxOrigin!.at.compareTo(b.boxOrigin!.at));
+    var count = requests.length;
+    var bytes = requests.fold(0, (sum, r) => sum + bytesOf(r));
+    final evicted = <int>[];
+    for (final r in requests) {
+      if (count <= maxKept && bytes <= maxKeptBytes) break;
+      evicted.add(r.userId);
+      count--;
+      bytes -= bytesOf(r);
+    }
+    if (evicted.isNotEmpty) await drop(evicted);
+  }
+
+  /// The Signal bytes of a `"{type}:{base64}"` frame, from its length.
+  static int _signalBytes(String signal) {
+    final chars = signal.length - signal.indexOf(':') - 1;
+    final padding = signal.endsWith('==')
+        ? 2
+        : signal.endsWith('=')
+        ? 1
+        : 0;
+    return chars * 3 ~/ 4 - padding;
   }
 
   /// The user declined [userId]'s request: it goes, and nothing is sent

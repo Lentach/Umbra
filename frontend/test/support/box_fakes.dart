@@ -31,7 +31,7 @@ class FakeBoxSocket implements BoxSocket {
   bool disposed = false;
   void Function()? _onConnect;
   void Function()? _onDisconnect;
-  void Function()? _onConnectError;
+  void Function(Object?)? _onConnectError;
   void Function(Object?)? _onMsg;
 
   @override
@@ -47,7 +47,8 @@ class FakeBoxSocket implements BoxSocket {
   void onDisconnect(void Function() handler) => _onDisconnect = handler;
 
   @override
-  void onConnectError(void Function() handler) => _onConnectError = handler;
+  void onConnectError(void Function(Object? error) handler) =>
+      _onConnectError = handler;
 
   @override
   void onMsg(void Function(Object? data) handler) => _onMsg = handler;
@@ -93,7 +94,9 @@ class FakeBoxSocket implements BoxSocket {
     _onDisconnect?.call();
   }
 
-  void refuseConnection() => _onConnectError?.call();
+  /// socket.io's `connect_error`, with what it carries: [error] is the
+  /// server's CONNECT_ERROR data, e.g. `{'message': 'Invalid namespace'}`.
+  void refuseConnection([Object? error]) => _onConnectError?.call(error);
 
   void push(Object? msg) => _onMsg?.call(msg);
 }

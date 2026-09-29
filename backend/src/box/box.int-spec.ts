@@ -33,6 +33,8 @@ import {
   BOX_GLOBAL_MSG_CEILING,
   BOX_MEDIA_DAILY_BUDGET_BYTES,
   BOX_MEDIA_LADDER,
+  BOX_OPEN_MEDIA_CEILING_BYTES,
+  BOX_OPEN_MSG_CEILING,
   BOX_SOCKET_RID_CAP,
 } from './box.constants';
 import { BOX_ENTITIES, BoxModule } from './box.module';
@@ -169,6 +171,8 @@ describeWithDb('box over real sockets and Postgres', () => {
   const ceiling: BoxCeiling = {
     msgs: BOX_GLOBAL_MSG_CEILING,
     mediaBytes: BOX_GLOBAL_MEDIA_CEILING_BYTES,
+    openMsgs: BOX_OPEN_MSG_CEILING,
+    openMediaBytes: BOX_OPEN_MEDIA_CEILING_BYTES,
   };
 
   async function connect(ip = nextIp()): Promise<ClientSocket> {
@@ -387,6 +391,29 @@ describeWithDb('box over real sockets and Postgres', () => {
   }
 
   /**
+   * A normal queue established the only way there is: its probation day is
+   * moved to today (7 days have passed) and its owner acks a message.
+   */
+  async function establishedQueue(
+    owner: ClientSocket,
+    sender: ClientSocket,
+  ): Promise<Queue> {
+    const queue = await createQueue(owner);
+    await db.query(
+      `UPDATE box_queues
+          SET "probationUntil" = (now() AT TIME ZONE 'utc')::date
+        WHERE rid = $1`,
+      [Buffer.from(queue.rid, 'base64url')],
+    );
+    const got = collect(owner);
+    await subscribe(owner, [queue]);
+    await call(sender, 'send', { v: 1, sid: queue.sid, blob: blob() });
+    await until(() => got.length === 1);
+    expect(await ackMessage(owner, queue, got[0].id)).toEqual({ ok: true });
+    return queue;
+  }
+
+  /**
    * POSTs an upload's HEADERS only — not one body byte is ever sent — and
    * resolves with the status, or 0 when the server waits for the body.
    */
@@ -495,6 +522,8 @@ describeWithDb('box over real sockets and Postgres', () => {
     pushes.length = 0;
     ceiling.msgs = BOX_GLOBAL_MSG_CEILING;
     ceiling.mediaBytes = BOX_GLOBAL_MEDIA_CEILING_BYTES;
+    ceiling.openMsgs = BOX_OPEN_MSG_CEILING;
+    ceiling.openMediaBytes = BOX_OPEN_MEDIA_CEILING_BYTES;
   });
 
   afterAll(async () => {
@@ -536,6 +565,7 @@ describeWithDb('box over real sockets and Postgres', () => {
           'claimBy',
           'msgCount',
           'mediaBytesToday',
+          'probationUntil',
         ],
       });
     });
@@ -952,6 +982,89 @@ describeWithDb('box over real sockets and Postgres', () => {
       });
     });
 
+    it("an outsider flooding a public request sid cannot spend the victim's ack budget: with the address's ack bucket spent, every ack of a frame pushed to that socket answers ok and a friend's message still arrives", async () => {
+      const bob = await connect('2001:db8:78:1::1');
+      const request = await createQueue(bob, 'request');
+      const friendly = await createQueue(bob);
+      const byRid = new Map([
+        [request.rid, request],
+        [friendly.rid, friendly],
+      ]);
+      const got: Delivered[] = [];
+      const answers: Promise<Answer>[] = [];
+      // The client acks every delivery, junk included (box_inbox `_ackAndDrop`).
+      bob.on('msg', (m: Delivered) => {
+        got.push(m);
+        answers.push(ackMessage(bob, byRid.get(m.rid) as Queue, m.id));
+      });
+      await subscribe(bob, [request, friendly]);
+
+      // Where 3000 junk deliveries leave the victim's /64: its ack bucket
+      // spent (spent here by bare frames; 3000 stored sends outrun the test).
+      const spender = await connect('2001:db8:78:1::2');
+      for (let i = 0; i < 3000; i += 250) {
+        await Promise.all(
+          Array.from({ length: 250 }, () => call(spender, 'ack', {})),
+        );
+      }
+      expect(await call(spender, 'ack', {})).toMatchObject({
+        ok: false,
+        code: 'rate_limited',
+      });
+      takeRefusalCounts();
+
+      // Three windows of junk on the public sid, then a friend's message.
+      const attacker = await connect('2001:db8:78:2::1');
+      const junk = 3 * 16;
+      await Promise.all(
+        Array.from({ length: junk }, () =>
+          call(attacker, 'send', { v: 1, sid: request.sid, blob: blob() }),
+        ),
+      );
+      await until(() => got.length >= 16);
+      for (const answer of await Promise.all(answers.slice(0, 16))) {
+        expect(answer).toEqual({ ok: true });
+      }
+      const alice = await connect();
+      const hello = blob();
+      await call(alice, 'send', { v: 1, sid: friendly.sid, blob: hello });
+      await until(() => got.length === junk + 1);
+      expect(got.map((m) => m.blob)).toContain(hello);
+      for (const answer of await Promise.all(answers)) {
+        expect(answer).toEqual({ ok: true });
+      }
+      expect(await storedIds(request.rid)).toEqual([]);
+      expect(await storedIds(friendly.rid)).toEqual([]);
+      expect(takeRefusalCounts().get('ack')).toBeUndefined();
+
+      // One ack per push, no more: a stale id counts against the spent
+      // bucket, and so does a push whose free ack a bad signature spent.
+      const rateLimited = { ok: false, code: 'rate_limited' };
+      expect(await ackMessage(bob, request, got[0].id)).toMatchObject(
+        rateLimited,
+      );
+      const carol = await connect('2001:db8:78:1::3');
+      const mine = await createQueue(carol);
+      const toCarol = collect(carol);
+      await subscribe(carol, [mine]);
+      await call(alice, 'send', { v: 1, sid: mine.sid, blob: blob() });
+      await until(() => toCarol.length === 1);
+      const id = toCarol[0].id;
+      const fields = ackFields(
+        Buffer.from(mine.rid, 'base64url'),
+        Buffer.from(id, 'base64url'),
+      );
+      expect(
+        await call(carol, 'ack', {
+          v: 1,
+          rid: mine.rid,
+          id,
+          sig: signFor(carol, mintKey(), 'ack', fields),
+        }),
+      ).toEqual({ ok: false, code: 'auth_failed' });
+      expect(await ackMessage(carol, mine, id)).toMatchObject(rateLimited);
+    });
+
     it('disconnects a client that sends an event without an ack callback', async () => {
       const socket = await connect();
       // Executor form on purpose: the tsconfig lib predates Promise.withResolvers.
@@ -1290,6 +1403,34 @@ describeWithDb('box over real sockets and Postgres', () => {
       expect(again.map((m) => m.blob)).toEqual([stored]);
     });
 
+    it('live to a request queue answers ok and pushes nothing: its public sid is no free channel into the owner’s socket', async () => {
+      const bob = await connect();
+      const alice = await connect();
+      const request = await createQueue(bob, 'request');
+      const got = collect(bob);
+      await subscribe(bob, [request]);
+      const before = await totals();
+
+      expect(
+        await call(alice, 'send', {
+          v: 1,
+          sid: request.sid,
+          blob: blob(),
+          mode: 'live',
+        }),
+      ).toEqual({ ok: true });
+      await sleep(300);
+      expect(got).toEqual([]);
+      expect(await totals()).toEqual(before);
+
+      // Control: an ordinary send on the same sid is delivered.
+      const ordinary = blob();
+      await call(alice, 'send', { v: 1, sid: request.sid, blob: ordinary });
+      await until(() => got.length === 1);
+      expect(got[0].blob).toBe(ordinary);
+      await ackMessage(bob, request, got[0].id);
+    });
+
     it('quiet: stored and delivered like any send, but wakes nobody — not at send, not when the socket that held it goes', async () => {
       const bob = await connect();
       const alice = await connect();
@@ -1564,6 +1705,88 @@ describeWithDb('box over real sockets and Postgres', () => {
       await app.get(BoxReaper).sweep();
       expect((await totals()).mediaBytes).toBe(before.mediaBytes);
       expect((await upload(queue.sid, randomBytes(4096))).status).toBe(201);
+    });
+
+    it('keeps the band above the open ceiling for ESTABLISHED normal queues: a new normal queue and a request queue stop at the open band, an established one stores to the ceiling, and a dead sid reads like an established one', async () => {
+      const bob = await connect();
+      const alice = await connect();
+      const fresh = await createQueue(bob);
+      const request = await createQueue(bob, 'request');
+      const old = await establishedQueue(bob, alice);
+      const send = (sid: string) =>
+        call(alice, 'send', { v: 1, sid, blob: blob() });
+      const dead = randomBytes(32).toString('base64url');
+      takeRefusalCounts();
+      const before = await totals();
+      ceiling.openMsgs = before.msgs;
+      ceiling.msgs = before.msgs + 1;
+
+      expect(await send(fresh.sid)).toEqual(QUOTA);
+      expect(await send(request.sid)).toEqual(QUOTA);
+      // No block oracle in the reserve: what a block deletes is a friend's
+      // established queue, so a dead sid answers like one.
+      expect(await send(dead)).toEqual({ ok: true });
+      expect(await send(old.sid)).toEqual({ ok: true });
+      expect(await totals()).toEqual({ ...before, msgs: before.msgs + 1 });
+      expect(await send(old.sid)).toEqual(QUOTA);
+      expect(await send(dead)).toEqual(QUOTA);
+      expect(await storedIds(fresh.rid)).toEqual([]);
+      expect(await storedIds(request.rid)).toEqual([]);
+      expect(takeRefusalCounts()).toEqual(new Map([['send:ceiling', 4]]));
+    });
+
+    it("establishes a normal queue only by its owner's ack on or after its probation day: neither an earlier ack nor time alone", async () => {
+      const bob = await connect();
+      const alice = await connect();
+      const queue = await createQueue(bob);
+      const got = collect(bob);
+      await subscribe(bob, [queue]);
+      const send = () =>
+        call(alice, 'send', { v: 1, sid: queue.sid, blob: blob() });
+      expect(await send()).toEqual({ ok: true });
+      await until(() => got.length === 1);
+      expect(await ackMessage(bob, queue, got[0].id)).toEqual({ ok: true });
+      expect(await send()).toEqual({ ok: true });
+      await until(() => got.length === 2);
+
+      // The open band shut: only an established queue may store now.
+      ceiling.openMsgs = 0;
+      expect(await send()).toEqual(QUOTA);
+      await db.query(
+        `UPDATE box_queues
+            SET "probationUntil" = (now() AT TIME ZONE 'utc')::date
+          WHERE rid = $1`,
+        [Buffer.from(queue.rid, 'base64url')],
+      );
+      expect(await send()).toEqual(QUOTA);
+      expect(await ackMessage(bob, queue, got[1].id)).toEqual({ ok: true });
+      expect(await send()).toEqual({ ok: true });
+    });
+
+    it('keeps the media band above the open ceiling for established normal queues: a new one is refused there, an established one and a dead sid are not', async () => {
+      const bob = await connect();
+      const alice = await connect();
+      const fresh = await createQueue(bob);
+      const old = await establishedQueue(bob, alice);
+      takeRefusalCounts();
+      const before = await totals();
+      ceiling.openMediaBytes = before.mediaBytes;
+      ceiling.mediaBytes = before.mediaBytes + 16 * 1024;
+
+      const refused = await upload(fresh.sid, randomBytes(16 * 1024));
+      expect(refused.status).toBe(429);
+      expect(await refused.json()).toEqual({ error: 'quota_exceeded' });
+      const dead = randomBytes(32).toString('base64url');
+      expect((await upload(dead, randomBytes(4096))).status).toBe(201);
+      expect((await upload(old.sid, randomBytes(16 * 1024))).status).toBe(201);
+      expect(await totals()).toEqual({
+        ...before,
+        mediaBytes: before.mediaBytes + 16 * 1024,
+      });
+      expect((await upload(old.sid, randomBytes(4096))).status).toBe(429);
+      expect(takeRefusalCounts()).toEqual(
+        new Map([['mediaUpload:ceiling', 2]]),
+      );
     });
   });
 

@@ -36,8 +36,12 @@ class _Me extends EncryptionProvider {
   @override
   bool get ownDeviceIdConfirmed => true;
 
+  /// Whether this device holds the friend's verified list (device 3 live).
+  bool friendListHeld = true;
+
   @override
-  VerifiedDeviceList? cachedDeviceList(int userId) => userId == _friend
+  VerifiedDeviceList? cachedDeviceList(int userId) =>
+      userId == _friend && friendListHeld
       ? VerifiedDeviceList.enrolled(
           version: 1,
           listHash: 'H' * 44,
@@ -51,7 +55,7 @@ class _Me extends EncryptionProvider {
 class _Link implements BoxFriendLink {
   final List<String> learned = [];
   final List<(int, int)> rekeyed = [];
-  final List<int> handedOffTo = [];
+  final List<(int, int)> rekeyNextConnect = [];
   final Set<(int, int)> awaiting = {};
   ContactRecord record = _friendRecord;
 
@@ -81,6 +85,10 @@ class _Link implements BoxFriendLink {
       rekeyed.add((userId, deviceId));
 
   @override
+  void rekeyFriendNextConnect(int userId, int deviceId) =>
+      rekeyNextConnect.add((userId, deviceId));
+
+  @override
   bool awaitingFriendRekeyFrom(int userId, int deviceId) =>
       awaiting.contains((userId, deviceId));
 
@@ -94,9 +102,6 @@ class _Link implements BoxFriendLink {
 
   @override
   void friendHeard(int userId, int deviceId) {}
-
-  @override
-  void handOffTo(int userId) => handedOffTo.add(userId);
 
   final List<int> devicesChanged = [];
   final List<(int, int, Map<String, dynamic>)> listUpdates = [];
@@ -141,6 +146,7 @@ void main() {
   late MessagingProvider s;
   late _Link link;
   late int bundleFetches;
+  late int listLookups;
   var nextLocal = kFirstLocalMessageId;
 
   /// `fetchPreKeyBundle`'s flat bundle, on one-time prekey [otp].
@@ -164,8 +170,10 @@ void main() {
       checkServerIdentity: () async => const ServerIdentityGuard(exists: false),
     );
     bundleFetches = 0;
+    listLookups = 0;
     enc = _Me();
     enc.setEmitCallback((event, data) {
+      if (event == 'getDeviceList' || event == 'getDeviceLists') listLookups++;
       if (event == 'checkOwnKeyBundle') {
         enc.onOwnKeyBundleStatus({'exists': false});
       }
@@ -228,8 +236,9 @@ void main() {
 
   test(
     'with no identity pinned for the friend, its PreKey handoff is finished '
-    'unread and answered by our own handoff, which pins one from the '
-    "server's bundle",
+    'unread and nothing is asked of the server for it: our own handoff, '
+    "which pins one from the server's bundle, goes out on the next connect's "
+    'pass (BOX-FORGED-PREKEY-LOOKUP)',
     () async {
       final first = await fromFreshF(handoff(_sid('A')), 0);
       expect(first, startsWith('3:'));
@@ -237,7 +246,8 @@ void main() {
       expect(await deliver(first), isTrue);
 
       expect(link.learned, isEmpty);
-      expect(link.handedOffTo, [_friend]);
+      expect(link.devicesChanged, isEmpty);
+      expect((bundleFetches, listLookups), (0, 0));
     },
   );
 
@@ -319,9 +329,16 @@ void main() {
       expect(link.awaiting, isEmpty);
 
       final viaRequest = await fromFreshF(handoff(_sid('R')), 0);
+      final fetchesBefore = bundleFetches;
       expect(await deliver(viaRequest), isTrue);
       expect(link.learned, isEmpty);
-      expect(link.rekeyed, [(_friend, 3)]);
+      expect(
+        link.rekeyed,
+        isEmpty,
+        reason: 'a re-key fetches a bundle: never timed by a request frame',
+      );
+      expect(link.rekeyNextConnect, [(_friend, 3)]);
+      expect(bundleFetches, fetchesBefore);
 
       final viaOurQueue = await fromFreshF(handoff(_sid('Q')), 1);
       expect(await deliver(viaOurQueue, viaRequest: false), isTrue);
@@ -354,7 +371,8 @@ void main() {
 
       expect(await deliver(replacing), isTrue);
       expect(link.learned, [_sid('B')]);
-      expect(link.rekeyed, [(_friend, 3)]);
+      expect(link.rekeyed, isEmpty);
+      expect(link.rekeyNextConnect, [(_friend, 3)]);
 
       // Once S asked (its re-key went out), the same shape is read.
       link.awaiting.add((_friend, 3));
@@ -392,12 +410,31 @@ void main() {
 
       expect(link.learned, isEmpty);
       expect(link.rekeyed, isEmpty);
-      expect(link.handedOffTo, isEmpty);
+      expect(link.rekeyNextConnect, isEmpty);
       final next = (await s.encryptForFriend(_friend, 3, '{"t":"y"}'))!;
       expect(
         await f.decrypt(1, next.signalCiphertext, deviceId: 2),
         '{"t":"y"}',
       );
+    },
+  );
+
+  test(
+    "a friend's request-queue handoff while this device holds no verified "
+    'list for it is finished unread with no lookup: a forged frame naming a '
+    "server-known friend must not time one (E50f); the connect's own lookup "
+    'supplies the list',
+    () async {
+      // An anchor is pinned, so the frame passes the identity check.
+      await s.encryptForFriend(_friend, 3, '{"t":"x"}');
+      final handoffFrame = await fromFreshF(handoff(_sid('L')), 0);
+      enc.friendListHeld = false;
+      listLookups = 0;
+
+      expect(await deliver(handoffFrame), isTrue);
+
+      expect(listLookups, 0);
+      expect(link.learned, isEmpty);
     },
   );
 

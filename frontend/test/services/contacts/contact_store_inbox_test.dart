@@ -245,6 +245,50 @@ void main() {
     expect(rows.any((k) => k.endsWith('old-read')), isFalse);
   });
 
+  group('unread rows per queue are bounded, as the box bounds a queue', () {
+    const cap = kBoxInboxUnreadPerQueue;
+
+    test(
+      'one past the bound finishes the OLDEST unread row of that queue: its '
+      'ciphertext goes, its local id still answers a redelivery; another '
+      "queue's rows are untouched",
+      () async {
+        await journal('other', rid: 'rid-b');
+        final oldest = (await journal('m0'))!;
+        for (var i = 1; i <= cap; i++) {
+          await journal('m$i');
+        }
+
+        final unread = store.pendingInbox.where((e) => e.rid == 'rid-a');
+        expect(unread, hasLength(cap));
+        expect(unread.map((e) => e.id), isNot(contains('m0')));
+        expect(unread.last.id, 'm$cap', reason: 'the newest is kept');
+        expect(
+          store.pendingInbox.where((e) => e.rid == 'rid-b'),
+          hasLength(1),
+        );
+
+        store = fresh();
+        await store.open(7);
+        final again = (await journal('m0'))!;
+        expect(again.localId, oldest.localId);
+        expect(again.signal, isNull);
+      },
+    );
+
+    test('a row already read does not count against the bound', () async {
+      for (var i = 1; i < cap; i++) {
+        await journal('m$i');
+      }
+      final read = (await journal('read'))!;
+      await store.markInboxConsumed(read);
+      await journal('m$cap');
+
+      expect(store.pendingInbox, hasLength(cap));
+      expect(store.pendingInbox.first.id, 'm1');
+    });
+  });
+
   test('rows sit in the account namespace, in a family sealed on web', () async {
     await journal('m1');
     final row = kv.getKeys().singleWhere((k) => k.contains('boxin'));

@@ -3781,15 +3781,27 @@ class EncryptionService {
     if (userId == null) return null;
     var cache = _wireClaims;
     if (cache == null || cache.userId != userId) {
+      final generation = _wireClaimsGeneration;
       final scanned = await _scanWireClaims();
       if (scanned == null || _userId != userId) return null;
       cache = (userId: userId, claims: scanned);
-      _wireClaims = cache;
+      // A scan that began before [forgetWireClaims] may predate the rows
+      // that call was for: answer with it, never keep it.
+      if (generation == _wireClaimsGeneration) _wireClaims = cache;
     }
     return cache.claims;
   }
 
   ({int userId, Map<WireKey, Set<int>> claims})? _wireClaims;
+  int _wireClaimsGeneration = 0;
+
+  /// Drops the wire-id cache behind [wireHeldByOther]/[wireHolder]: records
+  /// were written past [saveDecryptedContent] (a history-file import), so
+  /// the next lookup rescans the store.
+  void forgetWireClaims() {
+    _wireClaims = null;
+    _wireClaimsGeneration++;
+  }
 
   /// Every box message stored for [conversationId] — LOCAL ids (decision
   /// 14), which no server history page will ever name — as id → record.
@@ -3932,6 +3944,20 @@ class EncryptionService {
     }
   }
 
+  /// [boxTombstoned] for many wires at the cost of ONE read of the row (a
+  /// history-file import checks every record): the tombstones as they are
+  /// now, as a membership test. Never tombstoned when it cannot tell.
+  Future<bool Function(WireKey wire)> boxTombstoneSnapshot() async {
+    final userId = _userId;
+    if (userId == null) return (_) => false;
+    try {
+      final held = _readBoxTombstones(await _sharedPrefs, userId);
+      return (wire) => held.containsKey(_tombstoneOf(wire));
+    } on Object catch (_) {
+      return (_) => false;
+    }
+  }
+
   /// Records a delete-for-everyone of [wire]. Locked for the same reason the
   /// retired set is: one key, every same-origin PWA engine.
   Future<void> addBoxTombstone(WireKey wire) async {
@@ -3954,14 +3980,25 @@ class EncryptionService {
             for (final e in newest.take(_boxTombstoneCap)) e.key: e.value,
           }),
         );
-      } on Object catch (_) {}
+      } on Object catch (e) {
+        E2ePersistentDiag.record('BOX_TOMBSTONE_WRITE_FAILED', {
+          'error': e.runtimeType.toString(),
+        });
+      }
     });
   }
 
   Map<String, int> _readBoxTombstones(ContentKv prefs, int userId) {
     final raw = prefs.getString(_boxTombstoneKey(userId));
     if (raw == null) return {};
-    final decoded = jsonDecode(raw);
+    // An unsealable web row is served as its raw `fps1:` envelope: empty,
+    // so the next tombstone replaces it instead of failing on it forever.
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(raw);
+    } on FormatException {
+      return {};
+    }
     if (decoded is! Map<String, dynamic>) return {};
     return {
       for (final MapEntry(:key, :value) in decoded.entries)
@@ -4017,7 +4054,11 @@ class EncryptionService {
           (kept[key] ??= []).add(a);
         }
         await prefs.setString(_parkedBoxActionKey(userId), jsonEncode(kept));
-      } on Object catch (_) {}
+      } on Object catch (e) {
+        E2ePersistentDiag.record('BOX_PARKED_WRITE_FAILED', {
+          'error': e.runtimeType.toString(),
+        });
+      }
     });
   }
 
@@ -4052,7 +4093,11 @@ class EncryptionService {
         final parked = _readParkedBoxActions(prefs, userId);
         if (parked.remove(_parkedOf(conversationId, wire)) == null) return;
         await prefs.setString(_parkedBoxActionKey(userId), jsonEncode(parked));
-      } on Object catch (_) {}
+      } on Object catch (e) {
+        E2ePersistentDiag.record('BOX_PARKED_WRITE_FAILED', {
+          'error': e.runtimeType.toString(),
+        });
+      }
     });
   }
 
@@ -4080,7 +4125,13 @@ class EncryptionService {
   ) {
     final raw = prefs.getString(_parkedBoxActionKey(userId));
     if (raw == null) return {};
-    final decoded = jsonDecode(raw);
+    // As [_readBoxTombstones]: an unsealable row is empty, and replaceable.
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(raw);
+    } on FormatException {
+      return {};
+    }
     if (decoded is! Map<String, dynamic>) return {};
     final oldest =
         DateTime.now().millisecondsSinceEpoch -

@@ -73,6 +73,21 @@ void main() {
     return signedBy(rogue, rogueEnrollment, version, devices);
   }
 
+  /// A list anyone WITHOUT the account identity key can mint — the server
+  /// among them: its DAK is endorsed by a key that is not the peer's.
+  Map<String, dynamic> forgedByStranger(
+    int version,
+    List<DeviceListEntry> devices,
+  ) {
+    final stranger = DeviceAuthorityEngine();
+    final strangerEnrollment = stranger.mintEnrollment(
+      userId: peerId,
+      identity: generateIdentityKeyPair(),
+      createdAtMs: 777,
+    );
+    return signedBy(stranger, strangerEnrollment, version, devices);
+  }
+
   int lookups() =>
       emitted.where((e) => e['event'] == 'getDeviceList').length;
 
@@ -177,6 +192,93 @@ void main() {
 
     expect(second, CarriedListOutcome.refused);
     expect(lookups(), 1, reason: 'a forger must not buy a lookup per frame');
+  });
+
+  group('BOX-CARRIED-LIST-ORACLE: a carried list the pinned identity does '
+      'not vouch for spends no lookup', () {
+    // A request-queue frame is journaled for any friend before identity or
+    // decrypt, so a lookup bought by an unvouched list would let the server
+    // probe which accounts are this device's box friends.
+    test('a DAK the identity never endorsed, under a held list', () async {
+      await serverVerified();
+      serve(() => genuine(1, devicesUpTo(2)));
+
+      final outcome = await provider.adoptCarriedDeviceList(
+        peerId,
+        forgedByStranger(5, devicesUpTo(4)),
+      );
+
+      expect(outcome, CarriedListOutcome.refused);
+      expect(lookups(), 0);
+      expect(provider.cachedDeviceList(peerId)?.liveDeviceIds, [1, 2]);
+    });
+
+    test('a DAK the identity never endorsed, with no server list yet', () async {
+      serve(() => genuine(1, devicesUpTo(2)));
+
+      final outcome = await provider.adoptCarriedDeviceList(
+        peerId,
+        forgedByStranger(5, devicesUpTo(4)),
+      );
+
+      expect(outcome, CarriedListOutcome.refused);
+      expect(lookups(), 0);
+      expect(provider.cachedDeviceList(peerId), isNull);
+    });
+
+    test('an endorsed DAK whose list signature does not verify', () async {
+      await serverVerified();
+      serve(() => genuine(1, devicesUpTo(2)));
+      final endorsed = forgedByRevokedDevice(5, devicesUpTo(4));
+      final otherList = forgedByRevokedDevice(5, devicesUpTo(3));
+
+      final outcome = await provider.adoptCarriedDeviceList(peerId, {
+        ...endorsed,
+        'listCanonical': otherList['listCanonical'],
+      });
+
+      expect(outcome, CarriedListOutcome.refused);
+      expect(lookups(), 0);
+      expect(provider.cachedDeviceList(peerId)?.liveDeviceIds, [1, 2]);
+    });
+
+    test('no identity pinned for the account', () async {
+      FlutterSecureStorage.setMockInitialValues({});
+      SharedPreferences.setMockInitialValues({});
+      provider = await freshProvider();
+      emitted.clear();
+      expect(
+        await provider.encryptionService.peerTofuIdentityBase64(peerId),
+        isNull,
+      );
+      serve(() => genuine(1, devicesUpTo(2)));
+
+      final outcome = await provider.adoptCarriedDeviceList(
+        peerId,
+        genuine(2, devicesUpTo(3)),
+      );
+
+      expect(outcome, CarriedListOutcome.refused);
+      expect(lookups(), 0);
+    });
+
+    test('a forged list does not spend the one lookup a real DAK change '
+        'needs (decision 60)', () async {
+      await serverVerified();
+      serve(() => genuine(1, devicesUpTo(2)));
+
+      await provider.adoptCarriedDeviceList(
+        peerId,
+        forgedByStranger(5, devicesUpTo(4)),
+      );
+      final real = await provider.adoptCarriedDeviceList(
+        peerId,
+        forgedByRevokedDevice(6, devicesUpTo(3)),
+      );
+
+      expect(real, CarriedListOutcome.refetched);
+      expect(lookups(), 1);
+    });
   });
 
   test('a carried list at or below the held version is ignored before any '

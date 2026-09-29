@@ -37,6 +37,9 @@ class _Encryption extends EncryptionProvider {
   /// Per local id, overriding [inbound]: for deliveries read concurrently.
   final Map<int, String> inboundFor = {};
 
+  /// While set, every [encrypt] throws it.
+  Error? encryptThrows;
+
   @override
   bool get isE2EReady => true;
 
@@ -75,7 +78,10 @@ class _Encryption extends EncryptionProvider {
     int recipientId,
     String plaintext, {
     int deviceId = 1,
-  }) async => '3:${base64Encode(utf8.encode(plaintext))}';
+  }) async {
+    if (encryptThrows case final error?) throw error;
+    return '3:${base64Encode(utf8.encode(plaintext))}';
+  }
 
   @override
   Future<String> decrypt(
@@ -109,6 +115,9 @@ class _Outbox implements BoxOutbox {
   /// Devices whose `send` the box refuses.
   final Set<int> refuse = {};
 
+  /// Devices whose `deliver` throws instead of answering.
+  final Set<int> throwFor = {};
+
   /// While set, every `deliver` that starts waits for it (captured at start,
   /// so clearing it lets later sends through while earlier ones hang).
   Completer<void>? gate;
@@ -137,6 +146,7 @@ class _Outbox implements BoxOutbox {
     delivered.add((to, BoxFrame.decode(body)!));
     final held = gate;
     if (held != null) await held.future;
+    if (throwFor.contains(to.peerDeviceId)) throw StateError('seal failed');
     return !refuse.contains(to.peerDeviceId);
   }
 
@@ -818,6 +828,47 @@ void main() {
     });
 
     test(
+      'an edit whose encrypt throws reverts the row and the record, sends '
+      'nothing and says so',
+      () async {
+        final msg = await mine('typo');
+        encryption.encryptThrows = StateError('no Signal message');
+
+        provider.editMessage(msg.id, 'fixed');
+        await pump();
+
+        expect(outbox.delivered, isEmpty);
+        expect(row(msg.id)!.content, 'typo');
+        expect(row(msg.id)!.editedAt, isNull);
+        expect((await recordOf(msg.id))?['content'], 'typo');
+        expect(failures, [BoxActionFailure.edit]);
+      },
+    );
+
+    test(
+      'an edit whose frame to one sibling THREW stays, and that sibling is '
+      'owed the same edit by the retry (E19l)',
+      () async {
+        final msg = await mine('typo');
+        outbox.throwFor.add(3);
+
+        provider.editMessage(msg.id, 'fixed');
+        await pump();
+
+        expect(failures, isEmpty);
+        expect(row(msg.id)!.content, 'fixed');
+        expect((await recordOf(msg.id))?['content'], 'fixed');
+
+        outbox
+          ..delivered.clear()
+          ..throwFor.clear();
+        provider.refreshBoxDeviceLists();
+        await pump();
+        expect(outbox.delivered.map((d) => d.$1.sid), ['self-3']);
+      },
+    );
+
+    test(
       'an edit one sibling refused stays, and the retry sends that sibling '
       'the same edit alone (E19l)',
       () async {
@@ -944,6 +995,20 @@ void main() {
 
       expect(conversations.getConversationById(10)!.pinnedMessageId, 555);
       expect(events(), isNot(contains('unpinMessage')));
+      expect(failures, [BoxActionFailure.pin]);
+      expect(conversations.boxPinOf(10)?.pinned ?? false, isFalse);
+    });
+
+    test('a pin whose encrypt throws restores what it displaced and says so', () async {
+      await setUpWith(serverPin: 555);
+      final msg = await fromBob('pin me', wire: 'wire-bob-0004');
+      encryption.encryptThrows = StateError('no Signal message');
+
+      provider.pinMessage(10, msg.id);
+      await pump();
+
+      expect(outbox.delivered, isEmpty);
+      expect(conversations.getConversationById(10)!.pinnedMessageId, 555);
       expect(failures, [BoxActionFailure.pin]);
       expect(conversations.boxPinOf(10)?.pinned ?? false, isFalse);
     });

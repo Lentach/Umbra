@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Server, Socket } from 'socket.io';
 import { UsersService } from '../../users/users.service';
+import { FriendsService } from '../../friends/friends.service';
 import { DevicesService } from '../../key-bundles/devices.service';
 import { DeviceListService } from '../../key-bundles/device-list.service';
 import {
@@ -27,7 +29,8 @@ function socketUser(client: Socket): AuthenticatedSocketData['user'] {
 /**
  * First contact (metadata-privacy PR3.2, design §4.4).
  *
- * `searchUsers` answers any other account's handle, stranger or friend alike,
+ * `searchUsers` answers any other account's handle — stranger or friend alike
+ * while `BOX_ENABLED=true`, strangers only while the box is off —
  * with everything a first contact needs in ONE identity call: per addressable
  * device a bundle (its next one-time pre-key spent), the request queue that
  * device published, and the account's DAK-signed list so the searcher
@@ -42,9 +45,11 @@ export class ChatSearchService {
 
   constructor(
     private readonly usersService: UsersService,
+    private readonly friendsService: FriendsService,
     private readonly devicesService: DevicesService,
     private readonly deviceListService: DeviceListService,
     private readonly chatKeyExchangeService: ChatKeyExchangeService,
+    private readonly configService: ConfigService,
   ) {}
 
   async handleSearchUsers(
@@ -60,10 +65,23 @@ export class ChatSearchService {
       const [username, tag] = dto.handle.split('#');
       const user = await this.usersService.findByUsernameAndTag(username, tag);
       // Self answers empty BEFORE anything is claimed: a search must never
-      // spend a pre-key it is not going to hand out. A friend is answered like
-      // anyone (owner decision 4): a friendship made over the box has no
-      // server row, so the server cannot tell, and must not appear to.
+      // spend a pre-key it is not going to hand out. With the box on, a friend
+      // is answered like anyone (owner decision 4): a friendship made over the
+      // box has no server row, so the server cannot tell, and must not appear
+      // to. With the box off (release N step A, G5 owner call) a friend still
+      // answers empty: the clients before N do not filter friends, so they
+      // would offer a dead invitation and spend a one-time pre-key per device
+      // on every search. UNSET is off, as `app.module.ts` registers BoxModule.
       if (!user || user.id === currentUserId) {
+        client.emit('searchUsersResult', []);
+        return;
+      }
+      if (
+        this.configService.get<string>('BOX_ENABLED') !== 'true' &&
+        (await this.friendsService.getFriends(currentUserId)).some(
+          (friend) => friend.id === user.id,
+        )
+      ) {
         client.emit('searchUsersResult', []);
         return;
       }

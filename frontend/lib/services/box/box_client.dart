@@ -29,7 +29,11 @@ abstract interface class BoxSocket {
   bool get connected;
   void onConnect(void Function() handler);
   void onDisconnect(void Function() handler);
-  void onConnectError(void Function() handler);
+
+  /// [handler] gets what socket.io reports: the server's CONNECT_ERROR data
+  /// (`{message: 'Invalid namespace'}` from a backend with no box), or a
+  /// transport error.
+  void onConnectError(void Function(Object? error) handler);
   void onMsg(void Function(Object? data) handler);
   void emitWithAck(
     String event,
@@ -92,8 +96,8 @@ class IoBoxSocket implements BoxSocket {
       _socket.onDisconnect((_) => handler());
 
   @override
-  void onConnectError(void Function() handler) =>
-      _socket.onConnectError((_) => handler());
+  void onConnectError(void Function(Object? error) handler) =>
+      _socket.onConnectError((error) => handler(error));
 
   @override
   void onMsg(void Function(Object? data) handler) =>
@@ -118,6 +122,13 @@ class _Pending {
       Completer<BoxResult<Map<String, Object?>>>();
   Timer? timer;
 }
+
+/// How long [BoxClient] waits before trying again a backend that answered
+/// it has NO box (`Invalid namespace`: release N ships the client while the
+/// box is still switched off). Still retried, so a later switch-on is picked
+/// up without an app restart — within this delay, or at the next
+/// [BoxClient.connect] — but at 4 handshakes an hour, not 120.
+const Duration kBoxAbsentRetryDelay = Duration(minutes: 15);
 
 /// The client of the box (metadata-privacy PR1.2, G3 surface A "Plain RPC";
 /// contract `docs/contracts/wire.md` "The box"). Ships DARK: nothing wires it
@@ -227,8 +238,9 @@ class BoxClient {
       ..onDisconnect(() {
         if (identical(_socket, socket)) _lostConnection();
       })
-      ..onConnectError(() {
-        if (identical(_socket, socket)) _lostConnection();
+      ..onConnectError((error) {
+        if (!identical(_socket, socket)) return;
+        _lostConnection(boxAbsent: _namespaceMissing(error));
       })
       ..onMsg((data) {
         if (identical(_socket, socket)) _onMsg(data);
@@ -249,13 +261,25 @@ class BoxClient {
     _setState(BoxState.offline);
   }
 
-  void _lostConnection() {
+  /// socket.io's CONNECT_ERROR for a namespace the server does not serve —
+  /// the backend runs with the box switched off.
+  static bool _namespaceMissing(Object? error) =>
+      error is Map && error['message'] == 'Invalid namespace';
+
+  /// [boxAbsent]: the backend has no box at all, so the fast attempts would
+  /// only open a WebSocket every few seconds for nothing; it is tried again
+  /// after [kBoxAbsentRetryDelay] instead.
+  void _lostConnection({bool boxAbsent = false}) {
     _drop();
     if (!_wanted) return;
     void reopen() {
       if (_wanted && _socket == null) _open();
     }
 
+    if (boxAbsent) {
+      _reconnect.scheduleReconnectAfter(kBoxAbsentRetryDelay, reopen);
+      return;
+    }
     // The shared manager stops after `reconnectMaxAttempts`; the box must
     // not ([connect]'s contract: "until close"). Past the fast attempts it
     // keeps retrying at the manager's ceiling — nothing else would ever

@@ -149,9 +149,9 @@ extension MessagingBoxActions on MessagingProvider {
   /// first goes out. True when at least ONE device took its frame (E19l):
   /// the action then stands, and every device that refused or stayed silent
   /// is owed the same envelopes by a retry. False — nothing was taken — for
-  /// a route that is gone or cannot be verified, a missing session, or a
-  /// refusal or silence everywhere; nothing ever goes to the server instead
-  /// (decisions 19, 25, 46).
+  /// a route that is gone or cannot be verified, a missing session, a seal
+  /// that threw, or a refusal or silence everywhere; nothing ever goes to
+  /// the server instead (decisions 19, 25, 46).
   Future<bool> _sendBoxAction(
     int conversationId,
     String type,
@@ -161,8 +161,12 @@ extension MessagingBoxActions on MessagingProvider {
     bool? on,
     String content = '',
   }) async {
-    void failed(String why) =>
-        _e2eFlowLog('BOX_ACTION_FAILED', {'t': type, 'why': why});
+    void failed(String why, [Object? error]) =>
+        _e2eFlowLog('BOX_ACTION_FAILED', {
+          't': type,
+          'why': why,
+          if (error != null) 'error': error.runtimeType.toString(),
+        });
     final send = ++_boxActionSendSeq;
     final own = _currentUserId;
     final outbox = boxOutbox;
@@ -205,22 +209,34 @@ extension MessagingBoxActions on MessagingProvider {
     );
     final json = build();
     final copyJson = build(to: peer);
-    final sealed = await _sealBoxFrames(
-      route,
-      recipientId: peer,
-      json: json,
-      copyJson: copyJson,
-    );
-    if (sealed.failure != null) {
-      failed(sealed.failure!.name);
+    final List<(ContactOutbound, Uint8List)> frames;
+    try {
+      final sealed = await _sealBoxFrames(
+        route,
+        recipientId: peer,
+        json: json,
+        copyJson: copyJson,
+      );
+      if (sealed.failure != null) {
+        failed(sealed.failure!.name);
+        return false;
+      }
+      frames = sealed.frames;
+    } on Object catch (e) {
+      // An encrypt that threw: nothing went out, so the action is undone
+      // and reported like any other that no device took.
+      failed('seal_threw', e);
       return false;
     }
+    // A delivery that threw is a frame not taken, as `deliver` answers a
+    // failed seal: the frames other devices took still stand (E19l).
     final accepted = await Future.wait([
-      for (final (to, body) in sealed.frames) route.outbox.deliver(to, body),
+      for (final (to, body) in frames)
+        route.outbox.deliver(to, body).catchError((Object _) => false),
     ]);
     _e2eFlowLog('BOX_ACTION_SEND', {
       't': type,
-      'frames': sealed.frames.length,
+      'frames': frames.length,
       'accepted': accepted.where((ok) => ok).length,
     });
     if (!accepted.contains(true)) return false;
@@ -242,7 +258,7 @@ extension MessagingBoxActions on MessagingProvider {
       for (var i = 0; i < accepted.length; i++) {
         if (accepted[i]) continue;
         // `_sealBoxFrames` builds the peer devices' frames first.
-        final device = sealed.frames[i].$1.peerDeviceId;
+        final device = frames[i].$1.peerDeviceId;
         (i < route.targets.length ? retry.peerDevices : retry.siblings).add(
           device,
         );

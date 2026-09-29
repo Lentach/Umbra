@@ -14,11 +14,17 @@ import type { QueueKind } from '../box-wire';
  *   purpose, it only feeds the 90-day reaper (I3).
  * - `claimBy` is set at creation and cleared by the first subscribe: a queue
  *   still carrying it past its instant was never claimed and is deleted (I3,
- *   24 h). It is the only creation-time trace, and it is gone once claimed.
+ *   24 h). A creation-time trace, gone once claimed.
+ * - `probationUntil` (migration 0026, G5): a NORMAL queue's creation UTC day
+ *   plus 7; its owner's first ack on or after that day clears it, and a
+ *   normal queue without it is ESTABLISHED — the only kind of queue whose
+ *   stores may use the reserved top band of the global ceiling. A request
+ *   queue never carries it. Like `claimBy`, a creation trace that goes once
+ *   it has served.
  *
- * Prod truth is migration 0022; dev `synchronize` runs after the runner, so
- * every name here matches that file exactly (the integration suite asserts
- * `synchronize` would change nothing).
+ * Prod truth is migrations 0022 and 0026; dev `synchronize` runs after the
+ * runner, so every name here matches those files exactly (the integration
+ * suite asserts `synchronize` would change nothing).
  */
 @Entity('box_queues')
 @Unique('uq_box_queues_sid', ['sid'])
@@ -45,6 +51,9 @@ export class BoxQueue {
 
   @Column({ type: 'timestamptz', nullable: true })
   claimBy: Date | null;
+
+  @Column({ type: 'date', nullable: true })
+  probationUntil: string | null;
 
   @Column({ type: 'int', default: 0 })
   msgCount: number;

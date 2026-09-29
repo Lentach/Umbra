@@ -17,6 +17,14 @@ const int _inboxVersion = 1;
 /// (wire.md "Bounds (I3)"). A read row older than this maps nothing.
 const Duration kBoxRedeliveryWindow = Duration(days: 30);
 
+/// The most unread rows one queue keeps: the box's own cap on a normal
+/// queue (wire.md "Bounds (I3)"), so a backlog the box itself would store
+/// always fits. Past it the oldest unread row of that queue is finished
+/// ([ContactStoreInbox.journalDelivery]): a sid holder — a revoked,
+/// possibly stolen, device keeps an old queue's for 30 d (E50e) — must not
+/// fill this device's storage with rows the reader holds.
+const int kBoxInboxUnreadPerQueue = 128;
+
 /// One box delivery this device holds (metadata-privacy PR3.1 slice (b)).
 ///
 /// Written BEFORE the delivery is acked, keyed on the delivery itself
@@ -186,6 +194,8 @@ extension ContactStoreInbox on ContactStore {
   /// The journal row for delivery [id] on queue [rid], written now unless
   /// one is already on disk — then that one, local id and all, is returned
   /// unchanged. Null when nothing committed (store closed, write refused).
+  /// A queue left holding more than [kBoxInboxUnreadPerQueue] unread rows
+  /// has its oldest finished before this returns.
   Future<BoxInboxEntry?> journalDelivery({
     required String rid,
     required String id,
@@ -240,17 +250,41 @@ extension ContactStoreInbox on ContactStore {
         if (_generation == generation) _inbox[entry._slot] = entry;
         return true;
       }),
-    ).then((ok) => ok ? journaled : null);
+    ).then((ok) async {
+      final entry = journaled;
+      if (!ok || entry == null) return null;
+      await _boundUnread(entry.rid);
+      return entry;
+    });
+  }
+
+  /// Finishes the oldest unread rows of queue [rid] beyond
+  /// [kBoxInboxUnreadPerQueue], as the reader finishes a row it refuses for
+  /// good: the ciphertext goes, the row stays for the ack and a redelivery.
+  /// Never waits on the reader, so a delivery is never held unacked for it.
+  Future<void> _boundUnread(String rid) async {
+    final unread = pendingInbox.where((e) => e.rid == rid).toList();
+    final excess = unread.length - kBoxInboxUnreadPerQueue;
+    if (excess <= 0) return;
+    for (final entry in unread.take(excess)) {
+      await markInboxConsumed(entry);
+    }
   }
 
   /// A fresh local id for a message THIS device sends over the box (slice
   /// (c)), from the same counter and under the same lock as
   /// [journalDelivery], so a sent and a received message never share one.
   /// Null when nothing committed (store closed, write refused).
-  Future<int?> allocateLocalId() {
+  Future<int?> allocateLocalId() => allocateLocalIds(1);
+
+  /// [count] consecutive fresh local ids — the first is returned, the block
+  /// is `[first, first + count)` — for ONE key scan and ONE counter bump (a
+  /// history-file import re-issues every local id it carries). Null when
+  /// nothing committed.
+  Future<int?> allocateLocalIds(int count) {
     final kv = _kv;
     final userId = _userId;
-    if (kv == null || userId == null) return Future.value();
+    if (kv == null || userId == null || count < 1) return Future.value();
     final generation = _generation;
     int? allocated;
     return _serial(
@@ -258,9 +292,9 @@ extension ContactStoreInbox on ContactStore {
         if (_generation != generation) return false;
         final counterKey = _localIdCounterKey(userId);
         final rows = await ContactStore._readWhere(kv, (k) => k == counterKey);
-        final localId = _nextLocalId(kv, userId, rows[counterKey]);
-        if (!await kv.setString(counterKey, '${localId + 1}')) return false;
-        allocated = localId;
+        final first = _nextLocalId(kv, userId, rows[counterKey]);
+        if (!await kv.setString(counterKey, '${first + count}')) return false;
+        allocated = first;
         return true;
       }),
     ).then((ok) => ok ? allocated : null);

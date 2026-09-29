@@ -12,6 +12,8 @@ import { BoxGateway } from './box.gateway';
 import {
   BOX_GLOBAL_MEDIA_CEILING_BYTES,
   BOX_GLOBAL_MSG_CEILING,
+  BOX_OPEN_MEDIA_CEILING_BYTES,
+  BOX_OPEN_MSG_CEILING,
 } from './box.constants';
 import { BOX_CEILING, BoxService, type BoxCeiling } from './box.service';
 import { BoxMedia } from './entities/box-media.entity';
@@ -55,6 +57,8 @@ export const BOX_ENTITIES = [
       useValue: {
         msgs: BOX_GLOBAL_MSG_CEILING,
         mediaBytes: BOX_GLOBAL_MEDIA_CEILING_BYTES,
+        openMsgs: BOX_OPEN_MSG_CEILING,
+        openMediaBytes: BOX_OPEN_MEDIA_CEILING_BYTES,
       } satisfies BoxCeiling,
     },
   ],

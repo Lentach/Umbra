@@ -119,11 +119,13 @@ enum CarriedAdoption {
   /// At or below the version already held: nothing checked, nothing done.
   stale,
 
-  /// Not signed under the DAK the SERVER last served for this account (or
-  /// none was ever served): only the server can say whether it is real.
+  /// Verified along the full I7 chain from the pinned identity, but not
+  /// signed under the DAK the SERVER last served for this account (or none
+  /// was ever served): only the server can say whether it is real.
   unpinned,
 
-  /// Malformed, `not enrolled`, or its chain failed.
+  /// Malformed, `not enrolled`, no pinned identity, or its chain failed —
+  /// never worth a server lookup (BOX-CARRIED-LIST-ORACLE).
   refused,
 }
 
@@ -199,9 +201,14 @@ class DeviceListCache {
   ///    list can replay it;
   ///  * `not enrolled`, or anything unparseable, is refused: enrollment is
   ///    durable, and only the server may say an account has none;
+  ///  * then the full I7 chain, anchored on [tofuIdentityKeyBase64] —
+  ///    BEFORE the pin, so only a list the pinned identity vouches for can
+  ///    come back [CarriedAdoption.unpinned]: that outcome buys a server
+  ///    lookup, and a request-queue frame reaches here before any identity
+  ///    check, so an unvouched list would let the server probe which
+  ///    accounts are our box friends (BOX-CARRIED-LIST-ORACLE);
   ///  * its `dakPub` and `enrollmentSig` must be the ones the server last
-  ///    served ([_serverDak]), else [CarriedAdoption.unpinned] (E50a);
-  ///  * then the full I7 chain, anchored on [tofuIdentityKeyBase64].
+  ///    served ([_serverDak]), else [CarriedAdoption.unpinned] (E50a).
   ({CarriedAdoption outcome, VerifiedDeviceList? list, String? reason})
   adoptCarried({
     required int userId,
@@ -229,12 +236,6 @@ class DeviceListCache {
     if (pinned != null && version <= pinned) {
       return (outcome: CarriedAdoption.stale, list: null, reason: null);
     }
-    final dak = _serverDak[userId];
-    if (dak == null ||
-        dak.dakPub != dakPub ||
-        dak.enrollmentSig != enrollmentSig) {
-      return (outcome: CarriedAdoption.unpinned, list: null, reason: null);
-    }
     if (tofuIdentityKeyBase64 == null || tofuIdentityKeyBase64.isEmpty) {
       return (
         outcome: CarriedAdoption.refused,
@@ -254,6 +255,12 @@ class DeviceListCache {
         list: null,
         reason: verification.reason ?? 'verification_failed',
       );
+    }
+    final dak = _serverDak[userId];
+    if (dak == null ||
+        dak.dakPub != dakPub ||
+        dak.enrollmentSig != enrollmentSig) {
+      return (outcome: CarriedAdoption.unpinned, list: null, reason: null);
     }
     return (
       outcome: CarriedAdoption.adopted,
