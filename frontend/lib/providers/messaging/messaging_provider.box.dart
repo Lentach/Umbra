@@ -214,25 +214,23 @@ extension MessagingBox on MessagingProvider {
     // account. A PreKey message must carry that friend's pinned identity,
     // checked BEFORE Signal sees it — decrypting a stranger's would replace
     // the real session. With no identity pinned yet, nothing here can judge
-    // it: the next connect's handoff pass hands that friend our queue on a
-    // session built from the server's bundle (the old path's trust), and the
-    // friend's next one is read under it. Nothing is asked of the server
-    // now: the claimed sender and its identity key are public, so a forged
-    // frame would time the lookup (E50f, owner at G5).
+    // it: our own handoff to that friend builds the session from the
+    // server's bundle (the old path's trust), and the friend's next one is
+    // read under it.
     switch (await enc.friendFrameIdentity(user, signal)) {
       case FriendFrameIdentity.matches:
         break;
       case FriendFrameIdentity.noAnchor:
         refused('no_anchor');
+        link.handOffTo(user);
         return true;
       case FriendFrameIdentity.foreign:
         refused('foreign_identity');
         return true;
     }
     // Only a device the friend's VERIFIED list names live is ever given an
-    // answer (E2); a list that cannot be verified now refuses too, and none
-    // is looked up for a frame (the connect's own lookup supplies it).
-    if (!await _friendDeviceIsLive(user, device, lookUp: false)) {
+    // answer (E2); a list that cannot be verified now refuses too.
+    if (!await _friendDeviceIsLive(user, device)) {
       refused('not_live');
       return true;
     }
@@ -240,9 +238,8 @@ extension MessagingBox on MessagingProvider {
     // PreKey message that would replace our session with that device is read
     // only when this device asked for it — it started that session to hand
     // off, or re-keyed it; otherwise it is answered by our re-key, built from
-    // that device's real bundle (decision 37's rule), on the NEXT connect: a
-    // re-key fetches that bundle, and this frame may be forged. An account
-    // this account asked over the box counts as asked: our request built the
+    // that device's real bundle (decision 37's rule). An account this
+    // account asked over the box counts as asked: our request built the
     // session its accept may replace (slice (f), E15f).
     if (!link.awaitingFriendRekeyFrom(user, device) &&
         !MessagingFirstContact._boxPending(
@@ -251,7 +248,7 @@ extension MessagingBox on MessagingProvider {
         ) &&
         await enc.preKeyWouldReplaceSession(user, device, signal)) {
       refused('would_replace');
-      link.rekeyFriendNextConnect(user, device);
+      await link.rekeyFriend(user, device);
       return true;
     }
     final String plaintext;
@@ -271,23 +268,16 @@ extension MessagingBox on MessagingProvider {
   }
 
   /// Whether friend [userId]'s VERIFIED list names [deviceId] live: the held
-  /// list, else — only when [lookUp] — one batched lookup. False when it
-  /// cannot be verified. A frame read from the public request queue never
-  /// looks one up ([lookUp] false): anyone can name a friend there, and the
-  /// lookup would tell the server when this account reads the box and which
-  /// pair (E50f). A friend made over the box is never looked up here: its
-  /// lookup is a search that spends one-time pre-keys and names the pair
-  /// (E15h).
-  Future<bool> _friendDeviceIsLive(
-    int userId,
-    int deviceId, {
-    required bool lookUp,
-  }) async {
+  /// list, else one batched lookup. False when it cannot be verified. A
+  /// friend made over the box is never looked up here: its lookup is a
+  /// search that spends one-time pre-keys and names the pair (E15h), and
+  /// this runs on frame reads.
+  Future<bool> _friendDeviceIsLive(int userId, int deviceId) async {
     final enc = _encryptionProvider;
     if (enc == null) return false;
     try {
       final held = enc.cachedDeviceList(userId);
-      if (held == null && (!lookUp || _boxOnlyPeer(userId))) return false;
+      if (held == null && _boxOnlyPeer(userId)) return false;
       final list =
           held ?? await enc.getVerifiedDeviceList(userId, batched: true);
       return list.isLiveDevice(deviceId);
@@ -489,7 +479,7 @@ extension MessagingBox on MessagingProvider {
   }) async {
     final enc = _encryptionProvider;
     if (enc == null || !enc.isE2EReady) return null;
-    if (!await _friendDeviceIsLive(userId, deviceId, lookUp: true)) {
+    if (!await _friendDeviceIsLive(userId, deviceId)) {
       _e2eFlowLog('BOX_FRIEND_NOT_LIVE', {'peer': userId, 'device': deviceId});
       return null;
     }

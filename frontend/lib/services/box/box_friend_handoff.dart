@@ -84,16 +84,6 @@ class BoxFriendHandoff {
   /// (e), E50e); null or empty: none known.
   Future<Set<int>?> Function(int userId)? revokedDevices;
 
-  /// Re-keys a friend device ([BoxFriendLink.rekeyFriend]); wired by the
-  /// box session. A pass runs the re-keys owed from an EARLIER connect
-  /// ([rekeyNextConnect]).
-  Future<void> Function(int userId, int deviceId)? rekey;
-
-  /// `(user, device)` re-keys asked for on this connect, and those an
-  /// earlier connect asked for that this connect's pass runs.
-  final Set<(int, int)> _rekeyNextConnect = {};
-  final Set<(int, int)> _rekeyDue = {};
-
   /// Each friend device's request queue as the last friends list named it,
   /// by friend and device. Replaced whole by every list.
   Map<int, Map<int, ContactOutbound>> _requestQueues = const {};
@@ -125,8 +115,6 @@ class BoxFriendHandoff {
   void accountReady() {
     _accountReady = true;
     _handed.clear();
-    _rekeyDue.addAll(_rekeyNextConnect);
-    _rekeyNextConnect.clear();
     run();
   }
 
@@ -184,16 +172,10 @@ class BoxFriendHandoff {
   }
 
   /// [userId]'s devices may have changed, or it must be handed our queue
-  /// again now ([BoxFriendLink.friendDevicesChanged], [friendHeard]).
+  /// again now ([BoxFriendLink.handOffTo]).
   void friendChanged(int userId) {
     _handed.removeWhere((key) => key.startsWith('$userId:'));
     run();
-  }
-
-  /// [BoxFriendLink.rekeyFriendNextConnect]: owed to the pass of the next
-  /// connect, so no request-queue frame times the re-key's bundle fetch.
-  void rekeyNextConnect(int userId, int deviceId) {
-    if (!_disposed) _rekeyNextConnect.add((userId, deviceId));
   }
 
   /// A message from friend [userId]'s device [deviceId] was read
@@ -353,14 +335,6 @@ class BoxFriendHandoff {
     // Every lookup starts in this one turn, so a connect's lists leave as
     // one batched frame (E20a).
     final lists = await Future.wait([for (final f in friends) lookup(f)]);
-    // Re-keys an earlier connect owes, before any handoff: each is itself a
-    // handoff, which the loop below then does not repeat this connect.
-    for (final owed in [..._rekeyDue]) {
-      final rekeyNow = rekey;
-      if (_disposed || !_accountReady || rekeyNow == null) return;
-      _rekeyDue.remove(owed);
-      await rekeyNow(owed.$1, owed.$2);
-    }
     // Every queue the pass hands is made first, so its new ones go out in
     // ONE subscribe frame (chunked by the client past 256): the box counts
     // subscribe frames, 60 per 15 min per IP.

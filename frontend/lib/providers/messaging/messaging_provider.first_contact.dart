@@ -447,7 +447,7 @@ extension MessagingFirstContact on MessagingProvider {
       refused('foreign_identity');
       return true;
     }
-    if (!await _friendDeviceIsLive(user, device, lookUp: false)) {
+    if (!await _friendDeviceIsLive(user, device)) {
       refused('not_live');
       return true;
     }

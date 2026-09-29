@@ -462,6 +462,27 @@ void main() {
   );
 
   test(
+    'a friend whose handoff could not be read for want of an anchor is '
+    'handed our queue at once, not on the next connect or friends list: our '
+    'session build pins the anchor, so the pair converges in this pass (E20c)',
+    () async {
+      a.encryptFails = true;
+      await a.start();
+      await b.start();
+      a.session.onFriendsList([b.listed]);
+      await settle();
+      final toB = b.store.requestQueue!.sid;
+      expect(box.sent.where((sid) => sid == toB), isEmpty);
+
+      a.encryptFails = false;
+      a.session.handOffTo(5);
+      await settle();
+
+      expect(box.sent.where((sid) => sid == toB), hasLength(1));
+    },
+  );
+
+  test(
     'a device that never acknowledges is handed our queue again only after '
     'a day, however often this device reconnects — each handoff is one more '
     "blob in that device's request queue (review)",
@@ -608,7 +629,7 @@ void main() {
       await b.start();
       a.session.onFriendsList([b.listed]);
       await settle();
-      a.session.friendDevicesChanged(5);
+      a.session.handOffTo(5);
       await settle();
       a.session
         ..accountLost()
@@ -744,79 +765,6 @@ void main() {
       expect(b.outboundOf(2)?.sid, a.friend.queues.single.sid);
     },
   );
-
-  test(
-    'a re-key a request-queue frame asked for goes out on the NEXT '
-    "connect's pass, never on this one, whatever passes run meanwhile — a "
-    "re-key fetches the device's bundle, which a forged frame must not time "
-    '(BOX-FORGED-PREKEY-LOOKUP, E50f)',
-    () async {
-      await a.start();
-      await b.start();
-      a.session.onFriendsList([b.listed]);
-      await settle();
-
-      a.session.rekeyFriendNextConnect(5, 3);
-      a.session
-        ..onFriendsList([b.listed])
-        ..friendDevicesChanged(5);
-      await settle();
-      expect(a.freshFor, isEmpty);
-
-      a.session
-        ..accountLost()
-        ..accountReady(2)
-        ..e2eReady();
-      await settle();
-      expect(a.freshFor, [3]);
-
-      a.session
-        ..accountLost()
-        ..accountReady(2)
-        ..e2eReady();
-      await settle();
-      expect(a.freshFor, [3], reason: 'a mark is spent by the pass that ran it');
-    },
-  );
-
-  test(
-    "a re-key's asked window outlives the 10 min a first session gets: the "
-    'answering re-key of a device that refused ours comes only on ITS next '
-    'connect (BOX-FORGED-PREKEY-LOOKUP), so the window lasts until that '
-    'device is read or the box drops the frame (30 d)',
-    () async {
-      await a.start();
-      await b.start();
-      a.session.onFriendsList([b.listed]);
-      await settle();
-      a.session.friendSessionStarted(5, 4);
-
-      await a.session.rekeyFriend(5, 3);
-      expect(a.freshFor, [3]);
-      a.clock = a.clock.add(const Duration(minutes: 11));
-      expect(a.session.awaitingFriendRekeyFrom(5, 3), isTrue);
-      expect(
-        a.session.awaitingFriendRekeyFrom(5, 4),
-        isFalse,
-        reason: 'a first session keeps the 10 min window (decision 49)',
-      );
-
-      a.clock = a.clock.add(const Duration(days: 30));
-      expect(a.session.awaitingFriendRekeyFrom(5, 3), isFalse);
-    },
-  );
-
-  test('a re-key whose device answered is no longer awaited', () async {
-    await a.start();
-    await b.start();
-    a.session.onFriendsList([b.listed]);
-    await settle();
-
-    await a.session.rekeyFriend(5, 3);
-    a.session.friendRekeyAnswered(5, 3);
-
-    expect(a.session.awaitingFriendRekeyFrom(5, 3), isFalse);
-  });
 
   test(
     'a re-key whose device the fresh list STILL names no address for is '

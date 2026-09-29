@@ -37,22 +37,9 @@ enum FriendWrite {
   retryLater,
 }
 
-/// How long a FIRST session this device started with a friend's device
-/// waits for that device's own PreKey answer
-/// ([BoxFriendLink.awaitingFriendRekeyFrom]); a re-key waits
-/// [kFriendRekeyAnswerWindow].
+/// How long a session this device started with a friend's device waits for
+/// that device's own PreKey answer ([BoxFriendLink.awaitingFriendRekeyFrom]).
 const Duration kFriendRekeyWindow = Duration(minutes: 10);
-
-/// How long a RE-KEY this device sent waits for that device's own PreKey
-/// answer: until it is read, or the box drops the frame that could carry it
-/// (the box keeps an unread message 30 d). A device that refused our re-key
-/// answers with its own only on ITS next connect (it never fetches a bundle
-/// on a request-queue frame, BOX-FORGED-PREKEY-LOOKUP), which the 10 min of
-/// [kFriendRekeyWindow] would miss: each side would refuse the other's re-key
-/// for good, decision 49's stall again. Accepted residual (G5): a revoked
-/// device of the friend holding the account identity can answer inside it —
-/// only for a device we re-keyed that has not answered yet.
-const Duration kFriendRekeyAnswerWindow = Duration(days: 30);
 
 /// What the messaging reader of a friend's queue handoff needs from the box
 /// (metadata-privacy item 5, decision 47, E20c/E20d). `BoxSession` is the one
@@ -91,34 +78,23 @@ abstract interface class BoxFriendLink {
   /// session ([FriendEncrypt]'s `fresh`): it sent a PreKey message that would
   /// replace the session we hold and we did not ask for one. The handoff is a
   /// PreKey message only that device can read, so what it sends next is
-  /// under a session we hold. At most once per device per session. It
-  /// fetches that device's bundle: a frame anyone can put on our request
-  /// queue asks for it with [rekeyFriendNextConnect] instead.
+  /// under a session we hold. At most once per device per session.
   Future<void> rekeyFriend(int userId, int deviceId);
-
-  /// [rekeyFriend] on the NEXT connect's handoff pass, never on this one: a
-  /// request-queue frame refused as replacing our session with [userId]'s
-  /// [deviceId] must not time the bundle fetch a re-key makes — its claimed
-  /// sender and identity key are public, so the server could forge it and
-  /// learn when this account reads the box and which pair it names (E50f,
-  /// owner at G5: defer the re-key).
-  void rekeyFriendNextConnect(int userId, int deviceId);
 
   /// This device just built a session with [userId]'s device [deviceId] —
   /// where it held NONE, or afresh for a re-key — to hand it our queue: that
   /// device's answer may be a PreKey message of its own that replaces it
   /// (two friends starting, or re-keying each other, at once), so it counts
-  /// as asked for the next [kFriendRekeyWindow] — a [rekeyFriend] for
-  /// [kFriendRekeyAnswerWindow] (decision 49; a revoked device of the friend
-  /// can provoke a re-key and use that window). Called by the
-  /// [FriendEncrypt] implementation.
+  /// as asked for the next [kFriendRekeyWindow] (decision 49; a revoked
+  /// device of the friend can provoke a re-key and use that window). Called
+  /// by the [FriendEncrypt] implementation.
   void friendSessionStarted(int userId, int deviceId);
 
   /// Whether this device started a session with [userId]'s device
-  /// [deviceId] ([friendSessionStarted], [rekeyFriend]), its window has not
-  /// run out, and it has not read that device since: only then is a PreKey
-  /// message from it that would replace our session read (decision 37's
-  /// rule; a revoked device of the friend still holds its account identity).
+  /// [deviceId] ([friendSessionStarted]) within the last [kFriendRekeyWindow]
+  /// and has not read it since: only then is a PreKey message from it that
+  /// would replace our session read (decision 37's rule; a revoked device of
+  /// the friend still holds its account identity).
   bool awaitingFriendRekeyFrom(int userId, int deviceId);
 
   /// A message from [userId]'s device [deviceId] decrypted: the session this
@@ -131,6 +107,12 @@ abstract interface class BoxFriendLink {
   /// that are, so it is handed our queue again now — once per device per
   /// session, and not while this connect's own handoff may be in flight.
   void friendHeard(int userId, int deviceId);
+
+  /// Hand our queue to [userId]'s devices now, whatever this connect already
+  /// sent: a handoff from it could not be read because this device holds no
+  /// anchor for that account yet, and building our session with it pins one
+  /// from the server's bundle (the old path's trust).
+  void handOffTo(int userId);
 
   /// Friend [userId]'s verified list stopped naming some device live (a
   /// revoke, slice (e)): the handoff pass runs, which drops that device's
