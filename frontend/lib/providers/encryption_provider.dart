@@ -1494,6 +1494,10 @@ class EncryptionProvider extends ChangeNotifier {
   Future<void> addBoxTombstone(WireKey wire) =>
       _encryptionService.addBoxTombstone(wire);
 
+  /// Delegates to [EncryptionService.boxTombstoneSnapshot] (item 4, E19g).
+  Future<bool Function(WireKey wire)> boxTombstoneSnapshot() =>
+      _encryptionService.boxTombstoneSnapshot();
+
   /// Delegates to [EncryptionService.parkBoxAction] (item 4, E19k).
   Future<void> parkBoxAction(
     int conversationId,
@@ -1521,6 +1525,10 @@ class EncryptionProvider extends ChangeNotifier {
   Future<Map<int, Map<String, dynamic>>> localMessageRecords(
     int conversationId,
   ) => _encryptionService.localMessageRecords(conversationId);
+
+  /// Delegates to [EncryptionService.allLocalMessageRecords].
+  Future<Map<int, Map<String, dynamic>>> allLocalMessageRecords() =>
+      _encryptionService.allLocalMessageRecords();
 
   /// Delegates to [EncryptionService.removeRawReplay].
   Future<void> removeRawReplay(int messageId) =>

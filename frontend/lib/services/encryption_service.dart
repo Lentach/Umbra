@@ -3830,7 +3830,14 @@ class EncryptionService {
   /// is the cached one; a miss only defers a row to the next open.
   Future<Map<int, Map<String, dynamic>>> localMessageRecords(
     int conversationId,
-  ) async {
+  ) async => (await allLocalMessageRecords())..removeWhere(
+    (_, record) => record[_metaConversationId] != conversationId,
+  );
+
+  /// [localMessageRecords] of every chat at once, each record keeping its
+  /// chat id under [PlaintextRecordCodec.conversationIdKey]: the chat
+  /// list's last box message per chat, read once per connect.
+  Future<Map<int, Map<String, dynamic>>> allLocalMessageRecords() async {
     final userId = _userId;
     if (userId == null) return {};
     final prefix = _decryptedContentPrefix(userId);
@@ -3847,9 +3854,7 @@ class EncryptionService {
       return {};
     }
     if (ids.isEmpty) return {};
-    return (await getDecryptedContentMany(ids))..removeWhere(
-      (_, record) => record[_metaConversationId] != conversationId,
-    );
+    return getDecryptedContentMany(ids);
   }
 
   /// Every `(sender, wire id)` stamp → the record ids holding it.

@@ -609,8 +609,10 @@ class MessagingProvider extends ChangeNotifier {
   /// preview text (amendment (lxxxviii) A1).
   ///
   /// The server's `conversationsList` serves every E2E row as `[encrypted]`
-  /// and only a LIVE event replaces it, so after any restart every chat's last
-  /// message arrives that way. For such a row:
+  /// and only a LIVE event replaces it, so after any restart every chat's
+  /// last SERVER message arrives that way (a newer box message is restored
+  /// from its record with its plaintext, [applyStoredBoxLastMessages]). For
+  /// such a row:
   ///   1. the plaintext this install holds for that id (the decrypt cache, else
   ///      the persisted copy) → that row, so the real text or media label;
   ///   2. else a PEER row that is still unread ([unreadCount] > 0) and does

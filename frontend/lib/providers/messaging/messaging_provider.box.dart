@@ -1599,6 +1599,45 @@ extension MessagingBox on MessagingProvider {
     return _hasUsableDecryptedContent(row) ? row : null;
   }
 
+  /// Hands the chat list each chat's newest box message this device stores,
+  /// run when E2E comes up on every connect. No `conversationsList` names a
+  /// box message (decision 14): without this a chat moved onto the box shows
+  /// its last SERVER row after a launch, and sorts by it, and a chat made
+  /// over the box shows none. Never a message deleted for everyone here
+  /// (its tombstone, should its record outlive the delete) or on this device,
+  /// nor an expired one. The list keeps whichever last message is newer
+  /// ([ConversationsProvider.applyNewerLastMessages]).
+  Future<void> applyStoredBoxLastMessages() async {
+    final enc = _encryptionProvider;
+    final user = _currentUserId;
+    if (enc == null || user == null) return;
+    final records = await enc.allLocalMessageRecords();
+    if (records.isEmpty) return;
+    final tombstoned = await enc.boxTombstoneSnapshot();
+    final convs = _conversationsProvider;
+    if (_isDisposed || convs == null || user != _currentUserId) return;
+    final now = DateTime.now();
+    final newest = <int, MessageModel>{};
+    for (final MapEntry(key: id, value: record) in records.entries) {
+      final conversationId = record[PlaintextRecordCodec.conversationIdKey];
+      if (conversationId is! int || _deletedMessageIds.contains(id)) continue;
+      final row = _boxRowFrom(
+        id,
+        conversationId,
+        record,
+        convs.getConversationById(conversationId),
+      );
+      if (row == null || isMessageExpired(row, now)) continue;
+      final wire = _wireKey(row.senderId, row.wireId);
+      if (wire != null && tombstoned(wire)) continue;
+      final held = newest[conversationId];
+      if (held == null || row.createdAt.isAfter(held.createdAt)) {
+        newest[conversationId] = row;
+      }
+    }
+    convs.applyNewerLastMessages(newest);
+  }
+
   /// Where a TEXT to [recipientId] goes over the box (slice (c), decision
   /// 16): only when EVERY live device of the peer has a box address and
   /// every live OTHER device of ours has a self-queue address (sibling

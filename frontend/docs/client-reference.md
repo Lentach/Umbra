@@ -28,7 +28,7 @@ Detail relocated from `frontend/CLAUDE.md` §2, §4, §6 and §9 on 2026-09-24 t
 
 ## Unread merge
 
-- `conversationsList` unread merge trusts the server count (open conversation forced to 0). It replaced an old `max(prev, server)` merge that could only raise counts and left a badge permanently stuck after the conversation was read. Tradeoff: a stale snapshot can briefly reset a just-incremented local count, but the next snapshot restores it (and the message is already in the loaded list).
+- `conversationsList` unread merge trusts the server count (open conversation forced to 0). It replaced an old `max(prev, server)` merge that could only raise counts and left a badge permanently stuck after the conversation was read. Tradeoff: a stale snapshot can briefly reset a just-incremented local count, but the next snapshot restores it (and the message is already in the loaded list). The server cannot count a box message (no server row), so the unread box messages this device counted in a server chat (`ConversationsProvider._boxUnread`, RAM only) are added to the snapshot's count until the chat is opened; a local chat's count is never touched by a snapshot.
 
 ## Honeycomb captions
 

@@ -692,7 +692,10 @@ extension MessagingHistory on MessagingProvider {
     _conversationsProvider?.updateLastMessage(msg.conversationId, msg);
     if (msg.senderId != _currentUserId) {
       if (msg.conversationId != activeConversationId) {
-        _conversationsProvider?.incrementUnreadCount(msg.conversationId);
+        _conversationsProvider?.incrementUnreadCount(
+          msg.conversationId,
+          box: isLocalMessageId(msg.id),
+        );
       }
       if (isServerMessageId(msg.id)) {
         _emit?.call('messageDelivered', {'messageId': msg.id});

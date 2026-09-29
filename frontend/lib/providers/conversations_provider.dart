@@ -26,6 +26,12 @@ class ConversationsProvider extends ChangeNotifier {
   List<ConversationModel> _conversations = [];
   int? _activeConversationId;
   final Map<int, int> _unreadCounts = {}; // conversationId -> count
+
+  /// Unread box messages (local ids, decision 14) this device counted in
+  /// each SERVER chat. The server cannot count a message it never held, so
+  /// every snapshot adds these to its own count; opening the chat clears
+  /// them. A local chat needs none: no snapshot touches its count.
+  final Map<int, int> _boxUnread = {};
   final Map<int, MessageModel> _lastMessages = {};
   int? _pendingOpenConversationId;
 
@@ -478,6 +484,7 @@ class ConversationsProvider extends ChangeNotifier {
     ];
     // A local chat's unread count is this device's own: no snapshot has one.
     _unreadCounts.removeWhere((id, _) => !isLocalConversationId(id));
+    _boxUnread.removeWhere((id, _) => !newConvs.any((c) => c.id == id));
     // The server list is AUTHORITATIVE over any optimistic pin still waiting
     // for its answer, so every pre-pin snapshot is now superseded. Keeping one
     // is how a refusal much later reverts a conversation to state that predates
@@ -497,20 +504,29 @@ class ConversationsProvider extends ChangeNotifier {
       // left a badge permanently stuck after the conversation was read. Tradeoff:
       // a stale snapshot can briefly reset a just-incremented local count, but the
       // next snapshot restores it (and the message is already in the loaded list).
+      // The server cannot count a box message, so this device's are added.
+      if (convId == _activeConversationId) _boxUnread.remove(convId);
       _unreadCounts[convId] = convId == _activeConversationId
           ? 0
-          : serverUnread;
+          : serverUnread + (_boxUnread[convId] ?? 0);
 
       // Update last message from backend data. An E2E row keeps its
       // `[encrypted]` sentinel: the list decides how to show it (amendment
       // (lxxxviii) A1), and relabelling it here made a row this install can
-      // never read look readable to that decision.
+      // never read look readable to that decision. A box message held here
+      // that is newer stays: the server never names one (decision 14).
       final lastMsgData = m['lastMessage'];
       if (lastMsgData != null) {
         try {
-          _lastMessages[convId] = MessageModel.fromJson(
+          final server = MessageModel.fromJson(
             lastMsgData as Map<String, dynamic>,
           );
+          final held = _lastMessages[convId];
+          if (held == null ||
+              !isLocalMessageId(held.id) ||
+              !held.createdAt.isAfter(server.createdAt)) {
+            _lastMessages[convId] = server;
+          }
         } catch (e) {
           debugPrint(
             '[ConversationsProvider] Failed to parse lastMessage for conversation $convId: $e',
@@ -1062,6 +1078,7 @@ class ConversationsProvider extends ChangeNotifier {
     _activeConversationDeletedByOther = false;
     if (conversationId != null) {
       _unreadCounts[conversationId] = 0;
+      _boxUnread.remove(conversationId);
     }
     _postActiveConversationToSw();
     if (notify) {
@@ -1080,6 +1097,7 @@ class ConversationsProvider extends ChangeNotifier {
     _activeConversationId = conversationId;
     _activeConversationDeletedByOther = false;
     _unreadCounts[conversationId] = 0;
+    _boxUnread.remove(conversationId);
     notifyListeners();
     _postActiveConversationToSw();
   }
@@ -1147,15 +1165,33 @@ class ConversationsProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Each of [rows] (chat id → a message) becomes its chat's last message
+  /// unless the one held is as new or newer: the box messages a launch
+  /// finds stored, which no server snapshot names (decision 14).
+  void applyNewerLastMessages(Map<int, MessageModel> rows) {
+    var changed = false;
+    for (final MapEntry(key: id, value: row) in rows.entries) {
+      final held = _lastMessages[id];
+      if (held != null && !row.createdAt.isAfter(held.createdAt)) continue;
+      _lastMessages[id] = row;
+      changed = true;
+    }
+    if (changed) notifyListeners();
+  }
+
   /// Update the unread count for a conversation (called by MessagingProvider).
   void updateUnreadCount(int conversationId, int count) {
     _unreadCounts[conversationId] = count;
     notifyListeners();
   }
 
-  /// Increment the unread count for a conversation by 1.
-  void incrementUnreadCount(int conversationId) {
+  /// Increment the unread count for a conversation by 1. [box]: the message
+  /// is a box message ([_boxUnread]).
+  void incrementUnreadCount(int conversationId, {bool box = false}) {
     _unreadCounts[conversationId] = (_unreadCounts[conversationId] ?? 0) + 1;
+    if (box && !isLocalConversationId(conversationId)) {
+      _boxUnread[conversationId] = (_boxUnread[conversationId] ?? 0) + 1;
+    }
     notifyListeners();
   }
 
@@ -1183,6 +1219,7 @@ class ConversationsProvider extends ChangeNotifier {
       _activeConversationId = null;
       _lastMessages.clear();
       _unreadCounts.clear();
+      _boxUnread.clear();
       _prePinState.clear();
       _boxPins.clear();
       _boxPinShown.clear();
@@ -1216,6 +1253,7 @@ class ConversationsProvider extends ChangeNotifier {
     _currentUserId = null;
     _lastMessages.clear();
     _unreadCounts.clear();
+    _boxUnread.clear();
     _prePinState.clear();
     _boxPins.clear();
     _boxPinShown.clear();
@@ -1239,6 +1277,7 @@ class ConversationsProvider extends ChangeNotifier {
     _conversations.removeWhere((c) => c.id == convId);
     _lastMessages.remove(convId);
     _unreadCounts.remove(convId);
+    _boxUnread.remove(convId);
     if (_activeConversationId == convId) {
       _activeConversationId = null;
       _activeConversationDeletedByOther = false;
