@@ -580,7 +580,8 @@ class ConnectionProvider extends ChangeNotifier {
     _messagingProvider?.setEmitCallback((event, data) => emit(event, data));
     _encryptionProvider?.onE2EReady = () {
       unawaited(_messagingProvider?.retryDecryptActiveConversation());
-      // The chat list's last box message per chat: no server list names one.
+      // The chat list's last box message and box unread per chat: no server
+      // list names one. Reads the records once per session, not per connect.
       unawaited(_messagingProvider?.applyStoredBoxLastMessages());
       // A box delivery refused because E2E was not ready waits in the
       // journal; nothing else would offer it again before a reconnect.

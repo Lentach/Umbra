@@ -537,6 +537,10 @@ class MessagingProvider extends ChangeNotifier {
   /// taken is `read` in its record for every later launch.
   final Set<String> _boxReadReported = {};
 
+  /// Per chat, the seen mark this session last wrote (decision 73, E73a):
+  /// a show that moves nothing writes nothing.
+  final Map<int, int> _boxSeenMarked = {};
+
   /// When this device last sent typing `on` into each chat (E61e).
   final Map<int, DateTime> _boxTypingSentAt = {};
 
@@ -1358,6 +1362,7 @@ class MessagingProvider extends ChangeNotifier {
       _staleViewsAnswered.clear();
       _boxDeliveredOwed.clear();
       _boxReadReported.clear();
+      _boxSeenMarked.clear();
       _boxTypingSentAt.clear();
       _staleResendAttempts.clear();
       _staleResendTempIds.clear();
@@ -1481,6 +1486,7 @@ class MessagingProvider extends ChangeNotifier {
     _staleViewsAnswered.clear();
     _boxDeliveredOwed.clear();
     _boxReadReported.clear();
+    _boxSeenMarked.clear();
     _boxTypingSentAt.clear();
     _staleResendAttempts.clear();
     _staleResendTempIds.clear();

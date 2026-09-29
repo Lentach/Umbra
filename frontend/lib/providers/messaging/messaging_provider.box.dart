@@ -1513,8 +1513,10 @@ extension MessagingBox on MessagingProvider {
       }
       notifyListeners();
     }
-    // Shown now: what it holds of the peer's is read (slice (g), E61d).
+    // Shown now: what it holds of the peer's is read (slice (g), E61d), and
+    // seen here across a restart (decision 73).
     _sendBoxReadReceipt(conversationId);
+    _markBoxChatSeen(conversationId);
     // Shown now: a disappearing one not started yet starts (decision 41).
     _startBoxCountdowns(conversationId);
     // The chat's E2E pin names one of these (item 4, E19f).
@@ -1599,25 +1601,43 @@ extension MessagingBox on MessagingProvider {
     return _hasUsableDecryptedContent(row) ? row : null;
   }
 
-  /// Hands the chat list each chat's newest box message this device stores,
-  /// run when E2E comes up on every connect. No `conversationsList` names a
-  /// box message (decision 14): without this a chat moved onto the box shows
-  /// its last SERVER row after a launch, and sorts by it, and a chat made
-  /// over the box shows none. Never a message deleted for everyone here
-  /// (its tombstone, should its record outlive the delete) or on this device,
+  /// Hands the chat list what no `conversationsList` can name (decision
+  /// 14): each chat's newest box message this device stores, and the
+  /// peer's box messages this device has not shown yet (decision 73).
+  /// Without the first, a chat moved onto the box shows its last SERVER row
+  /// after a launch, and sorts by it, and a chat made over the box shows
+  /// none; without the second, an unopened box message loses its badge at
+  /// every restart. Never a message deleted for everyone here (its
+  /// tombstone, should its record outlive the delete) or on this device,
   /// nor an expired one. The list keeps whichever last message is newer
-  /// ([ConversationsProvider.applyNewerLastMessages]).
+  /// ([ConversationsProvider.applyNewerLastMessages]); unread is a peer
+  /// row sent after its chat's seen mark ([EncryptionService.boxSeenMarks]).
+  ///
+  /// Run at E2E ready, but reads the records ONCE per session (the first
+  /// E2E ready after a launch or a sign-in,
+  /// [ConversationsProvider.claimStoredBoxPass]): a reconnect keeps the
+  /// list's state, which live messages maintain, and on web every record
+  /// read is an unseal.
   Future<void> applyStoredBoxLastMessages() async {
     final enc = _encryptionProvider;
     final user = _currentUserId;
-    if (enc == null || user == null) return;
+    final convs = _conversationsProvider;
+    if (enc == null || user == null || convs == null) return;
+    if (!convs.claimStoredBoxPass()) return;
+    // First, even with nothing stored: this install's first pass fixes
+    // what a chat never shown here counts from.
+    final seen = await enc.boxSeenMarks();
     final records = await enc.allLocalMessageRecords();
     if (records.isEmpty) return;
     final tombstoned = await enc.boxTombstoneSnapshot();
-    final convs = _conversationsProvider;
-    if (_isDisposed || convs == null || user != _currentUserId) return;
+    if (_isDisposed ||
+        convs != _conversationsProvider ||
+        user != _currentUserId) {
+      return;
+    }
     final now = DateTime.now();
     final newest = <int, MessageModel>{};
+    final unread = <int, Set<int>>{};
     for (final MapEntry(key: id, value: record) in records.entries) {
       final conversationId = record[PlaintextRecordCodec.conversationIdKey];
       if (conversationId is! int || _deletedMessageIds.contains(id)) continue;
@@ -1634,8 +1654,44 @@ extension MessagingBox on MessagingProvider {
       if (held == null || row.createdAt.isAfter(held.createdAt)) {
         newest[conversationId] = row;
       }
+      if (seen != null &&
+          row.senderId != user &&
+          row.createdAt.millisecondsSinceEpoch >
+              (seen.chats[conversationId] ?? seen.base)) {
+        (unread[conversationId] ??= {}).add(id);
+      }
     }
-    convs.applyNewerLastMessages(newest);
+    convs
+      ..applyNewerLastMessages(newest)
+      ..seedBoxUnread(unread);
+  }
+
+  /// [conversationId] is on screen with the app in the foreground: the send
+  /// time of the newest peer box message it shows becomes this device's
+  /// seen mark for it, so a restart counts only what was sent later
+  /// (decision 73, E73a). Never `tick: read`: that is receipt state, set
+  /// only once a peer took our `rcpt r` (E61d). Written when it moves on.
+  void _markBoxChatSeen(int conversationId) {
+    final own = _currentUserId;
+    if (own == null || _conversationsProvider?.isClientVisible == false) {
+      return;
+    }
+    final viewing = _effectiveActiveConversationId ?? _paginationConversationId;
+    if (conversationId != viewing) return;
+    DateTime? upTo;
+    for (final m in _messages) {
+      if (m.conversationId != conversationId ||
+          !isLocalMessageId(m.id) ||
+          m.senderId == own) {
+        continue;
+      }
+      if (upTo == null || m.createdAt.isAfter(upTo)) upTo = m.createdAt;
+    }
+    if (upTo == null) return;
+    final ms = upTo.millisecondsSinceEpoch;
+    if ((_boxSeenMarked[conversationId] ?? -1) >= ms) return;
+    _boxSeenMarked[conversationId] = ms;
+    unawaited(_encryptionProvider?.markBoxChatSeen(conversationId, upTo));
   }
 
   /// Where a TEXT to [recipientId] goes over the box (slice (c), decision

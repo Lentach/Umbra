@@ -15,12 +15,19 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// The real plaintext store; Signal is faked: an inbound frame decrypts to
-/// [inbound].
+/// [inbound]. [recordReads] counts reads of every chat's box records.
 class _Encryption extends EncryptionProvider {
   _Encryption(this.store) : super(service: store);
 
   final EncryptionService store;
   String inbound = '{}';
+  int recordReads = 0;
+
+  @override
+  Future<Map<int, Map<String, dynamic>>> allLocalMessageRecords() {
+    recordReads++;
+    return super.allLocalMessageRecords();
+  }
 
   @override
   bool get isE2EReady => true;
@@ -197,23 +204,25 @@ void main() {
   }
 
   /// A box message's record as the receive path writes it, straight to the
-  /// store: Bob's [text] in [conversationId], sent [ago].
+  /// store: [from]'s (Bob's by default) [text] in [conversationId], sent
+  /// [ago].
   Future<int> storedFromBob(
     String text, {
     required String wire,
     required Duration ago,
     int conversationId = _bobChat,
+    int from = _bobId,
     Map<String, dynamic> extra = const {},
     int? disappearAfterSeconds,
   }) async {
     final id = nextLocal++;
     await encryption.store.saveDecryptedContent(
       id,
-      {'content': text, 'senderId': _bobId, ...extra},
+      {'content': text, 'senderId': from, ...extra},
       conversationId: conversationId,
       createdAt: now.subtract(ago),
       disappearAfterSeconds: disappearAfterSeconds,
-      wire: (senderId: _bobId, wireId: wire),
+      wire: (senderId: from, wireId: wire),
     );
     return id;
   }
@@ -228,14 +237,36 @@ void main() {
   }
 
   /// A fresh app on the same disk, E2E up after the server's list came.
-  Future<void> coldStart() async {
+  Future<void> coldStart({int bobUnread = 0}) async {
     provider.dispose();
     encryption = _Encryption(await openService());
-    conversations = newConversations()..onConversationsList(snapshot());
+    conversations = newConversations()
+      ..onConversationsList(snapshot(bobUnread: bobUnread));
     await store.settled;
     provider = newProvider();
     await provider.applyStoredBoxLastMessages();
     await pump();
+  }
+
+  /// Shows [chat] as the chat screen does: open, then its first page, whose
+  /// merge brings in its stored box messages.
+  Future<void> show(int chat) async {
+    conversations.openConversation(chat);
+    provider.setActiveConversationIdForTest(chat);
+    await provider.onMessageHistory({
+      'conversationId': chat,
+      'messages': <Object>[],
+    });
+    await pump();
+  }
+
+  /// Leaves the chat on screen for the list, as the chat screen's teardown
+  /// does.
+  void leave() {
+    conversations.closeConversation();
+    provider
+      ..setActiveConversationIdForTest(null)
+      ..clearMessages();
   }
 
   List<int> listOrder() => [
@@ -437,6 +468,264 @@ void main() {
       conversations.onConversationsList(snapshot());
 
       expect(conversations.lastMessages[_bobChat]?.id, newest);
+    });
+  });
+
+  /// Decision 73 (E73a): a box message this device has not shown keeps its
+  /// badge across an app restart. Each chat's seen mark is device-local; a
+  /// chat never shown here reads as seen up to when this device first kept
+  /// marks, which the group's first E2E ready fixes (a first launch).
+  group('box unread across a restart (decision 73)', () {
+    setUp(() async {
+      await provider.applyStoredBoxLastMessages();
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      now = DateTime.now().toUtc();
+    });
+
+    test('an unopened peer box message in a server chat keeps its badge, '
+        "on top of the server's count", () async {
+      await fromBob('unread', wire: 'wire-1', ago: Duration.zero);
+
+      await coldStart(bobUnread: 2);
+
+      expect(conversations.getUnreadCount(_bobChat), 3);
+      reconnect(bobUnread: 2);
+      expect(conversations.getUnreadCount(_bobChat), 3);
+      expect(conversations.getUnreadCount(_carolChat), 0);
+    });
+
+    test('the server list arriving after the stored rows adds its count to '
+        'theirs', () async {
+      await fromBob('unread', wire: 'wire-1', ago: Duration.zero);
+      provider.dispose();
+      encryption = _Encryption(await openService());
+      conversations = newConversations();
+      provider = newProvider();
+      await provider.applyStoredBoxLastMessages();
+
+      conversations.onConversationsList(snapshot(bobUnread: 2));
+
+      expect(conversations.getUnreadCount(_bobChat), 3);
+    });
+
+    test('an unopened box message in a chat made over the box keeps its '
+        'badge', () async {
+      final chat = localConversationIdFor(5);
+      await storedFromBob(
+        'hi erin',
+        wire: 'wire-e',
+        ago: Duration.zero,
+        conversationId: chat,
+        from: 5,
+      );
+
+      await coldStart();
+
+      expect(conversations.getUnreadCount(chat), 1);
+    });
+
+    test('a chat made over the box that was deleted here gets no badge',
+        () async {
+      final chat = localConversationIdFor(5);
+      await store.update(
+        5,
+        (_) => ContactRecord(
+          userId: 5,
+          username: 'erin',
+          tag: '0005',
+          state: ContactState.friend,
+          boxOrigin: ContactBoxOrigin(at: DateTime.utc(2026, 9, 27)),
+          settings: const ContactSettings(chatHidden: true),
+        ),
+      );
+      await store.settled;
+      await storedFromBob(
+        'hi erin',
+        wire: 'wire-e',
+        ago: Duration.zero,
+        conversationId: chat,
+        from: 5,
+      );
+
+      await coldStart();
+
+      expect(conversations.getUnreadCount(chat), 0);
+    });
+
+    test('a chat shown before the restart has no badge after it', () async {
+      await fromBob('read here', wire: 'wire-1', ago: Duration.zero);
+      await show(_bobChat);
+      leave();
+
+      await coldStart();
+
+      expect(conversations.getUnreadCount(_bobChat), 0);
+    });
+
+    test('a message that arrives in the chat on screen has no badge after '
+        'a restart', () async {
+      await show(_bobChat);
+      await fromBob('arrived on screen', wire: 'wire-1', ago: Duration.zero);
+      leave();
+
+      await coldStart();
+
+      expect(conversations.getUnreadCount(_bobChat), 0);
+    });
+
+    test('only what arrived after the chat was last shown counts', () async {
+      await fromBob('read here', wire: 'wire-1', ago: Duration.zero);
+      await show(_bobChat);
+      leave();
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      now = DateTime.now().toUtc();
+      await fromBob('after', wire: 'wire-2', ago: Duration.zero);
+
+      await coldStart();
+
+      expect(conversations.getUnreadCount(_bobChat), 1);
+    });
+
+    test('our own box messages, an expired one and one deleted for everyone '
+        'never count', () async {
+      await storedFromBob('still here', wire: 'wire-1', ago: Duration.zero);
+      await storedFromBob(
+        'mine',
+        wire: 'wire-2',
+        ago: Duration.zero,
+        from: _me,
+      );
+      // A 60 s timer whose countdown started 2 minutes ago.
+      await storedFromBob(
+        'gone',
+        wire: 'wire-3',
+        ago: Duration.zero,
+        disappearAfterSeconds: 60,
+        extra: {
+          'ttlFrom': now
+              .subtract(const Duration(minutes: 2))
+              .millisecondsSinceEpoch,
+        },
+      );
+      await storedFromBob('deleted', wire: 'wire-4', ago: Duration.zero);
+      await encryption.store.addBoxTombstone((
+        senderId: _bobId,
+        wireId: 'wire-4',
+      ));
+
+      await coldStart();
+
+      expect(conversations.getUnreadCount(_bobChat), 1);
+    });
+
+    test('a chat loaded while the app is hidden is not seen: its badge '
+        'survives a restart', () async {
+      await storedFromBob('unread', wire: 'wire-1', ago: Duration.zero);
+      conversations.setClientVisible(false);
+      await show(_bobChat);
+      leave();
+      conversations.setClientVisible(true);
+
+      await coldStart();
+
+      expect(conversations.getUnreadCount(_bobChat), 1);
+    });
+
+    test('the chat on screen when the stored rows are read gets no badge',
+        () async {
+      await storedFromBob('unread', wire: 'wire-1', ago: Duration.zero);
+      provider.dispose();
+      encryption = _Encryption(await openService());
+      conversations = newConversations()
+        ..onConversationsList(snapshot())
+        ..openConversation(_bobChat);
+      await store.settled;
+      provider = newProvider();
+
+      await provider.applyStoredBoxLastMessages();
+
+      expect(conversations.getUnreadCount(_bobChat), 0);
+    });
+
+    test('a later reconnect keeps the live state and reads no record '
+        'again', () async {
+      await coldStart();
+      expect(encryption.recordReads, 1);
+      await fromBob('live', wire: 'wire-1', ago: Duration.zero);
+
+      reconnect();
+      await provider.applyStoredBoxLastMessages();
+
+      expect(encryption.recordReads, 1);
+      expect(conversations.getUnreadCount(_bobChat), 1);
+    });
+
+    test('a message counted live before the stored rows are read counts '
+        'once', () async {
+      provider.dispose();
+      encryption = _Encryption(await openService());
+      conversations = newConversations()..onConversationsList(snapshot());
+      await store.settled;
+      provider = newProvider();
+      await fromBob('live', wire: 'wire-1', ago: Duration.zero);
+      expect(conversations.getUnreadCount(_bobChat), 1);
+
+      await provider.applyStoredBoxLastMessages();
+
+      expect(conversations.getUnreadCount(_bobChat), 1);
+    });
+
+    test('in a chat made over the box, a message counted live and then found '
+        'stored counts once, a snapshot in between', () {
+      final chat = localConversationIdFor(5);
+      const id = kFirstLocalMessageId + 99;
+
+      conversations
+        ..incrementUnreadCount(chat, boxId: id)
+        ..onConversationsList(snapshot())
+        ..seedBoxUnread({
+          chat: {id},
+        });
+
+      expect(conversations.getUnreadCount(chat), 1);
+    });
+
+    test('a message found stored and then shown live in the list counts '
+        'once (the pass read its record before it was shown)', () {
+      const id = kFirstLocalMessageId + 99;
+
+      conversations
+        ..seedBoxUnread({
+          _bobChat: {id},
+        })
+        ..incrementUnreadCount(_bobChat, boxId: id);
+
+      expect(conversations.getUnreadCount(_bobChat), 1);
+    });
+
+    test('a logout clears the badge; the next sign-in and a fresh connect '
+        'each read the stored rows again', () async {
+      await fromBob('unread', wire: 'wire-1', ago: Duration.zero);
+      await coldStart();
+      expect(conversations.getUnreadCount(_bobChat), 1);
+
+      conversations.clearAll();
+      provider.clearAll();
+      expect(conversations.getUnreadCount(_bobChat), 0);
+      conversations
+        ..setCurrentUserId(_me)
+        ..onConversationsList(snapshot());
+      provider.setCurrentUserId(_me);
+      await provider.applyStoredBoxLastMessages();
+      expect(encryption.recordReads, 2);
+      expect(conversations.getUnreadCount(_bobChat), 1);
+
+      conversations
+        ..onConnect(false)
+        ..onConversationsList(snapshot());
+      await provider.applyStoredBoxLastMessages();
+      expect(encryption.recordReads, 3);
+      expect(conversations.getUnreadCount(_bobChat), 1);
     });
   });
 }

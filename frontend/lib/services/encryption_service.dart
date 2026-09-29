@@ -99,6 +99,11 @@ class AccountIdentityMismatch implements Exception {
 /// or our own account for our own sends. Never a bare server field.
 typedef WireKey = ({int senderId, String wireId});
 
+/// This device's box seen marks (decision 73, E73a): per chat, the send
+/// time (ms) of the newest box message shown here; `base` for a chat never
+/// shown here. See [EncryptionService.boxSeenMarks].
+typedef BoxSeenMarks = ({int base, Map<int, int> chats});
+
 class EncryptionService {
   EncryptionService({
     int decryptedContentCacheLimit = 2000,
@@ -4028,6 +4033,125 @@ class EncryptionService {
       for (final MapEntry(:key, :value) in decoded.entries)
         if (value is int) key: value,
     };
+  }
+
+  // ── Box seen marks (decision 73, E73a) ───────────────────────────────────
+  //
+  // No server counts a box message, so its unread badge is this device's
+  // own, and it must survive a restart. Per chat: the send time (ms) of the
+  // newest box message this device has SHOWN in it (the chat on screen, app
+  // in the foreground). A peer box message sent later is unread. A chat with
+  // no mark reads as seen up to `b`, when this device first kept marks for
+  // the account: a first launch of this version, or of a restored install,
+  // counts nothing it already held (an imported history file included).
+  // `{"b": ms, "c": {"<chat>": ms}}`, device-local, carried by no backup.
+
+  static const int _boxSeenCap = 5000;
+
+  String _boxSeenKey(int userId) => 'e2e_${userId}_boxseen_v1';
+
+  /// Every chat's seen mark, and the mark of a chat never shown here.
+  /// The first read on this install for the account fixes that `base` at
+  /// now. Null without an account, or when the row cannot be written.
+  Future<BoxSeenMarks?> boxSeenMarks() async {
+    final userId = _userId;
+    if (userId == null) return null;
+    BoxSeenMarks? marks;
+    await _boxSeenWrite(userId, () async {
+      final prefs = await _sharedPrefs;
+      await _reloadPrefsForCrossContext(prefs);
+      final held = _readBoxSeen(prefs, userId);
+      final base = held.base;
+      if (base != null) {
+        marks = (base: base, chats: held.chats);
+        return;
+      }
+      final fixed = (
+        base: DateTime.now().millisecondsSinceEpoch,
+        chats: held.chats,
+      );
+      await _writeBoxSeen(prefs, userId, fixed);
+      marks = fixed;
+    });
+    return marks;
+  }
+
+  /// [conversationId] was shown here with its newest box message sent at
+  /// [upTo]. A mark only moves forward: another tab may have shown it later.
+  Future<void> markBoxChatSeen(int conversationId, DateTime upTo) async {
+    final userId = _userId;
+    if (userId == null) return;
+    final at = upTo.millisecondsSinceEpoch;
+    await _boxSeenWrite(userId, () async {
+      final prefs = await _sharedPrefs;
+      await _reloadPrefsForCrossContext(prefs);
+      final held = _readBoxSeen(prefs, userId);
+      final had = held.chats[conversationId];
+      if (had != null && had >= at) return;
+      await _writeBoxSeen(prefs, userId, (
+        base: held.base ?? DateTime.now().millisecondsSinceEpoch,
+        chats: {...held.chats, conversationId: at},
+      ));
+    });
+  }
+
+  /// The marks' writes, one after another, as [_parkedWrite]. A failure is
+  /// recorded, never thrown: a lost mark costs a badge, never a message.
+  Future<void> _boxSeenTail = Future<void>.value();
+
+  Future<void> _boxSeenWrite(int userId, Future<void> Function() write) {
+    final run = _boxSeenTail.then(
+      (_) => _sessionCrossContextLock('fireplace-e2e-boxseen-$userId', () async {
+        try {
+          await write();
+        } on Object catch (e) {
+          E2ePersistentDiag.record('BOX_SEEN_WRITE_FAILED', {
+            'error': e.runtimeType.toString(),
+          });
+        }
+      }),
+    );
+    _boxSeenTail = run.then((_) {}, onError: (Object _) {});
+    return run;
+  }
+
+  ({int? base, Map<int, int> chats}) _readBoxSeen(ContentKv prefs, int userId) {
+    final raw = prefs.getString(_boxSeenKey(userId));
+    if (raw == null) return (base: null, chats: const {});
+    // As [_readBoxTombstones]: an unsealable row is empty, and replaceable.
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(raw);
+    } on FormatException {
+      return (base: null, chats: const {});
+    }
+    if (decoded is! Map<String, dynamic>) return (base: null, chats: const {});
+    final base = decoded['b'];
+    final chats = decoded['c'];
+    return (
+      base: base is int ? base : null,
+      chats: {
+        if (chats is Map<String, dynamic>)
+          for (final MapEntry(:key, :value) in chats.entries)
+            if (int.tryParse(key) case final id? when value is int) id: value,
+      },
+    );
+  }
+
+  Future<void> _writeBoxSeen(
+    ContentKv prefs,
+    int userId,
+    BoxSeenMarks marks,
+  ) async {
+    final newest = marks.chats.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    await prefs.setString(
+      _boxSeenKey(userId),
+      jsonEncode({
+        'b': marks.base,
+        'c': {for (final e in newest.take(_boxSeenCap)) '${e.key}': e.value},
+      }),
+    );
   }
 
   // ── Box actions parked until their target lands (item 4, E19k) ──────────

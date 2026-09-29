@@ -1498,6 +1498,13 @@ class EncryptionProvider extends ChangeNotifier {
   Future<bool Function(WireKey wire)> boxTombstoneSnapshot() =>
       _encryptionService.boxTombstoneSnapshot();
 
+  /// Delegates to [EncryptionService.boxSeenMarks] (decision 73, E73a).
+  Future<BoxSeenMarks?> boxSeenMarks() => _encryptionService.boxSeenMarks();
+
+  /// Delegates to [EncryptionService.markBoxChatSeen] (decision 73, E73a).
+  Future<void> markBoxChatSeen(int conversationId, DateTime upTo) =>
+      _encryptionService.markBoxChatSeen(conversationId, upTo);
+
   /// Delegates to [EncryptionService.parkBoxAction] (item 4, E19k).
   Future<void> parkBoxAction(
     int conversationId,

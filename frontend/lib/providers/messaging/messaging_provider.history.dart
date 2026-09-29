@@ -694,7 +694,7 @@ extension MessagingHistory on MessagingProvider {
       if (msg.conversationId != activeConversationId) {
         _conversationsProvider?.incrementUnreadCount(
           msg.conversationId,
-          box: isLocalMessageId(msg.id),
+          boxId: isLocalMessageId(msg.id) ? msg.id : null,
         );
       }
       if (isServerMessageId(msg.id)) {

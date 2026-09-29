@@ -27,11 +27,18 @@ class ConversationsProvider extends ChangeNotifier {
   int? _activeConversationId;
   final Map<int, int> _unreadCounts = {}; // conversationId -> count
 
-  /// Unread box messages (local ids, decision 14) this device counted in
-  /// each SERVER chat. The server cannot count a message it never held, so
-  /// every snapshot adds these to its own count; opening the chat clears
-  /// them. A local chat needs none: no snapshot touches its count.
-  final Map<int, int> _boxUnread = {};
+  /// Unread box messages (local ids, decision 14) per chat, by id: counted
+  /// live ([incrementUnreadCount]) or, once per session, from the stored
+  /// rows ([seedBoxUnread], decision 73). The server cannot count a message
+  /// it never held, so every snapshot adds a server chat's to its own count;
+  /// a local chat's count is this device's alone. Opening the chat clears
+  /// them. By id, so a row counted both ways counts once.
+  final Map<int, Set<int>> _boxUnread = {};
+
+  /// The session's stored-row pass (`MessagingBox.applyStoredBoxLastMessages`)
+  /// has started: it rebuilds state only a fresh connect or [clearAll] drops,
+  /// and a reconnect keeps (live messages maintain it).
+  bool _storedBoxPassClaimed = false;
   final Map<int, MessageModel> _lastMessages = {};
   int? _pendingOpenConversationId;
 
@@ -484,7 +491,9 @@ class ConversationsProvider extends ChangeNotifier {
     ];
     // A local chat's unread count is this device's own: no snapshot has one.
     _unreadCounts.removeWhere((id, _) => !isLocalConversationId(id));
-    _boxUnread.removeWhere((id, _) => !newConvs.any((c) => c.id == id));
+    _boxUnread.removeWhere(
+      (id, _) => !isLocalConversationId(id) && !newConvs.any((c) => c.id == id),
+    );
     // The server list is AUTHORITATIVE over any optimistic pin still waiting
     // for its answer, so every pre-pin snapshot is now superseded. Keeping one
     // is how a refusal much later reverts a conversation to state that predates
@@ -508,7 +517,7 @@ class ConversationsProvider extends ChangeNotifier {
       if (convId == _activeConversationId) _boxUnread.remove(convId);
       _unreadCounts[convId] = convId == _activeConversationId
           ? 0
-          : serverUnread + (_boxUnread[convId] ?? 0);
+          : serverUnread + (_boxUnread[convId]?.length ?? 0);
 
       // Update last message from backend data. An E2E row keeps its
       // `[encrypted]` sentinel: the list decides how to show it (amendment
@@ -1185,15 +1194,50 @@ class ConversationsProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Increment the unread count for a conversation by 1. [box]: the message
-  /// is a box message ([_boxUnread]).
-  void incrementUnreadCount(int conversationId, {bool box = false}) {
-    _unreadCounts[conversationId] = (_unreadCounts[conversationId] ?? 0) + 1;
-    if (box && !isLocalConversationId(conversationId)) {
-      _boxUnread[conversationId] = (_boxUnread[conversationId] ?? 0) + 1;
+  /// Increment the unread count for a conversation by 1. [boxId]: the
+  /// message is a box message ([_boxUnread]), counted once.
+  void incrementUnreadCount(int conversationId, {int? boxId}) {
+    if (boxId != null && !(_boxUnread[conversationId] ??= {}).add(boxId)) {
+      return;
     }
+    _unreadCounts[conversationId] = (_unreadCounts[conversationId] ?? 0) + 1;
     notifyListeners();
   }
+
+  /// Claims this session's stored-row pass: true once until a fresh
+  /// connect or [clearAll] (decision 73). A reconnect keeps the state it
+  /// built, so re-reading every record then is pure cost.
+  bool claimStoredBoxPass() {
+    if (_storedBoxPassClaimed) return false;
+    return _storedBoxPassClaimed = true;
+  }
+
+  /// The stored peer box messages not shown here yet, per chat (decision
+  /// 73, at the session's first E2E ready): each one not counted yet adds
+  /// to its chat's badge. Never the chat on screen, nor a chat made over
+  /// the box that was deleted here (it comes back with its next message).
+  void seedBoxUnread(Map<int, Set<int>> unread) {
+    var changed = false;
+    for (final MapEntry(key: id, value: ids) in unread.entries) {
+      if (id == _activeConversationId || _hiddenLocalChat(id)) continue;
+      final held = _boxUnread[id] ??= {};
+      final added = ids.where(held.add).length;
+      if (added == 0) continue;
+      _unreadCounts[id] = (_unreadCounts[id] ?? 0) + added;
+      changed = true;
+    }
+    if (changed) notifyListeners();
+  }
+
+  bool _hiddenLocalChat(int conversationId) =>
+      isLocalConversationId(conversationId) &&
+      (_store?.all.any(
+            (r) =>
+                r.boxOrigin != null &&
+                _chatIdOf(r) == conversationId &&
+                r.settings.chatHidden,
+          ) ??
+          false);
 
   /// Remove expired messages from [lastMessages]. Does not notify listeners.
   void removeExpiredLastMessages() {
@@ -1220,6 +1264,7 @@ class ConversationsProvider extends ChangeNotifier {
       _lastMessages.clear();
       _unreadCounts.clear();
       _boxUnread.clear();
+      _storedBoxPassClaimed = false;
       _prePinState.clear();
       _boxPins.clear();
       _boxPinShown.clear();
@@ -1254,6 +1299,7 @@ class ConversationsProvider extends ChangeNotifier {
     _lastMessages.clear();
     _unreadCounts.clear();
     _boxUnread.clear();
+    _storedBoxPassClaimed = false;
     _prePinState.clear();
     _boxPins.clear();
     _boxPinShown.clear();
