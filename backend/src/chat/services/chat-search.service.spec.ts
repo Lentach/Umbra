@@ -246,7 +246,7 @@ describe('ChatSearchService', () => {
         },
       );
 
-      it('still answers a stranger in full', async () => {
+      it('still answers a stranger, but with no device, no list and no pre-key claimed: nothing can use them while the box is off', async () => {
         env = { BOX_ENABLED: 'false' };
         friends.getFriends.mockResolvedValue([{ id: 3 }]);
 
@@ -254,9 +254,17 @@ describe('ChatSearchService', () => {
 
         const [result] = payloadOf('searchUsersResult') as Array<{
           id: number;
+          username: string;
           devices: unknown[];
+          authorization: unknown;
         }>;
-        expect([result.id, result.devices.length]).toEqual([2, 1]);
+        expect([
+          result.id,
+          result.username,
+          result.devices,
+          result.authorization,
+        ]).toEqual([2, stranger.username, [], null]);
+        expect(keyExchange.claimBundle).not.toHaveBeenCalled();
       });
 
       it('BOX_ENABLED=true: answers the friend like anyone (decision 4)', async () => {

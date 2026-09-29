@@ -29,12 +29,13 @@ function socketUser(client: Socket): AuthenticatedSocketData['user'] {
 /**
  * First contact (metadata-privacy PR3.2, design §4.4).
  *
- * `searchUsers` answers any other account's handle — stranger or friend alike
- * while `BOX_ENABLED=true`, strangers only while the box is off —
- * with everything a first contact needs in ONE identity call: per addressable
- * device a bundle (its next one-time pre-key spent), the request queue that
- * device published, and the account's DAK-signed list so the searcher
- * verifies the device set instead of taking the server's word. Residual
+ * While `BOX_ENABLED=true`, `searchUsers` answers any other account's handle,
+ * stranger or friend alike, with everything a first contact needs in ONE
+ * identity call: per addressable device a bundle (its next one-time pre-key
+ * spent), the request queue that device published, and the account's
+ * DAK-signed list so the searcher verifies the device set instead of taking
+ * the server's word. With the box off it answers strangers only, with no
+ * device and no list, and claims nothing. Residual
  * (design §5): identity sees "A looked up B", once — the search is not logged.
  *
  * `setRequestQueue` is how a device publishes that queue.
@@ -71,13 +72,17 @@ export class ChatSearchService {
       // to. With the box off (release N step A, G5 owner call) a friend still
       // answers empty: the clients before N do not filter friends, so they
       // would offer a dead invitation and spend a one-time pre-key per device
-      // on every search. UNSET is off, as `app.module.ts` registers BoxModule.
+      // on every search. A stranger is answered, but with no device and no
+      // list: only a box first contact uses them, so a claim would spend a
+      // pre-key for nothing (G5 review). UNSET is off, as `app.module.ts`
+      // registers BoxModule.
       if (!user || user.id === currentUserId) {
         client.emit('searchUsersResult', []);
         return;
       }
+      const boxOn = this.configService.get<string>('BOX_ENABLED') === 'true';
       if (
-        this.configService.get<string>('BOX_ENABLED') !== 'true' &&
+        !boxOn &&
         (await this.friendsService.getFriends(currentUserId)).some(
           (friend) => friend.id === user.id,
         )
@@ -88,7 +93,9 @@ export class ChatSearchService {
       client.emit('searchUsersResult', [
         {
           ...UserMapper.toPayload(user),
-          ...(await this.reach(user.id, server)),
+          ...(boxOn
+            ? await this.reach(user.id, server)
+            : { devices: [], authorization: null }),
         },
       ]);
     } catch (error) {

@@ -106,8 +106,8 @@ export const BOX_OPEN_MEDIA_CEILING_BYTES = 1024 * 1024 * 1024;
 
 /**
  * A new normal queue is on probation until the UTC day this many days after
- * its creation; its owner's first ack on or after that day establishes it
- * (`box_queues."probationUntil"`, migration 0026).
+ * its creation; its owner's first ack or subscribe on or after that day
+ * establishes it (`box_queues."probationUntil"`, migration 0026).
  */
 export const BOX_PROBATION_DAYS = 7;
 

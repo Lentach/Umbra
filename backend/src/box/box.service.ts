@@ -61,8 +61,9 @@ export interface BoxCeiling {
 export const BOX_CEILING = Symbol('BOX_CEILING');
 
 /**
- * SQL over a `box_queues` row: a NORMAL queue whose owner acked it after its
- * probation (`ack`). Only its stores may use the top band of the ceiling.
+ * SQL over a `box_queues` row: a NORMAL queue whose owner acked or subscribed
+ * it after its probation (`ack`, `markSubscribed`). Only its stores may use
+ * the top band of the ceiling.
  */
 const ESTABLISHED = `(kind = 'normal' AND "probationUntil" IS NULL)`;
 
@@ -120,7 +121,7 @@ export class BoxService {
    * same key and gets the SAME queue back rather than an orphan. Only the key
    * holder can sign for it, so returning the existing address leaks nothing.
    * `null` when that key already owns a queue of the other kind. A normal
-   * queue starts on probation (`ack` ends it); a request queue never needs
+   * queue starts on probation (`ack` or `markSubscribed` ends it); a request queue never needs
    * it, so it keeps no creation trace.
    */
   async createQueue(
@@ -307,17 +308,24 @@ export class BoxService {
 
   /**
    * A subscribe claims the queue (clears `claimBy`) and stamps the UTC day.
-   * The WHERE skips rows already in that state: a reconnect loop must not
-   * rewrite every row of a device on every connect.
+   * One on or after a normal queue's probation day also ESTABLISHES it
+   * (clears `probationUntil`), like `ack`: its owner still reads it a week
+   * on. Without this, a queue on probation behind a full open band could
+   * never store the message it would have to ack, and stayed on probation
+   * for good. The WHERE skips rows already in that state: a reconnect loop
+   * must not rewrite every row of a device on every connect.
    */
   async markSubscribed(rids: Buffer[]): Promise<void> {
     await this.db.query(
       `UPDATE public.box_queues
-          SET "touchedDay" = $2::date, "claimBy" = NULL
+          SET "touchedDay" = $2::date, "claimBy" = NULL,
+              "probationUntil" = CASE WHEN "probationUntil" <= $2::date
+                THEN NULL ELSE "probationUntil" END
         WHERE rid IN (
           SELECT rid FROM public.box_queues
            WHERE rid = ANY($1::bytea[])
-             AND ("touchedDay" IS DISTINCT FROM $2::date OR "claimBy" IS NOT NULL)
+             AND ("touchedDay" IS DISTINCT FROM $2::date OR "claimBy" IS NOT NULL
+                  OR "probationUntil" <= $2::date)
            ORDER BY rid FOR UPDATE)`,
       [rids, utcDay(new Date())],
     );

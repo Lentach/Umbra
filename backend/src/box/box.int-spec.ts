@@ -1735,7 +1735,7 @@ describeWithDb('box over real sockets and Postgres', () => {
       expect(takeRefusalCounts()).toEqual(new Map([['send:ceiling', 4]]));
     });
 
-    it("establishes a normal queue only by its owner's ack on or after its probation day: neither an earlier ack nor time alone", async () => {
+    it("establishes a normal queue by its owner's ack on or after its probation day: neither an earlier ack nor time alone", async () => {
       const bob = await connect();
       const alice = await connect();
       const queue = await createQueue(bob);
@@ -1760,6 +1760,31 @@ describeWithDb('box over real sockets and Postgres', () => {
       );
       expect(await send()).toEqual(QUOTA);
       expect(await ackMessage(bob, queue, got[1].id)).toEqual({ ok: true });
+      expect(await send()).toEqual({ ok: true });
+    });
+
+    it("establishes a normal queue by its owner's subscribe on or after its probation day, so a full open band cannot keep it on probation for good", async () => {
+      const bob = await connect();
+      const alice = await connect();
+      const queue = await createQueue(bob);
+      await subscribe(bob, [queue]);
+      const send = () =>
+        call(alice, 'send', { v: 1, sid: queue.sid, blob: blob() });
+
+      // The open band is full from the start: nothing ever lands to be acked.
+      ceiling.openMsgs = 0;
+      expect(await send()).toEqual(QUOTA);
+      await subscribe(bob, [queue]);
+      expect(await send()).toEqual(QUOTA);
+      await db.query(
+        `UPDATE box_queues
+            SET "probationUntil" = (now() AT TIME ZONE 'utc')::date
+          WHERE rid = $1`,
+        [Buffer.from(queue.rid, 'base64url')],
+      );
+      expect(await send()).toEqual(QUOTA);
+      const later = await connect();
+      await subscribe(later, [queue]);
       expect(await send()).toEqual({ ok: true });
     });
 

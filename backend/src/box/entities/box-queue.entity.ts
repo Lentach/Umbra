@@ -16,7 +16,7 @@ import type { QueueKind } from '../box-wire';
  *   still carrying it past its instant was never claimed and is deleted (I3,
  *   24 h). A creation-time trace, gone once claimed.
  * - `probationUntil` (migration 0026, G5): a NORMAL queue's creation UTC day
- *   plus 7; its owner's first ack on or after that day clears it, and a
+ *   plus 7; its owner's first ack or subscribe on or after that day clears it, and a
  *   normal queue without it is ESTABLISHED — the only kind of queue whose
  *   stores may use the reserved top band of the global ceiling. A request
  *   queue never carries it. Like `claimBy`, a creation trace that goes once
