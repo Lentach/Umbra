@@ -8,6 +8,7 @@ import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/services/box/box_frame.dart';
+import 'package:fireplace/services/box/box_friends.dart';
 import 'package:fireplace/services/box/box_outbox.dart';
 import 'package:fireplace/services/box/box_siblings.dart';
 import 'package:fireplace/services/box/box_wire.dart';
@@ -173,6 +174,20 @@ class _Link implements BoxSiblingLink {
   @override
   Future<SiblingWrite> siblingAcked(int deviceId, String sid) async =>
       SiblingWrite.stored;
+}
+
+/// The friend side: whether this device is on the box, and the records.
+class _Friends implements BoxFriendLink {
+  final Map<int, ContactRecord> contacts = {};
+
+  @override
+  bool get onBox => true;
+
+  @override
+  ContactRecord? contactOf(int userId) => contacts[userId];
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 VerifiedDeviceList _enrolled(List<int> live) => VerifiedDeviceList.enrolled(
@@ -754,6 +769,55 @@ void main() {
           provider.sendRecordingVoiceIndicator(2, 10, isRecording: false);
           clock.elapse(const Duration(seconds: 20));
           expect(ons(), [false, false]);
+        });
+      },
+    );
+
+    test(
+      'a friend one of whose live devices handed us no queue is an old-path '
+      'chat: typing and the voice indicator go on the account socket, '
+      'nothing to the box, and the older-app notice shows (decision 48)',
+      () {
+        inFakeTime((clock) {
+          outbox.addresses[2] = {1: _address(1)};
+          provider
+            ..boxFriends = (_Friends()..contacts[2] = _bob)
+            ..emitTyping()
+            ..sendRecordingVoiceIndicator(2, 10, isRecording: true);
+          clock.elapse(const Duration(milliseconds: 100));
+          expect(events(), containsAllInOrder(['typing', 'recordingVoice']));
+          expect(outbox.delivered, isEmpty);
+          expect(provider.boxFriendPending(2), isTrue);
+
+          outbox.addresses[2] = {1: _address(1), 2: _address(2)};
+          expect(provider.boxFriendPending(2), isFalse);
+        });
+      },
+    );
+
+    test(
+      'a friend made over the box keeps typing off the account socket even '
+      'while one of its live devices has no address (decision 52)',
+      () {
+        inFakeTime((clock) {
+          outbox.addresses[2] = {1: _address(1)};
+          provider
+            ..boxFriends = (_Friends()
+              ..contacts[2] = ContactRecord(
+                userId: 2,
+                username: 'bob',
+                tag: '0002',
+                state: ContactState.friend,
+                legacy: const ContactLegacy(conversationId: 10),
+                boxOrigin: ContactBoxOrigin(at: DateTime.utc(2026)),
+              ))
+            ..emitTyping()
+            ..sendRecordingVoiceIndicator(2, 10, isRecording: true);
+          clock.elapse(const Duration(milliseconds: 100));
+          expect(
+            events(),
+            isNot(anyOf(contains('typing'), contains('recordingVoice'))),
+          );
         });
       },
     );

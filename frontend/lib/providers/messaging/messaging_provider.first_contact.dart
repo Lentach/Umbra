@@ -68,8 +68,10 @@ extension MessagingFirstContact on MessagingProvider {
         peer.userId == own) {
       return FirstContactSend.oldPath;
     }
-    if (!enc.isE2EReady) return FirstContactSend.failed;
     if (!friends.onBox || !peer.allOnBox) return FirstContactSend.oldPath;
+    // Only a request the box would carry needs E2E: the old path above
+    // needs none, so it stays open while E2E starts or after its init fails.
+    if (!enc.isE2EReady) return FirstContactSend.failed;
     final userId = peer.userId;
     final record = friends.contactOf(userId);
     if (_boxPending(record, ContactState.pendingIn)) {

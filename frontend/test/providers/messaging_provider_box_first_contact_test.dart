@@ -31,8 +31,10 @@ import '../support/box_fakes.dart';
 /// answers the own-list lookup and records every other emit — the
 /// server must never hear of the pair).
 class _Enc extends EncryptionProvider {
+  bool ready = true;
+
   @override
-  bool get isE2EReady => true;
+  bool get isE2EReady => ready;
 
   @override
   bool get hadIdentityReset => false;
@@ -698,6 +700,31 @@ void main() {
     expect(
       await alice.reader.sendBoxFriendRequest(partial),
       FirstContactSend.oldPath,
+    );
+    await settle();
+    expect(alice.recordOf(5), isNull);
+    expect(bob.recordOf(1), isNull);
+  });
+
+  test('with E2E not ready, a request to an account not all on the box takes '
+      'the old path, which needs no E2E; one the box would carry fails', () async {
+    final entry = bob.searchEntry;
+    final d1 = (entry['devices'] as List).first as Map<String, dynamic>;
+    final partial = {
+      ...entry,
+      'devices': [
+        d1,
+        {'deviceId': 2, 'bundle': d1['bundle']},
+      ],
+    };
+    alice.enc.ready = false;
+    expect(
+      await alice.reader.sendBoxFriendRequest(partial),
+      FirstContactSend.oldPath,
+    );
+    expect(
+      await alice.reader.sendBoxFriendRequest(bob.searchEntry),
+      FirstContactSend.failed,
     );
     await settle();
     expect(alice.recordOf(5), isNull);

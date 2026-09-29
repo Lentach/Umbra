@@ -924,18 +924,22 @@ extension MessagingSend on MessagingProvider {
     sendMessage(noteUrl, expiresIn: expiresInSeconds);
   }
 
-  /// Whether [peerUserId] is box-covered: an address in its contact record,
-  /// the `_boxRoute` rule, whatever the box's state.
-  bool _boxCovers(int peerUserId) =>
-      boxOutbox?.addressesFor(peerUserId).isNotEmpty ?? false;
+  /// Whether typing to [peerUserId] in [conversationId] stays off the
+  /// account socket: a local chat or a friend made over the box (owner
+  /// decision 52, the server does not know the pair), or a peer whose texts
+  /// the box carries ([_boxCoversPeer], the peer half of `_boxRoute`).
+  bool _typingOverBox(int peerUserId, int conversationId) =>
+      isLocalConversationId(conversationId) ||
+      _boxOnlyPeer(peerUserId) ||
+      _boxCoversPeer(peerUserId);
 
   /// Typing rides the ACCOUNT socket, so it names the pair to the server at
   /// the moment of typing. A box-covered peer never gets it there (decision
   /// 33): with the switch on it goes inside E2E over the box instead (slice
-  /// (g), E61e), and otherwise not at all. A local chat (owner decision 52)
-  /// is a box chat: the server does not know the pair at all.
+  /// (g), E61e), and otherwise not at all. An old-path chat — a friend with
+  /// a live device that handed us no queue — keeps the server's typing.
   void sendTypingIndicator(int recipientId, int conversationId) {
-    if (isLocalConversationId(conversationId) || _boxCovers(recipientId)) {
+    if (_typingOverBox(recipientId, conversationId)) {
       _sendBoxTyping(recipientId, conversationId);
       return;
     }
@@ -952,7 +956,7 @@ extension MessagingSend on MessagingProvider {
     int conversationId, {
     required bool isRecording,
   }) {
-    if (isLocalConversationId(conversationId) || _boxCovers(recipientId)) {
+    if (_typingOverBox(recipientId, conversationId)) {
       _sendBoxRecordingVoice(
         recipientId,
         conversationId,

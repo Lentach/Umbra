@@ -6,8 +6,8 @@ import 'package:fireplace/services/box/box_wire.dart';
 import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// Only the coverage half matters here: a peer is box-covered when its
-/// contact record holds an address (`addressesFor`, the `_boxRoute` rule).
+/// Only the coverage half matters here: with no device list held, a peer is
+/// box-covered when its contact record holds an address (`addressesFor`).
 class _Outbox implements BoxOutbox {
   final Map<int, Map<int, ContactOutbound>> addresses = {};
 

@@ -10,6 +10,14 @@ typedef _BoxRoute = ({
   SenderListInfo senderListInfo,
 });
 
+/// The peer half of `_boxRoute`'s rule: a verified list naming [live]
+/// devices is box-covered when it names one and every one of them has an
+/// address in [addresses].
+bool _everyLiveAddressed(
+  List<int> live,
+  Map<int, ContactOutbound> addresses,
+) => live.isNotEmpty && live.every(addresses.containsKey);
+
 /// A box attachment encrypted but not yet uploaded (item 3 / media wiring,
 /// E17b), with the plaintext `recording` a voice note was read from: the
 /// upload that succeeds deletes it, whichever attempt that is.
@@ -539,14 +547,20 @@ extension MessagingBox on MessagingProvider {
   /// read from the same record and list. Never blocks a send.
   bool boxFriendPending(int peerUserId) {
     final link = boxFriends;
-    final outbox = boxOutbox;
-    if (link == null || outbox == null || !link.onBox) return false;
+    if (link == null || boxOutbox == null || !link.onBox) return false;
     if (link.contactOf(peerUserId)?.state != ContactState.friend) return false;
-    final addresses = outbox.addressesFor(peerUserId);
+    return !_boxCoversPeer(peerUserId);
+  }
+
+  /// Whether [peerUserId] is box-covered now, synchronously: the peer half
+  /// of [_boxRoute]'s rule on the list held, whatever the box's state. With
+  /// no list held, any address counts — covered as far as we know, as
+  /// [_boxRoute] fails closed on a list it cannot verify.
+  bool _boxCoversPeer(int peerUserId) {
+    final addresses = boxOutbox?.addressesFor(peerUserId) ?? const {};
+    if (addresses.isEmpty) return false;
     final list = _encryptionProvider?.cachedDeviceList(peerUserId);
-    if (list == null) return addresses.isEmpty;
-    final live = list.liveDeviceIds;
-    return live.isEmpty || live.any((d) => !addresses.containsKey(d));
+    return list == null || _everyLiveAddressed(list.liveDeviceIds, addresses);
   }
 
   /// This device is on the box now (its request queue was published): the
@@ -1680,11 +1694,11 @@ extension MessagingBox on MessagingProvider {
       return null;
     }
     final live = peer.liveDeviceIds;
-    final targets = [for (final d in live) ?addresses[d]];
-    if (live.isEmpty || targets.length != live.length) {
+    if (!_everyLiveAddressed(live, addresses)) {
       declined('peer_uncovered');
       return null;
     }
+    final targets = [for (final d in live) addresses[d]!];
     return (
       outbox: outbox,
       targets: targets,
