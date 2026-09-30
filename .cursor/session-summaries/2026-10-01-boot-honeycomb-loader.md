@@ -17,13 +17,13 @@
 - Read only (load-bearing): `frontend/docs/passcode-lock.md`, `docs/design/flutter-ui-playbook.md`, `frontend/web/fp_boot.js`, `frontend/lib/widgets/hex_avatar.dart`
 
 ## Verification
-- CI: `PENDING on 0bc002d2` — 6 jobs in progress at handoff; see Notes.
+- CI: `success on 0bc002d2` — all 8 check-runs green (Flutter analyze and tests, Backend tests, E2E wire harness, Web Lock probe, isolated probes, Analyze, 2× Dependabot).
 - `flutter test` full suite via `verify-claude-frontend-test-counts.mjs`: 3055 tests / 14 skipped (count then bumped in `CLAUDE.md`). `dart-lint-ratchet.mjs`: PASS at the 3156 baseline. `flutter analyze` on the two new files: no issues. `verify-csp-inline-hashes.mjs`: OK (2 inline scripts).
 - Live drives (release web build, served locally, `main.dart.js` held 4–8.5 s, tokens seeded, `/auth/refresh` stalled): DOM loader → Flutter honeycomb at the same pixel position in light, teal, blue, cosmic, dark, including with the hint visible. A 42 fps recording (normal and 6× CPU throttle) shows no `PasscodeCurtain` frame between the two loaders: `flutter-view` exists ~550–770 ms before `#fp-boot` is removed.
 - NOT verified: a real phone, iOS Safari, Android native (the restore frame now shows `BootHoneycomb` there too), a slow device's `PasscodeCurtain` timing, a cold boot with the passcode ON.
 
 ## Notes for next session
-- Next action: check CI on `0bc002d2`; when green, deploy web only with `deploy-web.ps1` (not run — the owner said "ship it"; the deploy was not stated). Then amend the CI line here.
+- Next action: deploy web only with `deploy-web.ps1` (CI is green on `0bc002d2`; NOT run — "ship it" did not name a deploy, so the owner confirms first). Then record the DEPLOY STATE line in LATEST.
 - The DOM loader and `BootHoneycomb` are a twin pair; the accent map in `fp_boot.js` is still unpinned by any test (existing trap).
 - Owner-owed: none.
 - Traps: twin pair (traps.md, Deploy); bash `$var` expansion + 300 s async; `edit` line numbers (both Agent tooling).
