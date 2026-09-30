@@ -11,6 +11,9 @@
 - APK 0.2.53 (20053, SHA256 `7cc881fe…ca9c`, signer = recorded cert) at `/apk/umbra-0.2.53.apk`. VM `.env` `ANDROID_APK_*` updated (backup `.env.bak.pre-apk-0.2.53`); `/version` android block = 20053.
 - Out of repo: prod test accounts `apk053t3565` (id 128), `web053t6929` (129). The emulator has the release APK (the debug g5_dan data is gone). Staging is still UP with box ON (image 36451db8). `.env.staging` ALLOWED_ORIGINS +8204 (a stray CR was fixed). Tag `pre-0.2.53-prod` → 5c18cdf0 pushed (the rollback for 0.2.53 while the box is off).
 
+- Owner's phone: the in-app update did not land the first time (server file, checksum and signer all correct; cause on the phone, not diagnosed); a second browser download + install gave 0.2.53. Owner confirmed push on 0.2.53.
+- Step B (decision 75): `BOX_ENABLED: 'true'` at d86107c1, CI 6/6 (the 7th row on 2ed4a72b was the PR-only CodeQL rollup), backup `chatdb-20260930T014422Z.dump.gpg`, deploy + second restart, smoke 8/8. Driven on prod (E75a): both directions over the box, box push with the app killed. The second restart ran with no queues, so each real pair needs one reconnect per device.
+
 ## Key files
 - Edited: `frontend/lib/providers/conversations_provider.dart`, `frontend/lib/providers/messaging/messaging_provider.{box,actions,history}.dart`, `frontend/lib/services/encryption_service.dart`, `sealed_web_content_kv.dart`, `frontend/pubspec.yaml`, `CLAUDE.md` (3053).
 - Docs: `docs/plans/metadata-privacy-decisions.md` (68, 70–74, E65c, E69d, E73a), `docs/agents/traps.md`, `wire.md`, `e2e-invariants.md`, `client-reference.md`.
