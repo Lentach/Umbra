@@ -622,6 +622,64 @@ void main() {
     });
   });
 
+  // Decision 76: a restored session cannot mint (no password), so the app
+  // asks once. The typed string becomes the wrap, so a row minted from a wrong
+  // one would open for nobody.
+  group('mintFromPassword', () {
+    test('a restored session mints under the typed password and uploads',
+        () async {
+      await store.update(41, (_) => _friend(41));
+      final svc = await service();
+      svc.attach(store);
+      await svc.onSession(userId: 7, token: 'jwt');
+      expect(svc.awaitsPasswordToMint, isTrue);
+
+      expect(await svc.mintFromPassword('pw'), isTrue);
+
+      expect(svc.awaitsPasswordToMint, isFalse);
+      expect(backend.puts, hasLength(1));
+      // A later password login on another device opens the row it made.
+      final other = await service();
+      await other.onSession(userId: 7, token: 'jwt2', password: 'pw');
+      expect(other.state, ContactBackupState.ready);
+      expect(other.holdsOpenableBackup, isTrue);
+    });
+
+    test('a row another device minted meanwhile is opened, never replaced',
+        () async {
+      final svc = await service();
+      svc.attach(store);
+      await svc.onSession(userId: 7, token: 'jwt');
+      expect(svc.awaitsPasswordToMint, isTrue);
+      await seedRow(password: 'pw', contacts: [_friend(41)]);
+      final seededCkId = backend.row!['ckId'];
+
+      await svc.mintFromPassword('pw');
+
+      expect(backend.row!['ckId'], seededCkId);
+      expect(svc.state, ContactBackupState.ready);
+    });
+
+    test('it does nothing unless the server said there is no row', () async {
+      await seedRow(password: 'pw');
+      final svc = await service();
+      svc.attach(store);
+      await svc.onSession(userId: 7, token: 'jwt', password: 'pw');
+      expect(svc.awaitsPasswordToMint, isFalse);
+      final putsBefore = backend.puts.length;
+
+      expect(await svc.mintFromPassword('other'), isFalse);
+      expect(backend.puts, hasLength(putsBefore));
+
+      // A failed GET is ignorance, not absence: no prompt, no mint.
+      backend.nextGetStatus = 502;
+      final blind = await service();
+      await blind.onSession(userId: 7, token: 'jwt');
+      expect(blind.awaitsPasswordToMint, isFalse);
+      expect(await blind.mintFromPassword('pw'), isFalse);
+    });
+  });
+
   // G2 regression (2026-09-21). `_adopt` latches `_pendingRestore` on EVERY
   // session that opens the blob, and `uploadNow` refuses while it is set. The
   // only production caller of `applyRestore` lives in `ConnectionProvider`, so

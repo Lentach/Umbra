@@ -363,6 +363,23 @@ class ApiService {
     }
   }
 
+  /// Decision 76: checks [password] against the signed-in account without
+  /// creating a session. 401 = wrong password (an [ApiException] status).
+  Future<void> verifyPassword(String token, String password) async {
+    final response = await _httpClient.post(
+      Uri.parse('$baseUrl/users/verify-password'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+      body: jsonEncode({'password': password}),
+    ).timeout(_kDefaultTimeout);
+
+    if (response.statusCode != 201 && response.statusCode != 200) {
+      _fail(response, 'Password check failed', 'POST /users/verify-password');
+    }
+  }
+
   Future<void> deleteAccount(String token, String password) async {
     final response = await _httpClient.delete(
       Uri.parse('$baseUrl/users/account'),

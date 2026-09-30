@@ -24,8 +24,10 @@ import '../widgets/conversation_tile.dart';
 import '../widgets/conversation_list_skeleton.dart';
 import '../widgets/main_tab_screen_header.dart';
 import '../utils/backup_nudge.dart';
+import '../utils/contact_backup_prompt.dart';
 import '../utils/instant_opaque_route.dart';
 import '../widgets/backup_nudge_line.dart';
+import '../widgets/contact_backup_password_sheet.dart';
 import 'chat_detail_screen.dart';
 import 'passcode_lock_screen.dart';
 import 'invitations_screen.dart';
@@ -105,7 +107,31 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       conn.connect(userId, auth.token!, AppConfig.baseUrl);
       settings.loadBackupNudge(userId).ignore();
       if (auth.consumeFreshRegistration()) _armPhraseOffer(enc);
+      unawaited(_offerContactBackupPrompt(auth, settings, userId));
     });
+  }
+
+  /// Decision 76: once per app open, until the account has a contact backup.
+  Future<void> _offerContactBackupPrompt(
+    AuthProvider auth,
+    SettingsProvider settings,
+    int userId,
+  ) async {
+    await settings.loadContactBackupPrompt(userId);
+    await auth.contactBackupReady;
+    if (!mounted) return;
+    final due = shouldShowContactBackupPrompt(
+      awaitsPassword: auth.contactBackupAwaitsPassword,
+      snoozedAt: settings.contactBackupPromptSnoozedAt,
+      now: DateTime.now(),
+    );
+    if (!due) return;
+    await showContactBackupPasswordSheet(
+      context,
+      auth: auth,
+      settings: settings,
+      userId: userId,
+    );
   }
 
   @override

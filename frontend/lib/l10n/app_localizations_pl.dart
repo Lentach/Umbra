@@ -2119,6 +2119,17 @@ class AppLocalizationsPl extends AppLocalizations {
   String get backupNudgeTitle => 'Zabezpiecz konto — utwórz 12 słów';
 
   @override
+  String get contactBackupPromptTitle => 'Chroń swoje kontakty';
+
+  @override
+  String get contactBackupPromptBody =>
+      'Potwierdź hasło, a zapiszemy zaszyfrowaną kopię Twojej listy kontaktów. Odzyskasz ją na nowym urządzeniu — serwer jej nie odczyta.';
+
+  @override
+  String get contactBackupPromptFailed =>
+      'Nie udało się teraz zapisać kopii. Spróbuj ponownie później.';
+
+  @override
   String get recoveryKeyRequiredForLinking =>
       'Łączenie wymaga frazy odzyskiwania — utworzysz ją za chwilę.';
 

@@ -14,6 +14,7 @@ import '../services/pwa_app_badge_clear.dart';
 import '../services/push_service.dart';
 import '../services/session_refresh_exception.dart';
 import '../config/app_config.dart';
+import '../utils/contact_backup_prompt.dart';
 import '../utils/e2e_persistent_diag.dart';
 
 /// What the auth surface should TELL the user, without deciding the words.
@@ -943,6 +944,36 @@ class AuthProvider extends ChangeNotifier {
       clearAbout: savedAbout == null,
     );
     notifyListeners();
+  }
+
+  /// Decision 76: the server answered that this account has no contact
+  /// backup and this session cannot mint one without a password.
+  bool get contactBackupAwaitsPassword => _contactBackup.awaitsPasswordToMint;
+
+  /// Settles when the login-time backup resolve is done.
+  Future<void> get contactBackupReady => _contactBackup.ready;
+
+  /// Decision 76: verifies [password] against the account WITHOUT a session
+  /// (a wrap made from a mistyped string would lock the backup for good),
+  /// then mints the backup row under it and uploads this device's contacts.
+  Future<ContactBackupPromptResult> confirmPasswordForContactBackup(
+    String password,
+  ) async {
+    await ensureSessionReady();
+    final token = _token;
+    if (token == null) return ContactBackupPromptResult.unavailable;
+    try {
+      await _api.verifyPassword(token, password);
+    } on ApiException catch (e) {
+      return e.statusCode == 401
+          ? ContactBackupPromptResult.wrongPassword
+          : ContactBackupPromptResult.unavailable;
+    } on Object {
+      return ContactBackupPromptResult.unavailable;
+    }
+    return await _contactBackup.mintFromPassword(password)
+        ? ContactBackupPromptResult.saved
+        : ContactBackupPromptResult.unavailable;
   }
 
   /// Changes the password and ends the session. Failures propagate UNWRAPPED —

@@ -1,5 +1,12 @@
 import 'reflect-metadata';
-import { BadRequestException } from '@nestjs/common';
+import {
+  BadRequestException,
+  HttpStatus,
+  ValidationPipe,
+} from '@nestjs/common';
+import { GUARDS_METADATA, HTTP_CODE_METADATA } from '@nestjs/common/constants';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { VerifyPasswordDto } from './dto/user.dto';
 import { UsersController } from './users.controller';
 
 describe('UsersController', () => {
@@ -88,6 +95,44 @@ describe('UsersController', () => {
     );
     expect(ttl(controller.removeFcmToken)).toBe(
       ttl(controller.removeWebPushSubscription),
+    );
+  });
+
+  describe('POST /users/verify-password', () => {
+    // Metadata hangs off the prototype function; read it via the descriptor.
+    const handler = (): object => {
+      const value: unknown = Object.getOwnPropertyDescriptor(
+        UsersController.prototype,
+        'verifyPassword',
+      )?.value;
+      if (typeof value !== 'function') throw new Error('no verifyPassword');
+      return value;
+    };
+
+    it('is JWT-guarded, answers 200 and keeps the reset-password budget', () => {
+      // A password oracle for any JWT holder: unguarded or loosely throttled it
+      // is a free online guessing endpoint; a 201 breaks the client's check.
+      const guards: unknown = Reflect.getMetadata(GUARDS_METADATA, handler());
+      expect(guards).toContain(JwtAuthGuard);
+      expect(Reflect.getMetadata(HTTP_CODE_METADATA, handler())).toBe(
+        HttpStatus.OK,
+      );
+      expect(Reflect.getMetadata('THROTTLER:LIMITdefault', handler())).toBe(10);
+      expect(Reflect.getMetadata('THROTTLER:TTLdefault', handler())).toBe(
+        3600000,
+      );
+    });
+
+    it.each([{ password: '' }, {}, { password: 'x'.repeat(129) }])(
+      'rejects the body %j before the service runs',
+      async (body) => {
+        await expect(
+          new ValidationPipe({ whitelist: true }).transform(body, {
+            type: 'body',
+            metatype: VerifyPasswordDto,
+          }),
+        ).rejects.toThrow(BadRequestException);
+      },
     );
   });
 

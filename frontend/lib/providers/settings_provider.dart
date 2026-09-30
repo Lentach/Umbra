@@ -317,6 +317,31 @@ class SettingsProvider extends ChangeNotifier {
     await prefs.setInt(_backupNudgeKey(userId), at.millisecondsSinceEpoch);
   }
 
+  /// Decision 76: when this account last put off the "confirm your password
+  /// to protect your contacts" sheet on this install, or null. Per account,
+  /// like the backup nudge. Loaded by [loadContactBackupPrompt].
+  DateTime? get contactBackupPromptSnoozedAt => _contactBackupPromptSnoozedAt;
+  DateTime? _contactBackupPromptSnoozedAt;
+
+  static String _contactBackupPromptKey(int userId) =>
+      'contact_backup_prompt_snoozed_at_$userId';
+
+  Future<void> loadContactBackupPrompt(int userId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final stored = prefs.getInt(_contactBackupPromptKey(userId));
+    _contactBackupPromptSnoozedAt = stored == null
+        ? null
+        : DateTime.fromMillisecondsSinceEpoch(stored);
+  }
+
+  /// Hides the sheet for `kContactBackupPromptSnooze` from [now].
+  Future<void> snoozeContactBackupPrompt(int userId, {DateTime? now}) async {
+    final at = now ?? DateTime.now();
+    _contactBackupPromptSnoozedAt = at;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_contactBackupPromptKey(userId), at.millisecondsSinceEpoch);
+  }
+
   /// Loads the per-user background and migrates both legacy storage shapes:
   /// per-conversation wallpaper keys and the global Cosmic starfield switch.
   ///

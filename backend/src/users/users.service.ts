@@ -305,6 +305,25 @@ export class UsersService {
   }
 
   /**
+   * Answers whether `password` is the account's current password, and nothing
+   * else: no token, no session, no `passwordChangedAt`, no write of any kind.
+   * The client checks a typed password here before deriving the contact-backup
+   * wrap from it (metadata-privacy decision 76) — a wrap minted from a typo
+   * would be one the real password can never open.
+   */
+  async verifyPassword(userId: number, password: string): Promise<void> {
+    const user = await this.findById(userId);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const isValidPassword = await bcrypt.compare(password, user.password);
+    if (!isValidPassword) {
+      throw new UnauthorizedException('Invalid password');
+    }
+  }
+
+  /**
    * Stores a new password for an already-AUTHORIZED change (the caller proved
    * the old password, or the recovery phrase — spec §12 amendment (lxxxii)).
    *

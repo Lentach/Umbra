@@ -14,6 +14,8 @@ import {
   Logger,
   Param,
   ParseIntPipe,
+  HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Throttle } from '@nestjs/throttler';
@@ -24,6 +26,7 @@ import { UsersService } from './users.service';
 import {
   ResetPasswordDto,
   DeleteAccountDto,
+  VerifyPasswordDto,
   RegisterFcmTokenDto,
   RemoveFcmTokenDto,
   UpdateProfileAboutDto,
@@ -232,6 +235,25 @@ export class UsersController {
     );
 
     return { message: 'Password updated successfully' };
+  }
+
+  // Password check WITHOUT a session (metadata-privacy decision 76): the client
+  // proves a typed password before minting the contact-backup wrap from it.
+  // `/auth/login` would issue a session (and, on a linked device, the
+  // primary's token). A guessing oracle for a JWT holder: keep the reset budget.
+  @Post('verify-password')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  @Throttle({ default: { limit: 10, ttl: 3600000 } })
+  async verifyPassword(
+    @Body() dto: VerifyPasswordDto,
+    @Request() req: { user: { id: number } },
+  ): Promise<{ ok: true }> {
+    this.logger.debug('Password verification requested');
+
+    await this.usersService.verifyPassword(req.user.id, dto.password);
+
+    return { ok: true };
   }
 
   @Delete('account')

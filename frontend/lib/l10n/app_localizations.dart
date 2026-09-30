@@ -3674,6 +3674,24 @@ abstract class AppLocalizations {
   /// **'Zabezpiecz konto — utwórz 12 słów'**
   String get backupNudgeTitle;
 
+  /// No description provided for @contactBackupPromptTitle.
+  ///
+  /// In pl, this message translates to:
+  /// **'Chroń swoje kontakty'**
+  String get contactBackupPromptTitle;
+
+  /// No description provided for @contactBackupPromptBody.
+  ///
+  /// In pl, this message translates to:
+  /// **'Potwierdź hasło, a zapiszemy zaszyfrowaną kopię Twojej listy kontaktów. Odzyskasz ją na nowym urządzeniu — serwer jej nie odczyta.'**
+  String get contactBackupPromptBody;
+
+  /// No description provided for @contactBackupPromptFailed.
+  ///
+  /// In pl, this message translates to:
+  /// **'Nie udało się teraz zapisać kopii. Spróbuj ponownie później.'**
+  String get contactBackupPromptFailed;
+
   /// No description provided for @recoveryKeyRequiredForLinking.
   ///
   /// In pl, this message translates to:

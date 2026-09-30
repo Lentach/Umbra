@@ -157,6 +157,13 @@ class ContactBackupService {
   bool get rowStatusUnknown =>
       _state == ContactBackupState.unreachable && !_rowAbsent;
 
+  /// The server ANSWERED that this account has no backup row, and this
+  /// session holds no password to mint one under (a restored session). A
+  /// typed-password door never comes for a 365-day sliding session, so the app
+  /// asks once (decision 76): see [mintFromPassword].
+  bool get awaitsPasswordToMint =>
+      _state == ContactBackupState.unreachable && _rowAbsent;
+
   /// Settles when the in-flight login resolve finishes. Already-complete when
   /// none is running, so a caller may always await it.
   Future<void> get ready => _resolving?.future ?? Future<void>.value();
@@ -221,6 +228,22 @@ class ContactBackupService {
     } finally {
       if (!gate.isCompleted) gate.complete();
     }
+  }
+
+  /// Mints the row from [password] for a session that restored without one,
+  /// then uploads the store's view. The caller MUST have verified [password]
+  /// against the account: a wrap made from a mistyped string opens for
+  /// nobody, and a row nobody opens locks the backup for good. Runs the
+  /// login resolve again, so a row another device minted meanwhile is opened
+  /// instead of replaced. True once the server holds this device's view under
+  /// a key this session opens.
+  Future<bool> mintFromPassword(String password) async {
+    final userId = _userId;
+    final token = _token;
+    if (userId == null || token == null || !awaitsPasswordToMint) return false;
+    await onSession(userId: userId, token: token, password: password);
+    if (_state != ContactBackupState.ready) return false;
+    return uploadNow();
   }
 
   /// Writes every restored contact the store does NOT already hold, and the
