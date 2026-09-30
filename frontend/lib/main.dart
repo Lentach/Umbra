@@ -33,6 +33,7 @@ import 'utils/storage_persist.dart';
 import 'utils/e2e_persistent_diag.dart';
 import 'utils/web_document_background.dart';
 import 'utils/device_link_route_guard.dart';
+import 'widgets/boot_honeycomb.dart';
 import 'widgets/portrait_lock_shell.dart';
 import 'widgets/passcode_gate.dart';
 
@@ -269,7 +270,7 @@ class _AuthGateState extends State<AuthGate> {
     _previousLoggedInState = auth.isLoggedIn;
 
     if (auth.isRestoringSession) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return const Scaffold(body: Center(child: BootHoneycomb()));
     }
 
     if (auth.isLoggedIn) {
