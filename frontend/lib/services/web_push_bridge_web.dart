@@ -5,6 +5,7 @@ import 'dart:js_interop_unsafe';
 import 'dart:typed_data';
 
 import 'package:web/web.dart' as web;
+import '../utils/e2e_diag_log.dart';
 import '../utils/web_ios_webkit_web.dart';
 
 @JS()
@@ -67,7 +68,9 @@ class WebPushBridge {
     final permission = (await web.Notification.requestPermission().toDart).toDart;
     if (permission != 'granted') return null;
 
-    final registration = await _registerServiceWorker();
+    // No update check here: iOS allows `subscribe` only shortly after the
+    // tap, and the permission prompt already spent part of that window.
+    final registration = await _registerServiceWorker(refresh: false);
     var subscription =
         await registration.pushManager.getSubscription().toDart;
     final created = subscription == null;
@@ -177,13 +180,82 @@ class WebPushBridge {
     return endpoint;
   }
 
-  Future<web.ServiceWorkerRegistration> _registerServiceWorker() {
-    return web.window.navigator.serviceWorker
+  /// The push worker's registration. `register()` with an unchanged script
+  /// URL returns the EXISTING registration and never re-checks the script,
+  /// and iOS never re-checks it any other way (its scope controls no page,
+  /// so no navigation does, and WebKit does not soft-update after a push):
+  /// an iPhone kept the worker it first installed for months, one that
+  /// predates the box's `notifier_challenge`, so box push never registered.
+  /// The first call per page load therefore asks for an update and logs the
+  /// worker version that answers (`PUSH_SW`; null = a worker older than the
+  /// version reply). [refresh] false skips the wait, never the update.
+  Future<web.ServiceWorkerRegistration> _registerServiceWorker({
+    bool refresh = true,
+  }) async {
+    final registration = await web.window.navigator.serviceWorker
         .register(
           _serviceWorkerPath.toJS,
           web.RegistrationOptions(scope: _serviceWorkerScope),
         )
         .toDart;
+    final refreshed = _refreshed ??= _refreshWorker(registration);
+    if (refresh) await refreshed;
+    return registration;
+  }
+
+  static Future<void>? _refreshed;
+
+  static Future<void> _refreshWorker(
+    web.ServiceWorkerRegistration registration,
+  ) async {
+    try {
+      await registration.update().toDart.timeout(_workerWait);
+      // The new copy skips waiting (web-push-sw.js `install`); let it land.
+      for (var i = 0; i < 20; i++) {
+        if (registration.installing == null &&
+            registration.waiting == null) {
+          break;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+      }
+    } on Object catch (e) {
+      E2eDiagLog.add('PUSH_SW_UPDATE_FAILED', {
+        'error': e.runtimeType.toString(),
+      });
+    }
+    E2eDiagLog.add('PUSH_SW', {'version': await _activeVersion(registration)});
+  }
+
+  static const Duration _workerWait = Duration(seconds: 5);
+
+  /// The active worker's `SW_VERSION`, or null when it does not answer.
+  static Future<int?> _activeVersion(
+    web.ServiceWorkerRegistration registration,
+  ) async {
+    final worker = registration.active;
+    if (worker == null) return null;
+    final channel = web.MessageChannel();
+    final answer = Completer<int?>();
+    channel.port1.onmessage = ((web.MessageEvent event) {
+      final version = (event.data.dartify() as Map?)?['version'];
+      if (!answer.isCompleted) {
+        answer.complete(version is num ? version.toInt() : null);
+      }
+    }).toJS;
+    try {
+      worker.postMessage(
+        {'type': 'sw-version'}.jsify(),
+        [channel.port2].toJS,
+      );
+      return await answer.future.timeout(
+        const Duration(seconds: 2),
+        onTimeout: () => null,
+      );
+    } on Object {
+      return null;
+    } finally {
+      channel.port1.close();
+    }
   }
 
   Future<web.PushSubscription> _subscribe(

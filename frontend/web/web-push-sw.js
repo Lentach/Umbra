@@ -12,6 +12,20 @@
  * 'message' handler), because iOS WebKit requires these to run in SW context
  * to survive WebView suspension and to avoid racing the push handler.
  */
+// Bumped whenever this file's behaviour changes. The page asks for it
+// ('sw-version' below) and logs it, so a device still running an older copy
+// is visible in the diag log. iOS never re-checks this worker on its own: its
+// scope controls no page, so no navigation triggers an update check, and
+// WebKit does not soft-update after a push the way Chrome does — the page
+// calls `registration.update()` instead (web_push_bridge_web.dart).
+const SW_VERSION = 2;
+
+// A new copy takes over as soon as it is installed. This worker controls no
+// page (scope `/web-push-scope/`), so there is no page state to hand over.
+self.addEventListener('install', function () {
+  self.skipWaiting();
+});
+
 const APP_BADGE_MAX = 19;
 
 const DEEPLINK_DB = 'fireplace-push';
@@ -489,6 +503,10 @@ self.addEventListener('message', function (event) {
       } else {
         focusedConvByClient[event.source.id] = acId;
       }
+    }
+  } else if (data.type === 'sw-version') {
+    if (event.ports && event.ports[0]) {
+      event.ports[0].postMessage({ version: SW_VERSION });
     }
   }
 

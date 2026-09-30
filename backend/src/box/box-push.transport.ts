@@ -91,10 +91,13 @@ export class FirebaseWebPushTransport
       return 'sent';
     } catch (error) {
       // firebase-admin rejects with a FirebaseMessagingError carrying `code`.
-      const failure = error as { code?: unknown };
-      return failure.code === 'messaging/registration-token-not-registered'
-        ? 'gone'
-        : 'failed';
+      const failure = error as { code?: string };
+      if (failure.code === 'messaging/registration-token-not-registered') {
+        return 'gone';
+      }
+      // The code only: a token names a device.
+      this.logger.warn(`[box] fcm push refused: ${failure.code ?? 'no code'}`);
+      return 'failed';
     }
   }
 
@@ -125,10 +128,15 @@ export class FirebaseWebPushTransport
     } catch (error) {
       // web-push rejects with a WebPushError carrying the relay's statusCode;
       // only 404/410 mean the subscription is gone (BE-500).
-      const failure = error as { statusCode?: unknown };
-      return failure.statusCode === 404 || failure.statusCode === 410
-        ? 'gone'
-        : 'failed';
+      const failure = error as { statusCode?: number };
+      if (failure.statusCode === 404 || failure.statusCode === 410) {
+        return 'gone';
+      }
+      // The status only: an endpoint names a device.
+      this.logger.warn(
+        `[box] web push refused: ${failure.statusCode ?? 'no status'}`,
+      );
+      return 'failed';
     } finally {
       clearTimeout(timer);
     }
