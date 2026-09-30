@@ -804,7 +804,7 @@
   "recoveryKeyReplacesExisting": "You already have a phrase. New words replace it — the old ones stop working.",
   "backupNudgeTitle": "Secure your account — create 12 words",
   "contactBackupPromptTitle": "Protect your contacts",
-  "contactBackupPromptBody": "Confirm your password and we will save an encrypted copy of your contact list. You can restore it on a new device — the server cannot read it.",
+  "contactBackupPromptBody": "Confirm your password and we will save an encrypted copy of your contact list. You can restore it on a new device.",
   "contactBackupPromptFailed": "Could not save the copy right now. Try again later.",
   "recoveryKeyRequiredForLinking": "Linking requires a recovery phrase — you'll create it next.",
   "linkGateRestoreAction": "I have my recovery phrase",

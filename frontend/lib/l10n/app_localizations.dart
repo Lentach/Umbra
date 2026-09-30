@@ -3683,7 +3683,7 @@ abstract class AppLocalizations {
   /// No description provided for @contactBackupPromptBody.
   ///
   /// In pl, this message translates to:
-  /// **'Potwierdź hasło, a zapiszemy zaszyfrowaną kopię Twojej listy kontaktów. Odzyskasz ją na nowym urządzeniu — serwer jej nie odczyta.'**
+  /// **'Potwierdź hasło, a zapiszemy zaszyfrowaną kopię Twojej listy kontaktów. Odzyskasz ją na nowym urządzeniu.'**
   String get contactBackupPromptBody;
 
   /// No description provided for @contactBackupPromptFailed.

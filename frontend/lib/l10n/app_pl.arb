@@ -796,7 +796,7 @@
   "recoveryKeyReplacesExisting": "Masz już frazę. Nowe słowa ją zastąpią — stare przestaną działać.",
   "backupNudgeTitle": "Zabezpiecz konto — utwórz 12 słów",
   "contactBackupPromptTitle": "Chroń swoje kontakty",
-  "contactBackupPromptBody": "Potwierdź hasło, a zapiszemy zaszyfrowaną kopię Twojej listy kontaktów. Odzyskasz ją na nowym urządzeniu — serwer jej nie odczyta.",
+  "contactBackupPromptBody": "Potwierdź hasło, a zapiszemy zaszyfrowaną kopię Twojej listy kontaktów. Odzyskasz ją na nowym urządzeniu.",
   "contactBackupPromptFailed": "Nie udało się teraz zapisać kopii. Spróbuj ponownie później.",
   "recoveryKeyRequiredForLinking": "Łączenie wymaga frazy odzyskiwania — utworzysz ją za chwilę.",
   "linkGateRestoreAction": "Mam frazę odzyskiwania",

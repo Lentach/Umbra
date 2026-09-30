@@ -16,21 +16,39 @@ import 'web_push_bridge_stub.dart'
 /// "Hidden" is read from the platform at the moment of the message, never from
 /// `ConversationsProvider.isClientVisible`: that flag starts `true` on every
 /// connect, so an app that (re)connects while hidden would read as visible.
+///
+/// One alert per [alertWindow]: a backlog drained after a reconnect stores
+/// many messages in a burst, and the card carries no content, so a second one
+/// inside the window would only buzz again.
 class BoxHiddenNotifier {
-  BoxHiddenNotifier({bool Function()? isHidden, Future<void> Function()? post})
-      : _isHidden = isHidden ?? _platformHidden,
-        _post = post ?? _platformPost;
+  BoxHiddenNotifier({
+    bool Function()? isHidden,
+    Future<void> Function()? post,
+    DateTime Function()? now,
+  }) : _isHidden = isHidden ?? _platformHidden,
+       _post = post ?? _platformPost,
+       _now = now ?? DateTime.now;
+
+  static const Duration alertWindow = Duration(seconds: 10);
 
   final bool Function() _isHidden;
   final Future<void> Function() _post;
+  final DateTime Function() _now;
+  DateTime? _lastAlertAt;
 
   static final WebPushBridge _web = createWebPushBridge();
 
-  /// Posts the card when the app is hidden. Never throws: a card that cannot
-  /// be posted must not fail the message it announces.
+  /// Posts the card when the app is hidden and no alert went out in the last
+  /// [alertWindow]. Never throws: a card that cannot be posted must not fail
+  /// the message it announces.
   Future<void> notifyIfHidden() async {
     try {
-      if (_isHidden()) await _post();
+      if (!_isHidden()) return;
+      final now = _now();
+      final last = _lastAlertAt;
+      if (last != null && now.difference(last) < alertWindow) return;
+      _lastAlertAt = now;
+      await _post();
     } on Object {
       // Best effort: the message itself is already stored and shown.
     }

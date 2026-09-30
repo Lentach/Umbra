@@ -6,6 +6,7 @@ import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/services/box/box_frame.dart';
 import 'package:fireplace/services/box/box_siblings.dart';
+import 'package:fireplace/services/box_hidden_notifier.dart';
 import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/services/contacts/contact_store.dart';
 import 'package:fireplace/services/device_list/device_list_cache.dart';
@@ -566,6 +567,17 @@ void main() {
         );
       },
     );
+
+    test('a sent copy from a sibling never posts the hidden-app card', () async {
+      var posts = 0;
+      provider.boxHiddenNotifier = BoxHiddenNotifier(
+        isHidden: () => true,
+        post: () async => posts++,
+      );
+      inbound(copy());
+      expect(await consume(sibling()), isTrue);
+      expect(posts, 0);
+    });
 
     test('a second copy of a wire id this device holds is dropped', () async {
       inbound(copy());

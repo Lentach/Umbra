@@ -1418,8 +1418,16 @@ extension MessagingBox on MessagingProvider {
     if (!alreadyShown) {
       _showBoxMessage(msg);
       // H1 (decision 81): shown for the first time, only here — a re-store
-      // (`alreadyShown`) is the same message. A sibling's sent copy is ours.
-      if (msg.senderId != _currentUserId) {
+      // (`alreadyShown`) is the same message. A sibling's sent copy is ours,
+      // and a muted chat stays silent exactly as it was on the old path
+      // (the server skipped muted chats' pushes).
+      final muted =
+          _conversationsProvider?.conversations
+              .where((c) => c.id == msg.conversationId)
+              .firstOrNull
+              ?.isNotificationMuted ??
+          false;
+      if (msg.senderId != _currentUserId && !muted) {
         boxHiddenNotifier.notifyIfHidden().ignore();
       }
     }

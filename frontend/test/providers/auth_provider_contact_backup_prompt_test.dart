@@ -54,7 +54,7 @@ void main() {
 
     test('a wrong password mints nothing: the wrap would open for nobody',
         () async {
-      final auth = await restoredSession(verifyStatus: 401);
+      final auth = await restoredSession(verifyStatus: 403);
       expect(auth.contactBackupAwaitsPassword, isTrue);
 
       final result = await auth.confirmPasswordForContactBackup('wrong');
@@ -62,6 +62,14 @@ void main() {
       expect(result, ContactBackupPromptResult.wrongPassword);
       expect(auth.contactBackupAwaitsPassword, isTrue, reason: 'still no row');
       expect(calls, isNot(contains('PUT /backup/contacts')));
+    });
+
+    test('an expired token (401) is not a wrong password', () async {
+      final auth = await restoredSession(verifyStatus: 401);
+
+      final result = await auth.confirmPasswordForContactBackup('pw');
+
+      expect(result, ContactBackupPromptResult.unavailable);
     });
 
     test('a failed check is unavailable, not a wrong password', () async {

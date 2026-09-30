@@ -489,6 +489,8 @@ class ConnectionProvider extends ChangeNotifier {
             _friendsProvider?.hydrateFromStore();
             _conversationsProvider?.hydrateFromStore();
           }
+          if (_connectGeneration != generation) return;
+          await backup.flushPending();
         }),
       );
     }

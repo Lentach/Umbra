@@ -213,18 +213,25 @@ void main() {
 
   group('hidden app (H1, decision 81)', () {
     var posts = 0;
+    var clockNow = DateTime.utc(2026, 9, 30, 12);
 
-    Future<void> deliverWhile({required bool hidden}) async {
+    void hiddenNotifier({bool hidden = true}) {
       posts = 0;
       provider.boxHiddenNotifier = BoxHiddenNotifier(
         isHidden: () => hidden,
         post: () async => posts++,
+        now: () => clockNow,
       );
+    }
+
+    Future<void> deliverWhile({required bool hidden}) async {
+      hiddenNotifier(hidden: hidden);
       envelope('while you were away');
       expect(await deliver(entry(), _peer(2, conversationId: 10)), isTrue);
     }
 
-    test('a peer message journaled while hidden posts exactly one card', () async {
+    test('a peer message journaled while hidden posts exactly one card',
+        () async {
       await deliverWhile(hidden: true);
       expect(posts, 1);
     });
@@ -232,6 +239,55 @@ void main() {
     test('a peer message while the app is visible posts none', () async {
       await deliverWhile(hidden: false);
       expect(posts, 0);
+    });
+
+    test('a message offered again after an unproven store alerts once',
+        () async {
+      hiddenNotifier();
+      // Outside the alert window the second offer would post again if the
+      // hook sat on the whole store instead of the first show.
+      envelope('unproven first');
+      final e = entry();
+      encryption.dropSaves = true;
+      expect(await deliver(e, _peer(2, conversationId: 10)), isFalse);
+      expect(posts, 1);
+
+      encryption.dropSaves = false;
+      clockNow = clockNow.add(const Duration(minutes: 5));
+      expect(await deliver(e, _peer(2, conversationId: 10)), isTrue);
+      expect(posts, 1, reason: 'the same message, shown once');
+    });
+
+    test('a backlog drained while hidden alerts once', () async {
+      hiddenNotifier();
+      for (var i = 0; i < 5; i++) {
+        envelope('queued $i');
+        expect(await deliver(entry(), _peer(2, conversationId: 10)), isTrue);
+      }
+      expect(posts, 1);
+    });
+
+    test('a muted chat stays silent, as its old-path push did', () async {
+      conversations.onConversationMuteUpdated({
+        'conversationId': 10,
+        'muted': true,
+        'mutedUntil': null,
+      });
+      await deliverWhile(hidden: true);
+      expect(posts, 0);
+    });
+
+    test('a mute that has run out no longer silences the chat', () async {
+      conversations.onConversationMuteUpdated({
+        'conversationId': 10,
+        'muted': true,
+        'mutedUntil': DateTime.now()
+            .subtract(const Duration(minutes: 1))
+            .toUtc()
+            .toIso8601String(),
+      });
+      await deliverWhile(hidden: true);
+      expect(posts, 1);
     });
   });
 

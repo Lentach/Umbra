@@ -3,32 +3,31 @@
 **Date:** 2026-09-30 · **Version:** 0.2.54 → 0.2.55 (pubspec only) · **Tiers deployed:** none
 
 ## What was done
-- H1 (decision 81): `services/box_hidden_notifier.dart` `BoxHiddenNotifier.notifyIfHidden`, called from `MessagingBox._storeBoxMessage`'s `!alreadyShown` branch for a peer message. "Hidden" is read at the message: web `document.visibilityState`, Android `lifecycleState != resumed`; never `ConversationsProvider.isClientVisible` (starts `true` on every connect).
-- H1 card: local, content-free ("Umbra" / "You have a new message"), tag `box-message`. Web: `WebPushBridge.showBoxMessageCard` through the push SW registration (no SW change, `SW_VERSION` stays 2). Android: `showBoxMessageLocalNotification` (id `0x40000003`, channel `fireplace_messages`).
-- Decision 76: `ContactBackupService.awaitsPasswordToMint` (GET answered 404, no password) and `mintFromPassword` (login resolve again, then `uploadNow`); `AuthProvider.confirmPasswordForContactBackup` verifies the password first, so a wrong one mints nothing.
-- New backend route `POST /users/verify-password` (`users.controller.ts`, `VerifyPasswordDto`, `UsersService.verifyPassword`): 200 `{ok:true}` / 401, creates no session, 10/h per IP. `/auth/login` could not serve: it issues a session, and on a linked device the primary's. Contract in `docs/contracts/wire.md`.
-- UI: `widgets/contact_backup_password_sheet.dart` (glass sheet, obscured field, "Później"/"Potwierdź"), opened by `ConversationsScreen._offerContactBackupPrompt` once per app open; snooze 3 days (`SettingsProvider.snoozeContactBackupPrompt`, pref `contact_backup_prompt_snoozed_at_<uid>`) for any exit but a saved backup; pl + en ARB keys `contactBackupPrompt*`.
-- Docs: decisions log E81a, E76a; `e2e-invariants.md` bullet; traps (H1 closed, mint trap updated); root `CLAUDE.md` counts (Flutter 3063/14, Jest 1229/69).
-- Out-of-repo: none. Drives used throwaway accounts (deleted) and a temporary Node proxy (stopped).
+- H1 (decision 81): `services/box_hidden_notifier.dart` `BoxHiddenNotifier.notifyIfHidden`, called from `MessagingBox._storeBoxMessage`'s `!alreadyShown` branch for a peer message in an unmuted chat. "Hidden" is read at the message (web `document.visibilityState`, Android `lifecycleState != resumed`), never `ConversationsProvider.isClientVisible`.
+- H1 card: local, content-free ("Umbra" / "You have a new message"), tag `box-message`, at most one alert per 10 s (`alertWindow`: a drained backlog buzzes once). Web: `WebPushBridge.showBoxMessageCard` via the push SW registration, closing the old card first (iOS); no SW change. Android: `showBoxMessageLocalNotification` (id `0x40000003`).
+- Decision 76: `ContactBackupService.awaitsPasswordToMint` + `mintFromPassword`; `AuthProvider.confirmPasswordForContactBackup` verifies the password first, so a wrong one mints nothing. Copy no longer claims "the server cannot read it".
+- New route `POST /users/verify-password` (`users.controller.ts`, `VerifyPasswordDto`, `UsersService.verifyPassword`): 200 `{ok:true}`; wrong password is **403 `wrong_password`** (401 is the guard's expired token, which the client refreshes on); no session, 10/h per IP. Contract in `docs/contracts/wire.md`.
+- `ContactBackupService.flushPending`, called by `ConnectionProvider` after the restore: a password login that minted now PUTs at once. Before, an account whose graph never changed never got a row and met the sheet on its next cold start.
+- UI: `widgets/contact_backup_password_sheet.dart`, opened by `ConversationsScreen._offerContactBackupPrompt` once per app open; any exit but a saved backup snoozes 3 days; errors clear on typing, wrap to 3 lines; pl + en keys `contactBackupPrompt*`.
+- Docs: decisions E81a, E76a; `e2e-invariants.md`; traps; root `CLAUDE.md` counts (Flutter 3070/14, Jest 1229/69).
+- Out-of-repo: the Android drive uninstalled the prod-signed 0.2.53 APK from the emulator. Prod still holds that test install's device row (`apk053t3565`, device 1, live, WITH a request queue), so it does not skew the "live devices without a request queue" count; it is a stale live device. Throwaway accounts and proxies were deleted.
 
 ## Key files
-- Edited: `messaging_provider.box.dart`, `messaging_provider.dart`, `android_fcm_local_notifications.dart`, `web_push_bridge_{web,stub}.dart`, `contact_backup_service.dart`, `auth_provider.dart`, `settings_provider.dart`, `api_service.dart`, `conversations_screen.dart`, `users.controller.ts`, `users.service.ts`, `user.dto.ts`, `pubspec.yaml`.
+- Edited: `messaging_provider.box.dart`, `messaging_provider.dart`, `connection_provider.dart`, `android_fcm_local_notifications.dart`, `web_push_bridge_{web,stub}.dart`, `contact_backup_service.dart`, `auth_provider.dart`, `settings_provider.dart`, `api_service.dart`, `conversations_screen.dart`, `users.{controller,service}.ts`, `user.dto.ts`, `pubspec.yaml`.
 - New: `box_hidden_notifier.dart`, `contact_backup_prompt.dart`, `contact_backup_password_sheet.dart`, `users.service.verify-password.spec.ts`, three Flutter test files.
-- Read only (load-bearing): `docs/plans/metadata-privacy-decisions.md` decisions 76, 77, 81; `refresh-tokens.service.ts`.
+- Read only (load-bearing): decisions 76, 77, 81; `refresh-tokens.service.ts`.
 
 ## Verification
-- CI: `NOT RUN on 562ba915 (code) and c5917b15 (H1): bare branch push, no PR`. The last green master code commit is `80957c7f`.
-- Flutter full suite `+3063 ~14` (log fed to `verify-claude-frontend-test-counts.mjs --log`: OK); Dart ratchet PASS at the 3156 baseline; Jest 69 suites / 1229 tests; `tsc --noEmit` clean.
-- New tests: `messaging_provider_box_test.dart` (H1 hidden posts one, visible posts none), `contact_backup_service_test.dart` `mintFromPassword` (3), `auth_provider_contact_backup_prompt_test.dart` (wrong password mints nothing, failed check is not "wrong", snooze boundary), the sheet widget test (stale error clears). No mutants run.
-- H1 drives on the dev stack: web Chrome (visible 0 cards; hidden 1, replaced by the next; reconnect while hidden 1; tap focuses) and the Pixel_7 debug APK (foreground 0; backgrounded with the process alive 1 and replaced; after a backend restart while hidden 1; tap returns to the chat list). Card text has no sender or chat.
-- Prompt drives: web (all five themes, en + pl, tap-outside and swipe-down snooze, 4-day expiry returns it) and the Pixel_7 (IME open, Confirm reachable). Empty, wrong (no row, no new `refresh_tokens`), right (one `contact_backups` row with a `password` wrap, no sheet after restart). Two findings fixed after the drives: a stale error stayed while typing, and the long error was cut off (`errorMaxLines: 3`). The body text now uses `onSurface` (the muted token was low-contrast on the grey glass of the light and teal themes). That last change and the two fixes were NOT re-driven on a device; the widget test covers the stale error.
-- NOT verified: iOS, prod, a real phone, the Android release build.
+- CI: `NOT RUN on the code commits: bare branch push, no PR`. Last green master code commit `80957c7f`.
+- Flutter full suite `+3070 ~14`, count gate OK via `--log`; Dart ratchet PASS at 3156; Jest 69 suites / 1229; `tsc --noEmit` clean.
+- Mutants: dropping the sender and mute guard at the H1 hook failed the sibling-copy and muted-chat tests (both killed); the re-store and burst tests pin the `alreadyShown` placement and the window.
+- Drives, dev stack, final code: web Chrome and Pixel_7 debug APK. Sheet: empty / wrong (403) / expired (401, generic text) / 429 (two-line text) / right; error clears on typing; body contrast 7.6:1 light and 7.8:1 teal (was 3.3 and 2.1); a login-form login PUTs a row about 2-8 s later and a cold start shows no sheet. H1: visible 0; hidden 1; 4 messages in 7 s = 1 alert; a message after the window alerts again; muted chat 0, unmuted returns; web closes the old card before showing.
+- NOT verified: iOS, prod, a real phone, the release APK, the five-theme pass after the contrast change (only light and teal re-measured).
 
 ## Notes for next session
-- Next action: get CI on the branch (open a PR or merge to master from `fireplace-0a`, never push `HEAD:master` from this worktree), then, with the owner's OK, deploy backend AND web (the route must be live before the web build asks for it) and the APK 0.2.55. Decision 77's 6-week clock starts at that deploy. Before the backend restart, back up the DB.
-- Re-drive the final sheet on a device after the deploy build (error clearing, `errorMaxLines`, body contrast).
-- Owner-owed: Phase 5 drop go-ahead; princepolo's logout cause (ask when, which browser, whether history survived).
-- Web limit: a web page RELOADED while hidden paints no frame, so its box session never starts; only the server wake-up push card shows until it is shown.
-- `POST /users/verify-password` uses the global per-IP throttle: unauthenticated calls spend the 10/h too, and on dev the emulator and host share one IP.
-- PR4.1/PR4.2 follow (no backfill, keep a security-only push table, wire the storage-loss screen). Week-one watch continues (`2026-09-30-metadata-week-one-watch-day0.md`).
-- Traps: H1 trap closed and the mint trap updated in `traps.md` (already committed).
+- Next action: get CI on the branch (open a PR, or merge to master from `fireplace-0a`; never `HEAD:master` from this worktree). With the owner's OK, back up the DB, deploy backend AND web together (the route must be live first), then build the APK with `build-android.ps1` WITHOUT `-SkipClean` (the debug builds left a poisoned `GeneratedPluginRegistrant`). Decision 77's 6-week clock starts at the deploy.
+- Owner-owed: deploy go-ahead; Phase 5 drop; princepolo's logout cause.
+- Web limit: a web page RELOADED while hidden paints no frame, so only the server wake-up card shows until it is shown.
+- `verify-password` uses the global per-IP throttle: unauthenticated calls spend the 10/h, and on dev the emulator and host share an IP.
+- PR4.1/PR4.2 follow; PR4.2 must wire the storage-loss screen. Week-one watch continues.
+- Traps: in `traps.md` (H1 closed, mint trap, 403 vs 401, login mint flush).

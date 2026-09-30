@@ -2091,7 +2091,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get contactBackupPromptBody =>
-      'Confirm your password and we will save an encrypted copy of your contact list. You can restore it on a new device — the server cannot read it.';
+      'Confirm your password and we will save an encrypted copy of your contact list. You can restore it on a new device.';
 
   @override
   String get contactBackupPromptFailed =>

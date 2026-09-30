@@ -1,5 +1,5 @@
 import * as bcrypt from 'bcrypt';
-import { NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 
 import { UsersService } from './users.service';
 
@@ -63,11 +63,11 @@ describe('UsersService.verifyPassword', () => {
     expect(bcrypt.hash).not.toHaveBeenCalled();
   });
 
-  it('refuses a wrong password with 401 Invalid password', async () => {
+  it('refuses a wrong password with 403 wrong_password, never 401', async () => {
     (bcrypt.compare as jest.Mock).mockResolvedValue(false);
 
     await expect(service.verifyPassword(7, 'wrong')).rejects.toThrow(
-      new UnauthorizedException('Invalid password'),
+      new ForbiddenException({ error: 'wrong_password' }),
     );
     expect(mockRepo.save).not.toHaveBeenCalled();
   });

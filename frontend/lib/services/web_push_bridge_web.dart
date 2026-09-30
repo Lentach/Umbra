@@ -108,10 +108,18 @@ class WebPushBridge {
   /// SW's registration (scope `/web-push-scope/`), so a worker that predates
   /// this build shows it too; the worker's `notificationclick` focuses the
   /// app when the card carries no conversation. One tag: each message
-  /// replaces the last and re-alerts.
+  /// replaces the last. iOS WebKit does not replace a same-tag card reliably
+  /// (the worker closes `conversation-<id>` before showing for that reason),
+  /// so the old one is closed first.
   Future<void> showBoxMessageCard() async {
     if (!isSupported || notificationPermission != 'granted') return;
     final registration = await _registerServiceWorker(refresh: false);
+    final shown = await registration
+        .getNotifications(web.GetNotificationOptions(tag: 'box-message'))
+        .toDart;
+    for (final card in shown.toDart) {
+      card.close();
+    }
     await registration
         .showNotification(
           'Umbra',

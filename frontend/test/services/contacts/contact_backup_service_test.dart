@@ -678,6 +678,23 @@ void main() {
       expect(blind.awaitsPasswordToMint, isFalse);
       expect(await blind.mintFromPassword('pw'), isFalse);
     });
+
+    test('a password login that minted publishes once the store is open, '
+        'with no store change', () async {
+      final svc = await service();
+      svc.attach(store);
+      await svc.onSession(userId: 7, token: 'jwt', password: 'pw');
+      expect(svc.state, ContactBackupState.ready);
+      expect(backend.puts, isEmpty, reason: 'the mint alone writes nothing');
+
+      await svc.flushPending();
+
+      expect(backend.puts, hasLength(1));
+      expect(backend.row, isNotNull);
+
+      await svc.flushPending();
+      expect(backend.puts, hasLength(1), reason: 'nothing more is owed');
+    });
   });
 
   // G2 regression (2026-09-21). `_adopt` latches `_pendingRestore` on EVERY

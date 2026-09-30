@@ -246,6 +246,16 @@ class ContactBackupService {
     return uploadNow();
   }
 
+  /// Publishes a row a password login MINTED but could not write: at the
+  /// login door the store is not open yet, so `_mint` only marks the view
+  /// dirty and the first store change carried it. An account whose graph never
+  /// changes therefore stayed off the server however often it logged in
+  /// (found on the 2026-09-30 Android drive). `ConnectionProvider` calls this
+  /// once the restore is settled. No-op unless a write is owed.
+  Future<void> flushPending() async {
+    if (_dirty && _state == ContactBackupState.ready) await uploadNow();
+  }
+
   /// Writes every restored contact the store does NOT already hold, and the
   /// account's own profile when the store has none. Upgrade-only by
   /// construction: a local record always wins, because it is newer than any

@@ -2123,7 +2123,7 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get contactBackupPromptBody =>
-      'Potwierdź hasło, a zapiszemy zaszyfrowaną kopię Twojej listy kontaktów. Odzyskasz ją na nowym urządzeniu — serwer jej nie odczyta.';
+      'Potwierdź hasło, a zapiszemy zaszyfrowaną kopię Twojej listy kontaktów. Odzyskasz ją na nowym urządzeniu.';
 
   @override
   String get contactBackupPromptFailed =>

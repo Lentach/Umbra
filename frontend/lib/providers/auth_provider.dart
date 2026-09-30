@@ -965,7 +965,8 @@ class AuthProvider extends ChangeNotifier {
     try {
       await _api.verifyPassword(token, password);
     } on ApiException catch (e) {
-      return e.statusCode == 401
+      // 403 = wrong password; 401 is an expired token, not the user's mistake.
+      return e.statusCode == 403
           ? ContactBackupPromptResult.wrongPassword
           : ContactBackupPromptResult.unavailable;
     } on Object {
