@@ -4,6 +4,7 @@ import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
+import 'package:fireplace/services/box_hidden_notifier.dart';
 import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/services/contacts/contact_store.dart';
 import 'package:fireplace/services/device_list/device_list_cache.dart';
@@ -209,6 +210,30 @@ void main() {
       expect(emitted, isNot(contains('messageDelivered')));
     },
   );
+
+  group('hidden app (H1, decision 81)', () {
+    var posts = 0;
+
+    Future<void> deliverWhile({required bool hidden}) async {
+      posts = 0;
+      provider.boxHiddenNotifier = BoxHiddenNotifier(
+        isHidden: () => hidden,
+        post: () async => posts++,
+      );
+      envelope('while you were away');
+      expect(await deliver(entry(), _peer(2, conversationId: 10)), isTrue);
+    }
+
+    test('a peer message journaled while hidden posts exactly one card', () async {
+      await deliverWhile(hidden: true);
+      expect(posts, 1);
+    });
+
+    test('a peer message while the app is visible posts none', () async {
+      await deliverWhile(hidden: false);
+      expect(posts, 0);
+    });
+  });
 
   test(
     'a box message for a chat NOT on screen plays no sound: badge only '

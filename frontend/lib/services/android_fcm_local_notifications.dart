@@ -242,6 +242,30 @@ Future<void> showFireplaceMessageNotificationWithPlugin({
   );
 }
 
+/// H1 (decision 81): a box message journaled while the app is hidden. The
+/// card is content-free and names no chat; one fixed id, so each message
+/// replaces the last. Main isolate only: the app is alive, or it would have
+/// been woken by the box's own push.
+Future<void> showBoxMessageLocalNotification() async {
+  if (!_isAndroid || !_mainIsolatePluginReady) return;
+  await _mainIsolateNotificationsPlugin.show(
+    id: 0x40000003,
+    title: 'Umbra',
+    body: 'You have a new message',
+    notificationDetails: const NotificationDetails(
+      android: AndroidNotificationDetails(
+        _androidChannelId,
+        'Umbra',
+        channelDescription: _androidChannelDescription,
+        importance: Importance.high,
+        priority: Priority.high,
+        icon: '@drawable/ic_stat_umbra',
+        tag: 'box-message',
+      ),
+    ),
+  );
+}
+
 /// Cold start: user tapped a local notification while the app was terminated.
 ///
 /// ONCE per process — see [_coldStartTapDelivered]. A re-delivery on a later

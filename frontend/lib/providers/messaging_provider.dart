@@ -24,6 +24,7 @@ import '../services/box/box_media_url.dart';
 import '../services/box/box_outbox.dart';
 import '../services/box/box_siblings.dart';
 import '../services/box/box_wire.dart';
+import '../services/box_hidden_notifier.dart';
 import '../services/contacts/contact_record.dart';
 import '../services/contacts/contact_store.dart';
 import '../services/device_list/device_list_cache.dart';
@@ -557,6 +558,10 @@ class MessagingProvider extends ChangeNotifier {
   final IncomingMessageSoundService _incomingSound =
       IncomingMessageSoundService();
 
+  /// H1 (decision 81); replaced in tests.
+  @visibleForTesting
+  BoxHiddenNotifier boxHiddenNotifier = BoxHiddenNotifier();
+
   // ---------- Typing / Recording Indicators ----------
 
   final Map<int, bool> _typingStatus = {};
@@ -873,6 +878,7 @@ class MessagingProvider extends ChangeNotifier {
   void setIncomingMessageSoundEnabledForTest(bool enabled) {
     _incomingSound.setEnabledForTest(enabled);
   }
+
 
   @visibleForTesting
   int get incomingSoundRequestsForTest => _incomingSound.requests;

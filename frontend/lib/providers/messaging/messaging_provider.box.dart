@@ -1415,7 +1415,14 @@ extension MessagingBox on MessagingProvider {
     // ([_startBoxCountdowns]), which updates the held row, so the next
     // store keeps the start instead of resetting it to the unread cap.
     if (!stored) _boxUnsaved[msg.id] = msg;
-    if (!alreadyShown) _showBoxMessage(msg);
+    if (!alreadyShown) {
+      _showBoxMessage(msg);
+      // H1 (decision 81): shown for the first time, only here — a re-store
+      // (`alreadyShown`) is the same message. A sibling's sent copy is ours.
+      if (msg.senderId != _currentUserId) {
+        boxHiddenNotifier.notifyIfHidden().ignore();
+      }
+    }
     if (stored) {
       _boxUnsaved.remove(msg.id);
       _owedBoxDelivered(msg);
