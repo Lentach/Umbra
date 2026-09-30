@@ -41,7 +41,7 @@ Status: ACTIVE (in force), DONE (carried out, still binding), SUPERSEDED, OPEN (
 | B1 | 09-22 | Own-key banner on a wiped linking-OFF install: soft neutral notice | OWNER | DONE |
 | B2 | 09-22 | One neutral divider text for both link and re-mint causes | OWNER | DONE |
 | B3 | 09-22 | Keep keys across storage loss via a password-wrapped identity backup (lever d) | OWNER | SUPERSEDED by S4 |
-| B4 | 09-22 | Built-in Tor (Arti) stays Phase 5 | OWNER | ACTIVE |
+| B4 | 09-22 | Built-in Tor (Arti) stays Phase 5 | OWNER | SUPERSEDED by 82 |
 | S2 | 09-23 | Box media budget 1 GiB per normal queue per UTC day | OWNER | ACTIVE |
 | S3 | 09-23 | G4: box OFF on prod (`BOX_ENABLED: 'false'` pinned in the prod compose) until the PR3.1 prerequisites land | OWNER | SUPERSEDED by 75 |
 | S4 | 09-23 | Lever (d) and storage-loss Parts B + C dropped | OWNER | ACTIVE |
@@ -137,6 +137,22 @@ The owner said at G5 "I don't know these answers, decide for me": 64–69 are th
 | 74 | 09-29 | The G5 review fixes ship as 0.2.53: backend + web now with the box OFF, then the 0.2.53 APK; step B after that | OWNER (delegated) | ACTIVE |
 | 75 | 09-30 | Step B: the box is ON on prod (`BOX_ENABLED: 'true'` pinned in the prod compose), after 0.2.53 web, backend and APK went live and the owner's phone confirmed push on 0.2.53. Deployed with decision 72's second restart; one-way (E69d); week-one watch per E65b; FCM check per 69 | OWNER (delegated) | ACTIVE |
 
+## Plan review after release N (2026-09-30)
+
+Asked after step B, against prod: only 2 of 117 accounts had a `contact_backups` row, because the row is minted only when a password is typed (`contact_backup_service.dart:523-527`) and refresh sessions slide for 365 days (`refresh-tokens.service.ts:9`), so O1's recommended condition would never fill by itself.
+
+| Id | Date | Decision | Class | Status |
+|---|---|---|---|---|
+| 76 | 09-30 | The app asks each account ONCE for its password to mint the contact backup ("confirm your password to protect your contacts"): a dismissible sheet at app open, "Later" hides it for a few days, it returns until the row exists and then never again | OWNER | ACTIVE |
+| 77 | 09-30 | (O1.) The old tables may drop when BOTH hold: every account active in the last 90 days (refresh session slid within 90 d) has a `contact_backups` row, AND none of those accounts has a live device without a request queue. Backstop: the drop happens 6 weeks after the 0.2.55 deploy even if not met. No min-version gate. Not measured by `messages` rows per day: expiry deletes rows every minute, so that count reads "converged" early | OWNER | ACTIVE |
+| 78 | 09-30 | Security alerts (`identity_reset_pending`, `recovery_key_enrolled`, `chat-key-exchange.service.ts:763,865`) keep an account push channel used ONLY for them; PR4.1 keeps a security-only push table instead of deleting `fcm_token`/`web_push_subscription` outright, and drops the old `new_message` push | OWNER | ACTIVE |
+| 79 | 09-30 | Old-path attachments go with the old tables: no `box_media` backfill (removes PR4.1's first step); devices that downloaded them keep them; users are told before the drop | OWNER | ACTIVE |
+| 80 | 09-30 | The "friend has an older version" notice and the old-path send that stay after a friend's device joins the box, until the next reconnect (E69a), are NOT fixed before N+1; the old path's removal ends them | OWNER | ACTIVE |
+| 81 | 09-30 | (H1.) A box message journaled while the page is hidden posts a LOCAL content-free notification on that device; no visibility signal goes to the box. The notification problem ships first | OWNER | ACTIVE |
+| 82 | 09-30 | Phase 5 Arti (built-in Tor) is DROPPED (supersedes B4). Orbot in VPN mode is the only supported Tor path (Android app; iOS Safari/PWA). Tor Browser is UNSUPPORTED: always-private mode wipes device keys and history on close. Shared exit IPs can hit the per-IP throttles (`rate_limited`) | OWNER | ACTIVE |
+| 83 | 09-30 | 0.2.55 ships 81 and 76 before any PR4.x; decision 77's 6-week clock starts at its deploy | OWNER | ACTIVE |
+| 84 | 09-30 | Rest of Phase 5 (owner delegated): KEEP account-delete UX for box queues and avatar signed URLs. NOT PLANNED: Android foreground-service receive (battery, a Play FGS declaration; the box wake-up push carries no content) and a server-held encrypted history backup (history export exists). The nginx 32 MiB item is removed: done by decision 9 | OWNER (delegated) | ACTIVE |
+
 ## Engineering calls made in the work so far (owner may overrule at the gate)
 
 | Id | Call | Reason |
@@ -212,7 +228,7 @@ The owner said at G5 "I don't know these answers, decide for me": 64–69 are th
 
 | Id | Question | Needed before | Where |
 |---|---|---|---|
-| O1 | When release N+1 may drop the old tables (convergence rule). Current recommendation: no min-version gate; `contact_backups` row existence as the condition, plus a pre-G6 query that must be empty or knowingly accepted | G6 | `.planning/metadata-privacy/convergence-decision.md` |
+| O1 | (ANSWERED 09-30 → decisions 76, 77.) When release N+1 may drop the old tables (convergence rule). The 09-21 recommendation (`contact_backups` row existence) did not hold on prod: 2 of 117 accounts had a row | G6 | `.planning/metadata-privacy/convergence-decision.md` |
 | O6 | (ANSWERED 09-25 → decision 37.) Every device of an account shares ONE identity key, and a box frame's `senderDeviceId` is not authenticated, so a REVOKED device can still seal a PreKey message posing as a LIVE sibling into our public request queue: its handoff would replace that sibling's session and address, and every later sent copy (E5) would go to it. Options: (a) refuse a sibling PreKey message that would replace an existing session unless this device asked for a re-key; (b) per-device keys bound into the verified device list (changes approved design); (c) accept until slice (e)/(f). Recommendation: (a) now, (b) later | Box ON in prod | Re-review of part B (PartBReReview, P2-3), `.planning/metadata-privacy/task_plan.md` part B |
 | O7 | (ANSWERED 09-25 → decision 38.) A box send to a device with no Signal session yet (a sibling, or a peer device since slice (c)) fetches its pre-key bundle on the account socket at send time, which tells the server this account is sending now. Options: (a) accept (the swap's PreKey handoffs make it rare for siblings); (b) decline to the old path when a session is missing; (c) pre-build sessions at connect. Recommendation: (c) | Box ON in prod | Re-review of part B (PartBReReview, P3-3) |
 | O8 | (ANSWERED 09-26 → decision 40.) Box media is deleted after 14 d (D8): (a) every device downloads on arrival and keeps an encrypted local copy; (b) keep once shown; (c) keep nothing, expired after 14 d. Recommendation: (a) | Item 3 (decision-22 slice) | `2026-09-25-metadata-pr31-remainder.md` § Item 3 |
