@@ -10,7 +10,7 @@ Production backend deploy runs on the VM only (`cd ~/fireplace && ./deploy-backe
 
 ## Box module (§2)
 
-The **box** (`src/box/`: `/box` namespace + `/box/media`, metadata-privacy PR1.1) is dark until a client speaks it. It is registered only when `BOX_ENABLED=true` (`ConditionalModule`); dev compose sets it, prod pins it off until the owner turns it on after G5. Its global ceiling (60 000 blobs + 2 GiB media, decision 30) is the one-row `box_totals` (migration 0024); lock order `box_queues` → `box_msgs` → `box_totals` (header of `box.service.ts`).
+The **box** (`src/box/`: `/box` namespace + `/box/media`, metadata-privacy PR1.1) is dark until a client speaks it. It is registered only when `BOX_ENABLED=true` (`ConditionalModule`); dev compose sets it, and prod pins it ON since step B (decision 75, 2026-09-30; one-way, fix forward only: E69d). Its global ceiling (60 000 blobs + 2 GiB media, decision 30) is the one-row `box_totals` (migration 0024); lock order `box_queues` → `box_msgs` → `box_totals` (header of `box.service.ts`).
 
 The box has NO account on its path: it imports nothing from `auth/`, `users/`, `chat/`, even transitively (invariant I1, enforced by `scripts/verify-box-imports.mjs` in CI). Contract: `docs/contracts/wire.md` "Box". Suite: `npm run test:int` (real sockets + Postgres, `BOX_IT_DATABASE_URL`).
 
@@ -41,7 +41,7 @@ The box has NO account on its path: it imports nothing from `auth/`, `users/`, `
 | `FIREBASE_SERVICE_ACCOUNT` | Optional FCM; absent means FCM disabled. |
 | `WEB_PUSH_VAPID_PUBLIC_KEY`, `WEB_PUSH_VAPID_PRIVATE_KEY`, `WEB_PUSH_VAPID_SUBJECT` | Web Push. Public key must match frontend build. |
 | `APP_VERSION`, `GIT_COMMIT`, `BUILD_TIME` | `/version`; set by deploy script. |
-| `BOX_ENABLED` | `true` registers the box module (dev compose only for now). |
+| `BOX_ENABLED` | `true` registers the box module (dev compose; prod pins `'true'` since step B, 2026-09-30). |
 
 ## Presence on disconnect (§6)
 

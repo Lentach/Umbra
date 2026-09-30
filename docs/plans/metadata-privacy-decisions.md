@@ -43,7 +43,7 @@ Status: ACTIVE (in force), DONE (carried out, still binding), SUPERSEDED, OPEN (
 | B3 | 09-22 | Keep keys across storage loss via a password-wrapped identity backup (lever d) | OWNER | SUPERSEDED by S4 |
 | B4 | 09-22 | Built-in Tor (Arti) stays Phase 5 | OWNER | ACTIVE |
 | S2 | 09-23 | Box media budget 1 GiB per normal queue per UTC day | OWNER | ACTIVE |
-| S3 | 09-23 | G4: box OFF on prod (`BOX_ENABLED: 'false'` pinned in the prod compose) until the PR3.1 prerequisites land | OWNER | ACTIVE |
+| S3 | 09-23 | G4: box OFF on prod (`BOX_ENABLED: 'false'` pinned in the prod compose) until the PR3.1 prerequisites land | OWNER | SUPERSEDED by 75 |
 | S4 | 09-23 | Lever (d) and storage-loss Parts B + C dropped | OWNER | ACTIVE |
 | S5 | 09-23 | The branch stays a branch until release N; master then fast-forwards | OWNER | ACTIVE |
 | S6 | 09-23 | G4 passed: Phase 1 on master, backend live with the box off | OWNER | DONE |
@@ -135,6 +135,7 @@ The owner said at G5 "I don't know these answers, decide for me": 64–69 are th
 | 72 | 09-29 | Step B = the flip, then a plain backend restart ~2 min later, so every pair moves onto the box without waiting for its own reconnect (E69a). No `friendsList` push on `setRequestQueue` (it would tell friends when a device came online) | OWNER (delegated) | ACTIVE |
 | 73 | 09-29 | The box unread badge survives an app restart before the phone app ships (replaces E69c's residual) | OWNER (delegated) | ACTIVE |
 | 74 | 09-29 | The G5 review fixes ship as 0.2.53: backend + web now with the box OFF, then the 0.2.53 APK; step B after that | OWNER (delegated) | ACTIVE |
+| 75 | 09-30 | Step B: the box is ON on prod (`BOX_ENABLED: 'true'` pinned in the prod compose), after 0.2.53 web, backend and APK went live and the owner's phone confirmed push on 0.2.53. Deployed with decision 72's second restart; one-way (E69d); week-one watch per E65b; FCM check per 69 | OWNER (delegated) | ACTIVE |
 
 ## Engineering calls made in the work so far (owner may overrule at the gate)
 
