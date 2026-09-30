@@ -29,6 +29,7 @@
 ## Notes for next session
 - Next action: week-one watch (E65b): `box_totals`, BoxReaper `[box] refusals send:ceiling=` lines, and the new `[box] web push refused` / `fcm push refused` lines. Nothing else is owed on step B.
 - OPEN (H1): a hidden but still-connected page (an Android PWA in the background) gets a box blob in-band and acks it, and nothing posts a card. The box wakes only an unsubscribed queue or a detached socket. Do NOT close the box socket on hide without the decisions log (a new visibility signal to the box, likely OWNER-class). The privacy-neutral option is a local content-free card when a box message is journaled while the page is hidden.
-- Other iOS users pick up the new SW on their next app open (no action needed). Bump `SW_VERSION` with every `web-push-sw.js` change.
+- The 16 other iPhone users get the new SW only when they next open the app: track `web.push.apple.com` rows in `box_notifiers` over the next days. E73b (a lost badge after the first upgrade session) is still unexplained. The week-one watch runs only if someone opens a session; nothing runs in between.
+- Metadata plan position (`.planning/metadata-privacy/task_plan.md:37-38`): release N is done. Next: convergence (O1, owner decision at G6: when the old tables may go), then Phase 4 = PR4.1 backend (drop `messages`/`conversations`/`friends`…, ~12.7k lines) + PR4.2 frontend = release N+1. Arti stays Phase 5. Bump `SW_VERSION` with every `web-push-sw.js` change.
 - Real pairs move onto the box only after BOTH devices have been online once AND reconnected once: the second restart ran with 0 queues.
 - Traps: in traps.md (iOS push SW).
