@@ -421,6 +421,7 @@ Standing warnings that used to live in the `LATEST.md` banner and in rotated-out
 
 ## Owner-owed decisions (open)
 - **Metadata-privacy decisions live in ONE tracked log on the branch — read it before asking or answering ANY metadata-privacy question:** `git show origin/feat/metadata-privacy:docs/plans/metadata-privacy-decisions.md`. The 16 MiB cap was asked twice with opposite answers because decision 9 lived only in a gitignored plan in another worktree. Owner answers only OWNER-class questions, batched per phase (S8, 2026-09-25).
+- **Phase 5 (built-in Tor/Arti, B4) — owner leaning to drop, agent recommended drop, NOT answered or logged 2026-09-30.** Never recommend Tor Browser for Umbra: always-private mode wipes device keys + history on close; Orbot VPN mode only, and its shared exit IPs can trip per-IP `rate_limited` (`2026-09-30-metadata-step-b-054.md`).
 - README screenshot recapture, the domain decision (`2026-08-26-session.md`). **The GitHub repo rename is DONE — `Lentach/Fireplace` → `Lentach/Umbra`, 2026-09-14, owner's call** (`2026-09-14-session-apk-weight.md`).
 - Thief-with-password matrix answers (`2026-09-03-session-lxxii-reset-door.md`).
 - iPhone PWA camera recording for the WebKit probe fix; iOS eyeballing of reset-ceremony statuses, revoke/mismatch notices, fingerprint sheet, phrase reveal (`2026-09-08-session-c8-register-ceremony.md`).
