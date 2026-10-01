@@ -9,7 +9,7 @@
 - Backend `backend/src/box/`: Web Push wake-up carries `n`/`c` (`BoxService.notifierFor` counts non-quiet unexpired blobs; FCM stays bare); Web Push TTL split 600 s challenge / 86 400 s wake-up; E83: a send delivered to a live socket also schedules the wake-up, so a frozen iOS page is woken ~3 s after the send; a Web Push wake-up is never sent for a count of 0, nor twice for the same blobs (`announced` map).
 - Owner note "native Android is instant, iPhone PWA is not" drove E83. Prod, read-only: bob208's iPhone (device 1) has 12 notifiers on 12 queues, so registration was not its fault.
 - Docs: decisions 76/77/79 BUILT, rows E76a–E83; `wire.md` box bullet; `frontend/CLAUDE.md`; `traps.md` (Android / push ×4, Agent tooling ×2); root `CLAUDE.md` §3 count 3071.
-- Out-of-repo: throwaway compose project `fpdrive` (backend :3200, DB :5434), python servers :8091/:8092 and a Pixel_7 emulator drive; all stopped, volumes removed. Nothing deployed.
+- Out-of-repo: throwaway compose project `fpdrive` (backend :3200, DB :5434), python servers :8091/:8092 and a Pixel_7 emulator drive; all stopped. Nothing deployed. (Corrected 10-02: the `fpdrive` containers and volumes were NOT removed; `2026-10-01-deploy-0258.md` removed them.)
 
 ## Key files
 - Edited: `web-push-sw.js`, `conversations_provider.dart`, `messaging_provider.box.dart`, `box_session.dart`, `box_notifiers.dart`, `connection_provider.dart`, `contact_record.dart`, `box.gateway.ts`, `box-notifier.service.ts`, `box-push.transport.ts`, `box.service.ts`, `box.int-spec.ts`, `pubspec.yaml`.
