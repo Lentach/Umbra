@@ -25,6 +25,7 @@
 - Read only (load-bearing): `frontend/web/web-push-sw.js`, `backend/src/box/box.gateway.ts`, `box-notifier.service.ts`, `box-push.transport.ts`, `box-delivery.service.ts`.
 - Also: `frontend/lib/services/box/box_notifiers.dart`, `box_inbox.dart`, `push_box_source.dart`, `web_push_bridge_web.dart`, `notification_cleaner_web.dart`, `backend/src/chat/services/chat-message.service.ts`.
 - New: this summary, `.planning/pwa-notifications/findings.md` (gitignored).
+- Edited: `docs/plans/metadata-privacy-decisions.md` (owner decisions 76–81; D6 SUPERSEDED by 77), `docs/agents/traps.md`.
 
 ## Verification
 - CI: 6/6 success on `279007e2` (last code commit; this commit is docs-only).
@@ -42,15 +43,21 @@
 
 ## Notes for next session
 - Owner, at session end: "it's not broken now, notifications arrive normally". This fits conditional causes (H1 needs a live background socket; a banner comes with each new contact queue).
-  - Then: "start fixing, do your best to resolve this problem — let a fresh agent handle it". So fixes 1–3 are APPROVED, and the calls are delegated (log them as E-rows).
-- Next action: implement fix 1 → 2 → 3 (full brief, file:line and recipes in `.planning/pwa-notifications/findings.md` § Implementation brief).
-  - (1) `web-push-sw.js`: close the `new-message` tag on a `sweep`/`close-conv` whose `unreadTotal` is 0 (box unread is already in `_unreadCounts` via `_boxUnread`). Bump `SW_VERSION`.
-  - (2) H1: when a PEER box message arrives while the page is hidden, the page asks the SW for a local card tagged `conversation-<id>`, with no server signal. The existing sweep then clears it. Candidate hook: `MessagingBox._showBoxMessage` (`messaging_provider.box.dart:1443`); trace its callers first.
-  - (2) Trigger on `_conversationsProvider?.isClientVisible == false`, NOT `inView`: a hidden PWA with a chat open still has `inView` true. Reads, countdowns and receipts are already gated on that flag.
-  - (2) must exclude: sibling copies (`senderId == _currentUserId`), receipts/typing, redeliveries (`box.dart:1418` `alreadyShown`), and the stored-row replay (`applyStoredBoxLastMessages`, which today does not call `_showBoxMessage`).
-  - (3) `BoxNotifiers`: keep the last live code (server TTL 10 min) and activate new queues with it before challenging again. `authFailed` → challenge as today. Wire-legal under decision 34.
+  - Then: "start fixing, do your best". After that: "rethink — it must work as before the merge", and "don't give up much privacy". Both asked via the ask tool.
+- Owner decisions, logged in `metadata-privacy-decisions.md`:
+  - 76: a hidden page posts its OWN card. The box socket is NOT dropped on hide: the box would see each switch, and every return costs ≥ 3 `subscribe` frames against the per-IP 60/15 min budget.
+  - 77 reverses D6 (now SUPERSEDED): the Web Push wake-up carries the nid and the waiting count inside the encrypted payload, and the SW shows one card per chat that opens the chat.
+  - 78: never a name. 79: reuse the live challenge code. 80: other chats on screen stay badge-only (decision 11).
+  - 81: the shared push endpoint linkage is accepted until Phase 4.
+- Next action: build in this order (brief with file:line in `.planning/pwa-notifications/findings.md` § REVISED PLAN):
+  - A (79): `BoxNotifiers` keeps the last live code (server TTL 10 min) and activates new queues with it first. `authFailed` → challenge as today.
+  - B (76): the hook is `MessagingBox._showBoxMessage` (`messaging_provider.box.dart:1443`), triggered by `isClientVisible == false`, NOT `inView`. The page asks the SW for a card titled "Umbra", tagged `conversation-<id>`.
+  - B excludes are listed in findings § REVISED PLAN B (sibling copies, control frames, redeliveries, failure text, replay).
+  - B gate: FIRST drive a backgrounded Android PWA to confirm a hidden Flutter page still processes box messages. If it stalls, report to the owner; never switch to detach-on-hide unasked.
+  - C (77): `BoxNotifierService.flush` adds `n` (the nid) and `c` (non-quiet waiting count) on Web Push only. The page keeps nid → chat-id rows in IndexedDB. Update wire.md and the int-spec (details: findings C).
+  - D: an unknown-nid fallback card (`new-message`) closes on a `sweep`/`close-conv` with `unreadTotal` 0. Bump `SW_VERSION` with B/C/D.
 - Agent call (owner may overrule): split the box TTL. Challenge ≤ 600 s; wake-up for hours (blobs live 14 d).
   - The old path also uses 120 s (`push-notifications.service.ts:345`, pinned by spec `:182`). The relay already sees the TTL, so nothing new leaks.
 - Done = device drive (release web against `docker-compose up`, where the box is on by default, plus two box-paired accounts), CI green, and the PATCH bumped. iPhone/Apple branch: vm harness, plus the owner's iPhone.
 - NOT verified: Android background socket lifetime; iOS banner/`close()` on a real phone; report start time (it separates PR0.2 from the box causes).
-- Traps: three lines appended to `traps.md` (Android / push): the uncleared box card, a challenge banner per new queue, and notifier-less normal queues being self-queues.
+- Traps (`traps.md` Android / push): three appended (uncleared box card, a challenge banner per new queue, notifier-less normal queues are self-queues); a fourth on the shared push endpoint (81); the H1 line now points at decision 76.

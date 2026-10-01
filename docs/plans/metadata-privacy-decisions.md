@@ -20,7 +20,7 @@ Status: ACTIVE (in force), DONE (carried out, still binding), SUPERSEDED, OPEN (
 | D3 | Client IP is procurement (Orbot/Tor), not engineering | OWNER | ACTIVE |
 | D4 | Disappearing timers are client-side | OWNER | ACTIVE |
 | D5 | Receipts and typing ride inside the envelope, **mutual opt-in, default OFF** | OWNER | ACTIVE |
-| D6 | A notification opens the app, not a chat; box push is bare `{type:'new_message'}` | OWNER | ACTIVE |
+| D6 | A notification opens the app, not a chat; box push is bare `{type:'new_message'}` | OWNER | SUPERSEDED by 77 (10-01) |
 | D7 | Identity keeps no push token and sends no push; identity alarms show on open only | OWNER | ACTIVE |
 | D8 | TTL 30 d for undelivered messages, 14 d for media | OWNER | ACTIVE |
 | D9 | PWA history is device-local; backup ships with the cutover; the user is told on loss | OWNER | ACTIVE |
@@ -136,6 +136,12 @@ The owner said at G5 "I don't know these answers, decide for me": 64–69 are th
 | 73 | 09-29 | The box unread badge survives an app restart before the phone app ships (replaces E69c's residual) | OWNER (delegated) | ACTIVE |
 | 74 | 09-29 | The G5 review fixes ship as 0.2.53: backend + web now with the box OFF, then the 0.2.53 APK; step B after that | OWNER (delegated) | ACTIVE |
 | 75 | 09-30 | Step B: the box is ON on prod (`BOX_ENABLED: 'true'` pinned in the prod compose), after 0.2.53 web, backend and APK went live and the owner's phone confirmed push on 0.2.53. Deployed with decision 72's second restart; one-way (E69d); week-one watch per E65b; FCM check per 69 | OWNER (delegated) | ACTIVE |
+| 76 | 10-01 | (PWA notification parity, owner: "must work as before the merge", and "not give up much privacy".) A box message that reaches a web page while it is hidden (the socket still alive) gets a card the PAGE posts through the push SW: no new signal to any server. The box socket stays connected on hide. Rejected alternative: dropping the box connection on hide, because the box would see every background/foreground switch, and each return costs ≥ 3 `subscribe` frames against the per-IP 60 / 15 min budget, which also risks cutting an in-flight send. A frozen page stays covered by wake-on-detach (~45 s) | OWNER | ACTIVE — not built (`2026-10-01-pwa-notifications-diagnosis.md`) |
+| 77 | 10-01 | Supersedes D6 (a reversal the owner made knowingly). The Web Push box wake-up carries, INSIDE the RFC 8291-encrypted payload, the queue's `nid` and its count of waiting non-quiet blobs. The push SW maps nid → chat id from a table the page writes, and shows ONE card per chat ("N new messages"). The card is tagged `conversation-<id>`, so reading clears it and a tap opens the chat; the SW also sets the app badge. The FCM wake-up (native, Google-readable `data`) stays `{type:'new_message'}`. Residual: an unencrypted nid → chat-number table (no names) on the device, readable without the passcode | OWNER — changes the box wire | ACTIVE — not built |
+| 78 | 10-01 | Box notification cards never show a name: the title is "Umbra" whether the passcode is on or off; the SW table holds nid → chat id only, never a name | OWNER | ACTIVE |
+| 79 | 10-01 | "Setting up notifications": the client reuses a still-live challenge code (the box keeps it 10 min) for queues created later, so one banner per session; no durable notifier credential | OWNER | ACTIVE — not built |
+| 80 | 10-01 | Decision 11 re-confirmed: while the app is on screen, other chats get the badge only, no system notification | OWNER | ACTIVE |
+| 81 | 10-01 | Accepted until Phase 4: a box Web Push notifier token is the SAME PushSubscription as the account's `web_push_subscription` row (one subscription per SW registration), so a database holder can join box queues to accounts. Prod 10-01: 13 of 13 box tokens matched. The link ends when Phase 4 drops the account push table (D7); there is no separate box push registration before then | OWNER | ACTIVE (residual) |
 
 ## Engineering calls made in the work so far (owner may overrule at the gate)
 
