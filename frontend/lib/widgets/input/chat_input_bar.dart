@@ -36,7 +36,7 @@ import '../../utils/video_transcode_stub.dart'
     if (dart.library.io) '../../utils/video_transcode_io.dart'
     as video_transcode;
 import '../chat_action_tiles.dart';
-import '../hearth_fade_arc.dart';
+import '../hearth_fade_hex.dart';
 import '../top_snackbar.dart' show showTopSnackBar;
 import '../emoji/fireplace_emoji_picker.dart';
 import 'attachment_handler.dart';
@@ -1174,10 +1174,9 @@ class ChatInputBarState extends State<ChatInputBar>
                       children: [
                         CustomPaint(
                           size: const Size(14, 14),
-                          painter: HearthFadeArcPainter(
+                          painter: HearthFadeHexPainter(
                             color: ephemeral,
-                            trackColor: ephemeral.withValues(alpha: 0.35),
-                            dotted: true,
+                            preRead: true,
                           ),
                         ),
                         const SizedBox(width: 8),

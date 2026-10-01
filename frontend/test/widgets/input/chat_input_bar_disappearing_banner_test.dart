@@ -3,7 +3,7 @@ import 'package:fireplace/models/user_model.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/providers/settings_provider.dart';
-import 'package:fireplace/widgets/hearth_fade_arc.dart';
+import 'package:fireplace/widgets/hearth_fade_hex.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
 import 'package:fireplace/widgets/input/chat_input_bar.dart';
 import 'package:flutter/material.dart';
@@ -115,7 +115,7 @@ void main() {
       expect(find.textContaining('Disappearing'), findsNothing);
     });
 
-    testWidgets('teal theme uses teal accent on banner arc', (tester) async {
+    testWidgets('teal theme uses teal accent on banner hex', (tester) async {
       const conversationId = 10;
       final convs = _providerWithConversation(
         conversationId: conversationId,
@@ -145,10 +145,10 @@ void main() {
 
       expect(find.textContaining('5 minutes'), findsOneWidget);
 
-      final arcPaint = tester
+      final hexPaint = tester
           .widgetList<CustomPaint>(find.byType(CustomPaint))
-          .firstWhere((p) => p.painter is HearthFadeArcPainter);
-      final painter = arcPaint.painter! as HearthFadeArcPainter;
+          .firstWhere((p) => p.painter is HearthFadeHexPainter);
+      final painter = hexPaint.painter! as HearthFadeHexPainter;
       expect(painter.color, RpgTheme.primaryTealStone);
       expect(painter.color, isNot(RpgTheme.primaryLight));
     });

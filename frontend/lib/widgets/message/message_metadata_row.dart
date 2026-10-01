@@ -5,7 +5,7 @@ import '../../models/message_model.dart';
 import '../../providers/messaging_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../theme/rpg_theme.dart';
-import '../hearth_fade_arc.dart';
+import '../hearth_fade_hex.dart';
 
 /// Timestamp + delivery icon + Hearth Fade ephemeral indicator (Telegram style).
 class MessageMetadataRow extends StatelessWidget {
@@ -73,19 +73,18 @@ class MessageMetadataRow extends StatelessWidget {
   }
 
   Widget _buildEphemeralIndicator() {
-    if (!HearthFadeArcIndicator.showsEphemeralState(message)) {
+    if (!HearthFadeHexIndicator.showsEphemeralState(message)) {
       return const SizedBox.shrink();
     }
 
-    final countdown = HearthFadeArcIndicator.countdownLabel(message);
+    final countdown = HearthFadeHexIndicator.countdownLabel(message);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         const SizedBox(width: 6),
-        HearthFadeArcIndicator(
+        HearthFadeHexIndicator(
           message: message,
           color: timeColor,
-          trackColor: timeColor.withValues(alpha: 0.28),
           size: 12,
         ),
         if (countdown != null) ...[
@@ -124,7 +123,7 @@ class MessageMetadataRow extends StatelessWidget {
     // regardless of the message rebuilt every visible bubble's metadata — plus
     // a SettingsProvider read inside the delivery icon — at 1 Hz in chats with
     // no ephemeral messages at all. Same gate as conversation_tile.dart.
-    if (!HearthFadeArcIndicator.showsEphemeralState(message)) {
+    if (!HearthFadeHexIndicator.showsEphemeralState(message)) {
       return staticRow;
     }
 
@@ -132,7 +131,7 @@ class MessageMetadataRow extends StatelessWidget {
       valueListenable: context.read<MessagingProvider>().countdownTickNotifier,
       child: staticRow,
       builder: (ctx, tick, child) {
-        if (!HearthFadeArcIndicator.showsEphemeralState(message)) {
+        if (!HearthFadeHexIndicator.showsEphemeralState(message)) {
           return child!;
         }
         return Row(

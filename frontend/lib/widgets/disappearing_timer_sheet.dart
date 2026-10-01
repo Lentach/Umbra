@@ -8,7 +8,7 @@ import '../providers/settings_provider.dart';
 import '../theme/rpg_theme.dart';
 import '../utils/message_expiry.dart';
 import 'glass/glass_sheet.dart';
-import 'hearth_fade_arc.dart';
+import 'hearth_fade_hex.dart';
 
 const double kDisappearingPickerHeight = 216;
 const double kDisappearingPickerItemExtent = 32;
@@ -241,9 +241,8 @@ class _DisappearingTimerSheetState extends State<DisappearingTimerSheet> {
                   ),
                 ),
                 Center(
-                  child: HearthFadeArcHero(
+                  child: HearthFadeHexHero(
                     color: ephemeral,
-                    trackColor: ephemeral.withValues(alpha: 0.22),
                     progress: _heroProgress(),
                   ),
                 ),

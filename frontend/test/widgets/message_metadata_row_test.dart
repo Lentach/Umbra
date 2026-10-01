@@ -2,7 +2,7 @@ import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/providers/settings_provider.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
-import 'package:fireplace/widgets/hearth_fade_arc.dart';
+import 'package:fireplace/widgets/hearth_fade_hex.dart';
 import 'package:fireplace/widgets/message/message_metadata_row.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -26,8 +26,8 @@ MessageModel _message({
 }
 
 void main() {
-  group('MessageMetadataRow ephemeral arc', () {
-    testWidgets('pre-read shows dotted arc without countdown', (tester) async {
+  group('MessageMetadataRow ephemeral hex', () {
+    testWidgets('pre-read shows pre-read hex without countdown', (tester) async {
       await tester.pumpWidget(
         MaterialApp(
           theme: RpgTheme.themeDataLight,
@@ -47,11 +47,11 @@ void main() {
         ),
       );
 
-      expect(find.byType(HearthFadeArcIndicator), findsOneWidget);
+      expect(find.byType(HearthFadeHexIndicator), findsOneWidget);
       expect(find.textContaining('h'), findsNothing);
     });
 
-    testWidgets('post-read shows arc and countdown', (tester) async {
+    testWidgets('post-read shows hex and countdown', (tester) async {
       final expiresAt = DateTime.now().add(const Duration(hours: 3, minutes: 5));
       await tester.pumpWidget(
         MaterialApp(
@@ -75,7 +75,7 @@ void main() {
         ),
       );
 
-      expect(find.byType(HearthFadeArcIndicator), findsOneWidget);
+      expect(find.byType(HearthFadeHexIndicator), findsOneWidget);
       expect(find.text('3h'), findsOneWidget);
     });
 
@@ -105,7 +105,7 @@ void main() {
         ),
       );
 
-      expect(find.byType(HearthFadeArcIndicator), findsNothing);
+      expect(find.byType(HearthFadeHexIndicator), findsNothing);
     });
 
     testWidgets('plain message hides ephemeral indicator', (tester) async {
@@ -128,7 +128,7 @@ void main() {
         ),
       );
 
-      expect(find.byType(HearthFadeArcIndicator), findsNothing);
+      expect(find.byType(HearthFadeHexIndicator), findsNothing);
     });
   });
 
@@ -171,7 +171,7 @@ void main() {
       );
 
       expect(find.byType(ValueListenableBuilder<int>), findsOneWidget);
-      expect(find.byType(HearthFadeArcIndicator), findsOneWidget);
+      expect(find.byType(HearthFadeHexIndicator), findsOneWidget);
     });
   });
 }
