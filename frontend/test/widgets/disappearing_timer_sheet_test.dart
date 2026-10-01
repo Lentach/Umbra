@@ -288,4 +288,27 @@ void main() {
       expect(find.textContaining('2 dni'), findsOneWidget);
     });
   });
+
+  group('disappearingHeroProgress', () {
+    test('each common duration draws a visibly different hex', () {
+      const durations = [5, 60, 3600, 86400, 7 * 86400, 30 * 86400];
+      final values = durations.map(disappearingHeroProgress).toList();
+
+      for (var i = 1; i < values.length; i++) {
+        expect(
+          values[i] - values[i - 1],
+          greaterThan(0.05),
+          reason: '${durations[i - 1]}s vs ${durations[i]}s must not look alike',
+        );
+      }
+      expect(values.first, closeTo(0.35, 1e-9));
+      expect(values.last, closeTo(1.0, 1e-9));
+    });
+
+    test('off is dimmer than the shortest valid timer; out-of-range clamps', () {
+      expect(disappearingHeroProgress(0), lessThan(disappearingHeroProgress(5)));
+      expect(disappearingHeroProgress(1), closeTo(0.35, 1e-9));
+      expect(disappearingHeroProgress(99 * 86400), closeTo(1.0, 1e-9));
+    });
+  });
 }
