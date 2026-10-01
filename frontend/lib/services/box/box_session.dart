@@ -14,6 +14,7 @@ import 'box_friends.dart';
 import 'box_inbox.dart';
 import 'box_notifiers.dart';
 import 'box_outbox.dart';
+import 'box_push_nids.dart';
 import 'box_sibling_rotation.dart';
 import 'box_sibling_swap.dart';
 import 'box_siblings.dart';
@@ -82,6 +83,7 @@ class BoxSession
     _notifiers = push == null
         ? null
         : BoxNotifiers(box: box, store: store, push: push);
+    _nids = push == null ? null : BoxPushNids(store: store);
     _swap = BoxSiblingSwap(
       box: box,
       store: store,
@@ -106,7 +108,7 @@ class BoxSession
       store: store,
       keys: _keys,
       seal: _seal,
-      queueCreated: () => _notifiers?.run(),
+      queueCreated: _registerPush,
     );
     firstContact = BoxFirstContact(store: store, now: now);
   }
@@ -122,6 +124,7 @@ class BoxSession
   late final BoxSiblingSwap _swap;
   late final BoxSiblingRotation _rotation;
   late final BoxNotifiers? _notifiers;
+  late final BoxPushNids? _nids;
   late final BoxFriendHandoff _friends;
 
   /// Friend devices re-keyed this session ([rekeyFriend]), as `user:device`:
@@ -359,7 +362,7 @@ class BoxSession
           unawaited(_receive());
           _swap.run();
           _rotation.run();
-          _notifiers?.run();
+          _registerPush();
           _friends.run();
         }),
       )
@@ -399,8 +402,16 @@ class BoxSession
     unawaited(_receive());
     _swap.run();
     _rotation.run();
-    _notifiers?.run();
+    _registerPush();
     _friends.run();
+  }
+
+  /// A queue appeared, or the box is ready: every contact queue gets its
+  /// push notifier (E9), and the push worker its nid → chat table (decision
+  /// 77) — the worker has no other way to name the chat a wake-up is for.
+  void _registerPush() {
+    _nids?.sync();
+    _notifiers?.run();
   }
 
   /// The account socket dropped: an answer still owed will never come.
@@ -699,7 +710,7 @@ class BoxSession
       handedBack = false;
       final ensured = await _keys.ensureInbound(userId);
       if (ensured case InboundQueueCreated(:final queue)) {
-        if (ours == null) _notifiers?.run();
+        if (ours == null) _registerPush();
         handedBack = await _sendToFriend(
           userId,
           deviceId,
@@ -828,7 +839,7 @@ class BoxSession
     switch (await _keys.ensureInbound(userId)) {
       case InboundQueueCreated(:final queue):
         // A new contact queue gets its push notifier (E9) like any other.
-        _notifiers?.run();
+        _registerPush();
         return queue;
       case InboundQueueNotCreated():
       case InboundQueueNotStored():

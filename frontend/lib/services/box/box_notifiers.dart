@@ -34,14 +34,15 @@ abstract interface class BoxPushSource {
 typedef _Owed = ({ContactQueue queue, BoxQueueAuth auth, Uint8List nid});
 
 /// Box push registration (metadata-privacy E9, owner decisions 2, 23, 32,
-/// 34, 35, D6): a notifier on every NORMAL inbound contact queue this device
+/// 34, 35, 79): a notifier on every NORMAL inbound contact queue this device
 /// owns — never on its request queue (decision 2) or its self-queues, current
 /// or retiring (decision 32), which live outside the contact records, and
 /// never on a `blocked` or `former` contact's queue (decision 35: the box
 /// cannot know a block, and a blocked peer holding the sid could ring an
-/// offline device) — so a box message wakes a closed app with a bare
-/// `{type:'new_message'}`. A contact blocked AFTER its notifier was
-/// activated keeps it until the queue is deleted (accepted residual).
+/// offline device) — so a box message wakes a closed app (decision 77: on
+/// Web Push the wake-up carries the queue's nid and waiting count; on FCM it
+/// is a bare `{type:'new_message'}`). A contact blocked AFTER its notifier
+/// was activated keeps it until the queue is deleted (accepted residual).
 ///
 /// Registration is the box's two-step challenge, one per TOKEN (wire.md,
 /// decision 34): step 1 makes the box push a code to the target, step 2
@@ -57,6 +58,13 @@ typedef _Owed = ({ContactQueue queue, BoxQueueAuth auth, Uint8List nid});
 /// in a batch is gone; it is not offered again by this instance, since each
 /// offer costs a push to the device.
 ///
+/// The box keeps a code live 10 min and takes more queues under it, so the
+/// last code that activated is reused, in memory only, for queues owed
+/// within `codeReuse` (9 min) of its challenge on the same target (decision
+/// 79): every challenge is a push, and the web push SW may show it as a
+/// "Setting up notifications" banner. A reused code the box refuses whole
+/// (expired, box restarted) is dropped, and the pass challenges as before.
+///
 /// What was activated, and under which target, is kept in the store's
 /// `boxntf_v1` row, so a queue is activated once per push target, not once
 /// per launch. A new target (token rotation) re-registers every queue.
@@ -67,23 +75,33 @@ class BoxNotifiers {
     required BoxPushSource push,
     Duration codeWait = const Duration(seconds: 30),
     Duration park = const Duration(minutes: 15),
+    Duration codeReuse = const Duration(minutes: 9),
+    DateTime Function()? now,
   }) : _box = box,
        _store = store,
        _push = push,
        _codeWait = codeWait,
-       _parkFor = park;
+       _parkFor = park,
+       _codeReuse = codeReuse,
+       _now = now ?? DateTime.now;
 
   final BoxClient _box;
   final ContactStore _store;
   final BoxPushSource _push;
   final Duration _codeWait;
   final Duration _parkFor;
+  final Duration _codeReuse;
+  final DateTime Function() _now;
 
   StreamSubscription<void>? _changes;
   Timer? _retry;
 
   /// A target resting after it failed (see the class doc).
   String? _parked;
+
+  /// The last code that activated, its target, and when its challenge was
+  /// asked. In memory only: never stored, never logged (decision 79).
+  ({Uint8List code, String target, DateTime at})? _code;
 
   /// Nids the box refused in a batch: their queues are gone.
   final Set<String> _gone = {};
@@ -118,6 +136,7 @@ class BoxNotifiers {
 
   void dispose() {
     _disposed = true;
+    _code = null;
     _retry?.cancel();
     unawaited(_changes?.cancel());
   }
@@ -144,6 +163,7 @@ class BoxNotifiers {
     final target = await _push.target();
     if (target == null) return;
     final id = targetId(target);
+    if (_code?.target != id) _code = null;
     if (id == _parked) return;
     final owed = <_Owed>[
       for (final record in _store.all)
@@ -159,12 +179,27 @@ class BoxNotifiers {
                 (queue: queue, auth: auth, nid: nid),
     ];
     if (owed.isEmpty || !_live) return;
+    final cached = _code;
+    if (cached != null && _now().difference(cached.at) < _codeReuse) {
+      switch (await _activate(owed, cached.code, id)) {
+        case BoxCode.authFailed:
+          // Expired, or the box restarted: challenge as before.
+          _code = null;
+          if (!_live) return;
+        case BoxCode.rateLimited || null:
+          return;
+        case _:
+          _code = null;
+          return;
+      }
+    }
     // Listening BEFORE the challenge — the push may beat its ack — into a
     // buffer: a StreamIterator alone subscribes only on its first moveNext.
     final inbox = StreamController<Uint8List>();
     final listening = _push.challengeCodes.listen(inbox.add);
     final codes = StreamIterator(inbox.stream);
     try {
+      final asked = _now();
       switch (await _box.challengeNotifier(target.platform, target.token)) {
         case BoxOk():
           break;
@@ -193,9 +228,11 @@ class BoxNotifiers {
         }
         // A stray code (an earlier challenge's) is refused whole on the first
         // frame; then the next code is awaited.
-        if (await _activate(owed, codes.current, id) != BoxCode.authFailed) {
-          return;
-        }
+        final code = codes.current;
+        final refused = await _activate(owed, code, id);
+        if (refused == BoxCode.authFailed) continue;
+        if (refused == null) _code = (code: code, target: id, at: asked);
+        return;
       }
     } finally {
       await listening.cancel();
@@ -266,6 +303,7 @@ class BoxNotifiers {
 
   void _park(String id) {
     _parked = id;
+    _code = null;
     _retry?.cancel();
     _retry = Timer(_parkFor, () {
       _parked = null;

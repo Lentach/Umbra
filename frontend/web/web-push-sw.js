@@ -3,9 +3,10 @@
  * Companion: frontend/lib/services/web_push_bridge_web.dart
  *            frontend/lib/services/push_sw_channel_web.dart
  *            frontend/lib/utils/pending_deep_link_web.dart
+ *            frontend/lib/services/box/box_push_nids_web.dart (writes `box-nids`)
  *
  * APP_BADGE_MAX must match kAppBadgeMaxDisplayCount in frontend/lib/utils/app_badge_math.dart
- * DEEPLINK_* constants must match frontend/lib/utils/pending_deep_link_web.dart
+ * DEEPLINK_* and BOX_NIDS_KEY must match pending_deep_link_web.dart / box_push_nids_web.dart
  *
  * This SW is the single writer for the app icon badge and the notification tray.
  * The page never touches them directly — it posts messages here (see the
@@ -18,7 +19,7 @@
 // scope controls no page, so no navigation triggers an update check, and
 // WebKit does not soft-update after a push the way Chrome does — the page
 // calls `registration.update()` instead (web_push_bridge_web.dart).
-const SW_VERSION = 2;
+const SW_VERSION = 3;
 
 // A new copy takes over as soon as it is installed. This worker controls no
 // page (scope `/web-push-scope/`), so there is no page state to hand over.
@@ -143,6 +144,124 @@ function storePendingDeepLink(conversationId) {
   }).catch(function () {});
 }
 
+// ---------- Box wake-up state (IndexedDB, shared with the page) ----------
+// The page writes `box-nids` = { <nid>: <chat id> } (decision 77/78: chat
+// numbers only, never a name). The SW writes `box-wake` = { base, waiting }:
+// `waiting[nid]` is the count the last wake-up for that queue carried, and
+// `base` the last total the page (or the server) said was unread. The badge
+// of a closed app is base + the waiting counts; a total from the page is
+// authoritative and clears `waiting` (it has pulled those blobs by then).
+const BOX_NIDS_KEY = 'box-nids';
+const BOX_WAKE_KEY = 'box-wake';
+// The card for a wake-up whose nid the page never told us: it names no chat.
+const GENERIC_CARD_TAG = 'new-message';
+
+function kvRead(key) {
+  return openDeepLinkDb()
+    .then(function (db) {
+      return new Promise(function (resolve) {
+        try {
+          var req = db.transaction(DEEPLINK_STORE, 'readonly')
+            .objectStore(DEEPLINK_STORE)
+            .get(key);
+          req.onsuccess = function () { db.close(); resolve(req.result); };
+          req.onerror = function () { db.close(); resolve(undefined); };
+        } catch (_) { db.close(); resolve(undefined); }
+      });
+    })
+    .catch(function () { return undefined; });
+}
+
+function kvWrite(key, value) {
+  return openDeepLinkDb()
+    .then(function (db) {
+      return new Promise(function (resolve) {
+        try {
+          var tx = db.transaction(DEEPLINK_STORE, 'readwrite');
+          tx.objectStore(DEEPLINK_STORE).put(value, key);
+          tx.oncomplete = function () { db.close(); resolve(); };
+          tx.onabort = function () { db.close(); resolve(); };
+          tx.onerror = function () { db.close(); resolve(); };
+        } catch (_) { db.close(); resolve(); }
+      });
+    })
+    .catch(function () {});
+}
+
+function asRecord(v) {
+  return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+}
+
+function readWake() {
+  return kvRead(BOX_WAKE_KEY).then(function (raw) {
+    var w = asRecord(raw);
+    return {
+      base: typeof w.base === 'number' && w.base > 0 ? w.base : 0,
+      waiting: asRecord(w.waiting),
+    };
+  });
+}
+
+function waitingTotal(waiting) {
+  var total = 0;
+  Object.keys(waiting).forEach(function (nid) {
+    if (typeof waiting[nid] === 'number') total += waiting[nid];
+  });
+  return total;
+}
+
+// The base a wake-up adds to, from an old-path push's server total.
+function setWakeBase(total) {
+  return readWake().then(function (wake) {
+    wake.base = total > 0 ? total : 0;
+    return kvWrite(BOX_WAKE_KEY, wake);
+  });
+}
+
+// A total the page computed: the badge, the base, and — when nothing is
+// unread — the generic wake-up card, which names no chat any sweep could
+// match (decision 77's unknown-nid fallback).
+function applyPageTotal(total) {
+  return Promise.all([
+    setBadgeFromSW(total),
+    kvWrite(BOX_WAKE_KEY, { base: total > 0 ? total : 0, waiting: {} }),
+    total <= 0
+      ? closeNotificationsForTag(GENERIC_CARD_TAG)
+      : Promise.resolve(),
+  ]);
+}
+
+// The page read chat [convId] without a total to hand: forget its waiting
+// counts only.
+function dropWaitingForChat(convId) {
+  return Promise.all([kvRead(BOX_NIDS_KEY), readWake()])
+    .then(function (r) {
+      var nids = asRecord(r[0]);
+      var wake = r[1];
+      var changed = false;
+      Object.keys(wake.waiting).forEach(function (nid) {
+        if (nids[nid] === convId) {
+          delete wake.waiting[nid];
+          changed = true;
+        }
+      });
+      return changed ? kvWrite(BOX_WAKE_KEY, wake) : undefined;
+    })
+    .catch(function () {});
+}
+
+function isAnyPageVisible() {
+  return clients
+    .matchAll({ type: 'window', includeUncontrolled: true })
+    .then(function (all) {
+      for (var i = 0; i < all.length; i++) {
+        if (all[i].visibilityState === 'visible') return true;
+      }
+      return false;
+    })
+    .catch(function () { return false; });
+}
+
 // ---------- Push handler ----------
 
 // Which conversation each focused client is viewing (set via the page's
@@ -238,12 +357,193 @@ function handleNotifierChallenge(code) {
     .catch(flash);
 }
 
+// Shows the "new message" card for [payload] — unless the user is looking at
+// that chat (or, with [badgeOnly], at the app at all: decision 80) — then
+// sweeps stale cards and writes the badge. On an Apple endpoint a withheld
+// card is still posted and closed at once (decision 39).
+function showMessagePush(payload, badgeOnly) {
+  var convId = payload.conversationId != null ? Number(payload.conversationId) : null;
+  // Per-conversation unread — card text only.
+  var unreadCount = typeof payload.unreadCount === 'number'
+    ? payload.unreadCount
+    : (typeof payload.messageCount === 'number' ? payload.messageCount : 1);
+  // Badge MUST come from the live cumulative total. When the backend failed to
+  // compute it at flush time the field is absent — then we leave the badge
+  // untouched rather than writing a per-burst guess (the old fallback caused
+  // visible resets to 1).
+  var hasUnreadTotal = typeof payload.unreadTotal === 'number';
+  // null = field absent (backend error at flush time) — skip sweep rather than
+  // wrongly closing other conversations' notifications.
+  var unreadConvIds = Array.isArray(payload.unreadConversationIds)
+    ? payload.unreadConversationIds
+    : null;
+
+  // WhatsApp/Signal model: title = sender display name (metadata-only,
+  // approved), body = per-conversation unread count → "Bob: 15 new messages".
+  var senderName = typeof payload.senderName === 'string' && payload.senderName
+    ? payload.senderName
+    : null;
+  var title = senderName || 'Umbra';
+  var body = unreadCount > 1
+    ? unreadCount + ' new messages'
+    : 'New message';
+
+  var tag = convId != null ? 'conversation-' + convId : GENERIC_CARD_TAG;
+  var notificationOptions = {
+    body: body,
+    // Large icon (notification body): the ember hex Umbra mark.
+    icon: '/icons/notification-icon-512.png',
+    // Small/status-bar icon: MUST be monochrome white-on-transparent — Android
+    // renders only its alpha channel. A full-colour image here is the classic
+    // "white square" bug.
+    badge: '/icons/notification-badge-96.png',
+    tag: tag,
+    data: payload,
+    // Re-alert on tag replacement (Chrome/Android); ignored by Safari, where
+    // close-then-show below produces a fresh alerting notification anyway.
+    renotify: true,
+  };
+
+  return (badgeOnly
+    ? Promise.resolve(true)
+    : shouldSuppressForFocusedConversation(convId)
+  ).then(function (suppress) {
+    var chain = closeNotificationsForTag(tag);
+    // Suppress ONLY the banner when the user is already viewing this chat;
+    // the sweep + badge writes below must still run so other conversations'
+    // tray cards and the app badge stay correct. On an Apple endpoint a
+    // suppressed push still posts a silent card and closes it at once
+    // (decision 39): Safari revokes the subscription after 3 silent pushes.
+    if (!suppress) {
+      chain = chain.then(function () {
+        return self.registration.showNotification(title, notificationOptions);
+      });
+    } else {
+      // A failed flash must not skip the sweep and badge writes below.
+      chain = chain
+        .then(isApplePushEndpoint)
+        .then(function (apple) {
+          return apple ? postAndClose(title, body, tag, payload) : undefined;
+        })
+        .catch(function () {});
+    }
+    return chain
+      .then(function () {
+        return unreadConvIds != null
+          ? sweepStaleNotifications(unreadConvIds)
+          : Promise.resolve();
+      })
+      .then(function () {
+        return hasUnreadTotal
+          ? setBadgeFromSW(payload.unreadTotal)
+          : Promise.resolve();
+      });
+  });
+}
+
+// A box wake-up (decision 77) carries, inside its encrypted payload, the
+// queue's nid `n` and the count `c` of non-quiet blobs waiting. The page's
+// `box-nids` table names the chat, so this is the same per-chat card the old
+// path posts — titled "Umbra", never a name (decision 78). A nid the page did
+// not tell us still gets a card (a push that posts none counts toward Safari's
+// revoke budget), just a generic one that names no chat.
+function handleBoxWakeUp(payload) {
+  var nid = payload.n;
+  var count = typeof payload.c === 'number' && payload.c >= 1
+    ? Math.floor(payload.c)
+    : 1;
+  return Promise.all([kvRead(BOX_NIDS_KEY), readWake(), isAnyPageVisible()])
+    .then(function (r) {
+      var nids = asRecord(r[0]);
+      var wake = r[1];
+      var convId = typeof nids[nid] === 'number' ? nids[nid] : null;
+      wake.waiting[nid] = count;
+      var chatCount = count;
+      if (convId != null) {
+        chatCount = 0;
+        Object.keys(wake.waiting).forEach(function (other) {
+          if (nids[other] === convId && typeof wake.waiting[other] === 'number') {
+            chatCount += wake.waiting[other];
+          }
+        });
+      }
+      var message = {
+        type: 'new_message',
+        unreadCount: chatCount,
+        unreadTotal: wake.base + waitingTotal(wake.waiting),
+      };
+      if (convId != null) message.conversationId = convId;
+      return kvWrite(BOX_WAKE_KEY, wake).then(function () {
+        return { message: message, onScreen: r[2] };
+      });
+    })
+    .catch(function () {
+      return { message: { type: 'new_message', unreadCount: count }, onScreen: false };
+    })
+    .then(function (state) {
+      return showMessagePush(state.message, state.onScreen);
+    });
+}
+
+// A push card (a box wake-up or the old path's) already stands for this chat
+// with at least [n] messages: a hidden page that was frozen and thaws re-reads
+// the blob it never acked, and would alert a second time for the same message.
+function pushCardCovers(tag, n) {
+  return self.registration
+    .getNotifications({ tag: tag })
+    .then(function (cards) {
+      for (var i = 0; i < cards.length; i++) {
+        var d = cards[i].data;
+        if (!d || d.type !== 'new_message') continue;
+        if ((typeof d.unreadCount === 'number' ? d.unreadCount : 1) >= n) {
+          return true;
+        }
+      }
+      return false;
+    })
+    .catch(function () { return false; });
+}
+
+// The page posted a card for a box message it holds while it is hidden
+// (decision 76). The SW stays the single tray writer: the page asks, this
+// shows. Tagged like the old path's card, so a read, a sweep or the wake-up
+// push for the same chat replaces or clears it.
+function showLocalCard(convId, count) {
+  if (isNaN(convId)) return Promise.resolve();
+  var n = typeof count === 'number' && count > 1 ? Math.floor(count) : 1;
+  var tag = 'conversation-' + convId;
+  return shouldSuppressForFocusedConversation(convId)
+    .then(function (suppress) {
+      if (suppress) return undefined;
+      return pushCardCovers(tag, n).then(function (covered) {
+        if (covered) return undefined;
+        return closeNotificationsForTag(tag).then(function () {
+          return self.registration.showNotification('Umbra', {
+            body: n > 1 ? n + ' new messages' : 'New message',
+            icon: '/icons/notification-icon-512.png',
+            badge: '/icons/notification-badge-96.png',
+            tag: tag,
+            data: { conversationId: convId },
+            renotify: true,
+          });
+        });
+      });
+    })
+    .catch(function () {});
+}
+
 self.addEventListener('push', function (event) {
   var payload = {};
   try { payload = event.data ? event.data.json() : {}; } catch (_) {}
 
   if (payload.type === 'notifier_challenge') {
     event.waitUntil(handleNotifierChallenge(payload.code));
+    return;
+  }
+
+  // Box wake-up with a queue id (decision 77): one card per chat.
+  if (payload.type === 'new_message' && typeof payload.n === 'string') {
+    event.waitUntil(handleBoxWakeUp(payload));
     return;
   }
 
@@ -326,80 +626,13 @@ self.addEventListener('push', function (event) {
     return;
   }
 
-  var convId = payload.conversationId != null ? Number(payload.conversationId) : null;
-  // Per-conversation unread — card text only.
-  var unreadCount = typeof payload.unreadCount === 'number'
-    ? payload.unreadCount
-    : (typeof payload.messageCount === 'number' ? payload.messageCount : 1);
-  // Badge MUST come from the live cumulative total. When the backend failed to
-  // compute it at flush time the field is absent — then we leave the badge
-  // untouched rather than writing a per-burst guess (the old fallback caused
-  // visible resets to 1).
-  var hasUnreadTotal = typeof payload.unreadTotal === 'number';
-  // null = field absent (backend error at flush time) — skip sweep rather than
-  // wrongly closing other conversations' notifications.
-  var unreadConvIds = Array.isArray(payload.unreadConversationIds)
-    ? payload.unreadConversationIds
-    : null;
-
-  // WhatsApp/Signal model: title = sender display name (metadata-only,
-  // approved), body = per-conversation unread count → "Bob: 15 new messages".
-  var senderName = typeof payload.senderName === 'string' && payload.senderName
-    ? payload.senderName
-    : null;
-  var title = senderName || 'Umbra';
-  var body = unreadCount > 1
-    ? unreadCount + ' new messages'
-    : 'New message';
-
-  var tag = convId != null ? 'conversation-' + convId : 'new-message';
-  var notificationOptions = {
-    body: body,
-    // Large icon (notification body): the ember hex Umbra mark.
-    icon: '/icons/notification-icon-512.png',
-    // Small/status-bar icon: MUST be monochrome white-on-transparent — Android
-    // renders only its alpha channel. A full-colour image here is the classic
-    // "white square" bug.
-    badge: '/icons/notification-badge-96.png',
-    tag: tag,
-    data: payload,
-    // Re-alert on tag replacement (Chrome/Android); ignored by Safari, where
-    // close-then-show below produces a fresh alerting notification anyway.
-    renotify: true,
-  };
-
+  // Old path: the server names the chat and its counts. Its badge total is
+  // also the base the box wake-up counts are added to.
   event.waitUntil(
-    shouldSuppressForFocusedConversation(convId).then(function (suppress) {
-      var chain = closeNotificationsForTag(tag);
-      // Suppress ONLY the banner when the user is already viewing this chat;
-      // the sweep + badge writes below must still run so other conversations'
-      // tray cards and the app badge stay correct. On an Apple endpoint a
-      // suppressed push still posts a silent card and closes it at once
-      // (decision 39): Safari revokes the subscription after 3 silent pushes.
-      if (!suppress) {
-        chain = chain.then(function () {
-          return self.registration.showNotification(title, notificationOptions);
-        });
-      } else {
-        // A failed flash must not skip the sweep and badge writes below.
-        chain = chain
-          .then(isApplePushEndpoint)
-          .then(function (apple) {
-            return apple ? postAndClose(title, body, tag, payload) : undefined;
-          })
-          .catch(function () {});
-      }
-      return chain
-        .then(function () {
-          return unreadConvIds != null
-            ? sweepStaleNotifications(unreadConvIds)
-            : Promise.resolve();
-        })
-        .then(function () {
-          return hasUnreadTotal
-            ? setBadgeFromSW(payload.unreadTotal)
-            : Promise.resolve();
-        });
+    showMessagePush(payload, false).then(function () {
+      return typeof payload.unreadTotal === 'number'
+        ? setWakeBase(payload.unreadTotal)
+        : undefined;
     })
   );
 });
@@ -472,9 +705,9 @@ self.addEventListener('message', function (event) {
   var work = null;
 
   if (data.type === 'clear-badge') {
-    work = setBadgeFromSW(0);
+    work = applyPageTotal(0);
   } else if (data.type === 'set-badge') {
-    work = setBadgeFromSW(typeof data.count === 'number' ? data.count : 0);
+    work = applyPageTotal(typeof data.count === 'number' ? data.count : 0);
   } else if (data.type === 'close-conv') {
     var convId = Number(data.conversationId);
     work = isNaN(convId)
@@ -482,7 +715,9 @@ self.addEventListener('message', function (event) {
       : closeNotificationsForTag('conversation-' + convId);
     if (typeof data.unreadTotal === 'number') {
       var totalAfterClose = data.unreadTotal;
-      work = work.then(function () { return setBadgeFromSW(totalAfterClose); });
+      work = work.then(function () { return applyPageTotal(totalAfterClose); });
+    } else if (!isNaN(convId)) {
+      work = work.then(function () { return dropWaitingForChat(convId); });
     }
   } else if (data.type === 'sweep') {
     var ids = Array.isArray(data.unreadConversationIds)
@@ -491,8 +726,10 @@ self.addEventListener('message', function (event) {
     work = sweepStaleNotifications(ids);
     if (typeof data.unreadTotal === 'number') {
       var totalAfterSweep = data.unreadTotal;
-      work = work.then(function () { return setBadgeFromSW(totalAfterSweep); });
+      work = work.then(function () { return applyPageTotal(totalAfterSweep); });
     }
+  } else if (data.type === 'local-card') {
+    work = showLocalCard(Number(data.conversationId), data.count);
   } else if (data.type === 'active-conversation') {
     // Record which conversation this client is viewing (or clear it). Keyed by
     // client id so multiple tabs don't clobber each other; pruned on push.

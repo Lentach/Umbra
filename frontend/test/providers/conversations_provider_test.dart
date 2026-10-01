@@ -772,5 +772,72 @@ void main() {
         expect(only(provider).mutedUntil, isNull);
       });
     });
+
+    group('postHiddenArrivalCard (decision 76)', () {
+      late _RecordingPushSwChannel channel;
+
+      ConversationsProvider build({bool muted = false, bool hidden = true}) {
+        channel = _RecordingPushSwChannel();
+        final provider = ConversationsProvider(pushSwChannel: channel)
+          ..onConnect(false)
+          ..onConversationsList([
+            {
+              'id': 10,
+              'userOne': {'id': 1, 'username': 'alice', 'tag': '0001'},
+              'userTwo': {'id': 2, 'username': 'bob', 'tag': '0002'},
+              'createdAt': DateTime.utc(2026).toIso8601String(),
+              'muted': muted,
+            },
+          ]);
+        if (hidden) provider.setClientVisible(false);
+        return provider;
+      }
+
+      List<Map<String, Object?>> cards() =>
+          channel.messages.where((m) => m['type'] == 'local-card').toList();
+
+      test('a hidden page asks the push SW for a per-chat card', () {
+        build().postHiddenArrivalCard(10);
+
+        expect(cards(), [
+          {'type': 'local-card', 'conversationId': 10, 'count': 1},
+        ]);
+      });
+
+      test('counts the burst, and the chat unread when it is higher', () {
+        final provider = build()
+          ..postHiddenArrivalCard(10)
+          ..postHiddenArrivalCard(10);
+        expect(cards().last['count'], 2);
+
+        provider
+          ..updateUnreadCount(10, 5)
+          ..postHiddenArrivalCard(10);
+        expect(cards().last['count'], 5);
+      });
+
+      test('a visible page posts nothing: the badge alone speaks', () {
+        build(hidden: false).postHiddenArrivalCard(10);
+
+        expect(cards(), isEmpty);
+      });
+
+      test('a muted chat posts nothing', () {
+        build(muted: true).postHiddenArrivalCard(10);
+
+        expect(cards(), isEmpty);
+      });
+
+      test('coming back to the screen restarts the count', () {
+        build()
+          ..postHiddenArrivalCard(10)
+          ..postHiddenArrivalCard(10)
+          ..setClientVisible(true)
+          ..setClientVisible(false)
+          ..postHiddenArrivalCard(10);
+
+        expect(cards().last['count'], 1);
+      });
+    });
   });
 }

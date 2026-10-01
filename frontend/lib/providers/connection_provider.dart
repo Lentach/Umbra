@@ -9,6 +9,7 @@ import '../services/api_service.dart';
 import '../services/box/box_client.dart';
 import '../services/box/box_media_fetcher.dart';
 import '../services/box/box_media_store.dart';
+import '../services/box/box_push_nids.dart';
 import '../services/box/box_session.dart';
 import '../services/contacts/contact_backup.dart';
 import '../services/contacts/contact_backup_service.dart';
@@ -518,6 +519,8 @@ class ConnectionProvider extends ChangeNotifier {
       if (_box == null || _boxUserId != userId) {
         _box?.dispose();
         _boxMedia?.dispose();
+        // Another account's chats must not outlive it in the push worker.
+        if (_box != null) unawaited(BoxPushNids.clear());
         _boxUserId = userId;
         _box = BoxSession(
           box: boxClient(baseUrl),
@@ -1045,6 +1048,7 @@ class ConnectionProvider extends ChangeNotifier {
       _contactStore?.close();
       _box?.dispose();
       _box = null;
+      unawaited(BoxPushNids.clear());
       _boxMedia?.dispose();
       _boxMedia = null;
       _messagingProvider

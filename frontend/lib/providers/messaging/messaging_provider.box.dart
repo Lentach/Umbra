@@ -1457,6 +1457,12 @@ extension MessagingBox on MessagingProvider {
       _showPingEffect = true;
     }
     _addMessageToState(msg);
+    // A peer's message that reached a HIDDEN page (owner decision 76): its
+    // socket was alive, so the box sent no push; the page asks for the card
+    // itself. Not a sibling's sent copy, which is ours.
+    if (msg.senderId != _currentUserId) {
+      _conversationsProvider?.postHiddenArrivalCard(msg.conversationId);
+    }
     // Shown: a disappearing one starts counting now (decision 41).
     if (inView) _startBoxCountdowns(msg.conversationId);
     if (inView && _conversationCache.containsKey(msg.conversationId)) {

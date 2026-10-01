@@ -119,6 +119,11 @@ export class BoxGateway implements OnGatewayDisconnect {
    * the notifier. Both answer like an ordinary send; `live` answers
    * `{ok:true}` whether or not a socket got it, and for an unknown sid (no
    * presence or block oracle).
+   *
+   * An ordinary send schedules the notifier even when a socket owns the rid:
+   * a frozen web page (iOS) keeps its socket ~45 s without reading, so the
+   * flush wakes a Web Push device that has not acked by then (see
+   * `BoxNotifierService.flush`).
    */
   @Throttle({ default: { limit: BOX_LIMITS.send, ttl: BOX_THROTTLE_TTL_MS } })
   @SubscribeMessage('send')
@@ -137,12 +142,9 @@ export class BoxGateway implements OnGatewayDisconnect {
       countRefusal('send:ceiling');
       return { ok: false, code: 'quota_exceeded' };
     }
-    if (
-      stored.result === 'stored' &&
-      !this.delivery.onEnqueued(stored.rid) &&
-      !quiet
-    ) {
-      this.notifier.schedule(stored.nid);
+    if (stored.result === 'stored') {
+      const toSocket = this.delivery.onEnqueued(stored.rid);
+      if (!quiet) this.notifier.schedule(stored.nid, toSocket);
     }
     return { ok: true };
   }

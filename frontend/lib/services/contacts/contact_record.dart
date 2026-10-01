@@ -1,4 +1,5 @@
 import '../../models/user_model.dart';
+import '../../utils/message_ids.dart';
 
 /// Where a peer stands with this account. Exactly one per record.
 ///
@@ -597,6 +598,13 @@ class ContactRecord {
   /// Set when the friendship was made over the box (slice (f)); null for
   /// every friendship the server knows of.
   final ContactBoxOrigin? boxOrigin;
+
+  /// The chat of this contact: its server conversation, else — a friendship
+  /// made over the box (owner decision 52) — its local id. The contact
+  /// backup drops `legacy`, so a restored box friend has only [boxOrigin].
+  int? get chatId =>
+      legacy.conversationId ??
+      (boxOrigin == null ? null : localConversationIdFor(userId));
 
   Map<String, dynamic> toJson() => {
     'v': currentVersion,
