@@ -46,7 +46,8 @@
 - Next action: implement fix 1 → 2 → 3 (full brief, file:line and recipes in `.planning/pwa-notifications/findings.md` § Implementation brief).
   - (1) `web-push-sw.js`: close the `new-message` tag on a `sweep`/`close-conv` whose `unreadTotal` is 0 (box unread is already in `_unreadCounts` via `_boxUnread`). Bump `SW_VERSION`.
   - (2) H1: when a PEER box message arrives while the page is hidden, the page asks the SW for a local card tagged `conversation-<id>`, with no server signal. The existing sweep then clears it. Candidate hook: `MessagingBox._showBoxMessage` (`messaging_provider.box.dart:1443`); trace its callers first.
-  - (2) must exclude: the drain on app open, receipts/typing, sibling copies, redeliveries.
+  - (2) Trigger on `_conversationsProvider?.isClientVisible == false`, NOT `inView`: a hidden PWA with a chat open still has `inView` true. Reads, countdowns and receipts are already gated on that flag.
+  - (2) must exclude: sibling copies (`senderId == _currentUserId`), receipts/typing, redeliveries (`box.dart:1418` `alreadyShown`), and the stored-row replay (`applyStoredBoxLastMessages`, which today does not call `_showBoxMessage`).
   - (3) `BoxNotifiers`: keep the last live code (server TTL 10 min) and activate new queues with it before challenging again. `authFailed` → challenge as today. Wire-legal under decision 34.
 - Agent call (owner may overrule): split the box TTL. Challenge ≤ 600 s; wake-up for hours (blobs live 14 d).
   - The old path also uses 120 s (`push-notifications.service.ts:345`, pinned by spec `:182`). The relay already sees the TTL, so nothing new leaks.
