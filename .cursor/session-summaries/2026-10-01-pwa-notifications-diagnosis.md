@@ -1,4 +1,4 @@
-# PWA notifications after step B: three box-path causes found, no code changed
+# PWA notifications after the metadata release: three box-path causes found, no code changed
 
 **Date:** 2026-10-01 · **Version:** unchanged · **Tiers deployed:** none
 
@@ -41,10 +41,15 @@
 - NOT verified on a device: how long an Android PWA socket lives in the background; whether iOS shows the challenge banner before `close()` and whether `close()` removes it (code + owner report only); when the owner's users first reported (09-29 evening vs after step B).
 
 ## Notes for next session
-- Next action: the owner picks a fix order. Recommended:
-  - (1) Close `new-message` cards on app foreground or on a sweep with unread 0 (web-only, no privacy impact).
-  - (2) H1: the page posts a local content-free card when a box message is journaled while hidden. A visibility signal to the box would be OWNER-class.
-  - (3) Reuse a still-live challenge code (10-min server TTL; `activate` accepts more nids) before challenging again, so a session costs one banner, not one per contact.
-- Owner-owed: raise `TTL: 120` (box + old path)? A device offline > 2 min loses the wake-up for good.
+- Owner, at session end: "it's not broken now, notifications arrive normally". This fits conditional causes (H1 needs a live background socket; a banner comes with each new contact queue).
+  - Then: "start fixing, do your best to resolve this problem — let a fresh agent handle it". So fixes 1–3 are APPROVED, and the calls are delegated (log them as E-rows).
+- Next action: implement fix 1 → 2 → 3 (full brief, file:line and recipes in `.planning/pwa-notifications/findings.md` § Implementation brief).
+  - (1) `web-push-sw.js`: close the `new-message` tag on a `sweep`/`close-conv` whose `unreadTotal` is 0 (box unread is already in `_unreadCounts` via `_boxUnread`). Bump `SW_VERSION`.
+  - (2) H1: when a PEER box message arrives while the page is hidden, the page asks the SW for a local card tagged `conversation-<id>`, with no server signal. The existing sweep then clears it. Candidate hook: `MessagingBox._showBoxMessage` (`messaging_provider.box.dart:1443`); trace its callers first.
+  - (2) must exclude: the drain on app open, receipts/typing, sibling copies, redeliveries.
+  - (3) `BoxNotifiers`: keep the last live code (server TTL 10 min) and activate new queues with it before challenging again. `authFailed` → challenge as today. Wire-legal under decision 34.
+- Agent call (owner may overrule): split the box TTL. Challenge ≤ 600 s; wake-up for hours (blobs live 14 d).
+  - The old path also uses 120 s (`push-notifications.service.ts:345`, pinned by spec `:182`). The relay already sees the TTL, so nothing new leaks.
+- Done = device drive (release web against `docker-compose up`, where the box is on by default, plus two box-paired accounts), CI green, and the PATCH bumped. iPhone/Apple branch: vm harness, plus the owner's iPhone.
 - NOT verified: Android background socket lifetime; iOS banner/`close()` on a real phone; report start time (it separates PR0.2 from the box causes).
-- Traps: two lines appended to `traps.md` (Android / push).
+- Traps: three lines appended to `traps.md` (Android / push): the uncleared box card, a challenge banner per new queue, and notifier-less normal queues being self-queues.
