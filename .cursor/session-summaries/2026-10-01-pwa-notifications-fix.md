@@ -17,7 +17,7 @@
 - Read only (load-bearing): `notification_cleaner_web.dart`, `push_sw_channel_web.dart`, `box-delivery.service.ts`.
 
 ## Verification
-- CI: NOT RUN on the code commit yet (filled in after the push).
+- CI: 6/6 success on `2796c13f` (the code commit): Analyze, Flutter analyze and tests, Web Lock probe, Backend tests, E2E wire harness, E2E isolated probes. This follow-up commit is docs-only.
 - Flutter full suite 3071 passed, 14 skipped (+14 tests); `verify-claude-frontend-test-counts --log` OK. Dart ratchet PASS, 3154 → 3153 (floor lowered). Backend: tsc 0, knip 0, lint ratchet PASS, unit tests 1222 / 68; box int-spec 52/52 on a throwaway DB (46 → 52).
 - Red-first: A's tests failed on the old `BoxNotifiers`; the two int tests for the c = 0 and repeat guards failed with the guards off and passed with them on. SW logic: ~30 checks in a node:vm harness with a fake `indexedDB` (no permanent file; the repo has no SW test runner).
 - Driven, release web 0.2.58 against the local stack, hand-launched Chrome + CDP: hidden page → local card in 0.66 s, 3 sends = one card "3 new messages", cleared on open, muted = none; closed page → wake-up card 3.0–3.2 s with the chat tag; frozen page (`Page.setWebLifecycleState frozen`) → card 2.9–3.3 s; visible page → no push; second contact → no new challenge (code reused).
