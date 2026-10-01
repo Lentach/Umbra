@@ -124,7 +124,9 @@ class _DisappearingTimerSheetState extends State<DisappearingTimerSheet> {
   double _heroProgress() {
     final total = _totalSeconds;
     if (total == 0) return 0.15;
-    return (total / kDisappearingMaxSeconds).clamp(0.2, 1.0);
+    // Decorative only: floor at 0.6 so a short timer's hex never reads as
+    // "almost expired" (0.2 lit a single edge of six).
+    return (total / kDisappearingMaxSeconds).clamp(0.6, 1.0);
   }
 
   void _onDaysChanged(int index) {
