@@ -26,7 +26,7 @@
 
 ## Notes for next session
 - Next action: none pending. The owner fully closes and reopens the PWA (never uninstalls); Settings footer should read `0.2.56 / 50cb524b`.
-- Owner-owed: none.
+- Owner-owed: should the timer-sheet hex still say something about duration? Options offered 2026-10-01 (log scale, or one lit edge per tier); unanswered.
 - Recipe: to see ephemeral rows in the harness, temporarily seed `disappearAfterSeconds`/`expiresAt` on `_ChatListPreview._msg` and the cached messages, add `'disappearingTimer': 3600` to the conversation JSON (without it `?screen=timer` opens in "Off", hero 0.15), and a `?screen=timer` that calls `showDisappearingTimerSheet`; `flutter run -d web-server -t test/preview/glass_preview.dart`, `page.setViewport({deviceScaleFactor: 4})`. Hot restart (`R`) does not apply in web-server mode: relaunch.
 - Traps: headless `flutter test` cannot render Inter (google_fonts fetch fails, text is Ahem); use the web harness for any visual check (traps.md, Tests).
 - The 0.6 hero floor is linear over 30 days, so every timer under ~18 days draws the same hex (the old 0.2 floor did the same under ~6 days). A log scale would restore duration cues if the owner wants them.
