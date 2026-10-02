@@ -540,6 +540,34 @@ export class MessagesService {
   }
 
   /**
+   * Whether [recipientDeviceId] confirmed [messageId] with `messageDelivered`
+   * — the per-device stamp [stampEnvelope] writes. A row with no envelope for
+   * that device (a legacy row) falls back to the message's own status; a row
+   * that is gone counts as delivered (there is nothing left to announce).
+   */
+  async isDeliveredToDevice(
+    messageId: number,
+    recipientUserId: number,
+    recipientDeviceId: number,
+  ): Promise<boolean> {
+    const envelope = await this.msgRepo.manager
+      .getRepository(MessageEnvelope)
+      .findOne({
+        where: { messageId, recipientUserId, recipientDeviceId },
+        select: { deliveredAt: true },
+      });
+    if (envelope) return envelope.deliveredAt != null;
+    const message = await this.msgRepo.findOne({
+      where: { id: messageId },
+      select: { deliveryStatus: true },
+    });
+    return (
+      message === null ||
+      message.deliveryStatus !== MessageDeliveryStatus.SENT
+    );
+  }
+
+  /**
    * Count unread messages for a recipient in a conversation.
    * Unread = messages sent by the other participant, not yet READ, not expired.
    * Excludes messages hidden by recipientUserId (delete for me).

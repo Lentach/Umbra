@@ -76,6 +76,14 @@ type StaleListEntry = {
 const EDIT_WINDOW_MS = 15 * 60 * 1000;
 
 /**
+ * A device the push was skipped for (it reported itself on screen) has this
+ * long to confirm the message (`messageDelivered`, which a running page emits
+ * the moment it has the message). Past it the page is frozen — an iPhone PWA
+ * put away, whose `clientVisible: false` never left — and the push goes out.
+ */
+const VISIBLE_DELIVERY_GRACE_MS = 2000;
+
+/**
  * The socket's authenticated user id, or null before auth completed.
  *
  * `client.data` is `any` in socket.io's types; the gateway writes `data.user`
@@ -569,6 +577,14 @@ export class ChatMessageService {
       this.pushCoalescingService
         .scheduleMessagePush(recipientId, conversation.id, sender.username)
         .catch(() => {});
+    } else {
+      this.watchVisibleDelivery(
+        message.id,
+        recipientId,
+        recipientDeviceIds,
+        conversation.id,
+        sender.username,
+      );
     }
 
     // Async link preview — fire and forget, does not block send
@@ -582,6 +598,63 @@ export class ChatMessageService {
       recipientId: data.recipientId,
       server,
     });
+  }
+
+  /**
+   * PR0.2 skips the push for a device that reports itself visible. That state
+   * can be stale: iOS freezes a page it has just put away, and the
+   * `clientVisible: false` it meant to send never leaves, so every message of
+   * the next ~45 s (the socket's ping timeout) would get no push at all. A
+   * page that really is on screen confirms each message within milliseconds,
+   * so a device that has not confirmed after the grace gets its push after all.
+   */
+  private watchVisibleDelivery(
+    messageId: number,
+    recipientId: number,
+    deviceIds: number[],
+    conversationId: number,
+    senderName: string,
+  ): void {
+    const timer = setTimeout(() => {
+      void this.pushIfUnconfirmed(
+        messageId,
+        recipientId,
+        deviceIds,
+        conversationId,
+        senderName,
+      );
+    }, VISIBLE_DELIVERY_GRACE_MS);
+    timer.unref();
+  }
+
+  private async pushIfUnconfirmed(
+    messageId: number,
+    recipientId: number,
+    deviceIds: number[],
+    conversationId: number,
+    senderName: string,
+  ): Promise<void> {
+    try {
+      for (const deviceId of deviceIds) {
+        const delivered = await this.messagesService.isDeliveredToDevice(
+          messageId,
+          recipientId,
+          deviceId,
+        );
+        if (!delivered) {
+          await this.pushCoalescingService.scheduleMessagePush(
+            recipientId,
+            conversationId,
+            senderName,
+          );
+          return;
+        }
+      }
+    } catch (error) {
+      this.logger.warn(
+        `[sendMessage] delivery check failed: ${error instanceof Error ? error.name : 'unknown'}`,
+      );
+    }
   }
 
   async handleGetMessages(client: Socket, data: any) {

@@ -140,6 +140,7 @@ describe('ChatMessageService', () => {
           provide: MessagesService,
           useValue: {
             stampEnvelope: jest.fn().mockResolvedValue(undefined),
+            isDeliveredToDevice: jest.fn().mockResolvedValue(true),
             create: createMock,
             findByConversation: findByConversationMock,
             findEnvelopeCiphertexts: findEnvelopeCiphertextsMock,
@@ -419,6 +420,51 @@ describe('ChatMessageService', () => {
 
       expect(bob.emit).toHaveBeenCalledWith('newMessage', expect.anything());
       expect(pushCoalescingService.scheduleMessagePush).not.toHaveBeenCalled();
+    });
+
+    // A visible state can be stale: iOS freezes a page it has just put away
+    // before `clientVisible: false` leaves. A running page confirms a message
+    // (`messageDelivered`) within milliseconds; one that has not, after the
+    // grace, is frozen and gets the push the skip denied it.
+    describe('a visible recipient device that never confirms the message', () => {
+      beforeEach(() => jest.useFakeTimers());
+      afterEach(() => jest.useRealTimers());
+
+      const sendToVisibleBob = async () => {
+        arrangeSuccessfulTextMessageSend();
+        installSocket(mockServer, 2, 'socket-bob', {
+          pushClientState: { clientVisible: true },
+        });
+        await service.handleSendMessage(
+          mockClient as Socket,
+          { recipientId: 2, content: 'hello' },
+          mockServer as Server,
+        );
+      };
+
+      it('is pushed after the grace (a frozen iPhone page)', async () => {
+        messagesService.isDeliveredToDevice.mockResolvedValue(false);
+
+        await sendToVisibleBob();
+        expect(pushCoalescingService.scheduleMessagePush).not.toHaveBeenCalled();
+
+        await jest.advanceTimersByTimeAsync(2500);
+
+        expect(pushCoalescingService.scheduleMessagePush).toHaveBeenCalledWith(
+          2,
+          10,
+          'alice',
+        );
+      });
+
+      it('is not pushed when the page confirmed it (really on screen)', async () => {
+        messagesService.isDeliveredToDevice.mockResolvedValue(true);
+
+        await sendToVisibleBob();
+        await jest.advanceTimersByTimeAsync(2500);
+
+        expect(pushCoalescingService.scheduleMessagePush).not.toHaveBeenCalled();
+      });
     });
 
     it('schedules push when the recipient socket is online but hidden', async () => {
