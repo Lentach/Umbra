@@ -627,7 +627,10 @@ self.addEventListener('push', function (event) {
   }
 
   // Old path: the server names the chat and its counts. Its badge total is
-  // also the base the box wake-up counts are added to.
+  // also the base the box wake-up counts are added to. The badge itself is
+  // written as the server total, so box counts still waiting (an account
+  // mid-migration, some chats on each path) drop out of it until the next
+  // box wake-up or the page's own total puts them back.
   event.waitUntil(
     showMessagePush(payload, false).then(function () {
       return typeof payload.unreadTotal === 'number'

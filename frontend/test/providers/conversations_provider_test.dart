@@ -776,7 +776,11 @@ void main() {
     group('postHiddenArrivalCard (decision 76)', () {
       late _RecordingPushSwChannel channel;
 
-      ConversationsProvider build({bool muted = false, bool hidden = true}) {
+      ConversationsProvider build({
+        bool muted = false,
+        DateTime? mutedUntil,
+        bool hidden = true,
+      }) {
         channel = _RecordingPushSwChannel();
         final provider = ConversationsProvider(pushSwChannel: channel)
           ..onConnect(false)
@@ -787,6 +791,7 @@ void main() {
               'userTwo': {'id': 2, 'username': 'bob', 'tag': '0002'},
               'createdAt': DateTime.utc(2026).toIso8601String(),
               'muted': muted,
+              'mutedUntil': mutedUntil?.toIso8601String(),
             },
           ]);
         if (hidden) provider.setClientVisible(false);
@@ -824,6 +829,24 @@ void main() {
 
       test('a muted chat posts nothing', () {
         build(muted: true).postHiddenArrivalCard(10);
+
+        expect(cards(), isEmpty);
+      });
+
+      test('a mute that has run out no longer silences the card', () {
+        build(
+          muted: true,
+          mutedUntil: DateTime.now().subtract(const Duration(hours: 1)),
+        ).postHiddenArrivalCard(10);
+
+        expect(cards(), hasLength(1));
+      });
+
+      test('a mute that runs on still does', () {
+        build(
+          muted: true,
+          mutedUntil: DateTime.now().add(const Duration(hours: 1)),
+        ).postHiddenArrivalCard(10);
 
         expect(cards(), isEmpty);
       });
