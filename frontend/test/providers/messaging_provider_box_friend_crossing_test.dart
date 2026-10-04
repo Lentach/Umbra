@@ -8,6 +8,7 @@ import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/services/contacts/contact_store.dart';
 import 'package:fireplace/services/device_list/device_list_cache.dart';
 import 'package:fireplace/services/device_list/device_list_canonical.dart';
+import 'package:fireplace/services/encryption/signal_stores.dart';
 import 'package:fireplace/utils/e2e_diag_log.dart';
 import 'package:fireplace/utils/e2e_envelope.dart';
 import 'package:fireplace/utils/message_ids.dart';
@@ -47,8 +48,14 @@ class _Enc extends EncryptionProvider {
   @override
   bool get ownDeviceIdConfirmed => true;
 
+  /// The peer's held list: enrolled, or — single-device by construction —
+  /// not (its device is then 1).
+  bool peerEnrolled = true;
+
   @override
-  VerifiedDeviceList? cachedDeviceList(int userId) => userId == _peer
+  VerifiedDeviceList? cachedDeviceList(int userId) => userId != _peer
+      ? null
+      : peerEnrolled
       ? VerifiedDeviceList.enrolled(
           version: 1,
           listHash: 'H' * 44,
@@ -60,11 +67,31 @@ class _Enc extends EncryptionProvider {
             ),
           ],
         )
-      : null;
+      : const VerifiedDeviceList.notEnrolled();
 }
 
 String _sid(String c) => '${c * 42}E';
 final String _sealPub = '${'b' * 42}w';
+
+/// Key storage of one install, apart from every other's.
+class _MemoryStorage extends DualStorage {
+  _MemoryStorage() : super(const FlutterSecureStorage());
+
+  final Map<String, String> _store = {};
+
+  @override
+  Future<void> write({required String key, required String value}) async =>
+      _store[key] = value;
+
+  @override
+  Future<String?> read({required String key}) async => _store[key];
+
+  @override
+  Future<void> delete({required String key}) async => _store.remove(key);
+
+  @override
+  Future<Map<String, String>> readAll() async => Map.of(_store);
+}
 
 /// The test's clock: the resend gate and the "asked" window read it.
 DateTime _now = DateTime.utc(2026, 9, 27);
@@ -345,8 +372,8 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     _now = DateTime.utc(2026, 9, 27);
     mail = [];
-    a = _Side(1, 2, 5, 3, _sid('A'));
-    b = _Side(5, 3, 1, 2, _sid('B'));
+    a = _Side(1, 1, 5, 3, _sid('A'));
+    b = _Side(5, 3, 1, 1, _sid('B'));
     a.other = b;
     b.other = a;
     await wire(a);
@@ -354,12 +381,8 @@ void main() {
     // The old path: a wrote to b, b answered — an established session each
     // way, and no window open on either side.
     final first = (await a.reader.encryptForFriend(5, 3, '{"t":"x"}'))!;
-    await b.enc.encryptionService.decrypt(
-      1,
-      first.signalCiphertext,
-      deviceId: 2,
-    );
-    final reply = (await b.reader.encryptForFriend(1, 2, '{"t":"y"}'))!;
+    await b.enc.encryptionService.decrypt(1, first.signalCiphertext);
+    final reply = (await b.reader.encryptForFriend(1, 1, '{"t":"y"}'))!;
     await a.enc.encryptionService.decrypt(
       5,
       reply.signalCiphertext,
@@ -378,7 +401,7 @@ void main() {
     "hold each other's queue after one delivery, for good",
     () async {
       await a.link.rekeyFriend(5, 3);
-      await b.link.rekeyFriend(1, 2);
+      await b.link.rekeyFriend(1, 1);
       await pump();
 
       expect(converged(), isTrue);
@@ -415,4 +438,147 @@ void main() {
       }
     },
   );
+
+  group('a friend device that lost its storage (decision 88)', () {
+    /// Only a NOT enrolled account re-mints on a login (an enrolled one
+    /// gates), and B holds A's list as such.
+    setUp(() => b.enc.peerEnrolled = false);
+
+    /// Before the wipe the pair was on the box: each held the other's queue
+    /// and had acked it.
+    void onTheBox() {
+      a.link
+        ..learned = b.sid
+        ..acked = true;
+      b.link
+        ..learned = a.sid
+        ..acked = true;
+    }
+
+    /// A's device after a wipe and a password login: empty key storage, so a
+    /// NEW identity (an un-enrolled account re-mints), and the contact
+    /// restored from the backup — B's queue in `outbound`, but no queue of
+    /// its own (`toBackupJson` drops `queues`), so it holds a new one for B,
+    /// handed to nobody yet. Its storage is its own: [a] goes on holding the
+    /// OLD identity, as a device that never lost it would.
+    Future<_Side> restoreA() async {
+      final restored = _Side(1, 1, 5, 3, _sid('C'))..other = b;
+      restored.enc.encryptionService.debugSetDualStorage(_MemoryStorage());
+      b.other = restored;
+      await wire(restored);
+      restored.link.learned = b.sid;
+      E2eDiagLog.clear();
+      return restored;
+    }
+
+    /// [from] writes to [to] on the session the handoffs left; [to] reads it.
+    Future<void> expectTraffic(_Side from, _Side to) async {
+      const text = '{"t":"m"}';
+      final frame = (await from.reader.encryptForFriend(
+        from.peerId,
+        from.peerDevice,
+        text,
+      ))!;
+      expect(
+        await to.enc.encryptionService.decrypt(
+          to.peerId,
+          frame.signalCiphertext,
+          deviceId: to.peerDevice,
+        ),
+        text,
+      );
+    }
+
+    test('hands its new queue over the queue we gave it, and we take it: '
+        'what we write reaches the restored device', () async {
+      onTheBox();
+      final restored = await restoreA();
+
+      await restored.link.restart();
+      await pump();
+
+      expect(b.refusals, isEmpty);
+      expect(b.link.learned, restored.sid);
+      expect(restored.link.acked, isTrue);
+      await expectTraffic(b, restored);
+      await expectTraffic(restored, b);
+    });
+
+    test(
+      'from a friend held as ENROLLED, a new identity is refused like '
+      'any unasked PreKey handoff: its revoked device could mint one',
+      () async {
+        b.enc.peerEnrolled = true;
+        onTheBox();
+        final restored = await restoreA();
+
+        await restored.link.restart();
+        await pump();
+
+        expect(b.refusals, ['prekey_unasked']);
+        expect(b.link.learned, a.sid);
+      },
+    );
+
+    test('a handoff refused before the fix is taken when it is handed '
+        'again: the session it started already stands', () async {
+      onTheBox();
+      final restored = await restoreA();
+      await restored.link.restart();
+      // The prod shape (0.2.58): B read the frame — the decrypt moved its
+      // session to the new identity — and refused the handoff.
+      final refused = mail.single;
+      mail.clear();
+      await b.enc.encryptionService.decrypt(1, refused.signal);
+
+      _now = _now.add(_resend);
+      await restored.link.restart();
+      await pump();
+
+      expect(b.refusals, isEmpty);
+      expect(b.link.learned, restored.sid);
+      expect(restored.link.acked, isTrue);
+      await expectTraffic(b, restored);
+    });
+
+    /// [device] — holding A's identity, but not the restored install — hands
+    /// B a queue of its own (sid R) on a fresh session, unasked.
+    Future<void> handOffFrom(_Side device) async {
+      final frame = (await device.reader.encryptForFriend(
+        5,
+        3,
+        jsonEncode(
+          E2eEnvelope.buildQueueHandoff(sid: _sid('R'), sealPub: _sealPub),
+        ),
+        fresh: true,
+      ))!;
+      mail.add((to: b, signal: frame.signalCiphertext, viaRequest: false));
+      await pump();
+    }
+
+    test("a PreKey handoff under the friend's UNCHANGED identity is still "
+        'refused when we did not ask: a revoked device holds that identity '
+        'and our queue', () async {
+      onTheBox();
+
+      await handOffFrom(a);
+
+      expect(b.refusals, ['prekey_unasked']);
+      expect(b.link.learned, a.sid);
+    });
+
+    test('once the new identity is taken, a device still holding the OLD '
+        'one cannot take the address back', () async {
+      onTheBox();
+      final restored = await restoreA();
+      await restored.link.restart();
+      await pump();
+      expect(b.link.learned, restored.sid);
+
+      await handOffFrom(a);
+
+      expect(b.refusals, ['prekey_unasked']);
+      expect(b.link.learned, restored.sid);
+    });
+  });
 }

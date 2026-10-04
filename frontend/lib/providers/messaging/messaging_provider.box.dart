@@ -994,6 +994,24 @@ extension MessagingBox on MessagingProvider {
           kBoxRedeliveryWindow;
     }
 
+    // A friend's device that lost its storage re-minted its identity and
+    // hands us its new queue in a PreKey message (decision 88). Judged
+    // BEFORE the decrypt, which moves the session and erases the evidence.
+    // Only for a friend the held list says is NOT enrolled: single-device
+    // by construction, so no revoked device of it exists to mint a key of
+    // its own, and its identity changes only by that re-mint. An enrolled
+    // account never re-mints on a login (it gates).
+    final preKey = msg.encryptedContent!.startsWith(
+      '${BoxFrameKind.preKey.byte}:',
+    );
+    final newIdentity =
+        preKey &&
+        enc.cachedDeviceList(msg.senderId)?.enrolled == false &&
+        await enc.preKeyFromNewIdentity(
+          msg.senderId,
+          msg.originDeviceId ?? 1,
+          msg.encryptedContent!,
+        );
     final String plaintext;
     try {
       plaintext = await enc.decrypt(
@@ -1024,12 +1042,16 @@ extension MessagingBox on MessagingProvider {
       // came in a PreKey message is taken only when this device asked for
       // that session (it started or re-keyed it): a revoked device of the
       // friend still holds this queue's sid and the account identity, and
-      // would otherwise move a live device's address to its own queue.
+      // would otherwise move a live device's address to its own queue. A
+      // non-enrolled friend's device under an identity new to this session
+      // is not that device: it lost its storage, and the queue we gave it is
+      // the only place it can reach us from (decision 88).
       case E2eEnvelope.typeQueueHandoff when link != null:
         final device = msg.originDeviceId ?? 1;
         // An account we asked over the box answers from the session our
         // request built: its accept counts as asked (slice (f), E15f).
-        if (msg.encryptedContent!.startsWith('${BoxFrameKind.preKey.byte}:') &&
+        if (preKey &&
+            !newIdentity &&
             !link.awaitingFriendRekeyFrom(msg.senderId, device) &&
             !MessagingFirstContact._boxPending(
               link.contactOf(msg.senderId),
@@ -1041,6 +1063,12 @@ extension MessagingBox on MessagingProvider {
             'why': 'prekey_unasked',
           });
           return true;
+        }
+        if (newIdentity) {
+          _e2eFlowLog('BOX_FRIEND_HANDOFF_NEW_IDENTITY', {
+            'peer': msg.senderId,
+            'device': device,
+          });
         }
         link.friendRekeyAnswered(msg.senderId, device);
         return _takeFriendHandoff(link, msg.senderId, device, plaintext);
