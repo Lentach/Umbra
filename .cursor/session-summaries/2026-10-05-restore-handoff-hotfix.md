@@ -14,14 +14,14 @@
 - Read only (load-bearing): `box_friend_handoff.dart` (`targetOf` prefers held `outbound`), `box_session.dart` (`_takeHandoff`), `contact_record.dart:637` (`toBackupJson` drops `queues`), `device_list_cache.dart` (`VerifiedDeviceList.notEnrolled` = single device 1).
 
 ## Verification
-- CI: pending on `d8cc4706` at writing (see LATEST / follow-up commit).
+- CI: `d8cc4706` cancelled (superseded by the comment fix `fd9ad95f`, same code); `fd9ad95f` in progress at handoff — judge CI there.
 - `flutter test`: 3078 passed, 14 skipped; count gate OK; Dart ratchet PASS (baseline 3153); `flutter analyze` on touched files: infos only.
 - Crossing suite (real Signal both sides) +5 cases: restore taken; pair refused pre-fix heals on resend; unchanged-identity PreKey refused; old identity refused after the new one was taken; enrolled friend refused. Red before the fix (2 fail with `prekey_unasked`). Mutants killed: drop archived exclusion, drop `!newIdentity`, drop the enrolled check.
 - Live drives (release web, local stack): (1) old bundle: A wiped (fresh origin) → B refused `prekey_unasked`, `b2` stuck in `box_msgs` — the prod bug. (2) Fixed bundle on B, A's clock +25 h → A's resend taken (`NEW_IDENTITY`), `b3` reached A: a pre-fix pair heals. (3) B wiped on fixed build → A took B's handoff at once, messages both ways. (4) Android Pixel_7, profile APK 0.2.59: `rstb1` restored by password login, web A took its handoff, `a4 to android` shown on the phone.
 - NOT verified: iPhone PWA; prod; an enrolled account's phrase restore (rebinds the device id — separate path, may be broken the same way); a pair where BOTH sides were wiped (see Notes).
 
 ## Notes for next session
-- Next action: CI green on `d8cc4706`, then deploy 0.2.59 as its own release: `deploy-web.ps1` (web only; backend unchanged) + a release APK 0.2.59 (`build-android.ps1`) to `~/fireplace/apk/`. The FIX lives on the RECEIVING side: a peer heals only once IT runs 0.2.59.
+- Next action: CI green on `fd9ad95f` (`d8cc4706`: cancelled, superseded), then deploy 0.2.59 as its own release: `deploy-web.ps1` (web only; backend unchanged) + a release APK 0.2.59 (`build-android.ps1`) to `~/fireplace/apk/`. The FIX lives on the RECEIVING side: a peer heals only once IT runs 0.2.59.
 - Then: decisions 91/92 (empty notifications, reactions never notify), merge 0.2.55 (carry E88a into the branch log; bump past 0.2.59), deploy; owner calls Phase 4.
 - OPEN (owner): a box-only pair where BOTH sides lost storage cannot re-converge — each side's backup `outbound` names the other's dead queue, and no server list names a box friend's request queue. Prod 130/131 is that shape. Needs a design call (one `searchUsers` of the handle after a restore, naming the pair?).
 - Healing pairs broken before 0.2.59: automatic, on the restored side's next connect ≥ 24 h after its last handoff, once the peer runs 0.2.59.
