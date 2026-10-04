@@ -24,8 +24,11 @@
 - No device drive: no code changed. NOT verified: which pairs are on the box; whose device holds the 56-message queue; iOS users beyond the owner.
 
 ## Notes for next session
-- Next action: day-7 watch on or after 2026-10-07, same queries. E65c: a normal queue whose `probationUntil` is ≤ today must read NULL once its owner subscribes or acks. Queues keep being created (max is 10-10 now), so "every queue NULL after 10-08" no longer holds: count `"probationUntil" <= current_date` and expect it to fall as owners open the app. Then Phase 4 (PR4.1/PR4.2).
+- Next action: day-7 watch on or after 2026-10-07, same queries. E65c: a normal queue whose `probationUntil` is ≤ today must read NULL once its owner subscribes or acks. Queues keep being created (max is 10-10 now), so "every queue NULL after 10-08" no longer holds: count `"probationUntil" <= current_date` and expect it to fall as owners open the app; the full sweep is 10-11 or later.
+- **Phase 4 is NOT next after the watch.** Branch decision 83 (`feat/metadata-privacy`): 0.2.55 (H1 + the one-time password sheet, decisions 81 and 76, `POST /users/verify-password`) ships before any PR4.x, and decision 77's (O1) 6-week backstop starts at that deploy. 0.2.55 (`562ba915`, `adc54142`) is NOT on master or prod: `merge-base --is-ancestor adc54142 origin/master` fails, 0 `verify-password` hits in master's `backend/src` / `frontend/lib`. Order: merge 0.2.55 into master (it is behind 0.2.58), CI, deploy, then O1 convergence, then PR4.1/PR4.2.
+- **Decision numbers 76–81 collide** in `docs/plans/metadata-privacy-decisions.md`: the branch has 76–84 dated 09-30 (password prompt, O1, security push, media, notice, H1, Phase 5 drop, 0.2.55 order, rest of Phase 5); master has 76–81 dated 10-01 (PWA notifications). The merge must renumber one side and its `E76a`-style references. Master's 76 (a hidden page posts its own card) overlaps branch 81 (H1): reconcile the code too.
+- APK is still `0.2.53` (20053, `/version` `android`).
 - Watch the 56-message queue: if it still holds on day 7, the device is gone or broken, not slow; the 11-01 expiry reaps it.
 - The question still open from day 1: does a NON-owner pair ever show on the old path. Not yet.
-- Still open (unchanged): users' 10-02 push reports and E84 (`wip/e84-old-path-push`), VAPID rotation, `getMessages` box-id bug to file, Phase 5 drop (owner).
+- Still open (unchanged): users' 10-02 push reports and E84 (`wip/e84-old-path-push`), VAPID rotation, `getMessages` box-id bug to file. Phase 5 is answered on the branch (decision 82: dropped); `traps.md` Owner-owed still says unanswered, fix it at the merge.
 - Traps: none new.
