@@ -75,11 +75,11 @@ bool preKeyWouldReplace(SessionRecord record, String ciphertext) {
 /// device lost its storage and its login re-minted): [record] knows that
 /// device under another identity, and no ARCHIVED state ever held this one.
 ///
-/// Decision 37 refuses an unasked PreKey handoff because a revoked device
-/// of the friend holds the account identity and our queue's sid; that
-/// device signs with an identity [record] already knows, so it never
-/// passes here. A re-minted device's identity is new to us, and the decrypt
-/// has the identity policy judge it before any handoff is read.
+/// This alone does NOT tell a re-mint from a revoked device of the friend
+/// minting a fresh key of its own (it holds our queue's sid, and with key
+/// warnings off the decrypt absorbs any new identity). The caller takes the
+/// handoff only for a friend whose held list is NOT enrolled: single-device
+/// by construction, so no revoked device of it exists (decision 37's threat).
 ///  * The new identity in the CURRENT state (an earlier handoff of it was
 ///    refused after the decrypt moved the session) still counts: that
 ///    refusal must not lock the restored device out for good.
