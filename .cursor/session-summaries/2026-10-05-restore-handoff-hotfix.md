@@ -1,6 +1,6 @@
 # A restored friend device receives again: its new queue's handoff is no longer refused (0.2.59, decision 88)
 
-**Date:** 2026-10-05 · **Version:** 0.2.58 → 0.2.59 (not deployed) · **Tiers deployed:** none
+**Date:** 2026-10-05 · **Version:** 0.2.58 → 0.2.59 · **Tiers deployed:** both (web + backend redeploy for the APK channel) + APK 20059
 
 ## What was done
 - Cause found (red local repro, same diag as prod): the restore DID re-mint a queue and hand it over the queue the backup's `outbound` names, but under the re-minted identity the frame is a PreKey nobody asked for, so the peer refused it `BOX_FRIEND_HANDOFF_REFUSED {why: prekey_unasked}` (`messaging_provider.box.dart` `_readBox`) and kept writing to the dead pre-wipe queue.
@@ -21,7 +21,7 @@
 - NOT verified: iPhone PWA; prod; an enrolled account's phrase restore (rebinds the device id — separate path, may be broken the same way); a pair where BOTH sides were wiped (see Notes).
 
 ## Notes for next session
-- Next action (CI already green 6/6 on `fd9ad95f`): deploy 0.2.59 as its own release: `deploy-web.ps1` (web only; backend unchanged) + a release APK 0.2.59 (`build-android.ps1`) to `~/fireplace/apk/`. The FIX lives on the RECEIVING side: a peer heals only once IT runs 0.2.59.
+- DEPLOYED 2026-10-05: web `0.2.59/abb662ca` (smoke 8/8), backend `0.2.59/abb662ca` (code unchanged; redeployed so `/version` announces APK 20059), APK at `/apk/umbra-0.2.59.apk` (SHA256 `dcdce501dcce28d41aadffeb1db7d31af4bd32fcd739b8177f3a5304b4c372dd`, prod host + commit verified inside `libapp.so`). Backup `chatdb-20261004T234738Z.dump.gpg`; `.env.bak.pre-0259` on the VM. Next action: on a fresh prod pair, wipe ONE side and confirm delivery TO it. The FIX lives on the RECEIVING side: a peer heals only once IT runs 0.2.59.
 - Then: decisions 91/92 (empty notifications, reactions never notify), merge 0.2.55 (carry E88a into the branch log; bump past 0.2.59), deploy; owner calls Phase 4.
 - OPEN (owner): a box-only pair where BOTH sides lost storage cannot re-converge — each side's backup `outbound` names the other's dead queue, and no server list names a box friend's request queue. Prod 130/131 is that shape. Needs a design call (one `searchUsers` of the handle after a restore, naming the pair?).
 - Healing pairs broken before 0.2.59: automatic, on the restored side's next connect ≥ 24 h after its last handoff, once the peer runs 0.2.59.
