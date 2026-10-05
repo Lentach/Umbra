@@ -72,10 +72,12 @@ const List<Duration> _boxActionRetryDelays = [
 /// could no longer hold the target either.
 const Duration _boxActionRetryLife = Duration(days: 30);
 
-/// The frames of ONE box action some device took and some did not (E19l):
-/// its envelopes exactly as first sent — same `ts`, same payload, since
-/// every action is idempotent or last-writer-wins by `(s, w)` and `ts` —
-/// and the devices still owed them.
+/// The frames of ONE box action — or box message (E93a) — some device took
+/// and some did not (E19l): its envelopes exactly as first sent — same
+/// `ts`, same payload, since every action is idempotent or last-writer-wins
+/// by `(s, w)` and `ts`, and a message's wire id drops a repeat — and the
+/// devices still owed them. A device whose queue was full is never owed:
+/// it is paused instead ([BoxDevicePause]).
 class _BoxActionRetry {
   _BoxActionRetry({
     required this.seq,
@@ -230,41 +232,44 @@ extension MessagingBoxActions on MessagingProvider {
     }
     // A delivery that threw is a frame not taken, as `deliver` answers a
     // failed seal: the frames other devices took still stand (E19l).
-    final accepted = await Future.wait([
+    final answers = await Future.wait([
       for (final (to, body) in frames)
-        route.outbox.deliver(to, body).catchError((Object _) => false),
+        route.outbox
+            .deliver(to, body)
+            .catchError((Object _) => BoxSendOutcome.failed),
     ]);
+    _noteBoxAnswers(peer, frames, answers, peerFrames: route.targets.length);
     _e2eFlowLog('BOX_ACTION_SEND', {
       't': type,
       'frames': frames.length,
-      'accepted': accepted.where((ok) => ok).length,
+      'accepted': answers.where((a) => a == BoxSendOutcome.taken).length,
     });
-    if (!accepted.contains(true)) return false;
+    if (!answers.contains(BoxSendOutcome.taken)) return false;
     final key = _boxActionKey(conversationId, type, target);
     // A newer action of this type on this target, taken already, owns
     // every device's state: this one is owed to nobody any more.
     if ((_boxActionSends[key] ?? 0) > send) return true;
     _boxActionSends[key] = send;
     _dropBoxActionRetry(key);
-    if (accepted.contains(false)) {
-      final retry = _BoxActionRetry(
+    final owedPeers = <int>{};
+    final owedSiblings = <int>{};
+    for (var i = 0; i < answers.length; i++) {
+      if (answers[i] != BoxSendOutcome.failed) continue;
+      // `_sealBoxFrames` builds the peer devices' frames first.
+      (i < route.targets.length ? owedPeers : owedSiblings).add(
+        frames[i].$1.peerDeviceId,
+      );
+    }
+    if (owedPeers.isNotEmpty || owedSiblings.isNotEmpty) {
+      _oweBoxFrames(
+        key,
         seq: send,
-        owner: own,
         peer: peer,
         json: json,
         copyJson: copyJson,
-        since: clock.now(),
+        peerDevices: owedPeers,
+        siblings: owedSiblings,
       );
-      for (var i = 0; i < accepted.length; i++) {
-        if (accepted[i]) continue;
-        // `_sealBoxFrames` builds the peer devices' frames first.
-        final device = frames[i].$1.peerDeviceId;
-        (i < route.targets.length ? retry.peerDevices : retry.siblings).add(
-          device,
-        );
-      }
-      _boxActionRetries[key] = retry;
-      _scheduleBoxActionRetry(key, retry);
     }
     return true;
   }
@@ -337,18 +342,58 @@ extension MessagingBoxActions on MessagingProvider {
       copyJson: retry.copyJson,
     );
     if (sealed.failure != null) return;
-    final accepted = await Future.wait([
-      for (final (to, body) in sealed.frames) route.outbox.deliver(to, body),
+    final answers = await Future.wait([
+      for (final (to, body) in sealed.frames)
+        route.outbox
+            .deliver(to, body)
+            .catchError((Object _) => BoxSendOutcome.failed),
     ]);
-    for (var i = 0; i < accepted.length; i++) {
-      if (!accepted[i]) continue;
+    _noteBoxAnswers(
+      retry.peer,
+      sealed.frames,
+      answers,
+      peerFrames: targets.length,
+    );
+    for (var i = 0; i < answers.length; i++) {
+      // Taken, or full: a full queue is paused, never owed (E93a).
+      if (answers[i] == BoxSendOutcome.failed) continue;
       final device = sealed.frames[i].$1.peerDeviceId;
       (i < targets.length ? retry.peerDevices : retry.siblings).remove(device);
     }
     _e2eFlowLog('BOX_ACTION_RETRY', {
       'frames': sealed.frames.length,
-      'accepted': accepted.where((ok) => ok).length,
+      'accepted': answers.where((a) => a == BoxSendOutcome.taken).length,
     });
+  }
+
+  /// Owes [peerDevices] of [peer] and our [siblings] the frames of [json]
+  /// and [copyJson] under [key], resent from 30 s on (E19l; a box message's
+  /// too since E93a).
+  void _oweBoxFrames(
+    String key, {
+    required int seq,
+    required int peer,
+    required String json,
+    required String copyJson,
+    required Set<int> peerDevices,
+    required Set<int> siblings,
+  }) {
+    final own = _currentUserId;
+    if (own == null) return;
+    final retry =
+        _BoxActionRetry(
+            seq: seq,
+            owner: own,
+            peer: peer,
+            json: json,
+            copyJson: copyJson,
+            since: clock.now(),
+          )
+          ..peerDevices.addAll(peerDevices)
+          ..siblings.addAll(siblings);
+    _dropBoxActionRetry(key);
+    _boxActionRetries[key] = retry;
+    _scheduleBoxActionRetry(key, retry);
   }
 
   void _scheduleBoxActionRetry(String key, _BoxActionRetry retry) {

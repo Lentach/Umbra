@@ -66,9 +66,24 @@ extension MessagingBox on MessagingProvider {
   Future<bool> consumeBoxEntry(BoxInboxEntry entry, ContactRecord? peer) {
     final signal = entry.signal;
     if (signal == null) return Future.value(true);
+    // A device that sends to us reads its own queues again (E93a). Only on
+    // a queue whose sid that device was handed: our sibling's on a
+    // self-queue, a friend's on its contact queue. Anyone may write to the
+    // public request queue and claim any account and device there.
+    final own = _currentUserId;
+    final fromItsQueue = entry.peerUserId == own
+        ? entry.viaSelfQueue
+        : !entry.viaRequestQueue;
+    if (fromItsQueue &&
+        _boxPaused.resume(entry.peerUserId, entry.senderDeviceId)) {
+      _e2eFlowLog('BOX_DEVICE_RESUMED', {
+        'user': entry.peerUserId,
+        'device': entry.senderDeviceId,
+        'by': 'heard',
+      });
+    }
     // One of this account's OWN devices (PR3.1 sibling queues): read before
     // the contact-record refusals — the own account has no contact record.
-    final own = _currentUserId;
     if (own != null && entry.peerUserId == own) {
       return _runDecryptSerialized(
         own,
@@ -1735,6 +1750,11 @@ extension MessagingBox on MessagingProvider {
   /// [peerOnly] (receipts and typing, slice (g), E61b): the peer half alone
   /// — no sent copy goes to our siblings, so their coverage is not asked
   /// and the route names none.
+  ///
+  /// Coverage is judged on every live device; the route then leaves out a
+  /// device whose queue is full (E93a, [BoxDevicePause]) unless its probe is
+  /// due. When that leaves no peer device, every peer device is tried
+  /// anyway (not for [peerOnly]): the row then fails where the user sees it.
   Future<_BoxRoute?> _boxRoute(
     int recipientId,
     BoxOutbox outbox,
@@ -1798,11 +1818,21 @@ extension MessagingBox on MessagingProvider {
       declined('peer_uncovered');
       return null;
     }
-    final targets = [for (final d in live) addresses[d]!];
+    final everyTarget = [for (final d in live) addresses[d]!];
+    final targets = [
+      for (final t in everyTarget)
+        if (peerOnly
+            ? !_boxPaused.isPaused(recipientId, t.peerDeviceId)
+            : _boxPaused.admit(recipientId, t.peerDeviceId))
+          t,
+    ];
     return (
       outbox: outbox,
-      targets: targets,
-      siblings: siblings,
+      targets: targets.isEmpty && !peerOnly ? everyTarget : targets,
+      siblings: [
+        for (final s in siblings)
+          if (_boxPaused.admit(ownUserId, s.peerDeviceId)) s,
+      ],
       conversationId: conversationId,
       senderListInfo: SenderListInfo(
         ownVersion: own.version,
@@ -2144,12 +2174,17 @@ extension MessagingBox on MessagingProvider {
   /// sealed into that device's queue, and a SENT COPY — the same message
   /// naming the peer inside E2E (E5) — per sibling, sealed into its
   /// self-queue. Both carry the message's type, its own timer [ttl] and the
-  /// quote of a reply's [replyTo] (item 3). The row is SENT only once the
-  /// box took every frame, the copies included (decision 20); anything less
-  /// fails it for a retry (decision 19), which re-seals under the same wire
+  /// quote of a reply's [replyTo] (item 3). The row is SENT once at least
+  /// one PEER device's box took its frame (decision 93, E93a): our sent
+  /// copies never decide it, and neither does a friend device that refused
+  /// while another took it. A device whose answer was no answer or another
+  /// transient refusal is owed the same frames by the in-RAM retry (E19l's,
+  /// [_oweBoxFrames]); a device whose queue is full is paused instead
+  /// ([BoxDevicePause]) and misses this one. No peer device taking it fails
+  /// the row for a retry (decision 19), which re-seals under the same wire
   /// id, so a device that already holds the message drops the copy
   /// (`wireHeldByOther`). Every frame is built before the first goes out, so
-  /// nothing reaches some devices only. A device with no usable session
+  /// a seal that fails sends nothing at all. A device with no usable session
   /// fails the row before anything is encrypted, and nothing here fetches a
   /// pre-key bundle: a fetch timed by the send would name the sender at the
   /// moment of the box frame (decision 38, E38b); the refresh's next pass
@@ -2243,20 +2278,47 @@ extension MessagingBox on MessagingProvider {
         return false;
       }
       _boxTempIds.add(tempId);
-      final accepted = await Future.wait([
-        for (final (to, body) in frames) route.outbox.deliver(to, body),
+      final answers = await Future.wait([
+        for (final (to, body) in frames)
+          route.outbox
+              .deliver(to, body)
+              .catchError((Object _) => BoxSendOutcome.failed),
       ]);
+      final peerFrames = route.targets.length;
+      _noteBoxAnswers(recipientId, frames, answers, peerFrames: peerFrames);
+      final owedPeers = <int>{};
+      final owedSiblings = <int>{};
+      var peerTaken = 0;
+      for (var i = 0; i < answers.length; i++) {
+        final peerFrame = i < peerFrames;
+        if (answers[i] == BoxSendOutcome.taken && peerFrame) peerTaken++;
+        if (answers[i] != BoxSendOutcome.failed) continue;
+        (peerFrame ? owedPeers : owedSiblings).add(frames[i].$1.peerDeviceId);
+      }
       _e2eFlowLog('BOX_SEND', {
         'tempId': tempId,
         'frames': frames.length,
-        'accepted': accepted.where((ok) => ok).length,
+        'accepted': answers.where((a) => a == BoxSendOutcome.taken).length,
+        'peerTaken': peerTaken,
+        'full': answers.where((a) => a == BoxSendOutcome.full).length,
       });
-      if (accepted.contains(false)) {
+      if (peerTaken == 0) {
         _markMessageFailed(tempId, 'Could not send. Try again.');
         return false;
       }
+      if (owedPeers.isNotEmpty || owedSiblings.isNotEmpty) {
+        _oweBoxFrames(
+          'msg|${route.conversationId}|$sendToken',
+          seq: ++_boxActionSendSeq,
+          peer: recipientId,
+          json: envelope.json,
+          copyJson: envelope.copyJson,
+          peerDevices: owedPeers,
+          siblings: owedSiblings,
+        );
+      }
       final preview = envelope.linkPreview;
-      // Status is the model's default, `sent`: the box took every frame.
+      // Status is the model's default, `sent`: a peer device took it.
       final sent = MessageModel(
         id: localId,
         content: content,
@@ -2357,5 +2419,39 @@ extension MessagingBox on MessagingProvider {
       frames.add((to, frame.encode()));
     }
     return (frames: frames, failure: null, detail: const <String, Object>{});
+  }
+
+  /// What the box answered each of [frames] — the first [peerFrames] to
+  /// [peer]'s devices, the rest our own siblings', as [_sealBoxFrames]
+  /// builds them — applied to the pause (E93a): a full queue pauses its
+  /// device, a frame taken ends its pause.
+  void _noteBoxAnswers(
+    int peer,
+    List<(ContactOutbound, Uint8List)> frames,
+    List<BoxSendOutcome> answers, {
+    required int peerFrames,
+  }) {
+    final own = _currentUserId;
+    for (var i = 0; i < answers.length; i++) {
+      final user = i < peerFrames ? peer : own;
+      if (user == null) continue;
+      final device = frames[i].$1.peerDeviceId;
+      switch (answers[i]) {
+        case BoxSendOutcome.taken:
+          if (_boxPaused.resume(user, device)) {
+            _e2eFlowLog('BOX_DEVICE_RESUMED', {
+              'user': user,
+              'device': device,
+              'by': 'taken',
+            });
+          }
+        case BoxSendOutcome.full:
+          if (_boxPaused.full(user, device)) {
+            _e2eFlowLog('BOX_DEVICE_FULL', {'user': user, 'device': device});
+          }
+        case BoxSendOutcome.failed:
+          break;
+      }
+    }
   }
 }

@@ -223,15 +223,16 @@ extension MessagingFirstContact on MessagingProvider {
       );
       if (frame == null || frame.kind != BoxFrameKind.preKey) return false;
       return await outbox.deliver(
-        to,
-        BoxFrame(
-          kind: frame.kind,
-          senderDeviceId: frame.senderDeviceId,
-          senderUserId: own,
-          signal: frame.signal,
-          carriedClaim: payload.claim,
-        ).encode(),
-      );
+            to,
+            BoxFrame(
+              kind: frame.kind,
+              senderDeviceId: frame.senderDeviceId,
+              senderUserId: own,
+              signal: frame.signal,
+              carriedClaim: payload.claim,
+            ).encode(),
+          ) ==
+          BoxSendOutcome.taken;
     } on Object catch (e) {
       _firstContactLog('BOX_REQUEST_FRAME_FAILED', userId, {
         'device': device.deviceId,
@@ -259,7 +260,9 @@ extension MessagingFirstContact on MessagingProvider {
       if (to != null) {
         try {
           final frame = await encryptForOwnDevice(device, json);
-          taken = frame != null && await outbox.deliver(to, frame.encode());
+          taken =
+              frame != null &&
+              await outbox.deliver(to, frame.encode()) == BoxSendOutcome.taken;
           // `avoid_catching_errors` is waived here: a copy too big for one
           // frame or seal is refused with an ArgumentError, and a refused
           // copy is a failed one, recorded below.
@@ -852,7 +855,9 @@ extension MessagingFirstContact on MessagingProvider {
       for (final MapEntry(key: device, value: to)
           in outbox.addressesFor(userId).entries) {
         final frame = await encryptForFriend(userId, device, goodbye);
-        final sent = frame != null && await outbox.deliver(to, frame.encode());
+        final sent =
+            frame != null &&
+            await outbox.deliver(to, frame.encode()) == BoxSendOutcome.taken;
         if (!sent) {
           _firstContactLog('BOX_GOODBYE_NOT_SENT', userId, {'device': device});
         }
@@ -909,7 +914,8 @@ extension MessagingFirstContact on MessagingProvider {
     for (final MapEntry(key: device, value: to)
         in outbox.addressesFor(peerUserId).entries) {
       final frame = await encryptForFriend(peerUserId, device, timer);
-      if (frame == null || !await outbox.deliver(to, frame.encode())) {
+      if (frame == null ||
+          await outbox.deliver(to, frame.encode()) != BoxSendOutcome.taken) {
         _firstContactLog('BOX_TIMER_NOT_SENT', peerUserId, {'device': device});
       }
     }

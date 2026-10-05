@@ -467,17 +467,23 @@ class BoxSession
         ];
 
   @override
-  Future<bool> deliver(
+  Future<BoxSendOutcome> deliver(
     ContactOutbound to,
     Uint8List body, {
     BoxSendMode? mode,
   }) async {
     final sid = boxB64Decode(to.sid, kBoxSidBytes);
     final sealPub = boxB64Decode(to.sealPub, 32);
-    if (_disposed || sid == null || sealPub == null) return false;
+    if (_disposed || sid == null || sealPub == null) {
+      return BoxSendOutcome.failed;
+    }
     final blob = await _seal.seal(sealPub, body);
-    if (blob == null || _disposed) return false;
-    return await _box.send(sid, blob, mode: mode) is BoxOk;
+    if (blob == null || _disposed) return BoxSendOutcome.failed;
+    return switch (await _box.send(sid, blob, mode: mode)) {
+      BoxOk() => BoxSendOutcome.taken,
+      BoxRefused(code: BoxCode.queueFull) => BoxSendOutcome.full,
+      BoxRefused() || BoxUnknown() => BoxSendOutcome.failed,
+    };
   }
 
   @override
@@ -560,7 +566,8 @@ class BoxSession
     final encrypt = _swap.encrypt;
     if (_disposed || encrypt == null) return false;
     final frame = await encrypt(to.peerDeviceId, jsonEncode(envelope));
-    return frame != null && await deliver(to, frame.encode());
+    return frame != null &&
+        await deliver(to, frame.encode()) == BoxSendOutcome.taken;
   }
 
   @override
@@ -609,7 +616,9 @@ class BoxSession
     // Marked before the send: our session with it is already the fresh one,
     // so a replacing PreKey from it is an answer even if this send is lost.
     if (frame != null) _rekeyAsked[deviceId] = _now();
-    final sent = frame != null && await deliver(to, frame.encode());
+    final sent =
+        frame != null &&
+        await deliver(to, frame.encode()) == BoxSendOutcome.taken;
     E2eDiagLog.add('BOX_SIBLING_REKEYED', {'device': deviceId, 'sent': sent});
   }
 

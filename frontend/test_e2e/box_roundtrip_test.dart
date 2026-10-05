@@ -51,6 +51,7 @@ import 'package:fireplace/services/box/box_client.dart';
 import 'package:fireplace/services/box/box_first_contact.dart';
 import 'package:fireplace/services/box/box_frame.dart';
 import 'package:fireplace/services/box/box_friends.dart';
+import 'package:fireplace/services/box/box_outbox.dart';
 import 'package:fireplace/services/box/box_session.dart';
 import 'package:fireplace/services/box/box_signer.dart';
 import 'package:fireplace/services/box/box_wire.dart';
@@ -733,7 +734,10 @@ void main() {
             1,
             jsonEncode(E2eEnvelope.build(text)),
           ))!;
-          expect(await a.session.deliver(a.address!, frame.encode()), isTrue);
+          expect(
+            await a.session.deliver(a.address!, frame.encode()),
+            BoxSendOutcome.taken,
+          );
           await _until(() => b.read.contains(text), 'bob reads it');
 
           // Nothing of the migration or the message is a server row.
@@ -847,7 +851,7 @@ void main() {
                 )),
               ).encode(),
             ),
-            isTrue,
+            BoxSendOutcome.taken,
           );
 
           // B's inbox journals it; the request is KEPT, not decrypted.
@@ -911,7 +915,7 @@ void main() {
           ))!;
           expect(
             await a.session.deliver(a.record!.outbound.single, toBob.encode()),
-            isTrue,
+            BoxSendOutcome.taken,
           );
           final toAlice = (await b._encrypt(
             alice.userId,
@@ -923,7 +927,7 @@ void main() {
               b.record!.outbound.single,
               toAlice.encode(),
             ),
-            isTrue,
+            BoxSendOutcome.taken,
           );
           await _until(
             () => b.read.contains(hello) && a.read.contains(back),

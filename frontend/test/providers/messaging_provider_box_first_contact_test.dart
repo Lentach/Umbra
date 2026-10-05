@@ -7,6 +7,7 @@ import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/services/box/box_client.dart';
 import 'package:fireplace/services/box/box_first_contact.dart';
+import 'package:fireplace/services/box/box_outbox.dart';
 import 'package:fireplace/services/box/box_session.dart';
 import 'package:fireplace/services/box/box_wire.dart';
 import 'package:fireplace/services/box/queue_seal.dart';
@@ -344,7 +345,7 @@ class _Side {
       ),
     );
     expect(frame, isNotNull, reason: '$name encrypts to $peer');
-    expect(await session.deliver(to, frame!.encode()), isTrue);
+    expect(await session.deliver(to, frame!.encode()), BoxSendOutcome.taken);
   }
 
   /// The texts [peer] sent this device, as their stored records hold them,
