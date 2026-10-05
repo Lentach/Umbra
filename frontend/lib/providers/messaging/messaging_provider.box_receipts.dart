@@ -270,16 +270,26 @@ extension MessagingBoxReceipts on MessagingProvider {
         dropped(failure.name);
         return false;
       }
-      final accepted = await Future.wait([
+      final answers = await Future.wait([
         for (final (to, body) in sealed.frames)
           route.outbox.deliver(to, body, mode: mode),
       ]);
+      // A `live` frame is answered ok even when the box dropped it (E61a):
+      // it proves nothing about the device's queue (E93a).
+      if (mode != BoxSendMode.live) {
+        _noteBoxAnswers(
+          peer,
+          sealed.frames,
+          answers,
+          peerFrames: route.targets.length,
+        );
+      }
       _e2eFlowLog('BOX_SIGNAL_SEND', {
         't': type,
         'frames': sealed.frames.length,
-        'accepted': accepted.where((ok) => ok).length,
+        'accepted': answers.where((a) => a == BoxSendOutcome.taken).length,
       });
-      return accepted.contains(true);
+      return answers.contains(BoxSendOutcome.taken);
     } on Object catch (e) {
       dropped(e.runtimeType.toString());
       return false;

@@ -14,6 +14,7 @@ import '../models/conversation_model.dart';
 import '../models/message_model.dart';
 import '../services/api_service.dart';
 import '../services/box/box_device_list_refresh.dart';
+import '../services/box/box_device_pause.dart';
 import '../services/box/box_envelope.dart';
 import '../services/box/box_first_contact.dart';
 import '../services/box/box_frame.dart';
@@ -515,6 +516,10 @@ class MessagingProvider extends ChangeNotifier {
   /// older send settling after it leaves no retry (E19l).
   final Map<String, int> _boxActionSends = {};
   int _boxActionSendSeq = 0;
+
+  /// Devices whose box queue is full (E93a): no frame is sealed to them
+  /// but a probe now and then, until one is taken or they send to us.
+  final BoxDevicePause _boxPaused = BoxDevicePause();
 
   /// Each pin, edit or delete-for-everyone of a box message that NO device
   /// took; its optimistic state is already undone.
@@ -1494,6 +1499,7 @@ class MessagingProvider extends ChangeNotifier {
     _resetReactionKeyState();
     _cancelDelayedRetryIfAny();
     _dropBoxActionRetries();
+    _boxPaused.clear();
     _currentUserId = null;
     _tokenForReconnect = null;
     notifyListeners();
@@ -1526,6 +1532,7 @@ class MessagingProvider extends ChangeNotifier {
     onDisconnect();
     _boxLists.reset();
     _dropBoxActionRetries();
+    _boxPaused.clear();
     _incomingSound.dispose();
     countdownTickNotifier.dispose();
     _boxActionFailures.close().ignore();

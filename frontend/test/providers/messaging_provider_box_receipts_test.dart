@@ -126,13 +126,13 @@ class _Outbox implements BoxOutbox {
   ];
 
   @override
-  Future<bool> deliver(
+  Future<BoxSendOutcome> deliver(
     ContactOutbound to,
     Uint8List body, {
     BoxSendMode? mode,
   }) async {
     delivered.add((to: to, frame: BoxFrame.decode(body)!, mode: mode));
-    return !refuseAll;
+    return refuseAll ? BoxSendOutcome.failed : BoxSendOutcome.taken;
   }
 
   @override

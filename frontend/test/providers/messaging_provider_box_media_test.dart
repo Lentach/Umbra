@@ -130,11 +130,11 @@ class _Outbox implements BoxOutbox {
   Iterable<int> coveredPeers() => bob.isEmpty ? const [] : const [2];
 
   @override
-  Future<bool> deliver(
+  Future<BoxSendOutcome> deliver(
     ContactOutbound to,
     Uint8List body, {
     BoxSendMode? mode,
-  }) async => true;
+  }) async => BoxSendOutcome.taken;
 
   @override
   Future<int?> nextLocalId() async => _next++;

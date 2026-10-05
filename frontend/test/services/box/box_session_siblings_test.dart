@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:fireplace/services/box/box_client.dart';
 import 'package:fireplace/services/box/box_frame.dart';
+import 'package:fireplace/services/box/box_outbox.dart';
 import 'package:fireplace/services/box/box_session.dart';
 import 'package:fireplace/services/box/box_wire.dart';
 import 'package:fireplace/services/box/queue_seal.dart';
@@ -658,7 +659,7 @@ void main() {
               signal: Uint8List.fromList(utf8.encode('{"t":"msg"}')),
             ).encode(),
           ),
-          isTrue,
+          BoxSendOutcome.taken,
         );
         await settle();
         expect(

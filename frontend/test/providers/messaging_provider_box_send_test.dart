@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:clock/clock.dart';
 import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
@@ -13,6 +14,7 @@ import 'package:fireplace/services/box/box_media_frame.dart';
 import 'package:fireplace/services/box/box_outbox.dart';
 import 'package:fireplace/services/box/box_wire.dart';
 import 'package:fireplace/services/contacts/contact_record.dart';
+import 'package:fireplace/services/contacts/contact_store.dart';
 import 'package:fireplace/services/device_list/device_list_cache.dart';
 import 'package:fireplace/services/device_list/device_list_canonical.dart';
 import 'package:fireplace/services/encrypted_media_upload_service.dart';
@@ -162,6 +164,9 @@ class _Outbox implements BoxOutbox {
   /// Peer devices whose `send` the box refuses.
   final Set<int> refuse = {};
 
+  /// Devices whose queue is full (`queue_full`).
+  final Set<int> full = {};
+
   /// Every frame handed over, with its address.
   final List<(ContactOutbound, BoxFrame)> delivered = [];
 
@@ -197,14 +202,17 @@ class _Outbox implements BoxOutbox {
   ];
 
   @override
-  Future<bool> deliver(
+  Future<BoxSendOutcome> deliver(
     ContactOutbound to,
     Uint8List body, {
     BoxSendMode? mode,
   }) async {
     delivered.add((to, BoxFrame.decode(body)!));
     await hold?.future;
-    return !refuse.contains(to.peerDeviceId);
+    if (full.contains(to.peerDeviceId)) return BoxSendOutcome.full;
+    return refuse.contains(to.peerDeviceId)
+        ? BoxSendOutcome.failed
+        : BoxSendOutcome.taken;
   }
 
   @override
@@ -530,8 +538,13 @@ void main() {
     },
   );
 
+  /// Where each frame handed to the box went, by sid.
+  List<String> sentTo() => [for (final (to, _) in outbox.delivered) to.sid];
+
   test(
-    'a sibling frame the box refuses fails the whole row (decision 20)',
+    'a sibling frame the box could not take leaves the row SENT and stored '
+    'once, and only that copy is sent again, under the same wire id '
+    '(decision 93, E93a)',
     () async {
       bob([1]);
       encryption.lists[1] = _enrolled([1, 3]);
@@ -540,8 +553,179 @@ void main() {
         ..refuse.add(3);
       final row = await send('half sent');
 
-      expect(row.deliveryStatus, MessageDeliveryStatus.failed);
+      expect(row.deliveryStatus, MessageDeliveryStatus.sent);
       expect(emitted, isNot(contains('sendMessage')));
+      expect(await encryption.store.localMessageRecords(10), hasLength(1));
+
+      outbox
+        ..refuse.clear()
+        ..delivered.clear();
+      provider.refreshBoxDeviceLists();
+      await pump();
+
+      expect(sentTo(), ['self-3']);
+      expect(envelopeOf(outbox.delivered.single.$2)['msgId'], row.wireId);
+      outbox.delivered.clear();
+      provider.refreshBoxDeviceLists();
+      await pump();
+      expect(outbox.delivered, isEmpty, reason: 'taken: owed nothing more');
+      expect(await encryption.store.localMessageRecords(10), hasLength(1));
+    },
+  );
+
+  test(
+    'a friend device the box could not take while another took it leaves '
+    'the row SENT; only that device is sent it again, same wire id '
+    '(decision 93)',
+    () async {
+      bob([1, 2]);
+      outbox.refuse.add(2);
+      final row = await send('one of two');
+
+      expect(row.deliveryStatus, MessageDeliveryStatus.sent);
+      outbox
+        ..refuse.clear()
+        ..delivered.clear();
+      provider.refreshBoxDeviceLists();
+      await pump();
+
+      expect(sentTo(), ['sid-2']);
+      expect(envelopeOf(outbox.delivered.single.$2)['msgId'], row.wireId);
+      expect(provider.messages.last.deliveryStatus, MessageDeliveryStatus.sent);
+      expect(await encryption.store.localMessageRecords(10), hasLength(1));
+    },
+  );
+
+  test(
+    'a device whose queue is full is owed nothing and paused: nothing is '
+    'sealed to it until the probe is due, the wait doubles while it stays '
+    'full, and a frame it takes ends the pause (E93a)',
+    () async {
+      var now = DateTime.now();
+      await withClock(Clock(() => now), () async {
+        bob([1, 2]);
+        encryption.lists[1] = _enrolled([1, 3]);
+        outbox
+          ..siblings[3] = selfQueueOf(3)
+          ..full.addAll([2, 3]);
+        final row = await send('phone is off');
+        expect(row.deliveryStatus, MessageDeliveryStatus.sent);
+        expect(sentTo(), unorderedEquals(['sid-1', 'sid-2', 'self-3']));
+
+        Future<List<String>> after(Duration wait, String text) async {
+          now = now.add(wait);
+          outbox.delivered.clear();
+          encryption.encryptCalls.clear();
+          await send(text);
+          return sentTo();
+        }
+
+        outbox.delivered.clear();
+        provider.refreshBoxDeviceLists();
+        await pump();
+        expect(outbox.delivered, isEmpty, reason: 'a full queue is never owed');
+
+        expect(await after(const Duration(minutes: 59), 'still off'), [
+          'sid-1',
+        ]);
+        expect(
+          encryption.encryptCalls,
+          isNot(anyOf(contains((1, 3)), contains((2, 2)))),
+          reason: 'never sealed: a seal moves its chain on',
+        );
+        expect(
+          await after(const Duration(minutes: 1), 'the probe'),
+          unorderedEquals(['sid-1', 'sid-2', 'self-3']),
+        );
+        expect(
+          await after(const Duration(hours: 1, minutes: 59), 'still full'),
+          ['sid-1'],
+          reason: 'the next probe is two hours after the last',
+        );
+        outbox.full.clear();
+        expect(
+          await after(const Duration(minutes: 1), 'back on'),
+          unorderedEquals(['sid-1', 'sid-2', 'self-3']),
+        );
+        expect(
+          await after(Duration.zero, 'reads again'),
+          unorderedEquals(['sid-1', 'sid-2', 'self-3']),
+        );
+      });
+    },
+  );
+
+  test(
+    'a frame from a paused device on a queue it holds resumes it at once; '
+    'one claiming to be it on the public request queue does not (E93a)',
+    () async {
+      bob([1, 2]);
+      encryption.lists[1] = _enrolled([1, 3]);
+      outbox
+        ..siblings[3] = selfQueueOf(3)
+        ..full.addAll([2, 3]);
+      await send('both off');
+      outbox.full.clear();
+
+      var n = 0;
+      Future<void> hear(
+        int user,
+        int device, {
+        bool self = false,
+        bool request = false,
+      }) async {
+        await provider.consumeBoxEntry(
+          BoxInboxEntry(
+            rid: 'rid',
+            id: 'id-${n++}',
+            localId: kFirstLocalMessageId + 900 + n,
+            peerUserId: user,
+            senderDeviceId: device,
+            signal: '3:AAAA',
+            receivedAt: DateTime.utc(2026, 10, 5),
+            acked: true,
+            viaSelfQueue: self,
+            viaRequestQueue: request,
+          ),
+          null,
+        );
+        await pump();
+        outbox.delivered.clear();
+      }
+
+      // An own account's frame on the request queue is journaled with
+      // neither flag (`BoxInbox._intakeRequest`); a friend's carries
+      // `viaRequestQueue`.
+      await hear(1, 3);
+      await hear(2, 2, request: true);
+      await send('not yet');
+      expect(sentTo(), ['sid-1'], reason: 'unauthenticated claims');
+
+      await hear(1, 3, self: true);
+      await hear(2, 2);
+      await send('both read again');
+      expect(sentTo(), unorderedEquals(['sid-1', 'sid-2', 'self-3']));
+    },
+  );
+
+  test(
+    'every friend device answering full or failed fails the row, whatever '
+    'our own devices took (decision 93)',
+    () async {
+      bob([1, 2]);
+      encryption.lists[1] = _enrolled([1, 3]);
+      outbox
+        ..siblings[3] = selfQueueOf(3)
+        ..refuse.add(1)
+        ..full.add(2);
+      final row = await send('nobody got it');
+
+      expect(row.deliveryStatus, MessageDeliveryStatus.failed);
+      expect(await encryption.store.localMessageRecords(10), isEmpty);
+      outbox.delivered.clear();
+      provider.refreshBoxDeviceLists();
+      await pump();
+      expect(outbox.delivered, isEmpty, reason: 'a failed row owes nothing');
     },
   );
 
@@ -597,11 +781,11 @@ void main() {
   );
 
   test(
-    'a box refusal on ANY device fails the row (retry), stores nothing, and '
-    'the retry carries the SAME wire id',
+    'a box refusal on EVERY peer device fails the row (retry), stores '
+    'nothing, and the retry carries the SAME wire id',
     () async {
       bob([1, 2]);
-      outbox.refuse.add(2);
+      outbox.refuse.addAll([1, 2]);
       final failed = await send('try again');
 
       expect(failed.deliveryStatus, MessageDeliveryStatus.failed);
@@ -635,7 +819,7 @@ void main() {
     'most often down exactly when the account socket reconnects',
     () async {
       bob([1, 2]);
-      outbox.refuse.add(2);
+      outbox.refuse.addAll([1, 2]);
       final failed = await send('after a reconnect');
       final firstWire = envelopeOf(outbox.delivered.first.$2)['msgId'];
 
@@ -660,7 +844,7 @@ void main() {
     'server: device 1 may already hold it, and the old path cannot dedup',
     () async {
       bob([1, 2]);
-      outbox.refuse.add(2);
+      outbox.refuse.addAll([1, 2]);
       final failed = await send('pinned to the box');
 
       outbox.addresses[2]!.remove(2);
@@ -1203,7 +1387,7 @@ void main() {
     () async {
       await setUpWith(timer: 30);
       bob([1, 2]);
-      outbox.refuse.add(2);
+      outbox.refuse.addAll([1, 2]);
       final text = await send('first try');
       provider.sendPing(2);
       await pump();
@@ -1534,7 +1718,7 @@ void main() {
       () async {
         await setUpWith(timer: 30);
         bob([1, 2]);
-        outbox.refuse.add(2);
+        outbox.refuse.addAll([1, 2]);
         expect(await sendImage(), isFalse);
         final failed = rowOf(MessageType.image);
         expect(failed.deliveryStatus, MessageDeliveryStatus.failed);

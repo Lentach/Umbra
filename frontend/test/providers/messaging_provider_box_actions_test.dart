@@ -115,6 +115,9 @@ class _Outbox implements BoxOutbox {
   /// Devices whose `send` the box refuses.
   final Set<int> refuse = {};
 
+  /// Devices whose queue is full (`queue_full`).
+  final Set<int> full = {};
+
   /// Devices whose `deliver` throws instead of answering.
   final Set<int> throwFor = {};
 
@@ -138,7 +141,7 @@ class _Outbox implements BoxOutbox {
   ];
 
   @override
-  Future<bool> deliver(
+  Future<BoxSendOutcome> deliver(
     ContactOutbound to,
     Uint8List body, {
     BoxSendMode? mode,
@@ -147,7 +150,10 @@ class _Outbox implements BoxOutbox {
     final held = gate;
     if (held != null) await held.future;
     if (throwFor.contains(to.peerDeviceId)) throw StateError('seal failed');
-    return !refuse.contains(to.peerDeviceId);
+    if (full.contains(to.peerDeviceId)) return BoxSendOutcome.full;
+    return refuse.contains(to.peerDeviceId)
+        ? BoxSendOutcome.failed
+        : BoxSendOutcome.taken;
   }
 
   @override
@@ -692,7 +698,7 @@ void main() {
     );
 
     test(
-      'a delete one peer device refused (queue_full) still deletes here, '
+      'a delete one peer device refused (no answer) still deletes here, '
       'and the retry sends the same del frame to that device alone until it '
       'takes it (E19l)',
       () async {
@@ -728,6 +734,25 @@ void main() {
         await pump();
         expect(outbox.delivered, isEmpty, reason: 'healed: nothing owed');
         expect(failures, isEmpty);
+      },
+    );
+
+    test(
+      'a delete one peer device answered queue_full for still deletes here, '
+      'and that device is owed nothing: it is paused, not retried (E93a)',
+      () async {
+        final msg = await mine('regret');
+        outbox.full.add(2);
+
+        provider.deleteMessage(msg.id, forEveryone: true);
+        await pump();
+        expect(failures, isEmpty);
+        expect(row(msg.id), isNull);
+
+        outbox.delivered.clear();
+        provider.refreshBoxDeviceLists();
+        await pump();
+        expect(outbox.delivered, isEmpty);
       },
     );
 

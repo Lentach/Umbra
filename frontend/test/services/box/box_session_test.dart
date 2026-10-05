@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:fireplace/services/box/box_client.dart';
 import 'package:fireplace/services/box/box_media_frame.dart';
+import 'package:fireplace/services/box/box_outbox.dart';
 import 'package:fireplace/services/box/box_session.dart';
 import 'package:fireplace/services/box/box_signer.dart';
 import 'package:fireplace/services/box/box_wire.dart';
@@ -373,7 +374,10 @@ void main() {
         sockets.last.serverDrop();
         await pumpEventQueue();
         expect(session.addressesFor(42)[2]?.sid, address.sid);
-        expect(await session.deliver(address, Uint8List(4)), isFalse);
+        expect(
+          await session.deliver(address, Uint8List(4)),
+          BoxSendOutcome.failed,
+        );
         expect(session.addressesFor(7), isEmpty, reason: 'no record');
       },
     );
@@ -421,7 +425,7 @@ void main() {
       () async {
         await boxUp('S1');
         final body = Uint8List.fromList([1, 3, 0, 1, 9, 9]);
-        expect(await session.deliver(address, body), isTrue);
+        expect(await session.deliver(address, body), BoxSendOutcome.taken);
 
         final frame = sends().single.frame;
         expect(frame['sid'], address.sid);
@@ -438,10 +442,13 @@ void main() {
       'frame carries `mode` (decision 61, E61a)',
       () async {
         await boxUp('S1');
-        expect(await session.deliver(address, Uint8List(4)), isTrue);
+        expect(
+          await session.deliver(address, Uint8List(4)),
+          BoxSendOutcome.taken,
+        );
         expect(
           await session.deliver(address, Uint8List(4), mode: BoxSendMode.live),
-          isTrue,
+          BoxSendOutcome.taken,
         );
         expect(
           await session.deliver(
@@ -449,7 +456,7 @@ void main() {
             Uint8List(4),
             mode: BoxSendMode.quiet,
           ),
-          isTrue,
+          BoxSendOutcome.taken,
         );
 
         final frames = [for (final f in sends()) f.frame];
@@ -459,27 +466,45 @@ void main() {
       },
     );
 
-    test('a refused send is false', () async {
-      await boxUp('S1');
-      sendAnswer = {'ok': false, 'code': 'queue_full'};
-      expect(await session.deliver(address, Uint8List(4)), isFalse);
-    });
+    test(
+      'a full queue is told apart from every other refusal: it pauses the '
+      'device, any other refusal is retried (E93a)',
+      () async {
+        await boxUp('S1');
+        sendAnswer = {'ok': false, 'code': 'queue_full'};
+        expect(
+          await session.deliver(address, Uint8List(4)),
+          BoxSendOutcome.full,
+        );
+        sendAnswer = {'ok': false, 'code': 'rate_limited'};
+        expect(
+          await session.deliver(address, Uint8List(4)),
+          BoxSendOutcome.failed,
+        );
+      },
+    );
 
-    test('a box that is not connected is false, and nothing is emitted', () async {
-      expect(await session.deliver(address, Uint8List(4)), isFalse);
+    test('a box that is not connected fails, and nothing is emitted', () async {
+      expect(
+        await session.deliver(address, Uint8List(4)),
+        BoxSendOutcome.failed,
+      );
       expect(sends(), isEmpty);
     });
 
     test(
-      'an address that is not a canonical sid / 32-byte key is false, never '
-      'a throw',
+      'an address that is not a canonical sid / 32-byte key fails, never a '
+      'throw',
       () async {
         await boxUp('S1');
         for (final bad in [
           ContactOutbound(peerDeviceId: 2, sid: 'short', sealPub: address.sealPub),
           ContactOutbound(peerDeviceId: 2, sid: address.sid, sealPub: 'short'),
         ]) {
-          expect(await session.deliver(bad, Uint8List(4)), isFalse);
+          expect(
+            await session.deliver(bad, Uint8List(4)),
+            BoxSendOutcome.failed,
+          );
         }
         expect(sends(), isEmpty);
       },
