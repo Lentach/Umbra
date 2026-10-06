@@ -1753,8 +1753,9 @@ extension MessagingBox on MessagingProvider {
   ///
   /// Coverage is judged on every live device; the route then leaves out a
   /// device whose queue is full (E93a, [BoxDevicePause]) unless its probe is
-  /// due. When that leaves no peer device, every peer device is tried
-  /// anyway (not for [peerOnly]): the row then fails where the user sees it.
+  /// due. It may name no peer device at all: a new send then fails before
+  /// anything is sealed ([MessagingBox._peersAllPaused]), since a seal to a
+  /// full queue moves that device's chain for nothing.
   Future<_BoxRoute?> _boxRoute(
     int recipientId,
     BoxOutbox outbox,
@@ -1826,12 +1827,18 @@ extension MessagingBox on MessagingProvider {
             : _boxPaused.admit(recipientId, t.peerDeviceId))
           t,
     ];
+    // No peer device to send to: nothing is sealed, so no sibling's probe
+    // may be spent on it either.
+    final none = targets.isEmpty;
     return (
       outbox: outbox,
-      targets: targets.isEmpty && !peerOnly ? everyTarget : targets,
+      targets: targets,
       siblings: [
         for (final s in siblings)
-          if (_boxPaused.admit(ownUserId, s.peerDeviceId)) s,
+          if (none
+              ? !_boxPaused.isPaused(ownUserId, s.peerDeviceId)
+              : _boxPaused.admit(ownUserId, s.peerDeviceId))
+            s,
       ],
       conversationId: conversationId,
       senderListInfo: SenderListInfo(
@@ -1937,6 +1944,8 @@ extension MessagingBox on MessagingProvider {
           ? await _holdBoxMedia(tempId, bytes, recording)
           : _boxMediaBodies[tempId];
       if (body == null) throw StateError('no held attachment');
+      // After the hold: the retry uploads what is held here.
+      if (_peersAllPaused(route, recipientId, tempId)) return false;
       if (effectiveReplyToId != null && _boxQuoteOf(atSend.replyTo) == null) {
         _e2eFlowLog('BOX_MEDIA_NO_QUOTE', {'tempId': tempId});
         _markMessageFailed(tempId, 'Could not send. Try again.');
@@ -2220,6 +2229,7 @@ extension MessagingBox on MessagingProvider {
   }) async {
     _boxInFlight.add(tempId);
     try {
+      if (_peersAllPaused(route, recipientId, tempId)) return false;
       final enc = _encryptionProvider!;
       // Whole ms: the envelope's `ts` and the stored `createdAt` must agree.
       final sentAt = DateTime.fromMillisecondsSinceEpoch(
@@ -2453,5 +2463,17 @@ extension MessagingBox on MessagingProvider {
           break;
       }
     }
+  }
+
+  /// Whether [route] names no device of [peer]: every one is paused with
+  /// its probe not yet due (E93a). Then [tempId] fails for a retry with
+  /// nothing sealed — the box would refuse it, and the seal alone moves each
+  /// device's chain — and never takes the old path (decision 15). A retry
+  /// once a probe is due goes to that device.
+  bool _peersAllPaused(_BoxRoute route, int peer, String tempId) {
+    if (route.targets.isNotEmpty) return false;
+    _e2eFlowLog('BOX_SEND_PEERS_FULL', {'tempId': tempId, 'peer': peer});
+    _markMessageFailed(tempId, 'Could not send. Try again.');
+    return true;
   }
 }
