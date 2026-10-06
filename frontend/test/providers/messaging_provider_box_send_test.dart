@@ -730,6 +730,45 @@ void main() {
   );
 
   test(
+    'a friend whose every device is paused fails the next send with NOTHING '
+    'sealed — not to it, not as a sent copy — and never the old path; a '
+    'retry once the probe is due goes to it (E93a)',
+    () async {
+      var now = DateTime.now();
+      await withClock(Clock(() => now), () async {
+        bob([1]);
+        encryption.lists[1] = _enrolled([1, 3]);
+        outbox
+          ..siblings[3] = selfQueueOf(3)
+          ..full.add(1);
+        expect(
+          (await send('fills the pause')).deliveryStatus,
+          MessageDeliveryStatus.failed,
+        );
+
+        outbox.delivered.clear();
+        encryption.encryptCalls.clear();
+        final row = await send('while paused');
+        expect(row.deliveryStatus, MessageDeliveryStatus.failed);
+        expect(encryption.encryptCalls, isEmpty, reason: 'no chain step');
+        expect(outbox.delivered, isEmpty);
+        expect(emitted, isNot(contains('sendMessage')));
+
+        now = now.add(const Duration(hours: 1));
+        outbox.full.clear();
+        await provider.retryFailedMessage(row.tempId!);
+        await pump();
+        expect(sentTo(), unorderedEquals(['sid-1', 'self-3']));
+        expect(
+          provider.messages.singleWhere((m) => m.tempId == row.tempId)
+              .deliveryStatus,
+          MessageDeliveryStatus.sent,
+        );
+      });
+    },
+  );
+
+  test(
     'a revoked peer device gets nothing, even though it still holds an '
     'address',
     () async {

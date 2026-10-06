@@ -17,7 +17,7 @@ export const BOX_AUTH_PUB_BYTES = 32;
 export const BOX_SIG_BYTES = 64;
 export const BOX_CODE_BYTES = 16;
 
-/** A normal queue refuses a send once it holds this many (`queue_full`; the sender retries). */
+/** A normal queue refuses a send once it holds this many (`queue_full`; the client pauses that device and never retries the frame, E93a). */
 export const BOX_NORMAL_QUEUE_CAP = 128;
 /** A request queue (first contact only) keeps this many and drops the oldest. */
 export const BOX_REQUEST_QUEUE_CAP = 50;

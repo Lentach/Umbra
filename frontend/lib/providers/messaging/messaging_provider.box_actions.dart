@@ -196,6 +196,11 @@ extension MessagingBoxActions on MessagingProvider {
       failed('no_route');
       return false;
     }
+    // Every peer device paused (E93a): nothing is sealed, as for a message.
+    if (route.targets.isEmpty) {
+      failed('peers_full');
+      return false;
+    }
     String build({int? to}) => jsonEncode(
       E2eEnvelope.buildAction(
         type,
