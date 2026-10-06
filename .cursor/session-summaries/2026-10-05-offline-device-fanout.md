@@ -19,7 +19,7 @@
 - Read only (load-bearing): `third_party/libsignal_protocol_dart/lib/src/session_cipher.dart:272`, `backend/src/box/box.service.ts` `enqueue`, `box_inbox.dart` `_intakeRequest`.
 
 ## Verification
-- CI: 6/6 success on `4c872c58` (Flutter, backend, e2e-wire, isolated probes, Web Lock, CodeQL).
+- CI: all ci.yml jobs success on `7d8f37ca` (0.2.61; Flutter, backend, e2e-wire, isolated probes, Web Lock, CodeQL); also 6/6 on `4c872c58` (0.2.60).
 - `flutter test`: 3084 passed / 14 skipped (was 3078). `flutter analyze --no-fatal-infos`: infos only. Dart lint ratchet: PASS at 3153.
 - New tests (send file):
   - a sibling refused → SENT, stored once, only that copy re-sent with the same wire id;
