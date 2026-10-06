@@ -1,6 +1,6 @@
-# An offline own device no longer fails every box send (0.2.60, decision 93)
+# An offline own device no longer fails every box send (0.2.60 + 0.2.61, decision 93)
 
-**Date:** 2026-10-05 · **Version:** 0.2.59 → 0.2.60 · **Tiers deployed:** both + APK 20060
+**Date:** 2026-10-05 · **Version:** 0.2.59 → 0.2.60 → 0.2.61 · **Tiers deployed:** both + APK 20061
 
 ## What was done
 - Prod incident, measured read-only: the owner's Android (user 37, device 11), off since 10-02 17:02Z, filled its box self-queue (`BOX_NORMAL_QUEUE_CAP` 128) at 15:05:57Z. From then on every iPhone send got `queue_full` on that one sent copy, and `_sendOverBox` failed the whole row. Friends got and answered every one. A failed row is RAM-only (decision 19), so it vanished on reopen.
@@ -11,6 +11,7 @@
 - `_sendOverBox` / `_sendBoxAction`: `failed` frames are owed to that device by E19l's in-RAM retry (`_oweBoxFrames`, key `msg|chat|wire`, same envelope and wire id). `full` is never owed. Receipts/typing skip a paused device (`isPaused`, no probe spent).
 - Research note `docs/plans/2026-10-05-offline-device-fanout-research.md`. SimpleX (same 128 cap), Signal, WhatsApp, Threema, Wire, Matrix, Session, OMEMO: an offline device never blocks the sender.
 - Out-of-repo: local dev stack stopped (`docker compose stop`); throwaway users 251 `ana93` (2 web devices, phrase enrolled) / 252 `bob93` in the local DB; static servers 8091–8093 stopped; `frontend/build/web` holds a local (non-prod) bundle.
+- 0.2.61 (`7d8f37ca`, E93b, a review fix): 0.2.60 still sealed to every peer device when ALL were paused, so a friend whose only device was full lost a chain step per send. Now `_boxRoute` names no paused device, and `_peersAllPaused` fails the send for a retry with nothing sealed (`BOX_SEND_PEERS_FULL`; actions `why: peers_full`). No sibling probe is spent either. `box.constants.ts` comment fixed.
 
 ## Key files
 - Edited: `messaging_provider.box.dart` (`consumeBoxEntry`, `_boxRoute`, `_sendOverBox`, `_noteBoxAnswers`), `messaging_provider.box_actions.dart`, `messaging_provider.box_receipts.dart`, `messaging_provider.first_contact.dart`, `messaging_provider.dart`, `box_outbox.dart`, `box_session.dart`, 11 test files, `pubspec.yaml`, `CLAUDE.md`, `wire.md`, `metadata-privacy-decisions.md`, `traps.md`.
@@ -36,10 +37,12 @@
 - NOT verified: the changed path on Android or the iPhone PWA; the owner's prod account (his Android is still off, its self-queue at 128).
 
 ## Notes for next session
-- DEPLOYED 2026-10-05: web + backend `0.2.60/4c872c58`, APK `/apk/umbra-0.2.60.apk` (SHA256 `b127573e8012d5f4482e58b6a103a91ed248565243908f217e07efea1726e7b1`). VM `.env` backup `.env.bak.pre-apk-0.2.60`.
+- DEPLOYED 2026-10-06 01:20Z: web + backend `0.2.61/7d8f37ca` (CI 8/8 incl. Dependabot, smoke 8/8, 0 error lines), APK `/apk/umbra-0.2.61.apk` (20061, SHA256 `6d8919e1e3c4d413a7bd31af931d7083d6bed61d371486a971f299fbac047b4c`, signer = record-of-truth, booted on Pixel_7). Backup `chatdb-20261006T011617Z.dump.gpg`; VM `.env` backup `.env.bak.pre-apk-0.2.61`. 0.2.60 (`4c872c58`) was live ~4 h before.
+- 0.2.61 proof: Flutter 3085/14; new test (a friend whose every device is paused: no `encryptCalls`, no frame, no old path; a retry after +1 h goes). Drive: bob offline, his queue filled to 128; send A failed and paused him, send B logged `BOX_SEND_PEERS_FULL` with ana #2's self-queue count unchanged.
 - Next action: the owner checks on prod. Sending from the iPhone must now show ✓ while his Android is off. Then switching the Android on drains the 128.
-- `feat/metadata-privacy` (fireplace-mp): cherry-pick of `4c872c58`; pubspec kept at the branch's 0.2.55 (bump past 0.2.60 at the merge); rows 93/E93a appended to the branch log.
-- Deferred, owner-owed (0.2.61+): inactive-device UI in Settings → Devices; a "some messages may not appear" notice on a device that was full; persisting failed rows (would overturn decision 19); auto-unlink of stale devices.
+- `feat/metadata-privacy` (fireplace-mp): both fixes are cherry-picked (`f55c2650`, `455cd608`); Flutter 3077/14 there. Its pubspec stays at the branch's 0.2.55; bump it past 0.2.61 at the merge. Rows 93/E93a/E93b are in the branch log.
+- `messaging_provider_box_send_test.dart` flakes under load (pump-based waits; a different test fails each run). It also fails on `cc0e2ec9` (before this work); the full suite passed.
+- Deferred, owner-owed (0.2.62+): inactive-device UI in Settings → Devices; a "some messages may not appear" notice on a device that was full; persisting failed rows (would overturn decision 19); auto-unlink of stale devices.
 - Residuals (E93a): a restart forgets the pause (one chain step); a retry pass can spend a paused device's probe; frames a full device missed are not re-sent.
 - Recipe (drive):
   - Linking on web needs an "installed" PWA: init script `Object.defineProperty(Navigator.prototype,'standalone',{get:()=>true})`.
