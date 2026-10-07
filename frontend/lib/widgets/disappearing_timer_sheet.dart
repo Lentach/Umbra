@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -8,11 +10,26 @@ import '../providers/settings_provider.dart';
 import '../theme/rpg_theme.dart';
 import '../utils/message_expiry.dart';
 import 'glass/glass_sheet.dart';
-import 'hearth_fade_arc.dart';
+import 'hearth_fade_hex.dart';
 
 const double kDisappearingPickerHeight = 216;
 const double kDisappearingPickerItemExtent = 32;
 const int kDisappearingPickerMaxDays = 30;
+
+/// How full the sheet's decorative hex looks for a timer of [totalSeconds].
+///
+/// Log scale over the valid range (5 s … 30 d), mapped to 0.35–1.0: a linear
+/// scale put every timer under ~18 days on the same floor, so the hex said
+/// nothing about the duration. The floor keeps a short timer from reading as
+/// "almost expired"; 0 (timer off) is a separate, dimmer 0.15.
+@visibleForTesting
+double disappearingHeroProgress(int totalSeconds) {
+  if (totalSeconds == 0) return 0.15;
+  final t =
+      math.log(totalSeconds / kDisappearingMinSeconds) /
+      math.log(kDisappearingMaxSeconds / kDisappearingMinSeconds);
+  return 0.35 + 0.65 * t.clamp(0.0, 1.0);
+}
 
 /// Opens the Hearth Fade disappearing-messages timer sheet.
 void showDisappearingTimerSheet(BuildContext context) {
@@ -121,11 +138,7 @@ class _DisappearingTimerSheetState extends State<DisappearingTimerSheet> {
     return parts.join(' ');
   }
 
-  double _heroProgress() {
-    final total = _totalSeconds;
-    if (total == 0) return 0.15;
-    return (total / kDisappearingMaxSeconds).clamp(0.2, 1.0);
-  }
+  double _heroProgress() => disappearingHeroProgress(_totalSeconds);
 
   void _onDaysChanged(int index) {
     setState(() {
@@ -241,9 +254,8 @@ class _DisappearingTimerSheetState extends State<DisappearingTimerSheet> {
                   ),
                 ),
                 Center(
-                  child: HearthFadeArcHero(
+                  child: HearthFadeHexHero(
                     color: ephemeral,
-                    trackColor: ephemeral.withValues(alpha: 0.22),
                     progress: _heroProgress(),
                   ),
                 ),

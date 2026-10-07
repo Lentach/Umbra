@@ -9,7 +9,7 @@ import '../providers/messaging_provider.dart';
 import '../providers/settings_provider.dart';
 import 'glass/glass_dialog.dart';
 import 'hex_avatar.dart';
-import 'hearth_fade_arc.dart';
+import 'hearth_fade_hex.dart';
 import '../utils/jumbo_emoji.dart';
 import '../utils/anti_quantum_note_link.dart';
 import '../utils/message_display_text.dart';
@@ -94,7 +94,7 @@ class ConversationTile extends StatelessWidget {
 
   String _ephemeralTooltip(BuildContext context, MessageModel message) {
     final l10n = AppLocalizations.of(context);
-    final countdown = HearthFadeArcIndicator.countdownLabel(message);
+    final countdown = HearthFadeHexIndicator.countdownLabel(message);
     if (countdown != null) {
       return l10n.conversationLastMessageEphemeralRemaining(countdown);
     }
@@ -105,17 +105,15 @@ class ConversationTile extends StatelessWidget {
     BuildContext context,
     MessageModel message,
     Color ephemeralColor,
-    Color secondaryColor,
   ) {
     return Tooltip(
       message: _ephemeralTooltip(context, message),
       child: Padding(
         padding: const EdgeInsets.only(right: 6),
-        child: HearthFadeArcIndicator(
+        child: HearthFadeHexIndicator(
           message: message,
           color: ephemeralColor,
-          trackColor: secondaryColor.withValues(alpha: 0.35),
-          size: 12,
+          size: 14,
         ),
       ),
     );
@@ -170,7 +168,7 @@ class ConversationTile extends StatelessWidget {
 
     final message = lastMessage;
     if (message == null ||
-        !HearthFadeArcIndicator.showsEphemeralState(message)) {
+        !HearthFadeHexIndicator.showsEphemeralState(message)) {
       return staticTrailing;
     }
 
@@ -178,18 +176,13 @@ class ConversationTile extends StatelessWidget {
       valueListenable: context.read<MessagingProvider>().countdownTickNotifier,
       child: staticTrailing,
       builder: (context, _, child) {
-        if (!HearthFadeArcIndicator.showsEphemeralState(message)) {
+        if (!HearthFadeHexIndicator.showsEphemeralState(message)) {
           return child!;
         }
         return Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _buildEphemeralPrefix(
-              context,
-              message,
-              ephemeralColor,
-              secondaryColor,
-            ),
+            _buildEphemeralPrefix(context, message, ephemeralColor),
             child!,
           ],
         );

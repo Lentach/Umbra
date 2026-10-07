@@ -305,6 +305,21 @@ class EncryptionProvider extends ChangeNotifier {
     ciphertext,
   );
 
+  /// Whether [ciphertext] from [userId]'s [deviceId] is a PreKey message
+  /// from a device that minted a new identity since our session with it was
+  /// built — a friend's device that lost its storage (decision 88). Asked
+  /// before [decrypt]. Delegates to
+  /// [EncryptionService.preKeyFromNewIdentitySession].
+  Future<bool> preKeyFromNewIdentity(
+    int userId,
+    int deviceId,
+    String ciphertext,
+  ) => _encryptionService.preKeyFromNewIdentitySession(
+    userId,
+    deviceId,
+    ciphertext,
+  );
+
   /// Who can have sealed friend [userId]'s frame on our public request
   /// queue — the check a friend's queue handoff passes BEFORE [decrypt]
   /// (item 5). Delegates to [EncryptionService.friendFrameIdentityOf].

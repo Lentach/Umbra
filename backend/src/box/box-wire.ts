@@ -55,10 +55,10 @@ export interface CreateQueueCmd {
   sig: Buffer;
 }
 /**
- * How a `send` is handled (decision 61, E61a). Absent: stored, and a queue
- * nobody is subscribed to wakes its device. `live`: never stored, pushed once
- * to the rid's subscribed socket if there is one now. `quiet`: stored like an
- * ordinary send, but never wakes a device.
+ * How a `send` is handled (decision 61, E61a). Absent: stored, and wakes
+ * the device (`BoxNotifierService.flush` decides when). `live`: never
+ * stored, pushed once to the rid's subscribed socket if there is one now.
+ * `quiet`: stored like an ordinary send, but never wakes a device.
  */
 export type SendMode = 'live' | 'quiet';
 export interface SendCmd {

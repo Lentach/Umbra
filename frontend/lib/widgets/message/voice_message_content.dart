@@ -11,7 +11,7 @@ import '../../theme/rpg_theme.dart';
 import '../../utils/message_expiry.dart';
 import '../audio/playback_controller.dart';
 import '../audio/waveform_display.dart';
-import '../hearth_fade_arc.dart';
+import '../hearth_fade_hex.dart';
 import '../message_swipe_wrapper.dart';
 import '../dialogs/message_delete_dialog.dart';
 import 'message_context_menu_overlay.dart';
@@ -46,18 +46,17 @@ class VoiceMessageContent extends StatelessWidget {
   bool _isExpired() => isMessageExpired(message);
 
   Widget _buildEphemeralMeta(Color metaColor) {
-    if (!HearthFadeArcIndicator.showsEphemeralState(message)) {
+    if (!HearthFadeHexIndicator.showsEphemeralState(message)) {
       return const SizedBox.shrink();
     }
-    final countdown = HearthFadeArcIndicator.countdownLabel(message);
+    final countdown = HearthFadeHexIndicator.countdownLabel(message);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         const SizedBox(width: 6),
-        HearthFadeArcIndicator(
+        HearthFadeHexIndicator(
           message: message,
           color: metaColor,
-          trackColor: metaColor.withValues(alpha: 0.28),
           size: 12,
         ),
         if (countdown != null) ...[
@@ -379,7 +378,7 @@ class VoiceMessageContent extends StatelessWidget {
                                     // a genuinely ephemeral message; otherwise every
                                     // visible voice bubble rebuilt once per second
                                     // for a SizedBox.shrink.
-                                    if (HearthFadeArcIndicator.showsEphemeralState(
+                                    if (HearthFadeHexIndicator.showsEphemeralState(
                                       message,
                                     ))
                                       ValueListenableBuilder<int>(

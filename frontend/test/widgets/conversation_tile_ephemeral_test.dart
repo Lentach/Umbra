@@ -4,7 +4,7 @@ import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/providers/settings_provider.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
 import 'package:fireplace/widgets/conversation_tile.dart';
-import 'package:fireplace/widgets/hearth_fade_arc.dart';
+import 'package:fireplace/widgets/hearth_fade_hex.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
@@ -44,8 +44,8 @@ Widget _wrap(Widget child) {
 }
 
 void main() {
-  group('ConversationTile ephemeral arc (Option B)', () {
-    testWidgets('shows dotted arc for pre-read last message', (tester) async {
+  group('ConversationTile ephemeral hex', () {
+    testWidgets('shows pre-read hex for pre-read last message', (tester) async {
       await tester.pumpWidget(
         _wrap(
           ConversationTile(
@@ -58,7 +58,7 @@ void main() {
         ),
       );
 
-      expect(find.byType(HearthFadeArcIndicator), findsOneWidget);
+      expect(find.byType(HearthFadeHexIndicator), findsOneWidget);
       expect(find.text('1h'), findsNothing);
       expect(find.text('1m'), findsNothing);
     });
@@ -81,7 +81,7 @@ void main() {
       expect(find.byTooltip('Notifications muted'), findsOneWidget);
     });
 
-    testWidgets('shows filled arc for post-read last message', (tester) async {
+    testWidgets('shows lit hex for post-read last message', (tester) async {
       final expiresAt =
           DateTime.now().add(const Duration(hours: 2, minutes: 10));
       await tester.pumpWidget(
@@ -99,11 +99,11 @@ void main() {
         ),
       );
 
-      expect(find.byType(HearthFadeArcIndicator), findsOneWidget);
+      expect(find.byType(HearthFadeHexIndicator), findsOneWidget);
       expect(find.text('2h'), findsNothing);
     });
 
-    testWidgets('hides arc when conversation timer on but last message plain',
+    testWidgets('hides hex when conversation timer on but last message plain',
         (tester) async {
       await tester.pumpWidget(
         _wrap(
@@ -117,10 +117,10 @@ void main() {
         ),
       );
 
-      expect(find.byType(HearthFadeArcIndicator), findsNothing);
+      expect(find.byType(HearthFadeHexIndicator), findsNothing);
     });
 
-    testWidgets('hides arc when last message expired', (tester) async {
+    testWidgets('hides hex when last message expired', (tester) async {
       await tester.pumpWidget(
         _wrap(
           ConversationTile(
@@ -136,15 +136,15 @@ void main() {
         ),
       );
 
-      expect(find.byType(HearthFadeArcIndicator), findsNothing);
+      expect(find.byType(HearthFadeHexIndicator), findsNothing);
     });
 
-    testWidgets('shows arc for grandfathered send-time expiresAt only',
+    testWidgets('shows hex for grandfathered send-time expiresAt only',
         (tester) async {
       final expiresAt = DateTime.now().add(const Duration(hours: 3));
       final message = _lastMessage(expiresAt: expiresAt);
-      expect(HearthFadeArcIndicator.showsEphemeralState(message), isTrue);
-      final countdown = HearthFadeArcIndicator.countdownLabel(message);
+      expect(HearthFadeHexIndicator.showsEphemeralState(message), isTrue);
+      final countdown = HearthFadeHexIndicator.countdownLabel(message);
       expect(countdown, isNotNull);
 
       await tester.pumpWidget(
@@ -159,11 +159,11 @@ void main() {
         ),
       );
 
-      expect(find.byType(HearthFadeArcIndicator), findsOneWidget);
+      expect(find.byType(HearthFadeHexIndicator), findsOneWidget);
       expect(find.text(countdown!), findsNothing);
     });
 
-    testWidgets('rebuilds arc when tick notifier updates', (tester) async {
+    testWidgets('rebuilds hex when tick notifier updates', (tester) async {
       final messaging = MessagingProvider();
       addTearDown(messaging.dispose);
       final expiresAt = DateTime.now().add(const Duration(seconds: 90));
@@ -194,22 +194,22 @@ void main() {
         ),
       );
 
-      double arcProgress() {
+      double hexProgress() {
         final painter = tester
             .widgetList<CustomPaint>(
               find.descendant(
-                of: find.byType(HearthFadeArcIndicator),
+                of: find.byType(HearthFadeHexIndicator),
                 matching: find.byType(CustomPaint),
               ),
             )
             .map((w) => w.painter)
-            .whereType<HearthFadeArcPainter>()
+            .whereType<HearthFadeHexPainter>()
             .single;
         return painter.progress;
       }
 
-      expect(find.byType(HearthFadeArcIndicator), findsOneWidget);
-      final before = arcProgress();
+      expect(find.byType(HearthFadeHexIndicator), findsOneWidget);
+      final before = hexProgress();
 
       // Let real wall-clock time advance so the countdown actually moves, then
       // bump the tick. The tile recomputes progress from DateTime.now() on
@@ -221,9 +221,9 @@ void main() {
       messaging.countdownTickNotifier.value++;
       await tester.pump();
 
-      expect(find.byType(HearthFadeArcIndicator), findsOneWidget);
+      expect(find.byType(HearthFadeHexIndicator), findsOneWidget);
       expect(
-        arcProgress(),
+        hexProgress(),
         lessThan(before),
         reason: 'tick rebuild must recompute countdown progress',
       );

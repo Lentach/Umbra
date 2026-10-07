@@ -145,7 +145,7 @@ export class BoxDelivery {
     this.release(owner, rid);
   }
 
-  /** A blob was stored for `rid`. False when no socket owns it (push instead). */
+  /** A blob was stored for `rid`. False when no socket owns it. */
   onEnqueued(ridBytes: Buffer): boolean {
     const owner = this.owners.get(ridBytes.toString('base64url'));
     const slot = owner === undefined ? undefined : this.slots.get(owner);

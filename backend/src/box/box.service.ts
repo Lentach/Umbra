@@ -43,6 +43,21 @@ export interface NewMedia {
   expiresAt: Date;
 }
 
+/**
+ * A queue's notifier, with `waiting`: its messages delivery would hand out
+ * (not expired) that may wake a device (not `quiet`, decision 61) — the
+ * count a Web Push wake-up carries (decision 77). Not `msgCount`, which
+ * counts quiet rows too. `newest`: the arrival time of the newest of them
+ * (seconds since the epoch, null when none waits), read in the same
+ * statement as the count, so two reads compare without any clock of ours.
+ */
+export interface NotifierTarget {
+  platform: NotifierPlatform;
+  token: string;
+  waiting: number;
+  newest: number | null;
+}
+
 const RUNG_BUCKETS = BOX_MEDIA_LADDER.map((r) => r.bucket);
 const RUNG_BYTES = BOX_MEDIA_LADDER.map((r) => r.bytes);
 
@@ -430,14 +445,20 @@ export class BoxService {
     );
   }
 
-  async notifierFor(
-    nid: Buffer,
-  ): Promise<{ platform: NotifierPlatform; token: string } | null> {
-    const rows: { platform: NotifierPlatform; token: string }[] =
-      await this.db.query(
-        `SELECT platform, token FROM public.box_notifiers WHERE nid = $1`,
-        [nid],
-      );
+  async notifierFor(nid: Buffer): Promise<NotifierTarget | null> {
+    const rows: NotifierTarget[] = await this.db.query(
+      `SELECT n.platform, n.token, w.waiting, w.newest
+         FROM public.box_notifiers n
+         CROSS JOIN LATERAL (
+           SELECT count(*)::int AS waiting,
+                  extract(epoch FROM max(m."createdAt"))::float8 AS newest
+             FROM public.box_msgs m
+             JOIN public.box_queues q ON q.rid = m.rid
+            WHERE q.nid = n.nid AND m."expiresAt" > now() AND NOT m.quiet
+         ) w
+        WHERE n.nid = $1`,
+      [nid],
+    );
     return rows[0] ?? null;
   }
 

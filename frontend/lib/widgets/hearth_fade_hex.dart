@@ -2,110 +2,114 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import 'hex_avatar.dart' show kHexWidthRatio;
 import '../models/message_model.dart';
 import '../utils/message_expiry.dart';
 
-/// Fireplace ember arc for read-based disappearing messages.
+/// Fireplace hex ember for read-based disappearing messages.
 ///
-/// [dotted] = pre-read (TTL frozen, countdown not started).
-/// Filled sweep = post-read countdown ([progress] 0…1).
-class HearthFadeArcPainter extends CustomPainter {
+/// A pointy-top hexagon (the avatar/honeycomb silhouette): a dim continuous
+/// frame keeps the shape readable at 12px, six edge bars burn out clockwise
+/// from the top vertex, and a coal core dims with the time left.
+///
+/// [preRead] = TTL frozen, countdown not started: bright frame,
+/// full core, no bars. Otherwise [progress] is the time left, 1 → 0.
+class HearthFadeHexPainter extends CustomPainter {
   final Color color;
-  final Color? trackColor;
   final double progress;
-  final bool dotted;
+  final bool preRead;
+
+  /// Stroke width of the frame AND the lit bars (equal, so a lit bar exactly
+  /// recolours its edge instead of overshooting it). Corner gaps and the core
+  /// scale with it, so one painter serves 12px and the 72px hero.
   final double strokeWidth;
 
-  const HearthFadeArcPainter({
+  const HearthFadeHexPainter({
     required this.color,
-    this.trackColor,
     this.progress = 0,
-    this.dotted = false,
-    this.strokeWidth = 2.5,
+    this.preRead = false,
+    this.strokeWidth = 1.5,
   });
 
-  static const double _startAngle = -math.pi / 2;
-  static const double _sweepTotal = math.pi * 1.5;
+  /// Pointy-top hexagon vertices, clockwise from the top.
+  static List<Offset> _hexVertices(Offset center, double radius) => [
+    for (var i = 0; i < 6; i++)
+      center +
+          Offset(
+            math.cos(-math.pi / 2 + i * math.pi / 3),
+            math.sin(-math.pi / 2 + i * math.pi / 3),
+          ) *
+              radius,
+  ];
 
   @override
   void paint(Canvas canvas, Size size) {
+    // Largest pointy-top hexagon the box holds, centred. The inset covers the
+    // miter tip at a 120° corner (0.58 × stroke) so nothing clips.
+    final height = math.min(size.height, size.width / kHexWidthRatio);
     final center = Offset(size.width / 2, size.height / 2);
-    final radius = (math.min(size.width, size.height) - strokeWidth) / 2;
-    final rect = Rect.fromCircle(center: center, radius: radius);
+    final radius = height / 2 - strokeWidth * 0.6;
+    final vertices = _hexVertices(center, radius);
+    final clamped = progress.clamp(0.0, 1.0);
 
-    if (trackColor != null) {
-      final trackPaint = Paint()
-        ..color = trackColor!
+    canvas.drawPath(
+      Path()..addPolygon(vertices, true),
+      Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = strokeWidth
-        ..strokeCap = StrokeCap.round;
-      if (dotted) {
-        _drawDashedArc(canvas, rect, trackPaint);
-      } else {
-        canvas.drawArc(rect, _startAngle, _sweepTotal, false, trackPaint);
+        ..color = color.withValues(alpha: preRead ? 0.55 : 0.24),
+    );
+
+    if (!preRead) {
+      final bar = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = strokeWidth
+        ..strokeCap = StrokeCap.butt
+        ..color = color;
+      // A regular hexagon's edge equals its circumradius; the gap sits at
+      // each corner so the frame shows through and the corners stay sharp.
+      final gap = strokeWidth * 0.3 / radius;
+      for (var k = 0; k < 6; k++) {
+        final lit = math.min(1 - gap, (clamped * 6 - k).clamp(0.0, 1.0));
+        if (lit <= gap) continue;
+        final from = vertices[k];
+        final to = vertices[(k + 1) % 6];
+        canvas.drawLine(
+          Offset.lerp(from, to, gap)!,
+          Offset.lerp(from, to, lit)!,
+          bar,
+        );
       }
     }
 
-    final arcPaint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = strokeWidth
-      ..strokeCap = StrokeCap.round;
-
-    if (dotted) {
-      _drawDashedArc(canvas, rect, arcPaint);
-      return;
-    }
-
-    final clamped = progress.clamp(0.0, 1.0);
-    if (clamped <= 0) return;
-    canvas.drawArc(
-      rect,
-      _startAngle,
-      _sweepTotal * clamped,
-      false,
-      arcPaint,
+    canvas.drawPath(
+      Path()..addPolygon(_hexVertices(center, radius * 0.42), true),
+      Paint()
+        ..color = color.withValues(
+          alpha: preRead ? 0.9 : 0.22 + 0.78 * clamped,
+        ),
     );
   }
 
-  void _drawDashedArc(Canvas canvas, Rect rect, Paint paint) {
-    const dashCount = 12;
-    final dashSweep = _sweepTotal / dashCount;
-    final gapSweep = dashSweep * 0.45;
-    final drawSweep = dashSweep - gapSweep;
-    for (var i = 0; i < dashCount; i++) {
-      canvas.drawArc(
-        rect,
-        _startAngle + i * dashSweep,
-        drawSweep,
-        false,
-        paint,
-      );
-    }
-  }
-
   @override
-  bool shouldRepaint(HearthFadeArcPainter oldDelegate) {
+  bool shouldRepaint(HearthFadeHexPainter oldDelegate) {
     return oldDelegate.color != color ||
-        oldDelegate.trackColor != trackColor ||
         oldDelegate.progress != progress ||
-        oldDelegate.dotted != dotted ||
+        oldDelegate.preRead != preRead ||
         oldDelegate.strokeWidth != strokeWidth;
   }
 }
 
-/// Small arc indicator for bubble metadata rows.
-class HearthFadeArcIndicator extends StatelessWidget {
+/// Small hex indicator for bubble metadata rows and the chats list.
+class HearthFadeHexIndicator extends StatelessWidget {
   final MessageModel message;
   final Color color;
-  final Color? trackColor;
   final double size;
 
-  const HearthFadeArcIndicator({
+  const HearthFadeHexIndicator({
     super.key,
     required this.message,
     required this.color,
-    this.trackColor,
     this.size = 12,
   });
 
@@ -159,29 +163,26 @@ class HearthFadeArcIndicator extends StatelessWidget {
     final progress = preRead ? 0.0 : (countdownProgress(message) ?? 0.0);
 
     return CustomPaint(
-      size: Size(size, size),
-      painter: HearthFadeArcPainter(
+      size: Size(size * kHexWidthRatio, size),
+      painter: HearthFadeHexPainter(
         color: color,
-        trackColor: trackColor ?? color.withValues(alpha: 0.28),
         progress: progress,
-        dotted: preRead,
-        strokeWidth: size < 16 ? 1.8 : 2.5,
+        preRead: preRead,
+        strokeWidth: size < 16 ? 1.5 : 2.5,
       ),
     );
   }
 }
 
-/// Hero-scale decorative arc for the timer sheet.
-class HearthFadeArcHero extends StatelessWidget {
+/// Hero-scale decorative hex for the timer sheet.
+class HearthFadeHexHero extends StatelessWidget {
   final Color color;
-  final Color trackColor;
   final double size;
   final double progress;
 
-  const HearthFadeArcHero({
+  const HearthFadeHexHero({
     super.key,
     required this.color,
-    required this.trackColor,
     this.size = 72,
     this.progress = 0.85,
   });
@@ -190,10 +191,9 @@ class HearthFadeArcHero extends StatelessWidget {
   Widget build(BuildContext context) {
     final disableMotion = MediaQuery.disableAnimationsOf(context);
     final child = CustomPaint(
-      size: Size(size, size),
-      painter: HearthFadeArcPainter(
+      size: Size(size * kHexWidthRatio, size),
+      painter: HearthFadeHexPainter(
         color: color,
-        trackColor: trackColor,
         progress: progress,
         strokeWidth: 4,
       ),
@@ -204,10 +204,9 @@ class HearthFadeArcHero extends StatelessWidget {
       duration: const Duration(milliseconds: 700),
       curve: Curves.easeOutCubic,
       builder: (context, value, _) => CustomPaint(
-        size: Size(size, size),
-        painter: HearthFadeArcPainter(
+        size: Size(size * kHexWidthRatio, size),
+        painter: HearthFadeHexPainter(
           color: color,
-          trackColor: trackColor,
           progress: value,
           strokeWidth: 4,
         ),

@@ -57,7 +57,9 @@ bool preKeyWouldReplace(SessionRecord record, String ciphertext) {
   }
   final PreKeySignalMessage message;
   try {
-    message = PreKeySignalMessage(base64Decode(ciphertext.substring(colon + 1)));
+    message = PreKeySignalMessage(
+      base64Decode(ciphertext.substring(colon + 1)),
+    );
   } on Object {
     return false;
   }
@@ -66,6 +68,55 @@ bool preKeyWouldReplace(SessionRecord record, String ciphertext) {
         message.getMessageVersion(),
         message.getBaseKey().serialize(),
       );
+}
+
+/// Whether the `"{type}:{base64}"` PreKey message comes from a device that
+/// MINTED A NEW IDENTITY since [record] was built (decision 88: a friend's
+/// device lost its storage and its login re-minted): [record] knows that
+/// device under another identity, and no ARCHIVED state ever held this one.
+///
+/// This alone does NOT tell a re-mint from a revoked device of the friend
+/// minting a fresh key of its own (it holds our queue's sid, and with key
+/// warnings off the decrypt absorbs any new identity). The caller takes the
+/// handoff only for a friend whose held list is NOT enrolled: single-device
+/// by construction, so no revoked device of it exists (decision 37's threat).
+///  * The new identity in the CURRENT state (an earlier handoff of it was
+///    refused after the decrypt moved the session) still counts: that
+///    refusal must not lock the restored device out for good.
+///  * An identity this record moved AWAY from (archived) never counts: a
+///    device holding an account's identity from before its reset must not
+///    take the address back.
+///
+/// False for a whisper message, a fresh record and anything unparseable.
+bool preKeyFromNewIdentity(SessionRecord record, String ciphertext) {
+  final colon = ciphertext.indexOf(':');
+  if (colon < 0 || record.isFresh()) return false;
+  if (int.tryParse(ciphertext.substring(0, colon)) !=
+      CiphertextMessage.prekeyType) {
+    return false;
+  }
+  final String identity;
+  try {
+    identity = base64Encode(
+      PreKeySignalMessage(
+        base64Decode(ciphertext.substring(colon + 1)),
+      ).getIdentityKey().serialize(),
+    );
+  } on Object {
+    return false;
+  }
+  String? identityOf(SessionState state) {
+    final key = state.getRemoteIdentityKey();
+    return key == null ? null : base64Encode(key.serialize());
+  }
+
+  final archived = [
+    for (final s in record.previousSessionStates) ?identityOf(s),
+  ];
+  if (archived.contains(identity)) return false;
+  return [?identityOf(record.sessionState), ...archived].any(
+    (known) => known != identity,
+  );
 }
 
 /// Who can have sealed a FRIEND's account-bearing frame into our public
@@ -85,11 +136,12 @@ enum FriendFrameIdentity {
 
 /// [ciphertextMatchesIdentity] against a friend's pinned account identity
 /// [anchorBase64] (null: none pinned).
-FriendFrameIdentity friendFrameIdentity(String ciphertext, String? anchorBase64) {
+FriendFrameIdentity friendFrameIdentity(
+  String ciphertext,
+  String? anchorBase64,
+) {
   final colon = ciphertext.indexOf(':');
-  final type = colon < 0
-      ? null
-      : int.tryParse(ciphertext.substring(0, colon));
+  final type = colon < 0 ? null : int.tryParse(ciphertext.substring(0, colon));
   if (type == CiphertextMessage.whisperType) return FriendFrameIdentity.matches;
   if (type != CiphertextMessage.prekeyType) return FriendFrameIdentity.foreign;
   if (anchorBase64 == null) return FriendFrameIdentity.noAnchor;

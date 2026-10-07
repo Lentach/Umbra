@@ -5,7 +5,7 @@ import 'package:fireplace/theme/glass_theme.dart';
 import 'package:fireplace/widgets/glass/glass_surface.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
 import 'package:fireplace/widgets/disappearing_timer_sheet.dart';
-import 'package:fireplace/widgets/hearth_fade_arc.dart';
+import 'package:fireplace/widgets/hearth_fade_hex.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -84,7 +84,7 @@ void main() {
     ) async {
       await _openSheet(tester, initialSeconds: 300);
 
-      expect(find.byType(HearthFadeArcHero), findsOneWidget);
+      expect(find.byType(HearthFadeHexHero), findsOneWidget);
       expect(find.textContaining('after they are read'), findsOneWidget);
       expect(find.byType(CupertinoPicker), findsNWidgets(4));
       expect(find.text('5 minutes'), findsOneWidget);
@@ -234,8 +234,8 @@ void main() {
       expect(find.byType(DisappearingTimerSheet), findsOneWidget);
       expect(find.text('1 day'), findsOneWidget);
 
-      final hero = tester.widget<HearthFadeArcHero>(
-        find.byType(HearthFadeArcHero),
+      final hero = tester.widget<HearthFadeHexHero>(
+        find.byType(HearthFadeHexHero),
       );
       expect(hero.color, RpgTheme.primaryTealStone);
       expect(hero.color, isNot(RpgTheme.primaryLight));
@@ -286,6 +286,29 @@ void main() {
       );
 
       expect(find.textContaining('2 dni'), findsOneWidget);
+    });
+  });
+
+  group('disappearingHeroProgress', () {
+    test('each common duration draws a visibly different hex', () {
+      const durations = [5, 60, 3600, 86400, 7 * 86400, 30 * 86400];
+      final values = durations.map(disappearingHeroProgress).toList();
+
+      for (var i = 1; i < values.length; i++) {
+        expect(
+          values[i] - values[i - 1],
+          greaterThan(0.05),
+          reason: '${durations[i - 1]}s vs ${durations[i]}s must not look alike',
+        );
+      }
+      expect(values.first, closeTo(0.35, 1e-9));
+      expect(values.last, closeTo(1.0, 1e-9));
+    });
+
+    test('off is dimmer than the shortest valid timer; out-of-range clamps', () {
+      expect(disappearingHeroProgress(0), lessThan(disappearingHeroProgress(5)));
+      expect(disappearingHeroProgress(1), closeTo(0.35, 1e-9));
+      expect(disappearingHeroProgress(99 * 86400), closeTo(1.0, 1e-9));
     });
   });
 }

@@ -74,6 +74,9 @@ void main() {
   /// Answers for the next challenges, used once each (then the default).
   final challengeAnswers = <Map<String, Object?>>[];
 
+  /// What the registrar reads as "now" (the code-reuse window).
+  var clock = DateTime.utc(2026, 10, 2);
+
   /// Every registerNotifier frame in emit order: `'challenge'`, or the nids
   /// one activation frame carried.
   List<Object> frames() => [
@@ -86,6 +89,14 @@ void main() {
                   for (final q in f.frame['queues']! as List)
                     (q as Map)['nid']! as String,
                 ],
+  ];
+
+  /// The code every activation frame carried, in emit order.
+  List<String> activationCodes() => [
+    for (final socket in sockets.sockets)
+      for (final f in socket.emitted)
+        if (f.event == 'registerNotifier' && !f.frame.containsKey('token'))
+          f.frame['code']! as String,
   ];
 
   Future<void> contact(
@@ -106,12 +117,15 @@ void main() {
   BoxNotifiers build({
     Duration codeWait = const Duration(seconds: 5),
     Duration park = const Duration(minutes: 15),
+    Duration codeReuse = const Duration(minutes: 9),
   }) => BoxNotifiers(
     box: box,
     store: store,
     push: push,
     codeWait: codeWait,
     park: park,
+    codeReuse: codeReuse,
+    now: () => clock,
   )..start();
 
   Future<void> settle() async {
@@ -137,6 +151,7 @@ void main() {
     challengeAnswers.clear();
     deliver = true;
     codeFill = 0x90;
+    clock = DateTime.utc(2026, 10, 2);
     push = _Push();
     sockets = FakeBoxSockets()
       ..respond = (_, f) {
@@ -533,4 +548,115 @@ void main() {
       expect(frames(), isEmpty);
     },
   );
+
+  group('a live challenge code is reused for queues owed later '
+      '(decision 79: one "Setting up notifications" banner, not one per '
+      'queue)', () {
+    const reuse = Duration(minutes: 5);
+
+    test('inside the window a new queue is activated with the same code, '
+        'and no challenge is pushed', () async {
+      final a = _queue(0x10);
+      await contact(42, [a]);
+      notifiers = build(codeReuse: reuse)..run();
+      await settle();
+      expect(frames(), [
+        'challenge',
+        [a.nid],
+      ]);
+
+      final b = _queue(0x20);
+      await contact(43, [b]);
+      clock = clock.add(reuse - const Duration(seconds: 1));
+      notifiers.run();
+      await settle();
+
+      expect(frames().skip(2), [
+        [b.nid],
+      ]);
+      final sent = activationCodes();
+      expect(sent, hasLength(2));
+      expect(sent.last, sent.first);
+      expect(store.notifierActive(b.nid, target()), isTrue);
+    });
+
+    test('a cached code the box refuses whole (expired, box restarted) falls '
+        'back to ONE challenge, whose code is then the one reused', () async {
+      final a = _queue(0x10);
+      await contact(42, [a]);
+      notifiers = build(codeReuse: reuse)..run();
+      await settle();
+
+      issued.clear();
+      final b = _queue(0x20);
+      await contact(43, [b]);
+      notifiers.run();
+      await settle();
+      expect(frames().skip(2), [
+        [b.nid],
+        'challenge',
+        [b.nid],
+      ]);
+      expect(store.notifierActive(b.nid, target()), isTrue);
+
+      final c = _queue(0x30);
+      await contact(44, [c]);
+      notifiers.run();
+      await settle();
+      expect(frames().skip(5), [
+        [c.nid],
+      ]);
+      final sent = activationCodes();
+      expect(sent.last, sent[2], reason: "the fallback challenge's code");
+    });
+
+    test('once the window has passed a new queue gets a fresh challenge, '
+        'even though the box would still take the old code', () async {
+      final a = _queue(0x10);
+      await contact(42, [a]);
+      notifiers = build(codeReuse: reuse)..run();
+      await settle();
+
+      final b = _queue(0x20);
+      await contact(43, [b]);
+      clock = clock.add(reuse);
+      notifiers.run();
+      await settle();
+
+      expect(frames().skip(2), [
+        'challenge',
+        [b.nid],
+      ]);
+      final sent = activationCodes();
+      expect(sent.last, isNot(sent.first));
+    });
+
+    test('a code never crosses targets: back on the first target after a '
+        'rotation, a new queue is challenged again', () async {
+      final a = _queue(0x10);
+      await contact(42, [a]);
+      notifiers = build(codeReuse: reuse)..run();
+      await settle();
+      final first = push.current;
+
+      challengeAnswers.add({'ok': false, 'code': 'invalid_payload'});
+      push.current = (platform: NotifierPlatform.fcm, token: 'fcm-token-2');
+      push.changed.add(null);
+      await settle();
+      expect(frames().skip(2), ['challenge']);
+
+      final b = _queue(0x20);
+      await contact(43, [b]);
+      push.current = first;
+      push.changed.add(null);
+      await settle();
+
+      expect(frames().skip(3), [
+        'challenge',
+        [b.nid],
+      ]);
+      expect(activationCodes(), hasLength(2));
+      expect(activationCodes().last, isNot(activationCodes().first));
+    });
+  });
 }

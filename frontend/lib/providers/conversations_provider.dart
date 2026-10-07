@@ -88,7 +88,7 @@ class ConversationsProvider extends ChangeNotifier {
     final rows = <ConversationModel>[
       for (final r in store.all)
         if (r.state == ContactState.friend &&
-            _chatIdOf(r) != null &&
+            r.chatId != null &&
             !(r.boxOrigin != null && r.settings.chatHidden))
           _chatOf(r, self),
     ];
@@ -103,16 +103,9 @@ class ConversationsProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// The chat id of [record]: its server conversation, else — a friendship
-  /// made over the box (owner decision 52) — its local id. The contact
-  /// backup drops `legacy`, so a restored box friend has only [boxOrigin].
-  static int? _chatIdOf(ContactRecord record) =>
-      record.legacy.conversationId ??
-      (record.boxOrigin == null ? null : localConversationIdFor(record.userId));
-
   static ConversationModel _chatOf(ContactRecord r, UserModel self) =>
       ConversationModel(
-        id: _chatIdOf(r)!,
+        id: r.chatId!,
         userOne: self,
         userTwo: r.toUser(),
         createdAt:
@@ -148,7 +141,7 @@ class ConversationsProvider extends ChangeNotifier {
     final store = _store;
     if (store == null || !isLocalConversationId(conversationId)) return;
     final peer = store.all
-        .where((r) => r.boxOrigin != null && _chatIdOf(r) == conversationId)
+        .where((r) => r.boxOrigin != null && r.chatId == conversationId)
         .firstOrNull;
     if (peer == null || !peer.settings.chatHidden) return;
     unawaited(
@@ -323,8 +316,38 @@ class ConversationsProvider extends ChangeNotifier {
   void setClientVisible(bool visible) {
     if (_clientVisible == visible) return;
     _clientVisible = visible;
+    if (visible) _hiddenArrivals.clear();
     reemitPushClientState();
     if (visible) onClientVisible?.call();
+  }
+
+  /// Box messages that reached this page per chat since it was last
+  /// visible: the count a hidden app's card shows when the chat's own unread
+  /// is not counting (the open chat's never is).
+  final Map<int, int> _hiddenArrivals = {};
+
+  /// A box message for [conversationId] reached this page while it is
+  /// HIDDEN (owner decision 76): the socket is still alive, so the box sent
+  /// no push, and nothing else would tell the user. Asks the push SW — the
+  /// single tray writer — for a card titled "Umbra" (decision 78) tagged
+  /// like the old path's, so a read or a sweep clears it. A muted chat gets
+  /// none. No effect off web (the native app is woken by FCM) and none while
+  /// visible (decision 80: badge only).
+  void postHiddenArrivalCard(int conversationId) {
+    if (_clientVisible) return;
+    if (getConversationById(conversationId)?.isNotificationMuted ?? false) {
+      return;
+    }
+    final arrived = (_hiddenArrivals[conversationId] ?? 0) + 1;
+    _hiddenArrivals[conversationId] = arrived;
+    final unread = getUnreadCount(conversationId);
+    unawaited(
+      _pushSwChannel.postMessage({
+        'type': 'local-card',
+        'conversationId': conversationId,
+        'count': arrived > unread ? arrived : unread,
+      }),
+    );
   }
 
   /// Told when the app becomes visible again (`MessagingProvider`: the chat
@@ -1234,7 +1257,7 @@ class ConversationsProvider extends ChangeNotifier {
       (_store?.all.any(
             (r) =>
                 r.boxOrigin != null &&
-                _chatIdOf(r) == conversationId &&
+                r.chatId == conversationId &&
                 r.settings.chatHidden,
           ) ??
           false);
@@ -1264,6 +1287,7 @@ class ConversationsProvider extends ChangeNotifier {
       _lastMessages.clear();
       _unreadCounts.clear();
       _boxUnread.clear();
+      _hiddenArrivals.clear();
       _storedBoxPassClaimed = false;
       _prePinState.clear();
       _boxPins.clear();
@@ -1299,6 +1323,7 @@ class ConversationsProvider extends ChangeNotifier {
     _lastMessages.clear();
     _unreadCounts.clear();
     _boxUnread.clear();
+    _hiddenArrivals.clear();
     _storedBoxPassClaimed = false;
     _prePinState.clear();
     _boxPins.clear();

@@ -51,8 +51,11 @@
        gate has painted a known state (lib/utils/privacy_curtain_web.dart). */
     #fp-curtain { position: fixed; inset: 0; z-index: 2147483647;
       display: none; background-color: inherit; }
+    /* Regular pointy-top hexagon (circumradius 26 → 45.03 × 52): the same
+       shape as hexPath / kHexWidthRatio (lib/widgets/hex_avatar.dart). The old
+       path was 52 × 52 — visibly squashed next to every in-app hexagon. */
     #fp-curtain svg { position: absolute; top: 44px; left: 50%;
-      transform: translateX(-50%); width: 64px; height: 56px; }
+      transform: translateX(-50%); width: 48px; height: 56px; }
     /* Boot loader. The app shell (main.dart.js + CanvasKit wasm + fonts) is
        several MB and is served with `no-cache` (infra/nginx/fireplace.conf) and
        with NO offline service-worker cache (Flutter's generated SW self-
@@ -62,15 +65,30 @@
        days waited on a bare background and assumed the app was broken. This
        inert DOM loader paints instantly (no Flutter frame needed) and is removed
        on `flutter-first-frame` (fp_boot.js). It sits one z-index
-       BELOW #fp-curtain so a locked relaunch still shows the shield on top. */
+       BELOW #fp-curtain so a locked relaunch still shows the padlock on top. */
     #fp-boot { position: fixed; inset: 0; z-index: 2147483646;
       display: flex; align-items: center; justify-content: center;
       background-color: inherit; color: #C2410C; }
     #fp-boot .fp-boot-inner { display: flex; flex-direction: column;
       align-items: center; opacity: 0;
       animation: fpBootIn .45s ease-out .2s forwards; }
-    #fp-boot svg { width: 72px; height: 63px; }
-    #fp-boot svg path { animation: fpBootPulse 1.9s ease-in-out infinite; }
+    /* Honeycomb: seven regular hexagons (one centre, six neighbours) on the
+       Contacts-honeycomb geometry. The core breathes; the ring chases around
+       it (.13 s step, clockwise from 3 o'clock). The Flutter twin is
+       lib/widgets/boot_honeycomb.dart (AuthGate's restoring frame): keep
+       geometry, timings, delays and the reserved label/hint height in step so
+       the handoff at the first frame does not move. */
+    #fp-boot svg { width: 84px; height: 84px; }
+    #fp-boot .fp-boot-cell { fill: none; stroke: currentColor;
+      stroke-width: 1.6; stroke-linejoin: round;
+      animation: fpBootWave 1.6s ease-in-out infinite backwards; }
+    #fp-boot .fp-boot-c0 { animation-name: fpBootCore; }
+    #fp-boot .fp-boot-c1 { animation-delay: .13s; }
+    #fp-boot .fp-boot-c2 { animation-delay: .26s; }
+    #fp-boot .fp-boot-c3 { animation-delay: .39s; }
+    #fp-boot .fp-boot-c4 { animation-delay: .52s; }
+    #fp-boot .fp-boot-c5 { animation-delay: .65s; }
+    #fp-boot .fp-boot-c6 { animation-delay: .78s; }
     #fp-boot .fp-boot-bar { margin-top: 22px; width: 132px; height: 3px;
       border-radius: 3px; overflow: hidden;
       background-color: rgba(128, 128, 128, 0.18); }
@@ -81,14 +99,20 @@
       font: 500 13px/1.3 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
       color: rgba(128, 128, 128, 0.85); }
     #fp-boot .fp-boot-hint { margin-top: 8px; max-width: 260px; text-align: center;
+      /* Two lines of the 12px/1.4 text, reserved from the start: the hint
+         appears after 6 s and must not shift the centred column. */
+      min-height: 34px;
       opacity: 0; transition: opacity .4s ease;
       font: 400 12px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
       color: rgba(128, 128, 128, 0.6); }
     @keyframes fpBootIn { to { opacity: 1; } }
-    @keyframes fpBootPulse { 0%, 100% { opacity: .5; } 50% { opacity: 1; } }
+    @keyframes fpBootWave { 0%, 100% { opacity: .25; } 40% { opacity: 1; } }
+    @keyframes fpBootCore { 0%, 100% { fill: currentColor; fill-opacity: .35; }
+      50% { fill: currentColor; fill-opacity: 1; } }
     @media (prefers-reduced-motion: reduce) {
       #fp-boot .fp-boot-inner { animation: none; opacity: 1; }
-      #fp-boot svg path { animation: none; opacity: 1; }
+      #fp-boot .fp-boot-cell { animation: none; opacity: 1; }
+      #fp-boot .fp-boot-c0 { fill: currentColor; fill-opacity: .6; }
       #fp-boot .fp-boot-bar > i { transition: none; } }
   </style>
   <script>
@@ -182,16 +206,22 @@
 </head>
 <body>
   <div id="fp-curtain" aria-hidden="true">
-    <svg viewBox="0 0 64 56" fill="none" stroke="#C2410C" stroke-width="2">
-      <path d="M32 2 L58 16 L58 40 L32 54 L6 40 L6 16 Z"/>
-      <rect x="24" y="26" width="16" height="13" rx="2"/>
-      <path d="M27 26 V21 a5 5 0 0 1 10 0 V26"/>
+    <svg viewBox="0 0 48 56" fill="none" stroke="#C2410C" stroke-width="2" stroke-linejoin="round">
+      <path d="M24 2 L46.52 15 L46.52 41 L24 54 L1.48 41 L1.48 15 Z"/>
+      <rect x="16" y="26" width="16" height="13" rx="2"/>
+      <path d="M19 26 V21 a5 5 0 0 1 10 0 V26"/>
     </svg>
   </div>
   <div id="fp-boot" role="status" aria-live="polite">
     <div class="fp-boot-inner">
-      <svg viewBox="0 0 64 56" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-        <path d="M32 2 L58 16 L58 40 L32 54 L6 40 L6 16 Z"/>
+      <svg viewBox="0 0 64 64" aria-hidden="true">
+        <polygon class="fp-boot-cell fp-boot-c0" points="32,23 39.79,27.5 39.79,36.5 32,41 24.21,36.5 24.21,27.5"/>
+        <polygon class="fp-boot-cell fp-boot-c1" points="50.79,23 58.58,27.5 58.58,36.5 50.79,41 42.99,36.5 42.99,27.5"/>
+        <polygon class="fp-boot-cell fp-boot-c2" points="41.39,39.27 49.19,43.77 49.19,52.77 41.39,57.27 33.6,52.77 33.6,43.77"/>
+        <polygon class="fp-boot-cell fp-boot-c3" points="22.61,39.27 30.4,43.77 30.4,52.77 22.61,57.27 14.81,52.77 14.81,43.77"/>
+        <polygon class="fp-boot-cell fp-boot-c4" points="13.21,23 21.01,27.5 21.01,36.5 13.21,41 5.42,36.5 5.42,27.5"/>
+        <polygon class="fp-boot-cell fp-boot-c5" points="22.61,6.73 30.4,11.23 30.4,20.23 22.61,24.73 14.81,20.23 14.81,11.23"/>
+        <polygon class="fp-boot-cell fp-boot-c6" points="41.39,6.73 49.19,11.23 49.19,20.23 41.39,24.73 33.6,20.23 33.6,11.23"/>
       </svg>
       <div class="fp-boot-bar"><i></i></div>
       <div class="fp-boot-label" id="fp-boot-label">Wczytywanie&#8230;</div>

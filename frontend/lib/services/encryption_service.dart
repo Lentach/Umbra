@@ -2847,6 +2847,31 @@ class EncryptionService {
     });
   }
 
+  /// Whether [ciphertextStr] from [userId]'s [deviceId] is a PreKey message
+  /// from a device that minted a new identity since this device's session
+  /// with it was built ([preKeyFromNewIdentity], decision 88: a friend's
+  /// device that lost its storage). Asked BEFORE the decrypt, which would
+  /// move the session and erase the evidence. Read under the per-address
+  /// lock, like [preKeyWouldReplaceSession]; false before init and when the
+  /// record cannot be read now.
+  Future<bool> preKeyFromNewIdentitySession(
+    int userId,
+    int deviceId,
+    String ciphertextStr,
+  ) async {
+    if (!_initialized) return false;
+    return _runSessionSerialized(userId, deviceId, () async {
+      try {
+        final record = await _cipherSessionStore.loadSession(
+          SignalProtocolAddress(userId.toString(), deviceId),
+        );
+        return preKeyFromNewIdentity(record, ciphertextStr);
+      } on Object {
+        return false;
+      }
+    });
+  }
+
   /// Who can have sealed friend [userId]'s frame [ciphertextStr] into our
   /// public request queue ([friendFrameIdentity] against the account anchor
   /// pinned for [userId]; item 5, E20c). Checked BEFORE Signal sees it: a
@@ -3835,9 +3860,10 @@ class EncryptionService {
   /// is the cached one; a miss only defers a row to the next open.
   Future<Map<int, Map<String, dynamic>>> localMessageRecords(
     int conversationId,
-  ) async => (await allLocalMessageRecords())..removeWhere(
-    (_, record) => record[_metaConversationId] != conversationId,
-  );
+  ) async => (await allLocalMessageRecords())
+    ..removeWhere(
+      (_, record) => record[_metaConversationId] != conversationId,
+    );
 
   /// [localMessageRecords] of every chat at once, each record keeping its
   /// chat id under [PlaintextRecordCodec.conversationIdKey]: the chat
@@ -4101,15 +4127,16 @@ class EncryptionService {
 
   Future<void> _boxSeenWrite(int userId, Future<void> Function() write) {
     final run = _boxSeenTail.then(
-      (_) => _sessionCrossContextLock('fireplace-e2e-boxseen-$userId', () async {
-        try {
-          await write();
-        } on Object catch (e) {
-          E2ePersistentDiag.record('BOX_SEEN_WRITE_FAILED', {
-            'error': e.runtimeType.toString(),
-          });
-        }
-      }),
+      (_) =>
+          _sessionCrossContextLock('fireplace-e2e-boxseen-$userId', () async {
+            try {
+              await write();
+            } on Object catch (e) {
+              E2ePersistentDiag.record('BOX_SEEN_WRITE_FAILED', {
+                'error': e.runtimeType.toString(),
+              });
+            }
+          }),
     );
     _boxSeenTail = run.then((_) {}, onError: (Object _) {});
     return run;

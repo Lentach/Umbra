@@ -9,6 +9,7 @@ import 'package:fireplace/providers/settings_provider.dart';
 import 'package:fireplace/screens/auth_screen.dart';
 import 'package:fireplace/services/api_service.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
+import 'package:fireplace/widgets/boot_honeycomb.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -54,6 +55,7 @@ void main() {
         providers: [
           ChangeNotifierProvider<AuthProvider>.value(value: auth),
           ChangeNotifierProvider(create: (_) => ConnectionProvider()),
+          ChangeNotifierProvider(create: (_) => SettingsProvider()),
         ],
         child: MaterialApp(
           theme: RpgTheme.themeDataLight,
@@ -67,7 +69,7 @@ void main() {
     await tester.pump();
 
     expect(auth.isRestoringSession, isTrue);
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.byType(BootHoneycomb), findsOneWidget);
     expect(find.byType(AuthScreen), findsNothing);
 
     // The assertions above are the whole point: the boot/restoring frame,
@@ -131,7 +133,7 @@ void main() {
       await refreshStarted.future;
       await tester.pump();
       expect(auth.isRestoringSession, isTrue);
-      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      expect(find.byType(BootHoneycomb), findsOneWidget);
       expect(find.byType(AuthScreen), findsNothing);
 
       // Restore resolves (refresh rejected): isRestoringSession must flip false
@@ -147,7 +149,7 @@ void main() {
 
       expect(auth.isRestoringSession, isFalse);
       expect(auth.isLoggedIn, isFalse);
-      expect(find.byType(CircularProgressIndicator), findsNothing);
+      expect(find.byType(BootHoneycomb), findsNothing);
       expect(find.byType(AuthScreen), findsOneWidget);
     },
   );

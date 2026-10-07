@@ -17,6 +17,7 @@ import { HttpThrottlerGuard } from '../common/http-throttler.guard';
 import { runMigrations } from '../database/migration-runner';
 import {
   BOX_PUSH_TRANSPORT,
+  type BoxPush,
   type BoxPushTransport,
 } from './box-push.transport';
 import { BoxReaper } from './box-reaper.service';
@@ -154,7 +155,7 @@ describeWithDb('box over real sockets and Postgres', () => {
   const pushes: {
     platform: string;
     token: string;
-    data: Record<string, string>;
+    data: BoxPush;
   }[] = [];
   const transport: BoxPushTransport = {
     send: (platform, token, data) => {
@@ -269,19 +270,55 @@ describeWithDb('box over real sockets and Postgres', () => {
     return rows.map((r) => r.id.toString('base64url'));
   }
 
+  /** A `webpush` token the box accepts, on a known push service. */
+  function webPushToken(path: string): string {
+    return JSON.stringify({
+      endpoint: `https://fcm.googleapis.com/fcm/send/${path}`,
+      keys: {
+        p256dh: randomBytes(65).toString('base64url'),
+        auth: randomBytes(16).toString('base64url'),
+      },
+    });
+  }
+
+  /** The one-time code a challenge push carries. */
+  function codeOf(data: BoxPush): string {
+    if (data.type !== 'notifier_challenge') throw new Error('not a challenge');
+    return data.code;
+  }
+
+  /**
+   * An expired message the reaper has not swept yet, stored as `enqueue`
+   * would have: the counters follow the row.
+   */
+  async function storeExpired(queue: Queue): Promise<void> {
+    await db.query(
+      `WITH m AS (
+         INSERT INTO box_msgs (id, rid, blob, "createdAt", "expiresAt")
+         VALUES ($1, $2, $3, now() - interval '31 days', now() - interval '1 day')
+         RETURNING rid),
+       q AS (
+         UPDATE box_queues SET "msgCount" = "msgCount" + 1
+          WHERE rid IN (SELECT rid FROM m))
+       UPDATE box_totals SET "msgCount" = "msgCount" + 1`,
+      [randomBytes(16), Buffer.from(queue.rid, 'base64url'), randomBytes(16)],
+    );
+  }
+
   /** Step 1: the box pushes a code to `token`; answers with that code. */
   async function challengeToken(
     socket: ClientSocket,
     token: string,
+    platform: 'fcm' | 'webpush' = 'fcm',
   ): Promise<Buffer> {
     const before = pushes.length;
     const answer = await call(socket, 'registerNotifier', {
       v: 1,
-      platform: 'fcm',
+      platform,
       token,
     });
     if (answer.state !== 'challenged') throw new Error('not challenged');
-    return Buffer.from(pushes[before].data.code, 'base64url');
+    return Buffer.from(codeOf(pushes[before].data), 'base64url');
   }
 
   /** Step 2: `code` activates every queue in `queues`, each signing for itself. */
@@ -306,8 +343,9 @@ describeWithDb('box over real sockets and Postgres', () => {
     socket: ClientSocket,
     queue: Queue,
     token: string,
+    platform: 'fcm' | 'webpush' = 'fcm',
   ): Promise<void> {
-    const code = await challengeToken(socket, token);
+    const code = await challengeToken(socket, token, platform);
     const answer = await activateWith(socket, code, [queue]);
     if (!answer.ok || answer.refused?.length !== 0) {
       throw new Error('notifier not active');
@@ -1101,8 +1139,8 @@ describeWithDb('box over real sockets and Postgres', () => {
       // Content-free apart from the one-time code: FCM data transits Google.
       expect(Object.keys(challenge.data).sort()).toEqual(['code', 'type']);
       expect(challenge.data.type).toBe('notifier_challenge');
-      expect(challenge.data.code).toMatch(/^[A-Za-z0-9_-]{22}$/);
-      const code = Buffer.from(challenge.data.code, 'base64url');
+      expect(codeOf(challenge.data)).toMatch(/^[A-Za-z0-9_-]{22}$/);
+      const code = Buffer.from(codeOf(challenge.data), 'base64url');
 
       // A code the box never pushed refuses the WHOLE frame, one answer.
       expect(await activateWith(bob, randomBytes(16), [one, two])).toEqual({
@@ -1137,6 +1175,177 @@ describeWithDb('box over real sockets and Postgres', () => {
       expect(pushes).toEqual([
         { platform: 'fcm', token, data: { type: 'new_message' } },
       ]);
+    });
+
+    it('a Web Push wake-up adds the nid and the count of waiting messages that may wake, quiet and expired ones excluded (decision 77)', async () => {
+      const bob = await connect();
+      const alice = await connect();
+      const queue = await createQueue(bob);
+      const token = webPushToken('box-it-8');
+      await activateNotifier(bob, queue, token, 'webpush');
+      await storeExpired(queue);
+      expect(
+        await call(alice, 'send', {
+          v: 1,
+          sid: queue.sid,
+          blob: blob(),
+          mode: 'quiet',
+        }),
+      ).toEqual({ ok: true });
+      pushes.length = 0;
+
+      await call(alice, 'send', { v: 1, sid: queue.sid, blob: blob() });
+      await call(alice, 'send', { v: 1, sid: queue.sid, blob: blob() });
+      await until(() => pushes.length === 1, 8000);
+      await sleep(500);
+      // Four rows wait (`msgCount` counts quiet and expired ones too); two
+      // may wake.
+      expect((await queueRow(queue.rid)).msgCount).toBe(4);
+      expect(pushes).toEqual([
+        {
+          platform: 'webpush',
+          token,
+          data: { type: 'new_message', n: queue.nid, c: 2 },
+        },
+      ]);
+    });
+
+    it('a send a live socket holds but never acks wakes a Web Push device once the coalescing wait ends; a quiet one never does (a frozen page keeps its socket)', async () => {
+      const bob = await connect();
+      const alice = await connect();
+      const queue = await createQueue(bob);
+      const token = webPushToken('box-it-9');
+      await activateNotifier(bob, queue, token, 'webpush');
+      const got = collect(bob);
+      await subscribe(bob, [queue]);
+      pushes.length = 0;
+
+      await call(alice, 'send', {
+        v: 1,
+        sid: queue.sid,
+        blob: blob(),
+        mode: 'quiet',
+      });
+      await until(() => got.length === 1, 4000);
+      await sleep(3500);
+      expect(pushes).toEqual([]);
+
+      await call(alice, 'send', { v: 1, sid: queue.sid, blob: blob() });
+      await until(() => got.length === 2, 4000);
+      await until(() => pushes.length === 1, 8000);
+      await sleep(500);
+      expect(pushes).toEqual([
+        {
+          platform: 'webpush',
+          token,
+          data: { type: 'new_message', n: queue.nid, c: 1 },
+        },
+      ]);
+      // Nothing left for the suite's disconnect to wake in the next test.
+      await ackMessage(bob, queue, got[1].id);
+    });
+
+    it('a Web Push device whose live socket acked within the coalescing wait gets no wake-up', async () => {
+      const bob = await connect();
+      const alice = await connect();
+      const queue = await createQueue(bob);
+      await activateNotifier(bob, queue, webPushToken('box-it-10'), 'webpush');
+      const got = collect(bob);
+      await subscribe(bob, [queue]);
+      pushes.length = 0;
+
+      await call(alice, 'send', { v: 1, sid: queue.sid, blob: blob() });
+      await until(() => got.length === 1, 4000);
+      expect(await ackMessage(bob, queue, got[0].id)).toMatchObject({
+        ok: true,
+      });
+      await sleep(3500);
+      expect(pushes).toEqual([]);
+    });
+
+    it('a Web Push device whose page resumed and acked what its old socket held before the wait ended gets no empty wake-up (found driving a frozen page)', async () => {
+      const bob = await connect();
+      const alice = await connect();
+      const queue = await createQueue(bob);
+      await activateNotifier(bob, queue, webPushToken('box-it-11'), 'webpush');
+      const got = collect(bob);
+      await subscribe(bob, [queue]);
+      pushes.length = 0;
+
+      await call(alice, 'send', { v: 1, sid: queue.sid, blob: blob() });
+      await until(() => got.length === 1, 4000);
+      // The old socket goes (the resumed page reconnects at once): its
+      // detach joins the window's wake-up, and the new socket acks first.
+      bob.disconnect();
+      const resumed = await connect();
+      const again = collect(resumed);
+      await subscribe(resumed, [queue]);
+      await until(() => again.length === 1, 4000);
+      expect(await ackMessage(resumed, queue, again[0].id)).toMatchObject({
+        ok: true,
+      });
+
+      await sleep(3500);
+      expect(pushes).toEqual([]);
+    });
+
+    it('a Web Push device woken for a message its frozen socket held is not woken AGAIN when that socket times out; a newer message still wakes it', async () => {
+      const bob = await connect();
+      const alice = await connect();
+      const queue = await createQueue(bob);
+      const token = webPushToken('box-it-12');
+      await activateNotifier(bob, queue, token, 'webpush');
+      const got = collect(bob);
+      await subscribe(bob, [queue]);
+      pushes.length = 0;
+
+      await call(alice, 'send', { v: 1, sid: queue.sid, blob: blob() });
+      await until(() => got.length === 1, 4000);
+      await until(() => pushes.length === 1, 8000);
+
+      // The frozen page's socket is dropped at the ping timeout: the blob it
+      // never acked is the one the push already announced.
+      bob.disconnect();
+      await sleep(3500);
+      expect(pushes).toHaveLength(1);
+
+      await call(alice, 'send', { v: 1, sid: queue.sid, blob: blob() });
+      await until(() => pushes.length === 2, 8000);
+      expect(pushes[1]).toEqual({
+        platform: 'webpush',
+        token,
+        data: { type: 'new_message', n: queue.nid, c: 2 },
+      });
+    });
+
+    it('native (FCM) is never woken for a send a live socket holds, which does not cancel the wake-up an earlier send in the same window owes', async () => {
+      const bob = await connect();
+      const alice = await connect();
+      const queue = await createQueue(bob);
+      const token = 'fcm-token_box:9';
+      await activateNotifier(bob, queue, token);
+      const got = collect(bob);
+      pushes.length = 0;
+
+      // No socket owns the rid: this send owes a wake-up. The next one goes
+      // to the socket that subscribed meanwhile, inside the same window.
+      await call(alice, 'send', { v: 1, sid: queue.sid, blob: blob() });
+      await subscribe(bob, [queue]);
+      await call(alice, 'send', { v: 1, sid: queue.sid, blob: blob() });
+      await until(() => got.length === 2, 4000);
+      await until(() => pushes.length === 1, 8000);
+      await sleep(500);
+      expect(pushes).toEqual([
+        { platform: 'fcm', token, data: { type: 'new_message' } },
+      ]);
+
+      // A window of socket-held sends only: nothing, unacked as it is.
+      pushes.length = 0;
+      await call(alice, 'send', { v: 1, sid: queue.sid, blob: blob() });
+      await until(() => got.length === 3, 4000);
+      await sleep(3500);
+      expect(pushes).toEqual([]);
+      for (const m of got) await ackMessage(bob, queue, m.id);
     });
 
     it('a pushed code survives a reconnect between the steps and a stranger challenging the same token', async () => {
@@ -1224,18 +1433,7 @@ describeWithDb('box over real sockets and Postgres', () => {
       const queue = await createQueue(bob);
       await activateNotifier(bob, queue, 'fcm-token_box:4');
       await subscribe(bob, [queue]);
-      // Stored as `enqueue` would have: the counters follow the row.
-      await db.query(
-        `WITH m AS (
-           INSERT INTO box_msgs (id, rid, blob, "createdAt", "expiresAt")
-           VALUES ($1, $2, $3, now() - interval '31 days', now() - interval '1 day')
-           RETURNING rid),
-         q AS (
-           UPDATE box_queues SET "msgCount" = "msgCount" + 1
-            WHERE rid IN (SELECT rid FROM m))
-         UPDATE box_totals SET "msgCount" = "msgCount" + 1`,
-        [randomBytes(16), Buffer.from(queue.rid, 'base64url'), randomBytes(16)],
-      );
+      await storeExpired(queue);
       pushes.length = 0;
 
       bob.disconnect();

@@ -6,6 +6,17 @@ import { parseWebPushSubscription, type NotifierPlatform } from './box-wire';
 export type PushOutcome = 'sent' | 'gone' | 'failed';
 
 /**
+ * What the box pushes. `n`/`c` (decision 77: the queue's nid and its count
+ * of waiting non-quiet blobs) ride a WEB PUSH wake-up only, inside its RFC
+ * 8291-encrypted payload; FCM `data` transits Google readable, so an FCM
+ * wake-up is `{type:'new_message'}` alone.
+ */
+export type BoxPush =
+  | { type: 'notifier_challenge'; code: string }
+  | { type: 'new_message' }
+  | { type: 'new_message'; n: string; c: number };
+
+/**
  * Sends one push to one raw token. A DI seam (`BOX_PUSH_TRANSPORT`): the
  * integration suite swaps in a recorder to read the challenge code.
  *
@@ -17,7 +28,7 @@ export interface BoxPushTransport {
   send(
     platform: NotifierPlatform,
     token: string,
-    data: Record<string, string>,
+    data: BoxPush,
   ): Promise<PushOutcome>;
 }
 
@@ -25,6 +36,24 @@ export const BOX_PUSH_TRANSPORT = Symbol('BOX_PUSH_TRANSPORT');
 
 /** web-push has no send timeout; one half-open connection must not hang a flush. */
 const WEB_PUSH_SEND_TIMEOUT_MS = 10_000;
+
+/**
+ * How long the Web Push relay may hold a push for an offline device. A
+ * challenge code lives 10 min (`BOX_CHALLENGE_TTL_MS`): a later delivery
+ * carries a dead code. A wake-up is useful while a blob waits (up to 30 d,
+ * `BOX_MSG_TTL_MS`); a day covers a phone off overnight, and the app drains
+ * its queues on its next open anyway. The relay sees the TTL of every push
+ * already, so neither value tells it anything new. FCM keeps its own
+ * defaults: the native path is not part of this split.
+ */
+export const BOX_CHALLENGE_PUSH_TTL_S = 600;
+export const BOX_WAKE_PUSH_TTL_S = 86_400;
+
+function ttlFor(data: BoxPush): number {
+  return data.type === 'notifier_challenge'
+    ? BOX_CHALLENGE_PUSH_TTL_S
+    : BOX_WAKE_PUSH_TTL_S;
+}
 
 @Injectable()
 export class FirebaseWebPushTransport
@@ -69,15 +98,20 @@ export class FirebaseWebPushTransport
   async send(
     platform: NotifierPlatform,
     token: string,
-    data: Record<string, string>,
+    data: BoxPush,
   ): Promise<PushOutcome> {
-    if (platform === 'fcm') return this.sendFcm(token, data);
-    return this.sendWebPush(token, data);
+    if (platform === 'webpush') return this.sendWebPush(token, data);
+    // FCM `data` transits Google readable: a nid or a count never goes there.
+    if ('n' in data) {
+      this.logger.error('[box] refused a web-push-only wake-up for fcm');
+      return 'failed';
+    }
+    return this.sendFcm(token, data);
   }
 
   private async sendFcm(
     token: string,
-    data: Record<string, string>,
+    data: Exclude<BoxPush, { n: string }>,
   ): Promise<PushOutcome> {
     if (!this.fcmReady) return 'failed';
     try {
@@ -103,7 +137,7 @@ export class FirebaseWebPushTransport
 
   private async sendWebPush(
     token: string,
-    data: Record<string, string>,
+    data: BoxPush,
   ): Promise<PushOutcome> {
     const subscription = parseWebPushSubscription(token);
     if (!this.webPushReady || !subscription) return 'failed';
@@ -119,7 +153,7 @@ export class FirebaseWebPushTransport
       // No `topic`: it is cleartext to the relay (backend/CLAUDE.md §9).
       await Promise.race([
         webPush.sendNotification(subscription, JSON.stringify(data), {
-          TTL: 120,
+          TTL: ttlFor(data),
           urgency: 'high',
         }),
         timeout,
