@@ -170,6 +170,9 @@ class _Outbox implements BoxOutbox {
   /// Every frame handed over, with its address.
   final List<(ContactOutbound, BoxFrame)> delivered = [];
 
+  /// How each frame was kept, by sid, in send order (decision 61).
+  final List<(String, BoxSendMode?)> modes = [];
+
   bool noLocalId = false;
 
   /// When set, every `send` waits for it: a box that has not answered yet.
@@ -208,6 +211,7 @@ class _Outbox implements BoxOutbox {
     BoxSendMode? mode,
   }) async {
     delivered.add((to, BoxFrame.decode(body)!));
+    modes.add((to.sid, mode));
     await hold?.future;
     if (full.contains(to.peerDeviceId)) return BoxSendOutcome.full;
     return refuse.contains(to.peerDeviceId)
@@ -593,6 +597,37 @@ void main() {
       expect(envelopeOf(outbox.delivered.single.$2)['msgId'], row.wireId);
       expect(provider.messages.last.deliveryStatus, MessageDeliveryStatus.sent);
       expect(await encryption.store.localMessageRecords(10), hasLength(1));
+    },
+  );
+
+  test(
+    'only the friend may be woken: its frames are ordinary, our own '
+    "devices' sent copies are quiet — on the first send and on each retry "
+    '(decision 91: no card without a message)',
+    () async {
+      bob([1, 2]);
+      encryption.lists[1] = _enrolled([1, 3]);
+      outbox
+        ..siblings[3] = selfQueueOf(3)
+        ..refuse.addAll([2, 3]);
+      await send('wake bob only');
+
+      expect(outbox.modes, [
+        ('sid-1', null),
+        ('sid-2', null),
+        ('self-3', BoxSendMode.quiet),
+      ]);
+
+      outbox
+        ..refuse.clear()
+        ..modes.clear();
+      provider.refreshBoxDeviceLists();
+      await pump();
+
+      expect(
+        outbox.modes,
+        unorderedEquals([('sid-2', null), ('self-3', BoxSendMode.quiet)]),
+      );
     },
   );
 

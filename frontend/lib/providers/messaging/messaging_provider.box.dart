@@ -2323,13 +2323,17 @@ extension MessagingBox on MessagingProvider {
         return false;
       }
       _boxTempIds.add(tempId);
+      final peerFrames = route.targets.length;
       final answers = await Future.wait([
-        for (final (to, body) in frames)
+        for (var i = 0; i < frames.length; i++)
           route.outbox
-              .deliver(to, body)
+              .deliver(
+                frames[i].$1,
+                frames[i].$2,
+                mode: _boxFrameMode(message: true, toPeer: i < peerFrames),
+              )
               .catchError((Object _) => BoxSendOutcome.failed),
       ]);
-      final peerFrames = route.targets.length;
       _noteBoxAnswers(recipientId, frames, answers, peerFrames: peerFrames);
       final owedPeers = <int>{};
       final owedSiblings = <int>{};
@@ -2356,6 +2360,7 @@ extension MessagingBox on MessagingProvider {
           'msg|${route.conversationId}|$sendToken',
           seq: ++_boxActionSendSeq,
           peer: recipientId,
+          message: true,
           json: envelope.json,
           copyJson: envelope.copyJson,
           peerDevices: owedPeers,

@@ -204,7 +204,10 @@ class BoxSiblingSwap {
         if (_disposed) return;
         if (blob == null) {
           failed = 'seal';
-        } else if (await _box.send(sid, blob) is! BoxOk) {
+        } else if (await _box.send(sid, blob, mode: BoxSendMode.quiet)
+            is! BoxOk) {
+          // Quiet: an address swap is no message and must not wake the
+          // sibling with an empty card (decision 91).
           failed = 'send';
         }
       }

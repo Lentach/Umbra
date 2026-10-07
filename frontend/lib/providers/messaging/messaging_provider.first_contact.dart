@@ -260,9 +260,16 @@ extension MessagingFirstContact on MessagingProvider {
       if (to != null) {
         try {
           final frame = await encryptForOwnDevice(device, json);
+          // A relay carries no message: stored quiet, it never wakes our
+          // closed device with an empty card (decision 91).
           taken =
               frame != null &&
-              await outbox.deliver(to, frame.encode()) == BoxSendOutcome.taken;
+              await outbox.deliver(
+                    to,
+                    frame.encode(),
+                    mode: BoxSendMode.quiet,
+                  ) ==
+                  BoxSendOutcome.taken;
           // `avoid_catching_errors` is waived here: a copy too big for one
           // frame or seal is refused with an ArgumentError, and a refused
           // copy is a failed one, recorded below.
@@ -855,9 +862,15 @@ extension MessagingFirstContact on MessagingProvider {
       for (final MapEntry(key: device, value: to)
           in outbox.addressesFor(userId).entries) {
         final frame = await encryptForFriend(userId, device, goodbye);
+        // No message in a goodbye: quiet, no wake (decision 91).
         final sent =
             frame != null &&
-            await outbox.deliver(to, frame.encode()) == BoxSendOutcome.taken;
+            await outbox.deliver(
+                  to,
+                  frame.encode(),
+                  mode: BoxSendMode.quiet,
+                ) ==
+                BoxSendOutcome.taken;
         if (!sent) {
           _firstContactLog('BOX_GOODBYE_NOT_SENT', userId, {'device': device});
         }
@@ -914,8 +927,14 @@ extension MessagingFirstContact on MessagingProvider {
     for (final MapEntry(key: device, value: to)
         in outbox.addressesFor(peerUserId).entries) {
       final frame = await encryptForFriend(peerUserId, device, timer);
+      // A setting, not a message: quiet, no wake (decision 91).
       if (frame == null ||
-          await outbox.deliver(to, frame.encode()) != BoxSendOutcome.taken) {
+          await outbox.deliver(
+                to,
+                frame.encode(),
+                mode: BoxSendMode.quiet,
+              ) !=
+              BoxSendOutcome.taken) {
         _firstContactLog('BOX_TIMER_NOT_SENT', peerUserId, {'device': device});
       }
     }

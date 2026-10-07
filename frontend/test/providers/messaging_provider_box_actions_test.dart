@@ -125,6 +125,9 @@ class _Outbox implements BoxOutbox {
   /// so clearing it lets later sends through while earlier ones hang).
   Completer<void>? gate;
   final List<(ContactOutbound, BoxFrame)> delivered = [];
+
+  /// How each frame was kept, in send order (decision 61).
+  final List<BoxSendMode?> modes = [];
   int _next = kFirstLocalMessageId + 500;
 
   @override
@@ -147,6 +150,7 @@ class _Outbox implements BoxOutbox {
     BoxSendMode? mode,
   }) async {
     delivered.add((to, BoxFrame.decode(body)!));
+    modes.add(mode);
     final held = gate;
     if (held != null) await held.future;
     if (throwFor.contains(to.peerDeviceId)) throw StateError('seal failed');
@@ -562,6 +566,45 @@ void main() {
         expect(row(msg.id)!.reactions, {
           '👍': [1],
         });
+      },
+    );
+
+    test(
+      'no action wakes a device: a reaction, an edit, a delete and a pin go '
+      'quiet to every peer device and sibling, and so does a retry '
+      '(decisions 91, 92: no card without a message)',
+      () async {
+        final theirs = await fromBob('hi', wire: 'wire-bob-0009');
+        final ours = await mine('typo');
+        final gone = await mine('regret');
+        // Our own two messages went out as messages; only actions follow.
+        outbox
+          ..delivered.clear()
+          ..modes.clear()
+          ..refuse.add(2);
+
+        expect(await provider.addReaction(theirs.id, '👍'), isTrue);
+        provider
+          ..editMessage(ours.id, 'fixed')
+          ..deleteMessage(gone.id, forEveryone: true)
+          ..pinMessage(10, theirs.id);
+        await pump();
+        expect(
+          {for (final (_, f) in outbox.delivered) envelopeOf(f)['t']},
+          {'react', 'edit', 'del', 'pin'},
+        );
+        expect(outbox.modes, isNotEmpty);
+        expect(outbox.modes, everyElement(BoxSendMode.quiet));
+
+        outbox
+          ..refuse.clear()
+          ..delivered.clear()
+          ..modes.clear();
+        provider.refreshBoxDeviceLists();
+        await pump();
+        expect(outbox.delivered.map((d) => d.$1.sid), everyElement('sid-2'));
+        expect(outbox.modes, isNotEmpty, reason: 'device 2 was owed them');
+        expect(outbox.modes, everyElement(BoxSendMode.quiet));
       },
     );
 

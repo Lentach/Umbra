@@ -72,6 +72,15 @@ const List<Duration> _boxActionRetryDelays = [
 /// could no longer hold the target either.
 const Duration _boxActionRetryLife = Duration(days: 30);
 
+/// Decisions 91 and 92: a stored box frame may wake a closed device only
+/// when it brings a PEER a new message. A sibling's sent copy is ours, and an
+/// action (reaction, edit, delete, pin) carries no message, so both are
+/// stored `quiet` (decision 61): no wake-up push, read at the next open. Sent
+/// as an ordinary frame they woke the device with a "new message" card that
+/// had no message in it.
+BoxSendMode? _boxFrameMode({required bool message, required bool toPeer}) =>
+    message && toPeer ? null : BoxSendMode.quiet;
+
 /// The frames of ONE box action — or box message (E93a) — some device took
 /// and some did not (E19l): its envelopes exactly as first sent — same
 /// `ts`, same payload, since every action is idempotent or last-writer-wins
@@ -83,6 +92,7 @@ class _BoxActionRetry {
     required this.seq,
     required this.owner,
     required this.peer,
+    required this.message,
     required this.json,
     required this.copyJson,
     required this.since,
@@ -92,6 +102,10 @@ class _BoxActionRetry {
   final int seq;
   final int owner;
   final int peer;
+
+  /// A box message's frames ([_boxFrameMode]: its peer copies may wake),
+  /// not an action's.
+  final bool message;
   final String json;
   final String copyJson;
   final DateTime since;
@@ -240,7 +254,11 @@ extension MessagingBoxActions on MessagingProvider {
     final answers = await Future.wait([
       for (final (to, body) in frames)
         route.outbox
-            .deliver(to, body)
+            .deliver(
+              to,
+              body,
+              mode: _boxFrameMode(message: false, toPeer: true),
+            )
             .catchError((Object _) => BoxSendOutcome.failed),
     ]);
     _noteBoxAnswers(peer, frames, answers, peerFrames: route.targets.length);
@@ -270,6 +288,7 @@ extension MessagingBoxActions on MessagingProvider {
         key,
         seq: send,
         peer: peer,
+        message: false,
         json: json,
         copyJson: copyJson,
         peerDevices: owedPeers,
@@ -348,9 +367,16 @@ extension MessagingBoxActions on MessagingProvider {
     );
     if (sealed.failure != null) return;
     final answers = await Future.wait([
-      for (final (to, body) in sealed.frames)
+      for (var i = 0; i < sealed.frames.length; i++)
         route.outbox
-            .deliver(to, body)
+            .deliver(
+              sealed.frames[i].$1,
+              sealed.frames[i].$2,
+              mode: _boxFrameMode(
+                message: retry.message,
+                toPeer: i < targets.length,
+              ),
+            )
             .catchError((Object _) => BoxSendOutcome.failed),
     ]);
     _noteBoxAnswers(
@@ -378,6 +404,7 @@ extension MessagingBoxActions on MessagingProvider {
     String key, {
     required int seq,
     required int peer,
+    required bool message,
     required String json,
     required String copyJson,
     required Set<int> peerDevices,
@@ -390,6 +417,7 @@ extension MessagingBoxActions on MessagingProvider {
             seq: seq,
             owner: own,
             peer: peer,
+            message: message,
             json: json,
             copyJson: copyJson,
             since: clock.now(),

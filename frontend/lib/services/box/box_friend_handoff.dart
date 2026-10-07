@@ -285,7 +285,9 @@ class BoxFriendHandoff {
         : frame.encode();
     final blob = await _seal.seal(sealPub, body);
     if (blob == null || _disposed) return null;
-    return _box.send(sid, blob);
+    // A handoff carries no message: quiet, so it never wakes the friend's
+    // closed device with an empty "new message" card (decision 91).
+    return _box.send(sid, blob, mode: BoxSendMode.quiet);
   }
 
   /// Runs a pass once every gate is open; one at a time, and a request made
