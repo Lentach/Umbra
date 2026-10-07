@@ -8,7 +8,7 @@ import '../theme/rpg_theme.dart';
 /// button: it is how the ask stays visible without blocking the app, and it
 /// goes once the backup exists.
 class ContactBackupAlertLine extends StatelessWidget {
-  const ContactBackupAlertLine({super.key, required this.onTap});
+  const ContactBackupAlertLine({required this.onTap, super.key});
 
   final VoidCallback onTap;
 
@@ -40,7 +40,6 @@ class ContactBackupAlertLine extends StatelessWidget {
                     l10n.contactBackupAlertLine,
                     style: RpgTheme.bodyFont(
                       color: colorScheme.onError,
-                      fontSize: 14,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
