@@ -2,16 +2,20 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/widgets.dart';
 
 import 'android_fcm_local_notifications.dart';
-import 'web_push_bridge_stub.dart'
-    if (dart.library.html) 'web_push_bridge_web.dart';
 
-/// H1 (decision 81): a box message journaled while the app is hidden posts a
-/// LOCAL, content-free card on this device.
+/// H1 (decision R81, ER81b): a box message journaled while the NATIVE app is
+/// hidden posts a LOCAL, content-free card on this device.
 ///
 /// The box wakes a device only for an unsubscribed queue or a detached
-/// socket, so a hidden app whose socket lives on got nothing. No visibility
-/// signal goes to the box (decision 81); the device notifies itself. The card
-/// names no sender and no chat, and every message replaces the one before it.
+/// socket, and a native device gets nothing for a live one (E83), so a
+/// backgrounded app whose socket lives on got nothing. No visibility signal
+/// goes to the box; the device notifies itself. The card names no sender and
+/// no chat, and it is the same card the bare FCM box wake-up shows, so one
+/// replaces the other.
+///
+/// Web has its own card (decision 76): the page asks the push SW through
+/// `ConversationsProvider.postHiddenArrivalCard`, so here web is never
+/// hidden and posts nothing — two cards per message otherwise.
 ///
 /// "Hidden" is read from the platform at the moment of the message, never from
 /// `ConversationsProvider.isClientVisible`: that flag starts `true` on every
@@ -26,7 +30,7 @@ class BoxHiddenNotifier {
     Future<void> Function()? post,
     DateTime Function()? now,
   }) : _isHidden = isHidden ?? _platformHidden,
-       _post = post ?? _platformPost,
+       _post = post ?? showBoxMessageLocalNotification,
        _now = now ?? DateTime.now;
 
   static const Duration alertWindow = Duration(seconds: 10);
@@ -35,8 +39,6 @@ class BoxHiddenNotifier {
   final Future<void> Function() _post;
   final DateTime Function() _now;
   DateTime? _lastAlertAt;
-
-  static final WebPushBridge _web = createWebPushBridge();
 
   /// Posts the card when the app is hidden and no alert went out in the last
   /// [alertWindow]. Never throws: a card that cannot be posted must not fail
@@ -55,11 +57,8 @@ class BoxHiddenNotifier {
   }
 
   static bool _platformHidden() {
-    if (kIsWeb) return !_web.pageVisible;
+    if (kIsWeb) return false;
     final state = WidgetsBinding.instance.lifecycleState;
     return state != null && state != AppLifecycleState.resumed;
   }
-
-  static Future<void> _platformPost() =>
-      kIsWeb ? _web.showBoxMessageCard() : showBoxMessageLocalNotification();
 }

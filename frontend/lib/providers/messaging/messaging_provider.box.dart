@@ -1460,10 +1460,11 @@ extension MessagingBox on MessagingProvider {
     if (!stored) _boxUnsaved[msg.id] = msg;
     if (!alreadyShown) {
       _showBoxMessage(msg);
-      // H1 (decision 81): shown for the first time, only here — a re-store
-      // (`alreadyShown`) is the same message. A sibling's sent copy is ours,
-      // and a muted chat stays silent exactly as it was on the old path
-      // (the server skipped muted chats' pushes).
+      // H1 (decision R81, ER81b): the NATIVE app's card, posted only off
+      // web (on web the page's card in [_showBoxMessage] is the only one).
+      // Shown for the first time, only here — a re-store (`alreadyShown`)
+      // is the same message. A sibling's sent copy is ours, and a muted chat
+      // stays silent exactly as it was on the old path.
       final muted =
           _conversationsProvider?.conversations
               .where((c) => c.id == msg.conversationId)

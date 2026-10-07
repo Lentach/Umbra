@@ -24,8 +24,6 @@ class WebPushBridge {
 
   bool get pageVisible => false;
 
-  Future<void> showBoxMessageCard() async {}
-
   Stream<String> get boxChallengeCodes => const Stream.empty();
 
   Stream<void> get subscriptionChanged => const Stream.empty();

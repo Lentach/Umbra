@@ -242,14 +242,16 @@ Future<void> showFireplaceMessageNotificationWithPlugin({
   );
 }
 
-/// H1 (decision 81): a box message journaled while the app is hidden. The
-/// card is content-free and names no chat; one fixed id, so each message
-/// replaces the last. Main isolate only: the app is alive, or it would have
-/// been woken by the box's own push.
+/// H1 (decision R81, ER81b): a box message journaled while the app is
+/// hidden. Content-free and naming no chat — the same id and tag as the card
+/// a bare FCM box wake-up shows above (`conversationId` absent: id 0, tag
+/// `fireplace-message`), so a wake-up and this card are ONE card, and each
+/// message replaces the last. Main isolate only: the app is alive, or the
+/// box's own push would have woken it.
 Future<void> showBoxMessageLocalNotification() async {
   if (!_isAndroid || !_mainIsolatePluginReady) return;
   await _mainIsolateNotificationsPlugin.show(
-    id: 0x40000003,
+    id: 0,
     title: 'Umbra',
     body: 'You have a new message',
     notificationDetails: const NotificationDetails(
@@ -260,7 +262,7 @@ Future<void> showBoxMessageLocalNotification() async {
         importance: Importance.high,
         priority: Priority.high,
         icon: '@drawable/ic_stat_umbra',
-        tag: 'box-message',
+        tag: 'fireplace-message',
       ),
     ),
   );

@@ -563,7 +563,8 @@ class MessagingProvider extends ChangeNotifier {
   final IncomingMessageSoundService _incomingSound =
       IncomingMessageSoundService();
 
-  /// H1 (decision 81); replaced in tests.
+  /// H1 (decision R81): the native app's hidden-arrival card; replaced in
+  /// tests.
   @visibleForTesting
   BoxHiddenNotifier boxHiddenNotifier = BoxHiddenNotifier();
 

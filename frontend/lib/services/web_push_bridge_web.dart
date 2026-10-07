@@ -103,37 +103,6 @@ class WebPushBridge {
   /// open pages, and posts no notification only for a visible one.
   bool get pageVisible => web.document.visibilityState == 'visible';
 
-  /// H1 (decision 81): a local, content-free card for a box message that
-  /// landed while this page was hidden. Posted by the page through the push
-  /// SW's registration (scope `/web-push-scope/`), so a worker that predates
-  /// this build shows it too; the worker's `notificationclick` focuses the
-  /// app when the card carries no conversation. One tag: each message
-  /// replaces the last. iOS WebKit does not replace a same-tag card reliably
-  /// (the worker closes `conversation-<id>` before showing for that reason),
-  /// so the old one is closed first.
-  Future<void> showBoxMessageCard() async {
-    if (!isSupported || notificationPermission != 'granted') return;
-    final registration = await _registerServiceWorker(refresh: false);
-    final shown = await registration
-        .getNotifications(web.GetNotificationOptions(tag: 'box-message'))
-        .toDart;
-    for (final card in shown.toDart) {
-      card.close();
-    }
-    await registration
-        .showNotification(
-          'Umbra',
-          web.NotificationOptions(
-            body: 'You have a new message',
-            icon: '/icons/notification-icon-512.png',
-            badge: '/icons/notification-badge-96.png',
-            tag: 'box-message',
-            renotify: true,
-          ),
-        )
-        .toDart;
-  }
-
   static final StreamController<String> _boxChallengeCodes =
       StreamController.broadcast();
   static final StreamController<void> _subscriptionChanged =

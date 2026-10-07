@@ -211,7 +211,7 @@ void main() {
     },
   );
 
-  group('hidden app (H1, decision 81)', () {
+  group('hidden native app (H1, decision R81)', () {
     var posts = 0;
     var clockNow = DateTime.utc(2026, 9, 30, 12);
 
