@@ -309,7 +309,7 @@ export class UsersService {
    * Answers whether `password` is the account's current password, and nothing
    * else: no token, no session, no `passwordChangedAt`, no write of any kind.
    * The client checks a typed password here before deriving the contact-backup
-   * wrap from it (metadata-privacy decision 76) — a wrap minted from a typo
+   * wrap from it (metadata-privacy decision R76) — a wrap minted from a typo
    * would be one the real password can never open.
    */
   async verifyPassword(userId: number, password: string): Promise<void> {

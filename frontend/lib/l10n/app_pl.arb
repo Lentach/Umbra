@@ -798,6 +798,7 @@
   "contactBackupPromptTitle": "Chroń swoje kontakty",
   "contactBackupPromptBody": "Potwierdź hasło, a zapiszemy zaszyfrowaną kopię Twojej listy kontaktów. Odzyskasz ją na nowym urządzeniu.",
   "contactBackupPromptFailed": "Nie udało się teraz zapisać kopii. Spróbuj ponownie później.",
+  "contactBackupAlertLine": "Twoje kontakty nie mają kopii zapasowej. Dotknij, aby je zabezpieczyć.",
   "recoveryKeyRequiredForLinking": "Łączenie wymaga frazy odzyskiwania — utworzysz ją za chwilę.",
   "linkGateRestoreAction": "Mam frazę odzyskiwania",
   "linkGateRestoreTitle": "Przywróć konto z frazy",

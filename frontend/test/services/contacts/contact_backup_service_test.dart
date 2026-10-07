@@ -622,7 +622,7 @@ void main() {
     });
   });
 
-  // Decision 76: a restored session cannot mint (no password), so the app
+  // Decision R76: a restored session cannot mint (no password), so the app
   // asks once. The typed string becomes the wrap, so a row minted from a wrong
   // one would open for nobody.
   group('mintFromPassword', () {

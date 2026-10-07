@@ -2,29 +2,22 @@ import 'package:flutter/material.dart';
 
 import '../l10n/app_localizations.dart';
 import '../providers/auth_provider.dart';
-import '../providers/settings_provider.dart';
 import '../theme/rpg_theme.dart';
 import '../utils/contact_backup_prompt.dart';
 import 'glass/glass_sheet.dart';
 
-/// Decision 76: asks once for the account password to mint the contact
-/// backup. Any exit but a saved backup snoozes the sheet
-/// (`kContactBackupPromptSnooze`), so it does not return under the screen the
-/// user just closed.
+/// Decisions R76 and 94: asks for the account password to mint the contact
+/// backup. "Later" (or any dismissal) only closes it: nothing is snoozed, the
+/// red chat-list line stays and the sheet comes back at the next app open,
+/// until the row exists.
 Future<void> showContactBackupPasswordSheet(
   BuildContext context, {
   required AuthProvider auth,
-  required SettingsProvider settings,
-  required int userId,
-}) async {
-  final saved = await showGlassSheet<bool>(
-    context,
-    isScrollControlled: true,
-    builder: (_) => ContactBackupPasswordSheet(auth: auth),
-  );
-  if (saved == true) return;
-  await settings.snoozeContactBackupPrompt(userId);
-}
+}) => showGlassSheet<bool>(
+  context,
+  isScrollControlled: true,
+  builder: (_) => ContactBackupPasswordSheet(auth: auth),
+);
 
 class ContactBackupPasswordSheet extends StatefulWidget {
   const ContactBackupPasswordSheet({required this.auth, super.key});

@@ -946,14 +946,14 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Decision 76: the server answered that this account has no contact
+  /// Decision R76: the server answered that this account has no contact
   /// backup and this session cannot mint one without a password.
   bool get contactBackupAwaitsPassword => _contactBackup.awaitsPasswordToMint;
 
   /// Settles when the login-time backup resolve is done.
   Future<void> get contactBackupReady => _contactBackup.ready;
 
-  /// Decision 76: verifies [password] against the account WITHOUT a session
+  /// Decision R76: verifies [password] against the account WITHOUT a session
   /// (a wrap made from a mistyped string would lock the backup for good),
   /// then mints the backup row under it and uploads this device's contacts.
   Future<ContactBackupPromptResult> confirmPasswordForContactBackup(

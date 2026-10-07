@@ -160,7 +160,7 @@ class ContactBackupService {
   /// The server ANSWERED that this account has no backup row, and this
   /// session holds no password to mint one under (a restored session). A
   /// typed-password door never comes for a 365-day sliding session, so the app
-  /// asks once (decision 76): see [mintFromPassword].
+  /// asks (decisions R76, 94): see [mintFromPassword].
   bool get awaitsPasswordToMint =>
       _state == ContactBackupState.unreachable && _rowAbsent;
 

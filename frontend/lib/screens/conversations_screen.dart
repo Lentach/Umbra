@@ -24,9 +24,9 @@ import '../widgets/conversation_tile.dart';
 import '../widgets/conversation_list_skeleton.dart';
 import '../widgets/main_tab_screen_header.dart';
 import '../utils/backup_nudge.dart';
-import '../utils/contact_backup_prompt.dart';
 import '../utils/instant_opaque_route.dart';
 import '../widgets/backup_nudge_line.dart';
+import '../widgets/contact_backup_alert_line.dart';
 import '../widgets/contact_backup_password_sheet.dart';
 import 'chat_detail_screen.dart';
 import 'passcode_lock_screen.dart';
@@ -107,31 +107,27 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       conn.connect(userId, auth.token!, AppConfig.baseUrl);
       settings.loadBackupNudge(userId).ignore();
       if (auth.consumeFreshRegistration()) _armPhraseOffer(enc);
-      unawaited(_offerContactBackupPrompt(auth, settings, userId));
+      unawaited(_offerContactBackupPrompt(auth));
     });
   }
 
-  /// Decision 76: once per app open, until the account has a contact backup.
-  Future<void> _offerContactBackupPrompt(
-    AuthProvider auth,
-    SettingsProvider settings,
-    int userId,
-  ) async {
-    await settings.loadContactBackupPrompt(userId);
+  /// Decisions R76 and 94: at every app open, until the account has a
+  /// contact backup. Dismissible; the red line ([_buildTopLines]) stays.
+  Future<void> _offerContactBackupPrompt(AuthProvider auth) async {
     await auth.contactBackupReady;
-    if (!mounted) return;
-    final due = shouldShowContactBackupPrompt(
-      awaitsPassword: auth.contactBackupAwaitsPassword,
-      snoozedAt: settings.contactBackupPromptSnoozedAt,
-      now: DateTime.now(),
-    );
-    if (!due) return;
+    if (!mounted || !auth.contactBackupAwaitsPassword) return;
+    await _openContactBackupSheet();
+  }
+
+  /// The red line reads [AuthProvider.contactBackupAwaitsPassword], which
+  /// notifies nobody: rebuild after the sheet, so a saved backup takes the
+  /// line away and a dismissed first ask shows it.
+  Future<void> _openContactBackupSheet() async {
     await showContactBackupPasswordSheet(
       context,
-      auth: auth,
-      settings: settings,
-      userId: userId,
+      auth: context.read<AuthProvider>(),
     );
+    if (mounted) setState(() {});
   }
 
   @override
@@ -196,6 +192,23 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     return BackupNudgeLine(
       onTap: () => _openRecoveryKey(deferrable: false),
       onDismiss: _snoozeBackupNudge,
+    );
+  }
+
+  /// The lines above the chat list: decision 94's red contact-backup line
+  /// first, then the phrase nudge; null when neither is due.
+  Widget? _buildTopLines() {
+    final lines = [
+      if (context.watch<AuthProvider>().contactBackupAwaitsPassword)
+        ContactBackupAlertLine(onTap: _openContactBackupSheet),
+      ?_buildBackupNudge(),
+    ];
+    if (lines.isEmpty) return null;
+    if (lines.length == 1) return lines.single;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: lines,
     );
   }
 
@@ -301,11 +314,11 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   Widget _buildMobileLayout() {
     // Floating glass chrome: the list runs full-bleed behind the header
     // capsules (and behind the bottom nav via MainShell's extendBody);
-    // clearance is applied as list padding, not layout slots. While the
-    // backup nudge is up it takes the header clearance itself and the list
-    // starts below it — the line has to exist in the skeleton, empty and
-    // populated states alike, so it cannot be a list item.
-    final nudge = _buildBackupNudge();
+    // clearance is applied as list padding, not layout slots. While a top
+    // line is up it takes the header clearance itself and the list starts
+    // below it — the line has to exist in the skeleton, empty and populated
+    // states alike, so it cannot be a list item.
+    final nudge = _buildTopLines();
     return Stack(
       children: [
         Positioned.fill(
@@ -435,7 +448,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 _buildCustomHeader(),
-                ?_buildBackupNudge(),
+                ?_buildTopLines(),
                 Expanded(child: _buildConversationList()),
               ],
             ),

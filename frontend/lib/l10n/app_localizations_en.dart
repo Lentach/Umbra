@@ -2098,6 +2098,10 @@ class AppLocalizationsEn extends AppLocalizations {
       'Could not save the copy right now. Try again later.';
 
   @override
+  String get contactBackupAlertLine =>
+      'Your contacts have no backup. Tap to protect them.';
+
+  @override
   String get recoveryKeyRequiredForLinking =>
       'Linking requires a recovery phrase — you\'ll create it next.';
 

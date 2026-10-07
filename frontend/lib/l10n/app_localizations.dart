@@ -3692,6 +3692,12 @@ abstract class AppLocalizations {
   /// **'Nie udało się teraz zapisać kopii. Spróbuj ponownie później.'**
   String get contactBackupPromptFailed;
 
+  /// No description provided for @contactBackupAlertLine.
+  ///
+  /// In pl, this message translates to:
+  /// **'Twoje kontakty nie mają kopii zapasowej. Dotknij, aby je zabezpieczyć.'**
+  String get contactBackupAlertLine;
+
   /// No description provided for @recoveryKeyRequiredForLinking.
   ///
   /// In pl, this message translates to:

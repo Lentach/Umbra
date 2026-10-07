@@ -8,7 +8,7 @@ jest.mock('bcrypt', () => ({
   hash: jest.fn(),
 }));
 
-// Decision 76: the client checks a typed password here before deriving the
+// Decision R76: the client checks a typed password here before deriving the
 // contact-backup wrap from it. The route must answer the question and do
 // NOTHING else — no session, no password stamp, no write.
 describe('UsersService.verifyPassword', () => {

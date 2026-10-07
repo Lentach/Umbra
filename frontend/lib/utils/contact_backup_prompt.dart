@@ -1,25 +1,12 @@
-/// The one-time "confirm your password to protect your contacts" sheet
-/// (metadata-privacy decision 76).
+/// The "confirm your password to protect your contacts" ask (metadata-privacy
+/// decisions R76 and 94).
 ///
 /// A contact-backup row is minted only when a password is typed, and a
-/// 365-day sliding session never types one, so most accounts had none. The
-/// sheet asks once per app open until the row exists, then never again.
-/// "Later" (or any dismissal) hides it for [kContactBackupPromptSnooze].
-const Duration kContactBackupPromptSnooze = Duration(days: 3);
-
-/// Whether the sheet is due: the server answered that this account has no
-/// backup row (never "unknown": a failed GET must not prompt), and the user
-/// has not snoozed it less than [kContactBackupPromptSnooze] ago.
-bool shouldShowContactBackupPrompt({
-  required bool awaitsPassword,
-  required DateTime? snoozedAt,
-  required DateTime now,
-}) {
-  if (!awaitsPassword) return false;
-  if (snoozedAt == null) return true;
-  return now.difference(snoozedAt) >= kContactBackupPromptSnooze;
-}
-
+/// 365-day sliding session never types one, so most accounts had none. Until
+/// the row exists the app asks at every open and keeps a red line on the chat
+/// list; the ask can always be dismissed and never blocks the app (decision
+/// 94: a user signed in for months may not know the password).
+///
 /// What confirming the password came to.
 enum ContactBackupPromptResult {
   /// The row exists and this device's contacts are on the server.

@@ -2130,6 +2130,10 @@ class AppLocalizationsPl extends AppLocalizations {
       'Nie udało się teraz zapisać kopii. Spróbuj ponownie później.';
 
   @override
+  String get contactBackupAlertLine =>
+      'Twoje kontakty nie mają kopii zapasowej. Dotknij, aby je zabezpieczyć.';
+
+  @override
   String get recoveryKeyRequiredForLinking =>
       'Łączenie wymaga frazy odzyskiwania — utworzysz ją za chwilę.';
 

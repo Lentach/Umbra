@@ -237,7 +237,7 @@ export class UsersController {
     return { message: 'Password updated successfully' };
   }
 
-  // Password check WITHOUT a session (metadata-privacy decision 76): the client
+  // Password check WITHOUT a session (metadata-privacy decision R76): the client
   // proves a typed password before minting the contact-backup wrap from it.
   // `/auth/login` would issue a session (and, on a linked device, the
   // primary's token). A guessing oracle for a JWT holder: keep the reset budget.

@@ -363,7 +363,7 @@ class ApiService {
     }
   }
 
-  /// Decision 76: checks [password] against the signed-in account without
+  /// Decision R76: checks [password] against the signed-in account without
   /// creating a session. 403 = wrong password; 401 = expired token.
   Future<void> verifyPassword(String token, String password) async {
     final response = await _httpClient.post(

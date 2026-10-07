@@ -12,7 +12,7 @@ const _validAccessJwt =
     'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOjEsInVzZXJuYW1lIjoidGVzdCIsInRhZyI6IjAwMDAiLCJleHAiOjk5OTk5OTk5OTl9.abc';
 
 void main() {
-  group('confirmPasswordForContactBackup (decision 76)', () {
+  group('confirmPasswordForContactBackup (decision R76)', () {
     late List<String> calls;
 
     Future<AuthProvider> restoredSession({required int verifyStatus}) async {
@@ -79,40 +79,6 @@ void main() {
 
       expect(result, ContactBackupPromptResult.unavailable);
       expect(auth.contactBackupAwaitsPassword, isTrue);
-    });
-  });
-
-  group('shouldShowContactBackupPrompt', () {
-    final now = DateTime.utc(2026, 9, 30, 12);
-
-    test('only when the server said there is no row', () {
-      expect(
-        shouldShowContactBackupPrompt(
-          awaitsPassword: false,
-          snoozedAt: null,
-          now: now,
-        ),
-        isFalse,
-      );
-      expect(
-        shouldShowContactBackupPrompt(
-          awaitsPassword: true,
-          snoozedAt: null,
-          now: now,
-        ),
-        isTrue,
-      );
-    });
-
-    test('a snooze holds until exactly the snooze window has passed', () {
-      bool at(Duration ago) => shouldShowContactBackupPrompt(
-        awaitsPassword: true,
-        snoozedAt: now.subtract(ago),
-        now: now,
-      );
-
-      expect(at(kContactBackupPromptSnooze - const Duration(seconds: 1)), isFalse);
-      expect(at(kContactBackupPromptSnooze), isTrue);
     });
   });
 }
