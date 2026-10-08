@@ -343,6 +343,10 @@ Media and `.env` restore are manual.
 
 The VAPID public key in the frontend build MUST match the backend VAPID keys. A mismatch
 silently breaks web-push subscribe/delivery — a stupidly easy footgun.
+Rotating the pair (decision 90, E90a): new pair in `~/fireplace/.env` AND the PC `.env` the web build
+reads, backend and web deployed together. From 0.2.62 a page swaps a subscription made under another
+key at its next open; every existing `web_push_subscription` row then answers 403 (pruned only on
+404/410), so delete them at the rotation. The contact inbox shares the pair.
 
 ### Branch testing before merge
 

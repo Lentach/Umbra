@@ -317,6 +317,32 @@ class SettingsProvider extends ChangeNotifier {
     await prefs.setInt(_backupNudgeKey(userId), at.millisecondsSinceEpoch);
   }
 
+  /// Decision 95: how many times this account put off the contact-backup
+  /// password sheet on this install, or null until [loadContactBackupLaters]
+  /// ran (read as "not due", so a muted ask never flashes up at start).
+  int? get contactBackupLaters => _contactBackupLaters;
+  int? _contactBackupLaters;
+
+  static String _contactBackupLatersKey(int userId) =>
+      'contact_backup_laters_$userId';
+
+  Future<void> loadContactBackupLaters(int userId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final next = prefs.getInt(_contactBackupLatersKey(userId)) ?? 0;
+    if (next == _contactBackupLaters) return;
+    _contactBackupLaters = next;
+    notifyListeners();
+  }
+
+  /// One more "Later" (any exit without a saved backup).
+  Future<void> countContactBackupLater(int userId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final next = (prefs.getInt(_contactBackupLatersKey(userId)) ?? 0) + 1;
+    _contactBackupLaters = next;
+    notifyListeners();
+    await prefs.setInt(_contactBackupLatersKey(userId), next);
+  }
+
   /// Loads the per-user background and migrates both legacy storage shapes:
   /// per-conversation wallpaper keys and the global Cosmic starfield switch.
   ///

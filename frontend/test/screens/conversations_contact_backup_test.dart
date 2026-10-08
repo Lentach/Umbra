@@ -53,6 +53,7 @@ class _FakeAuthProvider extends AuthProvider {
     confirmed.add(password);
     if (password != 'right') return ContactBackupPromptResult.wrongPassword;
     awaitsPassword = false;
+    notifyListeners();
     return ContactBackupPromptResult.saved;
   }
 }
@@ -172,6 +173,32 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(auth.confirmed, ['wrong', 'right']);
+    expect(find.byKey(_sheetTitle), findsNothing);
+    expect(find.byKey(_alert), findsNothing);
+  });
+
+  testWidgets('the fifth Later mutes the line and the sheet on this install '
+      '(decision 95)', (tester) async {
+    await _pump(tester, awaitsPassword: true);
+    await tester.tap(find.byKey(_later));
+    await tester.pumpAndSettle();
+    for (var i = 2; i < kContactBackupLaterLimit; i++) {
+      await tester.tap(find.byKey(_alert));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(_later));
+      await tester.pumpAndSettle();
+    }
+    expect(find.byKey(_alert), findsOneWidget, reason: 'four Laters so far');
+
+    await tester.tap(find.byKey(_alert));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(_later));
+    await tester.pumpAndSettle();
+    expect(find.byKey(_alert), findsNothing);
+
+    // The next app open asks nothing either.
+    await tester.pumpWidget(const SizedBox());
+    await _pump(tester, awaitsPassword: true);
     expect(find.byKey(_sheetTitle), findsNothing);
     expect(find.byKey(_alert), findsNothing);
   });

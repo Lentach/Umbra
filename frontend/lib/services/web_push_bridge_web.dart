@@ -55,8 +55,7 @@ class WebPushBridge {
   }) async {
     if (!isSupported || notificationPermission != 'granted') return null;
     final registration = await _registerServiceWorker();
-    final subscription =
-        await registration.pushManager.getSubscription().toDart;
+    final subscription = await _underKey(registration, vapidPublicKey);
     return _toPayload(subscription, userAgent);
   }
 
@@ -71,13 +70,54 @@ class WebPushBridge {
     // No update check here: iOS allows `subscribe` only shortly after the
     // tap, and the permission prompt already spent part of that window.
     final registration = await _registerServiceWorker(refresh: false);
-    var subscription =
-        await registration.pushManager.getSubscription().toDart;
+    var subscription = await _underKey(registration, vapidPublicKey);
     final created = subscription == null;
     subscription ??=
         await _subscribe(registration, vapidPublicKey);
     if (created) _subscriptionChanged.add(null);
     return _toPayload(subscription, userAgent);
+  }
+
+  /// This browser's subscription, but only one made under [vapidPublicKey].
+  /// After a VAPID rotation (decision 90) the push service refuses every push
+  /// to a subscription made under the old key, and `getSubscription` keeps
+  /// returning it: it is dropped and a new one made, or null when the engine
+  /// refuses `subscribe` here (Settings' "enable" tap then makes it).
+  Future<web.PushSubscription?> _underKey(
+    web.ServiceWorkerRegistration registration,
+    String vapidPublicKey,
+  ) async {
+    final current = await registration.pushManager.getSubscription().toDart;
+    if (current == null || _madeUnder(current, vapidPublicKey)) return current;
+    E2eDiagLog.add('WEB_PUSH_KEY_SWAP', {});
+    await current.unsubscribe().toDart;
+    try {
+      return await _subscribe(registration, vapidPublicKey);
+    } on Object {
+      return null;
+    } finally {
+      _subscriptionChanged.add(null);
+    }
+  }
+
+  /// Whether [subscription] was made under [vapidPublicKey]. True when that
+  /// cannot be told (no key in this build, an engine without
+  /// `options.applicationServerKey`): never drop a subscription on a guess.
+  bool _madeUnder(web.PushSubscription subscription, String vapidPublicKey) {
+    if (vapidPublicKey.isEmpty) return true;
+    try {
+      final held = subscription.options.applicationServerKey;
+      if (held == null) return true;
+      final a = _bytesFromArrayBuffer(held);
+      final b = _base64UrlToUint8List(vapidPublicKey);
+      if (a.length != b.length) return false;
+      for (var i = 0; i < a.length; i++) {
+        if (a[i] != b[i]) return false;
+      }
+      return true;
+    } on Object {
+      return true;
+    }
   }
 
   /// This browser's push subscription as the box takes it (E9):

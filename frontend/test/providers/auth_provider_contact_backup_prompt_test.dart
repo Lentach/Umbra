@@ -80,5 +80,36 @@ void main() {
       expect(result, ContactBackupPromptResult.unavailable);
       expect(auth.contactBackupAwaitsPassword, isTrue);
     });
+
+    test('listeners hear the resolve settle: the red line needs no rebuild '
+        'from elsewhere', () async {
+      SharedPreferences.setMockInitialValues({
+        'jwt_token': _validAccessJwt,
+        'refresh_token': 'opaque_refresh',
+      });
+      final mock = MockClient((request) async {
+        if (request.url.path == '/users/me') {
+          return http.Response(
+            jsonEncode({'id': 1, 'username': 'test', 'tag': '0000'}),
+            200,
+            headers: {'Content-Type': 'application/json'},
+          );
+        }
+        return http.Response('{}', 404);
+      });
+      final heard = <bool>[];
+      late final AuthProvider auth;
+      auth = AuthProvider(
+        api: ApiService(baseUrl: 'http://t', httpClient: mock),
+      )..addListener(() => heard.add(auth.contactBackupAwaitsPassword));
+      for (var i = 0; i < 40 && !auth.isLoggedIn; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      await auth.contactBackupReady;
+      await Future<void>.delayed(Duration.zero);
+
+      expect(auth.contactBackupAwaitsPassword, isTrue);
+      expect(heard.last, isTrue, reason: 'the last notification saw the 404');
+    });
   });
 }

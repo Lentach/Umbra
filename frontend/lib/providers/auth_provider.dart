@@ -178,6 +178,25 @@ class AuthProvider extends ChangeNotifier {
   /// store the backup mirrors.
   ContactBackupService get contactBackup => _contactBackup;
 
+  bool _disposed = false;
+
+  /// Resolves the backup row, then tells listeners: the chat list's red line
+  /// reads [contactBackupAwaitsPassword] (decision 94). Never throws.
+  Future<void> _resolveContactBackup({
+    required int userId,
+    required String token,
+    String? password,
+    String? phrase,
+  }) async {
+    await _contactBackup.onSession(
+      userId: userId,
+      token: token,
+      password: password,
+      phrase: phrase,
+    );
+    if (!_disposed) notifyListeners();
+  }
+
   String? _token;
   String? _refreshToken;
   UserModel? _currentUser;
@@ -555,9 +574,7 @@ class AuthProvider extends ChangeNotifier {
       // every cold start that never touches a credential form.
       final restored = _currentUser;
       if (restored != null) {
-        unawaited(
-          _contactBackup.onSession(userId: restored.id, token: _token!),
-        );
+        unawaited(_resolveContactBackup(userId: restored.id, token: _token!));
       }
       _startSessionRefreshTimer();
       if (savedAccessUsable) {
@@ -836,7 +853,7 @@ class AuthProvider extends ChangeNotifier {
     // shell must not wait for it; `ConnectionProvider.connect()` awaits
     // `ContactBackupService.ready` inside its own budget before the socket.
     unawaited(
-      _contactBackup.onSession(
+      _resolveContactBackup(
         userId: _currentUser!.id,
         token: _token!,
         password: password,
@@ -972,7 +989,9 @@ class AuthProvider extends ChangeNotifier {
     } on Object {
       return ContactBackupPromptResult.unavailable;
     }
-    return await _contactBackup.mintFromPassword(password)
+    final saved = await _contactBackup.mintFromPassword(password);
+    if (!_disposed) notifyListeners();
+    return saved
         ? ContactBackupPromptResult.saved
         : ContactBackupPromptResult.unavailable;
   }
@@ -1040,6 +1059,7 @@ class AuthProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
     _cancelSessionRefreshTimer();
     super.dispose();
   }

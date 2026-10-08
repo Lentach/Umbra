@@ -24,6 +24,7 @@ import '../widgets/conversation_tile.dart';
 import '../widgets/conversation_list_skeleton.dart';
 import '../widgets/main_tab_screen_header.dart';
 import '../utils/backup_nudge.dart';
+import '../utils/contact_backup_prompt.dart';
 import '../utils/instant_opaque_route.dart';
 import '../widgets/backup_nudge_line.dart';
 import '../widgets/contact_backup_alert_line.dart';
@@ -107,27 +108,38 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       conn.connect(userId, auth.token!, AppConfig.baseUrl);
       settings.loadBackupNudge(userId).ignore();
       if (auth.consumeFreshRegistration()) _armPhraseOffer(enc);
-      unawaited(_offerContactBackupPrompt(auth));
+      unawaited(_offerContactBackupPrompt(auth, settings, userId));
     });
   }
 
-  /// Decisions R76 and 94: at every app open, until the account has a
-  /// contact backup. Dismissible; the red line ([_buildTopLines]) stays.
-  Future<void> _offerContactBackupPrompt(AuthProvider auth) async {
-    await auth.contactBackupReady;
-    if (!mounted || !auth.contactBackupAwaitsPassword) return;
+  /// Decisions R76, 94 and 95: at every app open, until the account has a
+  /// contact backup or this install counted [kContactBackupLaterLimit]
+  /// "Later"s. Dismissible; the red line ([_buildTopLines]) stays meanwhile.
+  Future<void> _offerContactBackupPrompt(
+    AuthProvider auth,
+    SettingsProvider settings,
+    int userId,
+  ) async {
+    await Future.wait([
+      auth.contactBackupReady,
+      settings.loadContactBackupLaters(userId),
+    ]);
+    final due = shouldAskForContactBackup(
+      awaitsPassword: auth.contactBackupAwaitsPassword,
+      laters: settings.contactBackupLaters,
+    );
+    if (!mounted || !due) return;
     await _openContactBackupSheet();
   }
 
-  /// The red line reads [AuthProvider.contactBackupAwaitsPassword], which
-  /// notifies nobody: rebuild after the sheet, so a saved backup takes the
-  /// line away and a dismissed first ask shows it.
+  /// Any exit without a saved backup counts one "Later" (decision 95).
   Future<void> _openContactBackupSheet() async {
-    await showContactBackupPasswordSheet(
-      context,
-      auth: context.read<AuthProvider>(),
-    );
-    if (mounted) setState(() {});
+    final auth = context.read<AuthProvider>();
+    final settings = context.read<SettingsProvider>();
+    final userId = auth.currentUser?.id;
+    final saved = await showContactBackupPasswordSheet(context, auth: auth);
+    if (saved || userId == null) return;
+    settings.countContactBackupLater(userId).ignore();
   }
 
   @override
@@ -198,9 +210,12 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   /// The lines above the chat list: decision 94's red contact-backup line
   /// first, then the phrase nudge; null when neither is due.
   Widget? _buildTopLines() {
+    final askBackup = shouldAskForContactBackup(
+      awaitsPassword: context.watch<AuthProvider>().contactBackupAwaitsPassword,
+      laters: context.watch<SettingsProvider>().contactBackupLaters,
+    );
     final lines = [
-      if (context.watch<AuthProvider>().contactBackupAwaitsPassword)
-        ContactBackupAlertLine(onTap: _openContactBackupSheet),
+      if (askBackup) ContactBackupAlertLine(onTap: _openContactBackupSheet),
       ?_buildBackupNudge(),
     ];
     if (lines.isEmpty) return null;

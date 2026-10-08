@@ -6,18 +6,20 @@ import '../theme/rpg_theme.dart';
 import '../utils/contact_backup_prompt.dart';
 import 'glass/glass_sheet.dart';
 
-/// Decisions R76 and 94: asks for the account password to mint the contact
-/// backup. "Later" (or any dismissal) only closes it: nothing is snoozed, the
-/// red chat-list line stays and the sheet comes back at the next app open,
-/// until the row exists.
-Future<void> showContactBackupPasswordSheet(
+/// Decisions R76, 94 and 95: asks for the account password to mint the
+/// contact backup. True once the backup is saved; "Later" (or any dismissal)
+/// only closes it, and the caller counts it toward the limit that mutes the
+/// ask on this install.
+Future<bool> showContactBackupPasswordSheet(
   BuildContext context, {
   required AuthProvider auth,
-}) => showGlassSheet<bool>(
-  context,
-  isScrollControlled: true,
-  builder: (_) => ContactBackupPasswordSheet(auth: auth),
-);
+}) async =>
+    await showGlassSheet<bool>(
+      context,
+      isScrollControlled: true,
+      builder: (_) => ContactBackupPasswordSheet(auth: auth),
+    ) ??
+    false;
 
 class ContactBackupPasswordSheet extends StatefulWidget {
   const ContactBackupPasswordSheet({required this.auth, super.key});
