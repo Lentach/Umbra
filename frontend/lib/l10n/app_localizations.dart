@@ -3698,6 +3698,12 @@ abstract class AppLocalizations {
   /// **'Twoje kontakty nie mają kopii zapasowej. Dotknij, aby je zabezpieczyć.'**
   String get contactBackupAlertLine;
 
+  /// No description provided for @webPushOffLine.
+  ///
+  /// In pl, this message translates to:
+  /// **'Powiadomienia są wyłączone. Dotknij, aby je włączyć.'**
+  String get webPushOffLine;
+
   /// No description provided for @recoveryKeyRequiredForLinking.
   ///
   /// In pl, this message translates to:

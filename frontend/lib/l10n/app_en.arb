@@ -807,6 +807,7 @@
   "contactBackupPromptBody": "Confirm your password and we will save an encrypted copy of your contact list. You can restore it on a new device.",
   "contactBackupPromptFailed": "Could not save the copy right now. Try again later.",
   "contactBackupAlertLine": "Your contacts have no backup. Tap to protect them.",
+  "webPushOffLine": "Notifications are off. Tap to turn them on.",
   "recoveryKeyRequiredForLinking": "Linking requires a recovery phrase — you'll create it next.",
   "linkGateRestoreAction": "I have my recovery phrase",
   "linkGateRestoreTitle": "Restore from recovery phrase",

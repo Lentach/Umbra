@@ -2,7 +2,12 @@ import 'dart:async';
 
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart'
-    show debugPrint, defaultTargetPlatform, kIsWeb, TargetPlatform;
+    show
+        debugPrint,
+        defaultTargetPlatform,
+        kIsWeb,
+        TargetPlatform,
+        ValueNotifier;
 import '../push_android_stub.dart'
     if (dart.library.io) 'android_fcm_local_notifications.dart'
     as push_android;
@@ -56,6 +61,14 @@ class PushService {
   /// Cancelled and re-listened on every [initialize] (i.e. every login), so a
   /// second session cannot leave a live listener from the first behind.
   StreamSubscription<String>? _tokenRefreshSubscription;
+
+  /// Web only: this browser has notification permission and can subscribe,
+  /// yet holds no subscription the server can push to — none at all (a
+  /// Safari revocation, a logout), or one under an old VAPID key that the
+  /// engine would not swap without a tap (iOS, decision 90, E90a). The chat
+  /// list shows a line whose tap runs [requestWebPushFromUserGesture]. One
+  /// browser, one answer, whichever [PushService] instance found it.
+  static final ValueNotifier<bool> webPushNeedsTap = ValueNotifier(false);
 
   /// Set by main.dart from the `notify_conv` URL param before initialize() is called.
   /// Drained once by ConnectionProvider._onSocketReady().
@@ -245,6 +258,7 @@ class PushService {
         return const WebPushRequestResult(WebPushRequestStatus.noChange);
       }
       await _api.registerWebPushSubscription(jwtToken, payload);
+      webPushNeedsTap.value = false;
       return const WebPushRequestResult(WebPushRequestStatus.subscribed);
     } catch (e) {
       return WebPushRequestResult(
@@ -262,6 +276,8 @@ class PushService {
       final payload = await _webPushBridge.registerExistingSubscription(
         vapidPublicKey: _vapidKey,
       );
+      webPushNeedsTap.value =
+          payload == null && _webPushBridge.isStandaloneOrNotRequired();
       if (payload == null) return;
       await _api.registerWebPushSubscription(jwtToken, payload);
     } catch (_) {
@@ -271,6 +287,7 @@ class PushService {
 
   Future<void> _unregisterWebPush(String jwtToken) async {
     if (!_webPushBridge.isSupported) return;
+    webPushNeedsTap.value = false;
     try {
       final endpoint = await _webPushBridge.unsubscribe();
       if (endpoint != null) {

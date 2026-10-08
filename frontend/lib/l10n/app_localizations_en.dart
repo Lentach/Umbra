@@ -2102,6 +2102,9 @@ class AppLocalizationsEn extends AppLocalizations {
       'Your contacts have no backup. Tap to protect them.';
 
   @override
+  String get webPushOffLine => 'Notifications are off. Tap to turn them on.';
+
+  @override
   String get recoveryKeyRequiredForLinking =>
       'Linking requires a recovery phrase — you\'ll create it next.';
 

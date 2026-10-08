@@ -2134,6 +2134,10 @@ class AppLocalizationsPl extends AppLocalizations {
       'Twoje kontakty nie mają kopii zapasowej. Dotknij, aby je zabezpieczyć.';
 
   @override
+  String get webPushOffLine =>
+      'Powiadomienia są wyłączone. Dotknij, aby je włączyć.';
+
+  @override
   String get recoveryKeyRequiredForLinking =>
       'Łączenie wymaga frazy odzyskiwania — utworzysz ją za chwilę.';
 

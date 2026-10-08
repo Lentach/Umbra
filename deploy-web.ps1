@@ -53,6 +53,23 @@ if (Test-Path $cfg) { . $cfg }
 
 function Step($m) { Write-Host "`n=== $m ===" -ForegroundColor Cyan }
 
+# Decision 90, E90a: since 0.2.62 a page swaps any push subscription made under
+# another VAPID key than its bundle's. A bundle whose key is not the LIVE
+# backend's would make every user drop a working subscription for one the
+# backend cannot sign for. Publish only a bundle that carries the backend's key
+# (a rotation deploys the backend first, then passes -VapidPublicKey here).
+function Assert-BundleHasBackendVapidKey([string]$remoteKey) {
+  $remoteKey = "$remoteKey".Trim()
+  if (-not $remoteKey) {
+    throw "Could not read WEB_PUSH_VAPID_PUBLIC_KEY from the live backend - refusing to publish."
+  }
+  $mainJs = "frontend/build/web/main.dart.js"
+  if (-not (Select-String -Path $mainJs -SimpleMatch $remoteKey -Quiet)) {
+    throw "VAPID mismatch: $mainJs does not carry the backend's public key ($($remoteKey.PadRight(12).Substring(0, 12))...) - refusing to publish. Deploy the backend's pair first, then build with -VapidPublicKey <its public key>."
+  }
+  Write-Host "Bundle carries the live backend's VAPID public key." -ForegroundColor Green
+}
+
 # ---------- repo state ----------
 Step "Repo state"
 $branch = (git rev-parse --abbrev-ref HEAD).Trim()
@@ -134,6 +151,7 @@ if (-not $SkipPublish) {
     $rHome = "/home/$GcloudUser"
     $stg   = "$rHome/web-staging"
     Step "Publish via gcloud ($tgt / $GcloudZone)"
+    Assert-BundleHasBackendVapidKey (gcloud compute ssh $tgt --zone $GcloudZone --command "cd $rHome/$RemoteDir && docker compose -f docker-compose.prod.yml exec -T backend printenv WEB_PUSH_VAPID_PUBLIC_KEY")
     gcloud compute ssh $tgt --zone $GcloudZone --command "rm -rf $stg; mkdir -p $stg"
     gcloud compute scp --recurse frontend/build/web "${tgt}:$stg" --zone $GcloudZone
     if ($LASTEXITCODE -ne 0) { throw "gcloud scp failed (exit=$LASTEXITCODE)." }
@@ -144,6 +162,7 @@ if (-not $SkipPublish) {
   else {
     # OpenSSH scp expands ~ and creates dirs, so the temp-dir approach works directly.
     Step "Publish via ssh/scp ($VmSshTarget)"
+    Assert-BundleHasBackendVapidKey (ssh $VmSshTarget "cd ~/$RemoteDir && docker compose -f docker-compose.prod.yml exec -T backend printenv WEB_PUSH_VAPID_PUBLIC_KEY")
     ssh $VmSshTarget "rm -rf ~/web-staging && mkdir -p ~/web-staging"
     if ($LASTEXITCODE -ne 0) { throw "ssh staging-dir prep failed (exit=$LASTEXITCODE). Check VmSshTarget / SSH access." }
     scp -r frontend/build/web "${VmSshTarget}:web-staging"

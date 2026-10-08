@@ -341,12 +341,16 @@ Media and `.env` restore are manual.
 | Frontend dart-defines | `BASE_URL`, `GIPHY_API_KEY`, `WEB_PUSH_VAPID_PUBLIC_KEY`, `GIT_COMMIT`, `BUILD_TIME` |
 | Deploy metadata | `APP_VERSION`, `GIT_COMMIT`, `BUILD_TIME` |
 
-The VAPID public key in the frontend build MUST match the backend VAPID keys. A mismatch
-silently breaks web-push subscribe/delivery — a stupidly easy footgun.
-Rotating the pair (decision 90, E90a): new pair in `~/fireplace/.env` AND the PC `.env` the web build
-reads, backend and web deployed together. From 0.2.62 a page swaps a subscription made under another
-key at its next open; every existing `web_push_subscription` row then answers 403 (pruned only on
-404/410), so delete them at the rotation. The contact inbox shares the pair.
+The VAPID public key in the frontend build MUST match the backend VAPID keys. Since 0.2.62 a mismatch
+is worse than silent: every page that loads the bundle drops its working subscription for one under the
+bundle's key (E90a). `deploy-web.ps1` therefore reads the live backend's key over SSH and refuses to
+publish a bundle (`main.dart.js`) that does not carry it.
+Rotating the pair (decision 90): (1) new pair in `~/fireplace/.env` (and `~/fireplace-inbox/.env`, which
+shares it); (2) `./deploy-backend.sh`; (3) `.\deploy-web.ps1 -VapidPublicKey <new public key>` (the
+script's default is the OLD key until edited); (4) delete every `web_push_subscription` row created
+before step 3 (all old-key: an old bundle re-registers its row at login, and 403 is never pruned, only
+404/410). Pages swap their subscription at the next open; an engine that wants a gesture (iOS) shows
+the red "Powiadomienia są wyłączone" line on the chat list instead.
 
 ### Branch testing before merge
 

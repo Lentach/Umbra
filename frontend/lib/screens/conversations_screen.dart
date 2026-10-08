@@ -14,8 +14,10 @@ import '../providers/friends_provider.dart';
 import '../providers/messaging_provider.dart';
 import '../providers/passcode_provider.dart';
 import '../providers/settings_provider.dart';
+import '../services/api_service.dart';
 import '../services/box/box_client.dart';
 import '../services/contacts/contact_store.dart';
+import '../services/push_service.dart';
 import '../theme/rpg_theme.dart';
 import '../widgets/avatar_circle.dart';
 import '../widgets/chat_honeycomb_picker.dart';
@@ -26,9 +28,10 @@ import '../widgets/main_tab_screen_header.dart';
 import '../utils/backup_nudge.dart';
 import '../utils/contact_backup_prompt.dart';
 import '../utils/instant_opaque_route.dart';
+import '../widgets/alert_line.dart';
 import '../widgets/backup_nudge_line.dart';
-import '../widgets/contact_backup_alert_line.dart';
 import '../widgets/contact_backup_password_sheet.dart';
+import '../widgets/top_snackbar.dart';
 import 'chat_detail_screen.dart';
 import 'passcode_lock_screen.dart';
 import 'invitations_screen.dart';
@@ -54,6 +57,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   @override
   void initState() {
     super.initState();
+    PushService.webPushNeedsTap.addListener(_onPushNeedsTap);
     final messaging = context.read<MessagingProvider>();
     _listCountdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
@@ -142,9 +146,33 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     settings.countContactBackupLater(userId).ignore();
   }
 
+  void _onPushNeedsTap() {
+    if (mounted) setState(() {});
+  }
+
+  /// Decision 90, E90a: the line's tap is the user gesture iOS asks for
+  /// before it makes a push subscription.
+  Future<void> _enableWebPush() async {
+    final token = context.read<AuthProvider>().token;
+    if (token == null) return;
+    final result = await PushService(
+      ApiService(baseUrl: AppConfig.baseUrl),
+    ).requestWebPushFromUserGesture(token);
+    if (!mounted || result.status == WebPushRequestStatus.subscribed) return;
+    final l10n = AppLocalizations.of(context);
+    showTopSnackBar(
+      context,
+      result.status == WebPushRequestStatus.denied
+          ? l10n.webPushPermissionDenied
+          : '${l10n.webPushEnableFailed}: ${result.details ?? ''}',
+      backgroundColor: Theme.of(context).colorScheme.error,
+    );
+  }
+
   @override
   void dispose() {
     _listCountdownTimer?.cancel();
+    PushService.webPushNeedsTap.removeListener(_onPushNeedsTap);
     _disarmPhraseOffer();
     super.dispose();
   }
@@ -207,15 +235,30 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     );
   }
 
-  /// The lines above the chat list: decision 94's red contact-backup line
-  /// first, then the phrase nudge; null when neither is due.
+  /// The lines above the chat list: notifications off (E90a) and decision
+  /// 94's contact-backup line, both red, then the phrase nudge; null when
+  /// none is due.
   Widget? _buildTopLines() {
+    final l10n = AppLocalizations.of(context);
     final askBackup = shouldAskForContactBackup(
       awaitsPassword: context.watch<AuthProvider>().contactBackupAwaitsPassword,
       laters: context.watch<SettingsProvider>().contactBackupLaters,
     );
     final lines = [
-      if (askBackup) ContactBackupAlertLine(onTap: _openContactBackupSheet),
+      if (PushService.webPushNeedsTap.value)
+        AlertLine(
+          text: l10n.webPushOffLine,
+          icon: Icons.notifications_off_outlined,
+          tapKey: const Key('web-push-off-alert'),
+          onTap: _enableWebPush,
+        ),
+      if (askBackup)
+        AlertLine(
+          text: l10n.contactBackupAlertLine,
+          icon: Icons.warning_amber_rounded,
+          tapKey: const Key('contact-backup-alert'),
+          onTap: _openContactBackupSheet,
+        ),
       ?_buildBackupNudge(),
     ];
     if (lines.isEmpty) return null;
