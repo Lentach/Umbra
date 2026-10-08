@@ -236,9 +236,10 @@ class ContactBackupService {
   /// nobody, and a row nobody opens locks the backup for good. Runs the
   /// login resolve again, so a row another device minted meanwhile is opened
   /// instead of replaced. True once the server holds a row this session
-  /// opens: this device's view, or that other device's row, which then gets
-  /// this device's view once its restore is applied at the next connect
-  /// ([flushPending]); an upload now would be refused by that pending restore.
+  /// opens: this device's view, or that other device's row. In that case the
+  /// write of this device's view stays owed (an upload now is refused by the
+  /// pending restore) until this session's next connect applies the restore
+  /// ([flushPending]); a reload drops it, as before this method existed.
   Future<bool> mintFromPassword(String password) async {
     final userId = _userId;
     final token = _token;

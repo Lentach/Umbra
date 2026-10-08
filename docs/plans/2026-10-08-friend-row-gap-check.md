@@ -45,12 +45,13 @@ Independent of the old tables (checked): pre-key fetch, box module and box push,
 
 ## Safer plan: staged, every step reversible until the last
 
-1. **Client hardening release** (no server data touched): stop deleting on absence (friends removed only on `unfriended`/block/decline events; the reconcile refuses an answer that orphans every id it asked about); mark every current friend device-owned and carry its chat id, request-queue addresses and device list in the contact backup; render old-path history from local text; merge the backup on a 409 instead of last-writer-wins; send the app version at connect.
+0. **Cull inactive and test accounts first** (decision 100; the owner confirms the threshold and the list). Through the app's account-delete path, not raw SQL. Their friends' devices then drop them as contacts and lose the text of those chats (both intended for a deleted account). Prod 10-08, by last refresh: 20 seen in 7 d, 8 more in 30 d, 23 more in 90 d, 14 older, 54 with no live session.
+1. **Client hardening release** (no server data touched): stop deleting on absence (friends removed only on `unfriended`/block/decline events; the reconcile refuses an answer that orphans every id it asked about); mark every current friend device-owned and carry its chat id, request-queue addresses and device list in the contact backup; merge the backup on a 409 instead of last-writer-wins; send the app version at connect. Old-path history is NOT rendered locally: it may go (decision 99).
 2. **Measure**: devices by version, accounts with friends and no backup; owner decides when it is enough.
-3. **Server goes silent behind an env flag** (rows untouched): the old list/reconcile handlers stop answering, old-path sends refused, versions below step 1 told to update. Watch 1–2 weeks. Undo = flip the flag.
-4. **Cut over** account delete, block, unfriend, device-list entitlement, security push (R78), profiles.
+3. **Freeze behind an env flag** (rows untouched): no new rows in the old tables (old-path sends and requests refused; only the existing disappearing-message expiry still deletes), versions below step 1 told to update. The list handlers keep serving the frozen rows: a complete frozen list cannot trigger the partial-list sweep, and silencing `conversationsList` would force a reconnect on every resume (`connection_provider.dart:1118-1126`). Watch 1–2 weeks. Undo = flip the flag.
+4. **Cut over** account delete, block, unfriend, device-list entitlement, security push (R78), profiles; then the list handlers and `getServedMessageIds` are removed (silence, never `[]`).
 5. **Archive, then DROP** (never `DELETE` rows under live code): an encrypted dump kept offline, then `DROP TABLE` with the code removal in the same release.
 
-Before steps 3 and 5: a rehearsal on a restored copy of the prod backup with an old APK (0.2.61), a PWA and the new build; each device's contact and message counts must be identical before and after.
+Before steps 3 and 5: a rehearsal on a restored copy of the prod backup with an old APK (0.2.61), a PWA and the new build; each device's contact count must be identical before and after. Before step 4: confirm with `git log -L` that every build still able to connect reads a missing `servedMessageIds` reply as "no answer", not as an empty set (checked only at HEAD: `connection_provider.dart:962-965`). Decision 99 accepts losing old-path text, but users are told first.
 
-Phase 4 stays the owner's call (decision 86); this note lists what it has to cover.
+Owner decisions 97–100 (10-08) apply. Phase 4 stays the owner's call (decision 86).

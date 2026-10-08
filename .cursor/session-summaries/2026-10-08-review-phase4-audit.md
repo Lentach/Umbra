@@ -27,7 +27,9 @@
 - NOT verified: iPhone, Android (the mute refactor is unit-tested only), prod.
 
 ## Notes for next session
-- Next action: owner's go for merge + deploy (unchanged gate-B plan in `NEXT.md`). Phase 4: owner reads the staged plan in the gap-check doc; nothing is deleted on prod before step 1 of it ships.
-- Owner-owed: must old-path history stay readable after Phase 4 (needs local rendering)? Accept that accounts which never ran 0.2.52+ lose their friends when `friend_requests` drops?
+- Owner answered (decisions 97–100): merge + deploy 0.2.62 only if PWA notifications do not break, so it ships WITHOUT the VAPID rotation (90 deferred: a rotation cuts every PWA's push until the next open, an iPhone's until a tap); the staged Phase 4 plan is approved; old-path history may disappear; inactive/test accounts get culled first (threshold + list owed to the owner; prod buckets in the gap-check doc, step 0).
+- Plan step 3 narrowed after review: freeze the old tables and keep the list handlers serving the frozen rows (silencing `conversationsList` would reconnect every resume); `getServedMessageIds` goes only at cut-over, after `git log -L` proves old builds read silence as "no answer".
+- `mintFromPassword` comment narrowed: the owed write survives only until this session's next connect; a reload drops it (the flush half is unit-tested, not driven).
+- Not changed (nit, kept as before): the `failed` push toast still appends the raw error text, in Settings and now on the chat-list line.
 - Open review items not fixed (LOW/MEDIUM, owner-visible only in edge cases): the backup line can vanish while an upload is still owed (sent at next connect); Later count not reset on account switch; `verify-password` throttle is per IP, not per account; contact backup is last-writer-wins across devices (Phase 4 prerequisite).
 - Recipe: Flutter toasts last 2.5 s; capture them with `page.screenshot` every 300–400 ms inside one `tab.run` and diff the hashes. `overridePermissions` must run in the same `tab.run` as the tap or it is gone.
