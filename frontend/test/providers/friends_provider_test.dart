@@ -285,7 +285,16 @@ void main() {
       tag: id.toString().padLeft(4, '0'),
       state: state,
       legacy: ContactLegacy(requestId: requestId),
-      boxOrigin: box ? ContactBoxOrigin(at: DateTime.utc(2026, 9, id)) : null,
+      // Relative to now: a box request is shown for 30 d (decision 54), so a
+      // fixed date stops showing it once the calendar passes it.
+      boxOrigin: box
+          ? ContactBoxOrigin(
+              at: DateTime.now()
+                  .toUtc()
+                  .subtract(const Duration(days: 1))
+                  .add(Duration(minutes: id)),
+            )
+          : null,
     );
 
     Future<void> seed(List<ContactRecord> records) async {
