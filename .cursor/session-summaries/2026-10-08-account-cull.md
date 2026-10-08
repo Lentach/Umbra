@@ -9,6 +9,7 @@
 - Out-of-repo: backup `chatdb-20261008T183741Z.dump.gpg` taken right before; the id list and avatar keys were not kept on disk.
 - Second round (18:56Z, owner: "delete those … old unused accs"): the 14 accounts outside his 26-user list (last seen 06-24 … 09-09). Same transaction and guards (exactly 14, none of the 26 kept, none seen after 09-10); backup `chatdb-20261008T185553Z.dump.gpg` first; 5 avatar files unlinked. Dry run: 10 conversations, 9 messages, 10 friend rows; 5 kept users lose a friend (bob208 loses 5).
 - The owner's iPhone PWA opened after the first round (dark then white screen, Safari "server stopped responding"; server healthy: load 0.03, no nginx errors, backend not restarted) and then came back on its own at 18:54Z. Read as a lost connection [INFERENCE]; not reproduced.
+- Temporary password for user 80 Norway (owner-chosen, owner OK, 20:18Z): same hash-only write as users 83/96/101 (`2026-10-08-review-phase4-audit.md`), no stamp, session kept; old hash `~/fireplace-backups/user80-hash-20261008T201803Z.txt`.
 
 ## Key files
 - Edited: `docs/plans/metadata-privacy-decisions.md` (100 → DONE), `docs/plans/2026-10-08-friend-row-gap-check.md` (step 0 done), LATEST.
