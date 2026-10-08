@@ -1,4 +1,4 @@
-# 79 inactive and test accounts deleted on prod (decision 100); 40 accounts remain
+# 93 inactive and test accounts deleted on prod (decision 100); 26 accounts remain
 
 **Date:** 2026-10-08 · **Version:** unchanged (0.2.63) · **Tiers deployed:** none (prod data write)
 
@@ -7,6 +7,8 @@
 - Deleted in ONE transaction, mirroring `UsersService.deleteAccount` (no password exists for an admin delete): guards first (exactly 79 ids, all exist, none of the 40 kept ids, none of the non-test accounts seen after 07-01), then `messages` of their conversations (envelopes cascade), their `conversations` (reaction keys, prefs cascade), their `friend_requests`, then `users` (devices, tokens, key bundles, OTPs, push rows, backups, recovery keys, photos cascade). `conversations`/`messages` FKs to `users` are NO ACTION, hence the explicit order.
 - Avatar files of the deleted accounts unlinked inside the backend container after the commit (4 deleted, 2 already gone; each checked unreferenced first). Old message media under `msgs/` goes with the nightly media sweep (R79).
 - Out-of-repo: backup `chatdb-20261008T183741Z.dump.gpg` taken right before; the id list and avatar keys were not kept on disk.
+- Second round (18:56Z, owner: "delete those … old unused accs"): the 14 accounts outside his 26-user list (last seen 06-24 … 09-09). Same transaction and guards (exactly 14, none of the 26 kept, none seen after 09-10); backup `chatdb-20261008T185553Z.dump.gpg` first; 5 avatar files unlinked. Dry run: 10 conversations, 9 messages, 10 friend rows; 5 kept users lose a friend (bob208 loses 5).
+- The owner's iPhone PWA opened after the first round (dark then white screen, Safari "server stopped responding"; server healthy: load 0.03, no nginx errors, backend not restarted) and then came back on its own at 18:54Z. Read as a lost connection [INFERENCE]; not reproduced.
 
 ## Key files
 - Edited: `docs/plans/metadata-privacy-decisions.md` (100 → DONE), `docs/plans/2026-10-08-friend-row-gap-check.md` (step 0 done), LATEST.
@@ -15,7 +17,7 @@
 ## Verification
 - CI: NOT RUN for this session's commits (docs only); the deployed code is unchanged at `3df3e092` (CI green).
 - Dry run (read-only) before: 79 victims, 26 conversations, 22 messages, 27 friend rows, 77 devices, 4 backups; only 2 kept users lose a friend (bob208 loses 2 of 32).
-- After: users 119 → 40, friend pairs 65 → 38, conversations 64 → 38, messages 126, backups 6, devices 44, `web_push_subscription` 36; 0 backend error/warn lines in 10 min.
+- After round 1: users 119 → 40, friend pairs 65 → 38, conversations 64 → 38, messages 126, backups 6, devices 44, `web_push_subscription` 36. After round 2: users 26, friend pairs 28, conversations 28. 0 backend error/warn lines after each.
 
 ## Notes for next session
 - Next action: read-only check of `contact_backups` for 83, 96, 101 (temporary passwords), then Phase 4 step 1 (`docs/plans/2026-10-08-friend-row-gap-check.md`).

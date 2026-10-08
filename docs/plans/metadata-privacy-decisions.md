@@ -175,7 +175,7 @@ Asked after step B, against prod: only 2 of 117 accounts had a `contact_backups`
 | 97 | 10-08 | 0.2.62 deploys only if PWA notifications do not break, so the VAPID rotation (90) is NOT done with it: no new key, no deletion of `web_push_subscription` rows. With the key unchanged every page keeps its subscription (E90a swaps only on a key mismatch). Owner: "agree to merge and deploy if its safe and do not broke pwa notifications" | OWNER | ACTIVE (90 deferred) |
 | 98 | 10-08 | Phase 4 runs as the staged, reversible plan in `2026-10-08-friend-row-gap-check.md`, not as one deletion | OWNER | ACTIVE |
 | 99 | 10-08 | Old-path message history may disappear with Phase 4 ("that ok"): no local rendering of old-path history is built | OWNER | ACTIVE |
-| 100 | 10-08 | Inactive and test accounts are deleted before Phase 4 ("we will cull inactive users"), shrinking the accounts without a backup. The threshold and the list are confirmed by the owner before any delete | OWNER | DONE 10-08 (owner: "delete all" no-login + last seen > 90 d + test accounts: 79 deleted, 40 remain; `2026-10-08-account-cull.md`) |
+| 100 | 10-08 | Inactive and test accounts are deleted before Phase 4 ("we will cull inactive users"), shrinking the accounts without a backup. The threshold and the list are confirmed by the owner before any delete | OWNER | DONE 10-08 (owner: "delete all" no-login + last seen > 90 d + test accounts: 79 deleted; then "delete those … old unused accs": 14 more; 26 remain; `2026-10-08-account-cull.md`) |
 
 ## Engineering calls made in the work so far (owner may overrule at the gate)
 
