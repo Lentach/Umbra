@@ -18,9 +18,9 @@
 - Read only (load-bearing): `encryption_provider.dart:1411-1456` (reconcile purge), `messages.service.ts:356-368`, `friends_provider.dart:183-199, 634-657`.
 
 ## Verification
-- CI: see the follow-up line in Notes (PR #198 head after this commit).
-- Flutter 3107 passed / 14 skipped; count script `--log` OK. Dart lint ratchet PASS, 3153 → 3147 (floor lowered).
 - CI: 7/7 success on `1ecfd91b` (contains code commit `97e02c2e`; PR #198 head).
+- Flutter 3107 passed / 14 skipped; count script `--log` OK. Dart lint ratchet PASS, 3153 → 3147 (floor lowered).
+- Mutants killed (concurrent-mint test): drop `_dirty = true`; restore the old `uploadNow()` return.
 - Web drive, release build `review3`: bob on two origins, row deleted, both reload → sheet on both; password on A → `PUT` 200, row rev 1; password on C → `GET` 200, no `PUT`, sheet closed, line gone (old code: "could not save"). Push-off line on C: tap → subscribed, toast "Powiadomienia push włączone", line gone.
 - Settings "Włącz powiadomienia push" tap: `POST /users/web-push-subscription` 201 but NO toast. Same on a build with the pre-change `settings_screen.dart` (`oldsettings`): pre-existing, not caused here, not fixed.
 - Prod (read-only, 10-08): 65 friend pairs, all old-path; 72 of 75 users with friends have no backup (23 of 26 active in 30 d); 118 active devices, 95 without a request queue; 13 old-path messages since the box launch; no FK into `friend_requests`.
