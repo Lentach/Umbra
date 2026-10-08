@@ -22,6 +22,7 @@ import '../widgets/dialogs/reset_password_dialog.dart';
 import '../widgets/main_tab_screen_header.dart';
 import '../widgets/dialogs/delete_account_dialog.dart';
 import '../widgets/top_snackbar.dart';
+import '../widgets/web_push_request_feedback.dart';
 import '../l10n/app_localizations.dart';
 import 'appearance_screen.dart';
 import 'blocked_users_screen.dart';
@@ -70,7 +71,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       debugPrint('Error loading app version: $e');
     }
   }
-
 
   Future<void> _loadDeviceName() async {
     String name = 'Unknown Device';
@@ -195,52 +195,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     final result = await _pushService.requestWebPushFromUserGesture(token);
     if (!mounted) return;
-
-    final l10n = AppLocalizations.of(context);
-    switch (result.status) {
-      case WebPushRequestStatus.subscribed:
-        showTopSnackBar(
-          context,
-          l10n.webPushEnabled,
-          backgroundColor: Theme.of(context).colorScheme.primary,
-        );
-        break;
-      case WebPushRequestStatus.denied:
-        showTopSnackBar(
-          context,
-          l10n.webPushPermissionDenied,
-          backgroundColor: Theme.of(context).colorScheme.error,
-        );
-        break;
-      case WebPushRequestStatus.requiresStandalone:
-        showTopSnackBar(
-          context,
-          l10n.webPushInstallRequired,
-          backgroundColor: Theme.of(context).colorScheme.error,
-        );
-        break;
-      case WebPushRequestStatus.unsupported:
-        showTopSnackBar(
-          context,
-          l10n.webPushNotSupported,
-          backgroundColor: Theme.of(context).colorScheme.error,
-        );
-        break;
-      case WebPushRequestStatus.noChange:
-        showTopSnackBar(
-          context,
-          l10n.webPushNoChanges,
-          backgroundColor: Theme.of(context).colorScheme.primary,
-        );
-        break;
-      case WebPushRequestStatus.failed:
-        showTopSnackBar(
-          context,
-          '${l10n.webPushEnableFailed}: ${result.details ?? ''}',
-          backgroundColor: Theme.of(context).colorScheme.error,
-        );
-        break;
-    }
+    showWebPushRequestFeedback(context, result);
   }
 
   /// The Appearance row's "glyph" is the live theme itself — the real
@@ -499,7 +454,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
   }
-
 
   @override
   Widget build(BuildContext context) {

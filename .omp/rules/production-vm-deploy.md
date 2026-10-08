@@ -345,12 +345,17 @@ The VAPID public key in the frontend build MUST match the backend VAPID keys. Si
 is worse than silent: every page that loads the bundle drops its working subscription for one under the
 bundle's key (E90a). `deploy-web.ps1` therefore reads the live backend's key over SSH and refuses to
 publish a bundle (`main.dart.js`) that does not carry it.
-Rotating the pair (decision 90): (1) new pair in `~/fireplace/.env` (and `~/fireplace-inbox/.env`, which
-shares it); (2) `./deploy-backend.sh`; (3) `.\deploy-web.ps1 -VapidPublicKey <new public key>` (the
-script's default is the OLD key until edited); (4) delete every `web_push_subscription` row created
-before step 3 (all old-key: an old bundle re-registers its row at login, and 403 is never pruned, only
-404/410). Pages swap their subscription at the next open; an engine that wants a gesture (iOS) shows
-the red "Powiadomienia są wyłączone" line on the chat list instead.
+Rotating the pair (decision 90): (1) new pair in `~/fireplace/.env` and `~/fireplace-inbox/.env` (it
+shares the pair), then `cd ~/fireplace-inbox && docker compose up -d --force-recreate` (the inbox reads
+its `.env` only at container start); (2) `./deploy-backend.sh`; (3) `.\deploy-web.ps1 -VapidPublicKey
+<new public key>` (the script's default is the OLD key until edited); (4) delete every
+`web_push_subscription` row created before step 3 (all old-key: an old bundle re-registers its row at
+login, and 403 is never pruned, only 404/410; a live row deleted by mistake comes back at that page's
+next open, which re-registers it). Pages swap their subscription at the next open; an engine that wants
+a gesture (iOS) shows the red "Powiadomienia są wyłączone" line on the chat list instead. Until a user
+opens the app, no web push reaches them, and box messages expire unread after 30 days: tell users on
+rotation day. No rollback to an old-key bundle: every page would swap back and iPhones need a tap again.
+The owner's inbox subscriptions are re-enabled by hand.
 
 ### Branch testing before merge
 

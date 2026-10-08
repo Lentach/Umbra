@@ -66,8 +66,11 @@ class _FakeBackend {
       }
       final current = row;
       if (current == null) return http.Response('{}', 404);
-      return http.Response(jsonEncode(current), 200,
-          headers: {'Content-Type': 'application/json'});
+      return http.Response(
+        jsonEncode(current),
+        200,
+        headers: {'Content-Type': 'application/json'},
+      );
     }
     final body = jsonDecode(request.body) as Map<String, dynamic>;
     puts.add(body);
@@ -103,8 +106,11 @@ class _FakeBackend {
       'blob': body['blob'],
       'updatedAt': '2026-09-20T00:00:00.000Z',
     };
-    return http.Response(jsonEncode({'rev': rev, 'updatedAt': row!['updatedAt']}),
-        200, headers: {'Content-Type': 'application/json'});
+    return http.Response(
+      jsonEncode({'rev': rev, 'updatedAt': row!['updatedAt']}),
+      200,
+      headers: {'Content-Type': 'application/json'},
+    );
   });
 }
 
@@ -194,59 +200,73 @@ void main() {
     };
   }
 
-  test('a 404 mints a key and salt; nothing is written until the graph is',
-      () async {
-    final svc = await service();
-    await svc.onSession(userId: 7, token: 'jwt', password: 'pw');
+  test(
+    'a 404 mints a key and salt; nothing is written until the graph is',
+    () async {
+      final svc = await service();
+      await svc.onSession(userId: 7, token: 'jwt', password: 'pw');
 
-    expect(svc.state, ContactBackupState.ready);
-    expect(backend.puts, isEmpty,
-        reason: 'minting must not publish an empty contact list');
-    expect(await tokens.readContactBackupKey(7), isNotNull);
-  });
+      expect(svc.state, ContactBackupState.ready);
+      expect(
+        backend.puts,
+        isEmpty,
+        reason: 'minting must not publish an empty contact list',
+      );
+      expect(await tokens.readContactBackupKey(7), isNotNull);
+    },
+  );
 
-  test('the password opens the row and the restore fills an EMPTY store',
-      () async {
-    await seedRow(password: 'pw', contacts: [_friend(41), _friend(42)]);
-    final svc = await service();
-    svc.attach(store);
-    await svc.onSession(userId: 7, token: 'jwt', password: 'pw');
+  test(
+    'the password opens the row and the restore fills an EMPTY store',
+    () async {
+      await seedRow(password: 'pw', contacts: [_friend(41), _friend(42)]);
+      final svc = await service();
+      svc.attach(store);
+      await svc.onSession(userId: 7, token: 'jwt', password: 'pw');
 
-    expect(svc.state, ContactBackupState.ready);
-    expect(await svc.applyRestore(), 2);
-    expect(store.byUserId(41)?.username, 'peer41');
-    expect(store.byUserId(42)?.username, 'peer42');
-    expect(store.self?.username, 'me');
-  });
+      expect(svc.state, ContactBackupState.ready);
+      expect(await svc.applyRestore(), 2);
+      expect(store.byUserId(41)?.username, 'peer41');
+      expect(store.byUserId(42)?.username, 'peer42');
+      expect(store.self?.username, 'me');
+    },
+  );
 
-  test('a restore never overwrites a record the device already holds',
-      () async {
-    await seedRow(password: 'pw', contacts: [_friend(41)]);
-    await store.update(41, (_) => _friend(41).copyWith(username: 'local'));
-    final svc = await service();
-    svc.attach(store);
-    await svc.onSession(userId: 7, token: 'jwt', password: 'pw');
-    await svc.applyRestore();
+  test(
+    'a restore never overwrites a record the device already holds',
+    () async {
+      await seedRow(password: 'pw', contacts: [_friend(41)]);
+      await store.update(41, (_) => _friend(41).copyWith(username: 'local'));
+      final svc = await service();
+      svc.attach(store);
+      await svc.onSession(userId: 7, token: 'jwt', password: 'pw');
+      await svc.applyRestore();
 
-    expect(store.byUserId(41)?.username, 'local');
-  });
+      expect(store.byUserId(41)?.username, 'local');
+    },
+  );
 
-  test('a cached content key opens the row with NO derivation at all',
-      () async {
-    await seedRow(password: 'pw');
-    // First session caches it.
-    final first = await service();
-    await first.onSession(userId: 7, token: 'jwt', password: 'pw');
-    expect(first.state, ContactBackupState.ready);
+  test(
+    'a cached content key opens the row with NO derivation at all',
+    () async {
+      await seedRow(password: 'pw');
+      // First session caches it.
+      final first = await service();
+      await first.onSession(userId: 7, token: 'jwt', password: 'pw');
+      expect(first.state, ContactBackupState.ready);
 
-    kdf.calls = 0;
-    final second = await service();
-    await second.onSession(userId: 7, token: 'jwt');
+      kdf.calls = 0;
+      final second = await service();
+      await second.onSession(userId: 7, token: 'jwt');
 
-    expect(second.state, ContactBackupState.ready);
-    expect(kdf.calls, 0,
-        reason: 'the common login path must not pay PBKDF2-600k');
-  });
+      expect(second.state, ContactBackupState.ready);
+      expect(
+        kdf.calls,
+        0,
+        reason: 'the common login path must not pay PBKDF2-600k',
+      );
+    },
+  );
 
   test('a cached key belonging to ANOTHER account is never adopted', () async {
     await seedRow(password: 'pw');
@@ -256,48 +276,55 @@ void main() {
     expect(await tokens.readContactBackupKey(8), isNull);
   });
 
-  test('a session that cannot open the row is LOCKED and never overwrites it',
-      () async {
-    await seedRow(password: 'right', contacts: [_friend(41)]);
-    final before = backend.row!['blob'];
-    final svc = await service();
-    svc.attach(store);
-    await svc.onSession(userId: 7, token: 'jwt', password: 'wrong');
+  test(
+    'a session that cannot open the row is LOCKED and never overwrites it',
+    () async {
+      await seedRow(password: 'right', contacts: [_friend(41)]);
+      final before = backend.row!['blob'];
+      final svc = await service();
+      svc.attach(store);
+      await svc.onSession(userId: 7, token: 'jwt', password: 'wrong');
 
-    expect(svc.state, ContactBackupState.locked);
-    // The store then does what it always does on connect: write through.
-    await store.update(99, (_) => _friend(99));
-    await store.settled;
-    await svc.uploadNow();
+      expect(svc.state, ContactBackupState.locked);
+      // The store then does what it always does on connect: write through.
+      await store.update(99, (_) => _friend(99));
+      await store.settled;
+      await svc.uploadNow();
 
-    expect(backend.puts, isEmpty);
-    expect(backend.row!['blob'], before,
-        reason: 'a locked session must leave a row others can still open');
-  });
+      expect(backend.puts, isEmpty);
+      expect(
+        backend.row!['blob'],
+        before,
+        reason: 'a locked session must leave a row others can still open',
+      );
+    },
+  );
 
-  test('the phrase door recovers the key AND mints a wrap for the new password',
-      () async {
-    await seedRow(password: 'old', phrase: 'abandon ability able');
-    final svc = await service();
-    svc.attach(store);
-    await svc.onSession(
-      userId: 7,
-      token: 'jwt',
-      password: 'brand new',
-      phrase: 'abandon ability able',
-    );
+  test(
+    'the phrase door recovers the key AND mints a wrap for the new password',
+    () async {
+      await seedRow(password: 'old', phrase: 'abandon ability able');
+      final svc = await service();
+      svc.attach(store);
+      await svc.onSession(
+        userId: 7,
+        token: 'jwt',
+        password: 'brand new',
+        phrase: 'abandon ability able',
+      );
 
-    expect(svc.state, ContactBackupState.ready);
-    // One PUT, carrying the SAME blob and a password wrap the new password
-    // opens — without it the next ordinary login would be locked out.
-    expect(backend.puts, hasLength(1));
-    expect(backend.puts.single['blob'], isNotNull);
+      expect(svc.state, ContactBackupState.ready);
+      // One PUT, carrying the SAME blob and a password wrap the new password
+      // opens — without it the next ordinary login would be locked out.
+      expect(backend.puts, hasLength(1));
+      expect(backend.puts.single['blob'], isNotNull);
 
-    final next = await service();
-    await tokens.clearContactBackupKey();
-    await next.onSession(userId: 7, token: 'jwt', password: 'brand new');
-    expect(next.state, ContactBackupState.ready);
-  });
+      final next = await service();
+      await tokens.clearContactBackupKey();
+      await next.onSession(userId: 7, token: 'jwt', password: 'brand new');
+      expect(next.state, ContactBackupState.ready);
+    },
+  );
 
   test('a wrap-only write keeps the blob byte-identical', () async {
     await seedRow(password: 'old', contacts: [_friend(41)]);
@@ -317,27 +344,29 @@ void main() {
     );
   });
 
-  test('a password login prunes the wrap the previous password opened',
-      () async {
-    await seedRow(password: 'old', contacts: [_friend(41)]);
-    final changing = await service();
-    changing.attach(store);
-    await changing.onSession(userId: 7, token: 'jwt', password: 'old');
-    await changing.addWrap(kind: ContactWrapKind.password, secret: 'new');
-    expect((backend.row!['wraps'] as List).length, 2);
+  test(
+    'a password login prunes the wrap the previous password opened',
+    () async {
+      await seedRow(password: 'old', contacts: [_friend(41)]);
+      final changing = await service();
+      changing.attach(store);
+      await changing.onSession(userId: 7, token: 'jwt', password: 'old');
+      await changing.addWrap(kind: ContactWrapKind.password, secret: 'new');
+      expect((backend.row!['wraps'] as List).length, 2);
 
-    await tokens.clearContactBackupKey();
-    final fresh = await service();
-    fresh.attach(store);
-    await fresh.onSession(userId: 7, token: 'jwt', password: 'new');
+      await tokens.clearContactBackupKey();
+      final fresh = await service();
+      fresh.attach(store);
+      await fresh.onSession(userId: 7, token: 'jwt', password: 'new');
 
-    expect((backend.row!['wraps'] as List).length, 1);
-    // And the pruned row still opens with the live password.
-    await tokens.clearContactBackupKey();
-    final again = await service();
-    await again.onSession(userId: 7, token: 'jwt', password: 'new');
-    expect(again.state, ContactBackupState.ready);
-  });
+      expect((backend.row!['wraps'] as List).length, 1);
+      // And the pruned row still opens with the live password.
+      await tokens.clearContactBackupKey();
+      final again = await service();
+      await again.onSession(userId: 7, token: 'jwt', password: 'new');
+      expect(again.state, ContactBackupState.ready);
+    },
+  );
 
   // G2 regression (2026-09-21, review M2). The 409 re-read MERGES the
   // server's wrap set so a wrap being ADDED is never lost — and that same
@@ -430,28 +459,30 @@ void main() {
     );
   });
 
-  test('an upload is refused while the store still holds unreadable rows',
-      () async {
-    // The store's RAM view is smaller than the disk, and the blob is a FULL
-    // replacement: publishing it would delete peers that still exist here.
-    await seedRow(password: 'pw');
-    await kv.setString('e2e_7_contact_v1_77', 'not json at all');
-    final reopened = ContactStore(
-      open: () async => kv,
-      lock: <T>(_, action) => action(),
-      accepts: (_) => true,
-    );
-    await reopened.open(7);
-    expect(reopened.undeterminedCount, 1);
+  test(
+    'an upload is refused while the store still holds unreadable rows',
+    () async {
+      // The store's RAM view is smaller than the disk, and the blob is a FULL
+      // replacement: publishing it would delete peers that still exist here.
+      await seedRow(password: 'pw');
+      await kv.setString('e2e_7_contact_v1_77', 'not json at all');
+      final reopened = ContactStore(
+        open: () async => kv,
+        lock: <T>(_, action) => action(),
+        accepts: (_) => true,
+      );
+      await reopened.open(7);
+      expect(reopened.undeterminedCount, 1);
 
-    final svc = await service();
-    svc.attach(reopened);
-    await svc.onSession(userId: 7, token: 'jwt', password: 'pw');
-    await svc.applyRestore();
+      final svc = await service();
+      svc.attach(reopened);
+      await svc.onSession(userId: 7, token: 'jwt', password: 'pw');
+      await svc.applyRestore();
 
-    expect(await svc.uploadNow(), isFalse);
-    expect(backend.puts, isEmpty);
-  });
+      expect(await svc.uploadNow(), isFalse);
+      expect(backend.puts, isEmpty);
+    },
+  );
 
   test('an unchanged graph is not re-uploaded, so no clock moves', () async {
     await seedRow(password: 'pw');
@@ -471,51 +502,58 @@ void main() {
     expect(backend.puts.length, after, reason: 'no PUT for an unchanged graph');
   });
 
-  test('a pure RESTORE publishes nothing — the wipe itself is not a clock',
-      () async {
-    await seedRow(password: 'pw', contacts: [_friend(42), _friend(41)]);
-    final svc = await service();
-    svc.attach(store);
-    await svc.onSession(userId: 7, token: 'jwt', password: 'pw');
+  test(
+    'a pure RESTORE publishes nothing — the wipe itself is not a clock',
+    () async {
+      await seedRow(password: 'pw', contacts: [_friend(42), _friend(41)]);
+      final svc = await service();
+      svc.attach(store);
+      await svc.onSession(userId: 7, token: 'jwt', password: 'pw');
 
-    expect(await svc.applyRestore(), 2);
-    await store.settled;
-    // `applyRestore`'s own writes fire `onChanged`; the graph they produce is
-    // the one the server already holds, seeded as this session's fingerprint
-    // when the blob was opened — including the reversed order it was sealed
-    // in, which a non-canonical encoding would read as a change.
-    expect(await svc.uploadNow(), isTrue);
-    expect(backend.puts, isEmpty,
-        reason: 'a storage-loss restore must not re-stamp updatedAt');
-    expect(backend.row!['rev'], 3);
+      expect(await svc.applyRestore(), 2);
+      await store.settled;
+      // `applyRestore`'s own writes fire `onChanged`; the graph they produce is
+      // the one the server already holds, seeded as this session's fingerprint
+      // when the blob was opened — including the reversed order it was sealed
+      // in, which a non-canonical encoding would read as a change.
+      expect(await svc.uploadNow(), isTrue);
+      expect(
+        backend.puts,
+        isEmpty,
+        reason: 'a storage-loss restore must not re-stamp updatedAt',
+      );
+      expect(backend.row!['rev'], 3);
 
-    // A real change after the restore still publishes.
-    await store.update(43, (_) => _friend(43));
-    await store.settled;
-    expect(await svc.uploadNow(), isTrue);
-    expect(backend.puts, hasLength(1));
-  });
+      // A real change after the restore still publishes.
+      await store.update(43, (_) => _friend(43));
+      await store.settled;
+      expect(await svc.uploadNow(), isTrue);
+      expect(backend.puts, hasLength(1));
+    },
+  );
 
-  test('a row re-keyed behind our back LOCKS the session instead of clobbering',
-      () async {
-    await seedRow(password: 'pw');
-    final svc = await service();
-    svc.attach(store);
-    await svc.onSession(userId: 7, token: 'jwt', password: 'pw');
-    await svc.applyRestore();
-    await store.update(41, (_) => _friend(41));
-    await store.settled;
+  test(
+    'a row re-keyed behind our back LOCKS the session instead of clobbering',
+    () async {
+      await seedRow(password: 'pw');
+      final svc = await service();
+      svc.attach(store);
+      await svc.onSession(userId: 7, token: 'jwt', password: 'pw');
+      await svc.applyRestore();
+      await store.update(41, (_) => _friend(41));
+      await store.settled;
 
-    // Another device ran a phrase restore: new content key, new wraps.
-    final survivor = Map<String, dynamic>.from(backend.row!);
-    survivor['rev'] = 9;
-    survivor['ckId'] = 'ZZZZZZZZZZZZZZZZZZZZZZ';
-    backend.row = survivor;
+      // Another device ran a phrase restore: new content key, new wraps.
+      final survivor = Map<String, dynamic>.from(backend.row!);
+      survivor['rev'] = 9;
+      survivor['ckId'] = 'ZZZZZZZZZZZZZZZZZZZZZZ';
+      backend.row = survivor;
 
-    expect(await svc.uploadNow(), isFalse);
-    expect(svc.state, ContactBackupState.locked);
-    expect(backend.row!['ckId'], 'ZZZZZZZZZZZZZZZZZZZZZZ');
-  });
+      expect(await svc.uploadNow(), isFalse);
+      expect(svc.state, ContactBackupState.locked);
+      expect(backend.row!['ckId'], 'ZZZZZZZZZZZZZZZZZZZZZZ');
+    },
+  );
 
   test('an upload before the restore is applied is refused', () async {
     await seedRow(password: 'pw', contacts: [_friend(41), _friend(42)]);
@@ -594,22 +632,24 @@ void main() {
     // answered earlier in the session must not make a LATER failed GET read
     // as "there is nothing to lose" — another device may have minted a row in
     // between, and a password change would then orphan it.
-    test('a later failed GET outranks a 404 from earlier in the session',
-        () async {
-      final svc = await service();
-      await svc.onSession(userId: 7, token: 'jwt');
-      expect(svc.rowStatusUnknown, isFalse, reason: 'the 404 is knowledge');
+    test(
+      'a later failed GET outranks a 404 from earlier in the session',
+      () async {
+        final svc = await service();
+        await svc.onSession(userId: 7, token: 'jwt');
+        expect(svc.rowStatusUnknown, isFalse, reason: 'the 404 is knowledge');
 
-      backend.nextGetStatus = 502;
-      await svc.onSession(userId: 7, token: 'jwt');
+        backend.nextGetStatus = 502;
+        await svc.onSession(userId: 7, token: 'jwt');
 
-      expect(svc.state, ContactBackupState.unreachable);
-      expect(
-        svc.rowStatusUnknown,
-        isTrue,
-        reason: 'ignorance must outrank the stale 404',
-      );
-    });
+        expect(svc.state, ContactBackupState.unreachable);
+        expect(
+          svc.rowStatusUnknown,
+          isTrue,
+          reason: 'ignorance must outrank the stale 404',
+        );
+      },
+    );
 
     test('an opened row is neither unknown nor absent', () async {
       await seedRow(password: 'pw');
@@ -626,38 +666,54 @@ void main() {
   // asks once. The typed string becomes the wrap, so a row minted from a wrong
   // one would open for nobody.
   group('mintFromPassword', () {
-    test('a restored session mints under the typed password and uploads',
-        () async {
+    test(
+      'a restored session mints under the typed password and uploads',
+      () async {
+        await store.update(41, (_) => _friend(41));
+        final svc = await service();
+        svc.attach(store);
+        await svc.onSession(userId: 7, token: 'jwt');
+        expect(svc.awaitsPasswordToMint, isTrue);
+
+        expect(await svc.mintFromPassword('pw'), isTrue);
+
+        expect(svc.awaitsPasswordToMint, isFalse);
+        expect(backend.puts, hasLength(1));
+        // A later password login on another device opens the row it made.
+        final other = await service();
+        await other.onSession(userId: 7, token: 'jwt2', password: 'pw');
+        expect(other.state, ContactBackupState.ready);
+        expect(other.holdsOpenableBackup, isTrue);
+      },
+    );
+
+    test('a row another device minted meanwhile is opened, never replaced, '
+        "and gets this device's view after the restore", () async {
       await store.update(41, (_) => _friend(41));
-      final svc = await service();
-      svc.attach(store);
-      await svc.onSession(userId: 7, token: 'jwt');
-      expect(svc.awaitsPasswordToMint, isTrue);
-
-      expect(await svc.mintFromPassword('pw'), isTrue);
-
-      expect(svc.awaitsPasswordToMint, isFalse);
-      expect(backend.puts, hasLength(1));
-      // A later password login on another device opens the row it made.
-      final other = await service();
-      await other.onSession(userId: 7, token: 'jwt2', password: 'pw');
-      expect(other.state, ContactBackupState.ready);
-      expect(other.holdsOpenableBackup, isTrue);
-    });
-
-    test('a row another device minted meanwhile is opened, never replaced',
-        () async {
+      await store.update(42, (_) => _friend(42));
       final svc = await service();
       svc.attach(store);
       await svc.onSession(userId: 7, token: 'jwt');
       expect(svc.awaitsPasswordToMint, isTrue);
       await seedRow(password: 'pw', contacts: [_friend(41)]);
       final seededCkId = backend.row!['ckId'];
+      final putsBefore = backend.puts.length;
 
-      await svc.mintFromPassword('pw');
-
+      expect(
+        await svc.mintFromPassword('pw'),
+        isTrue,
+        reason: 'the account holds its backup: the sheet must say saved',
+      );
       expect(backend.row!['ckId'], seededCkId);
       expect(svc.state, ContactBackupState.ready);
+      expect(backend.puts, hasLength(putsBefore), reason: 'restore first');
+
+      // The next connect: the blob adds nothing (41 is held), so only the
+      // owed write publishes 42, which the other device's row lacks.
+      expect(await svc.applyRestore(), 0);
+      await svc.flushPending();
+      expect(backend.puts, hasLength(putsBefore + 1));
+      expect(backend.row!['ckId'], seededCkId);
     });
 
     test('it does nothing unless the server said there is no row', () async {

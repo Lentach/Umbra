@@ -1,20 +1,56 @@
-# Step 2 gap check: what still needs the server's friend row (2026-10-08, read-only)
+# Phase 4 safety audit: what still needs the server's old tables (2026-10-08, read-only)
 
-Question: can the server's `friend_requests` rows (the friend graph) be pruned for pairs that are on the box? Answer: **not yet**. Three paths still need the row, and the first one would delete contacts on the devices.
+Question: can Phase 4 (decision 86: drop `friend_requests`, `conversations`, `messages`, the account push tables, old attachments) run on prod without users losing data? Answer: **no, not as one step, and not in the order first assumed.** Two paths destroy data on devices for good, several features break, and the server cannot see who is ready. Checked on `merge/0.2.62` (`9b686f6e`) by four independent read-only audits plus prod `SELECT`s; each row below was traced in code.
 
-Checked against decisions 50, 51, 52, E15g, E15h, E20c, E50a, E50c (`metadata-privacy-decisions.md`) on `merge/0.2.62`.
+## The two rules every Phase 4 step must keep
 
-| # | Dependency | Where | What breaks if the row goes | Covered by a decision? |
-|---|---|---|---|---|
-| 1 | The `friendsList` sweep removes every local friend record that the list omits, except a record with `boxOrigin` | `frontend/lib/providers/friends_provider.dart:184` | Every friendship made on the OLD path (no `boxOrigin`: all 65 accepted prod pairs, 10-07) is deleted from the device at the next `friendsList`: the user loses the contact. | E15g spares only box-made records |
-| 2 | Device-list reads are entitled by `areFriends` | `backend/src/chat/services/chat-device-list.service.ts:274-283` (`mayReadDeviceList` → `validateCanMessage`) → `chat-validation.service.ts:29` → `friends.service.ts` | The E50a/E50c fallbacks (no list held, DAK change, >30 d off the box) are refused silently; the client reads that as "cannot verify" and the send fails. | E50a/E50c assume the lookup works |
-| 3 | A friend's request-queue address comes from the `friendsList` `devices` | `frontend/lib/services/box/box_friend_handoff.dart:239-251` (`_requestQueues`), falling back to `boxOrigin.addresses` | An old-path friend with no `boxOrigin` has no address for a new handoff (re-mint, restore, new device). | E20c |
+1. **Never empty a table while the code that reads it still answers clients.** An EMPTY answer is what devices act on; a dropped table or a removed handler makes the server SILENT, and silence is safe on every app version.
+2. **Never let a device delete anything because the server stopped naming it.** No app version has a minimum-version gate (nothing in `backend/src` checks a client version; `ApkUpdateService` is a dismissible banner), so old installs obey whatever the server sends.
 
-Also seen (not blockers): the old path's sends (`chat-conversation.service.ts:57`, `chat-message.service.ts:324`) need the row by design, and `requestSessionRebuild` is skipped for box-only peers (`messaging_provider.dart:651`).
+## Paths that destroy data on devices
 
-## What pruning would need first
-1. A device-side marker that a friendship is owned by the device whatever its origin (e.g. stamp the existing old-path friends once, behind the contact backup), so the sweep stops deleting them.
-2. Device-list entitlement that does not read the friend graph (or a list carried over the box for every friend, decision 50, with no server fallback).
-3. Request-queue addresses for old-path friends delivered without `friendsList` (in the contact backup or over the box).
+| # | Path | Where | Versions | Trigger | Lost | Recoverable |
+|---|---|---|---|---|---|---|
+| A | Plaintext reconcile: every 6 h at most, the device asks which of its stored SERVER message ids are still served and purges the decrypted text of the rest | `encryption_provider.dart:1411-1456`; backend `messages.service.ts:356-368` (joins `conversations`) | every build since 0.0.140 | `messages` or `conversations` rows deleted/truncated while `getServedMessageIds` still answers, or a stub that answers `[]` | the text of every old-path message on every device that reconnects (box messages are spared since 0.2.52) | **no**: the ratchet keys are spent, the server ciphertext cannot be read again |
+| B | Friends sweep on a NON-EMPTY `friendsList` that leaves people out | `friends_provider.dart:183-199, 655` | 0.2.52–0.2.62 (identical) | rows emptied while old handlers can still create one row (an old-path accept sends a 1-entry list to both sides) | old-path friends holding no box queues are deleted; ones with queues become `former` (hidden); the pruned store then replaces the contact backup (`uploadNow` is a full replacement) | **no** once the upload lands |
 
-Phase 4 (decision 86) stays the owner's call; this note only lists what it has to cover.
+Not destructive, but visible: an EMPTY `friendsList` deletes nothing on disk (`friends_provider.dart:639, 655`), yet the old-path friends vanish from the screen for that session; `conversationsList` the same for chats (`conversations_provider.dart:481`); old-path history is rendered ONLY from server history (`messaging_provider.history.dart:195-238`), so it looks gone even while its text is still on disk. An emptied `blocked_users` sweeps local blocks (`friends_provider.dart:686-696`).
+
+Correction to this note's first version (same day): it said an empty list deletes old-path friends; it does not (only a partial list does), and it missed path A entirely.
+
+## Backend dependencies (what breaks if the rows go)
+
+| Dependency | Where | Effect | Severity |
+|---|---|---|---|
+| `getServedMessageIds` | `chat-message.service.ts:712-761` | path A | BLOCKER: remove the handler (silence) BEFORE any row goes |
+| `friendsList` from `friend_requests` | `chat-friend-request.service.ts:733-745`; `friends.service.ts:321-359` | path B; it is also the only server source of friends' profiles (avatar, about) and of request-queue addresses for old-path friends (`box_friend_handoff.dart:239-251`) | BLOCKER |
+| Device-list reads entitled by `areFriends` or a conversation row | `chat-device-list.service.ts:221-224, 275-293` | E50a/E50c fallbacks refused silently; sends to a friend whose key changed fail | HIGH |
+| Account push tables | `push-notifications.service.ts:94-174`, called from `chat-key-exchange.service.ts:389-398, 499, 734, 763, 865` | security alerts (reset pending/cancelled, recovery key, identity changed) never reach a closed app; R78's security-only table must exist first | HIGH |
+| `deleteAccount` | `users.service.ts:371, 386-426` | with the tables dropped and this code left: tokens revoked, then the delete throws: user logged out, account NOT deleted | HIGH (cut over in the same release) |
+| Block, unfriend | `blocked.service.ts:67`; `chat-friend-request.service.ts:747-838` | throw after a partial write | MEDIUM (cut over) |
+| `peerIdentityChanged` fan-out | `chat-key-exchange.service.ts:501-512` | no server-side takeover warning to peers | MEDIUM |
+| Media sweep keeps `msgs/` files a `messages` row names | `media-cleanup.service.ts:69-121` | old attachments unlinked at 03:00, as R79 intends | intended |
+| `POST /messages/link-preview` lives in `MessagesModule` | `messages.module.ts:7` | deleting the module wholesale kills web link previews (box sends too) | LOW |
+| FK cascades | prod `pg_constraint` | only old side tables cascade (`reaction_keys`, `message_envelopes`, notification prefs); nothing from `box_*`, `contact_backups`, `devices`, `key_bundles`, `users` points at the old tables | none |
+
+Independent of the old tables (checked): pre-key fetch, box module and box push, `contact_backups`, devices, key bundles, identity-reset cron, avatars (`GET /media/avatars` is public), search with the box on, throttlers.
+
+## Prod numbers (2026-10-08, `SELECT` only)
+
+- 65 accepted friend pairs, 75 users in them; all made before the box launch. The server **cannot** tell which pairs also exist on the box: only devices know.
+- Accounts with friends and NO `contact_backups` row (decision 86's number): 23 of 26 active in 30 days, 42 of 45 in 90 days, 72 of 75 overall. Only 5 accounts have a backup.
+- 118 active devices, 95 without a request queue; every device seen in the last 7 days has one (21), 6 of 29 seen in 30 days do not. App versions are not recorded server-side.
+- The old path is still used: 13 `messages` rows since the box launch (2 senders), newest 2026-10-07.
+- Builds 0.2.40–0.2.51 keep no contact store: for an account that never ran 0.2.52+, `friend_requests` is the ONLY copy of its friends.
+
+## Safer plan: staged, every step reversible until the last
+
+1. **Client hardening release** (no server data touched): stop deleting on absence (friends removed only on `unfriended`/block/decline events; the reconcile refuses an answer that orphans every id it asked about); mark every current friend device-owned and carry its chat id, request-queue addresses and device list in the contact backup; render old-path history from local text; merge the backup on a 409 instead of last-writer-wins; send the app version at connect.
+2. **Measure**: devices by version, accounts with friends and no backup; owner decides when it is enough.
+3. **Server goes silent behind an env flag** (rows untouched): the old list/reconcile handlers stop answering, old-path sends refused, versions below step 1 told to update. Watch 1–2 weeks. Undo = flip the flag.
+4. **Cut over** account delete, block, unfriend, device-list entitlement, security push (R78), profiles.
+5. **Archive, then DROP** (never `DELETE` rows under live code): an encrypted dump kept offline, then `DROP TABLE` with the code removal in the same release.
+
+Before steps 3 and 5: a rehearsal on a restored copy of the prod backup with an old APK (0.2.61), a PWA and the new build; each device's contact and message counts must be identical before and after.
+
+Phase 4 stays the owner's call (decision 86); this note lists what it has to cover.

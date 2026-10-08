@@ -1466,9 +1466,8 @@ extension MessagingBox on MessagingProvider {
       // is the same message. A sibling's sent copy is ours, and a muted chat
       // stays silent exactly as it was on the old path.
       final muted =
-          _conversationsProvider?.conversations
-              .where((c) => c.id == msg.conversationId)
-              .firstOrNull
+          _conversationsProvider
+              ?.getConversationById(msg.conversationId)
               ?.isNotificationMuted ??
           false;
       if (msg.senderId != _currentUserId && !muted) {

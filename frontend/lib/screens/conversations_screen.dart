@@ -31,7 +31,7 @@ import '../utils/instant_opaque_route.dart';
 import '../widgets/alert_line.dart';
 import '../widgets/backup_nudge_line.dart';
 import '../widgets/contact_backup_password_sheet.dart';
-import '../widgets/top_snackbar.dart';
+import '../widgets/web_push_request_feedback.dart';
 import 'chat_detail_screen.dart';
 import 'passcode_lock_screen.dart';
 import 'invitations_screen.dart';
@@ -158,15 +158,8 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     final result = await PushService(
       ApiService(baseUrl: AppConfig.baseUrl),
     ).requestWebPushFromUserGesture(token);
-    if (!mounted || result.status == WebPushRequestStatus.subscribed) return;
-    final l10n = AppLocalizations.of(context);
-    showTopSnackBar(
-      context,
-      result.status == WebPushRequestStatus.denied
-          ? l10n.webPushPermissionDenied
-          : '${l10n.webPushEnableFailed}: ${result.details ?? ''}',
-      backgroundColor: Theme.of(context).colorScheme.error,
-    );
+    if (!mounted) return;
+    showWebPushRequestFeedback(context, result);
   }
 
   @override

@@ -235,14 +235,20 @@ class ContactBackupService {
   /// against the account: a wrap made from a mistyped string opens for
   /// nobody, and a row nobody opens locks the backup for good. Runs the
   /// login resolve again, so a row another device minted meanwhile is opened
-  /// instead of replaced. True once the server holds this device's view under
-  /// a key this session opens.
+  /// instead of replaced. True once the server holds a row this session
+  /// opens: this device's view, or that other device's row, which then gets
+  /// this device's view once its restore is applied at the next connect
+  /// ([flushPending]); an upload now would be refused by that pending restore.
   Future<bool> mintFromPassword(String password) async {
     final userId = _userId;
     final token = _token;
     if (userId == null || token == null || !awaitsPasswordToMint) return false;
     await onSession(userId: userId, token: token, password: password);
     if (_state != ContactBackupState.ready) return false;
+    if (_pendingRestore != null) {
+      _dirty = true;
+      return true;
+    }
     return uploadNow();
   }
 
