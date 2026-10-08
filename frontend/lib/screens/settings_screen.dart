@@ -20,6 +20,7 @@ import '../widgets/local_node_core.dart';
 import '../widgets/settings_console.dart';
 import '../widgets/dialogs/reset_password_dialog.dart';
 import '../widgets/main_tab_screen_header.dart';
+import '../widgets/contact_backup_password_sheet.dart';
 import '../widgets/dialogs/delete_account_dialog.dart';
 import '../widgets/top_snackbar.dart';
 import '../widgets/web_push_request_feedback.dart';
@@ -554,6 +555,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                       );
                     },
+                  ),
+                  // Decision 95 mutes the chat-list ask after 5 "Later"s; this
+                  // row is not an ask: it stays while the account has no
+                  // backup, so a user who later gets the password still has
+                  // a way to save it without logging out.
+                  Consumer<AuthProvider>(
+                    builder: (context, auth, _) =>
+                        auth.contactBackupAwaitsPassword
+                        ? SettingsConsoleRow(
+                            key: const Key('settings-contact-backup-row'),
+                            glyph: ConsoleGlyph.keys,
+                            title: l10n.contactBackupPromptTitle,
+                            subtitle: l10n.contactBackupAlertLine,
+                            edge: ConsoleRowEdge.danger,
+                            onTap: () => showContactBackupPasswordSheet(
+                              context,
+                              auth: auth,
+                            ),
+                          )
+                        : const SizedBox.shrink(),
                   ),
                   SettingsConsoleRow(
                     glyph: ConsoleGlyph.blocked,
