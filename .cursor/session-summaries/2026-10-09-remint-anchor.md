@@ -19,6 +19,7 @@
 - Residual seen: the friend's message sent while the re-minted install was wedged (18:39) never arrived; the friend saw ✓. Not fixed.
 
 ## Notes for next session
-- Ship 0.2.64 (web; APK for Android users), then ruchens69 closes and reopens the PWA once. bob208's messages to him since 10-09 14:33Z are probably lost.
+- DEPLOYED 10-09 18:41–18:45Z: master ff `82fe7bdc → fd0c8e09` (CI all green), backup `chatdb-20261009T184108Z.dump.gpg`, backend `/version` 0.2.64/fd0c8e09 with android 20064, web smoke 8/8, APK `/apk/umbra-0.2.64.apk` (SHA256 `0277cef8da0c6a72fbebae1e1475eb6b41885c0dabaf9d353fa518289027246d`, signer `8e9a6bf3…5cdf405d` = record-of-truth, prod host + commit found in `libapp.so`; not booted on an emulator), VM `.env.bak.pre-apk-0.2.64`, 0 error/warn lines. Next: ruchens69 closes and reopens the PWA once; confirm with the owner. bob208's messages to him since 10-09 14:33Z are probably lost.
+- Round-2 cull check (read from backup `chatdb-20261008T185553Z`): the 10 lost friendships fell on 5 kept users — bob208 5, Ketokeczup 2, Takii 1, alteregobob8 1, R0yb3r 1. The original "5 kept users" was right.
 - Drive trap: Chrome served the old `main.dart.js` from its HTTP cache after a rebuild (python `http.server`); clear the cache over CDP before judging a fix.
 - Local stack: backend restarted with `-p fp062` (twice: box off, then on); throwaway users 21–24 (`rremint6382`, `bremint6382`, `rold4056`, `bold4056`, password `Passw0rd!x1`); CDP Chrome on 9333 (`fp-remint-cdp` profile); a stray `fireplace-062_default` docker network.
