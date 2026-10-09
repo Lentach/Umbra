@@ -291,7 +291,9 @@ void main() {
     );
     final signal = await f.encrypt(
       1,
-      jsonEncode(E2eEnvelope.buildQueueHandoff(sid: _sid('N'), sealPub: _sealPub)),
+      jsonEncode(
+        E2eEnvelope.buildQueueHandoff(sid: _sid('N'), sealPub: _sealPub),
+      ),
       deviceId: 2,
     );
     return s.consumeBoxEntry(
@@ -314,7 +316,9 @@ void main() {
   test("a friend's newly linked device is taken on the list its own handoff "
       'carries — no server lookup (decision 50)', () async {
     expect(
-      await handoffFromDevice4(carried: jsonEncode(genuine(2, devices({3, 4})))),
+      await handoffFromDevice4(
+        carried: jsonEncode(genuine(2, devices({3, 4}))),
+      ),
       isTrue,
     );
 
@@ -379,53 +383,60 @@ void main() {
     expect(lookups, 0);
   });
 
-  test('a list_update from a live device that revokes one adopts it with no '
-      'lookup and runs the handoff pass, which rotates our queue (E50d/E50e)', () async {
-    served = () => genuine(2, devices({3, 4}));
-    enc.invalidateDeviceList(_friend);
-    await enc.getVerifiedDeviceList(_friend);
-    lookups = 0;
+  test(
+    'a list_update from a live device that revokes one adopts it with no '
+    'lookup and runs the handoff pass, which rotates our queue (E50d/E50e)',
+    () async {
+      served = () => genuine(2, devices({3, 4}));
+      enc.invalidateDeviceList(_friend);
+      await enc.getVerifiedDeviceList(_friend);
+      lookups = 0;
 
-    await f.buildSession(
-      1,
-      bundleOf(enc.encryptionService, 1),
-      deviceId: 2,
-      expectedIdentityBase64: null,
-    );
-    final update = await f.encrypt(
-      1,
-      jsonEncode(
-        E2eEnvelope.buildListUpdate(genuine(3, devices({3}, revoked: {4}))),
-      ),
-      deviceId: 2,
-    );
-    expect(
-      await s.consumeBoxEntry(
-        BoxInboxEntry(
-          rid: 'friend-rid',
-          id: 'm$nextLocal',
-          localId: nextLocal++,
-          peerUserId: _friend,
-          senderDeviceId: 3,
-          signal: update,
-          receivedAt: DateTime.now().toUtc(),
-          acked: true,
+      await f.buildSession(
+        1,
+        bundleOf(enc.encryptionService, 1),
+        deviceId: 2,
+        expectedIdentityBase64: null,
+      );
+      final update = await f.encrypt(
+        1,
+        jsonEncode(
+          E2eEnvelope.buildListUpdate(genuine(3, devices({3}, revoked: {4}))),
         ),
-        _record,
-      ),
-      isTrue,
-    );
+        deviceId: 2,
+      );
+      expect(
+        await s.consumeBoxEntry(
+          BoxInboxEntry(
+            rid: 'friend-rid',
+            id: 'm$nextLocal',
+            localId: nextLocal++,
+            peerUserId: _friend,
+            senderDeviceId: 3,
+            signal: update,
+            receivedAt: DateTime.now().toUtc(),
+            acked: true,
+          ),
+          _record,
+        ),
+        isTrue,
+      );
 
-    expect(enc.cachedDeviceList(_friend)?.liveDeviceIds, [3]);
-    expect(link.devicesChanged, [_friend]);
-    expect(lookups, 0);
-  });
+      expect(enc.cachedDeviceList(_friend)?.liveDeviceIds, [3]);
+      expect(link.devicesChanged, [_friend]);
+      expect(lookups, 0);
+    },
+  );
 
   group('E50d: a revoke of OUR device is announced by this survivor', () {
     late DeviceAuthorityEngine ownDak;
     late Map<String, dynamic> ownEnrollment;
 
-    Map<String, dynamic> own(int version, Set<int> live, {Set<int> revoked = const {}}) {
+    Map<String, dynamic> own(
+      int version,
+      Set<int> live, {
+      Set<int> revoked = const {},
+    }) {
       final list = ownDak.signList(
         DeviceList(
           userId: 1,
@@ -501,12 +512,15 @@ void main() {
       expect(link.announced, hasLength(2), reason: 'announced: done');
     });
 
-    test('a device the list revoked is no survivor: it announces nothing', () async {
-      await connectWith(own(1, {1, 2, 3}));
-      await connectWith(own(2, {1, 3}, revoked: {2}));
+    test(
+      'a device the list revoked is no survivor: it announces nothing',
+      () async {
+        await connectWith(own(1, {1, 2, 3}));
+        await connectWith(own(2, {1, 3}, revoked: {2}));
 
-      expect(link.announced, isEmpty);
-    });
+        expect(link.announced, isEmpty);
+      },
+    );
   });
 
   group('decision 51: when the connect asks the server for a friend list', () {
@@ -605,5 +619,66 @@ void main() {
       expect(enc.peerListOwedByServer(_friend), isTrue);
       expect((await restart()).peerListOwedByServer(_friend), isTrue);
     });
+  });
+
+  test('an install that lost its storage holds no anchor for an old-path '
+      'friend whose device already handed it a queue: the connect pins it from '
+      "that device's bundle, so the list verifies — else every box send to "
+      'the friend failed for good', () async {
+    // Storage lost: nothing this device knew, not even the friend's key.
+    FlutterSecureStorage.setMockInitialValues({});
+    SharedPreferences.setMockInitialValues({});
+    final fetched = <int>[];
+    final next = _Me()..keepsDeviceListFor = (peer) => peer == _friend;
+    next.setEmitCallback((event, data) {
+      if (event == 'checkOwnKeyBundle') {
+        next.onOwnKeyBundleStatus({'exists': false});
+      }
+      if (event == 'getDeviceList' || event == 'getDeviceLists') {
+        final d = data as Map;
+        final users = d['userIds'] as List? ?? [d['userId']];
+        for (final user in users.cast<int>()) {
+          Future<void>.microtask(
+            () => next.onDeviceList({
+              'userId': user,
+              'authorization': user == _friend ? served() : null,
+            }),
+          ).ignore();
+        }
+      }
+      if (event == 'fetchPreKeyBundle') {
+        final device = (data as Map)['deviceId'] as int;
+        fetched.add(device);
+        next.onPreKeyBundleResponse({
+          'userId': _friend,
+          'deviceId': device,
+          'bundle': bundleOf(f, 6),
+        });
+      }
+    });
+    await next.initializeE2E(1);
+    expect(
+      await next.encryptionService.peerTofuIdentityBase64(_friend),
+      isNull,
+    );
+
+    final m = MessagingProvider()
+      ..setEncryptionProvider(next)
+      ..setCurrentUserId(1)
+      ..onConnect(false)
+      ..setEmitCallback((event, data) {})
+      ..boxFriends = link
+      ..boxOutbox = _Outbox()
+      ..refreshBoxDeviceLists();
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+
+    expect(fetched, [3], reason: 'one bundle, of the device that handed it');
+    expect(
+      await next.encryptionService.peerTofuIdentityBase64(_friend),
+      base64Encode(identity.getPublicKey().serialize()),
+    );
+    expect(next.cachedDeviceList(_friend)?.liveDeviceIds, [3]);
+    expect(await next.hasSessionWith(_friend, deviceId: 3), isTrue);
+    m.dispose();
   });
 }

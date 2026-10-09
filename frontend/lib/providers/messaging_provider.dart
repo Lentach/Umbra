@@ -327,11 +327,36 @@ class MessagingProvider extends ChangeNotifier {
         return;
       }
       try {
-        await enc.getVerifiedDeviceList(
-          user,
-          forceRefresh: enc.peerListOwedByServer(user),
-          batched: true,
-        );
+        try {
+          await enc.getVerifiedDeviceList(
+            user,
+            forceRefresh: enc.peerListOwedByServer(user),
+            batched: true,
+          );
+        } on DeviceListVerificationException catch (e) {
+          if (e.reason != 'no_tofu_identity' || _boxOnlyPeer(user)) rethrow;
+          // An old-path friend this install holds no anchor for — its storage
+          // was lost and the contact came back from the backup, which carries
+          // no keys — yet the friend's devices already handed it queues. Only
+          // a session build pins an anchor, the pre-build below runs only
+          // after the list verifies, and a box send never falls back to the
+          // old path that would build one (E38b), so every send failed for
+          // good. Pin it here, at the connect, from a covered device's bundle
+          // — the old path's own first-contact trust — then verify the list
+          // under it.
+          final device = boxOutbox?.addressesFor(user).keys.firstOrNull;
+          if (device == null) rethrow;
+          _e2eFlowLog('BOX_LIST_ANCHOR_PIN', {
+            'userId': user,
+            'device': device,
+          });
+          await enc.ensureSession(user, deviceId: device);
+          await enc.getVerifiedDeviceList(
+            user,
+            forceRefresh: true,
+            batched: true,
+          );
+        }
       } finally {
         // Every answer — a refused list throws but still counts as answered
         // (E50c) — may be the last owed one that lets the stamp be written.
@@ -884,7 +909,6 @@ class MessagingProvider extends ChangeNotifier {
   void setIncomingMessageSoundEnabledForTest(bool enabled) {
     _incomingSound.setEnabledForTest(enabled);
   }
-
 
   @visibleForTesting
   int get incomingSoundRequestsForTest => _incomingSound.requests;
