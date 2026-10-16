@@ -3,18 +3,22 @@ part of 'contact_store.dart';
 /// What this install knows of one sibling's presence (owner decisions 101 B
 /// and 103): when it was last heard from on our self-queue — or first known
 /// here, so neither a fresh link nor the upgrade to this build ever counts as
-/// a month of silence — when this device last sent it `alive`, and until
-/// when the primary's unlink question is kept away ("Keep").
+/// a month of silence — when this device last sent it `alive`, until
+/// when the primary's unlink question is kept away ("Keep"), and whether it
+/// was ever heard sending a frame only a build that reads `relay` sends
+/// (E101b: this device vouches `rl` to friends only then).
 typedef SiblingPresence = ({
   DateTime? heardAt,
   DateTime? aliveSentAt,
   DateTime? keptUntil,
+  bool readsRelays,
 });
 
 const SiblingPresence _noPresence = (
   heardAt: null,
   aliveSentAt: null,
   keptUntil: null,
+  readsRelays: false,
 );
 
 /// The `boxalive_v1` row: [SiblingPresence] per sibling device id.
@@ -33,6 +37,7 @@ class _AliveBook {
           if (p.heardAt case final at?) 'h': at.millisecondsSinceEpoch,
           if (p.aliveSentAt case final at?) 's': at.millisecondsSinceEpoch,
           if (p.keptUntil case final at?) 'k': at.millisecondsSinceEpoch,
+          if (p.readsRelays) 'r': 1,
         },
     },
   });
@@ -62,6 +67,7 @@ class _AliveBook {
               heardAt: at(p['h']),
               aliveSentAt: at(p['s']),
               keptUntil: at(p['k']),
+              readsRelays: p['r'] == 1,
             ),
       });
     } on Object {
@@ -106,11 +112,18 @@ extension ContactStoreSiblingAlive on ContactStore {
         final next = <int, SiblingPresence>{
           for (final id in live)
             id: switch (book.devices[id] ?? _noPresence) {
-              (heardAt: null, :final aliveSentAt, :final keptUntil) => (
-                heardAt: now,
-                aliveSentAt: aliveSentAt,
-                keptUntil: keptUntil,
-              ),
+              (
+                heardAt: null,
+                :final aliveSentAt,
+                :final keptUntil,
+                :final readsRelays,
+              ) =>
+                (
+                  heardAt: now,
+                  aliveSentAt: aliveSentAt,
+                  keptUntil: keptUntil,
+                  readsRelays: readsRelays,
+                ),
               final held => held,
             },
         };
@@ -128,6 +141,7 @@ extension ContactStoreSiblingAlive on ContactStore {
             heardAt: at,
             aliveSentAt: p.aliveSentAt,
             keptUntil: p.keptUntil,
+            readsRelays: p.readsRelays,
           ),
         );
       });
@@ -136,7 +150,12 @@ extension ContactStoreSiblingAlive on ContactStore {
   Future<bool> markSiblingAliveSent(int deviceId, DateTime at) => _updateAlive(
     (book) => book.withDevice(
       deviceId,
-      (p) => (heardAt: p.heardAt, aliveSentAt: at, keptUntil: p.keptUntil),
+      (p) => (
+        heardAt: p.heardAt,
+        aliveSentAt: at,
+        keptUntil: p.keptUntil,
+        readsRelays: p.readsRelays,
+      ),
     ),
   );
 
@@ -144,9 +163,29 @@ extension ContactStoreSiblingAlive on ContactStore {
   Future<bool> keepSibling(int deviceId, DateTime until) => _updateAlive(
     (book) => book.withDevice(
       deviceId,
-      (p) => (heardAt: p.heardAt, aliveSentAt: p.aliveSentAt, keptUntil: until),
+      (p) => (
+        heardAt: p.heardAt,
+        aliveSentAt: p.aliveSentAt,
+        keptUntil: until,
+        readsRelays: p.readsRelays,
+      ),
     ),
   );
+
+  /// Sibling [deviceId] sent a frame only a build that reads `relay` sends
+  /// (E101b). Never unset: a device does not downgrade its build.
+  Future<bool> markSiblingReadsRelays(int deviceId) => _updateAlive((book) {
+    if (book.devices[deviceId]?.readsRelays ?? false) return book;
+    return book.withDevice(
+      deviceId,
+      (p) => (
+        heardAt: p.heardAt,
+        aliveSentAt: p.aliveSentAt,
+        keptUntil: p.keptUntil,
+        readsRelays: true,
+      ),
+    );
+  });
 
   /// Read-modify-write of the row under the account lock, from GROUND TRUTH.
   /// [mutate] returns the book to keep; an unchanged encoding writes nothing.

@@ -270,7 +270,11 @@ class _Link implements BoxFriendLink {
   }
 
   @override
-  Future<void> friendRelays(int userId, int deviceId) async {}
+  Future<void> friendRelays(
+    int userId,
+    int deviceId, {
+    required bool relays,
+  }) async {}
 
   @override
   void handOffTo(int userId) {
@@ -435,8 +439,9 @@ void main() {
               frame.signalCiphertext,
               deviceId: to.peerDevice,
             ),
-            // Every frame to a friend says this device relays (101 A).
-            E2eEnvelope.toFriend(text),
+            // No sibling record here, so this device vouches no relay
+            // (E101b): the frame is the text as it was.
+            E2eEnvelope.toFriend(text, relays: false),
           );
         }
       }
@@ -489,7 +494,7 @@ void main() {
           frame.signalCiphertext,
           deviceId: to.peerDevice,
         ),
-        E2eEnvelope.toFriend(text),
+        E2eEnvelope.toFriend(text, relays: false),
       );
     }
 

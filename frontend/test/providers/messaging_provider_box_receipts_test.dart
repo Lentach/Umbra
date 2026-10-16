@@ -498,7 +498,6 @@ void main() {
         );
         for (final sent in outbox.delivered) {
           expect(envelopeOf(sent), {
-            'rl': 1,
             't': 'rcpt',
             'k': 'd',
             'w': [_wire(1), _wire(2), _wire(3)],
@@ -562,7 +561,6 @@ void main() {
         expect(outbox.delivered, hasLength(2));
         for (final sent in outbox.delivered) {
           expect(envelopeOf(sent), {
-            'rl': 1,
             't': 'rcpt',
             'k': 'r',
             'w': [_wire(2)],
@@ -621,7 +619,6 @@ void main() {
         );
         for (final sent in outbox.delivered) {
           expect(envelopeOf(sent), {
-            'rl': 1,
             't': 'rcpt',
             'k': 'r',
             'w': [_wire(1)],
@@ -660,7 +657,6 @@ void main() {
         expect(outbox.delivered, hasLength(2));
         for (final sent in outbox.delivered) {
           expect(envelopeOf(sent), {
-            'rl': 1,
             't': 'rcpt',
             'k': 'r',
             'w': [_wire(1)],
@@ -703,7 +699,6 @@ void main() {
         expect(outbox.delivered, hasLength(2));
         for (final sent in outbox.delivered) {
           expect(envelopeOf(sent), {
-            'rl': 1,
             't': 'rcpt',
             'k': 'r',
             'w': [_wire(1)],
@@ -726,7 +721,6 @@ void main() {
           expect(outbox.delivered, hasLength(2));
           for (final sent in outbox.delivered) {
             expect(envelopeOf(sent), {
-              'rl': 1,
               't': 'typ',
               'k': 't',
               'on': true,
@@ -762,7 +756,7 @@ void main() {
           [
             for (final on in [true, false, true])
               for (var i = 0; i < 2; i++)
-                {'rl': 1, 't': 'typ', 'k': 'v', 'on': on},
+                {'t': 'typ', 'k': 'v', 'on': on},
           ],
         );
         expect(events(), isNot(contains('recordingVoice')));

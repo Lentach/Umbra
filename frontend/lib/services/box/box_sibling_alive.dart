@@ -98,6 +98,17 @@ class BoxSiblingAlive {
   Future<bool> aliveSent(int deviceId) =>
       _store.markSiblingAliveSent(deviceId, now);
 
+  /// Sibling [deviceId] sent `alive`, `sync_req`, `sync_resp` or `relay`:
+  /// its build reads `relay` (E101b).
+  Future<bool> readsRelays(int deviceId) =>
+      _store.markSiblingReadsRelays(deviceId);
+
+  /// Whether every one of [siblings] was heard sending a frame only a build
+  /// that reads `relay` sends (E101b). True for none: nothing to relay to.
+  bool allReadRelays(Iterable<int> siblings) => siblings.every(
+    (id) => _store.siblingPresence(id)?.readsRelays ?? false,
+  );
+
   /// The user kept [deviceId]: not asked again for [kSiblingKeepFor].
   Future<bool> keep(int deviceId) =>
       _store.keepSibling(deviceId, now.add(kSiblingKeepFor));

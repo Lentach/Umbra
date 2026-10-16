@@ -279,10 +279,12 @@ class E2eEnvelope {
   /// The most wire ids one receipt names.
   static const int maxReceiptWireIds = 100;
 
-  /// Decision 101 A: `rl: 1` on every frame a device sends to a FRIEND's
-  /// device says "this device relays a friend's box message to the own
-  /// devices the friend could not address"; the friend keeps it per device
-  /// (`ContactOutbound.relays`). `ad: [device ids]` on a friend-bound
+  /// Decision 101 A: `rl: 1` on a frame a device sends to a FRIEND's device
+  /// says "this device relays a friend's box message to the own devices the
+  /// friend could not address"; the friend keeps it per device
+  /// (`ContactOutbound.relays`), and a frame from that device without it
+  /// clears it. A device sends it only while every live sibling of its own
+  /// is known to read `relay` (E101b). `ad: [device ids]` on a friend-bound
   /// message or action names the devices of the RECIPIENT account it was
   /// addressed to, sent only when some live device of that account was not
   /// (absent = every live device was). An older build ignores both keys.
@@ -438,16 +440,22 @@ class E2eEnvelope {
   }
 
   /// [json] — one envelope object as `jsonEncode` wrote it — as it goes to
-  /// a FRIEND's device (decision 101 A): with `rl: 1` and, when given, `ad`
-  /// [addressed]. Spliced in front of its keys, never re-encoded; anything
-  /// that is not an object is returned as it was.
-  static String toFriend(String json, {List<int>? addressed}) {
-    if (!json.startsWith('{')) return json;
-    final head = addressed == null
-        ? '{"$_keyRelays":1'
-        : '{"$_keyRelays":1,"$_keyAddressed":${jsonEncode(addressed)}';
+  /// a FRIEND's device (decision 101 A): with `rl: 1` when this device
+  /// [relays] and, when given, `ad` [addressed]. Spliced in front of its
+  /// keys, never re-encoded; anything that is not an object, or nothing to
+  /// add, is returned as it was.
+  static String toFriend(
+    String json, {
+    required bool relays,
+    List<int>? addressed,
+  }) {
+    if (!json.startsWith('{') || (!relays && addressed == null)) return json;
+    final keys = [
+      if (relays) '"$_keyRelays":1',
+      if (addressed != null) '"$_keyAddressed":${jsonEncode(addressed)}',
+    ].join(',');
     final rest = json.substring(1);
-    return rest.startsWith('}') ? '$head$rest' : '$head,$rest';
+    return rest.startsWith('}') ? '{$keys$rest' : '{$keys,$rest';
   }
 
   /// A [typeRelay] envelope carrying friend [user]'s [device]'s

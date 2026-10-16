@@ -48,8 +48,9 @@ extension MessagingBoxSync on MessagingProvider {
   /// when there is no live sibling to ask (nothing will ever answer); false
   /// when it should be tried again (E2E or the own list not ready, no
   /// sibling with a self-queue address and a usable session yet, a send
-  /// that failed). A sibling whose queue is full has not read it for a
-  /// while: the next one is asked.
+  /// that failed, every sibling's queue full). A sibling whose queue is full
+  /// has not read it for a while: the next one is asked, and a paused one
+  /// (E93a) is not sealed to until it reads its queue again.
   Future<bool> _askSiblingToCatchUp(int user, DateTime since) async {
     final outbox = boxOutbox;
     final enc = _encryptionProvider;
@@ -79,8 +80,16 @@ extension MessagingBoxSync on MessagingProvider {
     final json = jsonEncode(BoxCatchUpEnvelope.request(since));
     var anyFull = false;
     for (final device in order) {
+      // A paused sibling (E93a) does not read its queue: asking it would
+      // move its chain for an answer that is not coming.
+      if (_boxPaused.isPaused(user, device)) {
+        anyFull = true;
+        continue;
+      }
       if (!await _hasUsableBoxSession(enc, user, device)) continue;
-      switch (await _sendCatchUpFrame(device, addresses[device]!, json)) {
+      final outcome = await _sendCatchUpFrame(device, addresses[device]!, json);
+      _noteBoxAnswer(user, device, outcome);
+      switch (outcome) {
         case BoxSendOutcome.taken:
           _e2eFlowLog('BOX_SYNC_ASKED', {
             'device': device,
@@ -93,15 +102,15 @@ extension MessagingBoxSync on MessagingProvider {
           return false;
       }
     }
-    // A sibling whose queue is full will not read it soon: with every
-    // sibling that could be asked full, this absence is given up. None
-    // asked at all (no address or session yet) is tried again.
+    // None asked (no address or session yet, every queue full or paused):
+    // still owed. A paused sibling costs the next ticks nothing, and the
+    // first tick after its pause ends asks it.
     _e2eFlowLog('BOX_SYNC_NOT_ASKED', {
       'siblings': siblings.length,
       'asked': order.length,
       'full': anyFull,
     });
-    return anyFull;
+    return false;
   }
 
   /// [json] to own sibling [device] through its self-queue [to], quiet: it
@@ -221,6 +230,7 @@ extension MessagingBoxSync on MessagingProvider {
         ),
       );
       final outcome = await _sendCatchUpFrame(device, to, json);
+      _noteBoxAnswer(user, device, outcome);
       _e2eFlowLog('BOX_SYNC_ANSWERED', {
         'device': device,
         'count': records.length,

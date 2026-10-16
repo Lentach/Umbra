@@ -266,10 +266,32 @@ void main() {
       );
     });
 
-    test('one the box did not take is owed again on the next pass', () async {
+    test('a sibling whose queue answered full gets no alive sealed while it '
+        'stays paused (E93a)', () async {
       outbox
         ..siblings[2] = _address(2)
         ..answer = BoxSendOutcome.full;
+      encryption.siblingSessions.add(2);
+
+      await connect();
+      outbox.answer = BoxSendOutcome.taken;
+      await connect();
+      await connect();
+      expect(
+        outbox.delivered,
+        hasLength(1),
+        reason: 'each seal moves its chain toward the 2000-step cap (E93a)',
+      );
+
+      now = now.add(kSiblingAliveEvery);
+      await connect();
+      expect(outbox.delivered, hasLength(1), reason: 'still paused');
+    });
+
+    test('one that failed is owed again on the next pass', () async {
+      outbox
+        ..siblings[2] = _address(2)
+        ..answer = BoxSendOutcome.failed;
       encryption.siblingSessions.add(2);
 
       await connect();

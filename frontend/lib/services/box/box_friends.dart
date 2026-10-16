@@ -108,13 +108,18 @@ abstract interface class BoxFriendLink {
   /// session, and not while this connect's own handoff may be in flight.
   void friendHeard(int userId, int deviceId);
 
-  /// An authenticated frame from [userId]'s device [deviceId] carried `rl`
-  /// (decision 101 A): that device relays a box message to the siblings we
-  /// could not address. Kept on its address in the contact record
+  /// An authenticated frame from [userId]'s device [deviceId] said whether
+  /// that device [relays] (`rl`, decision 101 A, E101b): it forwards a box
+  /// message to the siblings we could not address, and a frame without
+  /// `rl` takes that back. Kept on its address in the contact record
   /// ([ContactOutbound.relays]) — at once in RAM, so a handoff stored after
   /// this call keeps it even when the device had no address yet, and in the
   /// record when it has one.
-  Future<void> friendRelays(int userId, int deviceId);
+  Future<void> friendRelays(
+    int userId,
+    int deviceId, {
+    required bool relays,
+  });
 
   /// Hand our queue to [userId]'s devices now, whatever this connect already
   /// sent: a handoff from it could not be read because this device holds no

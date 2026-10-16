@@ -382,7 +382,7 @@ void main() {
       await a.start();
       await b.start();
       // No address yet: kept for the handoff to come.
-      await a.session.friendRelays(5, 3);
+      await a.session.friendRelays(5, 3, relays: true);
       a.session.onFriendsList([b.listed]);
       b.session.onFriendsList([a.listed]);
       await settle();
@@ -394,7 +394,7 @@ void main() {
       expect(backedUp.single, isNot(contains('rl')));
 
       // An address already held: written to the record.
-      await b.session.friendRelays(1, 2);
+      await b.session.friendRelays(1, 2, relays: true);
       await settle();
       expect(b.outboundOf(2)?.relays, isTrue);
     },

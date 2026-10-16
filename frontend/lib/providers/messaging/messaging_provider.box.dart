@@ -524,12 +524,12 @@ extension MessagingBox on MessagingProvider {
           fresh || !await enc.hasSessionWith(userId, deviceId: deviceId);
       if (fresh) enc.markSessionRebuild(userId, deviceId: deviceId);
       await enc.ensureSession(userId, deviceId: deviceId);
-      // Every frame to a friend's device says this device relays
-      // (decision 101 A).
+      // A frame to a friend's device says whether this device relays
+      // (decision 101 A, E101b).
       final frame = BoxFrame.fromSignalCiphertext(
         await enc.encrypt(
           userId,
-          E2eEnvelope.toFriend(json),
+          E2eEnvelope.toFriend(json, relays: _vouchesRelay),
           deviceId: deviceId,
         ),
         senderDeviceId: enc.ownDeviceId,
@@ -787,7 +787,9 @@ extension MessagingBox on MessagingProvider {
       case E2eEnvelope.typeAlive:
         if (!viaSelf) {
           _e2eFlowLog('BOX_SIBLING_COPY_REFUSED', {'why': 'request_queue'});
+          return true;
         }
+        _siblingReadsRelays(device);
         return true;
       // Catch-up sync (decision 102): a sibling's request, or its answer to
       // ours. Only through our self-queue, like every copy.
@@ -796,6 +798,7 @@ extension MessagingBox on MessagingProvider {
           _e2eFlowLog('BOX_SIBLING_COPY_REFUSED', {'why': 'request_queue'});
           return true;
         }
+        _siblingReadsRelays(device);
         if (parsed.type == E2eEnvelope.typeSyncRequest) {
           return _takeSyncRequest(device, plaintext);
         }
@@ -808,6 +811,7 @@ extension MessagingBox on MessagingProvider {
           _e2eFlowLog('BOX_SIBLING_COPY_REFUSED', {'why': 'request_queue'});
           return true;
         }
+        _siblingReadsRelays(device);
         return _takeRelayed(link, msg, plaintext);
       // Receipts and typing go to the peer's devices only (E61b): a copy
       // on our own queues is not one we send, and is dropped.
@@ -1103,8 +1107,12 @@ extension MessagingBox on MessagingProvider {
       _e2eFlowLog('BOX_ENVELOPE_UNREADABLE', {'msgId': msg.id});
       return true;
     }
-    // That device relays to the siblings a sender cannot address (101 A).
-    if (parsed.relays) _noteFriendRelays(msg.senderId, msg.originDeviceId ?? 1);
+    // Whether that device relays to the siblings a sender cannot address
+    // (101 A, E101b): every frame says it, so a missing `rl` takes it back.
+    final origin = msg.originDeviceId;
+    if (origin != null) {
+      _noteFriendRelays(msg.senderId, origin, relays: parsed.relays);
+    }
     final link = boxFriends;
     switch (parsed.type) {
       // The friend's device handed us its queue — a hand-back over our own
@@ -2519,7 +2527,11 @@ extension MessagingBox on MessagingProvider {
     final enc = _encryptionProvider!;
     final ownUserId = _currentUserId!;
     final frames = <(ContactOutbound, Uint8List)>[];
-    final peerJson = E2eEnvelope.toFriend(json, addressed: route.addressed);
+    final peerJson = E2eEnvelope.toFriend(
+      json,
+      relays: _vouchesRelay,
+      addressed: route.addressed,
+    );
     final sends = [
       for (final to in route.targets) (recipientId, to, peerJson),
       for (final to in route.siblings) (ownUserId, to, copyJson),
@@ -2564,23 +2576,28 @@ extension MessagingBox on MessagingProvider {
     for (var i = 0; i < answers.length; i++) {
       final user = i < peerFrames ? peer : own;
       if (user == null) continue;
-      final device = frames[i].$1.peerDeviceId;
-      switch (answers[i]) {
-        case BoxSendOutcome.taken:
-          if (_boxPaused.resume(user, device)) {
-            _e2eFlowLog('BOX_DEVICE_RESUMED', {
-              'user': user,
-              'device': device,
-              'by': 'taken',
-            });
-          }
-        case BoxSendOutcome.full:
-          if (_boxPaused.full(user, device)) {
-            _e2eFlowLog('BOX_DEVICE_FULL', {'user': user, 'device': device});
-          }
-        case BoxSendOutcome.failed:
-          break;
-      }
+      _noteBoxAnswer(user, frames[i].$1.peerDeviceId, answers[i]);
+    }
+  }
+
+  /// What the box answered one frame sealed to [device] of [user],
+  /// applied to the pause (E93a).
+  void _noteBoxAnswer(int user, int device, BoxSendOutcome answer) {
+    switch (answer) {
+      case BoxSendOutcome.taken:
+        if (_boxPaused.resume(user, device)) {
+          _e2eFlowLog('BOX_DEVICE_RESUMED', {
+            'user': user,
+            'device': device,
+            'by': 'taken',
+          });
+        }
+      case BoxSendOutcome.full:
+        if (_boxPaused.full(user, device)) {
+          _e2eFlowLog('BOX_DEVICE_FULL', {'user': user, 'device': device});
+        }
+      case BoxSendOutcome.failed:
+        break;
     }
   }
 

@@ -10,11 +10,12 @@ part of '../messaging_provider.dart';
 /// authenticated sender, E19k parking. A relayed frame is never relayed
 /// again.
 extension MessagingBoxRelay on MessagingProvider {
-  /// An authenticated frame from friend [user]'s [device] carried `rl`: it
-  /// relays, so a message addressed to it covers its siblings. Kept on that
-  /// device's address once ([BoxFriendLink.friendRelays]); never awaited by
-  /// the read.
-  void _noteFriendRelays(int user, int device) {
+  /// An authenticated frame from friend [user]'s [device] said whether it
+  /// [relays] (`rl`, E101b): a message addressed to a relaying device
+  /// covers its siblings. Kept on that device's address
+  /// ([BoxFriendLink.friendRelays]) when it changes; never awaited by the
+  /// read.
+  void _noteFriendRelays(int user, int device, {required bool relays}) {
     final link = boxFriends;
     if (link == null) return;
     final held = link
@@ -22,8 +23,10 @@ extension MessagingBoxRelay on MessagingProvider {
         ?.outbound
         .where((o) => o.peerDeviceId == device)
         .firstOrNull;
-    if (held?.relays ?? false) return;
-    link.friendRelays(user, device).ignore();
+    // A device with no address yet is still told, so the handoff that
+    // brings one keeps the latest word.
+    if (held != null && held.relays == relays) return;
+    link.friendRelays(user, device, relays: relays).ignore();
   }
 
   /// [_noteFriendRelays] for a frame read outside [MessagingBox._readBox]
@@ -35,7 +38,7 @@ extension MessagingBoxRelay on MessagingProvider {
     } on Object {
       return;
     }
-    if (parsed.relays) _noteFriendRelays(user, device);
+    _noteFriendRelays(user, device, relays: parsed.relays);
   }
 
   /// Friend [msg]'s action [plaintext] ([parsed]) was read and taken here:
@@ -95,10 +98,11 @@ extension MessagingBoxRelay on MessagingProvider {
         'devices': missing.length - targets.length,
       });
     }
-    if (targets.isEmpty) return;
+    final origin = msg.originDeviceId;
+    if (targets.isEmpty || origin == null) return;
     final json = E2eEnvelope.buildRelay(
       user: friend,
-      device: msg.originDeviceId ?? 1,
+      device: origin,
       envelope: plaintext,
     );
     _sendRelays(own, friend, targets, json).ignore();
@@ -141,7 +145,15 @@ extension MessagingBoxRelay on MessagingProvider {
           });
           continue;
         }
-        final frame = await encryptForOwnDevice(device, json);
+        // One target's throw must not drop the frames already sealed: each
+        // seal moved its chain, and the relay is that sibling's only route.
+        final BoxFrame? frame;
+        try {
+          frame = await encryptForOwnDevice(device, json);
+        } on Object {
+          failed(device, 'encrypt');
+          continue;
+        }
         if (frame == null) {
           failed(device, 'encrypt');
         } else if (frame.signal.length > BoxFrame.maxSignalBytes) {

@@ -8,6 +8,7 @@ import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/services/box/box_frame.dart';
 import 'package:fireplace/services/box/box_friends.dart';
 import 'package:fireplace/services/box/box_outbox.dart';
+import 'package:fireplace/services/box/box_sibling_alive.dart';
 import 'package:fireplace/services/box/box_siblings.dart';
 import 'package:fireplace/services/box/box_wire.dart';
 import 'package:fireplace/services/contacts/contact_record.dart';
@@ -178,7 +179,7 @@ class _Siblings implements BoxSiblingLink {
 /// every device noted as relaying.
 class _Friends implements BoxFriendLink {
   final Map<int, ContactRecord> contacts = {};
-  final List<(int, int)> relaysNoted = [];
+  final List<(int, int, bool)> relaysNoted = [];
 
   @override
   bool get onBox => false;
@@ -187,8 +188,11 @@ class _Friends implements BoxFriendLink {
   ContactRecord? contactOf(int userId) => contacts[userId];
 
   @override
-  Future<void> friendRelays(int userId, int deviceId) async =>
-      relaysNoted.add((userId, deviceId));
+  Future<void> friendRelays(
+    int userId,
+    int deviceId, {
+    required bool relays,
+  }) async => relaysNoted.add((userId, deviceId, relays));
 
   @override
   void friendHeard(int userId, int deviceId) {}
@@ -245,6 +249,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   late MessagingProvider provider;
+  late BoxSiblingAlive alive;
   late ConversationsProvider conversations;
   late _Encryption encryption;
   late _Outbox outbox;
@@ -277,6 +282,7 @@ void main() {
       accepts: (_) => true,
     );
     await store.open(1);
+    alive = BoxSiblingAlive(store: store);
     outbox = _Outbox()..siblings[3] = _selfQueue(3);
     siblings = _Siblings()..contacts[2] = _bob;
     friends = _Friends()..contacts[2] = _bob;
@@ -298,7 +304,8 @@ void main() {
       ..setEmitCallback((event, _) => emitted.add(event))
       ..boxOutbox = outbox
       ..boxSiblings = siblings
-      ..boxFriends = friends;
+      ..boxFriends = friends
+      ..boxAlive = alive;
   });
 
   tearDown(() => provider.dispose());
@@ -314,6 +321,8 @@ void main() {
     };
     provider.refreshBoxDeviceLists();
     await pump();
+    // The connect's `alive` to sibling 3 (decision 103) is not under test.
+    outbox.delivered.clear();
   }
 
   BoxInboxEntry entry({int peer = 2, int device = 1, bool viaSelf = false}) =>
@@ -332,21 +341,24 @@ void main() {
   Map<String, dynamic> envelopeOf(BoxFrame frame) =>
       jsonDecode(utf8.decode(frame.signal)) as Map<String, dynamic>;
 
-  /// Bob's message [text] under [wire], as his device sealed it: `rl`, and
-  /// `ad` when [ad] is given.
-  String bobSays(String text, {String wire = _wire, List<int>? ad}) =>
-      E2eEnvelope.toFriend(
-        jsonEncode(
-          E2eEnvelope.build(
-            text,
-            msgId: wire,
-            sentAt: DateTime.now().toUtc().subtract(
-              const Duration(minutes: 5),
-            ),
-          ),
-        ),
-        addressed: ad,
-      );
+  /// Bob's message [text] under [wire], as his device sealed it: `rl` unless
+  /// [relays] is false, and `ad` when [ad] is given.
+  String bobSays(
+    String text, {
+    String wire = _wire,
+    List<int>? ad,
+    bool relays = true,
+  }) => E2eEnvelope.toFriend(
+    jsonEncode(
+      E2eEnvelope.build(
+        text,
+        msgId: wire,
+        sentAt: DateTime.now().toUtc().subtract(const Duration(minutes: 5)),
+      ),
+    ),
+    relays: relays,
+    addressed: ad,
+  );
 
   /// [envelope] read on Bob's queue, from his device 1.
   Future<bool> fromBob(String envelope) async {
@@ -376,6 +388,9 @@ void main() {
       provider.messages.where((m) => m.senderId == 2 && m.wireId == wire);
 
   group('sending to a friend', () {
+    // Our sibling 3 runs a build that reads `relay` (E101b).
+    setUp(() => alive.readsRelays(3));
+
     test(
       'one addressed live device that relays covers the friend: frames go to '
       'it alone, the peer frame carries rl and ad, the sent copy neither',
@@ -445,10 +460,50 @@ void main() {
     );
   });
 
+  test(
+    'rl only once every live sibling of ours was heard on a build that reads '
+    'relay: before that a friend must keep addressing it (E101b)',
+    () async {
+      await bobAddressed([1, 2]);
+      List<Map<String, dynamic>> peerFrames() => [
+        for (final (to, frame) in outbox.delivered)
+          if (to.sid.startsWith('sid-')) envelopeOf(frame),
+      ];
+
+      provider.sendMessage('before');
+      await pump();
+      expect(peerFrames(), hasLength(2));
+      expect(peerFrames().any((e) => e.containsKey('rl')), isFalse);
+
+      // Sibling 3's daily `alive` on our self-queue: its build reads relay.
+      encryption.inbound = jsonEncode(E2eEnvelope.buildAlive());
+      await provider.consumeBoxEntry(
+        entry(peer: 1, device: 3, viaSelf: true),
+        null,
+      );
+      await pump();
+      outbox.delivered.clear();
+
+      provider.sendMessage('after');
+      await pump();
+      expect(peerFrames(), hasLength(2));
+      expect(peerFrames().every((e) => e['rl'] == 1), isTrue);
+    },
+  );
+
   group('reading a friend frame', () {
-    test('rl marks that device as relaying', () async {
+    test('every frame says whether that device relays', () async {
       expect(await fromBob(bobSays('hello')), isTrue);
-      expect(friends.relaysNoted, [(2, 1)]);
+      expect(friends.relaysNoted, [(2, 1, true)]);
+
+      friends.contacts[2] = _bob.copyWith(
+        outbound: [_address(1, relays: true)],
+      );
+      expect(
+        await fromBob(bobSays('later', wire: 'wire-2', relays: false)),
+        isTrue,
+      );
+      expect(friends.relaysNoted.last, (2, 1, false));
     });
 
     test(
@@ -499,6 +554,7 @@ void main() {
 
         String bobActs(String type, {required int s, String? emoji}) =>
             E2eEnvelope.toFriend(
+              relays: true,
               jsonEncode(
                 E2eEnvelope.buildAction(
                   type,

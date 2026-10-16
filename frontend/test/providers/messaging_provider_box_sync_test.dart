@@ -96,6 +96,7 @@ class _Encryption extends EncryptionProvider {
 class _Outbox implements BoxOutbox {
   final Map<int, ContactOutbound> siblings = {};
   final List<(ContactOutbound, BoxFrame, BoxSendMode?)> delivered = [];
+  BoxSendOutcome answer = BoxSendOutcome.taken;
 
   /// What the box's media route holds, by base64url id.
   final Map<String, Uint8List> media = {};
@@ -119,7 +120,7 @@ class _Outbox implements BoxOutbox {
     BoxSendMode? mode,
   }) async {
     delivered.add((to, BoxFrame.decode(body)!, mode));
-    return BoxSendOutcome.taken;
+    return answer;
   }
 
   @override
@@ -442,6 +443,25 @@ void main() {
       await provider.catchUpTick();
 
       expect(outbox.delivered, hasLength(1));
+      expect((await provider.boxCatchUp.load(1)).owed, isNull);
+    });
+
+    test('stays owed while the only sibling is full, sealing nothing more '
+        'to it, and asks it once it is heard again', () async {
+      await stampedAgo(const Duration(hours: 5));
+      outbox.answer = BoxSendOutcome.full;
+
+      await provider.catchUpTick();
+      await provider.catchUpTick();
+
+      expect(outbox.delivered, hasLength(1), reason: 'paused (E93a)');
+      expect((await provider.boxCatchUp.load(1)).owed, isNotNull);
+
+      outbox.answer = BoxSendOutcome.taken;
+      await fromSibling({'t': 'alive'});
+      await provider.catchUpTick();
+
+      expect(outbox.delivered, hasLength(2));
       expect((await provider.boxCatchUp.load(1)).owed, isNull);
     });
   });

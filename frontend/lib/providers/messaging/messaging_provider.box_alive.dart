@@ -55,6 +55,35 @@ extension MessagingBoxAlive on MessagingProvider {
     );
   }
 
+  /// Own sibling [deviceId] sent a frame only a build that reads `relay`
+  /// sends (E101b).
+  void _siblingReadsRelays(int deviceId) {
+    final alive = boxAlive;
+    if (alive == null) return;
+    if (alive.allReadRelays([deviceId])) return;
+    alive.readsRelays(deviceId).ignore();
+  }
+
+  /// Whether this device tells friends it relays (`rl`, decision 101 A):
+  /// only while every live own sibling in the verified list is known to
+  /// read `relay` (E101b). A friend that trusts `rl` stops addressing the
+  /// devices it cannot reach, so a sibling on an older build would finish
+  /// the relayed copy unread and lose that message for good.
+  bool get _vouchesRelay {
+    final alive = boxAlive;
+    final enc = _encryptionProvider;
+    final own = _currentUserId;
+    if (alive == null || enc == null || own == null) return false;
+    if (!enc.ownDeviceIdConfirmed) return false;
+    final list = enc.cachedDeviceList(own);
+    if (list == null) return false;
+    final self = enc.ownDeviceId;
+    return alive.allReadRelays([
+      for (final d in list.liveDeviceIds)
+        if (d != self) d,
+    ]);
+  }
+
   /// One pass per connect (and per own-list change): every live sibling is
   /// known, and each one owed an `alive` that has a self-queue address and a
   /// usable session gets one, quiet. Best effort: a frame not taken is owed
@@ -87,6 +116,9 @@ extension MessagingBoxAlive on MessagingProvider {
       for (final device in alive.aliveDue(siblings)) {
         final to = addresses[device];
         if (to == null || _isDisposed) continue;
+        // A paused sibling (E93a) is not read; an `alive` is never worth its
+        // probe: sealing it would move that chain for nothing (2000-step cap).
+        if (_boxPaused.isPaused(own, device)) continue;
         try {
           if (!await _hasUsableBoxSession(enc, own, device)) continue;
           final frame = await encryptForOwnDevice(device, json);
@@ -100,7 +132,10 @@ extension MessagingBoxAlive on MessagingProvider {
             'device': device,
             'outcome': outcome.name,
           });
-          if (outcome == BoxSendOutcome.taken) await alive.aliveSent(device);
+          _noteBoxAnswer(own, device, outcome);
+          // A full queue is owed nothing more today: the pause is RAM only,
+          // and a retry at every connect would seal one step each time.
+          if (outcome != BoxSendOutcome.failed) await alive.aliveSent(device);
         } on Object catch (e) {
           _e2eFlowLog('BOX_SIBLING_ALIVE_FAILED', {
             'device': device,

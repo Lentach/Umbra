@@ -151,9 +151,10 @@ class BoxSession
   /// Siblings re-keyed this session ([rekeySibling]): once each.
   final Set<int> _rekeyed = {};
 
-  /// Friend devices that said they relay (`rl`, decision 101 A) this
-  /// session: a handoff stored after the frame keeps it ([friendRelays]).
-  final Set<(int, int)> _friendRelays = {};
+  /// What each friend device last said about relaying (`rl`, decision 101
+  /// A, E101b) this session: a handoff stored after the frame keeps it
+  /// ([friendRelays]).
+  final Map<(int, int), bool> _friendRelays = {};
 
   /// When this device built a re-key's handoff for a sibling it has not
   /// read since ([awaitingRekeyFrom], decision 37).
@@ -716,10 +717,10 @@ class BoxSession
       final held = current.outbound
           .where((o) => o.peerDeviceId == deviceId)
           .firstOrNull;
-      // A device that said it relays (decision 101 A) still does on its
-      // new queue; the frame that said so may be this very handoff.
+      // What the device last said about relaying (decision 101 A, E101b)
+      // holds on its new queue; the frame that said it may be this handoff.
       final relays =
-          (held?.relays ?? false) || _friendRelays.contains((userId, deviceId));
+          _friendRelays[(userId, deviceId)] ?? held?.relays ?? false;
       if (held?.sid == sid &&
           held?.sealPub == sealPub &&
           held?.relays == relays) {
@@ -870,21 +871,25 @@ class BoxSession
   }
 
   @override
-  Future<void> friendRelays(int userId, int deviceId) async {
+  Future<void> friendRelays(
+    int userId,
+    int deviceId, {
+    required bool relays,
+  }) async {
     if (_disposed) return;
-    _friendRelays.add((userId, deviceId));
+    _friendRelays[(userId, deviceId)] = relays;
     final held = _store
         .byUserId(userId)
         ?.outbound
         .where((o) => o.peerDeviceId == deviceId)
         .firstOrNull;
-    if (held == null || held.relays) return;
+    if (held == null || held.relays == relays) return;
     await _store.update(userId, (current) {
       if (current == null || current.state != ContactState.friend) return null;
       final now = current.outbound
           .where((o) => o.peerDeviceId == deviceId)
           .firstOrNull;
-      if (now == null || now.relays) return null;
+      if (now == null || now.relays == relays) return null;
       return current.copyWith(
         outbound: [
           for (final o in current.outbound)
@@ -895,7 +900,7 @@ class BoxSession
                 peerDeviceId: deviceId,
                 sid: o.sid,
                 sealPub: o.sealPub,
-                relays: true,
+                relays: relays,
               ),
         ],
       );
