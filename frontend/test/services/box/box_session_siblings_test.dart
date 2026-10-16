@@ -652,7 +652,11 @@ void main() {
         final readsBefore = a.reads.length;
         expect(
           await b.session.deliver(
-            ContactOutbound(peerDeviceId: 2, sid: old.sid, sealPub: old.sealPub),
+            ContactOutbound(
+              peerDeviceId: 2,
+              sid: old.sid,
+              sealPub: old.sealPub,
+            ),
             BoxFrame(
               kind: BoxFrameKind.whisper,
               senderDeviceId: 3,
@@ -758,7 +762,10 @@ void main() {
         a.answer([b]);
         await settle();
         final old = a.store.selfQueue!;
-        expect(a.sibling(3), isA<SiblingAddress>().having((s) => s.sid, 'sid', isNull));
+        expect(
+          a.sibling(3),
+          isA<SiblingAddress>().having((s) => s.sid, 'sid', isNull),
+        );
         expect(a.session.siblingAddresses(), isEmpty, reason: 'no address yet');
 
         await ownListIs(a, {2});
@@ -891,5 +898,32 @@ void main() {
       now = now.add(const Duration(seconds: 1));
       expect(a.session.awaitingRekeyFrom(3), isFalse);
     });
+
+    test(
+      'a sibling whose self-queue address is not held is re-keyed through '
+      'its request queue, or crossing first sessions refuse each other for '
+      'good',
+      () async {
+        now = DateTime.utc(2026, 9, 25, 12);
+        a = _Device(2, box, clock: () => now);
+        await a.start();
+        // b cannot encrypt (no E2E yet), so it never hands its self-queue
+        // back: a knows only its request queue.
+        await b.start(wireEncrypt: false);
+        a.session.accountReady(2);
+        await settle();
+        a.answer([b]);
+        await settle();
+        expect(a.session.siblingAddresses(), isEmpty);
+        final before = box.sent.length;
+
+        await a.session.rekeySibling(3);
+        await settle();
+
+        expect(a.freshFor, [3]);
+        expect(box.sent.sublist(before), [b.store.requestQueue!.sid]);
+        expect(a.session.awaitingRekeyFrom(3), isTrue);
+      },
+    );
   });
 }

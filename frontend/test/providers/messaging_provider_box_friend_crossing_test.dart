@@ -270,6 +270,9 @@ class _Link implements BoxFriendLink {
   }
 
   @override
+  Future<void> friendRelays(int userId, int deviceId) async {}
+
+  @override
   void handOffTo(int userId) {
     _handed = false;
     unawaited(_pass());
@@ -432,7 +435,8 @@ void main() {
               frame.signalCiphertext,
               deviceId: to.peerDevice,
             ),
-            text,
+            // Every frame to a friend says this device relays (101 A).
+            E2eEnvelope.toFriend(text),
           );
         }
       }
@@ -485,7 +489,7 @@ void main() {
           frame.signalCiphertext,
           deviceId: to.peerDevice,
         ),
-        text,
+        E2eEnvelope.toFriend(text),
       );
     }
 

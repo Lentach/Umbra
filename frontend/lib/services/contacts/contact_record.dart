@@ -146,27 +146,40 @@ class ContactQueue {
 
 /// How to reach ONE of the peer's devices: the send capability for the queue
 /// that device created for us, and the key its seal layer expects.
+///
+/// [relays]: that device said it relays our box messages to the siblings
+/// we could not address (`rl`, decision 101 A), so a message addressed to
+/// it covers the account. Learned from its frames, so the contact backup
+/// drops it ([ContactRecord.toBackupJson]): a capability learned must not
+/// move the backup's `rev`.
 class ContactOutbound {
   const ContactOutbound({
     required this.peerDeviceId,
     required this.sid,
     required this.sealPub,
+    this.relays = false,
   });
 
   factory ContactOutbound.fromJson(Map<String, dynamic> j) => ContactOutbound(
     peerDeviceId: j['peerDeviceId'] as int,
     sid: j['sid'] as String,
     sealPub: j['sealPub'] as String,
+    relays: j[relaysKey] == true,
   );
+
+  /// Its key: [ContactRecord.toBackupJson] drops it.
+  static const String relaysKey = 'rl';
 
   final int peerDeviceId;
   final String sid;
   final String sealPub;
+  final bool relays;
 
   Map<String, dynamic> toJson() => {
     'peerDeviceId': peerDeviceId,
     'sid': sid,
     'sealPub': sealPub,
+    if (relays) relaysKey: true,
   };
 }
 
@@ -633,12 +646,19 @@ class ContactRecord {
   /// the backup's `rev`/`updatedAt` — a per-pin activity clock on the
   /// server (item 4, E19f).
   /// The kept requests of a friendship made over the box go too: their
-  /// Signal bytes are this device's alone (E15c).
+  /// Signal bytes are this device's alone (E15c). So does each address's
+  /// [ContactOutbound.relays]: learned from frames, it would move `rev` as
+  /// a friend device's frame arrives (decision 101 A).
   Map<String, dynamic> toBackupJson() {
     final json = toJson()
       ..remove('queues')
       ..remove('legacy')
       ..['settings'] = (settings.toJson()..remove(ContactSettings.boxPinKey));
+    if (outbound.isNotEmpty) {
+      json['outbound'] = [
+        for (final o in outbound) o.toJson()..remove(ContactOutbound.relaysKey),
+      ];
+    }
     if (boxOrigin case final origin?) {
       json['box'] = origin.toJson()..remove(ContactBoxOrigin.keptKey);
     }

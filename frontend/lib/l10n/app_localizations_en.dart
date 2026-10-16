@@ -2105,6 +2105,23 @@ class AppLocalizationsEn extends AppLocalizations {
   String get webPushOffLine => 'Notifications are off. Tap to turn them on.';
 
   @override
+  String siblingSilentLine(String name) {
+    return '“$name” has not been used for 30 days. Tap to decide.';
+  }
+
+  @override
+  String siblingSilentTitle(String name) {
+    return 'Remove “$name”?';
+  }
+
+  @override
+  String get siblingSilentBody =>
+      'This device has not been used for 30 days. If you remove it, it is signed out and its messages stay. If you still use it, keep it.';
+
+  @override
+  String get siblingSilentKeep => 'Keep';
+
+  @override
   String get recoveryKeyRequiredForLinking =>
       'Linking requires a recovery phrase — you\'ll create it next.';
 

@@ -444,25 +444,34 @@ void main() {
   }
 
   group('with the switch OFF (E61c)', () {
-    test('nothing is sent and every rcpt and typ received is ignored', () async {
-      await fromBob('hi', wire: _wire(1));
-      provider
-        ..onBoxReadsIdle()
-        ..markConversationRead(10)
-        ..emitTyping()
-        ..sendRecordingVoiceIndicator(2, 10, isRecording: true);
-      await pump();
-      expect(outbox.delivered, isEmpty);
-      expect(events(), isNot(anyOf(contains('typing'), contains('recordingVoice'))));
+    test(
+      'nothing is sent and every rcpt and typ received is ignored',
+      () async {
+        await fromBob('hi', wire: _wire(1));
+        provider
+          ..onBoxReadsIdle()
+          ..markConversationRead(10)
+          ..emitTyping()
+          ..sendRecordingVoiceIndicator(2, 10, isRecording: true);
+        await pump();
+        expect(outbox.delivered, isEmpty);
+        expect(
+          events(),
+          isNot(anyOf(contains('typing'), contains('recordingVoice'))),
+        );
 
-      final own = await mine('yo');
-      expect(await bobDoes(receipt(E2eReceiptKind.read, [own.wireId!])), isTrue);
-      expect(row(own.id)!.deliveryStatus, MessageDeliveryStatus.sent);
-      expect(await bobDoes(typing(E2eTypingKind.text, on: true)), isTrue);
-      expect(await bobDoes(typing(E2eTypingKind.voice, on: true)), isTrue);
-      expect(provider.isPartnerTyping(10), isFalse);
-      expect(provider.isPartnerRecordingVoice(10), isFalse);
-    });
+        final own = await mine('yo');
+        expect(
+          await bobDoes(receipt(E2eReceiptKind.read, [own.wireId!])),
+          isTrue,
+        );
+        expect(row(own.id)!.deliveryStatus, MessageDeliveryStatus.sent);
+        expect(await bobDoes(typing(E2eTypingKind.text, on: true)), isTrue);
+        expect(await bobDoes(typing(E2eTypingKind.voice, on: true)), isTrue);
+        expect(provider.isPartnerTyping(10), isFalse);
+        expect(provider.isPartnerRecordingVoice(10), isFalse);
+      },
+    );
   });
 
   group('delivered (E61d)', () {
@@ -489,6 +498,7 @@ void main() {
         );
         for (final sent in outbox.delivered) {
           expect(envelopeOf(sent), {
+            'rl': 1,
             't': 'rcpt',
             'k': 'd',
             'w': [_wire(1), _wire(2), _wire(3)],
@@ -552,6 +562,7 @@ void main() {
         expect(outbox.delivered, hasLength(2));
         for (final sent in outbox.delivered) {
           expect(envelopeOf(sent), {
+            'rl': 1,
             't': 'rcpt',
             'k': 'r',
             'w': [_wire(2)],
@@ -610,6 +621,7 @@ void main() {
         );
         for (final sent in outbox.delivered) {
           expect(envelopeOf(sent), {
+            'rl': 1,
             't': 'rcpt',
             'k': 'r',
             'w': [_wire(1)],
@@ -648,6 +660,7 @@ void main() {
         expect(outbox.delivered, hasLength(2));
         for (final sent in outbox.delivered) {
           expect(envelopeOf(sent), {
+            'rl': 1,
             't': 'rcpt',
             'k': 'r',
             'w': [_wire(1)],
@@ -690,6 +703,7 @@ void main() {
         expect(outbox.delivered, hasLength(2));
         for (final sent in outbox.delivered) {
           expect(envelopeOf(sent), {
+            'rl': 1,
             't': 'rcpt',
             'k': 'r',
             'w': [_wire(1)],
@@ -711,7 +725,12 @@ void main() {
           expectPeerFramesOnly(BoxSendMode.live);
           expect(outbox.delivered, hasLength(2));
           for (final sent in outbox.delivered) {
-            expect(envelopeOf(sent), {'t': 'typ', 'k': 't', 'on': true});
+            expect(envelopeOf(sent), {
+              'rl': 1,
+              't': 'typ',
+              'k': 't',
+              'on': true,
+            });
           }
 
           outbox.delivered.clear();
@@ -742,7 +761,8 @@ void main() {
           [for (final sent in outbox.delivered) envelopeOf(sent)],
           [
             for (final on in [true, false, true])
-              for (var i = 0; i < 2; i++) {'t': 'typ', 'k': 'v', 'on': on},
+              for (var i = 0; i < 2; i++)
+                {'rl': 1, 't': 'typ', 'k': 'v', 'on': on},
           ],
         );
         expect(events(), isNot(contains('recordingVoice')));
@@ -754,8 +774,7 @@ void main() {
       () {
         inFakeTime((clock) {
           List<bool> ons() => [
-            for (final sent in outbox.delivered)
-              envelopeOf(sent)['on'] as bool,
+            for (final sent in outbox.delivered) envelopeOf(sent)['on'] as bool,
           ];
           provider.sendRecordingVoiceIndicator(2, 10, isRecording: true);
           clock.elapse(const Duration(milliseconds: 100));
@@ -888,7 +907,6 @@ void main() {
       });
     });
 
-
     test(
       'voice shows until 12 s after the last on, with no off needed',
       () {
@@ -897,7 +915,11 @@ void main() {
           clock.elapse(const Duration(seconds: 10));
           settle(clock, () => bobDoes(typing(E2eTypingKind.voice, on: true)));
           clock.elapse(const Duration(milliseconds: 11800));
-          expect(provider.isPartnerRecordingVoice(10), isTrue, reason: 'renewed');
+          expect(
+            provider.isPartnerRecordingVoice(10),
+            isTrue,
+            reason: 'renewed',
+          );
           clock.elapse(const Duration(milliseconds: 300));
           expect(provider.isPartnerRecordingVoice(10), isFalse);
         });

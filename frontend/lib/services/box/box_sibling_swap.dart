@@ -60,6 +60,12 @@ class BoxSiblingSwap {
   String? _answeredFor;
   Timer? _retry;
 
+  /// Each sibling's REQUEST-queue address from the last `ownRequestQueues`
+  /// answer, and the siblings owed a re-key there ([rekeyViaRequest]) until
+  /// that answer comes. In RAM: both are rebuilt on every connect.
+  final Map<int, (Uint8List sid, Uint8List sealPub)> _requestAddresses = {};
+  final Set<int> _rekeyOwed = {};
+
   /// The account socket is ready; [deviceId] null = a server that names no
   /// device, which cannot serve the verb either.
   void accountReady(int? deviceId) {
@@ -146,6 +152,12 @@ class BoxSiblingSwap {
       if (deviceId is! int) continue;
       // Not published yet: handed off on a later connect.
       if (sid == null || sealPub == null) continue;
+      _requestAddresses[deviceId] = (sid, sealPub);
+      // A re-key owed before this answer came ([rekeyViaRequest]).
+      if (_rekeyOwed.remove(deviceId)) {
+        await _handoff(seal, own, deviceId, sid, sealPub, self, fresh: true);
+        continue;
+      }
       // Our OWN request queue under a sibling's id: the handoff would come
       // straight back to us. A device on the link gate once published its
       // queue under the primary's token (found live, 2026-09-25).
@@ -159,27 +171,59 @@ class BoxSiblingSwap {
     }
   }
 
+  /// Decision 37's re-key (E37b) for sibling [deviceId] when this device
+  /// holds no self-queue address for it: a FRESH handoff through its
+  /// request queue, as a first swap goes. Without it, two siblings that
+  /// built crossing sessions before either learned the other's self-queue
+  /// refused each other's handoff (`would_replace`) and could never answer,
+  /// for good. An address not known yet is owed to the next
+  /// `ownRequestQueues` answer, asked for now. True only when the handoff
+  /// left now.
+  Future<bool> rekeyViaRequest(int deviceId) async {
+    final address = _requestAddresses[deviceId];
+    final self = _self();
+    final own = _store.userId;
+    final seal = encrypt;
+    if (_disposed || self == null || own == null || seal == null) return false;
+    if (address == null) {
+      _rekeyOwed.add(deviceId);
+      handAgain();
+      return false;
+    }
+    return _handoff(
+      seal,
+      own,
+      deviceId,
+      address.$1,
+      address.$2,
+      self,
+      fresh: true,
+    );
+  }
+
   void dispose() {
     _disposed = true;
     _retry?.cancel();
   }
 
-  /// One `queue_handoff` to sibling [deviceId]'s request queue. A failure is
-  /// only recorded: the next connect hands off again.
+  /// One `queue_handoff` to sibling [deviceId]'s request queue ([fresh]: on
+  /// a new session, a re-key). A failure is only recorded: the next connect
+  /// hands off again. True when the box took it.
   ///
   /// The sibling gets an entry in `boxsib_v1` BEFORE the handoff leaves (and
   /// only after [encrypt] — which refuses any device the own verified list
   /// does not name live — produced it, so a phantom the server lists never
   /// gets one): every device that may hold our self sid is then one the
   /// rotation (E6) sees go.
-  Future<void> _handoff(
+  Future<bool> _handoff(
     OwnDeviceEncrypt encrypt,
     int own,
     int deviceId,
     Uint8List sid,
     Uint8List sealPub,
-    ContactQueue self,
-  ) async {
+    ContactQueue self, {
+    bool fresh = false,
+  }) async {
     String? failed;
     try {
       final signal = await encrypt(
@@ -187,8 +231,9 @@ class BoxSiblingSwap {
         jsonEncode(
           E2eEnvelope.buildQueueHandoff(sid: self.sid, sealPub: self.sealPub),
         ),
+        fresh: fresh,
       );
-      if (_disposed) return;
+      if (_disposed) return false;
       if (signal == null) {
         failed = 'encrypt';
       } else if (await _store.noteSibling(deviceId) != SiblingWrite.stored) {
@@ -201,7 +246,7 @@ class BoxSiblingSwap {
           signal: signal.signal,
         ).encode();
         final blob = await _seal.seal(sealPub, body);
-        if (_disposed) return;
+        if (_disposed) return false;
         if (blob == null) {
           failed = 'seal';
         } else if (await _box.send(sid, blob, mode: BoxSendMode.quiet)
@@ -220,5 +265,6 @@ class BoxSiblingSwap {
         'stage': failed,
       });
     }
+    return failed == null;
   }
 }

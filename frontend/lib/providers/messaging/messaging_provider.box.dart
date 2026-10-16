@@ -1,22 +1,35 @@
 part of '../messaging_provider.dart';
 
-/// A box send's plan (slice (c)): one address per live peer device, and —
-/// sibling queues part B — one self-queue per live other device of ours.
+/// A box send's plan (slice (c)): one address per live peer device that
+/// has one, and — sibling queues part B — one self-queue per live other
+/// device of ours. `addressed` names the peer devices addressed when some
+/// live one was not (decision 101 A: the envelope's `ad`, so they relay it
+/// to the rest); null when every live device was, and for receipts and
+/// typing, which are never relayed.
 typedef _BoxRoute = ({
   BoxOutbox outbox,
   List<ContactOutbound> targets,
   List<ContactOutbound> siblings,
   int conversationId,
   SenderListInfo senderListInfo,
+  List<int>? addressed,
 });
 
-/// The peer half of `_boxRoute`'s rule: a verified list naming [live]
-/// devices is box-covered when it names one and every one of them has an
-/// address in [addresses].
+/// Decision 16's peer rule: a verified list naming [live] devices is
+/// box-covered when it names one and every one of them has an address in
+/// [addresses].
 bool _everyLiveAddressed(
   List<int> live,
   Map<int, ContactOutbound> addresses,
 ) => live.isNotEmpty && live.every(addresses.containsKey);
+
+/// The peer half of `_boxRoute`'s rule (decision 16 as amended by 101 A):
+/// every live device has an address, or at least one addressed live device
+/// relays (`rl`, [ContactOutbound.relays]) — it forwards the message to the
+/// devices the sender could not address.
+bool _boxCoversLive(List<int> live, Map<int, ContactOutbound> addresses) =>
+    _everyLiveAddressed(live, addresses) ||
+    live.any((d) => addresses[d]?.relays ?? false);
 
 /// A box attachment encrypted but not yet uploaded (item 3 / media wiring,
 /// E17b), with the plaintext `recording` a voice note was read from: the
@@ -279,6 +292,7 @@ extension MessagingBox on MessagingProvider {
       return true;
     }
     link.friendRekeyAnswered(user, device);
+    _noteFriendRelaysIn(user, device, plaintext);
     return _takeFriendHandoff(link, user, device, plaintext);
   }
 
@@ -510,8 +524,14 @@ extension MessagingBox on MessagingProvider {
           fresh || !await enc.hasSessionWith(userId, deviceId: deviceId);
       if (fresh) enc.markSessionRebuild(userId, deviceId: deviceId);
       await enc.ensureSession(userId, deviceId: deviceId);
+      // Every frame to a friend's device says this device relays
+      // (decision 101 A).
       final frame = BoxFrame.fromSignalCiphertext(
-        await enc.encrypt(userId, json, deviceId: deviceId),
+        await enc.encrypt(
+          userId,
+          E2eEnvelope.toFriend(json),
+          deviceId: deviceId,
+        ),
         senderDeviceId: enc.ownDeviceId,
       );
       if (started && frame != null) {
@@ -565,12 +585,16 @@ extension MessagingBox on MessagingProvider {
     final addresses = boxOutbox?.addressesFor(peerUserId) ?? const {};
     if (addresses.isEmpty) return false;
     final list = _encryptionProvider?.cachedDeviceList(peerUserId);
-    return list == null || _everyLiveAddressed(list.liveDeviceIds, addresses);
+    return list == null || _boxCoversLive(list.liveDeviceIds, addresses);
   }
 
   /// This device is on the box now (its request queue was published): the
-  /// decision-48 notice may show in a chat already on screen.
-  void onBoxReady() => notifyListeners();
+  /// decision-48 notice may show in a chat already on screen, and an
+  /// absence that just ended asks a sibling to catch up (decision 102).
+  void onBoxReady() {
+    notifyListeners();
+    unawaited(catchUpTick());
+  }
 
   /// Reads a delivery from sibling [BoxInboxEntry.senderDeviceId] (its
   /// `queue_handoff` on our request or self-queue, its ack, or — part B — a
@@ -680,6 +704,9 @@ extension MessagingBox on MessagingProvider {
           decision.retryAction == DecryptionRetryAction.none;
     }
     link.rekeyAnswered(device);
+    // Decisions 101 B / 103: any frame from a sibling that decrypts on our
+    // self-queue is that sibling heard, whatever it carries.
+    if (viaSelf) _heardFromSibling(device);
     final E2eEnvelopeFields parsed;
     try {
       parsed = E2eEnvelope.parse(plaintext);
@@ -755,6 +782,33 @@ extension MessagingBox on MessagingProvider {
           ),
           _ => _takeFirstContactCopy(parsed.type, plaintext),
         };
+      // A sibling's daily `alive` (decision 103): heard above, and nothing
+      // more. Only through our self-queue, like every copy.
+      case E2eEnvelope.typeAlive:
+        if (!viaSelf) {
+          _e2eFlowLog('BOX_SIBLING_COPY_REFUSED', {'why': 'request_queue'});
+        }
+        return true;
+      // Catch-up sync (decision 102): a sibling's request, or its answer to
+      // ours. Only through our self-queue, like every copy.
+      case E2eEnvelope.typeSyncRequest || E2eEnvelope.typeSyncResponse:
+        if (!viaSelf) {
+          _e2eFlowLog('BOX_SIBLING_COPY_REFUSED', {'why': 'request_queue'});
+          return true;
+        }
+        if (parsed.type == E2eEnvelope.typeSyncRequest) {
+          return _takeSyncRequest(device, plaintext);
+        }
+        return _takeSyncResponse(device, plaintext);
+      // A friend's message or action one of our devices read, relayed to
+      // this one because the friend could not address it (decision 101 A).
+      // Only through our self-queue: anyone can fill the request queue.
+      case E2eEnvelope.typeRelay:
+        if (!viaSelf) {
+          _e2eFlowLog('BOX_SIBLING_COPY_REFUSED', {'why': 'request_queue'});
+          return true;
+        }
+        return _takeRelayed(link, msg, plaintext);
       // Receipts and typing go to the peer's devices only (E61b): a copy
       // on our own queues is not one we send, and is dropped.
       case E2eEnvelope.typeReceipt || E2eEnvelope.typeTyping:
@@ -1049,6 +1103,8 @@ extension MessagingBox on MessagingProvider {
       _e2eFlowLog('BOX_ENVELOPE_UNREADABLE', {'msgId': msg.id});
       return true;
     }
+    // That device relays to the siblings a sender cannot address (101 A).
+    if (parsed.relays) _noteFriendRelays(msg.senderId, msg.originDeviceId ?? 1);
     final link = boxFriends;
     switch (parsed.type) {
       // The friend's device handed us its queue — a hand-back over our own
@@ -1157,13 +1213,16 @@ extension MessagingBox on MessagingProvider {
             parsed,
           ),
           receivedAt: receivedAt,
+          // Read here first: on to the siblings the friend could not
+          // address (decision 101 A).
+          relay: () => _relayFriendFrame(msg, parsed, plaintext),
         );
       case E2eEnvelope.typeReact ||
           E2eEnvelope.typePin ||
           E2eEnvelope.typeEdit ||
           E2eEnvelope.typeDelete:
         // The peer's action on a message of this chat (item 4, E19b).
-        return _takeBoxAction(
+        final taken = await _takeBoxAction(
           parsed,
           plaintext,
           actor: msg.senderId,
@@ -1171,6 +1230,8 @@ extension MessagingBox on MessagingProvider {
           conversationId: msg.conversationId,
           receivedAt: receivedAt,
         );
+        _relayFriendAction(msg, parsed, plaintext);
+        return taken;
       default:
         // A type a newer peer speaks: nothing here can show it.
         _e2eFlowLog('BOX_UNKNOWN_TYPE', {'msgId': msg.id, 't': parsed.type});
@@ -1405,9 +1466,15 @@ extension MessagingBox on MessagingProvider {
     return true;
   }
 
+  /// Stores and shows [decrypted] unless it is a copy already held, deleted
+  /// for everyone, or empty. [relay] runs once it is shown here for the
+  /// first time — never for a duplicate — whether or not its store is
+  /// proven yet (a re-store is never re-read): a friend's message goes on
+  /// to the siblings it could not reach (decision 101 A).
   Future<bool> _consumeBoxMessage(
     MessageModel decrypted, {
     required DateTime receivedAt,
+    void Function()? relay,
   }) async {
     final enc = _encryptionProvider!;
     final wire = _wireKey(decrypted.senderId, decrypted.wireId);
@@ -1429,11 +1496,13 @@ extension MessagingBox on MessagingProvider {
         decrypted.messageType == MessageType.text) {
       return true;
     }
-    return _storeBoxMessage(
+    final stored = await _storeBoxMessage(
       decrypted,
       alreadyShown: false,
       receivedAt: receivedAt,
     );
+    relay?.call();
+    return stored;
   }
 
   /// Stores [msg]'s plaintext and shows it. True only once the record is
@@ -1759,12 +1828,16 @@ extension MessagingBox on MessagingProvider {
   }
 
   /// Where a TEXT to [recipientId] goes over the box (slice (c), decision
-  /// 16): only when EVERY live device of the peer has a box address and
-  /// every live OTHER device of ours has a self-queue address (sibling
-  /// queues part B, E5) — one message is never split across the two paths,
-  /// because an old-path copy is a server row naming the pair that the box
-  /// devices would then be served as `none_for_device`. Null = the old path,
-  /// and ONLY on evidence: a verified list naming a device with no address.
+  /// 16 as amended by 101 A): only when the peer is covered — EVERY live
+  /// device of it has a box address, or at least one does and some
+  /// addressed live device relays ([_boxCoversLive]) — and every live
+  /// OTHER device of ours has a self-queue address (sibling queues part B,
+  /// E5) — one message is never split across the two paths, because an
+  /// old-path copy is a server row naming the pair that the box devices
+  /// would then be served as `none_for_device`. Frames go to the addressed
+  /// live devices only; when some live one is not, the route's `addressed`
+  /// names them, so they relay to the rest. Null = the old path, and ONLY
+  /// on evidence: a verified list naming a device with no address.
   /// A list that cannot be verified THROWS (the caller fails the row for a
   /// retry): the peer is box-covered as far as we know, and on web
   /// socket.io would replay an old-path emit buffered while offline as a
@@ -1849,11 +1922,14 @@ extension MessagingBox on MessagingProvider {
       return null;
     }
     final live = peer.liveDeviceIds;
-    if (!_everyLiveAddressed(live, addresses)) {
+    if (!_boxCoversLive(live, addresses)) {
       declined('peer_uncovered');
       return null;
     }
-    final everyTarget = [for (final d in live) addresses[d]!];
+    final everyTarget = [for (final d in live) ?addresses[d]];
+    final addressed = peerOnly || everyTarget.length == live.length
+        ? null
+        : [for (final t in everyTarget) t.peerDeviceId];
     final targets = [
       for (final t in everyTarget)
         if (peerOnly
@@ -1881,6 +1957,7 @@ extension MessagingBox on MessagingProvider {
         peerVersion: peer.version,
         peerListHash: peer.listHash,
       ),
+      addressed: addressed,
     );
   }
 
@@ -2419,8 +2496,10 @@ extension MessagingBox on MessagingProvider {
   }
 
   /// Every frame of one box send along [route], built before the first goes
-  /// out: [json] as its own Signal message per peer device, [copyJson] per
-  /// sibling. A device with no usable session fails it before anything is
+  /// out: [json] as its own Signal message per peer device — saying this
+  /// device relays, and naming the route's `addressed` devices when some
+  /// live one was not (decision 101 A) — [copyJson] per sibling, as it is.
+  /// A device with no usable session fails it before anything is
   /// encrypted — a box send never fetches a pre-key bundle (decision 38,
   /// E38b) — and a Signal message over one frame fails it whole
   /// ([BoxFrame.maxSignalBytes]). `detail` names what failed, for the log.
@@ -2440,8 +2519,9 @@ extension MessagingBox on MessagingProvider {
     final enc = _encryptionProvider!;
     final ownUserId = _currentUserId!;
     final frames = <(ContactOutbound, Uint8List)>[];
+    final peerJson = E2eEnvelope.toFriend(json, addressed: route.addressed);
     final sends = [
-      for (final to in route.targets) (recipientId, to, json),
+      for (final to in route.targets) (recipientId, to, peerJson),
       for (final to in route.siblings) (ownUserId, to, copyJson),
     ];
     for (final (userId, to, _) in sends) {

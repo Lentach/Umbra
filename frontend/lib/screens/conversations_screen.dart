@@ -31,8 +31,10 @@ import '../utils/instant_opaque_route.dart';
 import '../widgets/alert_line.dart';
 import '../widgets/backup_nudge_line.dart';
 import '../widgets/contact_backup_password_sheet.dart';
+import '../widgets/sibling_silent_line.dart';
 import '../widgets/web_push_request_feedback.dart';
 import 'chat_detail_screen.dart';
+import 'devices_screen.dart';
 import 'passcode_lock_screen.dart';
 import 'invitations_screen.dart';
 import 'recovery_key_screen.dart';
@@ -54,11 +56,28 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   /// held so dispose() can unsubscribe without touching the context.
   (EncryptionProvider, VoidCallback)? _phraseOffer;
 
+  /// Decision 101 B's line, mirrored from `MessagingProvider.siblingToUnlink`
+  /// by a listener: the top lines are built inside a `LayoutBuilder`, where
+  /// `context.select` is not allowed, and watching the whole provider would
+  /// rebuild the list on every message. The provider is held so dispose()
+  /// can unsubscribe without touching the context.
+  SiblingToUnlink? _siblingToUnlink;
+  late final MessagingProvider _messaging;
+
+  void _onMessagingForSilentLine() {
+    final next = _messaging.siblingToUnlink;
+    if (next != _siblingToUnlink && mounted) {
+      setState(() => _siblingToUnlink = next);
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     PushService.webPushNeedsTap.addListener(_onPushNeedsTap);
-    final messaging = context.read<MessagingProvider>();
+    final messaging = _messaging = context.read<MessagingProvider>();
+    _siblingToUnlink = messaging.siblingToUnlink;
+    messaging.addListener(_onMessagingForSilentLine);
     _listCountdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
       if (messaging.isRecordingVoice) return;
@@ -166,6 +185,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   void dispose() {
     _listCountdownTimer?.cancel();
     PushService.webPushNeedsTap.removeListener(_onPushNeedsTap);
+    _messaging.removeListener(_onMessagingForSilentLine);
     _disarmPhraseOffer();
     super.dispose();
   }
@@ -228,9 +248,29 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     );
   }
 
-  /// The lines above the chat list: notifications off (E90a) and decision
-  /// 94's contact-backup line, both red, then the phrase nudge; null when
-  /// none is due.
+  /// Decision 101 B: on the account's primary, the linked device silent for
+  /// 30 days that was not kept, or null. "Remove" opens the Devices screen,
+  /// which runs its revoke and shows how it went.
+  Widget? _buildSiblingSilentLine() {
+    final sibling = _siblingToUnlink;
+    if (sibling == null) return null;
+    return SiblingSilentLine(
+      name: sibling.name,
+      onKeep: () => context
+          .read<MessagingProvider>()
+          .keepSibling(sibling.deviceId)
+          .ignore(),
+      onRemove: () => Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => DevicesScreen(revokeDeviceId: sibling.deviceId),
+        ),
+      ),
+    );
+  }
+
+  /// The lines above the chat list: notifications off (E90a), decision
+  /// 94's contact-backup line and decision 101 B's silent device, all red,
+  /// then the phrase nudge; null when none is due.
   Widget? _buildTopLines() {
     final l10n = AppLocalizations.of(context);
     final askBackup = shouldAskForContactBackup(
@@ -252,6 +292,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
           tapKey: const Key('contact-backup-alert'),
           onTap: _openContactBackupSheet,
         ),
+      ?_buildSiblingSilentLine(),
       ?_buildBackupNudge(),
     ];
     if (lines.isEmpty) return null;

@@ -11,6 +11,7 @@ import '../encryption/content_kv_opener_stub.dart'
 import '../encryption/session_cross_context_lock.dart';
 import 'contact_record.dart';
 
+part 'contact_store_alive.dart';
 part 'contact_store_inbox.dart';
 part 'contact_store_notifiers.dart';
 part 'contact_store_siblings.dart';
@@ -101,6 +102,12 @@ class ContactStore {
   static String notifiersKey(int userId) => 'e2e_${userId}_boxntf_v1';
   static const int notifiersVersion = 1;
 
+  /// When each sibling was last heard and sent `alive`, and which the user
+  /// kept (decisions 101 B and 103, `contact_store_alive.dart`): outside
+  /// [keyPrefix] for the [requestQueueKey] reasons; no backup carries it.
+  static String siblingAliveKey(int userId) => 'e2e_${userId}_boxalive_v1';
+  static const int siblingAliveVersion = 1;
+
   int? _userId;
   ContentKv? _kv;
   final Map<int, ContactRecord> _records = <int, ContactRecord>{};
@@ -111,6 +118,8 @@ class ContactStore {
   bool _siblingsUnsupported = false;
   _NotifierBook _notifierBook = _NotifierBook.empty;
   bool _notifiersUnsupported = false;
+  _AliveBook _aliveBook = _AliveBook.empty;
+  bool _aliveUnsupported = false;
   int _undetermined = 0;
 
   /// The box delivery journal ([BoxInboxEntry]), keyed `rid.id`.
@@ -186,6 +195,7 @@ class ContactStore {
             key == requestQueueKey(userId) ||
             key == siblingsKey(userId) ||
             key == notifiersKey(userId) ||
+            key == siblingAliveKey(userId) ||
             key.startsWith(_inboxPrefix(userId)),
       );
     } on Object {
@@ -201,6 +211,7 @@ class ContactStore {
     final notifierBook = _NotifierBook.decode(
       rows.remove(notifiersKey(userId)),
     );
+    final aliveBook = _AliveBook.decode(rows.remove(siblingAliveKey(userId)));
     final inbox = _takeInbox(rows, userId);
     UserModel? selfUser;
     for (final entry in rows.entries) {
@@ -240,6 +251,8 @@ class ContactStore {
     _siblingsUnsupported = siblingBook == null;
     _notifierBook = notifierBook ?? _NotifierBook.empty;
     _notifiersUnsupported = notifierBook == null;
+    _aliveBook = aliveBook ?? _AliveBook.empty;
+    _aliveUnsupported = aliveBook == null;
     _undetermined = undetermined;
     _inbox
       ..clear()
@@ -266,6 +279,8 @@ class ContactStore {
     _siblingsUnsupported = false;
     _notifierBook = _NotifierBook.empty;
     _notifiersUnsupported = false;
+    _aliveBook = _AliveBook.empty;
+    _aliveUnsupported = false;
     _undetermined = 0;
     _records.clear();
     _inbox.clear();

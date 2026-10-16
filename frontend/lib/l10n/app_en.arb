@@ -808,6 +808,16 @@
   "contactBackupPromptFailed": "Could not save the copy right now. Try again later.",
   "contactBackupAlertLine": "Your contacts have no backup. Tap to protect them.",
   "webPushOffLine": "Notifications are off. Tap to turn them on.",
+  "siblingSilentLine": "“{name}” has not been used for 30 days. Tap to decide.",
+  "@siblingSilentLine": {
+    "placeholders": { "name": { "type": "String" } }
+  },
+  "siblingSilentTitle": "Remove “{name}”?",
+  "@siblingSilentTitle": {
+    "placeholders": { "name": { "type": "String" } }
+  },
+  "siblingSilentBody": "This device has not been used for 30 days. If you remove it, it is signed out and its messages stay. If you still use it, keep it.",
+  "siblingSilentKeep": "Keep",
   "recoveryKeyRequiredForLinking": "Linking requires a recovery phrase — you'll create it next.",
   "linkGateRestoreAction": "I have my recovery phrase",
   "linkGateRestoreTitle": "Restore from recovery phrase",

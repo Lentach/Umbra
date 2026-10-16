@@ -13,6 +13,7 @@ import '../config/app_config.dart';
 import '../models/conversation_model.dart';
 import '../models/message_model.dart';
 import '../services/api_service.dart';
+import '../services/box/box_catch_up.dart';
 import '../services/box/box_device_list_refresh.dart';
 import '../services/box/box_device_pause.dart';
 import '../services/box/box_envelope.dart';
@@ -23,6 +24,7 @@ import '../services/box/box_media_fetcher.dart';
 import '../services/box/box_media_frame.dart';
 import '../services/box/box_media_url.dart';
 import '../services/box/box_outbox.dart';
+import '../services/box/box_sibling_alive.dart';
 import '../services/box/box_siblings.dart';
 import '../services/box/box_wire.dart';
 import '../services/box_hidden_notifier.dart';
@@ -55,8 +57,11 @@ import 'conversations_provider.dart';
 import 'encryption_provider.dart';
 
 part 'messaging/messaging_provider.box.dart';
+part 'messaging/messaging_provider.box_alive.dart';
 part 'messaging/messaging_provider.box_actions.dart';
 part 'messaging/messaging_provider.box_receipts.dart';
+part 'messaging/messaging_provider.box_relay.dart';
+part 'messaging/messaging_provider.box_sync.dart';
 part 'messaging/messaging_provider.history.dart';
 part 'messaging/messaging_provider.events.dart';
 part 'messaging/messaging_provider.send.dart';
@@ -390,12 +395,20 @@ class MessagingProvider extends ChangeNotifier {
   void refreshBoxDeviceLists() {
     _boxLists.refresh();
     _retryBoxActionsNow();
+    // Decision 103: the daily `alive` to each live sibling.
+    unawaited(_siblingAlivePass());
+    // Decision 102: an absence that just ended asks a sibling to catch up.
+    unawaited(catchUpTick());
   }
 
   /// The E2E layer dropped [userId]'s verified list (a rebuild request, an
   /// identity change, the own account's `deviceListChanged`): a box send
   /// that reads it waits for a fresh lookup.
-  void onDeviceListInvalidated(int userId) => _boxLists.invalidate(userId);
+  void onDeviceListInvalidated(int userId) {
+    _boxLists.invalidate(userId);
+    // The own list moved (a link, a revoke): the unlink line is re-judged.
+    if (userId == _currentUserId) unawaited(_siblingAlivePass());
+  }
 
   /// Stale-list resend attempts per tempId (spec §5.2 cap of 3, then a
   /// surfaced failure). Cleared with [_pendingSendContent].
@@ -486,6 +499,12 @@ class MessagingProvider extends ChangeNotifier {
   /// sibling's handoff is stored and its ack sent. `ConnectionProvider`
   /// wires the account session's one; null = sibling entries wait.
   BoxSiblingLink? boxSiblings;
+
+  /// When each own sibling was last heard, the daily `alive` this device
+  /// owes it and the user's "Keep" (decisions 101 B, 103).
+  /// `ConnectionProvider` wires one over the account's contact store; null =
+  /// nothing is stamped, sent or asked.
+  BoxSiblingAlive? boxAlive;
 
   /// Friendships moving onto the box (item 5, decision 47): where a friend's
   /// queue handoff is stored and acknowledged, and whether this device is on
@@ -592,6 +611,11 @@ class MessagingProvider extends ChangeNotifier {
   /// tests.
   @visibleForTesting
   BoxHiddenNotifier boxHiddenNotifier = BoxHiddenNotifier();
+
+  /// Decision 102: this device's catch-up state (presence stamp, heartbeat,
+  /// the blob's crypto); replaced in tests.
+  @visibleForTesting
+  BoxCatchUp boxCatchUp = BoxCatchUp();
 
   // ---------- Typing / Recording Indicators ----------
 
@@ -1531,6 +1555,7 @@ class MessagingProvider extends ChangeNotifier {
     _cancelDelayedRetryIfAny();
     _dropBoxActionRetries();
     _boxPaused.clear();
+    boxCatchUp.reset();
     _currentUserId = null;
     _tokenForReconnect = null;
     notifyListeners();
@@ -1564,6 +1589,7 @@ class MessagingProvider extends ChangeNotifier {
     _boxLists.reset();
     _dropBoxActionRetries();
     _boxPaused.clear();
+    boxCatchUp.reset();
     _incomingSound.dispose();
     countdownTickNotifier.dispose();
     _boxActionFailures.close().ignore();

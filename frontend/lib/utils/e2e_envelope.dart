@@ -24,6 +24,8 @@ typedef E2eEnvelopeFields = ({
   int? ttl,
   E2eReplyQuote? replyQuote,
   String? boxMedia,
+  bool relays,
+  List<int>? addressed,
 });
 
 /// A box reply's quote (metadata-privacy item 3, E18a): the quoted
@@ -259,8 +261,46 @@ class E2eEnvelope {
   static const String _keyKind = 'k';
   static const String _keyWireIds = 'w';
 
+  /// Decision 103: `{t: 'alive'}`, no body, from one of our devices to a
+  /// live sibling through its self-queue, quiet, at most once a day per
+  /// sibling. Read only from our self-queue; a build that does not know it
+  /// finishes it as an unknown type.
+  static const String typeAlive = 'alive';
+
+  /// Decision 102 catch-up sync, own → own on the receiver's self-queue,
+  /// quiet: `{t: 'sync_req', since}` asks one live sibling for the box
+  /// messages sent since then; `{t: 'sync_resp', since, count, boxMedia,
+  /// mediaKey, mediaIv}` answers with ONE encrypted box media blob.
+  /// Built and parsed by `BoxCatchUpEnvelope`. A build that does not know
+  /// them finishes them as an unknown type.
+  static const String typeSyncRequest = 'sync_req';
+  static const String typeSyncResponse = 'sync_resp';
+
   /// The most wire ids one receipt names.
   static const int maxReceiptWireIds = 100;
+
+  /// Decision 101 A: `rl: 1` on every frame a device sends to a FRIEND's
+  /// device says "this device relays a friend's box message to the own
+  /// devices the friend could not address"; the friend keeps it per device
+  /// (`ContactOutbound.relays`). `ad: [device ids]` on a friend-bound
+  /// message or action names the devices of the RECIPIENT account it was
+  /// addressed to, sent only when some live device of that account was not
+  /// (absent = every live device was). An older build ignores both keys.
+  static const String _keyRelays = 'rl';
+  static const String _keyAddressed = 'ad';
+
+  /// A friend's message or action one of our devices read, relayed to a
+  /// sibling the friend could not address (decision 101 A), own → own on
+  /// the self-queue: `{t, u: friend user id, d: friend device id, e: the
+  /// friend's envelope as it decrypted}`. Never relayed again. An older
+  /// build finishes an unknown `t` unread.
+  static const String typeRelay = 'relay';
+  static const String _keyRelayUser = 'u';
+  static const String _keyRelayDevice = 'd';
+  static const String _keyRelayEnvelope = 'e';
+
+  /// The wire's device id range (`BoxFrame`, `fetchPreKeyBundle`).
+  static const int _maxDeviceId = 100;
 
   static Map<String, dynamic> build(
     String content, {
@@ -378,7 +418,65 @@ class E2eEnvelope {
       boxMedia: rawBoxMedia is String && _boxId32.hasMatch(rawBoxMedia)
           ? rawBoxMedia
           : null,
+      relays: envelope[_keyRelays] == 1,
+      addressed: _addressedOf(envelope[_keyAddressed]),
     );
+  }
+
+  /// A sound `ad`: 1 to [_maxDeviceId] device ids in the wire's range;
+  /// anything else names none, read as absent (no relay).
+  static List<int>? _addressedOf(Object? raw) {
+    if (raw is! List<dynamic> || raw.isEmpty || raw.length > _maxDeviceId) {
+      return null;
+    }
+    final ids = <int>[];
+    for (final id in raw) {
+      if (id is! int || id < 1 || id > _maxDeviceId) return null;
+      ids.add(id);
+    }
+    return ids;
+  }
+
+  /// [json] — one envelope object as `jsonEncode` wrote it — as it goes to
+  /// a FRIEND's device (decision 101 A): with `rl: 1` and, when given, `ad`
+  /// [addressed]. Spliced in front of its keys, never re-encoded; anything
+  /// that is not an object is returned as it was.
+  static String toFriend(String json, {List<int>? addressed}) {
+    if (!json.startsWith('{')) return json;
+    final head = addressed == null
+        ? '{"$_keyRelays":1'
+        : '{"$_keyRelays":1,"$_keyAddressed":${jsonEncode(addressed)}';
+    final rest = json.substring(1);
+    return rest.startsWith('}') ? '$head$rest' : '$head,$rest';
+  }
+
+  /// A [typeRelay] envelope carrying friend [user]'s [device]'s
+  /// [envelope]: the JSON object that decrypted, spliced in verbatim — it
+  /// parsed, so it is one JSON value — so it costs its own bytes and no
+  /// escaping.
+  static String buildRelay({
+    required int user,
+    required int device,
+    required String envelope,
+  }) =>
+      '{"$_keyType":"$typeRelay","$_keyRelayUser":$user,'
+      '"$_keyRelayDevice":$device,"$_keyRelayEnvelope":$envelope}';
+
+  /// The friend, its device and the friend's envelope (as JSON) a
+  /// [typeRelay] envelope carries; null for any other type, a user or
+  /// device id out of range, or an `e` that is not an object.
+  static ({int user, int device, String envelope})? parseRelay(
+    String jsonStr,
+  ) {
+    if (_object(jsonStr) case {
+      _keyType: typeRelay,
+      _keyRelayUser: final int user,
+      _keyRelayDevice: final int device,
+      _keyRelayEnvelope: final Map<String, dynamic> envelope,
+    } when _isUserId(user) && device >= 1 && device <= _maxDeviceId) {
+      return (user: user, device: device, envelope: jsonEncode(envelope));
+    }
+    return null;
   }
 
   /// A quote a peer sent: dropped whole unless its sender, type and snippet
@@ -666,6 +764,9 @@ class E2eEnvelope {
     );
     return {_keyType: typeReceipt, _keyKind: kind.wire, _keyWireIds: wireIds};
   }
+
+  /// A [typeAlive] envelope.
+  static Map<String, dynamic> buildAlive() => {_keyType: typeAlive};
 
   /// The receipt a peer's envelope carries; null — dropped whole — for any
   /// other type, an unknown kind, or a `w` that is not 1 to

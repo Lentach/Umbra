@@ -151,6 +151,10 @@ class BoxSession
   /// Siblings re-keyed this session ([rekeySibling]): once each.
   final Set<int> _rekeyed = {};
 
+  /// Friend devices that said they relay (`rl`, decision 101 A) this
+  /// session: a handoff stored after the frame keeps it ([friendRelays]).
+  final Set<(int, int)> _friendRelays = {};
+
   /// When this device built a re-key's handoff for a sibling it has not
   /// read since ([awaitingRekeyFrom], decision 37).
   final Map<int, DateTime> _rekeyAsked = {};
@@ -623,7 +627,20 @@ class BoxSession
     final self = _store.selfQueue;
     final to = siblingAddresses()[deviceId];
     final encrypt = _swap.encrypt;
-    if (self == null || to == null || !_rekeyed.add(deviceId)) return;
+    if (self == null || !_rekeyed.add(deviceId)) return;
+    if (to == null) {
+      // No self-queue address for it yet (crossing first sessions): the
+      // re-key goes through its request queue instead, or neither side
+      // could ever answer the other's refused handoff.
+      final sent = await _swap.rekeyViaRequest(deviceId);
+      if (sent) _rekeyAsked[deviceId] = _now();
+      E2eDiagLog.add('BOX_SIBLING_REKEYED', {
+        'device': deviceId,
+        'sent': sent,
+        'via': 'request',
+      });
+      return;
+    }
     final handoff = E2eEnvelope.buildQueueHandoff(
       sid: self.sid,
       sealPub: self.sealPub,
@@ -692,11 +709,6 @@ class BoxSession
     E2eProfile? profile,
   }) async {
     if (_disposed) return FriendWrite.retryLater;
-    final address = ContactOutbound(
-      peerDeviceId: deviceId,
-      sid: sid,
-      sealPub: sealPub,
-    );
     var friend = false;
     final committed = await _store.update(userId, (current) {
       if (current == null || current.state != ContactState.friend) return null;
@@ -704,12 +716,25 @@ class BoxSession
       final held = current.outbound
           .where((o) => o.peerDeviceId == deviceId)
           .firstOrNull;
-      if (held?.sid == sid && held?.sealPub == sealPub) return null;
+      // A device that said it relays (decision 101 A) still does on its
+      // new queue; the frame that said so may be this very handoff.
+      final relays =
+          (held?.relays ?? false) || _friendRelays.contains((userId, deviceId));
+      if (held?.sid == sid &&
+          held?.sealPub == sealPub &&
+          held?.relays == relays) {
+        return null;
+      }
       return current.copyWith(
         outbound: [
           for (final o in current.outbound)
             if (o.peerDeviceId != deviceId) o,
-          address,
+          ContactOutbound(
+            peerDeviceId: deviceId,
+            sid: sid,
+            sealPub: sealPub,
+            relays: relays,
+          ),
         ],
       );
     });
@@ -842,6 +867,39 @@ class BoxSession
   @override
   void friendHeard(int userId, int deviceId) {
     if (!_disposed) _friends.friendHeard(userId, deviceId);
+  }
+
+  @override
+  Future<void> friendRelays(int userId, int deviceId) async {
+    if (_disposed) return;
+    _friendRelays.add((userId, deviceId));
+    final held = _store
+        .byUserId(userId)
+        ?.outbound
+        .where((o) => o.peerDeviceId == deviceId)
+        .firstOrNull;
+    if (held == null || held.relays) return;
+    await _store.update(userId, (current) {
+      if (current == null || current.state != ContactState.friend) return null;
+      final now = current.outbound
+          .where((o) => o.peerDeviceId == deviceId)
+          .firstOrNull;
+      if (now == null || now.relays) return null;
+      return current.copyWith(
+        outbound: [
+          for (final o in current.outbound)
+            if (o.peerDeviceId != deviceId)
+              o
+            else
+              ContactOutbound(
+                peerDeviceId: deviceId,
+                sid: o.sid,
+                sealPub: o.sealPub,
+                relays: true,
+              ),
+        ],
+      );
+    });
   }
 
   @override

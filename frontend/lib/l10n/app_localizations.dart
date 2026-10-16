@@ -3704,6 +3704,30 @@ abstract class AppLocalizations {
   /// **'Powiadomienia są wyłączone. Dotknij, aby je włączyć.'**
   String get webPushOffLine;
 
+  /// No description provided for @siblingSilentLine.
+  ///
+  /// In pl, this message translates to:
+  /// **'Urządzenie „{name}” nie było używane od 30 dni. Dotknij, aby zdecydować.'**
+  String siblingSilentLine(String name);
+
+  /// No description provided for @siblingSilentTitle.
+  ///
+  /// In pl, this message translates to:
+  /// **'Usunąć „{name}”?'**
+  String siblingSilentTitle(String name);
+
+  /// No description provided for @siblingSilentBody.
+  ///
+  /// In pl, this message translates to:
+  /// **'To urządzenie nie było używane od 30 dni. Po usunięciu zostanie wylogowane, a jego wiadomości zostaną. Jeśli nadal go używasz, zostaw je.'**
+  String get siblingSilentBody;
+
+  /// No description provided for @siblingSilentKeep.
+  ///
+  /// In pl, this message translates to:
+  /// **'Zostaw'**
+  String get siblingSilentKeep;
+
   /// No description provided for @recoveryKeyRequiredForLinking.
   ///
   /// In pl, this message translates to:

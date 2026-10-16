@@ -81,6 +81,9 @@ class _Link implements BoxFriendLink {
   void friendHeard(int userId, int deviceId) {}
 
   @override
+  Future<void> friendRelays(int userId, int deviceId) async {}
+
+  @override
   void handOffTo(int userId) {}
 
   @override

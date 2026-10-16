@@ -24,7 +24,14 @@ import 'recovery_key_screen.dart';
 /// canonical list, verified along the I7 chain against this device's own
 /// identity — never the server's bare word.
 class DevicesScreen extends StatefulWidget {
-  const DevicesScreen({super.key});
+  const DevicesScreen({super.key, this.revokeDeviceId});
+
+  /// A device the user already chose to remove elsewhere — the chat list's
+  /// 30-day question (decision 101 B), whose dialog is the confirmation —
+  /// revoked once the verified list is here, through the same
+  /// [LinkCeremonyController.revokeDevice] this screen's own confirm runs, so
+  /// the outcome shows where it always does.
+  final int? revokeDeviceId;
 
   @override
   State<DevicesScreen> createState() => _DevicesScreenState();
@@ -70,8 +77,46 @@ class _DevicesScreenState extends State<DevicesScreen> {
     _controller = controller;
     _connection = connection;
     connection.registerProvisioningSink(controller);
-    controller.addListener(_maybeOpenPendingLink);
-    controller.refreshDeviceList();
+    controller
+      ..addListener(_maybeOpenPendingLink)
+      ..addListener(_maybeRevokeAsked)
+      ..refreshDeviceList();
+  }
+
+  /// Runs [DevicesScreen.revokeDeviceId]'s revoke once the verified list is
+  /// here, at most once per visit. A device that list no longer names live,
+  /// this device itself, or the primary is left alone: the server refuses
+  /// the last two anyway (amendment (xxi)).
+  bool _revokeAskedRan = false;
+  void _maybeRevokeAsked() {
+    final id = widget.revokeDeviceId;
+    final controller = _controller;
+    if (id == null || controller == null || _revokeAskedRan || !mounted) {
+      return;
+    }
+    final list = controller.verifiedList;
+    if (controller.listState != DeviceListState.enrolled || list == null) {
+      return;
+    }
+    _revokeAskedRan = true;
+    final live = [
+      for (final e in list.devices)
+        if (e.revokedAtMs == null) e.deviceId,
+    ];
+    final primary = live.isEmpty ? null : live.reduce((a, b) => a < b ? a : b);
+    if (!live.contains(id) ||
+        id == primary ||
+        id == context.read<EncryptionProvider>().ownDeviceId) {
+      return;
+    }
+    // Delivered from a controller notification, possibly mid-build.
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      await controller.revokeDevice(id);
+      // As [_confirmRevoke]: the tombstone is where the user sees it took.
+      if (!mounted || controller.revokeError != null) return;
+      setState(() => _showRevoked = true);
+    });
   }
 
   /// A code that arrived by QR deep link opens the primary-side ceremony
@@ -139,7 +184,9 @@ class _DevicesScreenState extends State<DevicesScreen> {
   void dispose() {
     final controller = _controller;
     if (controller != null) {
-      controller.removeListener(_maybeOpenPendingLink);
+      controller
+        ..removeListener(_maybeOpenPendingLink)
+        ..removeListener(_maybeRevokeAsked);
       _connection?.unregisterProvisioningSink(controller);
       controller.dispose();
     }

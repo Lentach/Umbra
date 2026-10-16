@@ -2138,6 +2138,23 @@ class AppLocalizationsPl extends AppLocalizations {
       'Powiadomienia są wyłączone. Dotknij, aby je włączyć.';
 
   @override
+  String siblingSilentLine(String name) {
+    return 'Urządzenie „$name” nie było używane od 30 dni. Dotknij, aby zdecydować.';
+  }
+
+  @override
+  String siblingSilentTitle(String name) {
+    return 'Usunąć „$name”?';
+  }
+
+  @override
+  String get siblingSilentBody =>
+      'To urządzenie nie było używane od 30 dni. Po usunięciu zostanie wylogowane, a jego wiadomości zostaną. Jeśli nadal go używasz, zostaw je.';
+
+  @override
+  String get siblingSilentKeep => 'Zostaw';
+
+  @override
   String get recoveryKeyRequiredForLinking =>
       'Łączenie wymaga frazy odzyskiwania — utworzysz ją za chwilę.';
 

@@ -375,6 +375,32 @@ void main() {
   );
 
   test(
+    'a friend device that said it relays (rl, decision 101 A) keeps the mark '
+    'on its address — even said before its handoff was stored — and the '
+    'contact backup never carries it',
+    () async {
+      await a.start();
+      await b.start();
+      // No address yet: kept for the handoff to come.
+      await a.session.friendRelays(5, 3);
+      a.session.onFriendsList([b.listed]);
+      b.session.onFriendsList([a.listed]);
+      await settle();
+
+      expect(a.outboundOf(3)?.relays, isTrue);
+      expect(b.outboundOf(2)?.relays, isFalse, reason: 'a said nothing yet');
+      expect(a.friend.toJson()['outbound'], [containsPair('rl', true)]);
+      final backedUp = a.friend.toBackupJson()['outbound'] as List<dynamic>;
+      expect(backedUp.single, isNot(contains('rl')));
+
+      // An address already held: written to the record.
+      await b.session.friendRelays(1, 2);
+      await settle();
+      expect(b.outboundOf(2)?.relays, isTrue);
+    },
+  );
+
+  test(
     'a friend still on an old app gets nothing and costs no queue; once it '
     'updates, its handoff reaches us and we hand ours back with no reconnect',
     () async {
@@ -861,7 +887,9 @@ void main() {
         a.session.onFriendsList([b.listed]);
         await settle();
 
-        expect(b.carried, [jsonEncode({'listVersion': 7})]);
+        expect(b.carried, [
+          jsonEncode({'listVersion': 7}),
+        ]);
         expect(a.carried, isEmpty, reason: "b's hand-back rode a's queue");
         expect(b.outboundOf(2)?.sid, a.friend.queues.single.sid);
       },

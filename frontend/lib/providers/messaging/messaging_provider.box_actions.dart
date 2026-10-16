@@ -360,6 +360,7 @@ extension MessagingBoxActions on MessagingProvider {
         siblings: siblings,
         conversationId: route.conversationId,
         senderListInfo: route.senderListInfo,
+        addressed: route.addressed,
       ),
       recipientId: retry.peer,
       json: retry.json,
@@ -484,7 +485,9 @@ extension MessagingBoxActions on MessagingProvider {
     final enc = _encryptionProvider;
     if (enc == null) return null;
     final id = await enc.wireHolder(wire);
-    if (id == null || !isLocalMessageId(id) || _deletedMessageIds.contains(id)) {
+    if (id == null ||
+        !isLocalMessageId(id) ||
+        _deletedMessageIds.contains(id)) {
       return null;
     }
     final record = await enc.getDecryptedContent(id);
@@ -820,7 +823,9 @@ extension MessagingBoxActions on MessagingProvider {
   }) async {
     final own = _currentUserId;
     final target = messageById(messageId);
-    final wire = target == null ? null : _wireKey(target.senderId, target.wireId);
+    final wire = target == null
+        ? null
+        : _wireKey(target.senderId, target.wireId);
     if (own == null || target == null || wire == null) return false;
     final before = _reactionOf(target.reactions, own);
     final after = on ? emoji : (before == emoji ? null : before);
@@ -895,7 +900,9 @@ extension MessagingBoxActions on MessagingProvider {
   /// not are retried (E19l): those that took it already applied it.
   Future<void> _deleteOverBox(int messageId) async {
     final target = messageById(messageId);
-    final wire = target == null ? null : _wireKey(target.senderId, target.wireId);
+    final wire = target == null
+        ? null
+        : _wireKey(target.senderId, target.wireId);
     if (target == null || wire == null || target.senderId != _currentUserId) {
       _boxActionFailed(BoxActionFailure.delete);
       return;
@@ -920,7 +927,9 @@ extension MessagingBoxActions on MessagingProvider {
   Future<void> _pinOverBox(int conversationId, int messageId) async {
     final convs = _conversationsProvider;
     final target = messageById(messageId);
-    final wire = target == null ? null : _wireKey(target.senderId, target.wireId);
+    final wire = target == null
+        ? null
+        : _wireKey(target.senderId, target.wireId);
     if (convs == null || target == null || wire == null) {
       _boxActionFailed(BoxActionFailure.pin);
       return;

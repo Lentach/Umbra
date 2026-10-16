@@ -115,6 +115,9 @@ class _Link implements BoxFriendLink {
   void friendHeard(int userId, int deviceId) {}
 
   @override
+  Future<void> friendRelays(int userId, int deviceId) async {}
+
+  @override
   void handOffTo(int userId) => handedOffTo.add(userId);
 
   final List<int> devicesChanged = [];
@@ -298,7 +301,8 @@ void main() {
       expect(ack.kind, BoxFrameKind.whisper);
       expect(
         jsonDecode(await f.decrypt(1, ack.signalCiphertext, deviceId: 2)),
-        E2eEnvelope.buildQueueHandoffAck(sid: _sid('F')),
+        // Every frame to a friend says this device relays (101 A).
+        {'rl': 1, ...E2eEnvelope.buildQueueHandoffAck(sid: _sid('F'))},
       );
     },
   );
@@ -431,7 +435,7 @@ void main() {
       final next = (await s.encryptForFriend(_friend, 3, '{"t":"y"}'))!;
       expect(
         await f.decrypt(1, next.signalCiphertext, deviceId: 2),
-        '{"t":"y"}',
+        E2eEnvelope.toFriend('{"t":"y"}'),
       );
     },
   );

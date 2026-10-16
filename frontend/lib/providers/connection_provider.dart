@@ -11,6 +11,7 @@ import '../services/box/box_media_fetcher.dart';
 import '../services/box/box_media_store.dart';
 import '../services/box/box_push_nids.dart';
 import '../services/box/box_session.dart';
+import '../services/box/box_sibling_alive.dart';
 import '../services/contacts/contact_backup.dart';
 import '../services/contacts/contact_backup_service.dart';
 import '../services/contacts/contact_store.dart';
@@ -569,7 +570,9 @@ class ConnectionProvider extends ChangeNotifier {
             ..boxSiblings = _box
             ..boxFriends = _box
             ..boxFirstContact = _box
-            ..boxMedia = _boxMedia;
+            ..boxMedia = _boxMedia
+            // Decisions 101 B / 103: siblings heard, `alive`, "Keep".
+            ..boxAlive = BoxSiblingAlive(store: contacts);
           _encryptionProvider?.lookupBoxPeerList = messaging.lookupBoxPeerList;
         }
         if (_encryptionProvider?.isE2EReady == true) _box!.e2eReady();
