@@ -79,7 +79,7 @@ dependencies:
   # retry floor — package:clock is what fake_async overrides, so the floor is
   # deterministic under test while DateTime.now() would not be.
   clock: ^1.1.2
-  skeletonizer: ^2.1.3
+  skeletonizer: ^3.0.0
   # Encrypted native content store. These bounds are load-bearing, not
   # cosmetic: drift >=2.32 and sqlite3 3.x moved to native-assets BUILD HOOKS,
   # which demand MSVC on every local `flutter test` on Windows — the exact trap
