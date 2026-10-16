@@ -375,6 +375,13 @@ class BoxSession
     if (!_disposed) _box.connect();
   }
 
+  /// The app came back from the background
+  /// (`ConnectionProvider.ensureReconnectIfNeeded`): the box connection is
+  /// replaced only if it went dead meanwhile ([BoxClient.checkAlive]).
+  void checkAlive() {
+    if (!_disposed) _box.checkAlive();
+  }
+
   /// Drops the box connection; [resume] brings it back.
   void close() => _box.close();
 

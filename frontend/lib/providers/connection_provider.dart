@@ -1080,6 +1080,14 @@ class ConnectionProvider extends ChangeNotifier {
     if (_currentUserId == null || _reconnectManager.tokenForReconnect == null) {
       return;
     }
+    // The box socket is its own transport and gets nothing from the account
+    // socket's probe below: suspended in the background (an iOS PWA above
+    // all), it can be dead while it still reports connected, until
+    // socket.io's ping timeout. Meanwhile every box send waits out its
+    // timeout and fails, and the box hands every message stored for us to
+    // that dead socket instead of pushing it. Probe it, whatever the account
+    // socket claims; only a dead one is replaced.
+    _box?.checkAlive();
     if (!claimsConnected) {
       connect(
         _currentUserId!,

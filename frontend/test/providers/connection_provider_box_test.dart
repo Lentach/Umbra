@@ -177,6 +177,64 @@ void main() {
     expect(boxUrls, hasLength(2));
   });
 
+  group('a resume probes the box socket', () {
+    const judged = Duration(milliseconds: 100);
+
+    Set<Object?> ridsSubscribedOn(FakeBoxSocket socket) => {
+      for (final f in socket.emitted)
+        if (f.event == 'subscribe')
+          for (final sub in f.frame['subs']! as List<Object?>)
+            (sub! as Map<Object?, Object?>)['rid'],
+    };
+
+    test(
+      'and replaces one that still claims to be connected but has heard no '
+      'ping, even when the account socket survived; the new one resubscribes',
+      () async {
+        await connection.connect(1, 'token', 'http://api.test');
+        final suspended = sockets.last..serverConnect('S1');
+        await pumpEventQueue();
+        final held = ridsSubscribedOn(suspended);
+        expect(held, isNotEmpty, reason: 'the session holds a queue');
+
+        // iOS suspended the page: the box transport died, but socket.io only
+        // notices at its ping timeout, so the socket still says connected.
+        suspended.lastHeardAt = DateTime.now().subtract(
+          const Duration(minutes: 2),
+        );
+        connection.ensureReconnectIfNeeded();
+        await Future<void>.delayed(kBoxResumeGrace + judged);
+        await pumpEventQueue();
+
+        expect(suspended.disposed, isTrue);
+        expect(sockets.sockets, hasLength(2));
+        final fresh = sockets.last;
+        expect(fresh.connectCalled, isTrue);
+        expect(boxUrls, hasLength(1), reason: 'the box session is kept');
+
+        fresh.serverConnect('S2');
+        await pumpEventQueue();
+        expect(ridsSubscribedOn(fresh), held);
+      },
+    );
+
+    test('and keeps one the server pings (decision 76)', () async {
+      await connection.connect(1, 'token', 'http://api.test');
+      final live = sockets.last..serverConnect('S1');
+      await pumpEventQueue();
+      live.lastHeardAt = DateTime.now().subtract(const Duration(minutes: 2));
+
+      connection.ensureReconnectIfNeeded();
+      // The ping the suspension held back lands once the page runs again.
+      live.serverPing();
+      await Future<void>.delayed(kBoxResumeGrace + judged);
+      await pumpEventQueue();
+
+      expect(live.disposed, isFalse);
+      expect(sockets.sockets, hasLength(1));
+    });
+  });
+
   test('without a box factory wired nothing is opened', () async {
     final bare = _RecordingConnection(socketService: _AccountSocket())
       ..setProviders(

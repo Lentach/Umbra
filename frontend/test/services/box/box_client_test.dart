@@ -59,6 +59,9 @@ Map<String, Object?> _subscribed([List<Uint8List> refused = const []]) => _ok({
   ],
 });
 
+/// Just past a timer's deadline.
+const Duration _tick = Duration(milliseconds: 1);
+
 void main() {
   late FakeBoxSockets sockets;
 
@@ -217,6 +220,51 @@ void main() {
           BoxUnknownReason.timeout,
         ),
       );
+    });
+  });
+
+  group('checkAlive after a resume', () {
+    test(
+      'judges a socket silent for less than the limit again at the limit, '
+      'and replaces it then if it is still silent',
+      () {
+        fakeAsync((clock) {
+          final box = client()..connect();
+          final socket = sockets.last..serverConnect('S1');
+          clock
+            ..flushMicrotasks()
+            ..elapse(const Duration(seconds: 10));
+
+          box.checkAlive();
+          clock.elapse(kBoxResumeGrace);
+          expect(sockets.sockets, hasLength(1), reason: 'silent 12 s only');
+
+          clock.elapse(
+            kBoxSilenceLimit - const Duration(seconds: 12) + _tick,
+          );
+          expect(socket.disposed, isTrue);
+          expect(sockets.sockets, hasLength(2));
+          expect(sockets.last.connectCalled, isTrue);
+        });
+      },
+    );
+
+    test('keeps a socket that hears a ping before the limit', () {
+      fakeAsync((clock) {
+        final box = client()..connect();
+        final socket = sockets.last..serverConnect('S1');
+        clock
+          ..flushMicrotasks()
+          ..elapse(const Duration(seconds: 10));
+
+        box.checkAlive();
+        clock.elapse(const Duration(seconds: 15));
+        socket.serverPing();
+        clock.elapse(kBoxSilenceLimit);
+
+        expect(socket.disposed, isFalse);
+        expect(sockets.sockets, hasLength(1));
+      });
     });
   });
 

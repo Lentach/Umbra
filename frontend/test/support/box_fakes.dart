@@ -1,6 +1,7 @@
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:clock/clock.dart';
 import 'package:fireplace/services/box/box_client.dart';
 import 'package:fireplace/services/encryption/content_sealer.dart';
 import 'package:pointycastle/export.dart' as pc;
@@ -39,6 +40,11 @@ class FakeBoxSocket implements BoxSocket {
 
   @override
   bool get connected => _connected;
+
+  /// When the "server" was last heard: stamped by [serverConnect], [push]
+  /// and [serverPing]; a test sets it directly to age a socket.
+  @override
+  DateTime? lastHeardAt;
 
   @override
   void onConnect(void Function() handler) => _onConnect = handler;
@@ -85,8 +91,12 @@ class FakeBoxSocket implements BoxSocket {
   void serverConnect(String sockId) {
     _id = sockId;
     _connected = true;
+    lastHeardAt = clock.now();
     _onConnect?.call();
   }
+
+  /// engine.io's ping: the transport is alive.
+  void serverPing() => lastHeardAt = clock.now();
 
   void serverDrop() {
     _connected = false;
@@ -98,7 +108,10 @@ class FakeBoxSocket implements BoxSocket {
   /// server's CONNECT_ERROR data, e.g. `{'message': 'Invalid namespace'}`.
   void refuseConnection([Object? error]) => _onConnectError?.call(error);
 
-  void push(Object? msg) => _onMsg?.call(msg);
+  void push(Object? msg) {
+    lastHeardAt = clock.now();
+    _onMsg?.call(msg);
+  }
 }
 
 /// The [BoxSocketFactory]: records every socket the client builds.

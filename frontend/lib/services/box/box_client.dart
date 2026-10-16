@@ -2,12 +2,14 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:http/http.dart' as http;
 import 'package:socket_io_client/socket_io_client.dart' as io;
 
 import '../../constants/app_constants.dart';
 import '../../providers/chat_reconnect_manager.dart';
+import '../../utils/e2e_diag_log.dart';
 import 'box_signer.dart';
 import 'box_wire.dart';
 
@@ -27,6 +29,12 @@ abstract interface class BoxSocket {
   /// The `/box` namespace socket's id while connected — what gets signed.
   String? get id;
   bool get connected;
+
+  /// When the server was last heard on this connection — any packet, its
+  /// pings included; null before the first. The server pings every
+  /// [kBoxPingInterval], so a socket silent for longer is dead whatever
+  /// [connected] says.
+  DateTime? get lastHeardAt;
   void onConnect(void Function() handler);
   void onDisconnect(void Function() handler);
 
@@ -73,9 +81,20 @@ class IoBoxSocket implements BoxSocket {
             .enableForceNew()
             .disableReconnection()
             .build(),
-      );
+      ) {
+    // The Manager is this socket's own (`enableForceNew`): its engine.io
+    // pings and decoded packets are this connection's and nobody else's.
+    void heard([Object? _]) => _heard = clock.now();
+    _socket.io
+      ..on('ping', heard)
+      ..on('packet', heard);
+  }
 
   final io.Socket _socket;
+  DateTime? _heard;
+
+  @override
+  DateTime? get lastHeardAt => _heard;
 
   /// The engine.io session under this socket, null until connected. The wire
   /// harness asserts it is never the account socket's (design §4.6).
@@ -129,6 +148,19 @@ class _Pending {
 /// up without an app restart — within this delay, or at the next
 /// [BoxClient.connect] — but at 4 handshakes an hour, not 120.
 const Duration kBoxAbsentRetryDelay = Duration(minutes: 15);
+
+/// How often the box's engine.io server pings a connected socket (the
+/// socket.io default; the backend sets no `pingInterval`).
+const Duration kBoxPingInterval = Duration(seconds: 25);
+
+/// A connected socket that has heard nothing from the server for this long
+/// missed a ping: its transport is dead whatever socket.io reports.
+const Duration kBoxSilenceLimit = Duration(seconds: 30);
+
+/// How long [BoxClient.checkAlive] lets a resumed page process the frames
+/// its suspension held back before judging the silence: a live socket's
+/// queued ping lands within it.
+const Duration kBoxResumeGrace = Duration(seconds: 2);
 
 /// The client of the box (metadata-privacy PR1.2, G3 surface A "Plain RPC";
 /// contract `docs/contracts/wire.md` "The box"). Ships DARK: nothing wires it
@@ -190,6 +222,9 @@ class BoxClient {
   bool _wanted = false;
   BoxState _state = BoxState.offline;
 
+  /// The pending [checkAlive] judgement, if any.
+  Timer? _aliveCheck;
+
   Stream<BoxState> get states => _states.stream;
   BoxState get state => _state;
   Stream<BoxDelivery> get deliveries => _deliveries.stream;
@@ -206,6 +241,48 @@ class BoxClient {
       ..resetAttempts()
       ..cancel();
     if (_socket == null) _open();
+  }
+
+  /// The app came back from the background (`ConnectionProvider
+  /// .ensureReconnectIfNeeded`): replace the connection only if it is DEAD.
+  /// A suspended app (an iOS PWA above all) can hold a transport that
+  /// socket.io reports connected until its own ping timeout — every call on
+  /// it waits out the timeout and fails, and the box hands every message
+  /// stored meanwhile to that socket instead of a push. The server pings
+  /// every [kBoxPingInterval], so once the page had [kBoxResumeGrace] to
+  /// read what its suspension held back, a socket that heard nothing since
+  /// the resume and nothing for [kBoxSilenceLimit] is replaced; one silent
+  /// for less is judged again when that limit is reached. A live socket is
+  /// never touched: the box sees no extra connection and no `subscribe` is
+  /// spent (decision 76 rejected cycling the socket on every switch).
+  /// Nothing after [close], or while no connection claims to be up (the
+  /// reconnect backoff owns that case).
+  void checkAlive() {
+    _aliveCheck?.cancel();
+    final socket = _socket;
+    if (!_wanted || socket == null || !socket.connected) return;
+    final resumedAt = clock.now();
+    void judge() {
+      _aliveCheck = null;
+      if (!identical(_socket, socket) || !socket.connected) return;
+      final heard = socket.lastHeardAt;
+      if (heard != null && !heard.isBefore(resumedAt)) return;
+      final silent = heard == null
+          ? kBoxSilenceLimit
+          : clock.now().difference(heard);
+      if (silent < kBoxSilenceLimit) {
+        _aliveCheck = Timer(kBoxSilenceLimit - silent, judge);
+        return;
+      }
+      E2eDiagLog.add('BOX_SOCKET_DEAD', {'silentS': silent.inSeconds});
+      _reconnect
+        ..resetAttempts()
+        ..cancel();
+      _drop();
+      _open();
+    }
+
+    _aliveCheck = Timer(kBoxResumeGrace, judge);
   }
 
   /// Drops the connection and stops reconnecting. The subscribe set is kept:
@@ -252,6 +329,8 @@ class BoxClient {
   /// disposal: disposing a connected socket fires its own `disconnect`
   /// synchronously, which must not read as a lost connection.
   void _drop() {
+    _aliveCheck?.cancel();
+    _aliveCheck = null;
     final socket = _socket;
     _socket = null;
     for (final pending in _pending.toList()) {
