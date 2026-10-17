@@ -1,6 +1,6 @@
 # A lookup joined across a reconnect can no longer hang a box send forever
 
-**Date:** 2026-10-17 · **Version:** unchanged (0.2.66; fix on master, not deployed) · **Tiers deployed:** none
+**Date:** 2026-10-17 · **Version:** 0.2.66 → 0.2.67 (`28ac55af`) · **Tiers deployed:** both + APK
 
 ## What was done
 - Field report: bob208's (37) box sends to SaraLee (63) and goonboy (48) stayed "sending" with no red dot and no tick. His diag log: `DEVICE_LIST_FETCH_EMIT {userId 37}` at 19:32:55 with no answer, an intentional reconnect at 19:32:57 with no new emit, then `SEND_START` with nothing after it from 19:33:13 on.
@@ -27,7 +27,14 @@
 - Read only: `messaging_provider.box.dart` (`_boxRoute`), `box_device_list_refresh.dart`, `messaging_provider.dart` (`_boxLists`).
 
 ## Verification
-- CI: green on `e415ce7d` (master push). All 6 jobs `success`: Backend tests, Flutter analyze and tests, E2E wire harness, E2E isolated probes, E2E session Web Lock probe, Analyze (actions).
+- CI: green on `e415ce7d` (the fix) and on `28ac55af` (the 0.2.67 bump), master pushes. All 6 jobs `success` on each.
+- Deploy (owner go):
+  - Backup `chatdb-20261017T022831Z.dump.gpg`.
+  - `deploy-backend.sh` → `/version` 0.2.67 / 28ac55af, healthy.
+  - `deploy-web.ps1` → smoke 8/8, `main.dart.js` contains 28ac55af.
+  - APK 20067: `build-android.ps1` signer + 16 KB gates OK. SHA256 `f2d8266532f5cf8ce88573458e97ab5634ad7a603fb613fd28ed3c6a6de8891e`, matched on the VM. Content-Length 52840329.
+  - VM `.env` `ANDROID_APK_*` set to 0.2.67 (previous copy `.env.bak.pre-apk-0.2.67`), backend redeployed; `/version` android reads 20067.
+  - 0 error/exception lines in the backend log 10 min after the deploy.
 - Repro: all 3 new tests were RED on the unfixed lib files (stash A/B) and GREEN with the fix.
 - Full Flutter suite: 3166 passed, 14 skipped.
 - Dart lint ratchet held at baseline 3146. Two new `discarded_futures` in the test were wrapped in `unawaited`.
@@ -35,12 +42,11 @@
   - Method: an init-script `WebSocket` subclass dropped the `getDeviceList` frame, the script closed every socket, and closed them again 2.5 s later.
   - 0.2.66 bundle: one emit was dropped, and after the second reconnect no new emit went out. `hang1` was still on the clock after 45 s, with no red dot and no tick, matching the field log exactly.
   - Fixed bundle, same origin: the dropped emit was followed by a fresh `getDeviceList` on the second reconnect, which was answered. `fix2` got its ✓ and arrived on d101a's chat list.
-- NOT verified: Android, iOS, prod.
+- NOT verified: the APK on a device, iOS, and the fix on prod with a real double reconnect.
 
 ## Notes for next session
-- Next action: get the owner's go to release this as 0.2.67 (web + backend version bump + APK). Bob's tabs heal only on a full app restart until then.
+- Next action: watch prod after 0.2.67. Ask bob208 whether box sends still stick after a resume. His tabs pick up the fix only after a full app close and reopen.
 - Owner-owed decisions:
-  - The 0.2.67 release.
   - Still open from 0.2.66: a same-origin re-link breaks the primary's box sends; the rest of Phase 4 step 1.
 - Observed, not investigated: in the old build, `hang1` disappeared from the sender's chat after a reload, yet the receiver's unread count read 2. Whether a reload re-sends or drops a hung box send is unknown.
 - Recipe: see the `traps.md` line "Drive a lost socket request with an init-script `WebSocket` subclass". The drive profile is `%TEMP%/d101drive/prof`. Origins 8091 (d101a, user 253) and 8094–8096 (its friends) hold logged-in sessions.
