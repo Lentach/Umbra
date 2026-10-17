@@ -19,13 +19,13 @@ The d101 drive accounts most likely can't take a box send to d101a. d101a (user 
 
 ## Design sketch (no code written yet)
 
-- **Store:** `e2e_<uid>_boxunsent_v1` in content kv.
-  - It holds plaintext. Register it like `boxact_v1`:
+- **Store:** `e2e_<uid>_boxunsent_v1_<tempId>` in content kv, one key per message.
+  - It holds message text, like `pendsend_v1_` (also pending-send plaintext, also sealed), not control data like `boxact_v1`. Register it:
     - the sealed-family regex `_familyKey` in `sealed_web_content_kv.dart:86` (web localStorage is otherwise unsealed);
-    - NOT `NativeContentStore.isSealedKey` (`native_content_store.dart:125-129`): on Android it stays in the SQLCipher DB without content-key sealing, as `boxact_v1` does;
+    - `NativeContentStore.isSealedKey` (`native_content_store.dart:125-129`). Only those families are sealed under the rotating content key and shredded on removal (class doc `:29-34`, `:59-66`); anything else stays under the never-rotated SQLCipher key, so a deleted entry's words would survive as freelist/WAL residue. Make the matcher agree with the key shape: `contains('_boxunsent_v1_')` never matches a single-blob key `e2e_<uid>_boxunsent_v1`. Prefer one key per tempId (`e2e_<uid>_boxunsent_v1_<tempId>`), which also makes a removal flip `rotationPending`;
     - the logout, `clearAllKeys` and account-delete sweeps. Logout must destroy unsent rows, as it drops decision 19's RAM retry today.
   - Don't reuse `pendsend_v1_`: the old path's lost-ack reconcile consumes it (`messaging_provider.decrypt.dart:1222-1287`, keyed by ciphertext/token), and a box row there could be matched or pruned under the wrong rules.
-  - Mirror `boxact_v1` (`encryption_service.dart:4184-4327`): the cross-context lock plus an in-process queue, no backup, a count cap, and a 30-day prune.
+  - Mirror `boxact_v1` (`encryption_service.dart:4184-4327`) for concurrency and bounds only: the cross-context lock plus an in-process queue, no backup, a count cap, and a 30-day prune.
 - **Entry**, keyed by tempId: chat, peer, createdAt, wire id (`_sendTokenFor`), type, content, ttl, reply, and the box media fields if the attachment was uploaded.
 - **Write:**
   - When a send enters the box branch: `messaging_provider.send.dart:1655-1695`, before `_boxRoute`.
@@ -45,4 +45,5 @@ The d101 drive accounts most likely can't take a box send to d101a. d101a (user 
 - An unsent entry past its `ttl` is neither shown nor retryable after a reload, and its key is gone.
 - An unsent row never appears in `catchUpRecords`.
 - On web, a value written under `boxunsent_v1` reads back as a sealed envelope.
+- On Android, `isSealedKey` matches a real `boxunsent` key, and removing one flips `rotationPending`.
 - Logout clears the family.
