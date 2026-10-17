@@ -45,9 +45,21 @@
 - NOT verified: the APK on a device, iOS, and the fix on prod with a real double reconnect.
 
 ## Notes for next session
-- Next action: watch prod after 0.2.67. Ask bob208 whether box sends still stick after a resume. His tabs pick up the fix only after a full app close and reopen.
+- Next action: build decision 104 (owner picked option B: a failed box message is kept on the device and still shows "Ponów" after leaving the chat or a restart, with no auto-resend). Before building it, do the proper rerun:
+  1. Revoke d101a's never-online 0.2.65 sibling (device 8) from d101a's Devices screen on 8091, not by SQL: the signed list decides coverage.
+  2. A control send F4 (8094) → d101a must go green.
+  3. Hold only the box's `send` ack (drop the incoming `43/box,…` frame, let the outgoing frame through), reload the sender, and check both sides.
+  4. Read the reason for each red send in Privacy & Safety → the diagnostics panel. The page console doesn't carry `BOX_*`/`SEND_*` lines.
+- Item 4 findings (10-17, release web, 0.2.66 and 0.2.67):
+  - A failed or stuck box message is lost on reload and even on leaving the chat. It never reached the friend (`hang1`, `r1`–`r3`). This is decision 19 as written (RAM only).
+  - The drive's instant reds (`r1`–`r3`) were most likely E101b coverage: d101a's device 8 is a live 0.2.65 sibling. [INFERENCE: the diag was not read.] My frame hook was blind in that run, so "no frame was emitted" is unproven.
+  - Confirmed in code, not driven: `_sendOverBox` stores the sender's own record only after a peer device took a frame (`messaging_provider.box.dart:2494`). A reload mid-`deliver` can leave the friend with the message and the sender without it.
+- Decision 104 design sketch and the rerun recipe: `docs/plans/2026-10-17-decision-104-unsent-box-messages.md` (no code written).
+- Found, not fixed (owner go pending): `connection_provider.dart:833` (socketReady re-assert) and `:1124` (`_resyncAfterResume`) call `_socketService.getMessages(activeConvId)` without the `isLocalConversationId` guard (`messaging_provider.history.dart:524`). A reconnect or resume with a box-only chat open makes the server log `QueryFailedError … out of range for type integer` (seen on dev). Prod logs only go back to this morning's redeploy, so prod is unmeasured.
+- Backup coverage on prod (10-17, read-only): 19 of 24 accounts have a backup. The 5 without one (52, 54, 62, 86, 101) are dormant and their only friend is bob208. That Bob's backup holds them is an assumption (the blob is opaque). None carries Phase 4 step 1 data yet, so re-measure after step 1 ships.
 - Owner-owed decisions:
   - Still open from 0.2.66: a same-origin re-link breaks the primary's box sends; the rest of Phase 4 step 1.
-- Observed, not investigated: in the old build, `hang1` disappeared from the sender's chat after a reload, yet the receiver's unread count read 2. Whether a reload re-sends or drops a hung box send is unknown.
+  - The `getMessages` local-id fix.
+- Also: ask bob208 whether box sends still stick after a resume on 0.2.67. He has to fully close and reopen the app.
 - Recipe: see the `traps.md` line "Drive a lost socket request with an init-script `WebSocket` subclass". The drive profile is `%TEMP%/d101drive/prof`. Origins 8091 (d101a, user 253) and 8094–8096 (its friends) hold logged-in sessions.
 - Traps: two lines were added to `traps.md` under E2E.
