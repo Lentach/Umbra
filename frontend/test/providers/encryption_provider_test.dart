@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -166,6 +169,38 @@ void main() {
         expect(fetchEvents.length, 1);
       },
     );
+
+    test('a session build that JOINS an unanswered bundle fetch fails with it '
+        '— never waits forever', () {
+      fakeAsync((fake) {
+        Object? ownerOutcome;
+        Object? joinerOutcome;
+        unawaited(provider.ensureSession(99).then<void>(
+          (_) => ownerOutcome = 'built',
+          onError: (Object e) => ownerOutcome = e,
+        ));
+        fake.flushMicrotasks();
+        unawaited(provider.ensureSession(99).then<void>(
+          (_) => joinerOutcome = 'built',
+          onError: (Object e) => joinerOutcome = e,
+        ));
+        fake.flushMicrotasks();
+        expect(
+          emitted.where((e) => e['event'] == 'fetchPreKeyBundle').length,
+          1,
+          reason: 'the second build joins the first fetch',
+        );
+
+        fake.elapse(const Duration(seconds: 11));
+        fake.flushMicrotasks();
+        expect(ownerOutcome, isA<TimeoutException>());
+        expect(
+          joinerOutcome,
+          isA<TimeoutException>(),
+          reason: 'the joiner must fail with the shared fetch, not hang',
+        );
+      });
+    });
 
     test('preKeysLow handler is reentrant-safe', () async {
       final initialUploads = emitted

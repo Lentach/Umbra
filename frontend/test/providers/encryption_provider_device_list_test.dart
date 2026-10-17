@@ -280,6 +280,33 @@ void main() {
     expect(provider.cachedDeviceList(peerId), isNull);
   });
 
+  test('a caller that JOINS an unanswered fetch fails with it — never waits '
+      'forever (a lost answer stalled every box send, 0.2.66)', () async {
+    // The first lookup's request died with a replaced socket; the next
+    // connect's refresh asks again and joins it.
+    final first = provider.getVerifiedDeviceList(
+      peerId,
+      timeout: const Duration(milliseconds: 50),
+    );
+    final joiner = provider.getVerifiedDeviceList(
+      peerId,
+      timeout: const Duration(milliseconds: 50),
+    );
+    await expectLater(first, throwsA(isA<TimeoutException>()));
+    await expectLater(
+      joiner.timeout(const Duration(seconds: 2)),
+      throwsA(
+        isA<TimeoutException>().having(
+          (e) => e.message,
+          'message',
+          contains('Device list fetch'),
+        ),
+      ),
+      reason: 'the joiner must fail with the shared fetch, not hang',
+    );
+    expect(deviceListFetchCount(), 1, reason: 'the joiner sends nothing');
+  });
+
   test(
     'an enrolled answer for a peer with NO pinned identity fails closed',
     () async {

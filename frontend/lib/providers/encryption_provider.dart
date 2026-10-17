@@ -426,17 +426,22 @@ class EncryptionProvider extends ChangeNotifier {
         if (deviceId != 1) 'deviceId': deviceId,
       });
 
-      // Wait for the server response with a timeout
-      final bundle = await completer.future.timeout(
+      // The timeout fails the SHARED completer, so a build that joined this
+      // fetch fails with it instead of waiting forever ([_expireShared]).
+      _expireShared(
+        completer,
         const Duration(seconds: 10),
-        onTimeout: () {
-          _pendingPreKeyFetches.remove(addressKey);
-          throw TimeoutException(
-            'Pre-key bundle fetch timed out for user $recipientId '
-            'device $deviceId',
-          );
+        drop: () {
+          if (identical(_pendingPreKeyFetches[addressKey], completer)) {
+            _pendingPreKeyFetches.remove(addressKey);
+          }
         },
+        error: () => TimeoutException(
+          'Pre-key bundle fetch timed out for user $recipientId '
+          'device $deviceId',
+        ),
       );
+      final bundle = await completer.future;
 
       await _encryptionService.buildSession(
         recipientId,
@@ -1037,17 +1042,21 @@ class EncryptionProvider extends ChangeNotifier {
     } else {
       _emit?.call('getDeviceList', {'userId': userId});
     }
-    return completer.future.timeout(
+    // Fail closed: an unanswered fetch means "cannot verify", never "no
+    // devices" (I5). The caller surfaces a send failure — every caller,
+    // including each that joined this fetch ([_expireShared]).
+    _expireShared(
+      completer,
       timeout,
-      onTimeout: () {
-        // Fail closed: an unanswered fetch means "cannot verify", never
-        // "no devices" (I5). The caller surfaces a send failure.
+      drop: () {
         if (identical(_pendingDeviceListFetches[userId], completer)) {
           _pendingDeviceListFetches.remove(userId);
         }
-        throw TimeoutException('Device list fetch timed out for user $userId');
       },
+      error: () =>
+          TimeoutException('Device list fetch timed out for user $userId'),
     );
+    return completer.future;
   }
 
   /// Box-only peers whose one lookup of this process is spent.
@@ -3625,17 +3634,19 @@ class EncryptionProvider extends ChangeNotifier {
       'userId': userId,
       if (deviceId != 1) 'deviceId': deviceId,
     });
-    return completer.future.timeout(
+    _expireShared(
+      completer,
       timeout,
-      onTimeout: () {
+      drop: () {
         if (identical(_pendingIdentityProbes[addressKey], completer)) {
           _pendingIdentityProbes.remove(addressKey);
         }
-        throw TimeoutException(
-          'Pre-key bundle fetch timed out for user $userId device $deviceId',
-        );
       },
+      error: () => TimeoutException(
+        'Pre-key bundle fetch timed out for user $userId device $deviceId',
+      ),
     );
+    return completer.future;
   }
 
   /// User dismissed the own-identity-replaced notice.
@@ -3670,6 +3681,28 @@ class EncryptionProvider extends ChangeNotifier {
   }
 
   // ---------- Private Helpers ----------
+
+  /// Fails [completer] after [timeout] with [error], first running [drop] so
+  /// the next caller sends a fresh request. Failing the SHARED completer —
+  /// never a per-caller `.timeout()` — fails every awaiter together: the
+  /// caller that sent the request AND each one that joined it. A per-caller
+  /// timeout released only the sender, so a joiner of a request whose answer
+  /// never came (lost with a socket `connect()` replaced) waited forever, and
+  /// every box send behind it sat "sending" with no error (0.2.66; same
+  /// finding as [_checkServerIdentity]).
+  void _expireShared<T>(
+    Completer<T> completer,
+    Duration timeout, {
+    required void Function() drop,
+    required Object Function() error,
+  }) {
+    final timer = Timer(timeout, () {
+      if (completer.isCompleted) return;
+      drop();
+      completer.completeError(error());
+    });
+    completer.future.whenComplete(timer.cancel).ignore();
+  }
 
   void _cancelPendingFetches() {
     for (final completer in _pendingPreKeyFetches.values) {

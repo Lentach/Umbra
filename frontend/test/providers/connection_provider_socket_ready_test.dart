@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:fake_async/fake_async.dart';
 import 'package:fireplace/providers/connection_provider.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
@@ -437,6 +439,28 @@ void main() {
       // a tab close, and it needs no clock at all.
       expect(encryption.calls, contains('drainPurgeBacklog'));
       expect(ServerClock.instance.estimatedNow, isNull);
+    });
+
+    test('a reconnect fails every lookup still waiting on the REPLACED socket',
+        () async {
+      // Its request left on the socket connect() tears down, so its answer
+      // can never come; a later lookup that joins it would otherwise wait on
+      // a dead request (a box send stuck "sending" forever, 0.2.66).
+      await connection.connect(1, 'test-token', 'http://localhost:3000');
+      final orphan = Completer<Map<String, dynamic>>();
+      encryption.pendingPreKeyFetches[(5, 1)] = orphan;
+      final failed = expectLater(orphan.future, throwsA('Disconnected'));
+
+      await connection.connect(
+        1,
+        'test-token',
+        'http://localhost:3000',
+        immediate: true,
+      );
+
+      await failed;
+      expect(encryption.pendingPreKeyFetches, isEmpty,
+          reason: 'the next lookup must send a fresh request');
     });
   });
 

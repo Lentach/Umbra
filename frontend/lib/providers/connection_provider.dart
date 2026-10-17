@@ -655,6 +655,11 @@ class ConnectionProvider extends ChangeNotifier {
     // extra connect() calls that can clear lists (non-reconnect) or use a stale JWT.
     _intentionalDisconnect = true;
     _socketService.disconnect();
+    // Every lookup still waiting left on the socket just torn down, so its
+    // answer can never come. Fail them now: a later lookup would otherwise
+    // join a dead request instead of sending a fresh one (0.2.66: a box send
+    // waited on it forever, "sending" with no error).
+    _encryptionProvider?.onDisconnect();
     _socketService.connect(baseUrl: baseUrl, token: token);
 
     // 8. Register socket event listeners (routed to sub-providers)
