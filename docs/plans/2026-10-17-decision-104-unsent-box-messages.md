@@ -20,9 +20,9 @@ The d101 drive accounts most likely can't take a box send to d101a. d101a (user 
 ## Design sketch (no code written yet)
 
 - **Store:** `e2e_<uid>_boxunsent_v1` in content kv.
-  - It holds plaintext, so register it everywhere the plaintext families are registered:
-    - the sealed-family regex `_familyKey` in `sealed_web_content_kv.dart:86`;
-    - the plaintext-family list in `native_content_store.dart:128-129`, so Android keeps it in SQLCipher;
+  - It holds plaintext. Register it like `boxact_v1`:
+    - the sealed-family regex `_familyKey` in `sealed_web_content_kv.dart:86` (web localStorage is otherwise unsealed);
+    - NOT `NativeContentStore.isSealedKey` (`native_content_store.dart:125-129`): on Android it stays in the SQLCipher DB without content-key sealing, as `boxact_v1` does;
     - the logout, `clearAllKeys` and account-delete sweeps. Logout must destroy unsent rows, as it drops decision 19's RAM retry today.
   - Don't reuse `pendsend_v1_`: the old path's lost-ack reconcile consumes it (`messaging_provider.decrypt.dart:1222-1287`, keyed by ciphertext/token), and a box row there could be matched or pruned under the wrong rules.
   - Mirror `boxact_v1` (`encryption_service.dart:4184-4327`): the cross-context lock plus an in-process queue, no backup, a count cap, and a 30-day prune.
