@@ -37,6 +37,7 @@ The d101 drive accounts most likely can't take a box send to d101a. d101a (user 
   - In `_mergeLocalBoxRows` (`messaging_provider.box.dart:1619`, which runs on every chat open and launch) as `failed` rows.
   - Re-seed `_pendingSendContent`, `_sendTokenByTempId` and `_boxTempIds`, so a retry never falls back to the old path. The box may already hold the message, and receivers drop a repeated wire id.
 - **Residual:** an attachment whose upload never finished can't be retried after a restart, because its bytes are gone.
+- **Found, not fixed (owner call):** `boxact_v1` holds edit text and emoji (`sealed_web_content_kv.dart:80`) but is not in `NativeContentStore.isSealedKey`, so on Android a removed parked edit's words have the same unshredded residue gap. Out of scope for 104.
 
 ## Tests to write first (red before the fix)
 
