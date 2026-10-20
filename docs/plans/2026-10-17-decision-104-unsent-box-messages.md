@@ -64,7 +64,7 @@ The d101 drive accounts most likely can't take a box send to d101a. d101a (user 
 - The drop after a send waits for the sent record to be PROVEN stored; an unproven store keeps the entry, so the message comes back red rather than not at all.
 - On chat open, an entry whose wire id a stored sent row of ours already carries (the app died between the record write and the drop) is dropped, not shown.
 - Logout clears the family from `MessagingProvider.clearAll` (logout and an account switch). "Delete all local history" (`clearDecryptedContentCache`) sweeps it too.
-- A restored row is `sending`, not `failed`, while this session's attempt for it is still running. A negative id is never an action target, so no pin, edit or react opens for it.
+- A restored row is `sending`, not `failed`, while this session's attempt for it is still running. A negative id is never an action target: pin and delete-for-everyone stay off, and the long-press reaction bar (shown on any failed temp row, as before 104) only answers with "reaction unavailable" (`_emitReaction` refuses a non-server id; nothing is sent).
 - Deleting a red row: delete-for-me drops it on the device. The old code emitted a negative id to the server.
 - `_pendingSendContent` is not re-seeded: a box send never reads it.
 - Residual: a second web tab of the same account shows the other tab's in-flight send red; its retry reuses the wire id (the friend drops the repeat), but this device may store it twice.

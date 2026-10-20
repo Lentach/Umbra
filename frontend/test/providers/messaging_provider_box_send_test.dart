@@ -2423,6 +2423,7 @@ void main() {
         'mediaHeight',
         'mediaThumbHash',
       ]) {
+        expect(first[key], isNotNull, reason: key);
         expect(again[key], first[key], reason: key);
       }
       expect(oldPathSends, isEmpty);

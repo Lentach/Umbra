@@ -53,9 +53,9 @@
 ## Notes for next session
 - Next action: Phase 4 step 1, the hardening release (decision 105's order). 104 ships with it.
 - Owner-owed: the `getMessages` local-id fix; the same-origin re-link bug; bob208 must remove the old ruchens69 contact.
-- Seen, not touched:
-  - A retried box row's shown time moves to the retry time (`rv1` 20:46 → 20:47).
-  - A failed temp row still offers reactions and reply in its long-press menu.
+- Checked, not changed (both are older than 104; written into `wire.md` and the 104 plan):
+  - Every box attempt stamps `ts` at its own send (`_sendOverBox` `sentAt`). After a retry, F showed `rv1` at 20:47 while d101a kept the first attempt's 20:46.
+  - A failed temp row's long-press still shows the reaction bar and reply. A reaction tap is refused (`_emitReaction` rejects a non-server id), says "reaction unavailable", and sends nothing.
 - Residuals (E104a):
   - an attachment whose upload never finished is not kept;
   - a second web tab shows the other tab's in-flight send red; its Ponów reuses the wire id, but this device may store the message twice.
