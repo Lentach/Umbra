@@ -32,7 +32,7 @@
 - Read only (load-bearing): `utils/message_ids.dart` (a negative id is never an action target), `messaging_provider.history.dart`.
 
 ## Verification
-- CI: filled in after the push (see the follow-up line below).
+- CI: green on `2d26a81c` (master push; carries code commit `3ceac941`): backend, Flutter, e2e-wire, isolated probes, Web Lock probe, CodeQL all `success`.
 - `flutter test` (full): `+3192 ~14: All tests passed!`. Dart lint ratchet (`node scripts/dart-lint-ratchet.mjs`): PASS at 3146.
 - Red first: the sealed/native tests failed before the lib change, and the provider group (8) failed before the wiring.
 - Mutants, 12, each run against its test and restored byte-for-byte; all killed:
