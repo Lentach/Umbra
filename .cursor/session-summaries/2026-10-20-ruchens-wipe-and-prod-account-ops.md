@@ -24,7 +24,7 @@
 - NOT verified: benz93 logging in on his own device; the native APK on ruchens's phone.
 
 ## Notes for next session
-- Next action: reproduce "box messages stop arriving after a PWA storage wipe" on the dev stack. Wipe one test user's web storage, restore, then send to it from a friend. Watch the restored side for any `BOX_*` line after `SOCKET_READY`.
+- Next action: build decision 104 test-first (`docs/plans/2026-10-17-decision-104-unsent-box-messages.md`): the rerun of its §"Before building" first, then the listed tests red, then the store. Decision 105 (owner, 10-20): no PWA storage-wipe work; after 104, finish Phase 4, then prepare the Android release, whose prep includes one reinstall test (a friend's messages must still arrive).
 - Findings (10-20, prod read-only + both diag logs):
   - user 90 re-minted 6 times in 17 days (`identity_change_audit` 10-03 … 10-20), each a full PWA storage wipe (phone storage full);
   - bob's device logged `PEER_IDENTITY_CHANGED {peerId: 90}` with no `source` at 16:13:18 local. That suggests a receive under the new key, but a send-side session build is not fully ruled out;
@@ -33,6 +33,6 @@
   - his contact backup stayed rev 3 (10-09); that is by design (restores never upload), not evidence.
 - Owner-owed: the old ruchens69 is a box friend (`boxOrigin`), which `friends_provider.dart:184` never sweeps. bob208 must remove it by hand before befriending the new account.
 - Owner-owed (carried): the `getMessages` local-id fix (`connection_provider.dart:833`, `:1124`); the same-origin re-link bug; the rest of Phase 4 step 1. The old-path drop waits for 101–103 / decision 98's staged plan (decision 86).
-- Then: build decision 104 test-first (plan doc), after the wipe repro.
+- Shelved by decision 105: the PWA wipe repro (recipe: wipe a test user's web storage, restore, send to it, watch the restored side for `BOX_*` after `SOCKET_READY`). Reopens only if the Android reinstall test fails.
 - Prod facts 10-20: benz93 (86) still has device 1 without a request queue (the only one on prod); last old-path message 10-11.
 - Traps: two lines added to `traps.md` (E2E).
