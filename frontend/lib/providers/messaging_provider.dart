@@ -290,6 +290,12 @@ class MessagingProvider extends ChangeNotifier {
   /// them until the box has answered.
   final Set<String> _boxInFlight = {};
 
+  /// TempIds this device keeps as box messages that did not go out
+  /// (decision 104): kept by this session's send or restored with their
+  /// chat. Only these are dropped when the old path takes the send, and
+  /// only these rows are deleted on the device alone.
+  final Set<String> _boxUnsentTempIds = {};
+
   /// A revoke announcement is running (E50d): one at a time.
   bool _announcingOwnList = false;
 
@@ -1417,6 +1423,7 @@ class MessagingProvider extends ChangeNotifier {
       _identityRefusedSendTempIds.clear();
       _sendTokenByTempId.clear();
       _boxTempIds.clear();
+      _boxUnsentTempIds.clear();
       _boxMediaBodies.clear();
       _boxLists.reset();
       _staleViewsAnswered.clear();
@@ -1541,6 +1548,13 @@ class MessagingProvider extends ChangeNotifier {
     _identityRefusedSendTempIds.clear();
     _sendTokenByTempId.clear();
     _boxTempIds.clear();
+    _boxUnsentTempIds.clear();
+    // A message nobody sent must not wait on this device for the next
+    // sign-in (decision 104).
+    final signedOut = _currentUserId;
+    if (signedOut != null) {
+      _encryptionProvider?.clearBoxUnsent(signedOut).ignore();
+    }
     _boxMediaBodies.clear();
     _boxLists.reset();
     _staleViewsAnswered.clear();

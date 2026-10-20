@@ -148,6 +148,36 @@ class _SendEncryption extends EncryptionProvider {
     return '3:${base64Encode(bytes)}';
   }
 
+  /// When set, a stored record cannot be proven (a write the store
+  /// swallowed).
+  bool recordsUnproven = false;
+
+  @override
+  Future<bool?> recordExists(int messageId) async =>
+      recordsUnproven ? false : super.recordExists(messageId);
+
+  @override
+  Future<void> saveDecryptedContent(
+    int messageId,
+    Map<String, dynamic> data, {
+    int? conversationId,
+    DateTime? createdAt,
+    DateTime? expiresAt,
+    int? disappearAfterSeconds,
+    WireKey? wire,
+  }) async {
+    if (recordsUnproven) return;
+    await super.saveDecryptedContent(
+      messageId,
+      data,
+      conversationId: conversationId,
+      createdAt: createdAt,
+      expiresAt: expiresAt,
+      disappearAfterSeconds: disappearAfterSeconds,
+      wire: wire,
+    );
+  }
+
   @override
   Future<void> savePendingSendRecord(
     String key,
@@ -2079,6 +2109,328 @@ void main() {
           expect(outbox.delivered, hasLength(1));
           expect(provider.messages, isEmpty);
         },
+      );
+    });
+  });
+
+  group('decision 104: a box message that did not go out is kept', () {
+    const unsentPrefix = 'e2e_1_boxunsent_v1_';
+
+    Future<List<String>> unsentKeys() async => (await encryption.store
+            .contentKv)
+        .getKeys()
+        .where((k) => k.startsWith(unsentPrefix))
+        .toList();
+
+    /// The user leaves the chat and opens it again: its rows leave the
+    /// provider, and the first (empty) server page brings them back.
+    Future<void> reopenChat() async {
+      provider.clearMessages();
+      await provider.onMessageHistory({
+        'conversationId': 10,
+        'messages': <Object>[],
+      });
+      await pump(80);
+    }
+
+    MessageModel rowOf(String tempId) =>
+        provider.messages.singleWhere((m) => m.tempId == tempId);
+
+    test('a failed one is still shown red, with its words, after leaving '
+        'the chat and after a restart', () async {
+      bob([1]);
+      outbox.refuse.add(1);
+      final failed = await send('keep me');
+      expect(failed.deliveryStatus, MessageDeliveryStatus.failed);
+
+      await reopenChat();
+      expect(rowOf(failed.tempId!).deliveryStatus,
+          MessageDeliveryStatus.failed);
+
+      await restart();
+      final back = rowOf(failed.tempId!);
+      expect(back.deliveryStatus, MessageDeliveryStatus.failed);
+      expect(back.content, 'keep me');
+      expect(back.senderId, 1);
+      expect(
+        back.createdAt.millisecondsSinceEpoch,
+        failed.createdAt.millisecondsSinceEpoch,
+      );
+    });
+
+    test('one the box never answered (reload mid-deliver) comes back red '
+        'after a restart, not lost', () async {
+      bob([1]);
+      outbox.hold = Completer<void>();
+      provider.sendMessage('stuck');
+      await pump();
+      final stuck = provider.messages.last;
+      expect(stuck.deliveryStatus, MessageDeliveryStatus.sending);
+
+      outbox.hold = null;
+      await restart();
+
+      expect(rowOf(stuck.tempId!).deliveryStatus,
+          MessageDeliveryStatus.failed);
+    });
+
+    test('its retry after a restart re-seals under the SAME wire id and never '
+        'takes the old path', () async {
+      bob([1]);
+      outbox.refuse.add(1);
+      final failed = await send('same wire');
+      final firstWire = envelopeOf(outbox.delivered.single.$2)['msgId'];
+
+      await restart();
+      provider.refreshBoxDeviceLists();
+      outbox
+        ..refuse.clear()
+        ..delivered.clear();
+      await provider.retryFailedMessage(failed.tempId!);
+      await pump();
+
+      expect(outbox.delivered, hasLength(1));
+      expect(envelopeOf(outbox.delivered.single.$2)['msgId'], firstWire);
+      expect(oldPathSends, isEmpty);
+      expect(
+        provider.messages.singleWhere((m) => m.content == 'same wire')
+            .deliveryStatus,
+        MessageDeliveryStatus.sent,
+      );
+    });
+
+    test('a restored one whose route is gone at the retry stays failed and '
+        'never reaches the server', () async {
+      bob([1, 2]);
+      outbox.refuse.addAll([1, 2]);
+      final failed = await send('pinned after a restart');
+
+      await restart();
+      outbox.addresses[2]!.remove(2);
+      provider.refreshBoxDeviceLists();
+      await provider.retryFailedMessage(failed.tempId!);
+      await pump();
+
+      expect(oldPathSends, isEmpty);
+      expect(rowOf(failed.tempId!).deliveryStatus,
+          MessageDeliveryStatus.failed);
+    });
+
+    test('once it goes through it is no longer kept: a restart shows the '
+        'sent message once, no red copy', () async {
+      bob([1]);
+      outbox.refuse.add(1);
+      final failed = await send('then sent');
+      outbox.refuse.clear();
+      await provider.retryFailedMessage(failed.tempId!);
+      await pump();
+      expect(await unsentKeys(), isEmpty);
+
+      await restart();
+      final rows = provider.messages.where((m) => m.content == 'then sent');
+      expect(rows, hasLength(1));
+      expect(rows.single.deliveryStatus, MessageDeliveryStatus.sent);
+    });
+
+    test('a send the route hands to the old path is not kept as unsent',
+        () async {
+      bob([1, 2], addressed: [1]);
+      await send('over the server');
+
+      expect(oldPathSends, hasLength(1));
+      expect(await unsentKeys(), isEmpty);
+    });
+
+    test('one past its own timer is neither shown nor retryable after a '
+        'restart, and its words are gone', () async {
+      await setUpWith(timer: 60);
+      bob([1]);
+      outbox.refuse.add(1);
+      final failed = await send('vanishing unsent');
+      // Two minutes later: rewrite the kept entry's send time.
+      final kept =
+          (await encryption.store.boxUnsent(1, 10))[failed.tempId!]!;
+      await encryption.store.saveBoxUnsent(1, failed.tempId!, {
+        ...kept,
+        'at': failed.createdAt.millisecondsSinceEpoch - 120 * 1000,
+      });
+
+      await restart();
+
+      expect(
+        provider.messages.where((m) => m.tempId == failed.tempId),
+        isEmpty,
+      );
+      expect(await unsentKeys(), isEmpty);
+    });
+
+    test('it is never a stored message: nothing a catch-up or history file '
+        'reads holds it', () async {
+      bob([1]);
+      outbox.refuse.add(1);
+      await send('not a record');
+
+      expect(await unsentKeys(), hasLength(1));
+      expect(await encryption.store.allLocalMessageRecords(), isEmpty);
+    });
+
+    test('deleting the failed row drops it for good, and tells the server '
+        'nothing', () async {
+      bob([1]);
+      outbox.refuse.add(1);
+      final failed = await send('delete me');
+
+      provider.deleteMessage(failed.id, forEveryone: false);
+      await pump();
+      expect(provider.messages.where((m) => m.tempId == failed.tempId),
+          isEmpty);
+      expect(emitted, isNot(contains('deleteMessage')));
+
+      await restart();
+      expect(provider.messages.where((m) => m.tempId == failed.tempId),
+          isEmpty);
+      expect(await unsentKeys(), isEmpty);
+    });
+
+    test('signing out destroys every kept one', () async {
+      bob([1]);
+      outbox.refuse.add(1);
+      await send('gone at logout');
+      expect(await unsentKeys(), hasLength(1));
+
+      provider.clearAll();
+      await pump();
+
+      expect(await unsentKeys(), isEmpty);
+    });
+
+    test('one a peer device took but whose own copy could not be stored '
+        'stays kept: after a restart it is red, not gone', () async {
+      bob([1]);
+      encryption.recordsUnproven = true;
+      final shown = await send('took it, not stored');
+      expect(shown.deliveryStatus, MessageDeliveryStatus.sent);
+      encryption.recordsUnproven = false;
+
+      await restart();
+
+      expect(rowOf(shown.tempId!).deliveryStatus,
+          MessageDeliveryStatus.failed);
+    });
+
+    test('a kept copy of a message whose sent record did land (the app died '
+        'before the drop) is not shown again, and goes', () async {
+      bob([1]);
+      final sent = await send('landed');
+      final wire = envelopeOf(outbox.delivered.single.$2)['msgId'] as String;
+      await encryption.store.saveBoxUnsent(1, sent.tempId!, {
+        'c': 10,
+        'at': sent.createdAt.millisecondsSinceEpoch,
+        'w': wire,
+        'type': 'TEXT',
+        'content': 'landed',
+      });
+
+      await restart();
+
+      final rows = provider.messages.where((m) => m.content == 'landed');
+      expect(rows, hasLength(1));
+      expect(rows.single.deliveryStatus, MessageDeliveryStatus.sent);
+      await pump();
+      expect(await unsentKeys(), isEmpty);
+    });
+
+    test('reopening the chat while it is still going adds no second row; '
+        'once it goes through there is one sent row and nothing kept',
+        () async {
+      bob([1]);
+      final hold = outbox.hold = Completer<void>();
+      provider.sendMessage('in flight');
+      await pump();
+      final tempId = provider.messages.last.tempId!;
+
+      await reopenChat();
+      expect(provider.messages.where((m) => m.tempId == tempId), hasLength(1));
+      expect(rowOf(tempId).deliveryStatus, MessageDeliveryStatus.sending);
+
+      outbox.hold = null;
+      hold.complete();
+      await pump(80);
+
+      final rows = provider.messages.where((m) => m.content == 'in flight');
+      expect(rows, hasLength(1));
+      expect(rows.single.deliveryStatus, MessageDeliveryStatus.sent);
+      expect(await unsentKeys(), isEmpty);
+    });
+
+    test('a kept reply to a message that itself disappears holds none of '
+        'its words (E18a)', () async {
+      bob([1]);
+      outbox.refuse.add(1);
+      provider.setReplyingTo(
+        quotable(5, wireId: 'wire-00000005').copyWith(disappearAfterSeconds: 60),
+      );
+      final failed = await send('re: fleeting');
+      expect(failed.deliveryStatus, MessageDeliveryStatus.failed);
+
+      final kept = await encryption.store.boxUnsent(1, 10);
+      final reply = kept[failed.tempId!]!['reply'] as Map;
+      expect(reply['content'], '');
+      expect(reply['wireId'], 'wire-00000005');
+
+      await restart();
+      expect(rowOf(failed.tempId!).replyTo?.content, isEmpty);
+    });
+
+    test('a failed attachment comes back after a restart, and its retry '
+        're-sends the SAME box id, key, IV, wire id and shape — never a '
+        'second upload', () async {
+      bob([1]);
+      outbox.refuse.add(1);
+      await provider.sendVideoMessage(
+        'tok',
+        List<int>.generate(3000, (i) => i % 251),
+        2,
+        duration: 4,
+        width: 720,
+        height: 720,
+        thumbHash: 'THASH',
+      );
+      await pump();
+      final first = envelopeOf(outbox.delivered.single.$2);
+      expect(first, containsPair('mediaWidth', 720));
+      final uploads = outbox.uploads.length;
+      final tempId = provider.messages.last.tempId!;
+
+      await restart();
+      expect(rowOf(tempId).deliveryStatus, MessageDeliveryStatus.failed);
+      provider.refreshBoxDeviceLists();
+      outbox
+        ..refuse.clear()
+        ..delivered.clear();
+      await provider.retryFailedMessage(tempId);
+      await pump();
+
+      expect(outbox.uploads, hasLength(uploads));
+      final again = envelopeOf(outbox.delivered.single.$2);
+      for (final key in [
+        'msgId',
+        'boxMedia',
+        'mediaKey',
+        'mediaIv',
+        'mediaDuration',
+        'mediaWidth',
+        'mediaHeight',
+        'mediaThumbHash',
+      ]) {
+        expect(again[key], first[key], reason: key);
+      }
+      expect(oldPathSends, isEmpty);
+      expect(
+        provider.messages
+            .singleWhere((m) => m.messageType == MessageType.video)
+            .deliveryStatus,
+        MessageDeliveryStatus.sent,
       );
     });
   });

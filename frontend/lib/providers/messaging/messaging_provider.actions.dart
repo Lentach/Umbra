@@ -41,6 +41,25 @@ extension MessagingActions on MessagingProvider {
   }
 
   void deleteMessage(int messageId, {required bool forEveryone}) {
+    // A box message that did not go out (decision 104) has no server row
+    // and no record: deleting it drops this device's kept copy, nothing
+    // else.
+    final unsent = _messages
+        .where((m) => m.id == messageId && m.tempId != null)
+        .firstOrNull;
+    final owner = _currentUserId;
+    if (unsent != null &&
+        owner != null &&
+        unsent.deliveryStatus == MessageDeliveryStatus.failed &&
+        _boxUnsentTempIds.remove(unsent.tempId)) {
+      _messages.remove(unsent);
+      _encryptionProvider?.dropBoxUnsent(owner, unsent.tempId!).ignore();
+      if (_conversationCache.containsKey(unsent.conversationId)) {
+        _updateCache(unsent.conversationId);
+      }
+      notifyListeners();
+      return;
+    }
     if (isLocalMessageId(messageId)) {
       // A box message (decision 14) has no server row to delete: "for me"
       // is this device's copy, "for everyone" goes over the box (item 4).

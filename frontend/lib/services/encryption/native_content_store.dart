@@ -120,13 +120,15 @@ class NativeContentStore implements ContentKv {
   static const String _metaShredGen = 'shred_gen';
   static const String _metaShredDoneGen = 'shred_done_gen';
 
-  /// The three plaintext-bearing families. Everything else under `e2e_` is
-  /// control data and stays cleartext-in-encrypted-DB (see class doc).
+  /// The four plaintext-bearing families (the fourth: box messages that did
+  /// not go out, decision 104). Everything else under `e2e_` is control data
+  /// and stays cleartext-in-encrypted-DB (see class doc).
   static bool isSealedKey(String k) =>
       k.startsWith('e2e_') &&
       (k.contains('_decrypted_') ||
           k.contains('_decrypt_raw_v1_') ||
-          k.contains('_pendsend_v1_'));
+          k.contains('_pendsend_v1_') ||
+          k.contains('_boxunsent_v1_'));
 
   static final RegExp _idBearingKey = RegExp(
     r'^e2e_(\d+)_(?:decrypted|decrypt_raw_v1)_(\d+)$',

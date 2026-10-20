@@ -1614,14 +1614,41 @@ extension MessagingBox on MessagingProvider {
   }
 
   /// Adds [conversationId]'s stored box messages to the open chat once its
-  /// first history page has landed. A separate step on purpose: the page's
-  /// own merge stays the single synchronous install it is on a warm entry.
+  /// first history page has landed, with the ones that did not go out
+  /// (decision 104). A separate step on purpose: the page's own merge stays
+  /// the single synchronous install it is on a warm entry.
   Future<void> _mergeLocalBoxRows(int conversationId) async {
     final rows = await _localBoxRows(conversationId);
-    if (rows.isEmpty || _isDisposed) return;
+    final unsent = await _unsentBoxRows(conversationId);
+    if ((rows.isEmpty && unsent.isEmpty) || _isDisposed) return;
     final viewing = _effectiveActiveConversationId ?? _paginationConversationId;
     if (viewing != conversationId) return;
     final held = {for (final m in _messages) m.id};
+    final heldTempIds = {for (final m in _messages) ?m.tempId};
+    final user = _currentUserId;
+    // The app died between storing a sent record and dropping its kept copy
+    // (decision 104): the stored message wins, and the copy goes, or a retry
+    // would store it twice here.
+    final sentWires = {
+      for (final row in rows)
+        if (row.senderId == user) ?row.wireId,
+    };
+    final stillUnsent = <MessageModel>[];
+    for (final row in unsent) {
+      final tempId = row.tempId!;
+      if (heldTempIds.contains(tempId) ||
+          _boxInFlight.contains(tempId) ||
+          !sentWires.contains(_sendTokenByTempId[tempId])) {
+        stillUnsent.add(row);
+        continue;
+      }
+      _boxUnsentTempIds.remove(tempId);
+      _boxTempIds.remove(tempId);
+      _sendTokenByTempId.remove(tempId);
+      if (user != null) {
+        _encryptionProvider?.dropBoxUnsent(user, tempId).ignore();
+      }
+    }
     final now = DateTime.now();
     final live = [
       for (final row in rows)
@@ -1630,7 +1657,6 @@ extension MessagingBox on MessagingProvider {
     ];
     // An attachment whose download never finished (the app closed first)
     // is fetched again (E17c); its copy's presence is checked, not read.
-    final user = _currentUserId;
     final media = boxMedia;
     if (user != null && media != null) {
       for (final row in live) {
@@ -1642,6 +1668,8 @@ extension MessagingBox on MessagingProvider {
     final missing = [
       for (final row in live)
         if (!held.contains(row.id)) row,
+      for (final row in stillUnsent)
+        if (!heldTempIds.contains(row.tempId)) row,
     ];
     if (missing.isNotEmpty) {
       _messages = [..._messages, ...missing]
@@ -1654,6 +1682,7 @@ extension MessagingBox on MessagingProvider {
       }
       notifyListeners();
     }
+    if (rows.isEmpty) return;
     // Shown now: what it holds of the peer's is read (slice (g), E61d), and
     // seen here across a restart (decision 73).
     _sendBoxReadReceipt(conversationId);
@@ -1680,6 +1709,136 @@ extension MessagingBox on MessagingProvider {
       for (final MapEntry(key: id, value: record) in records.entries)
         ?_boxRowFrom(id, conversationId, record, conversation),
     ];
+  }
+
+  /// Keeps box send [tempId] of account [owner] on the device until it goes
+  /// out or the user deletes it (decision 104): its row's words, time,
+  /// timer, quote and an uploaded attachment, with the wire id every retry
+  /// re-seals under. Never the words of a quoted message that itself
+  /// disappears (E18a). Nothing once [owner] is no longer the signed-in
+  /// account: sign-out destroyed that family, and a send still running
+  /// then must not write its words back, nor into the next account's.
+  Future<void> _keepBoxUnsent(
+    String tempId, {
+    required int? owner,
+    required int conversationId,
+    required DateTime createdAt,
+    required String content,
+    required String messageType,
+    required int? ttl,
+    required int? replyToId,
+    required ReplyToPreview? replyTo,
+    String? mediaUrl,
+    String? mediaKey,
+    String? mediaIv,
+    int? mediaDuration,
+    int? mediaWidth,
+    int? mediaHeight,
+    String? mediaThumbHash,
+  }) async {
+    // A send that outlived its sign-out writes nothing: its words must not
+    // come back after the sweep, nor land in the next account's session.
+    if (owner == null || owner != _currentUserId) return;
+    _boxUnsentTempIds.add(tempId);
+    final quote = replyTo == null
+        ? null
+        : (replyTo.quotedDisappears
+                  ? ReplyToPreview(
+                      id: replyTo.id,
+                      content: '',
+                      senderUsername: replyTo.senderUsername,
+                      messageType: replyTo.messageType,
+                      wireId: replyTo.wireId,
+                      senderId: replyTo.senderId,
+                      quotedDisappears: true,
+                    )
+                  : replyTo)
+              .toJson();
+    await _encryptionProvider?.saveBoxUnsent(owner, tempId, {
+      'c': conversationId,
+      'at': createdAt.millisecondsSinceEpoch,
+      'w': _sendTokenFor(tempId),
+      'type': messageType,
+      'content': content,
+      'ttl': ?ttl,
+      'replyId': ?replyToId,
+      'reply': ?quote,
+      'mediaUrl': ?mediaUrl,
+      'mediaKey': ?mediaKey,
+      'mediaIv': ?mediaIv,
+      'mediaDuration': ?mediaDuration,
+      'mediaWidth': ?mediaWidth,
+      'mediaHeight': ?mediaHeight,
+      'mediaThumbHash': ?mediaThumbHash,
+    });
+  }
+
+  /// The box sends of [conversationId] that did not go out (decision 104),
+  /// as the red rows they were — `sending` while this session's attempt is
+  /// still running — each with its wire id restored and pinned to the box,
+  /// so a retry re-seals under it and never takes the old path: a device
+  /// may already hold it, and only the box reader drops a repeated wire id.
+  Future<List<MessageModel>> _unsentBoxRows(int conversationId) async {
+    final own = _currentUserId;
+    if (own == null) return const [];
+    final entries = await _encryptionProvider?.boxUnsent(own, conversationId);
+    if (entries == null || entries.isEmpty || own != _currentUserId) {
+      return const [];
+    }
+    return [
+      for (final MapEntry(key: tempId, value: entry) in entries.entries)
+        ?_unsentRow(own, conversationId, tempId, entry),
+    ];
+  }
+
+  MessageModel? _unsentRow(
+    int own,
+    int conversationId,
+    String tempId,
+    Map<String, dynamic> e,
+  ) {
+    if (e case {
+      'at': final int at,
+      'w': final String wire,
+      'content': final String content,
+      'type': final String type,
+    }) {
+      final messageType = _parseMessageTypeString(type);
+      if (messageType == null) return null;
+      _sendTokenByTempId[tempId] = wire;
+      _boxTempIds.add(tempId);
+      _boxUnsentTempIds.add(tempId);
+      final createdAt = DateTime.fromMillisecondsSinceEpoch(at);
+      final ttl = e['ttl'] is int ? e['ttl'] as int : null;
+      final reply = e['reply'];
+      return MessageModel(
+        id: -++MessagingProvider._tempIdSeq,
+        content: content,
+        senderId: own,
+        senderUsername: '',
+        conversationId: conversationId,
+        createdAt: createdAt,
+        deliveryStatus: _boxInFlight.contains(tempId)
+            ? MessageDeliveryStatus.sending
+            : MessageDeliveryStatus.failed,
+        messageType: messageType,
+        disappearAfterSeconds: ttl,
+        expiresAt: ttl == null ? null : createdAt.add(Duration(seconds: ttl)),
+        tempId: tempId,
+        replyToMessageId: e['replyId'] is int ? e['replyId'] as int : null,
+        replyTo: reply is Map<String, dynamic>
+            ? ReplyToPreview.fromJson(reply)
+            : null,
+        mediaUrl: e['mediaUrl'] as String?,
+        mediaKey: e['mediaKey'] as String?,
+        mediaIv: e['mediaIv'] as String?,
+        mediaDuration: e['mediaDuration'] as int?,
+        mediaWidth: e['mediaWidth'] as int?,
+        mediaHeight: e['mediaHeight'] as int?,
+        mediaThumbHash: e['mediaThumbHash'] as String?,
+      );
+    }
+    return null;
   }
 
   MessageModel? _boxRowFrom(
@@ -2492,8 +2651,15 @@ extension MessagingBox on MessagingProvider {
       );
       enc.cacheDecryption(localId, sent);
       await _persistDecryptedContent(sent);
-      if (await enc.recordExists(localId) != true) {
-        // Shown from RAM this session; nothing re-offers a sent message.
+      if (await enc.recordExists(localId) == true) {
+        // A peer device took it and our copy is stored: no longer a message
+        // that did not go out (decision 104).
+        _boxUnsentTempIds.remove(tempId);
+        await enc.dropBoxUnsent(ownUserId, tempId);
+      } else {
+        // Shown from RAM this session. The kept copy stays, so after a
+        // restart it comes back red; its retry reuses the wire id and the
+        // peer drops the repeat (decision 104).
         E2ePersistentDiag.record('BOX_SENT_STORE_UNPROVEN', {'msgId': localId});
       }
       _addMessageToState(sent);

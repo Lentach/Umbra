@@ -318,6 +318,15 @@ void main() {
       expect(db.meta['shred_gen'], isNotNull); // durable, not in-memory only
     });
 
+    test('removing an unsent box message stamps it too (decision 104)',
+        () async {
+      store = await openStore();
+      const key = 'e2e_7_boxunsent_v1_temp_1760000000000_7';
+      await store!.setString(key, '{"content":"unsent words"}');
+      expect(await store!.remove(key), isTrue);
+      expect(store!.rotationPending, isTrue);
+    });
+
     test('removing a control record does NOT stamp', () async {
       store = await openStore();
       await store!.setInt('e2e_7_retention_epoch_v1', 1);

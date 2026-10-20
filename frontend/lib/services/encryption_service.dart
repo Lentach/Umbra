@@ -3360,8 +3360,9 @@ class EncryptionService {
   }
 
   /// Destroy EVERY persisted plaintext record for the signed-in account:
-  /// message plaintext, the raw replay cache, and the pending-send records
-  /// holding outgoing plaintext.
+  /// message plaintext, the raw replay cache, the pending-send records
+  /// holding outgoing plaintext, and box messages that did not go out
+  /// (decision 104).
   ///
   /// IRREVERSIBLE, and far wider than [removeDecryptedContent] — this is the
   /// primitive behind the user-facing "delete all local history" action, so it
@@ -3421,6 +3422,7 @@ class EncryptionService {
     await sweepPrefs(prefix, collectIds: true);
     await sweepPrefs(_rawDecryptedContentPrefix(userId), collectIds: true);
     await sweepPrefs(_pendingSendPrefix(userId));
+    await sweepPrefs(_boxUnsentPrefix(userId));
 
     // Retire what we destroyed, BEFORE reporting success.
     //
@@ -4324,6 +4326,171 @@ class EncryptionService {
       if (live.isNotEmpty) parked[key] = live;
     }
     return parked;
+  }
+
+  // ── Box messages that did not go out (decision 104) ─────────────────────
+  //
+  // A box send that failed or never got an answer keeps the message here so
+  // it is still shown red with "Ponów" after leaving the chat or a restart;
+  // nothing resends it until the user taps. ONE key per tempId
+  // (`e2e_<uid>_boxunsent_v1_<tempId>`): it holds message words, so it is a
+  // sealed family on web AND native (a removal is shredded), and it is NOT
+  // a stored message — no reader of `_decrypted_` records (catch-up, the
+  // history file, the unread seed) can see it. Each entry carries its chat
+  // (`c`) and when its row was made (`at`, ms); one with a timer (`ttl`, s)
+  // dies at `at + ttl` (E18), anything older than 30 days is pruned, and at
+  // most [boxUnsentCap] are kept (newest). Writes go one after another
+  // under the cross-context lock and an in-process queue, like the parked
+  // actions. Swept by [clearBoxUnsent] at sign-out, by [clearAllKeys] and by
+  // [clearDecryptedContentCache]; carried by no backup.
+
+  @visibleForTesting
+  static const int boxUnsentCap = 200;
+
+  static const Duration _boxUnsentLife = Duration(days: 30);
+
+  static String _boxUnsentPrefix(int userId) => 'e2e_${userId}_boxunsent_v1_';
+
+  /// Keeps [entry] (JSON-safe, with int `c` and `at`) for [tempId] of
+  /// [userId] — the account that made the send, never "whoever is signed
+  /// in now": a send still running at sign-out must not land in the next
+  /// account's family.
+  Future<void> saveBoxUnsent(
+    int userId,
+    String tempId,
+    Map<String, Object?> entry,
+  ) async {
+    await _boxUnsentWrite(userId, () async {
+      try {
+        final prefs = await _sharedPrefs;
+        await _reloadPrefsForCrossContext(prefs);
+        await prefs.setString(
+          '${_boxUnsentPrefix(userId)}$tempId',
+          jsonEncode(entry),
+        );
+        final read = _readBoxUnsent(prefs, userId);
+        final kept = read.live.entries.toList()
+          ..sort(
+            (a, b) => _boxUnsentAt(b.value).compareTo(_boxUnsentAt(a.value)),
+          );
+        for (final key in [
+          ...read.dead,
+          for (final e in kept.skip(boxUnsentCap))
+            '${_boxUnsentPrefix(userId)}${e.key}',
+        ]) {
+          await prefs.remove(key);
+        }
+      } on Object catch (e) {
+        E2ePersistentDiag.record('BOX_UNSENT_WRITE_FAILED', {
+          'error': e.runtimeType.toString(),
+        });
+      }
+    });
+  }
+
+  /// [userId]'s entries for [conversationId], by tempId. Entries past their
+  /// timer or 30 days old (any chat) are destroyed on the way.
+  Future<Map<String, Map<String, dynamic>>> boxUnsent(
+    int userId,
+    int conversationId,
+  ) async {
+    var live = const <String, Map<String, dynamic>>{};
+    await _boxUnsentWrite(userId, () async {
+      try {
+        final prefs = await _sharedPrefs;
+        await _reloadPrefsForCrossContext(prefs);
+        final read = _readBoxUnsent(prefs, userId);
+        live = read.live;
+        for (final key in read.dead) {
+          await prefs.remove(key);
+        }
+      } on Object catch (_) {
+        live = const {};
+      }
+    });
+    return {
+      for (final MapEntry(:key, :value) in live.entries)
+        if (value['c'] == conversationId) key: value,
+    };
+  }
+
+  /// Drops what [userId] keeps for [tempId]: it went out, or the user
+  /// deleted it.
+  Future<void> dropBoxUnsent(int userId, String tempId) async {
+    await _boxUnsentWrite(userId, () async {
+      try {
+        final prefs = await _sharedPrefs;
+        await prefs.remove('${_boxUnsentPrefix(userId)}$tempId');
+      } on Object catch (e) {
+        E2ePersistentDiag.record('BOX_UNSENT_WRITE_FAILED', {
+          'error': e.runtimeType.toString(),
+        });
+      }
+    });
+  }
+
+  /// Destroys every entry of [userId] (sign-out): a message nobody sent
+  /// must not wait for the next account on this device.
+  Future<void> clearBoxUnsent(int userId) => _boxUnsentWrite(userId, () async {
+    try {
+      final prefs = await _sharedPrefs;
+      await _reloadPrefsForCrossContext(prefs);
+      final prefix = _boxUnsentPrefix(userId);
+      for (final key in prefs.getKeys().toList()) {
+        if (key.startsWith(prefix)) await prefs.remove(key);
+      }
+    } on Object catch (e) {
+      E2ePersistentDiag.record('BOX_UNSENT_WRITE_FAILED', {
+        'error': e.runtimeType.toString(),
+      });
+    }
+  });
+
+  Future<void> _boxUnsentTail = Future<void>.value();
+
+  Future<void> _boxUnsentWrite(int userId, Future<void> Function() write) {
+    final run = _boxUnsentTail.then(
+      (_) => _sessionCrossContextLock('fireplace-e2e-boxunsent-$userId', write),
+    );
+    _boxUnsentTail = run.then((_) {}, onError: (Object _) {});
+    return run;
+  }
+
+  static int _boxUnsentAt(Map<String, dynamic> entry) => entry['at'] as int;
+
+  /// Every entry of [userId] by tempId: `live` — with a chat and a time,
+  /// within 30 days and its own timer — and the keys of the `dead` ones. A
+  /// row that cannot be read (a sealed value whose key is unavailable now)
+  /// is neither: the key may come back.
+  ({Map<String, Map<String, dynamic>> live, List<String> dead}) _readBoxUnsent(
+    ContentKv prefs,
+    int userId,
+  ) {
+    final prefix = _boxUnsentPrefix(userId);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final oldest = now - _boxUnsentLife.inMilliseconds;
+    final live = <String, Map<String, dynamic>>{};
+    final dead = <String>[];
+    for (final key in prefs.getKeys()) {
+      if (!key.startsWith(prefix)) continue;
+      final raw = prefs.getString(key);
+      if (raw == null) continue;
+      final Object? decoded;
+      try {
+        decoded = jsonDecode(raw);
+      } on FormatException {
+        continue;
+      }
+      if (decoded case {'c': int _, 'at': final int at}) {
+        final ttl = (decoded as Map<String, dynamic>)['ttl'];
+        if (at < oldest || (ttl is int && at + ttl * 1000 <= now)) {
+          dead.add(key);
+        } else {
+          live[key.substring(prefix.length)] = decoded;
+        }
+      }
+    }
+    return (live: live, dead: dead);
   }
 
   // ── Retired ids ──────────────────────────────────────────────────────────

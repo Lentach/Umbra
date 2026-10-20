@@ -17,7 +17,14 @@ The d101 drive accounts most likely can't take a box send to d101a. d101a (user 
 3. Hold only the box's `send` ack: drop the incoming `43/box,…` frame and let the outgoing frame through. Reload the sender and check both sides.
 4. Read the reason for every red send in Privacy & Safety → the diagnostics panel. The page console doesn't carry `BOX_*`/`SEND_*` lines.
 
-## Design sketch (no code written yet)
+### Rerun result (2026-10-20, release web 0.2.67 / `002fce58`, dev stack)
+
+1. Device 8 revoked from d101a's Devices screen on 8091 (d101a's primary, #1). Live after: #1, #6.
+2. Control send F4 (8094) → d101a: `ctl1` went ✓ and arrived. The 10-17 instant reds were most likely device 8 under E101b; their diag was never read, so that stays an inference.
+3. With an init-script `WebSocket` subclass dropping only the incoming `43/box,` ack (one dropped: `43/box,3[{"ok":true}]`), `held1` sat on the clock; after a reload F4 showed no `held1`, d101a had it. The loss mode "the friend has it, the sender lost it" is confirmed.
+4. No send went red, so there was no reason to read.
+
+## Design (built 2026-10-20: E104a in `metadata-privacy-decisions.md`)
 
 - **Store:** `e2e_<uid>_boxunsent_v1_<tempId>` in content kv, one key per message.
   - It holds message text, like `pendsend_v1_` (also pending-send plaintext, also sealed), not control data like `boxact_v1`. Register it:
@@ -48,3 +55,16 @@ The d101 drive accounts most likely can't take a box send to d101a. d101a (user 
 - On web, a value written under `boxunsent_v1` reads back as a sealed envelope.
 - On Android, `isSealedKey` matches a real `boxunsent` key, and removing one flips `rotationPending`.
 - Logout clears the family.
+
+## As built: where it differs from the sketch
+
+- API on `EncryptionService`: `saveBoxUnsent(uid, …)`, `boxUnsent(uid, chat)` (also destroys dead entries), `dropBoxUnsent(uid, …)`, `clearBoxUnsent(uid)`. The account is always passed in: the service's own user id survives logout. The cap is 200.
+- The entry keeps no peer id: the retry finds the chat's peer.
+- The write sits before `_boxRoute` inside the box branch, and runs again at `BOX_RETRY_NO_ROUTE`. It is skipped once the account that started the send has signed out. When the route chooses the old path, the entry is dropped without an await, so the old path's emit keeps its turns.
+- The drop after a send waits for the sent record to be PROVEN stored; an unproven store keeps the entry, so the message comes back red rather than not at all.
+- On chat open, an entry whose wire id a stored sent row of ours already carries (the app died between the record write and the drop) is dropped, not shown.
+- Logout clears the family from `MessagingProvider.clearAll` (logout and an account switch). "Delete all local history" (`clearDecryptedContentCache`) sweeps it too.
+- A restored row is `sending`, not `failed`, while this session's attempt for it is still running. A negative id is never an action target, so no pin, edit or react opens for it.
+- Deleting a red row: delete-for-me drops it on the device. The old code emitted a negative id to the server.
+- `_pendingSendContent` is not re-seeded: a box send never reads it.
+- Residual: a second web tab of the same account shows the other tab's in-flight send red; its retry reuses the wire id (the friend drops the repeat), but this device may store it twice.

@@ -1552,6 +1552,27 @@ class EncryptionProvider extends ChangeNotifier {
   Future<void> dropParkedBoxActions(int conversationId, WireKey wire) =>
       _encryptionService.dropParkedBoxActions(conversationId, wire);
 
+  /// Delegates to [EncryptionService.saveBoxUnsent] (decision 104).
+  Future<void> saveBoxUnsent(
+    int userId,
+    String tempId,
+    Map<String, Object?> entry,
+  ) => _encryptionService.saveBoxUnsent(userId, tempId, entry);
+
+  /// Delegates to [EncryptionService.boxUnsent] (decision 104).
+  Future<Map<String, Map<String, dynamic>>> boxUnsent(
+    int userId,
+    int conversationId,
+  ) => _encryptionService.boxUnsent(userId, conversationId);
+
+  /// Delegates to [EncryptionService.dropBoxUnsent] (decision 104).
+  Future<void> dropBoxUnsent(int userId, String tempId) =>
+      _encryptionService.dropBoxUnsent(userId, tempId);
+
+  /// Delegates to [EncryptionService.clearBoxUnsent] (decision 104).
+  Future<void> clearBoxUnsent(int userId) =>
+      _encryptionService.clearBoxUnsent(userId);
+
   /// Delegates to [EncryptionService.localMessageRecords].
   Future<Map<int, Map<String, dynamic>>> localMessageRecords(
     int conversationId,

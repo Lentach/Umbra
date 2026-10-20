@@ -1540,6 +1540,10 @@ extension MessagingSend on MessagingProvider {
     String? mediaThumbHash,
     _BoxRowAtSend? boxRowAtSend,
   }) async {
+    // The account this send belongs to, read before the first await: a
+    // sign-out or account switch while it runs must not see its kept copy
+    // (decision 104) written into the next session.
+    final sendOwner = _currentUserId;
     final e2eReady = _encryptionProvider?.isE2EReady ?? false;
     _e2eFlowLog('SEND_START', {
       'recipientId': recipientId,
@@ -1652,6 +1656,49 @@ extension MessagingSend on MessagingProvider {
       final onBox = isBoxMediaUrl(mediaUrl);
       final outbox = boxOutbox;
       final addresses = outbox?.addressesFor(recipientId) ?? const {};
+      // Decision 42: the chat's setting, taken into E2E per message at its
+      // send; one outside the timer sheet's range is no timer (E18b).
+      final ttl =
+          boxTtl != null &&
+              boxTtl >= kDisappearingMinSeconds &&
+              boxTtl <= kDisappearingMaxSeconds
+          ? boxTtl
+          : null;
+      // Decision 104: a box send is kept on the device from before anything
+      // can fail or hang until it goes out, so a failed one — or one a
+      // reload cut off mid-send — is still shown red with its wire id.
+      Future<void> keepUnsent() async {
+        final conversationId =
+            row?.conversationId ??
+            _conversationsProvider?.conversations
+                .where(
+                  (c) =>
+                      conv_helpers.getOtherUserId(c, _currentUserId) ==
+                      recipientId,
+                )
+                .firstOrNull
+                ?.id;
+        if (conversationId == null) return;
+        await _keepBoxUnsent(
+          tempId,
+          owner: sendOwner,
+          conversationId: conversationId,
+          createdAt: row?.createdAt ?? DateTime.now(),
+          content: content,
+          messageType: messageType,
+          ttl: ttl,
+          replyToId: effectiveReplyToId,
+          replyTo: replyTo,
+          mediaUrl: onBox ? mediaUrl : null,
+          mediaKey: onBox ? mediaKey : null,
+          mediaIv: onBox ? mediaIv : null,
+          mediaDuration: onBox ? mediaDuration : null,
+          mediaWidth: onBox ? mediaWidth : null,
+          mediaHeight: onBox ? mediaHeight : null,
+          mediaThumbHash: onBox ? mediaThumbHash : null,
+        );
+      }
+
       if (outbox != null &&
           addresses.isNotEmpty &&
           (onBox ||
@@ -1661,9 +1708,9 @@ extension MessagingSend on MessagingProvider {
                   mediaUrl == null &&
                   (effectiveReplyToId == null ||
                       _boxQuoteOf(replyTo) != null)))) {
+        await keepUnsent();
         final route = await _boxRoute(recipientId, outbox, addresses);
         if (route != null) {
-          final ttl = boxTtl;
           // Awaited: a throw must reach this try's failure handling.
           return await _sendOverBox(
             route,
@@ -1673,15 +1720,7 @@ extension MessagingSend on MessagingProvider {
             sendToken: _sendTokenFor(tempId),
             linkPreview: linkPreview,
             messageType: messageType,
-            // Decision 42: the chat's setting, taken into E2E per message at
-            // its send; one outside the timer sheet's range is no timer
-            // (E18b).
-            ttl:
-                ttl != null &&
-                    ttl >= kDisappearingMinSeconds &&
-                    ttl <= kDisappearingMaxSeconds
-                ? ttl
-                : null,
+            ttl: ttl,
             replyTo: replyTo,
             mediaUrl: onBox ? mediaUrl : null,
             mediaKey: onBox ? mediaKey : null,
@@ -1703,8 +1742,14 @@ extension MessagingSend on MessagingProvider {
         // no old path at all (owner decision 52): the server does not know
         // the pair, and a row naming it must never be attempted.
         _e2eFlowLog('BOX_RETRY_NO_ROUTE', {'tempId': tempId});
+        await keepUnsent();
         _markMessageFailed(tempId, 'Could not send. Try again.');
         return false;
+      }
+      // The route chose the old path (decision 16): this send is not the
+      // box's to keep. Not awaited, so the old path's emit keeps its turns.
+      if (_boxUnsentTempIds.remove(tempId) && sendOwner != null) {
+        _encryptionProvider?.dropBoxUnsent(sendOwner, tempId).ignore();
       }
 
       // 3. Resolve the addresses this send must reach (spec §5.2 + §12

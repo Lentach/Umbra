@@ -626,12 +626,14 @@ void main() {
 
     // Parked actions hold edit text and emoji, the kept lists name every box
     // friend's user id and authorization (E50c), the tombstones name senders,
-    // the seen marks say when each chat was last read here (E73a).
+    // the seen marks say when each chat was last read here (E73a), an unsent
+    // box message holds its words (decision 104).
     for (final key in [
       'e2e_37_boxact_v1',
       'e2e_37_boxlists_v1',
       'e2e_37_boxdel_v1',
       'e2e_37_boxseen_v1',
+      'e2e_37_boxunsent_v1_temp_1760000000000_37',
     ]) {
       test('$key is sealed, never cleartext', () async {
         final kv = await openStore();
