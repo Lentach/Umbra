@@ -830,10 +830,7 @@ class ConnectionProvider extends ChangeNotifier {
         'activeConvId': activeConvId,
         'socketConnected': _socketService.isConnected,
       });
-      _socketService.getMessages(
-        activeConvId,
-        limit: AppConstants.messagePageSize,
-      );
+      _refetchActiveChat(activeConvId);
     }
 
     // "Still empty" used to mean "the first answer was lost"; the contact
@@ -1121,10 +1118,7 @@ class ConnectionProvider extends ChangeNotifier {
     _socketService.getConversations();
     _conversationsProvider?.reemitPushClientState();
     if (activeConvId != null) {
-      _socketService.getMessages(
-        activeConvId,
-        limit: AppConstants.messagePageSize,
-      );
+      _refetchActiveChat(activeConvId);
     }
     E2eDiagLog.add('RESUME_RESYNC', {
       'activeConvId': activeConvId ?? -1,
@@ -1140,6 +1134,18 @@ class ConnectionProvider extends ChangeNotifier {
       if (userId == null || token == null) return;
       connect(userId, token, AppConfig.baseUrl);
     });
+  }
+
+  /// Re-reads the open chat's server history. A box chat (local id,
+  /// decision 52) has none, and its id is `2^48 + peer`: emitted, it would
+  /// name the friend to the server (wire.md "every chat-keyed emit is skipped
+  /// for a local id").
+  void _refetchActiveChat(int conversationId) {
+    if (isLocalConversationId(conversationId)) return;
+    _socketService.getMessages(
+      conversationId,
+      limit: AppConstants.messagePageSize,
+    );
   }
 
   // ---------- Event Routing ----------

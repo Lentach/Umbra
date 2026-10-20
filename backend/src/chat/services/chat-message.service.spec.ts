@@ -2093,6 +2093,19 @@ describe('ChatMessageService', () => {
         messages: [],
       });
     });
+
+    it('drops a box chat id silently: no query, no reply, nothing logged', async () => {
+      // Pre-fix clients re-assert an open box chat by its local id, 2^48 +
+      // the friend's user id (decision 52). Postgres refused it as out of range
+      // for `integer` and the gateway logged the id, naming the friend. An
+      // `error` reply would turn the client's in-flight sends red.
+      await service.handleGetMessages(mockClient as Socket, {
+        conversationId: 281474976710693,
+      });
+
+      expect(conversationsService.findById).not.toHaveBeenCalled();
+      expect(mockClient.emit).not.toHaveBeenCalled();
+    });
   });
 
   describe('per-device history reads (spec §5.3 + §12 amendment (viii))', () => {

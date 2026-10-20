@@ -9,6 +9,7 @@ import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/services/device_link/link_ceremony_controller.dart';
 import 'package:fireplace/services/socket_service.dart';
 import 'package:fireplace/services/server_clock.dart';
+import 'package:fireplace/utils/message_ids.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Test double for [SocketService] — simulates connect / socketReady without I/O.
@@ -303,6 +304,25 @@ void main() {
         reason:
             'socketReady must reassert foreground visibility after reconnect; states=$pushStates',
       );
+    });
+
+    test('socketReady never names an open box chat to the server', () async {
+      // A box chat's id is 2^48 + the friend's user id (decision 52): sent as
+      // `getMessages`, it tells the server who this account talks to. Seen on
+      // prod 10-20 as `value "281474976710693" is out of range`.
+      final conversations = ConversationsProvider();
+      connection.setProviders(
+        encryption: EncryptionProvider(),
+        friends: FriendsProvider(),
+        conversations: conversations,
+        messaging: MessagingProvider()..setConversationsProvider(conversations),
+      );
+      await connection.connect(1, 'test-token', 'http://localhost:3000');
+
+      conversations.openConversation(localConversationIdFor(37));
+      fakeSocket.simulateSocketReady();
+
+      expect(fakeSocket.getMessagesConversationIds, isEmpty);
     });
 
     test('socketReady reasserts background active chat as not visible',

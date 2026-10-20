@@ -588,6 +588,18 @@ export class ChatMessageService {
     const userId: number = client.data.user?.id;
     if (!userId) return;
 
+    // A box chat's LOCAL id (2^48 + the friend's user id, decision 52) has no
+    // row and is above Postgres `integer`. Pre-fix clients send it when they
+    // re-assert an open chat: drop it unread and unanswered, so it is never
+    // logged (a query error would carry the id, i.e. the friend) and never
+    // answered with `error`, which turns the client's in-flight sends red.
+    if (
+      typeof data?.conversationId === 'number' &&
+      data.conversationId > 2147483647
+    ) {
+      return;
+    }
+
     try {
       const dto = validateDto(GetMessagesDto, data);
       data = dto;
