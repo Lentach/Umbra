@@ -32,7 +32,12 @@
   - his live log showed no `BOX_*` line after `SOCKET_READY` and no list fetch for 37. The lead: the restored PWA's box receive never starts. NOT confirmed;
   - his contact backup stayed rev 3 (10-09); that is by design (restores never upload), not evidence.
 - Owner-owed: the old ruchens69 is a box friend (`boxOrigin`), which `friends_provider.dart:184` never sweeps. bob208 must remove it by hand before befriending the new account.
-- Owner-owed (carried): the `getMessages` local-id fix (`connection_provider.dart:833`, `:1124`); the same-origin re-link bug; the rest of Phase 4 step 1. The old-path drop waits for 101–103 / decision 98's staged plan (decision 86).
+- Owner-owed (carried): the `getMessages` local-id fix (`connection_provider.dart:833`, `:1124`); the same-origin re-link bug. Phase 4: 101–103 are built (0.2.66, rows now DONE). What remains of step 1 (`2026-10-08-friend-row-gap-check.md` §Safer plan) is the client hardening release:
+  - stop deleting on absence (`friends_provider.dart:196` `_unlisted` still returns null for a server friend without queues);
+  - carry chat id, request-queue addresses and the device list in the contact backup;
+  - merge the backup on a 409;
+  - send the app version at connect.
+  - Then steps 2–5 (measure, freeze, cut over, archive + drop).
 - Shelved by decision 105: the PWA wipe repro (recipe: wipe a test user's web storage, restore, send to it, watch the restored side for `BOX_*` after `SOCKET_READY`). Reopens only if the Android reinstall test fails.
 - Prod facts 10-20: benz93 (86) still has device 1 without a request queue (the only one on prod); last old-path message 10-11.
 - Traps: two lines added to `traps.md` (E2E).
