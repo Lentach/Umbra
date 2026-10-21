@@ -24,10 +24,11 @@
   - box friendship made over the box (0 `friend_requests` rows);
   - A wiped + password login (remint, contact restored): fixed build sends ✓ to enrolled B; the old build on another origin shows red "Ponów" (his exact symptom);
   - old-build A reminted (no key reaches B), B removes A, A removes B and invites, B accepts: friendship made; B's store holds `19:59:02 ACCOUNT_ANCHOR_REPLACED {peerId: 263}`; one message each way arrives.
+  - the exact prod state, then the owner's recovery (driven 20:20–20:24): both on 0.2.68, B removes A, A reminted on 0.2.68 invites, B's accept drops it (`20:21:58 BOX_REQUEST_UNVERIFIED served_list`; B shows nothing, A "Oczekuje"). Both origins then served the fix and reloaded: A's invite cannot be withdrawn (no cancel exists), so B INVITES A; A's waiting request takes it as an accept (E15f), B logs `20:23:46 ACCOUNT_ANCHOR_REPLACED`, friends on both sides with no tap on A, one message each way arrives.
 - NOT verified: Android/native build, prod.
 
 ## Notes for next session
-- Next action: release the fix (0.2.69: version bump, CI green, backend unchanged, web + APK per `docs/runbooks/android-release.md`), when the owner says so. Then PrezydentKarol updates the APK, and bob208 reloads the PWA; he invites bob208 again (his stuck pending invite may need removing first) and bob208 accepts.
+- Next action: release the fix (0.2.69: version bump, CI green, backend unchanged, web + APK per `docs/runbooks/android-release.md`), when the owner says so. Then: PrezydentKarol installs the APK and opens it; bob208 reloads the PWA; bob208 INVITES PrezydentKarol (not the other way: a box invite cannot be withdrawn); his waiting invite turns it into a friendship by itself.
 - Owner-owed: the release go; O31–O36 (on hold); the bob208 ↔ R0yb3r positive check (E111c); the step 3 rehearsal; jarekk / qwerty / benz93 backups.
 - Recipe: the hacker-mode durable panel can render stale; read `localStorage['flutter.e2e_diag_persist_v1']`. Fake installed mode for "Włącz łączenie": init script `Object.defineProperty(Navigator.prototype,'standalone',{get:()=>true})`. A `--name` regex selects flutter tests (`--plain-name` broke under cmd quoting).
 - Traps appended: E2E (box-made restore / stale pin, fixed); Tests (the Dart ratchet counts infos only, a warning fails CI).
