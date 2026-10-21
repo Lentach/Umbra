@@ -34,7 +34,8 @@ import '../services/device_list/device_list_cache.dart';
 import '../services/device_list/sender_list_info.dart';
 import '../services/media_crypto_service.dart';
 import '../services/encrypted_media_upload_service.dart';
-import '../services/encryption/prekey_identity.dart' show FriendFrameIdentity;
+import '../services/encryption/prekey_identity.dart'
+    show FriendFrameIdentity, friendFrameIdentity;
 import '../services/encryption_service.dart';
 import '../services/incoming_message_sound_service.dart';
 import '../services/link_preview_service.dart';

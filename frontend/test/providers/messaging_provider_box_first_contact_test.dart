@@ -13,6 +13,7 @@ import 'package:fireplace/services/box/box_wire.dart';
 import 'package:fireplace/services/box/queue_seal.dart';
 import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/services/contacts/contact_store.dart';
+import 'package:fireplace/services/device_list/device_authority_engine.dart';
 import 'package:fireplace/services/device_list/device_list_cache.dart';
 import 'package:fireplace/services/device_list/device_list_canonical.dart';
 import 'package:fireplace/services/encryption/content_kv.dart';
@@ -56,11 +57,13 @@ class _Enc extends EncryptionProvider {
     int userId, {
     required String identityKey,
     required Map<String, dynamic>? authorization,
+    bool replaceStaleAnchor = false,
   }) async {
     final real = await super.adoptServedAccount(
       userId,
       identityKey: identityKey,
       authorization: authorization,
+      replaceStaleAnchor: replaceStaleAnchor,
     );
     return servedList ?? real;
   }
@@ -526,15 +529,17 @@ void main() {
     },
   );
 
-  test('a friend from before the box gets the chat timer over the box',
-      () async {
-    await befriendBeforeTheBox();
+  test(
+    'a friend from before the box gets the chat timer over the box',
+    () async {
+      await befriendBeforeTheBox();
 
-    await alice.reader.sendBoxChatTimer(5, 3600, DateTime.now().toUtc());
-    await settle();
+      await alice.reader.sendBoxChatTimer(5, 3600, DateTime.now().toUtc());
+      await settle();
 
-    expect(bob.recordOf(1)!.settings.disappearingTimer, 3600);
-  });
+      expect(bob.recordOf(1)!.settings.disappearingTimer, 3600);
+    },
+  );
 
   test(
     'a request is kept undecrypted, the accept looks the handle up once and '
@@ -726,6 +731,116 @@ void main() {
     expect(bob.recordOf(1), isNull);
   });
 
+  /// The identity key a search answer serves for its one device.
+  String servedKey(Map<String, dynamic> entry) =>
+      (((entry['devices'] as List).first as Map)['bundle']
+              as Map)['identityPublicKey']
+          as String;
+
+  test('an account met again after its key changed (decision 112): the '
+      'accept pins the key its request carries over the stale one, and both '
+      'read each other', () async {
+    // Bob still holds the key of alice's install from an ended friendship.
+    final before = _Side(9, 'alice', _RoutingBox());
+    await before.start();
+    await bob.enc.adoptServedAccount(
+      1,
+      identityKey: servedKey(before.searchEntry),
+      authorization: null,
+    );
+    expect(
+      await alice.reader.sendBoxFriendRequest(bob.searchEntry),
+      FirstContactSend.sent,
+    );
+    await settle();
+    bob.answer = (_) => [alice.searchEntry];
+    expect(
+      await bob.reader.acceptBoxFriendRequest(1),
+      FirstContactAccept.accepted,
+    );
+    await settle();
+    expect(alice.recordOf(5)?.state, ContactState.friend);
+    await alice.sendText(5, 'again');
+    await bob.sendText(1, 'welcome back');
+    await settle();
+    expect(await bob.textsFrom(1), ['again']);
+    expect(await alice.textsFrom(5), ['welcome back']);
+    before.session.dispose();
+  });
+
+  test(
+    'a request to an account met again after its key changed (decision '
+    '112) goes under the key the search serves, and its accept lands',
+    () async {
+      final before = _Side(9, 'alice', _RoutingBox());
+      await before.start();
+      await bob.enc.adoptServedAccount(
+        1,
+        identityKey: servedKey(before.searchEntry),
+        authorization: null,
+      );
+      expect(
+        await bob.reader.sendBoxFriendRequest(alice.searchEntry),
+        FirstContactSend.sent,
+      );
+      await settle();
+      alice.answer = (_) => [bob.searchEntry];
+      expect(
+        await alice.reader.acceptBoxFriendRequest(5),
+        FirstContactAccept.accepted,
+      );
+      await settle();
+      expect(bob.recordOf(1)?.state, ContactState.friend);
+      before.session.dispose();
+    },
+  );
+
+  test('a box-made friend restored from the backup, which carries no keys, '
+      'has its list verified under the key one handle lookup serves '
+      '(E38d)', () async {
+    await befriend();
+    final dak = DeviceAuthorityEngine();
+    final enrollment = dak.mintEnrollment(
+      userId: 5,
+      identity: await bob.enc.encryptionService.identityKeyPairForLinking(),
+      createdAtMs: 1,
+    );
+    final list = dak.signList(
+      const DeviceList(
+        userId: 5,
+        version: 1,
+        devices: [
+          DeviceListEntry(deviceId: 1, platform: 'web', addedAtMs: 1000),
+        ],
+      ),
+    );
+    final authorization = {
+      'dakPub': enrollment['dakPub'],
+      'enrollmentSig': enrollment['enrollmentSig'],
+      'enrollmentCreatedAt': enrollment['createdAt'],
+      'listVersion': 1,
+      'listSignature': list['listSignature'],
+      'listCanonical': list['listCanonical'],
+    };
+    // A new install of an account whose only contact came back from the
+    // backup: the record, and no anchor for it.
+    final restored = _Side(7, 'carol', box);
+    await restored.start();
+    await restored.store.update(
+      5,
+      (_) => ContactRecord.fromJson(alice.recordOf(5)!.toBackupJson()),
+    );
+    restored.answer = (_) => [
+      {...bob.searchEntry, 'authorization': authorization},
+    ];
+
+    final verified = await restored.enc.getVerifiedDeviceList(5);
+
+    expect(verified.liveDeviceIds, [1]);
+    expect(restored.lookups, ['bob#0005']);
+    restored.session.dispose();
+  });
+
   test('a request to an account one of whose devices publishes no request '
       'address takes the old path (E15a)', () async {
     final entry = bob.searchEntry;
@@ -746,30 +861,33 @@ void main() {
     expect(bob.recordOf(1), isNull);
   });
 
-  test('with E2E not ready, a request to an account not all on the box takes '
-      'the old path, which needs no E2E; one the box would carry fails', () async {
-    final entry = bob.searchEntry;
-    final d1 = (entry['devices'] as List).first as Map<String, dynamic>;
-    final partial = {
-      ...entry,
-      'devices': [
-        d1,
-        {'deviceId': 2, 'bundle': d1['bundle']},
-      ],
-    };
-    alice.enc.ready = false;
-    expect(
-      await alice.reader.sendBoxFriendRequest(partial),
-      FirstContactSend.oldPath,
-    );
-    expect(
-      await alice.reader.sendBoxFriendRequest(bob.searchEntry),
-      FirstContactSend.failed,
-    );
-    await settle();
-    expect(alice.recordOf(5), isNull);
-    expect(bob.recordOf(1), isNull);
-  });
+  test(
+    'with E2E not ready, a request to an account not all on the box takes '
+    'the old path, which needs no E2E; one the box would carry fails',
+    () async {
+      final entry = bob.searchEntry;
+      final d1 = (entry['devices'] as List).first as Map<String, dynamic>;
+      final partial = {
+        ...entry,
+        'devices': [
+          d1,
+          {'deviceId': 2, 'bundle': d1['bundle']},
+        ],
+      };
+      alice.enc.ready = false;
+      expect(
+        await alice.reader.sendBoxFriendRequest(partial),
+        FirstContactSend.oldPath,
+      );
+      expect(
+        await alice.reader.sendBoxFriendRequest(bob.searchEntry),
+        FirstContactSend.failed,
+      );
+      await settle();
+      expect(alice.recordOf(5), isNull);
+      expect(bob.recordOf(1), isNull);
+    },
+  );
 
   test('a request from an account with a live sibling this device holds no '
       'self-queue address for takes the old path (E15a)', () async {

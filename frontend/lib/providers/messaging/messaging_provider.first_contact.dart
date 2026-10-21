@@ -109,6 +109,9 @@ extension MessagingFirstContact on MessagingProvider {
         userId,
         identityKey: identity,
         authorization: peer.authorization,
+        // No record, or a former one: the account is no contact now, so a
+        // key pinned for it is a leftover (decision 112).
+        replaceStaleAnchor: fresh,
       );
     } on Object catch (e) {
       _firstContactLog('BOX_REQUEST_REFUSED', userId, {
@@ -565,6 +568,10 @@ extension MessagingFirstContact on MessagingProvider {
         userId,
         identityKey: identity,
         authorization: peer.authorization,
+        // A pendingIn record is no friendship (decision 112): a key pinned
+        // for the account is a leftover, replaced only when a kept frame
+        // carries the very key served, so the request vouches for it.
+        replaceStaleAnchor: _keptCarries(record!, identity),
       );
     } on DeviceListVerificationException {
       // The answer does not vouch for itself, or another key is pinned.
@@ -598,6 +605,22 @@ extension MessagingFirstContact on MessagingProvider {
       final id = kept.localId;
       if (id != null) await enc.removeRawReplay(id);
     }
+  }
+
+  /// Whether one of [record]'s kept request frames is sealed under
+  /// [identity] — the served key the accept would pin in place of a stale
+  /// one (decision 112). A key no kept frame carries vouches for nothing.
+  bool _keptCarries(ContactRecord record, String identity) {
+    final String key;
+    try {
+      key = base64Encode(base64Decode(base64.normalize(identity)));
+    } on FormatException {
+      return false;
+    }
+    return (record.boxOrigin?.kept ?? const <KeptRequest>[]).any(
+      (kept) =>
+          friendFrameIdentity(kept.signal, key) == FriendFrameIdentity.matches,
+    );
   }
 
   /// Decrypts [record]'s kept requests that the served account vouches for:
@@ -972,7 +995,10 @@ extension MessagingFirstContact on MessagingProvider {
   /// box, whose list this device does not hold — from one `searchUsers` of
   /// its handle: `getDeviceList` would name the pair, and the server refuses
   /// it for a pair it does not know anyway. Its fresh bundles and addresses
-  /// are kept. Throws when no answer names that account.
+  /// are kept, and its identity becomes the account anchor when none is held
+  /// — a friend restored from the contact backup, which carries no keys, as
+  /// first contact pinned it (E38d). Throws when no answer names that
+  /// account.
   Future<Map<String, dynamic>?> lookupBoxPeerList(int userId) async {
     final link = boxFirstContact;
     final lookup = lookupHandle;
@@ -988,6 +1014,26 @@ extension MessagingFirstContact on MessagingProvider {
       throw StateError('box peer $userId: no search answer');
     }
     await link.firstContact.refreshServed(peer);
+    final enc = _encryptionProvider;
+    final identity = peer.identityKey;
+    if (enc != null && identity != null) {
+      try {
+        // Pins only when no anchor is held; a pinned key that differs is a
+        // key change, which stays a human's call ((xlvi)), and the caller's
+        // check under the held anchor decides as before.
+        await enc.adoptServedAccount(
+          userId,
+          identityKey: identity,
+          authorization: peer.authorization,
+        );
+      } on DeviceListVerificationException catch (e) {
+        // Judged again by the caller under whatever anchor is held.
+        _e2eFlowLog('BOX_LIST_LOOKUP_NOT_ADOPTED', {
+          'userId': userId,
+          'reason': e.reason,
+        });
+      }
+    }
     return peer.authorization;
   }
 }

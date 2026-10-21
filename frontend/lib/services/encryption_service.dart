@@ -2726,6 +2726,40 @@ class EncryptionService {
     );
   }
 
+  /// Moves [peerId]'s ACCOUNT anchor to [identityKeyBase64] without a human
+  /// acknowledgement — ONLY for an account that is no longer a contact at all
+  /// and is being met again over the box (owner decision 112, 10-21): a
+  /// friend who reminted after the friendship ended left a stale pin that
+  /// refused every new request for good. The caller has verified the served
+  /// list under the new key. A stale candidate and warning for the account
+  /// go with the old key, since they describe a friendship that no longer
+  /// exists.
+  Future<void> replaceStaleAccountAnchor(
+    int peerId,
+    String identityKeyBase64,
+  ) async {
+    if (!_initialized) {
+      throw StateError(
+        'account anchor replaced for $peerId before initialization',
+      );
+    }
+    final name = peerId.toString();
+    final pending = await _identityStore.pendingAccountIdentity(name);
+    await _identityStore.adoptAccountIdentity(
+      name,
+      IdentityKey.fromBytes(base64Decode(identityKeyBase64), 0),
+      expectedPendingBase64: pending == null
+          ? null
+          : base64Encode(pending.serialize()),
+    );
+    E2ePersistentDiag.record('ACCOUNT_ANCHOR_REPLACED', {'peerId': peerId});
+    if (_peersWithChangedIdentity.remove(peerId) |
+        _peersRefusedIdentity.remove(peerId)) {
+      await _persistIdentityChanged();
+      onPeerIdentityChanged?.call(peerId);
+    }
+  }
+
   /// The account anchor for the (xxxix)/(lvi) SESSION GATE, where a failed read
   /// MUST NOT look like an absence ((lxii)).
   ///

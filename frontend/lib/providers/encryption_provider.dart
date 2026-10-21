@@ -756,11 +756,15 @@ class EncryptionProvider extends ChangeNotifier {
   /// DAK pin), and kept across restarts (decision 51). Then [identityKey]
   /// becomes the account anchor when none is held. Throws, adopting nothing,
   /// when another key is pinned (a key change is a human's call, (xlvi)) or
-  /// the list does not verify.
+  /// the list does not verify — unless [replaceStaleAnchor]: the caller
+  /// knows the account is no longer a contact at all (decision 112), so a
+  /// pinned key is a leftover of a friendship that ended, and the served key
+  /// replaces it once the list verifies under it.
   Future<VerifiedDeviceList> adoptServedAccount(
     int userId, {
     required String identityKey,
     required Map<String, dynamic>? authorization,
+    bool replaceStaleAnchor = false,
   }) async {
     if (!_e2eInitialized ||
         _currentUserId == null ||
@@ -777,7 +781,8 @@ class EncryptionProvider extends ChangeNotifier {
       throw DeviceListVerificationException(userId, 'served_identity_invalid');
     }
     final held = await _encryptionService.peerAccountAnchorForGate(userId);
-    if (held != null && held != served) {
+    final stale = held != null && held != served;
+    if (stale && !replaceStaleAnchor) {
       throw DeviceListVerificationException(userId, 'served_identity_mismatch');
     }
     final verified = await _adoptDeviceListAnswer(
@@ -785,7 +790,9 @@ class EncryptionProvider extends ChangeNotifier {
       authorization,
       anchor: served,
     );
-    if (held == null &&
+    if (stale) {
+      await _encryptionService.replaceStaleAccountAnchor(userId, served);
+    } else if (held == null &&
         !await _encryptionService.stageAccountAnchor(userId, served)) {
       throw DeviceListVerificationException(userId, 'served_identity_mismatch');
     }
