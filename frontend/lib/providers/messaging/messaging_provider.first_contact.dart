@@ -850,7 +850,7 @@ extension MessagingFirstContact on MessagingProvider {
     final friends = boxFriends;
     final outbox = boxOutbox;
     final record = friends?.contactOf(userId);
-    if (link == null || record?.boxOrigin == null) return;
+    if (link == null || !(record?.onBoxRoute ?? false)) return;
     if (!await _relayToAllSiblings(
       jsonEncode(E2eEnvelope.buildGoodbye(sentTo: userId, block: block)),
       peer: userId,
@@ -880,13 +880,14 @@ extension MessagingFirstContact on MessagingProvider {
     _afterBoxFriendshipEnded(userId);
   }
 
-  /// A `goodbye` read from [userId] — a friend made over the box — or a
-  /// sibling's copy of ours: the same local end, with no goodbye sent.
+  /// A `goodbye` read from [userId] — a friend the box carries, whoever made
+  /// the friendship (decision 107) — or a sibling's copy of ours: the same
+  /// local end, with no goodbye sent.
   Future<bool> _takeGoodbye(int userId, {required bool block}) async {
     final link = boxFirstContact;
     if (link == null) return false;
-    if (link.firstContact.contactOf(userId)?.boxOrigin == null) {
-      // A friendship the server knows ends on the server's unfriend.
+    if (!(link.firstContact.contactOf(userId)?.onBoxRoute ?? false)) {
+      // Nothing the box carries: the server's unfriend ends it.
       _firstContactLog('BOX_GOODBYE_IGNORED', userId);
       return true;
     }
@@ -909,10 +910,11 @@ extension MessagingFirstContact on MessagingProvider {
 
   // ---------- The chat's timer setting (E15k) ----------
 
-  /// Our chat with [peerUserId] — a friendship made over the box — got the
-  /// timer [seconds] (null = off) at [at]: every device of the friend this
-  /// device holds an address for, and our siblings, are told. Best effort;
-  /// the latest write wins on every device.
+  /// Our chat with [peerUserId] — a friend the box carries, whoever made the
+  /// friendship (decision 107) — got the timer [seconds] (null = off) at
+  /// [at]: every device of the friend this device holds an address for, and
+  /// our siblings, are told. Best effort; the latest write wins on every
+  /// device.
   Future<void> sendBoxChatTimer(
     int peerUserId,
     int? seconds,
@@ -920,7 +922,7 @@ extension MessagingFirstContact on MessagingProvider {
   ) async {
     final outbox = boxOutbox;
     if (outbox == null ||
-        boxFriends?.contactOf(peerUserId)?.boxOrigin == null) {
+        !(boxFriends?.contactOf(peerUserId)?.onBoxRoute ?? false)) {
       return;
     }
     final timer = jsonEncode(E2eEnvelope.buildTimer(ttl: seconds, sentAt: at));
@@ -951,7 +953,8 @@ extension MessagingFirstContact on MessagingProvider {
   /// clamped to our own receive time (decision 13).
   bool _takeBoxTimer(int peerUserId, String plaintext, DateTime receivedAt) {
     final timer = E2eEnvelope.parseTimer(plaintext);
-    if (timer == null || boxFriends?.contactOf(peerUserId)?.boxOrigin == null) {
+    if (timer == null ||
+        !(boxFriends?.contactOf(peerUserId)?.onBoxRoute ?? false)) {
       _e2eFlowLog('BOX_ENVELOPE_UNREADABLE', {'t': E2eEnvelope.typeTimer});
       return true;
     }

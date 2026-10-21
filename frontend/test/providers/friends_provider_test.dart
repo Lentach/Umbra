@@ -334,8 +334,8 @@ void main() {
               .having((r) => r.state, 'state', ContactState.friend)
               .having((r) => r.boxOrigin, 'boxOrigin', isNotNull),
         );
-        // A server friend the list omits is still swept.
-        expect(store.byUserId(3), isNull);
+        // A server friend the list omits is hidden, never deleted.
+        expect(store.byUserId(3)?.state, ContactState.former);
       });
 
       test(
@@ -350,7 +350,7 @@ void main() {
           await store.settled;
 
           expect(store.byUserId(8)?.state, ContactState.pendingIn);
-          expect(store.byUserId(11), isNull);
+          expect(store.byUserId(11)?.state, ContactState.former);
         },
       );
     });
@@ -665,6 +665,71 @@ void main() {
           expect(events(), isEmpty);
         },
       );
+
+      group('a friend from before the box with a box route', () {
+        const queue = ContactQueue(
+          rid: 'r',
+          sid: 's',
+          nid: 'n',
+          authPriv: 'a',
+          sealPriv: 'sp',
+          sealPub: 'p',
+        );
+        ContactRecord preBox() => record(
+          7,
+          ContactState.friend,
+          box: false,
+        ).copyWith(queues: const [queue]);
+
+        for (final block in [false, true]) {
+          test(
+            '${block ? 'a block' : 'an unfriend'} ends it on the box AND tells '
+            'the server, which still lists the pair',
+            () async {
+              await seed([preBox()]);
+              final ended = <(int, bool)>[];
+              final friends = provider()
+                ..boxEndFriendship = ((userId, {required block}) async =>
+                    ended.add((userId, block)));
+
+              expect(
+                block ? await friends.blockUser(7) : await friends.unfriend(7),
+                isTrue,
+              );
+
+              expect(ended, [(7, block)]);
+              final event = block ? 'blockUser' : 'unfriend';
+              expect(events(), [event]);
+            },
+          );
+        }
+
+        test('the friend leaves the list at once on either end, with no '
+            'server event', () async {
+          await seed([preBox()]);
+          final ending = provider()
+            ..onFriendsList([user(7)])
+            ..boxEndFriendship = ((userId, {required block}) async {});
+          await store.settled;
+          await ending.unfriend(7);
+          expect(ending.friends.map((u) => u.id), isNot(contains(7)));
+
+          final told = provider()..onFriendsList([user(7)]);
+          await store.settled;
+          told.onBoxFriendshipEnded(7);
+          expect(told.friends.map((u) => u.id), isNot(contains(7)));
+        });
+
+        test('a box end that failed tells the server nothing', () async {
+          await seed([preBox()]);
+          final friends = provider()
+            ..boxEndFriendship = ((userId, {required block}) async =>
+                throw StateError('a sibling was not told'));
+
+          expect(await friends.unfriend(7), isFalse);
+          expect(events(), isEmpty);
+        });
+      });
 
       test('unblocking a box-blocked contact deletes it locally', () async {
         await seed([record(10, ContactState.blocked)]);

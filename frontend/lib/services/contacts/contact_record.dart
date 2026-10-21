@@ -614,10 +614,19 @@ class ContactRecord {
 
   /// The chat of this contact: its server conversation, else — a friendship
   /// made over the box (owner decision 52) — its local id. The contact
-  /// backup drops `legacy`, so a restored box friend has only [boxOrigin].
+  /// backup keeps only the server chat id of `legacy` (decision 107).
   int? get chatId =>
       legacy.conversationId ??
       (boxOrigin == null ? null : localConversationIdFor(userId));
+
+  /// Whether the box carries this relationship: it was made there, or queue
+  /// material is held either way (our keys handed to the peer, or the peer's
+  /// send addresses). A server list cannot name such a record into or out of
+  /// existence: its end arrives as a box `goodbye` (Phase 4 step 1,
+  /// decision 107), and a sweep would turn it `former`, whose frames the
+  /// inbox drops unread (`BoxInbox`).
+  bool get onBoxRoute =>
+      boxOrigin != null || queues.isNotEmpty || outbound.isNotEmpty;
 
   Map<String, dynamic> toJson() => {
     'v': currentVersion,
@@ -640,8 +649,8 @@ class ContactRecord {
   ///
   /// [queues] is dropped because its private halves are THIS device's alone
   /// and a restored device re-mints them anyway (the identity died with the
-  /// same storage); [legacy] because the server re-supplies those ids in the
-  /// first list, so a backed-up one could only outlive the row it names.
+  /// same storage); of [legacy] only the chat id stays (nothing re-supplies
+  /// it once the server's lists go silent, decision 107), request ids go.
   /// The E2E pin ([ContactSettings.boxPin]) is dropped too: a pin would move
   /// the backup's `rev`/`updatedAt` — a per-pin activity clock on the
   /// server (item 4, E19f).
@@ -652,8 +661,16 @@ class ContactRecord {
   Map<String, dynamic> toBackupJson() {
     final json = toJson()
       ..remove('queues')
-      ..remove('legacy')
       ..['settings'] = (settings.toJson()..remove(ContactSettings.boxPinKey));
+    // Of `legacy`, only the chat id: a friend from before the box keeps its
+    // chat after a restore once no server list re-supplies it (Phase 4 step
+    // 1, decision 107). Request ids stay out — they name rows that end.
+    final chat = legacy.conversationId;
+    if (chat == null) {
+      json.remove('legacy');
+    } else {
+      json['legacy'] = {'conversationId': chat};
+    }
     if (outbound.isNotEmpty) {
       json['outbound'] = [
         for (final o in outbound) o.toJson()..remove(ContactOutbound.relaysKey),

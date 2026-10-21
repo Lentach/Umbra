@@ -144,8 +144,8 @@ class FriendsProvider extends ChangeNotifier {
   /// in [state] that the list omits is swept ([_unlisted]). That state ONLY:
   /// a `friendRequestsList` never touches a friend and a `blockedList` never
   /// touches a pending request. A `former` record the list names again takes
-  /// the listed state and keeps its queues. A record made over the box
-  /// (`boxOrigin`, E15g) is never swept: no server list can name it.
+  /// the listed state and keeps its queues. A record the box carries
+  /// ([ContactRecord.onBoxRoute]) is never swept: its end is a box goodbye.
   void _storeList(
     ContactState state,
     List<UserModel> peers, {
@@ -181,7 +181,7 @@ class FriendsProvider extends ChangeNotifier {
                 );
         },
         sweep: prune
-            ? (r) => r.state == state && r.boxOrigin == null ? _unlisted(r) : r
+            ? (r) => r.state == state && !r.onBoxRoute ? _unlisted(r) : r
             : null,
       ),
     );
@@ -189,14 +189,11 @@ class FriendsProvider extends ChangeNotifier {
 
   /// A record a server list stopped naming. Absence from a list is INFERRED,
   /// not an event (only `unfriended`, `youWereBlocked` and a decline are):
-  /// the list may be wrong, and a record holding queue material no server can
-  /// re-supply — this device's queue keys, the peer's send addresses — must
-  /// survive that, so it is kept as [ContactState.former]. Anything else is
-  /// removed.
-  static ContactRecord? _unlisted(ContactRecord record) =>
-      record.queues.isEmpty && record.outbound.isEmpty
-      ? null
-      : record.copyWith(state: ContactState.former);
+  /// the list may be wrong, so the record is never deleted, only hidden as
+  /// [ContactState.former] until a list names it again (Phase 4 step 1,
+  /// decision 107).
+  static ContactRecord _unlisted(ContactRecord record) =>
+      record.copyWith(state: ContactState.former);
 
   void _storeRequest(FriendRequestModel request, ContactState state) {
     final peer = state == ContactState.pendingIn
@@ -685,9 +682,16 @@ class FriendsProvider extends ChangeNotifier {
 
   void onBlockedList(dynamic data) {
     final list = data as List<dynamic>;
-    _blockedUsers = list
+    final incoming = list
         .map((u) => UserModel.fromJson(u as Map<String, dynamic>))
         .toList();
+    // An empty list after a real one is far more often a hiccup (or a server
+    // whose old tables went) than every block lifted at once: unblocking on
+    // it would let blocked accounts through, so it changes nothing.
+    if (incoming.isEmpty && _blockedUsers.isNotEmpty && _hasBlockedSnapshot) {
+      return;
+    }
+    _blockedUsers = incoming;
     _hasBlockedSnapshot = true;
     final blockedIds = _blockedUsers.map((u) => u.id).toSet();
     _friends.removeWhere((f) => blockedIds.contains(f.id));
@@ -751,12 +755,14 @@ class FriendsProvider extends ChangeNotifier {
 
   /// A box friend said `goodbye` (E15j); the messaging side removed the
   /// record. Our own id is refused for [onUnfriended]'s reason: it would
-  /// purge every chat.
+  /// purge every chat. A friendship from before the box also leaves the
+  /// server's list as held here: no `unfriended` may ever follow (Phase 4).
   void onBoxFriendshipEnded(int userId) {
     if (_currentUserId != null && userId == _currentUserId) {
       E2ePersistentDiag.record('BOX_GOODBYE_SELF_IGNORED');
       return;
     }
+    _friends.removeWhere((f) => f.id == userId);
     onRemoveConversationsForUser?.call(userId);
     notifyListeners();
   }
@@ -1096,25 +1102,31 @@ class FriendsProvider extends ChangeNotifier {
     });
   }
 
-  /// Ends the friendship with [userId]. False when a friendship made over
-  /// the box could not end — our other devices could not be told, so
+  /// Ends the friendship with [userId]. False when a friendship the box
+  /// carries could not end — our other devices could not be told, so
   /// nothing was ended or sent (E15j); the caller tells the user to retry.
-  Future<bool> unfriend(int userId) async {
-    final end = boxEndFriendship;
-    if (end != null && _endsOverBox(userId, block: false)) {
-      return _endOverBox(end, userId, block: false);
-    }
-    _emit?.call('unfriend', {'userId': userId});
-    return true;
-  }
+  /// A friendship from before the box that the box also carries ends on
+  /// both: the goodbye survives the server going silent (Phase 4), the
+  /// server event removes the row the server still lists (decision 107).
+  Future<bool> unfriend(int userId) => _end(userId, block: false);
 
   /// Blocks [userId]; false as for [unfriend].
-  Future<bool> blockUser(int userId) async {
+  Future<bool> blockUser(int userId) => _end(userId, block: true);
+
+  Future<bool> _end(int userId, {required bool block}) async {
     final end = boxEndFriendship;
-    if (end != null && _endsOverBox(userId, block: true)) {
-      return _endOverBox(end, userId, block: true);
+    final record = _store?.byUserId(userId);
+    if (end != null && _endsOverBox(userId, block: block)) {
+      return _endOverBox(end, userId, block: block);
     }
-    _emit?.call('blockUser', {'userId': userId});
+    if (end != null &&
+        record != null &&
+        record.state == ContactState.friend &&
+        record.onBoxRoute &&
+        !await _endOverBox(end, userId, block: block)) {
+      return false;
+    }
+    _emit?.call(block ? 'blockUser' : 'unfriend', {'userId': userId});
     return true;
   }
 
@@ -1144,6 +1156,7 @@ class FriendsProvider extends ChangeNotifier {
       return false;
     }
     if (!_isLiveFor(account)) return true;
+    _friends.removeWhere((f) => f.id == userId);
     onRemoveConversationsForUser?.call(userId);
     notifyListeners();
     return true;
@@ -1173,7 +1186,25 @@ class FriendsProvider extends ChangeNotifier {
       );
       return;
     }
+    // A server block: the server answers with its list, and an EMPTY one —
+    // this was the last block — is what [onBlockedList] ignores as a likely
+    // hiccup. Our own unblock is an event, not an inference: applied here.
+    _blockedUsers = [
+      for (final u in _blockedUsers)
+        if (u.id != userId) u,
+    ];
+    if (store != null) {
+      unawaited(
+        store.update(
+          userId,
+          (r) => r?.state == ContactState.blocked && !r!.onBoxRoute
+              ? r.copyWith(state: ContactState.former)
+              : null,
+        ),
+      );
+    }
     _emit?.call('unblockUser', {'userId': userId});
+    notifyListeners();
   }
 
   void loadBlockedList() {

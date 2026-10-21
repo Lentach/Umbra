@@ -198,7 +198,7 @@ void main() {
 
   group('write-through', () {
     test(
-      'unfriend removes the record; a non-empty list prunes the missing',
+      'unfriend removes the record; a list that omits a friend only hides it',
       () async {
         await seedOnlineSession();
         final friends = friendsOver(store)..onUnfriended({'userId': 2});
@@ -209,9 +209,9 @@ void main() {
         friends.onFriendsList([_user(6, 'frank')]);
         await _settle();
         expect(
-          store.byUserId(3),
-          isNull,
-          reason: 'carol left the server list: removed elsewhere',
+          store.byUserId(3)?.state,
+          ContactState.former,
+          reason: 'absence is not an event: kept, hidden, restorable',
         );
         expect(store.byUserId(6)?.state, ContactState.friend);
         expect(
@@ -219,13 +219,18 @@ void main() {
           ContactState.blocked,
           reason: 'a friends list never touches a blocked record',
         );
+
+        friends.onFriendsList([_user(3, 'carol'), _user(6, 'frank')]);
+        await _settle();
+        expect(store.byUserId(3)?.state, ContactState.friend);
       },
     );
 
     test(
-      'a friend the list omits is KEPT as former while it holds queue '
-      'material, and the next list that names it restores it',
+      'a friend holding a box route is untouched by a list that omits it',
       () async {
+        // A former friend's box frames are dropped unread (BoxInbox), so a
+        // partial server list used to silence a pre-box friend for good.
         await seedOnlineSession();
         const queue = ContactQueue(
           rid: 'RID',
@@ -236,22 +241,91 @@ void main() {
           sealPub: 'SEALPUB',
         );
         await store.update(3, (r) => r!.copyWith(queues: const [queue]));
-        final friends = friendsOver(store)..onFriendsList([_user(2, 'bob')]);
+        friendsOver(store).onFriendsList([_user(2, 'bob')]);
         await _settle();
 
         final carol = store.byUserId(3)!;
-        expect(carol.state, ContactState.former);
+        expect(carol.state, ContactState.friend);
         expect(carol.queues.single.rid, 'RID');
-        expect(
-          (friendsOver(store)..hydrateFromStore()).friends.map((u) => u.id),
-          [2],
-          reason: "a former record hydrates as nobody's friend",
-        );
+      },
+    );
 
-        friends.onFriendsList([_user(2, 'bob'), _user(3, 'carol')]);
+    test('a chat the list omits keeps its id while the friend is on the box',
+        () async {
+      await seedOnlineSession();
+      const queue = ContactQueue(
+        rid: 'RID',
+        sid: 'SID',
+        nid: 'NID',
+        authPriv: 'AUTH',
+        sealPriv: 'SEALPRIV',
+        sealPub: 'SEALPUB',
+      );
+      await store.update(2, (r) => r!.copyWith(queues: const [queue]));
+      convsOver(store).onConversationsList([_conv(11, 3, 'carol')]);
+      await _settle();
+
+      expect(
+        store.byUserId(2)?.chatId,
+        10,
+        reason: "bob's box messages live under chat 10",
+      );
+    });
+
+    test('an empty blocked list after a real one unblocks nobody', () async {
+      await seedOnlineSession();
+      friendsOver(store)
+        ..onBlockedList([_user(5, 'erin')])
+        ..onBlockedList(const []);
+      await _settle();
+
+      expect(store.byUserId(5)?.state, ContactState.blocked);
+    });
+
+    test('unblocking the last blocked account empties the list at once',
+        () async {
+      // The server answers an unblock with its list, here empty — which the
+      // empty-list guard above must not swallow for our own unblock.
+      await seedOnlineSession();
+      final friends = friendsOver(store)
+        ..onBlockedList([_user(5, 'erin')])
+        ..unblockUser(5)
+        ..onBlockedList(const []);
+      await _settle();
+
+      expect(friends.blockedUsers, isEmpty);
+      expect(store.byUserId(5)?.state, isNot(ContactState.blocked));
+    });
+
+    test(
+      'a timer set on a pre-box chat the box carries goes over the box AND to '
+      'the server',
+      () async {
+        await seedOnlineSession();
+        const queue = ContactQueue(
+          rid: 'RID',
+          sid: 'SID',
+          nid: 'NID',
+          authPriv: 'AUTH',
+          sealPriv: 'SEALPRIV',
+          sealPub: 'SEALPUB',
+        );
+        await store.update(2, (r) => r!.copyWith(queues: const [queue]));
+        final sent = <(int, int?)>[];
+        final emitted = <String>[];
+        final convs = convsOver(store)
+          ..setEmitCallback((event, _) => emitted.add(event))
+          ..onConversationsList([_conv(10, 2, 'bob')])
+          ..onLocalChatTimerChanged = (peer, seconds, _) =>
+              sent.add((peer, seconds));
         await _settle();
-        expect(store.byUserId(3)?.state, ContactState.friend);
-        expect(store.byUserId(3)?.queues.single.rid, 'RID');
+
+        convs.setDisappearingTimer(10, 3600);
+        await _settle();
+
+        expect(sent, [(2, 3600)]);
+        expect(emitted, contains('setDisappearingTimer'));
+        expect(store.byUserId(2)!.settings.timerAt, isNotNull);
       },
     );
 

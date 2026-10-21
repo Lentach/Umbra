@@ -62,8 +62,8 @@ void main() {
       expect(peer.settings.muted, isTrue);
     });
 
-    test('the blob carries NO queue private keys and no server-side ids',
-        () async {
+    test('the blob carries NO queue private keys and no request ids, but the '
+        'chat id', () async {
       final codec = _codec();
       final (ck, _) = ContactBackupCodec.mintContentKey();
       final payload = ContactBackupPayload(
@@ -86,15 +86,18 @@ void main() {
       expect(plain, isNot(contains('AUTHPRIV')));
       expect(plain, isNot(contains('SEALPRIV')));
       expect(plain, isNot(contains('MYSID')));
-      expect(plain, isNot(contains('conversationId')));
       expect(plain, isNot(contains('requestId')));
+      // The chat of a friend from before the box: nothing re-supplies it once
+      // the server's lists go silent (Phase 4 step 1, decision 107).
+      expect(plain, contains('"conversationId":900'));
       // …while everything a restored device needs IS there.
       expect(plain, contains('peer42'));
       expect(plain, contains('SID'));
 
       final opened = await codec.openPayload(ck, blob);
       expect(opened.contacts.single.queues, isEmpty);
-      expect(opened.contacts.single.legacy.conversationId, isNull);
+      expect(opened.contacts.single.legacy.conversationId, 900);
+      expect(opened.contacts.single.legacy.requestId, isNull);
     });
 
     test('the blob length is bucketed, so it is not a contact counter',

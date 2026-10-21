@@ -261,8 +261,11 @@ class ConversationsProvider extends ChangeNotifier {
                   mutedUntil: c.mutedUntil,
                   pinnedMessageId: c.pinnedMessageId,
                   // The E2E pin is the devices' own (item 4): no server
-                  // list names it.
+                  // list names it. Nor the time a box timer was set
+                  // (decision 107): kept, so a late older box timer cannot
+                  // undo a newer one.
                   boxPin: base.settings.boxPin,
+                  timerAt: base.settings.timerAt,
                 ),
                 legacy: base.legacy.copyWith(
                   conversationId: c.id,
@@ -271,8 +274,11 @@ class ConversationsProvider extends ChangeNotifier {
               );
         },
         // Gated on SERVER rows: a RAM list holding only local chats is an
-        // empty server list, which changes the store not at all.
-        sweep: byPeer.isEmpty ? null : (r) => _withoutChat(r) ?? r,
+        // empty server list, which changes the store not at all. A friend on
+        // the box keeps its chat id: its box messages live under it.
+        sweep: byPeer.isEmpty
+            ? null
+            : (r) => r.onBoxRoute ? r : _withoutChat(r) ?? r,
       ),
     );
   }
@@ -953,10 +959,16 @@ class ConversationsProvider extends ChangeNotifier {
   /// Emit setDisappearingTimer socket event (optimistic local update). A
   /// local chat keeps its timer on the devices (owner decision 52): stored
   /// here with the time it was set, sent over the box by
-  /// [onLocalChatTimerChanged], never emitted.
+  /// [onLocalChatTimerChanged], never emitted. A server chat whose friend
+  /// the box also carries goes both ways (decision 107): the box copy
+  /// survives the server going silent, the server copy keeps old builds.
   void setDisappearingTimer(int conversationId, int? timer) {
     final local = isLocalConversationId(conversationId);
     final index = _conversations.indexWhere((c) => c.id == conversationId);
+    final peer = index == -1 ? null : getOtherUserId(_conversations[index]);
+    final onBox =
+        local ||
+        (peer != null && (_store?.byUserId(peer)?.onBoxRoute ?? false));
     if (index != -1) {
       final oldConv = _conversations[index];
       // Remember what is being overwritten BEFORE overwriting it, so a refusal
@@ -975,7 +987,7 @@ class ConversationsProvider extends ChangeNotifier {
       );
       notifyListeners();
     }
-    if (local) {
+    if (onBox) {
       final at = DateTime.now().toUtc();
       _storeSettings(
         conversationId,
@@ -985,25 +997,20 @@ class ConversationsProvider extends ChangeNotifier {
           timerAt: at,
         ),
       );
-      if (index != -1) {
-        onLocalChatTimerChanged?.call(
-          getOtherUserId(_conversations[index]),
-          timer,
-          at,
-        );
-      }
-      return;
+      if (peer != null) onLocalChatTimerChanged?.call(peer, timer, at);
     }
+    if (local) return;
     _emit?.call('setDisappearingTimer', {
       'conversationId': conversationId,
       'seconds': timer,
     });
   }
 
-  /// The timer of the local chat with [peerUserId] as another device set it
-  /// at [at] — the friend, or a sibling of ours (E15k): taken only when
-  /// newer than the one held, decided on the stored record, so every device
-  /// ends on the latest write.
+  /// The timer of the chat with [peerUserId] as another device set it at
+  /// [at] — the friend, or a sibling of ours (E15k): taken only when newer
+  /// than the one held, decided on the stored record, so every device ends
+  /// on the latest write. Any chat the box carries (decision 107), keyed by
+  /// the record's chat id.
   Future<void> applyLocalChatTimer(
     int peerUserId,
     int? seconds,
@@ -1011,15 +1018,15 @@ class ConversationsProvider extends ChangeNotifier {
   ) async {
     final store = _store;
     if (store == null) return;
-    var applied = false;
+    int? chat;
     await store.update(peerUserId, (record) {
       final held = record?.settings.timerAt;
       if (record == null ||
-          record.boxOrigin == null ||
+          !record.onBoxRoute ||
           (held != null && !at.isAfter(held))) {
         return null;
       }
-      applied = true;
+      chat = record.chatId;
       return record.copyWith(
         settings: record.settings.copyWith(
           disappearingTimer: seconds,
@@ -1028,10 +1035,8 @@ class ConversationsProvider extends ChangeNotifier {
         ),
       );
     });
-    if (!applied) return;
-    final index = _conversations.indexWhere(
-      (c) => c.id == localConversationIdFor(peerUserId),
-    );
+    if (chat == null) return;
+    final index = _conversations.indexWhere((c) => c.id == chat);
     if (index == -1) return;
     _conversations[index] = _conversations[index].copyWith(
       disappearingTimer: seconds,

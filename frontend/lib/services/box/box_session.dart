@@ -958,18 +958,18 @@ class BoxSession
       await _keys.retireInbound(userId, queue);
     }
     if (!block && (_store.byUserId(userId)?.queues.isEmpty ?? true)) {
-      if (_store.byUserId(userId)?.boxOrigin != null) {
-        await _store.remove(userId);
-      }
+      if (_store.byUserId(userId) != null) await _store.remove(userId);
       return;
     }
     await _store.update(userId, (current) {
-      final origin = current?.boxOrigin;
-      if (current == null || origin == null) return null;
+      if (current == null) return null;
+      final origin = current.boxOrigin;
       // Nothing the friendship held stays but an undeleted queue: no
-      // address, no chat, no request kept. The origin mark keeps the record
-      // out of every server list's sweep (E15g); an unfriend that left a
-      // queue is `former` until the queue is gone.
+      // address, no chat, no request kept. The origin mark keeps a box-made
+      // record out of every server list's sweep (E15g); a friendship from
+      // before the box has none (the server lists its block), and a queue
+      // left on it keeps it out of the sweep (`onBoxRoute`). An unfriend
+      // that left a queue is `former` until the queue is gone.
       return ContactRecord(
         userId: userId,
         username: current.username,
@@ -977,7 +977,7 @@ class BoxSession
         avatarUrl: current.avatarUrl,
         state: block ? ContactState.blocked : ContactState.former,
         queues: current.queues,
-        boxOrigin: ContactBoxOrigin(at: origin.at),
+        boxOrigin: origin == null ? null : ContactBoxOrigin(at: origin.at),
       );
     });
   }

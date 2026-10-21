@@ -497,6 +497,45 @@ void main() {
     },
   );
 
+  /// Both records turned into a friendship the SERVER also knows (made
+  /// before the box, chat 10) that later got a box route (item 5): the
+  /// shape of every prod pair (Phase 4 step 1, decision 107).
+  Future<void> befriendBeforeTheBox() async {
+    await befriend();
+    ContactRecord preBox(ContactRecord? r) => r!.copyWith(
+      clearBoxOrigin: true,
+      legacy: r.legacy.copyWith(conversationId: 10),
+    );
+    await alice.store.update(5, preBox);
+    await bob.store.update(1, preBox);
+    expect(alice.recordOf(5)!.onBoxRoute, isTrue);
+    expect(bob.recordOf(1)!.onBoxRoute, isTrue);
+  }
+
+  test(
+    'a friend from before the box ends over the box too: a goodbye reaches '
+    'the other side, so the end survives the server going silent',
+    () async {
+      await befriendBeforeTheBox();
+
+      await alice.endWith(5, block: false);
+      await settle();
+
+      expect(alice.recordOf(5), isNull);
+      expect(bob.recordOf(1), isNull, reason: "bob took alice's goodbye");
+    },
+  );
+
+  test('a friend from before the box gets the chat timer over the box',
+      () async {
+    await befriendBeforeTheBox();
+
+    await alice.reader.sendBoxChatTimer(5, 3600, DateTime.now().toUtc());
+    await settle();
+
+    expect(bob.recordOf(1)!.settings.disappearingTimer, 3600);
+  });
+
   test(
     'a request is kept undecrypted, the accept looks the handle up once and '
     'verifies the key before decrypting, and both become friends on local '
