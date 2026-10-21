@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConflictException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { ChatFriendRequestService } from './chat-friend-request.service';
 import { FriendsService } from '../../friends/friends.service';
 import { BlockedService } from '../../blocked/blocked.service';
@@ -36,6 +37,8 @@ describe('ChatFriendRequestService', () => {
     [number[]]
   >;
   let pendingReplacementUserIds: jest.Mock<Promise<Set<number>>, [number[]]>;
+  // The env as `ConfigService` serves it; `LEGACY_WRITES_FROZEN` set per test.
+  let env: Record<string, string | undefined>;
 
   // Mark a user online by placing a socket in their per-user room — the same
   // structure isUserOnline/socketsForUser read. Two ids in one set = two tabs.
@@ -54,6 +57,7 @@ describe('ChatFriendRequestService', () => {
 
   beforeEach(async () => {
     mockClient = { data: { user: { id: 1 } }, emit: jest.fn() };
+    env = {};
     onlineRooms = new Map();
     mockServer = {
       to: jest.fn().mockReturnThis(),
@@ -132,6 +136,10 @@ describe('ChatFriendRequestService', () => {
         },
         { provide: DevicesService, useValue: { firstContactDevicesFor } },
         { provide: DeviceListService, useValue: { pendingReplacementUserIds } },
+        {
+          provide: ConfigService,
+          useValue: { get: (key: string) => env[key] },
+        },
       ],
     }).compile();
 
@@ -1078,6 +1086,93 @@ describe('ChatFriendRequestService', () => {
         expect(lists).toHaveLength(2);
         for (const list of lists) expect(devicesOf(list)).toEqual(expected);
       });
+    });
+  });
+
+  describe('LEGACY_WRITES_FROZEN=true (decision 111)', () => {
+    beforeEach(() => {
+      env = { LEGACY_WRITES_FROZEN: 'true' };
+      usersService.findById
+        .mockResolvedValueOnce(mockSender as unknown as User)
+        .mockResolvedValueOnce(mockRecipient as unknown as User);
+    });
+
+    it('refuses a new friend request and writes none', async () => {
+      friendsService.sendRequest.mockResolvedValue(
+        mockFriendRequest as unknown as FriendRequest,
+      );
+
+      await service.handleSendFriendRequest(
+        mockClient as Socket,
+        { recipientId: 2 },
+        mockServer as Server,
+      );
+
+      expect(mockClient.emit).toHaveBeenCalledWith('friendRequestFailed', {
+        action: 'send',
+        requestId: null,
+        recipientId: 2,
+        reason: 'legacy_frozen',
+      });
+      expect(friendsService.sendRequest.mock.calls).toHaveLength(0);
+      expect(conversationsService.findOrCreate.mock.calls).toHaveLength(0);
+    });
+
+    it('refuses an accept, which would create a chat, and writes nothing', async () => {
+      friendsService.acceptRequest.mockResolvedValue({
+        ...mockFriendRequest,
+        status: 'accepted',
+      } as unknown as FriendRequest);
+
+      await service.handleAcceptFriendRequest(
+        mockClient as Socket,
+        { requestId: 10 },
+        mockServer as Server,
+      );
+
+      expect(mockClient.emit).toHaveBeenCalledWith('friendRequestFailed', {
+        action: 'accept',
+        requestId: 10,
+        recipientId: null,
+        reason: 'legacy_frozen',
+      });
+      expect(friendsService.acceptRequest.mock.calls).toHaveLength(0);
+      expect(conversationsService.findOrCreate.mock.calls).toHaveLength(0);
+    });
+
+    it('refuses an invitation chat that does not exist yet, correlated so the row stops retrying', async () => {
+      conversationsService.findByUsers.mockResolvedValue(null);
+
+      await service.handleEnsureInvitationChat(
+        mockClient as Socket,
+        { peerUserId: 2, correlationId: 'session_1-token' },
+        mockServer as Server,
+      );
+
+      expect(mockClient.emit).toHaveBeenCalledWith('invitationChatReady', {
+        peerUserId: 2,
+        correlationId: 'session_1-token',
+        conversationId: null,
+        chatReady: false,
+        reason: 'legacy_frozen',
+      });
+      expect(conversationsService.findOrCreate.mock.calls).toHaveLength(0);
+    });
+
+    it('still reports an existing invitation chat ready', async () => {
+      await service.handleEnsureInvitationChat(
+        mockClient as Socket,
+        { peerUserId: 2, correlationId: 'session_1-token' },
+        mockServer as Server,
+      );
+
+      expect(mockClient.emit).toHaveBeenCalledWith('invitationChatReady', {
+        peerUserId: 2,
+        correlationId: 'session_1-token',
+        conversationId: 50,
+        chatReady: true,
+      });
+      expect(conversationsService.findOrCreate.mock.calls).toHaveLength(0);
     });
   });
 });

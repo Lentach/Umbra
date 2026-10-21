@@ -1,4 +1,5 @@
 import { ConflictException, Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Server, Socket } from 'socket.io';
 import { userRoom, isUserOnline } from '../utils/user-room';
 import { FriendsService } from '../../friends/friends.service';
@@ -27,6 +28,7 @@ import { ChatConversationService } from './chat-conversation.service';
 import { ChatValidationService } from './chat-validation.service';
 import { DevicesService } from '../../key-bundles/devices.service';
 import { DeviceListService } from '../../key-bundles/device-list.service';
+import { LEGACY_FROZEN, legacyWritesFrozen } from '../utils/legacy-freeze';
 
 @Injectable()
 export class ChatFriendRequestService {
@@ -43,6 +45,7 @@ export class ChatFriendRequestService {
     private readonly chatValidationService: ChatValidationService,
     private readonly devicesService: DevicesService,
     private readonly deviceListService: DeviceListService,
+    private readonly configService: ConfigService,
   ) {}
 
   /**
@@ -267,6 +270,18 @@ export class ChatFriendRequestService {
       return;
     }
 
+    // Frozen (decision 111): no new friend request on the old path. Friends
+    // are made over the box (first contact) since the box launch.
+    if (legacyWritesFrozen(this.configService)) {
+      client.emit('friendRequestFailed', {
+        action: 'send',
+        requestId: null,
+        recipientId: dto.recipientId,
+        reason: LEGACY_FROZEN,
+      });
+      return;
+    }
+
     const sender = await this.usersService.findById(senderId);
     const recipient = await this.usersService.findById(dto.recipientId);
 
@@ -412,6 +427,17 @@ export class ChatFriendRequestService {
         requestId,
         recipientId: null,
         reason: 'invalid_payload',
+      });
+      return;
+    }
+
+    // Frozen (decision 111): accepting would create a chat on the old path.
+    if (legacyWritesFrozen(this.configService)) {
+      client.emit('friendRequestFailed', {
+        action: 'accept',
+        requestId: dto.requestId,
+        recipientId: null,
+        reason: LEGACY_FROZEN,
       });
       return;
     }
@@ -676,12 +702,13 @@ export class ChatFriendRequestService {
     // caller's retry row would stay in its retrying state forever waiting for a
     // correlated result that never arrives — the exact stuck state this flow exists
     // to remove. Report the failure honestly instead.
-    let conversation: Conversation;
+    // Frozen (decision 111): an existing chat is still reported ready, a new
+    // one is refused with the same correlated shape so the row stops retrying.
+    let conversation: Conversation | null;
     try {
-      conversation = await this.conversationsService.findOrCreate(
-        user,
-        peerUser,
-      );
+      conversation = legacyWritesFrozen(this.configService)
+        ? await this.conversationsService.findByUsers(userId, peerUser.id)
+        : await this.conversationsService.findOrCreate(user, peerUser);
     } catch (error) {
       this.logger.error(
         'handleEnsureInvitationChat: findOrCreate failed:',
@@ -693,6 +720,16 @@ export class ChatFriendRequestService {
         conversationId: null,
         chatReady: false,
         reason: 'chat_setup_failed',
+      });
+      return;
+    }
+    if (!conversation) {
+      client.emit('invitationChatReady', {
+        peerUserId: dto.peerUserId,
+        correlationId: dto.correlationId,
+        conversationId: null,
+        chatReady: false,
+        reason: LEGACY_FROZEN,
       });
       return;
     }

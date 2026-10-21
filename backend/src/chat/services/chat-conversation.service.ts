@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Server, Socket } from 'socket.io';
 import { ConversationsService } from '../../conversations/conversations.service';
 import { MessagesService } from '../../messages/messages.service';
@@ -19,6 +20,7 @@ import { MessageMapper } from '../../messages/message.mapper';
 import { isMessageExpired } from '../../messages/message-expiry.util';
 import { SetConversationMuteDto } from '../dto/set-conversation-mute.dto';
 import { ConversationNotificationPreferencesService } from '../../conversation-notification-preferences/conversation-notification-preferences.service';
+import { LEGACY_FROZEN, legacyWritesFrozen } from '../utils/legacy-freeze';
 
 @Injectable()
 export class ChatConversationService {
@@ -32,6 +34,7 @@ export class ChatConversationService {
     private readonly chatValidationService: ChatValidationService,
     private readonly mediaCleanup: MediaCleanupService,
     private readonly notificationPreferences: ConversationNotificationPreferencesService,
+    private readonly configService: ConfigService,
   ) {}
 
   async handleStartConversation(client: Socket, data: any, server: Server) {
@@ -63,10 +66,14 @@ export class ChatConversationService {
       return;
     }
 
-    const conversation = await this.conversationsService.findOrCreate(
-      user,
-      otherUser,
-    );
+    // Frozen (decision 111): an existing chat still opens, a new one is refused.
+    const conversation = legacyWritesFrozen(this.configService)
+      ? await this.conversationsService.findByUsers(userId, otherUser.id)
+      : await this.conversationsService.findOrCreate(user, otherUser);
+    if (!conversation) {
+      client.emit('error', { message: LEGACY_FROZEN });
+      return;
+    }
 
     const [rawConversations, blockedIds, blockedByUserIds] = await Promise.all([
       this.conversationsService.findByUser(userId),

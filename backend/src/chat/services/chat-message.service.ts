@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Server, Socket } from 'socket.io';
 import { MessagesService } from '../../messages/messages.service';
 import { ConversationsService } from '../../conversations/conversations.service';
@@ -30,6 +31,7 @@ import {
 import { DEFAULT_DEVICE_ID } from '../../key-bundles/key-bundles.service';
 import { DevicesService } from '../../key-bundles/devices.service';
 import { DeviceListService } from '../../key-bundles/device-list.service';
+import { LEGACY_FROZEN, legacyWritesFrozen } from '../utils/legacy-freeze';
 import { AccountAuthorization } from '../../key-bundles/account-authorization.entity';
 
 /**
@@ -115,6 +117,7 @@ export class ChatMessageService {
     private readonly mediaCleanup: MediaCleanupService,
     private readonly devicesService: DevicesService,
     private readonly deviceListService: DeviceListService,
+    private readonly configService: ConfigService,
   ) {}
 
   /**
@@ -308,6 +311,14 @@ export class ChatMessageService {
   async handleSendMessage(client: Socket, data: any, server: Server) {
     const senderId: number = client.data.user?.id;
     if (!senderId) return;
+
+    // Frozen (decision 111): refused before anything is read or written. The
+    // client's `error` handler turns its in-flight old-path sends red, which
+    // is the honest state: none of them will be stored.
+    if (legacyWritesFrozen(this.configService)) {
+      client.emit('error', { message: LEGACY_FROZEN });
+      return;
+    }
 
     // `data` stays `any` for the pre-existing reads below; the new Phase 1
     // fields go through the validated DTO so they are typed at the point of

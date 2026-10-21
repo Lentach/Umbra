@@ -86,6 +86,12 @@ services:
       # Pinned here, not read from .env, so a change is a reviewed commit,
       # never a .env edit.
       BOX_ENABLED: 'true'
+      # Phase 4 step 3 (decision 111): 'true' refuses new old-path messages,
+      # friend requests and chats; existing rows stay served. Owner flips it,
+      # only once no `messages` row has been created for 7 days (else a pair
+      # still on the old path loses its only way to send). Undo = 'false'.
+      # Pinned like BOX_ENABLED: a change is a reviewed commit.
+      LEGACY_WRITES_FROZEN: 'false'
       FIREBASE_SERVICE_ACCOUNT: ${FIREBASE_SERVICE_ACCOUNT:-}
       WEB_PUSH_VAPID_PUBLIC_KEY: ${WEB_PUSH_VAPID_PUBLIC_KEY:?set WEB_PUSH_VAPID_PUBLIC_KEY in ~/fireplace/.env}
       WEB_PUSH_VAPID_PRIVATE_KEY: ${WEB_PUSH_VAPID_PRIVATE_KEY:?set WEB_PUSH_VAPID_PRIVATE_KEY in ~/fireplace/.env}

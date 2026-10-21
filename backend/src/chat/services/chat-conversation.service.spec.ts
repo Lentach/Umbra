@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ConfigService } from '@nestjs/config';
 import { ChatConversationService } from './chat-conversation.service';
 import { ConversationsService } from '../../conversations/conversations.service';
 import { MessagesService } from '../../messages/messages.service';
@@ -10,6 +11,7 @@ import { ConversationNotificationPreferencesService } from '../../conversation-n
 import { Socket, Server } from 'socket.io';
 import { Conversation } from '../../conversations/conversation.entity';
 import { Message } from '../../messages/message.entity';
+import { User } from '../../users/user.entity';
 
 describe('ChatConversationService', () => {
   let service: ChatConversationService;
@@ -20,9 +22,12 @@ describe('ChatConversationService', () => {
   let mockClient: Partial<Socket>;
   let notificationPreferences: jest.Mocked<ConversationNotificationPreferencesService>;
   let mockServer: Partial<Server>;
+  // The env as `ConfigService` serves it; `LEGACY_WRITES_FROZEN` set per test.
+  let env: Record<string, string | undefined>;
 
   beforeEach(async () => {
     mockClient = { data: { user: { id: 1 } }, emit: jest.fn() };
+    env = {};
     mockServer = { to: jest.fn().mockReturnThis(), emit: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -32,6 +37,7 @@ describe('ChatConversationService', () => {
           provide: ConversationsService,
           useValue: {
             findOrCreate: jest.fn(),
+            findByUsers: jest.fn().mockResolvedValue(null),
             findByUser: jest.fn().mockResolvedValue([]),
             findById: jest.fn(),
             setPinnedMessage: jest.fn(),
@@ -71,6 +77,10 @@ describe('ChatConversationService', () => {
         {
           provide: ConversationNotificationPreferencesService,
           useValue: { setMute: jest.fn() },
+        },
+        {
+          provide: ConfigService,
+          useValue: { get: (key: string) => env[key] },
         },
       ],
     }).compile();
@@ -133,6 +143,49 @@ describe('ChatConversationService', () => {
       );
 
       expect(conversationsService.findOrCreate).toHaveBeenCalled();
+    });
+
+    describe('LEGACY_WRITES_FROZEN=true (decision 111)', () => {
+      beforeEach(() => {
+        env = { LEGACY_WRITES_FROZEN: 'true' };
+        usersService.findById
+          .mockResolvedValueOnce({ id: 1, username: 'alice' } as User)
+          .mockResolvedValueOnce({ id: 2, username: 'bob' } as User);
+        conversationsService.findOrCreate.mockResolvedValue({
+          id: 99,
+        } as Conversation);
+      });
+
+      it('refuses a chat that does not exist yet and creates none', async () => {
+        await service.handleStartConversation(
+          mockClient as Socket,
+          { recipientId: 2 },
+          mockServer as Server,
+        );
+
+        expect(mockClient.emit).toHaveBeenCalledWith('error', {
+          message: 'legacy_frozen',
+        });
+        expect(conversationsService.findOrCreate.mock.calls).toHaveLength(0);
+      });
+
+      it('still opens the existing chat, so old history stays reachable', async () => {
+        conversationsService.findByUsers.mockResolvedValue({
+          id: 10,
+        } as Conversation);
+
+        await service.handleStartConversation(
+          mockClient as Socket,
+          { recipientId: 2 },
+          mockServer as Server,
+        );
+
+        expect(conversationsService.findByUsers.mock.calls).toEqual([[1, 2]]);
+        expect(mockClient.emit).toHaveBeenCalledWith('openConversation', {
+          conversationId: 10,
+        });
+        expect(conversationsService.findOrCreate.mock.calls).toHaveLength(0);
+      });
     });
   });
 

@@ -61,6 +61,15 @@ export class EnvironmentVariables {
   @IsIn(['true', 'false'])
   BOX_ENABLED?: string;
 
+  /**
+   * `true` freezes the old path (Phase 4 step 3, decision 111): no new
+   * message, friend request or chat is written to the old tables. Unset or
+   * `false` leaves it open; any other value fails boot, as for `BOX_ENABLED`.
+   */
+  @IsOptional()
+  @IsIn(['true', 'false'])
+  LEGACY_WRITES_FROZEN?: string;
+
   @IsOptional()
   @IsString()
   MEDIA_DIR?: string;

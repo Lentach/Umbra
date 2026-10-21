@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ConfigService } from '@nestjs/config';
 import { MessagesService } from '../../messages/messages.service';
 import { ConversationsService } from '../../conversations/conversations.service';
 import { ChatValidationService } from './chat-validation.service';
@@ -64,6 +65,8 @@ describe('ChatMessageService', () => {
   let usersService: jest.Mocked<UsersService>;
   let chatLinkPreviewService: jest.Mocked<ChatLinkPreviewService>;
   let pushCoalescingService: jest.Mocked<PushNotificationCoalescingService>;
+  // The env as `ConfigService` serves it; `LEGACY_WRITES_FROZEN` set per test.
+  let env: Record<string, string | undefined>;
 
   const mockSender: Partial<User> = { id: 1, username: 'alice' };
   const mockRecipient: Partial<User> = { id: 2, username: 'bob' };
@@ -110,6 +113,7 @@ describe('ChatMessageService', () => {
   let mockServer: Partial<Server>;
 
   beforeEach(async () => {
+    env = {};
     findServedMessageIdsMock = jest.fn().mockResolvedValue([]);
     // No committed row by default: every pre-existing send law is unchanged,
     // because a send without a token never reaches this lookup anyway.
@@ -202,6 +206,10 @@ describe('ChatMessageService', () => {
             pendingReplacementVersion: pendingReplacementVersionMock,
           },
         },
+        {
+          provide: ConfigService,
+          useValue: { get: (key: string) => env[key] },
+        },
       ],
     }).compile();
 
@@ -283,6 +291,33 @@ describe('ChatMessageService', () => {
         'messageSent',
         expect.any(Object),
       );
+    });
+
+    it('LEGACY_WRITES_FROZEN=true: refuses a send that would be stored, and writes no chat or message', async () => {
+      // Phase 4 step 3 (decision 111): the old path takes no new message.
+      env = { LEGACY_WRITES_FROZEN: 'true' };
+      chatValidationService.validateCanMessage.mockResolvedValue({
+        valid: true,
+      });
+      usersService.findById
+        .mockResolvedValueOnce(mockSender as User)
+        .mockResolvedValueOnce(mockRecipient as User);
+      conversationsService.findOrCreate.mockResolvedValue(
+        mockConversation as Conversation,
+      );
+      messagesService.create.mockResolvedValue(mockMessage);
+
+      await service.handleSendMessage(
+        mockClient as Socket,
+        { recipientId: 2, content: 'hi', messageType: 'TEXT' },
+        mockServer as Server,
+      );
+
+      expect(mockClient.emit).toHaveBeenCalledWith('error', {
+        message: 'legacy_frozen',
+      });
+      expect(conversationsService.findOrCreate.mock.calls).toHaveLength(0);
+      expect(messagesService.create.mock.calls).toHaveLength(0);
     });
     it('should not create message and emit error when validation rejects the send', async () => {
       chatValidationService.validateCanMessage.mockResolvedValue({

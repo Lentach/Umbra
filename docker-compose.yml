@@ -40,6 +40,8 @@ services:
       # CI's e2e stacks (this file) run it on; prod pins it off until the owner
       # turns it on after G5.
       BOX_ENABLED: ${BOX_ENABLED:-true}
+      # Phase 4 step 3 freeze (decision 111); prod pins it in docker-compose.prod.yml.
+      LEGACY_WRITES_FROZEN: ${LEGACY_WRITES_FROZEN:-false}
       FIREBASE_SERVICE_ACCOUNT: ${FIREBASE_SERVICE_ACCOUNT}
       WEB_PUSH_VAPID_PUBLIC_KEY: ${WEB_PUSH_VAPID_PUBLIC_KEY}
       WEB_PUSH_VAPID_PRIVATE_KEY: ${WEB_PUSH_VAPID_PRIVATE_KEY}
