@@ -44,7 +44,7 @@
 - Docs:
   - decisions log, plan doc, `docs/contracts/wire.md:142`;
   - `frontend/docs/e2e-invariants.md` lines 51, 52, 103–105;
-  - `docs/agents/traps.md` (E2E), root `CLAUDE.md:66` counts.
+- CI: green on `7f28d0ee` (all six jobs). `2dd35da3` had Backend tests RED on the backend ESLint ratchet, 850 → 853: an `any` read in the guard, and `unbound-method` from `expect(mock.method)` in the spec. Fixed by `7f28d0ee`.
 - Read only: `box_inbox.dart:211-217` (a non-friend's frames are dropped unread).
 
 ## Verification
