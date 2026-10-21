@@ -580,7 +580,7 @@ extension MessagingFirstContact on MessagingProvider {
       // Storage or readiness: nothing about the request was decided.
       return FirstContactAccept.failed;
     }
-    final opened = await _openKept(enc, record!, list);
+    final opened = await _openKept(enc, record, list);
     if (opened.offered.isEmpty) {
       // A frame that would not decrypt may heal (the store, the session);
       // only when every kept frame is under another key or device is the

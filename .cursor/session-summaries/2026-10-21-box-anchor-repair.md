@@ -1,0 +1,33 @@
+# Box friends' key anchor repaired: a restored install pins on its lookup (E38d); a re-met ex-friend's stale pin is replaced (decision 112)
+
+**Date:** 2026-10-21 · **Version:** unchanged (0.2.68; fix not released) · **Tiers deployed:** none
+
+## What was done
+- Field case: PrezydentKarol (132) could send nothing to bob208 from his native app since 10-20 17:43Z, and bob208's accept of his new request vanished. Cause from both logs: his native login reminted and restored bob208 from the contact backup with no key (`DEVICE_LIST_REJECTED no_tofu_identity` → `box peer 37: lookup spent`); bob208 still held his pre-remint key, so the accept was dropped (`BOX_REQUEST_UNVERIFIED served_list`).
+- `messaging_provider.first_contact.dart` `lookupBoxPeerList`: the one handle lookup per process now runs `adoptServedAccount`, which pins the served identity when no anchor is held (E38d). A held anchor that differs is left alone.
+- `EncryptionProvider.adoptServedAccount(replaceStaleAnchor:)` + `EncryptionService.replaceStaleAccountAnchor`: a pin held for an account that is no contact any more is replaced, durable `ACCOUNT_ANCHOR_REPLACED` (decision 112, owner "A").
+  - Accept: only when a kept request frame is sealed under the served key (`_keptCarries`).
+  - Send: to a fresh contact (no record, or `former`).
+- Decisions log: 112 and E38d. Traps (E2E): the box-made restore trap rewritten as fixed; the two-install identity flip (goonboy, PARKED).
+- Earlier the same day (in `2026-10-21-phase4-step3-freeze.md`): O31–O36 asked and put on hold by the owner; the storage fix parked.
+- Out-of-repo: dev stack `fireplace` running (Docker Desktop started); Chrome CDP 9461 still running; throwaway `%TEMP%/d101drive/serve-one.mjs`; web builds `%TEMP%/p112` (fix) and `%TEMP%/p4s3` (0.2.68).
+
+## Key files
+- Edited: `frontend/lib/providers/encryption_provider.dart`, `frontend/lib/providers/messaging/messaging_provider.first_contact.dart`, `frontend/lib/providers/messaging_provider.dart` (import), `frontend/lib/services/encryption_service.dart`, `frontend/test/providers/messaging_provider_box_first_contact_test.dart`, `docs/plans/metadata-privacy-decisions.md`, `docs/agents/traps.md`, `CLAUDE.md` (count).
+- Read only (load-bearing): `encryption/signal_stores.dart` (`stageAccountIdentity`, `adoptAccountIdentity`, `isTrustedIdentity`), `device_list_cache.dart` `adopt`, `messaging_provider.box.dart` `_friendDeviceIsLive`.
+
+## Verification
+- CI: pending on `731389ed` at writing.
+- 3 new tests in the first-contact harness, all RED with the fix mutated off (`unverified`, `failed`/`served_list`, `no_tofu_identity`), green with it. Existing "lookup serves another key" tests unchanged and green.
+- Flutter full suite 3206 passed, 14 skipped. Dart lint ratchet 3146 (PASS).
+- Drive, dev stack, release web build `p112` vs 0.2.68 `p4s3`, accounts pk112a (263) / bob112b (264, enrolled via "Włącz łączenie" with a `navigator.standalone` init script):
+  - box friendship made over the box (0 `friend_requests` rows);
+  - A wiped + password login (remint, contact restored): fixed build sends ✓ to enrolled B; the old build on another origin shows red "Ponów" (his exact symptom);
+  - old-build A reminted (no key reaches B), B removes A, A removes B and invites, B accepts: friendship made; B's store holds `19:59:02 ACCOUNT_ANCHOR_REPLACED {peerId: 263}`; one message each way arrives.
+- NOT verified: Android/native build, prod.
+- CI: RED on `731389ed` (Flutter analyze: `unnecessary_non_null_assertion` warning at `messaging_provider.first_contact.dart:583`, a `record!` made redundant by the new one); fixed in the follow-up commit (local analyze 0 warnings, the file's 27 tests green). The follow-up's CI result is in LATEST/the baton.
+## Notes for next session
+- Next action: release the fix (0.2.69: version bump, CI green, backend unchanged, web + APK per `docs/runbooks/android-release.md`), when the owner says so. Then PrezydentKarol updates the APK, and bob208 reloads the PWA; he invites bob208 again (his stuck pending invite may need removing first) and bob208 accepts.
+- Owner-owed: the release go; O31–O36 (on hold); the bob208 ↔ R0yb3r positive check (E111c); the step 3 rehearsal; jarekk / qwerty / benz93 backups.
+- Recipe: the hacker-mode durable panel can render stale; read `localStorage['flutter.e2e_diag_persist_v1']`. Fake installed mode for "Włącz łączenie": init script `Object.defineProperty(Navigator.prototype,'standalone',{get:()=>true})`. A `--name` regex selects flutter tests (`--plain-name` broke under cmd quoting).
+- Trap appended (E2E): box-made restore / stale pin, fixed.
