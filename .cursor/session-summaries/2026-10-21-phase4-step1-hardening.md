@@ -44,11 +44,11 @@
 - Docs:
   - decisions log, plan doc, `docs/contracts/wire.md:142`;
   - `frontend/docs/e2e-invariants.md` lines 51, 52, 103–105;
-- CI: green on `7f28d0ee` (all six jobs). `2dd35da3` had Backend tests RED on the backend ESLint ratchet, 850 → 853: an `any` read in the guard, and `unbound-method` from `expect(mock.method)` in the spec. Fixed by `7f28d0ee`.
+  - `docs/agents/traps.md` (E2E, Deploy/CI), root `CLAUDE.md:66` counts.
 - Read only: `box_inbox.dart:211-217` (a non-friend's frames are dropped unread).
 
 ## Verification
-- CI: see the handoff commit's Notes. The last code commit of this session is the step-1 commit after `afdfc1a6`.
+- CI: green on `7f28d0ee` (all six jobs). `2dd35da3` had Backend tests RED on the backend ESLint ratchet, 850 → 853: an `any` read in the guard, and `unbound-method` from `expect(mock.method)` in the spec. Fixed by `7f28d0ee`.
 - Every new test was red first with the exact symptom:
   - `getMessages` emitted `281474976710693`;
   - a box-route friend swept to `former`;
