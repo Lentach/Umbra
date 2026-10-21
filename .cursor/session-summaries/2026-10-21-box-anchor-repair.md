@@ -17,7 +17,7 @@
 - Read only (load-bearing): `encryption/signal_stores.dart` (`stageAccountIdentity`, `adoptAccountIdentity`, `isTrustedIdentity`), `device_list_cache.dart` `adopt`, `messaging_provider.box.dart` `_friendDeviceIsLive`.
 
 ## Verification
-- CI: pending on `731389ed` at writing.
+- CI: green on `9075aec2` (all six jobs). `731389ed` was RED: Flutter analyze `unnecessary_non_null_assertion` at `messaging_provider.first_contact.dart:583`, a `record!` made redundant by the new one; `9075aec2` drops it.
 - 3 new tests in the first-contact harness, all RED with the fix mutated off (`unverified`, `failed`/`served_list`, `no_tofu_identity`), green with it. Existing "lookup serves another key" tests unchanged and green.
 - Flutter full suite 3206 passed, 14 skipped. Dart lint ratchet 3146 (PASS).
 - Drive, dev stack, release web build `p112` vs 0.2.68 `p4s3`, accounts pk112a (263) / bob112b (264, enrolled via "Włącz łączenie" with a `navigator.standalone` init script):
@@ -25,9 +25,9 @@
   - A wiped + password login (remint, contact restored): fixed build sends ✓ to enrolled B; the old build on another origin shows red "Ponów" (his exact symptom);
   - old-build A reminted (no key reaches B), B removes A, A removes B and invites, B accepts: friendship made; B's store holds `19:59:02 ACCOUNT_ANCHOR_REPLACED {peerId: 263}`; one message each way arrives.
 - NOT verified: Android/native build, prod.
-- CI: RED on `731389ed` (Flutter analyze: `unnecessary_non_null_assertion` warning at `messaging_provider.first_contact.dart:583`, a `record!` made redundant by the new one); fixed in the follow-up commit (local analyze 0 warnings, the file's 27 tests green). The follow-up's CI result is in LATEST/the baton.
+
 ## Notes for next session
 - Next action: release the fix (0.2.69: version bump, CI green, backend unchanged, web + APK per `docs/runbooks/android-release.md`), when the owner says so. Then PrezydentKarol updates the APK, and bob208 reloads the PWA; he invites bob208 again (his stuck pending invite may need removing first) and bob208 accepts.
 - Owner-owed: the release go; O31–O36 (on hold); the bob208 ↔ R0yb3r positive check (E111c); the step 3 rehearsal; jarekk / qwerty / benz93 backups.
 - Recipe: the hacker-mode durable panel can render stale; read `localStorage['flutter.e2e_diag_persist_v1']`. Fake installed mode for "Włącz łączenie": init script `Object.defineProperty(Navigator.prototype,'standalone',{get:()=>true})`. A `--name` regex selects flutter tests (`--plain-name` broke under cmd quoting).
-- Trap appended (E2E): box-made restore / stale pin, fixed.
+- Traps appended: E2E (box-made restore / stale pin, fixed); Tests (the Dart ratchet counts infos only, a warning fails CI).
