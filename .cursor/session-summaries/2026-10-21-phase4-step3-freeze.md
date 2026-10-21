@@ -46,6 +46,8 @@
 - Owner-owed:
   - the passphrase for the rehearsal;
   - the flip itself, only after a POSITIVE check (E111c): bob208 sends R0yb3r a message and R0yb3r replies on 0.2.68, both arrive, and `select max("createdAt") from messages` stays at 2026-10-11 20:40Z. A quiet week alone proves nothing (R0yb3r has only legacy device 1);
-  - jarekk and qwerty backups before step 4 (decision 111);
-  - the before-step-4 list.
+  - backups for jarekk (101), qwerty (62) and benz93 (86), the three accounts with friends and no `contact_backups` row on 10-21 04:40Z; the owner is doing them (decision 111);
+  - answers to O31–O36 (asked 10-21 in the decisions log; O32, pre-box friends' device lists, is the critical path).
+- Before step 4, done 10-21: the `servedMessageIds` `git log -L` check passed (plan line 55); found that silencing `conversationsList` makes every resume reconnect (plan §Review 10-21).
+- Parked by the owner 10-21 ("save it for later"): the Android `flutter_secure_storage` fix and the two-install identity flip (goonboy, traps E2E).
 - Trap (not new): a background tab in the drive Chrome does not boot the app; `page.bringToFront()` before reading it.
