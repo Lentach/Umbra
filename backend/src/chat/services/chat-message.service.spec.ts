@@ -2103,7 +2103,7 @@ describe('ChatMessageService', () => {
         conversationId: 281474976710693,
       });
 
-      expect(conversationsService.findById).not.toHaveBeenCalled();
+      expect(conversationsService.findById.mock.calls).toHaveLength(0);
       expect(mockClient.emit).not.toHaveBeenCalled();
     });
   });
