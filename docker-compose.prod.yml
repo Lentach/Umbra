@@ -88,8 +88,9 @@ services:
       BOX_ENABLED: 'true'
       # Phase 4 step 3 (decision 111): 'true' refuses new old-path messages,
       # friend requests and chats; existing rows stay served. Owner flips it,
-      # only once no `messages` row has been created for 7 days (else a pair
-      # still on the old path loses its only way to send). Undo = 'false'.
+      # only after a POSITIVE check (E111c): bob208 <-> R0yb3r message both
+      # ways and no new `messages` row appears; silence alone proves nothing
+      # (a pair still on the old path loses its only way to send). Undo = 'false'.
       # Pinned like BOX_ENABLED: a change is a reviewed commit.
       LEGACY_WRITES_FROZEN: 'false'
       FIREBASE_SERVICE_ACCOUNT: ${FIREBASE_SERVICE_ACCOUNT:-}

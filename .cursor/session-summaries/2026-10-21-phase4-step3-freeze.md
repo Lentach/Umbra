@@ -45,7 +45,7 @@
 - Next action: the step 3 rehearsal on staging, when the owner is ready ("Later", 10-21): `staging.ps1 up` → `restore chatdb-20261021T010125Z.dump.gpg` → backend with `LEGACY_WRITES_FROZEN=true` → APK 0.2.61 built against staging + a PWA + 0.2.68; pass criteria plan line 55. The restore needs the OWNER to type the backup passphrase (traps "Never pipe a plaintext prod pg_dump").
 - Owner-owed:
   - the passphrase for the rehearsal;
-  - the flip itself, after 7 days with no new `messages` row since 0.2.68 (prod: newest 10-11; check `select max("createdAt") from messages`);
+  - the flip itself, only after a POSITIVE check (E111c): bob208 sends R0yb3r a message and R0yb3r replies on 0.2.68, both arrive, and `select max("createdAt") from messages` stays at 2026-10-11 20:40Z. A quiet week alone proves nothing (R0yb3r has only legacy device 1);
   - jarekk and qwerty backups before step 4 (decision 111);
   - the before-step-4 list.
 - Trap (not new): a background tab in the drive Chrome does not boot the app; `page.bringToFront()` before reading it.
