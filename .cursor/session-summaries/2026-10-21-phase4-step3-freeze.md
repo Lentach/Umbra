@@ -1,6 +1,6 @@
-# Phase 4 step 3 built: `LEGACY_WRITES_FROZEN` refuses new old-path messages, friend requests and chats (off; not deployed)
+# Phase 4 step 3 built and deployed OFF: `LEGACY_WRITES_FROZEN` refuses new old-path messages, friend requests and chats
 
-**Date:** 2026-10-21 · **Version:** unchanged (0.2.68 live; step 3 is unreleased backend code) · **Tiers deployed:** none
+**Date:** 2026-10-21 · **Version:** unchanged (0.2.68; backend redeployed at `0b03d64f`, flag `'false'`) · **Tiers deployed:** backend
 
 ## What was done
 - `backend/src/chat/utils/legacy-freeze.ts`: `legacyWritesFrozen(config)` (`=== 'true'`, unset = open) and `LEGACY_FROZEN = 'legacy_frozen'`. `env.validation.ts` takes only `'true'`/`'false'`.
@@ -30,7 +30,8 @@
   - decisions log, plan doc.
 
 ## Verification
-- CI: green on `316fc600` (all six jobs, master push).
+- CI: green on `316fc600` (all six jobs, master push); tip `0b03d64f` is docs-only (CodeQL only, green).
+- Prod (owner: "Deploy now, switch off"): `deploy-backend.sh` → `/version` 0.2.68 / `0b03d64f`, healthy, `LEGACY_WRITES_FROZEN=false` in the container; 0 error and 0 `legacy_frozen` lines in the first 2 min; newest `messages` row still 2026-10-11 20:40Z (107 rows).
 - 7 new tests (send, start ×2, friend send, accept, ensure ×2), all red with the predicate mutated to never match, green with it. Backend 1249 tests, 70 suites (count verified). Backend ESLint ratchet 850 (the first run was 851: a redundant `as Message` in the new spec).
 - Dev stack, release web build `p4s3` (HEAD 0.2.68):
   - `LEGACY_WRITES_FROZEN=yes`: boot refused ("must be one of the following values: true, false").
@@ -38,13 +39,12 @@
   - A raw `sendMessage` on its own socket got `error legacy_frozen`; `startConversation` to p4bravo got `openConversation {79}` plus its history; d101a's `startConversation` to d101g (no chat) got `error legacy_frozen`. Messages stayed 590 and chats 76.
   - In the UI, p4alpha's chat shows "p4bravo ma starszą wersję aplikacji"; a typed send went red with "Ponów", no row stored.
   - Flag off again: tapping "Ponów" sent it (✓, row 1045).
-- NOT verified: the rehearsal (prod dump, 0.2.61 APK, PWA), Android, prod.
+- NOT verified: the rehearsal (prod dump, 0.2.61 APK, PWA), Android, the flag ON in prod.
 
 ## Notes for next session
-- Next action: the step 3 rehearsal on staging (`staging.ps1 up` → `restore chatdb-20261021T010125Z.dump.gpg` → backend with `LEGACY_WRITES_FROZEN=true` → APK 0.2.61 built against staging + a PWA + 0.2.68; pass criteria plan line 55). The restore needs the OWNER to type the backup passphrase (traps "Never pipe a plaintext prod pg_dump").
+- Next action: the step 3 rehearsal on staging, when the owner is ready ("Later", 10-21): `staging.ps1 up` → `restore chatdb-20261021T010125Z.dump.gpg` → backend with `LEGACY_WRITES_FROZEN=true` → APK 0.2.61 built against staging + a PWA + 0.2.68; pass criteria plan line 55. The restore needs the OWNER to type the backup passphrase (traps "Never pipe a plaintext prod pg_dump").
 - Owner-owed:
   - the passphrase for the rehearsal;
-  - whether step 3 ships to prod now with the flag off or waits for the flip;
   - the flip itself, after 7 days with no new `messages` row since 0.2.68 (prod: newest 10-11; check `select max("createdAt") from messages`);
   - jarekk and qwerty backups before step 4 (decision 111);
   - the before-step-4 list.
