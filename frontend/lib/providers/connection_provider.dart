@@ -349,7 +349,10 @@ class ConnectionProvider extends ChangeNotifier {
     String baseUrl, {
     bool immediate = false,
   }) async {
-    final now = DateTime.now();
+    // clock.now() (package:clock), not DateTime.now(): fake_async patches the
+    // former, so the cooldown is deterministic under test — else a test's
+    // forced reconnect inside the window is deferred forever, unseen.
+    final now = clock.now();
     if (!immediate && _lastConnectStartedAt != null) {
       final since = now.difference(_lastConnectStartedAt!);
       if (since < AppConstants.reconnectConnectCooldown) {

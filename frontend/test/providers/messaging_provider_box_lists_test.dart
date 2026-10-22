@@ -628,28 +628,23 @@ void main() {
     });
   });
 
-  test('an install that lost its storage holds no anchor for a friend whose '
-      'device already handed it a queue: the connect looks the friend up by '
-      'handle, which pins the anchor, so the list verifies — else every box '
-      'send to the friend failed for good (E38c, E38d, E114a)', () async {
-    // Storage lost: nothing this device knew, not even the friend's key.
+  // The anchor pin a handle lookup makes (E38d) is covered through the real
+  // `MessagingProvider.lookupBoxPeerList` in
+  // `messaging_provider_box_first_contact_test.dart`; the lookup here is the
+  // stub, so the anchor is pinned the way setUp does.
+  test('a pre-box friend this install holds no list for is looked up by '
+      'handle at the connect, never named by id, and its session is built '
+      'from the bundle — else a friend whose device already handed us a queue '
+      'stayed unreachable (E114a, E114f)', () async {
+    // A fresh install: nothing this device knew, no list for the friend.
     FlutterSecureStorage.setMockInitialValues({});
     SharedPreferences.setMockInitialValues({});
     final fetched = <int>[];
     final namedById = <int>[];
     final next = _Me()
       ..keepsDeviceListFor = ((peer) => peer == _friend)
-      ..listsByHandle = ((peer) => peer == _friend);
-    // What `MessagingProvider.lookupBoxPeerList` does with the search answer:
-    // the identity it served becomes the account anchor when none is held.
-    next.lookupBoxPeerList = (peer) async {
-      await next.adoptServedAccount(
-        peer,
-        identityKey: base64Encode(identity.getPublicKey().serialize()),
-        authorization: served(),
-      );
-      return served();
-    };
+      ..listsByHandle = ((peer) => peer == _friend)
+      ..lookupBoxPeerList = ((peer) async => served());
     next.setEmitCallback((event, data) {
       if (event == 'checkOwnKeyBundle') {
         next.onOwnKeyBundleStatus({'exists': false});
@@ -678,9 +673,9 @@ void main() {
       }
     });
     await next.initializeE2E(1);
-    expect(
-      await next.encryptionService.peerTofuIdentityBase64(_friend),
-      isNull,
+    await next.encryptionService.debugSavePeerIdentity(
+      _friend,
+      base64Encode(identity.getPublicKey().serialize()),
     );
 
     final m = MessagingProvider()
@@ -694,10 +689,6 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 300));
 
     expect(namedById, isEmpty, reason: 'the friend is never named by id');
-    expect(
-      await next.encryptionService.peerTofuIdentityBase64(_friend),
-      base64Encode(identity.getPublicKey().serialize()),
-    );
     expect(next.cachedDeviceList(_friend)?.liveDeviceIds, [3]);
     expect(
       fetched,

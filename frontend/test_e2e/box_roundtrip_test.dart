@@ -255,8 +255,8 @@ class _AppSide {
 
   /// The app's handle lookup of [friend] (E114b): one real `searchUsers`,
   /// whose answer names the request queues the friend's devices published.
-  Future<void> _lookup(int user) async {
-    if (user != friend.userId) return;
+  Future<bool> _lookup(int user) async {
+    if (user != friend.userId) return true;
     me.events.discard('searchUsersResult');
     me.socketService.socket!.emit('searchUsers', {
       'handle': '${friend.username}#${friend.tag}',
@@ -271,6 +271,7 @@ class _AppSide {
         ? null
         : FirstContactPeer.fromSearchEntry(answer.first);
     session.takeServedAddresses(user, peer?.addresses ?? const []);
+    return true;
   }
 
   Future<BoxFrame?> _encrypt(
@@ -728,8 +729,9 @@ void main() {
 
           final a = _AppSide(alice, bob, box(ip: _randomIp()));
           await a.start();
-          // Bob's app predates the box: the list names his device with no
-          // request queue, so alice hands nothing off and makes no queue.
+          // Bob's app predates the box: he published no request queue, so a
+          // handle lookup names none, so alice hands nothing off and makes no
+          // queue.
           await a.listFriends();
           await Future<void>.delayed(const Duration(seconds: 1));
           expect(a.record.queues, isEmpty);

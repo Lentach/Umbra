@@ -1089,10 +1089,10 @@ extension MessagingFirstContact on MessagingProvider {
   /// does not hold, whether the friendship was made over the box or before it
   /// (decision 114) — from one `searchUsers` of its handle: `getDeviceList`
   /// would name the pair, and once Phase 4 is through the server refuses it
-  /// for a pair it does not know anyway. Its fresh bundles and addresses are
-  /// kept on a friendship made over the box; for any other friend its
-  /// request queues are kept for this process (`takeServedAddresses`, where
-  /// the handoff goes until that device hands us its own queue). The
+  /// for a pair it does not know anyway. Its request queues are kept for this
+  /// process (`takeServedAddresses`, where the handoff goes until that device
+  /// hands us its own queue), for every friend alike; on a friendship made
+  /// over the box its fresh bundles are kept too. The
   /// answer's identity becomes the account anchor when none is held — a
   /// friend restored from the contact backup, which carries no keys, as
   /// first contact pinned it (E38d). Throws when no answer names that
@@ -1138,12 +1138,14 @@ extension MessagingFirstContact on MessagingProvider {
 
   /// One handle lookup of friend [userId] for the request queues of its
   /// devices (`BoxFriendHandoff.addressLookup`, E114b): [lookupBoxPeerList]
-  /// keeps them, and the list it serves is adopted like any other. Throws
-  /// when the lookup is spent (once per account per process, E15h) or
-  /// answers nothing — the caller then adds no address.
-  Future<void> lookupFriendAddresses(int userId) async {
+  /// keeps them, and the list it serves is adopted like any other. Completes
+  /// false, having asked nothing, while E2E is not ready (the caller asks
+  /// again later); throws when the lookup is spent (once per account per
+  /// process, E15h) or answers nothing — the caller then adds no address.
+  Future<bool> lookupFriendAddresses(int userId) async {
     final enc = _encryptionProvider;
-    if (enc == null || !enc.isE2EReady) return;
+    if (enc == null || !enc.isE2EReady) return false;
     await enc.getVerifiedDeviceList(userId, forceRefresh: true);
+    return true;
   }
 }

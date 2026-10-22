@@ -86,13 +86,35 @@ void main() {
     });
   });
 
+  // `connect()` itself counts once; every count past it is a FORCED
+  // reconnect. The provider's connect cooldown reads `package:clock`, so
+  // the 6 s probe window is past it under fake_async: a forced connect runs
+  // rather than being deferred by the debounce, unseen.
+  test('silence in the probe window forces a fresh connect (control)', () {
+    fakeAsync((fake) {
+      final sock = _FakeSocketService();
+      final provider = ConnectionProvider(socketService: sock);
+      unawaited(provider.connect(1, 'tok', 'http://test'));
+      fake.flushMicrotasks();
+      expect(sock.connectCalls, 1);
+      sock.connectedClaim = true;
+
+      provider.ensureReconnectIfNeeded();
+      fake
+        ..elapse(const Duration(seconds: 7))
+        ..flushMicrotasks();
+
+      expect(sock.connectCalls, 2);
+    });
+  });
+
   test('probe is disarmed when a server response arrives in the window', () {
     fakeAsync((fake) {
       final sock = _FakeSocketService();
       final provider = ConnectionProvider(socketService: sock);
       // Full connect() registers the event handlers that bump the
       // liveness counter.
-      provider.connect(1, 'tok', 'http://test');
+      unawaited(provider.connect(1, 'tok', 'http://test'));
       fake.flushMicrotasks();
       sock.connectedClaim = true;
 
@@ -101,9 +123,11 @@ void main() {
 
       // Server responds within the window → socket is alive.
       sock.handlers['conversationsList']!.call(<dynamic>[]);
-      fake.elapse(const Duration(seconds: 7));
+      fake
+        ..elapse(const Duration(seconds: 7))
+        ..flushMicrotasks();
 
-      expect(_logged('RESUME_PROBE_TIMEOUT'), isFalse);
+      expect(sock.connectCalls, 1, reason: 'no forced reconnect');
     });
   });
 
@@ -126,9 +150,11 @@ void main() {
       sock.handlers['serverTime']!.call({
         'serverTime': '2026-10-22T10:00:00.000Z',
       });
-      fake.elapse(const Duration(seconds: 7));
+      fake
+        ..elapse(const Duration(seconds: 7))
+        ..flushMicrotasks();
 
-      expect(_logged('RESUME_PROBE_TIMEOUT'), isFalse);
+      expect(sock.connectCalls, 1, reason: 'no forced reconnect');
     });
   });
 }

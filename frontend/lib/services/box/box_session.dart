@@ -280,10 +280,10 @@ class BoxSession
   /// One handle lookup of a friend, for the request queues of its devices
   /// (E114b; `MessagingProvider.lookupFriendAddresses`): the answer reaches
   /// [takeServedAddresses].
-  Future<void> Function(int userId)? get friendAddressLookup =>
+  Future<bool> Function(int userId)? get friendAddressLookup =>
       _friends.addressLookup;
 
-  set friendAddressLookup(Future<void> Function(int userId)? lookup) {
+  set friendAddressLookup(Future<bool> Function(int userId)? lookup) {
     _friends.addressLookup = lookup;
   }
 
@@ -816,7 +816,10 @@ class BoxSession
       // per device per session (E114d), and re-key from what it names. None
       // named: given up for the session, never looped on.
       if (!_friendAddressAsked.add(key)) return;
-      await _friends.lookupAddresses(userId);
+      // A device not ready to ask yet spent nothing: left to the next call.
+      if (!await _friends.lookupAddresses(userId)) {
+        _friendAddressAsked.remove(key);
+      }
       if (_disposed) return;
       target = _friends.targetOf(userId, deviceId);
       if (target == null) return;

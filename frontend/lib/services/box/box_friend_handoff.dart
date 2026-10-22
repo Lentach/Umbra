@@ -96,13 +96,17 @@ class BoxFriendHandoff {
 
   /// Friends whose request queues this process already asked for — by
   /// [addressLookup], or by the lookup that served their list: one lookup
-  /// each, however many passes.
+  /// each, however many passes. A lookup that could not be made (not ready)
+  /// is not counted: it is asked again on the next pass.
   final Set<int> _addressesAsked = {};
 
   /// One handle lookup of friend `userId`, whose answer reaches
-  /// [takeServedAddresses] (`MessagingProvider.lookupFriendAddresses`). Null:
-  /// nothing can be looked up, and no address is ever learned.
-  Future<void> Function(int userId)? addressLookup;
+  /// [takeServedAddresses] (`MessagingProvider.lookupFriendAddresses`).
+  /// Completes true when the lookup was made, whatever it answered; false
+  /// when this device is not ready to ask yet (nothing was spent). Throws
+  /// when the lookup is spent or answers nothing. Null: nothing can be
+  /// looked up, and no address is ever learned.
+  Future<bool> Function(int userId)? addressLookup;
 
   /// The last `BOX_ROUTES` numbers written, so only a change is.
   (int, int, int)? _routesLogged;
@@ -174,16 +178,29 @@ class BoxFriendHandoff {
 
   /// Asks for [userId]'s request queues by handle and waits for the answer to
   /// be taken ([takeServedAddresses]). The lookup itself is bounded to once
-  /// per account per process (E15h); one that fails adds nothing.
-  Future<void> lookupAddresses(int userId) async {
+  /// per account per process (E15h); one that fails adds nothing and is
+  /// logged once per friend and error type. Completes true when the lookup
+  /// was made (it may have failed), false when it could not be made yet.
+  Future<bool> lookupAddresses(int userId) async {
     final lookup = addressLookup;
-    if (lookup == null || _disposed) return;
+    if (lookup == null || _disposed) return false;
+    // Marked before the await, so a second caller meanwhile does not ask.
     _addressesAsked.add(userId);
     try {
-      await lookup(userId);
-    } on Object {
+      if (await lookup(userId)) return true;
+    } on Object catch (e) {
       // Spent, unanswered or unverifiable: no address is learned.
+      _failed(
+        'lookup',
+        e.runtimeType.toString(),
+        userId: userId,
+        extra: {'userId': userId},
+      );
+      return true;
     }
+    // Not ready: nothing was asked, so nothing is spent.
+    _addressesAsked.remove(userId);
+    return false;
   }
 
   /// Whether our [queue] — the current one when none is given, none yet
@@ -412,7 +429,7 @@ class BoxFriendHandoff {
       // already ran, which took its addresses.
       if (live.any((d) => !targets.containsKey(d) && _handoffDue(userId, d)) &&
           addressLookup != null &&
-          _addressesAsked.add(userId)) {
+          !_addressesAsked.contains(userId)) {
         await lookupAddresses(userId);
         if (_disposed || !_accountReady) return;
         targets = {for (final d in live) d: ?targetOf(userId, d)};

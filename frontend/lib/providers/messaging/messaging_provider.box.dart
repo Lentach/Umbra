@@ -496,9 +496,9 @@ extension MessagingBox on MessagingProvider {
   /// Encrypts [json] for friend [userId]'s [deviceId] and frames it as from
   /// THIS device — the [FriendEncrypt] the box's friend handoff uses (the
   /// box asks only for friends). Null when it cannot now: E2E not ready, a
-  /// device the friend's VERIFIED list does not name live (the server's
-  /// friends list says which devices exist, never who is handed our queue,
-  /// E2), or no session could be built. [fresh] (a re-key) rebuilds the
+  /// device the friend's VERIFIED list does not name live (a list says which
+  /// devices exist, never who is handed our queue, E2), or no session could
+  /// be built. [fresh] (a re-key) rebuilds the
   /// session from the device's bundle first, so the frame is a PreKey
   /// message. Runs at connect or in answer to an inbound frame, never timed
   /// by a send (decision 21).

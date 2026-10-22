@@ -278,6 +278,11 @@ class _Device {
   /// Every lookup throws, as a spent or unanswered one does.
   bool lookupFails = false;
 
+  /// Every lookup answers "not ready yet" (`MessagingProvider.
+  /// lookupFriendAddresses` while E2E is not ready): it asks and serves
+  /// nothing.
+  bool lookupNotReady = false;
+
   List<ContactOutbound> _served() => [
     for (final peer in peers)
       if (peer.started && peer.store.requestQueue != null)
@@ -290,13 +295,15 @@ class _Device {
 
   /// `MessagingProvider.lookupFriendAddresses` as the box session sees it:
   /// the answer reaches [BoxSession.takeServedAddresses] before it completes.
-  Future<void> _lookup(int userId) async {
+  Future<bool> _lookup(int userId) async {
     lookups.add(userId);
     // A real lookup is a round trip: a caller that does not await it has
     // not got the answer yet.
     await Future<void>.delayed(Duration.zero);
+    if (lookupNotReady) return false;
     if (lookupFails) throw StateError('box peer $userId: lookup spent');
     session.takeServedAddresses(userId, serves?.call() ?? _served());
+    return true;
   }
 
   /// Opens the store and connects. The handle lookup is wired once the
@@ -785,8 +792,10 @@ void main() {
       await settle();
       session.accountReady(2);
       await settle();
-      session.friendAddressLookup = (user) async =>
-          session.takeServedAddresses(user, [served[user]!]);
+      session.friendAddressLookup = (user) async {
+        session.takeServedAddresses(user, [served[user]!]);
+        return true;
+      };
       final before = socket.emitted.where((f) => f.event == 'subscribe').length;
 
       session.onFriendsListed();
@@ -1011,6 +1020,81 @@ void main() {
       await reconnect(a);
       await reconnect(a);
       expect(a.lookups, [5, 5]);
+    },
+  );
+
+  // Mutation: `lookupAddresses` keeps the friend in `_addressesAsked` when
+  // the lookup answers false (drop the `remove`): the connect that found
+  // E2E not ready never asks that friend again this process.
+  test(
+    'a lookup that could not be made yet (E2E not ready) spends nothing: the '
+    'next pass asks again and the handoff then converges',
+    () async {
+      await b.start();
+      a.lookupNotReady = true;
+      await a.start(lookupAtStart: true);
+      await settle();
+
+      expect(a.lookups, [5]);
+      expect(box.sent, isEmpty);
+      expect(a.friend.queues, isEmpty);
+
+      a.lookupNotReady = false;
+      await reconnect(a);
+      await settle();
+
+      expect(a.lookups, [5, 5]);
+      expect(box.sent, contains(b.store.requestQueue!.sid));
+      expect(a.outboundOf(3)?.sid, b.friend.queues.single.sid);
+    },
+  );
+
+  // Mutation: `rekeyFriend` keeps `_friendAddressAsked` when the lookup
+  // answers false (drop the `remove`): a re-key provoked while E2E was not
+  // ready is given up for the session.
+  test(
+    'a re-key whose lookup could not be made yet is asked again by the next '
+    'one and goes out from what that lookup named',
+    () async {
+      await a.start();
+      await b.start();
+      a.lookupNotReady = true;
+
+      await a.session.rekeyFriend(5, 3);
+      expect(a.lookups, [5]);
+      expect(a.freshFor, isEmpty);
+
+      a.lookupNotReady = false;
+      await a.session.rekeyFriend(5, 3);
+      await settle();
+
+      expect(a.lookups, [5, 5]);
+      expect(a.freshFor, [3]);
+      expect(box.sent, contains(b.store.requestQueue!.sid));
+    },
+  );
+
+  // Mutation: `lookupAddresses` swallows the error again (no `_failed`), or
+  // logs durably on every repeat.
+  test(
+    'a spent or unanswered address lookup is written to the durable log once '
+    'per friend, however often it repeats',
+    () async {
+      await a.start();
+      await b.start();
+      a.lookupFails = true;
+
+      await reconnect(a);
+      await a.session.rekeyFriend(5, 3);
+      await settle();
+
+      final failed = E2ePersistentDiag.entries
+          .where((e) => e.contains('BOX_FRIEND_HANDOFF_FAILED'))
+          .where((e) => e.contains('stage: lookup'))
+          .toList();
+      expect(a.lookups.length, greaterThan(1));
+      expect(failed, hasLength(1));
+      expect(failed.single, contains('code: StateError'));
     },
   );
 

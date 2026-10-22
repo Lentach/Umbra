@@ -196,7 +196,9 @@ void main() {
     expect(encryption.listIsByHandle(5), isTrue);
     expect(encryption.keepsDeviceListFor!(5), isTrue);
     expect(encryption.listIsByHandle(6), isFalse, reason: 'no longer a friend');
+    expect(encryption.keepsDeviceListFor!(6), isFalse);
     expect(encryption.listIsByHandle(7), isFalse, reason: 'no record at all');
+    expect(encryption.keepsDeviceListFor!(7), isFalse);
   });
 
   test('logout closes the box; the next account gets its own', () async {

@@ -877,51 +877,73 @@ void main() {
     },
   );
 
-  test('a box-made friend restored from the backup, which carries no keys, '
-      'has its list verified under the key one handle lookup serves '
-      '(E38d)', () async {
-    await befriend();
-    final dak = DeviceAuthorityEngine();
-    final enrollment = dak.mintEnrollment(
-      userId: 5,
-      identity: await bob.enc.encryptionService.identityKeyPairForLinking(),
-      createdAtMs: 1,
-    );
-    final list = dak.signList(
-      const DeviceList(
+  // The real `MessagingProvider.lookupBoxPeerList` is what pins the anchor
+  // (mutation: drop its `adoptServedAccount`, and the lookup's own list is
+  // refused `no_tofu_identity`); a friend from before the box (no
+  // `boxOrigin`, every prod friendship) takes the same path (E114a).
+  for (final boxMade in [true, false]) {
+    test('a ${boxMade ? 'box-made' : 'pre-box'} friend restored from the '
+        'backup, which carries no keys, has its list verified and its account '
+        'anchor pinned under the key one handle lookup serves '
+        '(E38d, E114a)', () async {
+      await befriend();
+      final dak = DeviceAuthorityEngine();
+      final enrollment = dak.mintEnrollment(
         userId: 5,
-        version: 1,
-        devices: [
-          DeviceListEntry(deviceId: 1, platform: 'web', addedAtMs: 1000),
-        ],
-      ),
-    );
-    final authorization = {
-      'dakPub': enrollment['dakPub'],
-      'enrollmentSig': enrollment['enrollmentSig'],
-      'enrollmentCreatedAt': enrollment['createdAt'],
-      'listVersion': 1,
-      'listSignature': list['listSignature'],
-      'listCanonical': list['listCanonical'],
-    };
-    // A new install of an account whose only contact came back from the
-    // backup: the record, and no anchor for it.
-    final restored = _Side(7, 'carol', box);
-    await restored.start();
-    await restored.store.update(
-      5,
-      (_) => ContactRecord.fromJson(alice.recordOf(5)!.toBackupJson()),
-    );
-    restored.answer = (_) => [
-      {...bob.searchEntry, 'authorization': authorization},
-    ];
+        identity: await bob.enc.encryptionService.identityKeyPairForLinking(),
+        createdAtMs: 1,
+      );
+      final list = dak.signList(
+        const DeviceList(
+          userId: 5,
+          version: 1,
+          devices: [
+            DeviceListEntry(deviceId: 1, platform: 'web', addedAtMs: 1000),
+          ],
+        ),
+      );
+      final authorization = {
+        'dakPub': enrollment['dakPub'],
+        'enrollmentSig': enrollment['enrollmentSig'],
+        'enrollmentCreatedAt': enrollment['createdAt'],
+        'listVersion': 1,
+        'listSignature': list['listSignature'],
+        'listCanonical': list['listCanonical'],
+      };
+      // A new install of an account whose only contact came back from the
+      // backup: the record, and no anchor for it.
+      final restored = _Side(7, 'carol', box);
+      await restored.start();
+      await restored.store.update(
+        5,
+        (_) => ContactRecord.fromJson(
+          alice.recordOf(5)!.toBackupJson(),
+        ).copyWith(clearBoxOrigin: !boxMade),
+      );
+      restored.answer = (_) => [
+        {...bob.searchEntry, 'authorization': authorization},
+      ];
+      expect(
+        await restored.enc.encryptionService.peerTofuIdentityBase64(5),
+        isNull,
+      );
 
-    final verified = await restored.enc.getVerifiedDeviceList(5);
+      final verified = await restored.enc.getVerifiedDeviceList(5);
 
-    expect(verified.liveDeviceIds, [1]);
-    expect(restored.lookups, ['bob#0005']);
-    restored.session.dispose();
-  });
+      expect(verified.liveDeviceIds, [1]);
+      expect(restored.lookups, ['bob#0005']);
+      expect(
+        await restored.enc.encryptionService.peerTofuIdentityBase64(5),
+        base64Encode(
+          (await bob.enc.encryptionService.identityKeyPairForLinking())
+              .getPublicKey()
+              .serialize(),
+        ),
+        reason: 'the served identity is the account anchor',
+      );
+      restored.session.dispose();
+    });
+  }
 
   test('a request to an account one of whose devices publishes no request '
       'address takes the old path (E15a)', () async {

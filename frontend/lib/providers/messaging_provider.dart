@@ -322,9 +322,10 @@ class MessagingProvider extends ChangeNotifier {
       final own = _currentUserId;
       return [if (covered.isNotEmpty && own != null) own, ...covered];
     },
-    // Batched: every list this connect looks up leaves as ONE
-    // `getDeviceLists` frame, so the throttle is spent per connect, not per
-    // covered friend (item 5, E20a).
+    // The OWN list is asked by id (it names only the caller). A covered
+    // peer is always a friend, whose list is the one held or one handle
+    // lookup (decision 114, E114a): never named to the server by id, so
+    // never a batched `getDeviceLists` frame (E20a's batch is gone for it).
     fetch: (user) async {
       final enc = _encryptionProvider;
       if (enc == null) throw StateError('no encryption provider');
@@ -342,7 +343,6 @@ class MessagingProvider extends ChangeNotifier {
         await enc.getVerifiedDeviceList(
           user,
           forceRefresh: enc.peerListOwedByServer(user),
-          batched: true,
         );
       } finally {
         // Every answer — a refused list throws but still counts as answered
