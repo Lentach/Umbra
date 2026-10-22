@@ -931,6 +931,100 @@ extension MessagingFirstContact on MessagingProvider {
     notifyListeners();
   }
 
+  // ---------- The end of an account (decision 113, E114h, E114i) ----------
+
+  /// The account is being deleted (`AuthProvider.deleteAccount`'s
+  /// `beforeDelete`, which runs once the password is known good): a `goodbye`
+  /// goes to every device of every friend the box covers
+  /// ([BoxOutbox.coveredPeers]) — its side ends the friendship as for an
+  /// unfriend, so nobody keeps writing into queues that are about to die — and
+  /// THEN every queue this device holds is deleted from the box
+  /// ([BoxFirstContactLink.retireAccountQueues]). Friends are told at the same
+  /// time, one friend's devices one after the other.
+  ///
+  /// The goodbye is [endBoxFriendship]'s own: the friend's copy, no `sentTo`,
+  /// quiet so it wakes nobody (decision 91). None of its other steps apply —
+  /// our siblings are NOT told (the account is ending, they lose their
+  /// session at the delete), no record is removed (the app tears itself down
+  /// right after) and nobody has to answer.
+  ///
+  /// Best effort inside [budget] and it never throws: a box that is down, a
+  /// friend that cannot be reached or a build that ignores a goodbye never
+  /// hold the delete (E114i). The budget is a real [Timer], cancelled the
+  /// moment the work is over — a `Future.any` against a `Future.delayed`
+  /// leaves the loser live for the whole budget. When it runs out first this
+  /// returns anyway and the work goes on in the background. The durable log
+  /// gets `BOX_ACCOUNT_GOODBYE {told, missed, ms}`: the friend devices the
+  /// box took a goodbye for, those it did not, and the time spent, as of the
+  /// moment this returns.
+  Future<void> goodbyeToBoxFriends({
+    Duration budget = const Duration(seconds: 10),
+  }) async {
+    final watch = Stopwatch()..start();
+    var told = 0;
+    var missed = 0;
+
+    Future<void> work() async {
+      try {
+        final outbox = boxOutbox;
+        if (outbox != null) {
+          final goodbye = jsonEncode(E2eEnvelope.buildGoodbye());
+          Future<void> tell(int userId) async {
+            for (final MapEntry(key: device, value: to)
+                in outbox.addressesFor(userId).entries) {
+              var sent = false;
+              try {
+                final frame = await encryptForFriend(userId, device, goodbye);
+                sent =
+                    frame != null &&
+                    await outbox.deliver(
+                          to,
+                          frame.encode(),
+                          mode: BoxSendMode.quiet,
+                        ) ==
+                        BoxSendOutcome.taken;
+              } on Object {
+                // A device that cannot be told now is a miss, nothing more.
+              }
+              if (sent) {
+                told++;
+              } else {
+                missed++;
+                _firstContactLog('BOX_GOODBYE_NOT_SENT', userId, {
+                  'device': device,
+                });
+              }
+            }
+          }
+
+          await Future.wait([
+            for (final userId in outbox.coveredPeers().toList()) tell(userId),
+          ]);
+        }
+        await boxFirstContact?.retireAccountQueues();
+      } on Object catch (e) {
+        _e2eFlowLog('BOX_ACCOUNT_GOODBYE_FAILED', {
+          'error': e.runtimeType.toString(),
+        });
+      }
+    }
+
+    final over = Completer<void>();
+    void finish() {
+      if (!over.isCompleted) over.complete();
+    }
+
+    final timer = Timer(budget, finish);
+    unawaited(work().whenComplete(finish));
+    await over.future;
+    timer.cancel();
+    E2ePersistentDiag.record('BOX_ACCOUNT_GOODBYE', {
+      'told': told,
+      'missed': missed,
+      'ms': watch.elapsedMilliseconds,
+    });
+  }
+
   // ---------- The chat's timer setting (E15k) ----------
 
   /// Our chat with [peerUserId] — a friend the box carries, whoever made the
@@ -989,14 +1083,18 @@ extension MessagingFirstContact on MessagingProvider {
     return true;
   }
 
-  // ---------- A box friend's list (E15h) ----------
+  // ---------- A friend's list and addresses (E15h, E114a-b) ----------
 
-  /// The `authorization` record of [userId] — a friendship made over the
-  /// box, whose list this device does not hold — from one `searchUsers` of
-  /// its handle: `getDeviceList` would name the pair, and the server refuses
-  /// it for a pair it does not know anyway. Its fresh bundles and addresses
-  /// are kept, and its identity becomes the account anchor when none is held
-  /// — a friend restored from the contact backup, which carries no keys, as
+  /// The `authorization` record of [userId] — a friend whose list this device
+  /// does not hold, whether the friendship was made over the box or before it
+  /// (decision 114) — from one `searchUsers` of its handle: `getDeviceList`
+  /// would name the pair, and once Phase 4 is through the server refuses it
+  /// for a pair it does not know anyway. Its fresh bundles and addresses are
+  /// kept on a friendship made over the box; for any other friend its
+  /// request queues are kept for this process (`takeServedAddresses`, where
+  /// the handoff goes until that device hands us its own queue). The
+  /// answer's identity becomes the account anchor when none is held — a
+  /// friend restored from the contact backup, which carries no keys, as
   /// first contact pinned it (E38d). Throws when no answer names that
   /// account.
   Future<Map<String, dynamic>?> lookupBoxPeerList(int userId) async {
@@ -1014,6 +1112,7 @@ extension MessagingFirstContact on MessagingProvider {
       throw StateError('box peer $userId: no search answer');
     }
     await link.firstContact.refreshServed(peer);
+    link.takeServedAddresses(userId, peer.addresses);
     final enc = _encryptionProvider;
     final identity = peer.identityKey;
     if (enc != null && identity != null) {
@@ -1035,5 +1134,16 @@ extension MessagingFirstContact on MessagingProvider {
       }
     }
     return peer.authorization;
+  }
+
+  /// One handle lookup of friend [userId] for the request queues of its
+  /// devices (`BoxFriendHandoff.addressLookup`, E114b): [lookupBoxPeerList]
+  /// keeps them, and the list it serves is adopted like any other. Throws
+  /// when the lookup is spent (once per account per process, E15h) or
+  /// answers nothing — the caller then adds no address.
+  Future<void> lookupFriendAddresses(int userId) async {
+    final enc = _encryptionProvider;
+    if (enc == null || !enc.isE2EReady) return;
+    await enc.getVerifiedDeviceList(userId, forceRefresh: true);
   }
 }

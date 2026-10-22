@@ -628,15 +628,28 @@ void main() {
     });
   });
 
-  test('an install that lost its storage holds no anchor for an old-path '
-      'friend whose device already handed it a queue: the connect pins it from '
-      "that device's bundle, so the list verifies — else every box send to "
-      'the friend failed for good', () async {
+  test('an install that lost its storage holds no anchor for a friend whose '
+      'device already handed it a queue: the connect looks the friend up by '
+      'handle, which pins the anchor, so the list verifies — else every box '
+      'send to the friend failed for good (E38c, E38d, E114a)', () async {
     // Storage lost: nothing this device knew, not even the friend's key.
     FlutterSecureStorage.setMockInitialValues({});
     SharedPreferences.setMockInitialValues({});
     final fetched = <int>[];
-    final next = _Me()..keepsDeviceListFor = (peer) => peer == _friend;
+    final namedById = <int>[];
+    final next = _Me()
+      ..keepsDeviceListFor = ((peer) => peer == _friend)
+      ..listsByHandle = ((peer) => peer == _friend);
+    // What `MessagingProvider.lookupBoxPeerList` does with the search answer:
+    // the identity it served becomes the account anchor when none is held.
+    next.lookupBoxPeerList = (peer) async {
+      await next.adoptServedAccount(
+        peer,
+        identityKey: base64Encode(identity.getPublicKey().serialize()),
+        authorization: served(),
+      );
+      return served();
+    };
     next.setEmitCallback((event, data) {
       if (event == 'checkOwnKeyBundle') {
         next.onOwnKeyBundleStatus({'exists': false});
@@ -645,6 +658,7 @@ void main() {
         final d = data as Map;
         final users = d['userIds'] as List? ?? [d['userId']];
         for (final user in users.cast<int>()) {
+          if (user == _friend) namedById.add(user);
           Future<void>.microtask(
             () => next.onDeviceList({
               'userId': user,
@@ -679,12 +693,17 @@ void main() {
       ..refreshBoxDeviceLists();
     await Future<void>.delayed(const Duration(milliseconds: 300));
 
-    expect(fetched, [3], reason: 'one bundle, of the device that handed it');
+    expect(namedById, isEmpty, reason: 'the friend is never named by id');
     expect(
       await next.encryptionService.peerTofuIdentityBase64(_friend),
       base64Encode(identity.getPublicKey().serialize()),
     );
     expect(next.cachedDeviceList(_friend)?.liveDeviceIds, [3]);
+    expect(
+      fetched,
+      [3],
+      reason: 'the session pre-build still fetches the bundle (E114f)',
+    );
     expect(await next.hasSessionWith(_friend, deviceId: 3), isTrue);
     m.dispose();
   });

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:fireplace/models/user_model.dart';
 import 'package:fireplace/providers/connection_provider.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
@@ -193,6 +195,79 @@ void main() {
         ..hydrateFromStore();
 
       expect(friends.friendRequests.single.receiver.username, 'me');
+    });
+  });
+
+  group('the bounded wait for the first conversation list (decision 121)', () {
+    /// A new session over the seeded store: chats and friends hydrated from
+    /// it, no server list yet.
+    Future<({ConversationsProvider convs, FriendsProvider friends})>
+    freshSession() async {
+      await seedOnlineSession();
+      final friends = FriendsProvider()..contactStore = newStore();
+      await friends.contactStore!.open(1);
+      final convs = ConversationsProvider()
+        ..contactStore = friends.contactStore;
+      friends
+        ..onConnect(false)
+        ..setCurrentUserId(1)
+        ..hydrateFromStore();
+      convs
+        ..onConnect(false)
+        ..setCurrentUserId(1)
+        ..hydrateFromStore();
+      return (convs: convs, friends: friends);
+    }
+
+    String held(ContactStore s) =>
+        jsonEncode([for (final r in s.all) r.toJson()]);
+
+    // Mutation: `releaseFirstSnapshotWait` runs the list handler with an
+    // empty list (an empty FIRST answer is the server's truth and would wipe
+    // every held chat).
+    test(
+      'running out of the wait releases the waits and touches nothing held',
+      () async {
+        final (:convs, :friends) = await freshSession();
+        final chatIds = convs.conversations.map((c) => c.id).toList();
+        final friendIds = friends.friends.map((u) => u.id).toList();
+        final stored = held(convs.contactStore!);
+        expect(convs.hasLoadedConversationsOnce, isFalse);
+
+        convs.releaseFirstSnapshotWait();
+        await _settle(convs.contactStore);
+
+        expect(convs.hasLoadedConversationsOnce, isTrue);
+        expect(chatIds, isNotEmpty);
+        expect(convs.conversations.map((c) => c.id), chatIds);
+        expect(friends.friends.map((u) => u.id), friendIds);
+        expect(friends.hasFriendsSnapshot, isFalse, reason: 'no friends answer');
+        expect(held(convs.contactStore!), stored);
+      },
+    );
+
+    // Mutation: the release sets `_conversationsListReceivedOnce`, the flag a
+    // real list sets (the late list then no longer counts as the first one).
+    test('an EMPTY list that arrives after the wait is still the first '
+        'snapshot: the server truth, applied as on time', () async {
+      final (:convs, friends: _) = await freshSession();
+      expect(convs.conversations, isNotEmpty);
+
+      convs
+        ..releaseFirstSnapshotWait()
+        ..onConversationsList(const []);
+
+      expect(convs.conversations, isEmpty);
+    });
+
+    test('a list that arrives after the wait replaces what was held', () async {
+      final (:convs, friends: _) = await freshSession();
+      convs
+        ..releaseFirstSnapshotWait()
+        ..onConversationsList([_conv(11, 3, 'carol')]);
+
+      expect(convs.conversations.map((c) => c.id), [11]);
+      expect(convs.hasLoadedConversationsOnce, isTrue);
     });
   });
 

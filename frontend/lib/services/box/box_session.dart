@@ -140,13 +140,10 @@ class BoxSession
   /// request queue was published. The composer notice (decision 48) reads it.
   void Function()? onBoxReady;
 
-  /// Re-keys owed to friend devices this device had no address for, whether
-  /// a fresh friends list was asked for them, and the devices one was asked
-  /// for this session: once each, so a device the next list still names no
-  /// address for is given up, never looped on ([rekeyFriend]).
-  final Set<(int, int)> _rekeyOwed = {};
+  /// Friend devices whose request queue was asked for by handle this session
+  /// ([rekeyFriend]), as `user:device`: once each, so a device the lookup
+  /// names no address for is given up, never looped on.
   final Set<String> _friendAddressAsked = {};
-  bool _askedFriends = false;
 
   /// Siblings re-keyed this session ([rekeySibling]): once each.
   final Set<int> _rekeyed = {};
@@ -280,6 +277,16 @@ class BoxSession
     _friends.revokedDevices = lookup;
   }
 
+  /// One handle lookup of a friend, for the request queues of its devices
+  /// (E114b; `MessagingProvider.lookupFriendAddresses`): the answer reaches
+  /// [takeServedAddresses].
+  Future<void> Function(int userId)? get friendAddressLookup =>
+      _friends.addressLookup;
+
+  set friendAddressLookup(Future<void> Function(int userId)? lookup) {
+    _friends.addressLookup = lookup;
+  }
+
   /// E2E is ready on this connect: the request queue may be published, a
   /// handoff encrypted and the own list read now.
   void e2eReady() {
@@ -303,24 +310,12 @@ class BoxSession
     if (!_disposed) unawaited(_swap.onOwnRequestQueues(data));
   }
 
-  /// `friendsList`: each friend device's request queue, where the friend
-  /// handoff goes until that device hands us its own queue (item 5). A
-  /// re-key that was owed for want of an address goes out once the store
-  /// holds what the list wrote ([rekeyFriend]).
-  void onFriendsList(Object? data) {
-    if (_disposed) return;
-    _friends.takeFriendsList(data);
-    _askedFriends = false;
-    if (_rekeyOwed.isEmpty) return;
-    final owed = List.of(_rekeyOwed);
-    _rekeyOwed.clear();
-    unawaited(
-      _store.settled.then((_) async {
-        for (final (user, device) in owed) {
-          await rekeyFriend(user, device);
-        }
-      }),
-    );
+  /// `friendsList`: a friend it names for the first time is visited by the
+  /// handoff pass once the store holds what the list wrote (item 5). Its
+  /// `devices` are not read (E114b): a friend's request queues come from a
+  /// handle lookup.
+  void onFriendsListed() {
+    if (!_disposed) _friends.friendsListed();
   }
 
   /// Friend [userId]'s verified device list was dropped or moved (a device
@@ -741,6 +736,7 @@ class BoxSession
     });
     if (!committed) return FriendWrite.retryLater;
     if (!friend) return FriendWrite.refused;
+    _friends.noteRoutes();
     final acked = await _sendToFriend(
       userId,
       deviceId,
@@ -813,18 +809,17 @@ class BoxSession
     final key = '$userId:$deviceId';
     final encrypt = _friends.encrypt;
     if (_disposed || encrypt == null || _friendRekeyed.contains(key)) return;
-    final target = _friends.targetOf(userId, deviceId);
+    var target = _friends.targetOf(userId, deviceId);
     if (target == null) {
-      // Our friends list predates that device's app update (it named no
-      // request queue then): ask for a fresh one, once per device per
-      // session, and re-key when it arrives ([onFriendsList]).
+      // No address held for that device (it published a request queue after
+      // our last lookup, or this process never looked): ask by handle, once
+      // per device per session (E114d), and re-key from what it names. None
+      // named: given up for the session, never looped on.
       if (!_friendAddressAsked.add(key)) return;
-      _rekeyOwed.add((userId, deviceId));
-      if (!_askedFriends) {
-        _askedFriends = true;
-        _emit('getFriends', null);
-      }
-      return;
+      await _friends.lookupAddresses(userId);
+      if (_disposed) return;
+      target = _friends.targetOf(userId, deviceId);
+      if (target == null) return;
     }
     _friendRekeyed.add(key);
     final ensured = await _keys.ensureInbound(userId);
@@ -980,6 +975,30 @@ class BoxSession
         boxOrigin: origin == null ? null : ContactBoxOrigin(at: origin.at),
       );
     });
+  }
+
+  @override
+  void takeServedAddresses(int userId, List<ContactOutbound> addresses) {
+    if (!_disposed) _friends.takeServedAddresses(userId, addresses);
+  }
+
+  @override
+  Future<void> retireAccountQueues() async {
+    if (_disposed) return;
+    // Best effort (decision 113, E114i): a queue the box does not confirm
+    // deleted stays for its reaper, and the account is going either way.
+    for (final record in [..._store.all]) {
+      for (final queue in [...record.queues]) {
+        await _keys.retireInbound(record.userId, queue);
+      }
+    }
+    for (final retiring in [..._store.retiringSelfQueues]) {
+      await _keys.retire(retiring);
+    }
+    for (final own in [_store.selfQueue, _store.requestQueue]) {
+      final auth = own == null ? null : QueueKeys.authOf(own);
+      if (auth != null) await _box.deleteQueue(auth);
+    }
   }
 
   /// Called when a box-made record changed outside the messaging reader —

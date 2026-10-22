@@ -44,6 +44,18 @@ abstract interface class BoxFirstContactLink {
   /// box does not answer is left to its reaper), then the record goes — or,
   /// for a [block], stays as `blocked`, so the box drops its frames.
   Future<void> endBoxFriendship(int userId, {required bool block});
+
+  /// The request queues a handle lookup of friend [userId] served (E114b):
+  /// where the item-5 handoff goes for a device that has handed us nothing,
+  /// for this process. Replaces what an earlier lookup served.
+  void takeServedAddresses(int userId, List<ContactOutbound> addresses);
+
+  /// Decision 113, the account is being deleted: deletes every queue this
+  /// device holds from the box — each contact's inbound queue, the
+  /// self-queue and the ones it is retiring, and the request queue. Best
+  /// effort: one the box does not confirm stays for its reaper (30 d).
+  /// Tells nobody anything; the goodbyes are the caller's.
+  Future<void> retireAccountQueues();
 }
 
 /// How a friend request sent from a search answer went (E15a): over the box,

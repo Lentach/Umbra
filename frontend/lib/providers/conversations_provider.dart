@@ -58,6 +58,13 @@ class ConversationsProvider extends ChangeNotifier {
   /// set by the push SW while the app was closed.
   bool _conversationsListReceivedOnce = false;
 
+  /// The bounded wait for that first snapshot ran out (decision 121, E114k):
+  /// the server went silent, or is slow. A flag of its OWN, never the one a
+  /// real list sets: [hydrateFromStore], [rewriteStore] and the first-snapshot
+  /// branch of [onConversationsList] read [_conversationsListReceivedOnce],
+  /// and a list that arrives later must still be the first one.
+  bool _firstSnapshotWaitOver = false;
+
   int? _currentUserId;
 
   /// The client-owned contact list, when this session could open it. The
@@ -405,7 +412,24 @@ class ConversationsProvider extends ChangeNotifier {
   int? get pendingOpenConversationId => _pendingOpenConversationId;
   int? get pendingNotificationConversationId =>
       _pendingNotificationConversationId;
-  bool get hasLoadedConversationsOnce => _conversationsListReceivedOnce;
+
+  /// Whether the waits that hang on the first server snapshot may stop: a
+  /// list arrived, or the wait for one ran out ([releaseFirstSnapshotWait]).
+  /// The chat-list skeleton, the notification-tap navigation and the unread
+  /// badge flush read this; nothing that writes, prunes or reconciles does.
+  bool get hasLoadedConversationsOnce =>
+      _conversationsListReceivedOnce || _firstSnapshotWaitOver;
+
+  /// The bounded wait for `conversationsList` ran out (decision 121): releases
+  /// the three waits above and NOTHING else — no list handler runs, nothing
+  /// is pruned, swept or reconciled, and local contacts and chats stay as
+  /// held. A list that arrives later is applied like an on-time one.
+  void releaseFirstSnapshotWait() {
+    if (_conversationsListReceivedOnce || _firstSnapshotWaitOver) return;
+    _firstSnapshotWaitOver = true;
+    notifyListeners();
+  }
+
   bool get activeConversationDeletedByOther =>
       _activeConversationDeletedByOther;
   Map<int, int> get unreadCounts => _unreadCounts;
@@ -1305,6 +1329,7 @@ class ConversationsProvider extends ChangeNotifier {
       _errorMessage = null;
       _clientVisible = true;
       _conversationsListReceivedOnce = false;
+      _firstSnapshotWaitOver = false;
     } else {
       // Reconnect (same user): keep conversations and active chat to avoid flicker.
       _pendingOpenConversationId = null;
@@ -1341,6 +1366,7 @@ class ConversationsProvider extends ChangeNotifier {
     _errorMessage = null;
     _clientVisible = true;
     _conversationsListReceivedOnce = false;
+    _firstSnapshotWaitOver = false;
     // Clear all push notifications on logout.
     _notificationCleaner.sweepNotificationsKeepUnread(const {}, 0);
     notifyListeners();

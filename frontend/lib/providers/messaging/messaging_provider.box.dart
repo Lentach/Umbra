@@ -298,15 +298,17 @@ extension MessagingBox on MessagingProvider {
 
   /// Whether friend [userId]'s VERIFIED list names [deviceId] live: the held
   /// list, else one batched lookup. False when it cannot be verified. A
-  /// friend made over the box is never looked up here: its lookup is a
-  /// search that spends one-time pre-keys and names the pair (E15h), and
-  /// this runs on frame reads.
+  /// friend is never looked up here (E114e): its lookup is a search that
+  /// spends one-time pre-keys and names the pair (E15h), and this runs on
+  /// frame reads — a frame never times a lookup.
   Future<bool> _friendDeviceIsLive(int userId, int deviceId) async {
     final enc = _encryptionProvider;
     if (enc == null) return false;
     try {
       final held = enc.cachedDeviceList(userId);
-      if (held == null && _boxOnlyPeer(userId)) return false;
+      if (held == null && (enc.listIsByHandle(userId) || _boxOnlyPeer(userId))) {
+        return false;
+      }
       final list =
           held ?? await enc.getVerifiedDeviceList(userId, batched: true);
       return list.isLiveDevice(deviceId);

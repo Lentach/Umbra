@@ -1046,13 +1046,50 @@ class AuthProvider extends ChangeNotifier {
     await _clearLocalAuthState('password_changed', source: 'resetPassword');
   }
 
-  /// Deletes the account and logs out. Failures propagate unwrapped, same
-  /// reason as [resetPassword].
-  Future<bool> deleteAccount(String password) async {
-    if (_token == null) {
+  /// Deletes the account and logs out, in this order (decision 113, E114h):
+  ///
+  /// 1. The session is made ready and [password] is checked FIRST, with
+  ///    `POST /users/verify-password` (no side effect). The server checks it
+  ///    again only at `DELETE /users/account`, so anything that tells other
+  ///    people before this would tell every friend goodbye on a mistyped
+  ///    password. A wrong one throws that [ApiException] unchanged and
+  ///    NOTHING else happens: no [beforeDelete], no delete.
+  /// 2. [beforeDelete] — the goodbyes over the box and the retired queues
+  ///    (`MessagingProvider.goodbyeToBoxFriends`). Best effort: whatever it
+  ///    throws is swallowed, so it can never hold the delete (E114i). It runs
+  ///    BEFORE the delete because after it the app tears itself down
+  ///    (`logout`, `clearEncryptionKeys`, `disconnect`) and the box work
+  ///    could not follow.
+  /// 3. `DELETE /users/account` with the token held NOW (the check, or a
+  ///    refresh during [beforeDelete], may have replaced it).
+  /// 4. [logout].
+  ///
+  /// Failures of 1 and 3 propagate unwrapped, same reason as
+  /// [resetPassword]. A delete that fails after [beforeDelete] leaves the
+  /// friends told and this device's queues retired: a retry finishes it.
+  Future<bool> deleteAccount(
+    String password, {
+    Future<void> Function()? beforeDelete,
+  }) async {
+    await ensureSessionReady();
+    final checked = _token;
+    if (checked == null) {
       throw Exception('Not authenticated');
     }
-    await _api.deleteAccount(_token!, password);
+    await _api.verifyPassword(checked, password);
+    if (beforeDelete != null) {
+      try {
+        await beforeDelete();
+      } on Object {
+        // Best effort (E114i): a box that is down or a friend that cannot be
+        // told must never keep the account from being deleted.
+      }
+    }
+    final token = _token;
+    if (token == null) {
+      throw Exception('Not authenticated');
+    }
+    await _api.deleteAccount(token, password);
     await logout();
     return true;
   }

@@ -9,6 +9,7 @@ import '../providers/auth_provider.dart';
 import '../l10n/auth_status_text.dart';
 import '../providers/connection_provider.dart';
 import '../providers/encryption_provider.dart';
+import '../providers/messaging_provider.dart';
 import '../providers/passcode_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/api_service.dart';
@@ -171,8 +172,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final auth = context.read<AuthProvider>();
       final enc = context.read<EncryptionProvider>();
       final conn = context.read<ConnectionProvider>();
+      final messaging = context.read<MessagingProvider>();
 
-      await auth.deleteAccount(password);
+      // Decision 113: the goodbyes over the box and the retired queues run
+      // after the password check and before the delete.
+      await auth.deleteAccount(
+        password,
+        beforeDelete: messaging.goodbyeToBoxFriends,
+      );
       await enc.clearEncryptionKeys();
       conn.disconnect(isLogout: true);
 

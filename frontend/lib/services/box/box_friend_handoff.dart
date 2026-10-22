@@ -29,8 +29,9 @@ const Duration kFriendHandoffResend = Duration(hours: 24);
 ///
 /// Where a handoff goes: the queue that friend's device handed US, when we
 /// hold one (a normal frame, E20c); otherwise that device's public REQUEST
-/// queue as the friends list names it (`friendsList` `devices`, an
-/// account-bearing frame). A device on an app that predates the box
+/// queue as a handle lookup of the friend served it (E114b; an
+/// account-bearing frame) — the server's `friendsList` is not read, it stops
+/// answering at Phase 4 step 4. A device on an app that predates the box
 /// publishes no request queue and gets nothing: an old app never sees a
 /// handoff. The later side to update hands off first, and the earlier one
 /// hands back on receipt ([BoxFriendLink.takeFriendHandoff]), so neither
@@ -38,7 +39,10 @@ const Duration kFriendHandoffResend = Duration(hours: 24);
 ///
 /// A pass runs once the account socket, E2E, the box and the store are all
 /// ready on this connect (the sibling swap's gate, E3), again when a friends
-/// list arrives and when a friend's device list changes. A device is handed
+/// list arrives and when a friend's device list changes, and visits EVERY
+/// friend (E114c): one with a live device no address is held for, whose
+/// handoff is due, is looked up by handle once per process, so a pair that
+/// never had a route gets one. A device is handed
 /// a given queue at most once per connect, and again only
 /// [kFriendHandoffResend] after the last time ([ContactQueue.handedAt],
 /// kept across connects) — sooner once it is heard from ([friendHeard]). No
@@ -84,9 +88,24 @@ class BoxFriendHandoff {
   /// (e), E50e); null or empty: none known.
   Future<Set<int>?> Function(int userId)? revokedDevices;
 
-  /// Each friend device's request queue as the last friends list named it,
-  /// by friend and device. Replaced whole by every list.
-  Map<int, Map<int, ContactOutbound>> _requestQueues = const {};
+  /// Each friend device's request queue as that friend's last handle lookup
+  /// served it, by friend and device (E114b). RAM only: a request queue
+  /// changes when its device re-publishes, and the next process asks again
+  /// when a handoff is due (E114c). Replaced per friend by every lookup.
+  final Map<int, Map<int, ContactOutbound>> _served = {};
+
+  /// Friends whose request queues this process already asked for — by
+  /// [addressLookup], or by the lookup that served their list: one lookup
+  /// each, however many passes.
+  final Set<int> _addressesAsked = {};
+
+  /// One handle lookup of friend `userId`, whose answer reaches
+  /// [takeServedAddresses] (`MessagingProvider.lookupFriendAddresses`). Null:
+  /// nothing can be looked up, and no address is ever learned.
+  Future<void> Function(int userId)? addressLookup;
+
+  /// The last `BOX_ROUTES` numbers written, so only a change is.
+  (int, int, int)? _routesLogged;
 
   /// `user:device:sid` handed this connect.
   final Set<String> _handed = {};
@@ -131,44 +150,78 @@ class BoxFriendHandoff {
     run();
   }
 
-  /// `friendsList`: a list of users, each with `devices: [{deviceId,
-  /// requestSid, sealPub}]` (wire.md "Friends' request queues"). A device
-  /// whose address is null or not spelled as the box spells a 32-byte id is
-  /// left out: it has not published one (an app that predates the box).
+  /// A `friendsList` arrived: it may name a friend this device has no record
+  /// of yet, and what it writes is what the pass reads. The list's own
+  /// `devices` are NOT read (E114b): addresses come from handoffs and from
+  /// a handle lookup.
   ///
   /// The pass runs once the contact store has settled: the same list is
   /// what writes a friend first named here into the store (`FriendsProvider`
   /// queues that write just before), and a pass that reads the store before
   /// it lands skips that friend until the next connect (found live: a
   /// friendship made while this device was away).
-  void takeFriendsList(Object? data) {
-    if (data is! List) return;
-    final queues = <int, Map<int, ContactOutbound>>{};
-    for (final user in data) {
-      if (user case {
-        'id': final int userId,
-        'devices': final List<Object?> devices,
-      }) {
-        queues[userId] = {
-          for (final device in devices)
-            if (device
-                case {
-                  'deviceId': final int deviceId,
-                  'requestSid': final String sid,
-                  'sealPub': final String sealPub,
-                }
-                when boxB64Decode(sid, kBoxSidBytes) != null &&
-                    boxB64Decode(sealPub, 32) != null)
-              deviceId: ContactOutbound(
-                peerDeviceId: deviceId,
-                sid: sid,
-                sealPub: sealPub,
-              ),
-        };
-      }
-    }
-    _requestQueues = queues;
+  void friendsListed() {
     unawaited(_store.settled.then((_) => run()));
+  }
+
+  /// The request queues a handle lookup of friend [userId] served (E114b),
+  /// one per live device that published one: where a handoff goes until that
+  /// device hands us its own queue. Replaces what an earlier lookup served.
+  void takeServedAddresses(int userId, Iterable<ContactOutbound> addresses) {
+    _served[userId] = {for (final a in addresses) a.peerDeviceId: a};
+    _addressesAsked.add(userId);
+  }
+
+  /// Asks for [userId]'s request queues by handle and waits for the answer to
+  /// be taken ([takeServedAddresses]). The lookup itself is bounded to once
+  /// per account per process (E15h); one that fails adds nothing.
+  Future<void> lookupAddresses(int userId) async {
+    final lookup = addressLookup;
+    if (lookup == null || _disposed) return;
+    _addressesAsked.add(userId);
+    try {
+      await lookup(userId);
+    } on Object {
+      // Spent, unanswered or unverifiable: no address is learned.
+    }
+  }
+
+  /// Whether our [queue] — the current one when none is given, none yet
+  /// counts as owed — is still owed to [userId]'s [device]: not
+  /// acknowledged, not handed this connect, and never handed or last handed
+  /// [kFriendHandoffResend] ago.
+  bool _handoffDue(int userId, int device, [ContactQueue? queue]) {
+    final q = queue ?? _store.byUserId(userId)?.queues.firstOrNull;
+    if (q == null) return true;
+    if (q.ackedBy.contains(device) ||
+        _handed.contains('$userId:$device:${q.sid}')) {
+      return false;
+    }
+    final last = q.handedAt[device];
+    return last == null || _now().difference(last) >= kFriendHandoffResend;
+  }
+
+  /// Writes `BOX_ROUTES {friends, routed, owed}` to the durable log when the
+  /// numbers changed (E114c): the friends this device holds, those it holds
+  /// at least one address for, and those it holds none for. The per-device
+  /// proof that a friendship moved onto the box — local, no server effect.
+  void noteRoutes() {
+    var friends = 0;
+    var routed = 0;
+    for (final record in _store.all) {
+      if (record.state != ContactState.friend) continue;
+      friends++;
+      if (record.outbound.isNotEmpty) routed++;
+    }
+    final now = (friends, routed, friends - routed);
+    // An account with no friend has nothing to prove: no line until it has one.
+    if (now == _routesLogged || (friends == 0 && _routesLogged == null)) return;
+    _routesLogged = now;
+    E2ePersistentDiag.record('BOX_ROUTES', {
+      'friends': friends,
+      'routed': routed,
+      'owed': friends - routed,
+    });
   }
 
   /// [userId]'s devices may have changed, or it must be handed our queue
@@ -232,10 +285,10 @@ class BoxFriendHandoff {
   }
 
   /// Where [userId]'s [deviceId] takes a handoff: the queue it handed us,
-  /// else its request queue (account-bearing) — as the friends list names
-  /// it, or, for a friendship made over the box that no server list names,
-  /// as the search answer did ([ContactBoxOrigin.addresses], slice (f)).
-  /// Null: nowhere yet.
+  /// else its request queue (account-bearing) — as this process's handle
+  /// lookup of the friend served it ([takeServedAddresses]), or, for a
+  /// friendship made over the box, as the search answer that made it did
+  /// ([ContactBoxOrigin.addresses], slice (f)). Null: nowhere yet.
   ({ContactOutbound to, bool viaRequest})? targetOf(int userId, int deviceId) {
     final record = _store.byUserId(userId);
     final held = record?.outbound
@@ -243,7 +296,7 @@ class BoxFriendHandoff {
         .firstOrNull;
     if (held != null) return (to: held, viaRequest: false);
     final request =
-        _requestQueues[userId]?[deviceId] ??
+        _served[userId]?[deviceId] ??
         record?.boxOrigin?.addresses
             .where((a) => a.peerDeviceId == deviceId)
             .firstOrNull;
@@ -326,13 +379,12 @@ class BoxFriendHandoff {
   Future<void> _pass() async {
     final lookup = liveDevices;
     if (lookup == null) return;
+    // EVERY friend, an address held for it or not (E114c): one with a live
+    // device no address is held for is looked up below, so a pair that never
+    // had a route gets one with no server list.
     final friends = [
       for (final record in _store.all)
-        if (record.state == ContactState.friend &&
-            (record.outbound.isNotEmpty ||
-                (_requestQueues[record.userId]?.isNotEmpty ?? false) ||
-                (record.boxOrigin?.addresses.isNotEmpty ?? false)))
-          record.userId,
+        if (record.state == ContactState.friend) record.userId,
     ];
     // Every lookup starts in this one turn, so a connect's lists leave as
     // one batched frame (E20a).
@@ -353,7 +405,18 @@ class BoxFriendHandoff {
         await _rotateAwayFromRevoked(userId, revoked);
       }
       await _retireExpired(userId);
-      final targets = {for (final d in live) d: ?targetOf(userId, d)};
+      var targets = {for (final d in live) d: ?targetOf(userId, d)};
+      // A live device no address is held for, and a handoff to it due: its
+      // request queue is asked of the server ONCE this process, by handle
+      // (E114c) — never again when the lookup that served this friend's list
+      // already ran, which took its addresses.
+      if (live.any((d) => !targets.containsKey(d) && _handoffDue(userId, d)) &&
+          addressLookup != null &&
+          _addressesAsked.add(userId)) {
+        await lookupAddresses(userId);
+        if (_disposed || !_accountReady) return;
+        targets = {for (final d in live) d: ?targetOf(userId, d)};
+      }
       if (targets.isEmpty) continue;
       final hadQueue = _store.byUserId(userId)?.queues.isNotEmpty ?? false;
       switch (await _keys.ensureInbound(userId, subscribe: false)) {
@@ -373,6 +436,7 @@ class BoxFriendHandoff {
           continue;
       }
     }
+    noteRoutes();
     // A handoff invites that device to write into the queue: it goes out
     // only once the box follows the queue, or what the device writes is not
     // read before the next connect. A queue an earlier pass could not
@@ -521,13 +585,8 @@ class BoxFriendHandoff {
       E2eEnvelope.buildQueueHandoff(sid: queue.sid, sealPub: queue.sealPub),
     );
     for (final MapEntry(key: device, value: target) in targets.entries) {
-      if (queue.ackedBy.contains(device)) continue;
+      if (!_handoffDue(userId, device, queue)) continue;
       final key = '$userId:$device:${queue.sid}';
-      if (_handed.contains(key)) continue;
-      final last = queue.handedAt[device];
-      if (last != null && _now().difference(last) < kFriendHandoffResend) {
-        continue;
-      }
       final seal = encrypt;
       if (_disposed || seal == null) return false;
       final frame = await seal(userId, device, handoff);

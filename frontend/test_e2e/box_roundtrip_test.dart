@@ -190,7 +190,8 @@ class _MemKv implements ContentKv {
 /// stood in by a plain decrypt that hands a handoff or an ack to the session
 /// (`messaging_provider_box_friend_test` drives the real reader's checks on
 /// real Signal); what is proven here is the rest of the chain against the
-/// real server: friends list addresses, request queues, routing, sealing.
+/// real server: the friend's request queues from a handle lookup, request
+/// queues, routing, sealing.
 class _AppSide {
   _AppSide(this.me, this.friend, this.client);
 
@@ -232,6 +233,7 @@ class _AppSide {
       ..consumer = _read
       ..encryptForFriend = _encrypt
       ..friendLiveDevices = ((user) async => user == friend.userId ? {1} : null)
+      ..friendAddressLookup = _lookup
       ..e2eReady()
       ..accountReady(1);
     await me.events.next(
@@ -241,13 +243,34 @@ class _AppSide {
     );
   }
 
-  /// The friends list as the server serves it at connect.
-  Future<void> takeFriendsList() async {
+  /// A friends list arrived (the server still serves one at connect): the
+  /// pass visits the friend. Its `devices` are not read (E114b); the friend's
+  /// request queues come from [_lookup].
+  Future<void> listFriends() async {
     me.events.discard('friendsList');
     me.socketService.getFriends();
-    session.onFriendsList(
-      await me.events.next('friendsList', reason: '${me.label} friends list'),
-    );
+    await me.events.next('friendsList', reason: '${me.label} friends list');
+    session.onFriendsListed();
+  }
+
+  /// The app's handle lookup of [friend] (E114b): one real `searchUsers`,
+  /// whose answer names the request queues the friend's devices published.
+  Future<void> _lookup(int user) async {
+    if (user != friend.userId) return;
+    me.events.discard('searchUsersResult');
+    me.socketService.socket!.emit('searchUsers', {
+      'handle': '${friend.username}#${friend.tag}',
+    });
+    final answer =
+        await me.events.next(
+              'searchUsersResult',
+              reason: '${me.label} looks ${friend.label} up',
+            )
+            as List;
+    final peer = answer.isEmpty
+        ? null
+        : FirstContactPeer.fromSearchEntry(answer.first);
+    session.takeServedAddresses(user, peer?.addresses ?? const []);
   }
 
   Future<BoxFrame?> _encrypt(
@@ -707,7 +730,7 @@ void main() {
           await a.start();
           // Bob's app predates the box: the list names his device with no
           // request queue, so alice hands nothing off and makes no queue.
-          await a.takeFriendsList();
+          await a.listFriends();
           await Future<void>.delayed(const Duration(seconds: 1));
           expect(a.record.queues, isEmpty);
           expect(a.address, isNull);
@@ -715,7 +738,7 @@ void main() {
           // Bob updates. Alice's session hears nothing new from its server.
           final b = _AppSide(bob, alice, box(ip: _randomIp()));
           await b.start();
-          await b.takeFriendsList();
+          await b.listFriends();
           await _until(
             () =>
                 a.address != null &&

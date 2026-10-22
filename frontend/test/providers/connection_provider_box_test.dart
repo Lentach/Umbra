@@ -7,6 +7,7 @@ import 'package:fireplace/providers/friends_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/services/box/box_client.dart';
 import 'package:fireplace/services/box/box_wire.dart';
+import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/services/contacts/contact_store.dart';
 import 'package:fireplace/services/encryption/content_kv.dart';
 import 'package:fireplace/services/socket_service.dart';
@@ -85,6 +86,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   late ContentKv kv;
+  late ContactStore store;
   late _AccountSocket account;
   late _RecordingConnection connection;
   late _QuietEncryption encryption;
@@ -115,7 +117,7 @@ void main() {
         friends: FriendsProvider(),
         conversations: ConversationsProvider(),
         messaging: MessagingProvider(),
-        contactStore: ContactStore(
+        contactStore: store = ContactStore(
           open: () async => kv,
           lock: <T>(_, action) => action(),
           accepts: (_) => true,
@@ -165,6 +167,36 @@ void main() {
     await connection.connect(1, 'token', 'http://api.test');
     await connection.connect(1, 'token', 'http://api.test', immediate: true);
     expect(boxUrls, hasLength(1));
+  });
+
+  // Mutation: drop `..listsByHandle = isFriend` (or the `friend` state from
+  // `keepsDeviceListFor`) in `ConnectionProvider.connect`.
+  test('a friend in the contact store is looked up by handle and its list is '
+      'kept; anyone else is neither (decision 114, E114a)', () async {
+    await connection.connect(1, 'token', 'http://api.test');
+    await store.update(
+      5,
+      (_) => const ContactRecord(
+        userId: 5,
+        username: 'bob',
+        tag: '0005',
+        state: ContactState.friend,
+      ),
+    );
+    await store.update(
+      6,
+      (_) => const ContactRecord(
+        userId: 6,
+        username: 'eve',
+        tag: '0006',
+        state: ContactState.former,
+      ),
+    );
+
+    expect(encryption.listIsByHandle(5), isTrue);
+    expect(encryption.keepsDeviceListFor!(5), isTrue);
+    expect(encryption.listIsByHandle(6), isFalse, reason: 'no longer a friend');
+    expect(encryption.listIsByHandle(7), isFalse, reason: 'no record at all');
   });
 
   test('logout closes the box; the next account gets its own', () async {

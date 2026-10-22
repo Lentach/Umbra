@@ -736,13 +736,28 @@ class EncryptionProvider extends ChangeNotifier {
   /// `ConnectionProvider` from the contact store.
   bool Function(int userId)? isBoxOnlyPeer;
 
+  /// Whether `userId`'s device list is never asked of the server by id: a
+  /// friend (decision 114, E114a), box-made or from before the box. Its list
+  /// is the one held, else one search of its handle ([lookupBoxPeerList]).
+  /// Bundles are not touched by this — [isBoxOnlyPeer] still decides those.
+  /// Wired by `ConnectionProvider` from the contact store; unwired,
+  /// [isBoxOnlyPeer] alone decides.
+  bool Function(int userId)? listsByHandle;
+
+  /// Whether [userId]'s list is looked up by handle and never by id: a friend
+  /// ([listsByHandle]) or a box-only peer ([isBoxOnlyPeer]).
+  bool listIsByHandle(int userId) =>
+      (listsByHandle?.call(userId) ?? false) ||
+      (isBoxOnlyPeer?.call(userId) ?? false);
+
   /// The bundle a search answer served for a box-only peer's device
   /// (`ContactBoxOrigin.bundles`), which [ensureSession] builds from.
   Map<String, dynamic>? Function(int userId, int deviceId)? servedBundleFor;
 
-  /// A box-only peer's `authorization` record, from one `searchUsers` of
-  /// its handle — the one lookup design §4.2 keeps for a friend whose list
-  /// this device does not hold (E15h). Throws when nothing answered.
+  /// A friend's `authorization` record (E114a: box-made or not), from one
+  /// `searchUsers` of its handle — the one lookup design §4.2 keeps for a
+  /// friend whose list this device does not hold (E15h). Throws when nothing
+  /// answered.
   Future<Map<String, dynamic>?> Function(int userId)? lookupBoxPeerList;
 
   final Map<int, Future<Map<String, dynamic>?>> _boxListLookups = {};
@@ -1013,16 +1028,16 @@ class EncryptionProvider extends ChangeNotifier {
   }
 
   /// One in-flight `getDeviceList` per userId; concurrent callers share it.
-  /// A box-only peer ([isBoxOnlyPeer]) is never named to `getDeviceList`:
-  /// its list comes from one search of its handle ([lookupBoxPeerList]),
-  /// at most once per account per process — each spends a one-time pre-key
-  /// of every device of the peer and names the pair (E15h).
+  /// A friend ([listIsByHandle]) is never named to `getDeviceList`: its list
+  /// comes from one search of its handle ([lookupBoxPeerList]), at most
+  /// once per account per process — each spends a one-time pre-key of every
+  /// device of the peer and names the pair (E15h).
   Future<Map<String, dynamic>?> _fetchDeviceListAnswer(
     int userId,
     Duration timeout, {
     bool batched = false,
   }) {
-    if (isBoxOnlyPeer?.call(userId) ?? false) {
+    if (listIsByHandle(userId)) {
       final lookup = lookupBoxPeerList;
       if (lookup == null) {
         return Future.error(StateError('box peer $userId: no lookup wired'));

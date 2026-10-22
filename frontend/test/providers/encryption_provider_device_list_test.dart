@@ -386,4 +386,62 @@ void main() {
 
     expect(frames, ['getDeviceList']);
   });
+
+  group('a friend is looked up by handle, never by id (decision 114)', () {
+    const stranger = 99;
+
+    // Mutation: `_fetchDeviceListAnswer` asks `isBoxOnlyPeer` alone.
+    test('its list comes from the handle lookup and no id leaves', () async {
+      final lookups = <int>[];
+      provider
+        ..listsByHandle = ((peer) => peer == peerId)
+        ..lookupBoxPeerList = (peer) async {
+          lookups.add(peer);
+          return authorizationV1();
+        };
+
+      final list = await provider.getVerifiedDeviceList(
+        peerId,
+        timeout: const Duration(milliseconds: 200),
+      );
+
+      expect(list.enrolled, isTrue);
+      expect(list.liveDeviceIds, [1]);
+      expect(lookups, [peerId]);
+      expect(
+        emitted.where(
+          (e) => e['event'] == 'getDeviceList' || e['event'] == 'getDeviceLists',
+        ),
+        isEmpty,
+      );
+      // Held now: asking again costs nothing, and the one lookup per account
+      // per process (E15h) is not spent twice.
+      await provider.getVerifiedDeviceList(peerId);
+      expect(lookups, [peerId]);
+    });
+
+    // Mutation: `listIsByHandle` answers true for everyone.
+    test('the own list and a peer with no record still go by id', () async {
+      provider
+        ..listsByHandle = ((peer) => peer == peerId)
+        ..lookupBoxPeerList = (peer) async => fail('looked up $peer');
+
+      for (final user in [ownUserId, stranger]) {
+        await expectLater(
+          provider.getVerifiedDeviceList(
+            user,
+            timeout: const Duration(milliseconds: 50),
+          ),
+          throwsA(isA<TimeoutException>()),
+        );
+      }
+
+      expect(
+        emitted
+            .where((e) => e['event'] == 'getDeviceList')
+            .map((e) => (e['data'] as Map)['userId']),
+        [ownUserId, stranger],
+      );
+    });
+  });
 }

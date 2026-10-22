@@ -17,6 +17,7 @@ import 'package:fireplace/services/device_list/device_authority_engine.dart';
 import 'package:fireplace/services/device_list/device_list_cache.dart';
 import 'package:fireplace/services/device_list/device_list_canonical.dart';
 import 'package:fireplace/services/encryption/content_kv.dart';
+import 'package:fireplace/utils/e2e_diag_log.dart';
 import 'package:fireplace/utils/e2e_envelope.dart';
 import 'package:fireplace/utils/message_ids.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -30,8 +31,9 @@ import '../support/box_fakes.dart';
 /// read by the shipped `MessagingProvider` over a real
 /// `EncryptionProvider`. Nothing is stood in but the box server (it routes
 /// a `send` to whoever subscribed the sid) and the account socket (it
-/// answers the own-list lookup and records every other emit — the
-/// server must never hear of the pair).
+/// answers the own-list lookup — and a friend from before the box its
+/// bundle fetch, where a test serves one (`_Side.bundleOf`, E114f) — and
+/// records every other emit: the server must never hear of the pair).
 class _Enc extends EncryptionProvider {
   bool ready = true;
 
@@ -196,6 +198,14 @@ class _Side {
   /// What a lookup of [lookups] answers.
   List<Object?>? Function(String handle)? answer;
 
+  /// What a `fetchPreKeyBundle` this device emits is answered with, by peer
+  /// id: that peer's bundle as the server serves it (a fresh one-time pre-key
+  /// each time). Null: left unanswered, as every other test leaves it.
+  Map<String, dynamic>? Function(int userId)? bundleOf;
+
+  /// This device's own box socket: every box command of it goes out on it.
+  late FakeBoxSocket socket;
+
   int _otp = 0;
 
   String get tag => '000$userId';
@@ -211,6 +221,15 @@ class _Side {
           () => enc.onDeviceList({'userId': userId, 'authorization': null}),
         );
       }
+      if (event == 'fetchPreKeyBundle' && data is Map) {
+        final peer = data['userId'] as int;
+        final bundle = bundleOf?.call(peer);
+        if (bundle != null) {
+          Timer.run(
+            () => enc.onPreKeyBundleResponse({'userId': peer, 'bundle': bundle}),
+          );
+        }
+      }
     });
     await enc.initializeE2E(userId);
     store = ContactStore(
@@ -222,6 +241,10 @@ class _Side {
     await store.setSelf(UserModel(id: userId, username: name, tag: tag));
     enc
       ..keepsDeviceListFor = ((peer) => store.byUserId(peer) != null)
+      // Decision 114, as `ConnectionProvider` wires it: a friend's list is
+      // one handle lookup, never asked of the server by id.
+      ..listsByHandle =
+          ((peer) => store.byUserId(peer)?.state == ContactState.friend)
       ..isBoxOnlyPeer = ((peer) => store.byUserId(peer)?.boxOrigin != null)
       ..servedBundleFor = ((peer, device) =>
           store.byUserId(peer)?.boxOrigin?.bundles[device]);
@@ -271,8 +294,10 @@ class _Side {
       ..friendLiveDevices = reader.friendLiveDevices
       ..ownDeviceList = reader.ownDeviceList
       ..friendRevokedDevices = reader.friendRevokedDevices
+      ..friendAddressLookup = reader.lookupFriendAddresses
       ..e2eReady();
     box.sockets.last.serverConnect('S$userId');
+    socket = box.sockets.last;
     await settle();
     session.accountReady(1);
     await settle();
@@ -317,6 +342,12 @@ class _Side {
     };
   }
 
+  /// The bundle `fetchPreKeyBundle` serves for this account's one device.
+  Map<String, dynamic> get servedBundle =>
+      ((searchEntry['devices'] as List).first
+              as Map<String, dynamic>)['bundle']
+          as Map<String, dynamic>;
+
   ContactRecord? recordOf(int peer) => store.byUserId(peer);
 
   /// Any event that would tell the server this device knows [peer].
@@ -329,6 +360,17 @@ class _Side {
           (jsonEncode(data).contains('$peer') ||
               event.contains('Friend') ||
               event == 'fetchPreKeyBundle'))
+        event,
+  ];
+
+  /// Every by-id device-list request this device emitted that named [peer]:
+  /// a friend's list is a handle lookup, never one of these (decision 114).
+  List<String> listsAskedFor(int peer) => [
+    for (final (event, data) in emitted)
+      if (data is Map &&
+          ((event == 'getDeviceList' && data['userId'] == peer) ||
+              (event == 'getDeviceLists' &&
+                  (data['userIds'] as List).contains(peer))))
         event,
   ];
 
@@ -354,7 +396,8 @@ class _Side {
   /// The texts [peer] sent this device, as their stored records hold them,
   /// oldest first.
   Future<List<String>> textsFrom(int peer) async {
-    final records = await enc.localMessageRecords(localConversationIdFor(peer));
+    final chat = recordOf(peer)?.chatId ?? localConversationIdFor(peer);
+    final records = await enc.localMessageRecords(chat);
     final ids = records.keys.toList()..sort();
     return [
       for (final id in ids)
@@ -369,6 +412,45 @@ Future<void> settle() async {
     await Future<void>.delayed(Duration.zero);
   }
 }
+
+/// Settles until [done] holds — a handoff is several box round trips, and a
+/// fixed number of turns is a flake — or a bounded number of rounds passed.
+Future<void> settleUntil(bool Function() done) async {
+  for (var i = 0; i < 40 && !done(); i++) {
+    await settle();
+  }
+}
+
+/// Every queue [side] holds on the box: one inbound queue per contact, its
+/// self-queue and its request queue — what an account delete must retire.
+Set<String> _queuesHeldBy(_Side side) => {
+  for (final record in side.store.all)
+    for (final queue in record.queues) queue.rid,
+  ?side.store.selfQueue?.rid,
+  ?side.store.requestQueue?.rid,
+};
+
+/// The queues [side] asked the box to delete so far.
+Set<String> _queuesDeletedBy(_Side side) => {
+  for (final sent in side.socket.emitted)
+    if (sent.event == 'deleteQueue') sent.frame['rid']! as String,
+};
+
+/// Runs [body] in a zone that records every timer started in it, with its
+/// duration, into [started].
+Future<T> recordingTimers<T>(
+  Future<T> Function() body,
+  List<(Duration, Timer)> started,
+) => runZoned(
+  body,
+  zoneSpecification: ZoneSpecification(
+    createTimer: (self, parent, zone, duration, callback) {
+      final timer = parent.createTimer(zone, duration, callback);
+      started.add((duration, timer));
+      return timer;
+    },
+  ),
+);
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -1041,4 +1123,313 @@ void main() {
     expect(record?.state, ContactState.blocked);
     expect(record?.queues.map((q) => q.rid), [rid]);
   });
+
+  // ---------- Account delete (decision 113, E114h, E114i) ----------
+
+  // Mutation: no goodbye is built or sent (skip the friend's addresses).
+  test(
+    'an account delete says goodbye to a box-made friend, then deletes every '
+    'queue the account holds, and names nothing to the server',
+    () async {
+      await befriend();
+      await alice.sendText(5, 'before');
+      await bob.sendText(1, 'before too');
+      await settle();
+      expect(await bob.textsFrom(1), ['before']);
+      final held = _queuesHeldBy(alice);
+      expect(
+        held,
+        hasLength(3),
+        reason: "bob's queue, the self-queue and the request queue",
+      );
+      final mark = alice.socket.emitted.length;
+
+      await alice.reader.goodbyeToBoxFriends();
+      await settle();
+
+      expect(bob.recordOf(1), isNull, reason: "bob took alice's goodbye");
+      // Its chat and history go, as for an unfriend.
+      expect(
+        await bob.enc.localMessageRecords(localConversationIdFor(1)),
+        isEmpty,
+      );
+      expect(_queuesDeletedBy(alice), unorderedEquals(held));
+      final commands = [
+        for (final sent in alice.socket.emitted.skip(mark)) sent.event,
+      ];
+      expect(commands, contains('send'));
+      expect(
+        commands.lastIndexOf('send'),
+        lessThan(commands.indexOf('deleteQueue')),
+        reason: 'the goodbyes go first, then the queues',
+      );
+      expect(alice.namedToServer(5), isEmpty);
+      expect(bob.namedToServer(1), isEmpty);
+      expect(
+        [for (final (event, _) in alice.emitted) event],
+        isNot(anyOf(contains('unfriend'), contains('blockUser'))),
+      );
+    },
+  );
+
+  // Mutation: the friends told are picked by `boxOrigin != null`.
+  test(
+    'an account delete says goodbye to a friend from before the box too',
+    () async {
+      await befriendBeforeTheBox();
+      final held = _queuesHeldBy(alice);
+
+      await alice.reader.goodbyeToBoxFriends();
+      await settle();
+
+      expect(bob.recordOf(1), isNull, reason: "bob took alice's goodbye");
+      expect(_queuesDeletedBy(alice), unorderedEquals(held));
+      expect(alice.namedToServer(5), isEmpty);
+      expect(bob.namedToServer(1), isEmpty);
+    },
+  );
+
+  // Mutation: only the first friend is told (`take(1)` on the covered peers).
+  test('an account delete tells every friend, not only the first', () async {
+    final carol = _Side(7, 'carol', box);
+    await carol.start();
+    addTearDown(carol.session.dispose);
+    await befriend();
+    await alice.reader.sendBoxFriendRequest(carol.searchEntry);
+    await settle();
+    carol.answer = (_) => [alice.searchEntry];
+    await carol.reader.acceptBoxFriendRequest(1);
+    await settle();
+    expect(alice.recordOf(7)?.state, ContactState.friend);
+    final held = _queuesHeldBy(alice);
+    expect(held, hasLength(4), reason: "two friends' queues, self, request");
+
+    await alice.reader.goodbyeToBoxFriends();
+    await settle();
+
+    expect(bob.recordOf(1), isNull, reason: "bob took alice's goodbye");
+    expect(carol.recordOf(1), isNull, reason: "carol took alice's goodbye");
+    expect(_queuesDeletedBy(alice), unorderedEquals(held));
+  });
+
+  // Mutation: no `timer.cancel()`, a `Future.delayed` raced against the work,
+  // or no budget timer at all.
+  test('a goodbye done inside its budget leaves no budget timer running',
+      () async {
+    await befriend();
+    const budget = Duration(seconds: 7);
+    final started = <(Duration, Timer)>[];
+
+    await recordingTimers(
+      () => alice.reader.goodbyeToBoxFriends(budget: budget),
+      started,
+    );
+    await settle();
+
+    expect(bob.recordOf(1), isNull, reason: 'the goodbye did go out');
+    final budgets = [
+      for (final (duration, timer) in started)
+        if (duration == budget) timer,
+    ];
+    expect(budgets, hasLength(1), reason: 'the budget is one real Timer');
+    expect(budgets.single.isActive, isFalse);
+  });
+
+  // Mutation: await the work with no budget, so the call waits for the box.
+  test(
+    'a box that never answers a send cannot hold the goodbye past its budget, '
+    'and the work goes on once it answers',
+    () async {
+      await befriend();
+      final held = _queuesHeldBy(alice);
+      final inner = box.sockets.respond!;
+      box.sockets.respond = (s, f) => f.event == 'send' ? null : inner(s, f);
+      const budget = Duration(milliseconds: 100);
+      final started = <(Duration, Timer)>[];
+
+      await recordingTimers(
+        () => alice.reader.goodbyeToBoxFriends(budget: budget),
+        started,
+      ).timeout(const Duration(seconds: 5));
+
+      expect(
+        bob.recordOf(1)?.state,
+        ContactState.friend,
+        reason: 'the box swallowed the goodbye',
+      );
+      expect(_queuesDeletedBy(alice), isEmpty, reason: 'still behind it');
+      expect([
+        for (final (duration, timer) in started)
+          if (duration == budget && timer.isActive) timer,
+      ], isEmpty);
+
+      // The box answers at last: the work was not abandoned with the call.
+      for (final sent in alice.socket.emitted.where((f) => f.event == 'send')) {
+        sent.answer({'ok': true});
+      }
+      await settleUntil(() => _queuesDeletedBy(alice).length == held.length);
+      expect(_queuesDeletedBy(alice), unorderedEquals(held));
+    },
+  );
+
+  // ---------- Pre-box friends move to the box (decision 114) ----------
+
+  /// Both sides hold the other as a friend from before the box and NOTHING
+  /// else: a server chat id, no queue, no address, no box origin — a pair no
+  /// device ever made a route for. Each side's handle lookup serves the
+  /// other's search entry; a `fetchPreKeyBundle` (a pre-box friend's bundle
+  /// stays by id, E114f) is answered with the other's bundle. [listsHeld]:
+  /// each side also holds the other's verified list and pinned key, as after
+  /// a restart (a friend's list is kept, decision 51) — the addresses are RAM.
+  Future<void> befriendBeforeTheBoxWithNoRoute({bool listsHeld = false}) async {
+    for (final (side, peer) in [(alice, bob), (bob, alice)]) {
+      await side.store.update(
+        peer.userId,
+        (_) => ContactRecord(
+          userId: peer.userId,
+          username: peer.name,
+          tag: peer.tag,
+          state: ContactState.friend,
+          legacy: const ContactLegacy(conversationId: 10),
+        ),
+      );
+      side
+        ..answer = ((_) => [peer.searchEntry])
+        ..bundleOf = ((_) => peer.servedBundle);
+      if (listsHeld) {
+        await side.enc.adoptServedAccount(
+          peer.userId,
+          identityKey: servedKey(peer.searchEntry),
+          authorization: null,
+        );
+      }
+    }
+  }
+
+  /// The connect's pass on both devices of a pair with no route: each gets an
+  /// address for the other and one acked queue, one handle lookup per side
+  /// and no list asked by id, no friends list — and a message each way reads.
+  Future<void> expectRoutedByLookupAlone({required bool listsHeld}) async {
+    await befriendBeforeTheBoxWithNoRoute(listsHeld: listsHeld);
+    for (final (side, peer) in [(alice, 5), (bob, 1)]) {
+      final record = side.recordOf(peer)!;
+      expect(record.outbound, isEmpty, reason: side.name);
+      expect(record.queues, isEmpty, reason: side.name);
+      expect(record.boxOrigin, isNull, reason: side.name);
+      expect(
+        side.enc.cachedDeviceList(peer) != null,
+        listsHeld,
+        reason: '${side.name} holds the list only when it was given',
+      );
+    }
+    bool routed(_Side side, int peer) {
+      final record = side.recordOf(peer);
+      return record != null &&
+          record.outbound.isNotEmpty &&
+          (record.queues.firstOrNull?.ackedBy.contains(1) ?? false);
+    }
+
+    // The connect's pass, on both devices; no friends list is ever fed.
+    alice.session.accountReady(1);
+    bob.session.accountReady(1);
+    await settleUntil(() => routed(alice, 5) && routed(bob, 1));
+
+    for (final (side, peer) in [(alice, bob), (bob, alice)]) {
+      final record = side.recordOf(peer.userId)!;
+      expect(record.outbound, hasLength(1), reason: '${side.name} address');
+      expect(record.queues, hasLength(1), reason: '${side.name} queue');
+      expect(
+        record.queues.single.ackedBy,
+        [1],
+        reason: '${peer.name} acked the queue',
+      );
+      expect(
+        record.boxOrigin,
+        isNull,
+        reason: 'a friendship from before the box stays one',
+      );
+      expect(
+        side.lookups,
+        ['${peer.name}#${peer.tag}'],
+        reason: 'one lookup per process',
+      );
+      expect(side.listsAskedFor(peer.userId), isEmpty, reason: side.name);
+      expect(
+        [for (final (event, _) in side.emitted) event],
+        isNot(contains('getFriends')),
+        reason: side.name,
+      );
+    }
+
+    await alice.sendText(5, 'hi bob');
+    await bob.sendText(1, 'hi alice');
+    await settle();
+    expect(await bob.textsFrom(1), ['hi bob']);
+    expect(await alice.textsFrom(5), ['hi alice']);
+  }
+
+  // Mutation: a friend's list is asked by id (`listsByHandle` unwired), the
+  // pass visits only friends that already hold an address, or the lookup's
+  // addresses are not kept.
+  test(
+    'a pair of friends from before the box that never had a route gets one '
+    'from the handle lookup alone: no list asked by id, no friends list',
+    () => expectRoutedByLookupAlone(listsHeld: false),
+  );
+
+  // Mutation: the pass looks no address up for a friend whose list it holds
+  // (the lookup E114c allows once per process).
+  test(
+    'a pair with no route whose lists are held gets its addresses from one '
+    'handle lookup each',
+    () => expectRoutedByLookupAlone(listsHeld: true),
+  );
+
+  // Mutation: `_friendDeviceIsLive` looks the friend up again (the by-handle
+  // lookup restored).
+  test(
+    'a handoff read from a friend whose list this device does not hold is '
+    'refused not_live, with no lookup',
+    () async {
+      E2eDiagLog.clear();
+      await befriendBeforeTheBoxWithNoRoute();
+      // Alice pinned bob's key long ago (an old-path session did) but holds
+      // no list of his: a connect before its refresh landed.
+      await alice.enc.adoptServedAccount(
+        5,
+        identityKey: servedKey(bob.searchEntry),
+        authorization: null,
+      );
+      alice.enc.invalidateDeviceList(5);
+      expect(alice.enc.cachedDeviceList(5), isNull);
+      final intoRequestQueue = <EmittedFrame>[];
+      final inner = box.sockets.respond!;
+      box.sockets.respond = (s, f) {
+        if (f.event == 'send' &&
+            f.frame['sid'] == alice.store.requestQueue!.sid) {
+          intoRequestQueue.add(f);
+        }
+        return inner(s, f);
+      };
+      bool refused() => E2eDiagLog.entries.any(
+        (e) => e.contains('BOX_FRIEND_HANDOFF_REFUSED') && e.contains('not_live'),
+      );
+
+      // Bob's pass looks alice up and hands his queue into her request queue.
+      bob.session.accountReady(1);
+      await settleUntil(refused);
+
+      expect(intoRequestQueue, hasLength(1), reason: "bob's handoff reached her");
+      expect(alice.lookups, isEmpty, reason: 'a frame read looks nothing up');
+      expect(alice.listsAskedFor(5), isEmpty);
+      expect(alice.enc.cachedDeviceList(5), isNull);
+      expect(
+        alice.recordOf(5)!.outbound,
+        isEmpty,
+        reason: 'the refused handoff stored no address',
+      );
+      // The control that the branch under test is where the read ended.
+      expect(refused(), isTrue, reason: 'the read ended at the liveness check');
+    },
+  );
 }

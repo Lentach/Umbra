@@ -710,4 +710,42 @@ void main() {
       });
     });
   });
+
+  group('ConnectionProvider first conversations snapshot wait '
+      '(decision 121)', () {
+    late FakeSocketService fakeSocket;
+    late RecordingConnectionProvider connection;
+    late ConversationsProvider conversations;
+
+    setUp(() {
+      fakeSocket = FakeSocketService();
+      connection = RecordingConnectionProvider(socketService: fakeSocket);
+      conversations = ConversationsProvider();
+      connection.setProviders(
+        encryption: _RecordingEncryption(),
+        friends: FriendsProvider(),
+        conversations: conversations,
+        messaging: MessagingProvider(),
+      );
+    });
+
+    tearDown(() => connection.disconnect());
+
+    // Mutation: drop `_armFirstSnapshotWait()` from `_onSocketReady`.
+    test('a list the server never answers stops being waited for after 8 s',
+        () {
+      fakeAsync((fake) {
+        unawaited(connection.connect(1, 'test-token', 'http://localhost:3000'));
+        fake.flushMicrotasks();
+        fakeSocket.simulateSocketReady();
+        fake
+          ..flushMicrotasks()
+          ..elapse(const Duration(seconds: 7));
+        expect(conversations.hasLoadedConversationsOnce, isFalse);
+
+        fake.elapse(const Duration(seconds: 2));
+        expect(conversations.hasLoadedConversationsOnce, isTrue);
+      });
+    });
+  });
 }

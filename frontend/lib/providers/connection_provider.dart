@@ -14,6 +14,7 @@ import '../services/box/box_session.dart';
 import '../services/box/box_sibling_alive.dart';
 import '../services/contacts/contact_backup.dart';
 import '../services/contacts/contact_backup_service.dart';
+import '../services/contacts/contact_record.dart';
 import '../services/contacts/contact_store.dart';
 import '../services/push_box_source.dart';
 import '../services/push_service.dart';
@@ -53,9 +54,11 @@ class ConnectionProvider extends ChangeNotifier {
   DateTime? _lastConnectStartedAt;
   Timer? _debouncedConnectTimer;
 
-  /// Bumped on every conversationsList/messageHistory response — liveness
-  /// signal for the resume probe (zombie-socket detection, see
-  /// [ensureReconnectIfNeeded]).
+  /// Bumped on every conversationsList, messageHistory and serverTime
+  /// response — liveness signal for the resume probe (zombie-socket
+  /// detection, see [ensureReconnectIfNeeded]). `serverTime` is the one the
+  /// probe itself asks for: the server will stop answering
+  /// `getConversations`, and no chat sends `getMessages` on the box.
   int _serverResponseCounter = 0;
   Timer? _resumeProbeTimer;
 
@@ -503,17 +506,24 @@ class ConnectionProvider extends ChangeNotifier {
     final boxClient = _boxClient;
     final contacts = _contactStore;
     if (boxClient != null && contacts != null) {
-      // Decision 51: a box peer's verified list is kept across restarts —
-      // one this device holds a queue for, or an address of, or one met
-      // over the box (slice (f): no lookup may name that pair again).
+      // Decision 51, E114a: a friend's verified list is kept across restarts
+      // — every friend (its list was looked up by handle once), and any
+      // contact this device holds a queue for, or an address of, or met over
+      // the box (slice (f): no lookup may name that pair again).
+      bool isFriend(int peer) =>
+          contacts.byUserId(peer)?.state == ContactState.friend;
       _encryptionProvider
         ?..keepsDeviceListFor = (peer) {
           final record = contacts.byUserId(peer);
           return record != null &&
-              (record.queues.isNotEmpty ||
+              (record.state == ContactState.friend ||
+                  record.queues.isNotEmpty ||
                   record.outbound.isNotEmpty ||
                   record.boxOrigin != null);
         }
+        // Decision 114, E114a: a friend's list is never asked of the server
+        // by id, whoever made the friendship.
+        ..listsByHandle = isFriend
         // Slice (f), decision 52: a friendship or request made over the box
         // is never named to the server by a lookup of this device.
         ..isBoxOnlyPeer = ((peer) => contacts.byUserId(peer)?.boxOrigin != null)
@@ -554,6 +564,8 @@ class ConnectionProvider extends ChangeNotifier {
             // Item 5: existing friendships move onto the box.
             ..encryptForFriend = messaging.encryptForFriend
             ..friendLiveDevices = messaging.friendLiveDevices
+            // E114b: a friend's request queues come from a handle lookup.
+            ..friendAddressLookup = messaging.lookupFriendAddresses
             // Slice (e): a new device's handoff carries its account's list.
             ..ownDeviceList = messaging.ownDeviceList
             ..friendRevokedDevices = messaging.friendRevokedDevices
@@ -806,6 +818,7 @@ class ConnectionProvider extends ChangeNotifier {
     unawaited(_runLocalPlaintextMaintenance());
     _startPlaintextSweepTimer();
     _socketService.getConversations();
+    _armFirstSnapshotWait();
     _socketService.getFriendRequests();
     _socketService.getFriends();
     _socketService.getBlockedList();
@@ -849,6 +862,22 @@ class ConnectionProvider extends ChangeNotifier {
     // re-run ordered decrypt for the open chat once the socket is authenticated.
     Future.delayed(const Duration(milliseconds: 900), () {
       _messagingProvider?.retryDecryptActiveConversation();
+    });
+  }
+
+  /// Decision 121, E114k: how long the waits that hang on the first
+  /// `conversationsList` (the chat-list skeleton, the notification-tap
+  /// navigation, the unread badge flush) keep waiting for it. The server is
+  /// to stop answering `getConversations` at Phase 4 step 4 (silence, never
+  /// `[]`), and a wait with no end would hold all three for good.
+  static const Duration _kFirstSnapshotWait = Duration(seconds: 8);
+  Timer? _firstSnapshotWaitTimer;
+
+  void _armFirstSnapshotWait() {
+    _firstSnapshotWaitTimer?.cancel();
+    _firstSnapshotWaitTimer = Timer(_kFirstSnapshotWait, () {
+      _firstSnapshotWaitTimer = null;
+      _conversationsProvider?.releaseFirstSnapshotWait();
     });
   }
 
@@ -933,6 +962,7 @@ class ConnectionProvider extends ChangeNotifier {
   /// unconfirmed and nothing is destroyed. The retry stamp is cleared only on
   /// a usable answer so garbage cannot silence the re-request path.
   void _onServerTime(dynamic data) {
+    _serverResponseCounter++;
     ServerClock.instance.observeIso(data is Map ? data['serverTime'] : null);
     if (ServerClock.instance.estimatedNow == null) return;
     _serverTimeRequestedAt = null;
@@ -1018,6 +1048,8 @@ class ConnectionProvider extends ChangeNotifier {
     _intentionalDisconnect = true;
     _debouncedConnectTimer?.cancel();
     _resumeProbeTimer?.cancel();
+    _firstSnapshotWaitTimer?.cancel();
+    _firstSnapshotWaitTimer = null;
     _socketReadyWatchdog?.cancel();
     _socketReadyWatchdog = null;
     _plaintextSweepTimer?.cancel();
@@ -1115,7 +1147,13 @@ class ConnectionProvider extends ChangeNotifier {
   void _resyncAfterResume() {
     final probeStart = _serverResponseCounter;
     final activeConvId = _conversationsProvider?.activeConversationId;
-    _socketService.getConversations();
+    // `getConversations` stays until the silence; the time is the probe's
+    // own question. `conversationsList` is the server's to stop answering
+    // (Phase 4 step 4, silence never `[]`), so a resume must not depend on
+    // it: the time is read from nothing the old tables hold.
+    _socketService
+      ..getConversations()
+      ..getServerTime();
     _conversationsProvider?.reemitPushClientState();
     if (activeConvId != null) {
       _refetchActiveChat(activeConvId);
@@ -1624,9 +1662,9 @@ class ConnectionProvider extends ChangeNotifier {
     });
     _socketService.on('friendsList', (data) {
       _friendsProvider?.onFriendsList(data);
-      // Item 5: each friend device's request queue, where the handoff of
-      // our queue goes until that device hands us its own.
-      _box?.onFriendsList(data);
+      // Item 5: a friend this list names for the first time is visited by
+      // the handoff pass. Its `devices` are not read (E114b).
+      _box?.onFriendsListed();
     });
     _socketService.on('searchUsersResult', (data) {
       _friendsProvider?.onSearchUsersResult(data);
@@ -1795,6 +1833,7 @@ class ConnectionProvider extends ChangeNotifier {
     _debouncedConnectTimer?.cancel();
     _plaintextSweepTimer?.cancel();
     _resumeProbeTimer?.cancel();
+    _firstSnapshotWaitTimer?.cancel();
     _socketReadyWatchdog?.cancel();
     _reconnectManager.cancel();
     _socketService.disconnect();

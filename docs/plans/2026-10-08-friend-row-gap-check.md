@@ -70,7 +70,7 @@ Read-only review of the plan against HEAD plus prod `SELECT`s (10-21: 24 live de
 
 ## Step 4 design (2026-10-22; decisions 113, 114 and the resume probe)
 
-The client release that must reach users before step 4's server half. Backend untouched. Spec: decisions 113–119. Engineering calls: E114a–E114j (decisions log). Owner-class questions: O37, O38. Line numbers are as of `7e34495e`.
+The client release that must reach users before step 4's server half. Backend untouched. Spec: decisions 113–122 (120–122 are the owner's answers to the questions this pass raised, 10-22). Engineering calls: E114a–E114k (decisions log). Line numbers are as of `7e34495e`.
 
 ### What the client asks the server today
 
@@ -108,13 +108,13 @@ With the box on, `searchUsers` answers "stranger or friend alike" (`chat-search.
 
 Prod, read-only, 10-22: 25 accepted pairs, 23 accounts, exactly 1 live device each, **0 of 23 without a published request queue** (the 10-20 "device 1 without a queue" is stale), 22 of 23 refreshed a session within 14 days (16 within 2). `messages` is untouched since 10-11. Which pairs hold queues both ways is known only to the devices (the box cannot link a queue to an account by design), so "no route" cannot be counted on the server.
 
-- **A pair with no route gets one from this release, without `friendsList`.** Both devices run the pass at every connect. A friend with nothing to hand to is looked up once; the answer carries the request queues, the handoff goes there, the friend hands its queue back on receipt. All 23 devices are lookup-reachable. Without this, every pair not yet routed at the silence is stranded and recovers only by unfriend and a box re-invite (itself a handle lookup): that is O37, recommendation (β). The cost is bounded: once per process per friend, and at most one naming lookup per 24 h per friend that has not answered (E114c).
+- **A pair with no route gets one from this release, without `friendsList` (decision 120).** Both devices run the pass at every connect. A friend with a live device it holds no address for, and a handoff to it due, is looked up once per process; the answer carries the request queues, the handoff goes there, the friend hands its queue back on receipt. All 23 devices are lookup-reachable. The cost is bounded (E114c): per looking device at most one lookup per friend per process and one per 24 h per friend still waiting, zero in steady state. **One-time pre-keys:** a lookup spends one per live device of the friend. Moving prod's 25 pairs costs about two lookups per pair, about 50 pre-keys fleet-wide once; replenishment keeps up because the server signals `preKeysLow` to the claimed device's room below 10 left and a connected device mints 100 (`encryption_service.dart:116`), a device that is offline is topped up by the first claim after it returns, and an empty pool serves the bundle WITHOUT a one-time pre-key (the prod `OTP exhausted` line: a weaker first message, never a failure).
 - **Stranded whatever we do:** a friend whose build ignores a goodbye (before 0.2.68, `BOX_GOODBYE_IGNORED`), a friend with no device that published a request queue (0 on prod), a wiped device with no contact backup (decision 119).
-- **Reach has no server signal and is not given one** (decision 108 dropped the version; E114j). The check that can be run:
+- **Reach has no server signal and is not given one** (decisions 108 and 122; E114j). The check that can be run:
   1. Before the silence, read-only on prod: every accepted-pair account refreshed a session after the release deploy time (`refresh_tokens`: `expires_at - interval '365 days'`), and `devices` still shows 0 live devices without `requestSid`. PWA users (23 of 24 hold Web Push; decision 110) load the new bundle at their next open (`no-cache` on `/`), so "opened since the deploy" is the best server-visible proxy; a tab left open for days keeps old code.
   2. The 2 native accounts (FCM tokens) are on the new APK: the owner's attestation, there is no signal.
   3. On each device the durable log gains `BOX_ROUTES {friends, routed, owed}` after every pass (no server effect); the owner reads it on his own devices, and a user can read it in hacker mode.
-  4. An anonymous in-memory count of by-id peer-list answers is the only server option that does not reverse 108, and it is weak: a build holding kept lists never asks. Not built; say so if wanted (O37 note).
+  4. No server counter (decision 122): the one option that reverses nothing in 108 is an anonymous count of by-id peer-list answers, and it is weak (a build holding kept lists never asks).
 
 ### Release order
 
@@ -126,12 +126,20 @@ Prod, read-only, 10-22: 25 accepted pairs, 23 accounts, exactly 1 live device ea
 
 ### Account delete (113)
 
-Order: verify the password (`POST /users/verify-password`, no side effect) → goodbye to every friend's devices over the box and retire every own queue → `DELETE /users/account` → the existing teardown. A wrong password must not tell friends goodbye (E114h). Best effort inside a time budget; the delete is never held hostage by a down box or a friend that cannot be reached (E114i).
+Order: verify the password (`POST /users/verify-password`, no side effect) → goodbye to every friend's devices over the box and retire every own queue → `DELETE /users/account` → the existing teardown. A wrong password must not tell friends goodbye (E114h). Best effort inside a 10 s budget (the delete shows no progress of its own); the delete is never held hostage by a down box or a friend that cannot be reached (E114i).
 
-### Found, not built here (O38): the client under silence
+### The client under silence (decision 121)
 
-Besides the probe, a client whose `conversationsList` and `friendsList` never arrive is still wrong: the chat list shows its skeleton forever for an account with no chat (`conversations_screen.dart:603`), a notification tap never navigates (`main_shell.dart:279`, `notification_nav_decision.dart:40`: waits for the first list), and the unread badge never flushes (`unread_badge_sync.dart:60`). Nothing is destroyed (`served == null` purges nothing; `_storeList` prunes only on a received list). A fresh install shows no friends without a contact backup (decision 119). These need to reach users BEFORE the silence, so deferring them costs a second client release.
+Besides the probe, a client whose `conversationsList` never arrives was still wrong: the chat list kept its skeleton for an account with no chat (`conversations_screen.dart:603`), a notification tap never navigated (`main_shell.dart:279`: it waits for the first list) and the unread badge never flushed (`unread_badge_sync.dart:60`). Nothing was destroyed (`served == null` purges nothing; `_storeList` prunes only on a received list). Now `ConnectionProvider` arms an 8 s timer at each `socketReady` that asks for the list, and when it fires `ConversationsProvider.releaseFirstSnapshotWait()` flips a flag of its own that those three consumers read through `hasLoadedConversationsOnce`. It runs no list handler and no reconcile, prune or sweep (an empty `friendsList` blanks the friends screen, `friends_provider.dart:631-643`), local contacts and chats stay as held, and a list that arrives later finds the real flag unset and is applied as a first snapshot (E114k). A fresh install still shows no friends without a contact backup (decision 119).
 
-### Size
+### What remains for step 4's server half
 
-About 10 lib files, 350–450 lines net, no backend, no migration, no wire change: `encryption_provider.dart`, `connection_provider.dart`, `messaging_provider.first_contact.dart`, `messaging_provider.box.dart`, `messaging_provider.dart`, `box_friend_handoff.dart`, `box_session.dart`, `box_friends.dart`, `auth_provider.dart`, `settings_screen.dart`. Tests: the handoff/re-key tests that fed `friendsList` addresses are re-fed through the lookup, plus new ones per behaviour. Test seams (all existing): `ConnectionProvider.ensureReconnectIfNeeded`, `BoxSession` (`box_session_friends_test.dart`), `EncryptionProvider.getVerifiedDeviceList` with a captured emit, `MessagingProvider` (`messaging_provider_box_first_contact_test.dart`), `AuthProvider.deleteAccount`.
+1. Silence (never `[]`) `friendsList`, `conversationsList`, `getServedMessageIds`; the list payload's `devices` (`chat-friend-request.service.ts:51-76`) goes with it. A new client reads none of it for routing.
+2. `getDeviceList` / `getDeviceLists`: answer only `userId == caller` (the own list: connect, link ceremony, devices screen, handoff carry) and drop the `areFriends` / `conversations` entitlement (`chat-device-list.service.ts:275-293`); silence for every other id.
+3. `searchUsers` and `fetchPreKeyBundle` stay as they are. Note for the owner: `fetchPreKeyBundle` answers any authenticated caller and claims a pre-key (`chat-key-exchange.service.ts:876-915`), an existing by-id oracle outside 114's wording (E114f).
+4. The reach check above, then the owner's go. Old builds (≤ 0.2.69) reconnect on every resume once `conversationsList` is silent, cannot read a friend's list they do not hold, and never learn a new device of a friend: they must update.
+5. Step 5 as before (archive, drop, `MediaCleanupService`, push tables).
+
+### Size (as built)
+
+See the dated summary `2026-10-22-phase4-step4-client.md` for the file list and counts. No backend, no migration, no wire change. Test seams (all existing): `ConnectionProvider.ensureReconnectIfNeeded` and `socketReady`, `BoxSession` (`box_session_friends_test.dart`), `EncryptionProvider.getVerifiedDeviceList` with a captured emit, `MessagingProvider` (`messaging_provider_box_first_contact_test.dart`), `AuthProvider.deleteAccount`, `ConversationsProvider`.
