@@ -727,6 +727,11 @@ class ConnectionProvider extends ChangeNotifier {
       }
       _socketReadyWatchdog?.cancel();
       _socketReadyWatchdog = null;
+      // Decision 121, E114k: a disconnect cancels the bounded wait. A dropped
+      // socket must not release the three waits 8 s later; the next
+      // socketReady re-arms it.
+      _firstSnapshotWaitTimer?.cancel();
+      _firstSnapshotWaitTimer = null;
     });
   }
 
@@ -853,7 +858,9 @@ class ConnectionProvider extends ChangeNotifier {
     // store fills both lists before the socket, so the retry asks the
     // providers whether the SERVER has spoken instead.
     Future.delayed(AppConstants.conversationsRefreshDelay, () {
-      if (_conversationsProvider?.hasLoadedConversationsOnce == false) {
+      // The REAL flag, not `hasLoadedConversationsOnce`: the 8 s release only
+      // frees the three waits, it is no server answer (decision 121).
+      if (_conversationsProvider?.conversationsListReceived == false) {
         _socketService.getConversations();
       }
       if (_friendsProvider?.hasFriendsSnapshot == false) {

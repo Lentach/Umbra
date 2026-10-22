@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:fake_async/fake_async.dart';
+import 'package:fireplace/constants/app_constants.dart';
 import 'package:fireplace/providers/connection_provider.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
@@ -16,6 +17,7 @@ import 'package:flutter_test/flutter_test.dart';
 class FakeSocketService extends SocketService {
   final Map<String, List<void Function(dynamic)>> _handlers = {};
   void Function()? _onConnectCallback;
+  void Function(dynamic)? _onDisconnectCallback;
 
   int getConversationsCalls = 0;
   int getFriendRequestsCalls = 0;
@@ -50,7 +52,14 @@ class FakeSocketService extends SocketService {
   }
 
   @override
-  void onDisconnect(void Function(dynamic) callback) {}
+  void onDisconnect(void Function(dynamic) callback) {
+    _onDisconnectCallback = callback;
+  }
+
+  /// The transport dropped (the server or the network ended the socket).
+  void simulateDisconnect() {
+    _onDisconnectCallback?.call('transport close');
+  }
 
   void simulateTransportConnect() {
     _onConnectCallback?.call();
@@ -745,6 +754,68 @@ void main() {
 
         fake.elapse(const Duration(seconds: 2));
         expect(conversations.hasLoadedConversationsOnce, isTrue);
+      });
+    });
+
+    // Mutation: drop the `_firstSnapshotWaitTimer` cancel from the transient
+    // `onDisconnect` handler in `ConnectionProvider.connect`.
+    test('a socket that drops after socketReady cancels the 8 s release; the '
+        'next socketReady re-arms it', () {
+      fakeAsync((fake) {
+        unawaited(connection.connect(1, 'test-token', 'http://localhost:3000'));
+        fake.flushMicrotasks();
+        fakeSocket.simulateSocketReady();
+        fake
+          ..flushMicrotasks()
+          ..elapse(const Duration(seconds: 3));
+        fakeSocket.simulateDisconnect();
+        fake.elapse(const Duration(seconds: 6));
+        expect(conversations.hasLoadedConversationsOnce, isFalse,
+            reason: 'the dropped socket cancelled the wait: +9 s from the '
+                'first socketReady must not release it');
+
+        fakeSocket.simulateSocketReady();
+        fake
+          ..flushMicrotasks()
+          ..elapse(const Duration(seconds: 7));
+        expect(conversations.hasLoadedConversationsOnce, isFalse);
+
+        fake.elapse(const Duration(seconds: 2));
+        expect(conversations.hasLoadedConversationsOnce, isTrue);
+      });
+    });
+
+    // Mutation: the delayed re-ask in `_onSocketReady` reads
+    // `hasLoadedConversationsOnce` instead of the real-list flag.
+    test('after the 8 s release a later socketReady still re-asks for the '
+        'list; once a real list arrived it does not', () {
+      fakeAsync((fake) {
+        unawaited(connection.connect(1, 'test-token', 'http://localhost:3000'));
+        fake.flushMicrotasks();
+        fakeSocket.simulateSocketReady();
+        fake
+          ..flushMicrotasks()
+          ..elapse(const Duration(seconds: 9));
+        expect(conversations.hasLoadedConversationsOnce, isTrue,
+            reason: 'precondition: the release has happened');
+
+        var before = fakeSocket.getConversationsCalls;
+        fakeSocket.simulateSocketReady();
+        fake
+          ..flushMicrotasks()
+          ..elapse(AppConstants.conversationsRefreshDelay);
+        expect(fakeSocket.getConversationsCalls - before, 2,
+            reason: 'the immediate emit plus the re-ask: the release is not '
+                'a server answer');
+
+        // Control: a real list was received, so the re-ask stays quiet.
+        conversations.onConversationsList(const []);
+        before = fakeSocket.getConversationsCalls;
+        fakeSocket.simulateSocketReady();
+        fake
+          ..flushMicrotasks()
+          ..elapse(AppConstants.conversationsRefreshDelay);
+        expect(fakeSocket.getConversationsCalls - before, 1);
       });
     });
   });

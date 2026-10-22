@@ -420,6 +420,12 @@ class ConversationsProvider extends ChangeNotifier {
   bool get hasLoadedConversationsOnce =>
       _conversationsListReceivedOnce || _firstSnapshotWaitOver;
 
+  /// True only once a real server `conversationsList` arrived. Unlike
+  /// [hasLoadedConversationsOnce] the bounded-wait release
+  /// ([releaseFirstSnapshotWait]) never sets it, so a decision that asks the
+  /// server again keys off this one.
+  bool get conversationsListReceived => _conversationsListReceivedOnce;
+
   /// The bounded wait for `conversationsList` ran out (decision 121): releases
   /// the three waits above and NOTHING else — no list handler runs, nothing
   /// is pruned, swept or reconciled, and local contacts and chats stay as
