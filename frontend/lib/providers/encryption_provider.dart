@@ -930,6 +930,12 @@ class EncryptionProvider extends ChangeNotifier {
           });
           return CarriedListOutcome.refused;
         }
+        // The carried lookup is its own once-per-process budget
+        // ([_carriedLookupSpent]), not the initial one: a friend's list is
+        // normally fetched by handle at first sight, and that fetch had
+        // spent the very lookup this one needs — the friend's new device
+        // was then refused `not_live` until the next restart (E114l).
+        _boxListLookupSpent.remove(userId);
         try {
           await getVerifiedDeviceList(userId, forceRefresh: true);
         } on Object {

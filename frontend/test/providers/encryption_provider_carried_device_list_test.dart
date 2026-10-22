@@ -313,6 +313,38 @@ void main() {
     expect(provider.cachedDeviceList(peerId)?.version, 2);
   });
 
+  // Mutation: `adoptCarriedDeviceList` leaves the friend's initial lookup of
+  // this process spent, so the carried one fails `lookup spent` unseen.
+  test('a friend looked up by handle still gets its one carried lookup, and '
+      'no id leaves (decision 114)', () async {
+    final moved = forgedByRevokedDevice(2, devicesUpTo(2));
+    var served = genuine(1, devicesUpTo(1));
+    var byHandle = 0;
+    provider
+      ..listsByHandle = ((peer) => peer == peerId)
+      ..lookupBoxPeerList = (peer) async {
+        byHandle++;
+        return served;
+      };
+    await provider.getVerifiedDeviceList(peerId);
+    expect(byHandle, 1);
+
+    served = moved;
+    final outcome = await provider.adoptCarriedDeviceList(peerId, moved);
+
+    expect(outcome, CarriedListOutcome.refetched);
+    expect(byHandle, 2);
+    expect(provider.cachedDeviceList(peerId)?.liveDeviceIds, [1, 2]);
+
+    final again = await provider.adoptCarriedDeviceList(
+      peerId,
+      forgedByRevokedDevice(6, devicesUpTo(3)),
+    );
+    expect(again, CarriedListOutcome.refused);
+    expect(byHandle, 2);
+    expect(lookups(), 0);
+  });
+
   test('a carried "not enrolled" is never adopted', () async {
     await serverVerified();
 

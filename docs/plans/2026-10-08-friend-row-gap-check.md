@@ -81,7 +81,7 @@ The client release that must reach users before step 4's server half. Backend un
 | `_boxLists.fetch`, peers (`messaging_provider.dart:343-347`) | connect refresh: list not held, or a >30-d gap (E50c) | handle lookup (E114a) |
 | `friendLiveDevices` (`messaging_provider.box.dart:561`) | the handoff pass, each connect and friend-list change | held list, else handle lookup (E114a) |
 | `_friendDeviceIsLive` (`messaging_provider.box.dart:311`) | a friend's handoff read off a queue | held list only, never a lookup on a frame read (E114e) |
-| `adoptCarriedDeviceList`, unpinned DAK (`encryption_provider.dart:919`) | a carried list under a DAK the server never served | handle lookup, once per process |
+| `adoptCarriedDeviceList`, unpinned DAK (`encryption_provider.dart:919`) | a carried list under a DAK the server never served | handle lookup, one per account per process of its OWN: it does not share the first-sight lookup's budget (E114l, found on the drive) |
 | accept gate, sender-list check (`messaging_provider.decrypt.dart:120, 152, 274`) | old-path rows only | handle lookup; dies with the rows |
 | old-path send, edit, resend, failed-send refresh (`messaging_provider.send.dart:1052, 1125, 2020`; `messaging_provider.dart:1062`) | old-path sends only | handle lookup; dies with the old path |
 | the OWN list (`messaging_provider.dart:331`; `messaging_provider.box.dart:371, 975, 1012`; `messaging_provider.decrypt.dart:255`; `link_ceremony_controller.dart:265`; the devices screen) | connect, link ceremony, handoff carry | UNCHANGED, by id: it names only the caller. The server half must keep answering `userId == caller` |
