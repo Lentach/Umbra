@@ -70,7 +70,7 @@ Read-only review of the plan against HEAD plus prod `SELECT`s (10-21: 24 live de
 
 ## Step 4 design (2026-10-22; decisions 113, 114 and the resume probe)
 
-The client release that must reach users before step 4's server half. Backend untouched. Spec: decisions 113–122 (120–122 are the owner's answers to the questions this pass raised, 10-22). Engineering calls: E114a–E114k (decisions log). Line numbers are as of `7e34495e`.
+The client release that must reach users before step 4's server half. Backend untouched. Spec: decisions 113–122 (120–122 are the owner's answers to the questions this pass raised, 10-22). Engineering calls: E114a–E114n (decisions log; E114m and E114n come from the spec review of the build). Line numbers are as of `7e34495e`.
 
 ### What the client asks the server today
 
@@ -85,6 +85,8 @@ The client release that must reach users before step 4's server half. Backend un
 | accept gate, sender-list check (`messaging_provider.decrypt.dart:120, 152, 274`) | old-path rows only | handle lookup; dies with the rows |
 | old-path send, edit, resend, failed-send refresh (`messaging_provider.send.dart:1052, 1125, 2020`; `messaging_provider.dart:1062`) | old-path sends only | handle lookup; dies with the old path |
 | the OWN list (`messaging_provider.dart:331`; `messaging_provider.box.dart:371, 975, 1012`; `messaging_provider.decrypt.dart:255`; `link_ceremony_controller.dart:265`; the devices screen) | connect, link ceremony, handoff carry | UNCHANGED, by id: it names only the caller. The server half must keep answering `userId == caller` |
+| **missed by the first pass (review F2, 10-22):** the verify dialog's served-key fetch, `loadPeerIdentityVerification` → `_fetchServedAccountIdentity` → `_servedDeviceIdHints` (`encryption_provider.dart`) | a standing key-change warning with no candidate (amendment (xlvii) clause 3), a person opening the dialog | by id before; now the key the friend's handle lookup served (kept in RAM from the lookup that raised the warning, a lookup of its own only when that is older than the floor), and no by-id bundle fetch for a friend (E114m) |
+| **invalidate-then-refetch (review F2):** `invalidateDeviceList` from `onSessionRebuildNeeded` (`encryption_provider.dart`), a peer's newer-list claim (`messaging_provider.decrypt.dart`, `refreshPeerList`) and `acknowledgePeerIdentity` | a rebuild request, an old-path row claiming a newer list, a person acknowledging a new key | by id before; the held list is dropped only when a lookup is owed and may be made: one per event, floored (1 min) and capped (6 per friend per process); otherwise the held list stands (E114m) |
 
 **`friendsList` `devices`** (`[{deviceId, requestSid, sealPub}]`, built by `chat-friend-request.service.ts:51-76`). Consumers:
 

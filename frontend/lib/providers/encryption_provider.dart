@@ -28,13 +28,29 @@ import '../utils/message_ids.dart';
 import '../utils/storage_persist.dart';
 import '../utils/boot_markers.dart';
 
+/// E114m: the shortest gap between two lookups of one friend's list that a
+/// PEER-driven event buys (a rebuild request, a newer-list claim), per process.
+/// One minute is the cooldown amendment (xvi) already gives the in-band
+/// refetch (`SenderListInfoRefreshLimiter`). A person's act (the verify dialog,
+/// acknowledging a key) is paced by the person and has no floor.
+const Duration kBoxRelookupFloor = Duration(minutes: 1);
+
+/// E114m: how many handle lookups of one friend's list an EVENT may buy in one
+/// process, besides the first-sight lookup and the carried one (E114l). A
+/// reset recovery costs about three (the lookup that finds the change, the
+/// dialog, the acknowledgement); the cap only has to stop a loop from
+/// spending one-time pre-keys of the friend's devices without end.
+const int kBoxRelookupCap = 6;
+
 /// EncryptionProvider — owns all E2E encryption state, initialization,
 class EncryptionProvider extends ChangeNotifier {
   EncryptionProvider({
     EncryptionService? service,
     IdentityBackupCodec? backupCodec,
     DakStore? dakStore,
+    DateTime Function()? clock,
   }) : _encryptionService = service ?? EncryptionService(),
+       _clock = clock ?? DateTime.now,
        _backupCodec = backupCodec ?? IdentityBackupCodec(),
        _dakStore = dakStore ?? DakStore() {
     // Register on the process-wide lock seam. Last one built wins, which in
@@ -54,6 +70,10 @@ class EncryptionProvider extends ChangeNotifier {
 
   /// The persisted DAK, for the restore's post-rebind list re-sign.
   final DakStore _dakStore;
+
+  /// The clock the friend-lookup floor ([kBoxRelookupFloor], E114m) reads;
+  /// injectable so a test can move time.
+  final DateTime Function() _clock;
 
   static void _e2eFlowLog(String step, [Map<String, dynamic>? data]) {
     E2eDiagLog.add(step, data ?? {});
@@ -672,8 +692,22 @@ class EncryptionProvider extends ChangeNotifier {
   /// `deviceListChanged` for the own account). The rollback pin survives.
   /// Every drop goes through here so [onDeviceListInvalidated] sees it: a box
   /// send never refetches, so the box refresh must.
-  void invalidateDeviceList(int userId) {
-    _deviceListCache.invalidate(userId);
+  ///
+  /// A FRIEND's list ([listIsByHandle]) is refetched by one handle lookup, which
+  /// spends a one-time pre-key of every live device of the friend (E114a), so
+  /// the drop is only made when that lookup is owed and may be made: an event
+  /// buys one more per friend, floored and capped (E114m, [_owedRelookup]).
+  /// Where none may be, the held list stands — a dropped one would leave the
+  /// friend with none until a restart — and the box refresh still runs.
+  /// [byPerson]: a person's act caused it (acknowledging a new key): the held
+  /// list is known wrong, so it is dropped whatever the budget says, and the
+  /// lookup it owes has no floor.
+  void invalidateDeviceList(int userId, {bool byPerson = false}) {
+    if (listIsByHandle(userId) && !_owedRelookup(userId, byPerson: byPerson)) {
+      _e2eFlowLog('DEVICE_LIST_KEPT', {'userId': userId});
+    } else {
+      _deviceListCache.invalidate(userId);
+    }
     onDeviceListInvalidated?.call(userId);
   }
 
@@ -723,6 +757,75 @@ class EncryptionProvider extends ChangeNotifier {
   /// Accounts whose carried list could not be judged without the server and
   /// already cost this process its one lookup (E50a).
   final Set<int> _carriedLookupSpent = {};
+
+  /// Friends owed one more handle lookup of their list (E114m): an event
+  /// dropped it ([invalidateDeviceList]) or the verify dialog wants the key the
+  /// server serves now, and no lookup has answered it yet. The value is whether
+  /// a PERSON caused it, which has no floor. One token per friend however many
+  /// events arrive; a lookup in flight answers the events that arrive meanwhile.
+  final Map<int, bool> _relookupOwed = {};
+
+  /// When each friend's last event-bought lookup went out, and how many this
+  /// process made ([kBoxRelookupFloor], [kBoxRelookupCap]).
+  final Map<int, DateTime> _relookupAt = {};
+  final Map<int, int> _relookups = {};
+
+  /// The account identity each friend's last handle lookup served this
+  /// process, and when: what the verify dialog shows without asking again
+  /// ([_servedIdentityByHandle]). UNTRUSTED, like every served identity.
+  final Map<int, ({String identity, DateTime at})> _servedIdentity = {};
+
+  /// Whether an event may buy friend [userId] another lookup now.
+  bool _relookupAvailable(int userId, {bool byPerson = false}) {
+    if ((_relookups[userId] ?? 0) >= kBoxRelookupCap) return false;
+    final at = _relookupAt[userId];
+    return byPerson ||
+        at == null ||
+        _clock().difference(at) >= kBoxRelookupFloor;
+  }
+
+  /// An event dropped, or wants, friend [userId]'s list. True: a handle lookup
+  /// is owed it (the first of the process needs no token), so the held list may
+  /// go; false: none may be made now, the held list stands. A person's act is
+  /// always owed (the list is known wrong), only the cap can still refuse the
+  /// lookup itself.
+  bool _owedRelookup(int userId, {bool byPerson = false}) {
+    if (!_boxListLookupSpent.contains(userId)) return true;
+    if (!byPerson && !_relookupAvailable(userId)) return false;
+    _relookupOwed[userId] = byPerson || (_relookupOwed[userId] ?? false);
+    return true;
+  }
+
+  /// Whether a handle lookup of friend [userId] may go out now, spending its
+  /// budget (E114a, E114m): the first of the process always may; every later
+  /// one needs an event that owes it and [_relookupAvailable].
+  bool _takeLookup(int userId) {
+    if (_boxListLookupSpent.add(userId)) {
+      _relookupOwed.remove(userId);
+      return true;
+    }
+    final byPerson = _relookupOwed[userId];
+    if (byPerson == null || !_relookupAvailable(userId, byPerson: byPerson)) {
+      return false;
+    }
+    _relookupOwed.remove(userId);
+    final n = (_relookups[userId] ?? 0) + 1;
+    _relookups[userId] = n;
+    _relookupAt[userId] = _clock();
+    E2ePersistentDiag.record('BOX_LIST_RELOOKUP', {'userId': userId, 'n': n});
+    return true;
+  }
+
+  /// A new account: no lookup budget, owed lookup or served identity of the
+  /// last one carries over.
+  void _forgetFriendLookups() {
+    _carriedLookupSpent.clear();
+    _boxListLookupSpent.clear();
+    _relookupOwed.clear();
+    _relookupAt.clear();
+    _relookups.clear();
+    _servedIdentity.clear();
+  }
 
   /// Whether a peer's verified list is kept across restarts (decision 51:
   /// a box peer's). Wired by `ConnectionProvider` from the contact store;
@@ -794,6 +897,12 @@ class EncryptionProvider extends ChangeNotifier {
       served = base64Encode(base64Decode(base64.normalize(identityKey)));
     } on FormatException {
       throw DeviceListVerificationException(userId, 'served_identity_invalid');
+    }
+    // What the server serves for this friend NOW, kept before any check: the
+    // verify dialog shows it after the very lookup that refused it (a key
+    // change is exactly the mismatch below), without a lookup of its own.
+    if (listIsByHandle(userId)) {
+      _servedIdentity[userId] = (identity: served, at: _clock());
     }
     final held = await _encryptionService.peerAccountAnchorForGate(userId);
     final stale = held != null && held != served;
@@ -1035,9 +1144,11 @@ class EncryptionProvider extends ChangeNotifier {
 
   /// One in-flight `getDeviceList` per userId; concurrent callers share it.
   /// A friend ([listIsByHandle]) is never named to `getDeviceList`: its list
-  /// comes from one search of its handle ([lookupBoxPeerList]), at most
-  /// once per account per process — each spends a one-time pre-key of every
-  /// device of the peer and names the pair (E15h).
+  /// comes from one search of its handle ([lookupBoxPeerList]) — each spends a
+  /// one-time pre-key of every device of the peer and names the pair (E15h) —
+  /// so it is bounded: the first per process, then one per event that owes it,
+  /// floored and capped ([_takeLookup], E114m). Past that the fetch throws
+  /// `lookup spent` and the caller keeps what it holds.
   Future<Map<String, dynamic>?> _fetchDeviceListAnswer(
     int userId,
     Duration timeout, {
@@ -1049,8 +1160,13 @@ class EncryptionProvider extends ChangeNotifier {
         return Future.error(StateError('box peer $userId: no lookup wired'));
       }
       final pending = _boxListLookups[userId];
-      if (pending != null) return pending;
-      if (!_boxListLookupSpent.add(userId)) {
+      if (pending != null) {
+        // An event that arrives while a lookup is in flight is answered by it,
+        // and a token left over would buy a second lookup for nothing (E114m).
+        _relookupOwed.remove(userId);
+        return pending;
+      }
+      if (!_takeLookup(userId)) {
         return Future.error(StateError('box peer $userId: lookup spent'));
       }
       _e2eFlowLog('DEVICE_LIST_BOX_LOOKUP', {'userId': userId});
@@ -3358,8 +3474,7 @@ class EncryptionProvider extends ChangeNotifier {
       // Fresh connect may be a different account: forget verified lists AND
       // their rollback pins (they are per-account TOFU state).
       _deviceListCache.clear();
-      _carriedLookupSpent.clear();
-      _boxListLookupSpent.clear();
+      _forgetFriendLookups();
       _cancelPendingFetches();
     }
     // On reconnect: preserve _e2eInitialized and caches
@@ -3410,8 +3525,7 @@ class EncryptionProvider extends ChangeNotifier {
     _identityUploadLocked = false;
     _identityCheckUnavailable = false;
     _deviceListCache.clear();
-    _carriedLookupSpent.clear();
-    _boxListLookupSpent.clear();
+    _forgetFriendLookups();
     // The phrase/backup flags are per ACCOUNT too: left standing, user A's
     // `false` puts the Chats line over user B's list until B's first status
     // corrects it — the same class of stale-singleton defect as the ceremony
@@ -3567,7 +3681,7 @@ class EncryptionProvider extends ChangeNotifier {
       adoptIdentityBase64: adoptIdentityBase64,
     );
     if (advanced) {
-      invalidateDeviceList(peerId);
+      invalidateDeviceList(peerId, byPerson: true);
       for (final deviceId in addresses) {
         markSessionRebuild(peerId, deviceId: deviceId);
       }
@@ -3592,10 +3706,15 @@ class EncryptionProvider extends ChangeNotifier {
   /// fingerprint to a human for out-of-band comparison. §3 gives one identity
   /// key per account, so the first live device that answers speaks for all of
   /// them; the loop exists only to survive a device whose bundle is missing.
+  ///
+  /// A friend ([listIsByHandle]) is never named by id, and its handle lookup
+  /// already carries the key: [_servedIdentityByHandle].
   Future<String?> _fetchServedAccountIdentity(
     int peerId,
     Duration timeout,
   ) async {
+    if (listIsByHandle(peerId)) return _servedIdentityByHandle(peerId, timeout);
+
     final List<int> candidates;
     try {
       candidates = await _servedDeviceIdHints(peerId, timeout);
@@ -3626,6 +3745,31 @@ class EncryptionProvider extends ChangeNotifier {
       }
     }
     return null;
+  }
+
+  /// The identity key a handle lookup of friend [peerId] served (E114m): the one
+  /// kept from this process's last lookup while it is younger than
+  /// [kBoxRelookupFloor] — the lookup that raised the warning is exactly that
+  /// one, and it spent the budget a second one would need — else one lookup
+  /// the dialog buys as a person's act (no floor, still capped). When none may
+  /// be made the last identity served stands, however old; null when no
+  /// lookup ever served one.
+  Future<String?> _servedIdentityByHandle(int peerId, Duration timeout) async {
+    final known = _servedIdentity[peerId];
+    if (known != null && _clock().difference(known.at) < kBoxRelookupFloor) {
+      return known.identity;
+    }
+    if (_owedRelookup(peerId, byPerson: true)) {
+      try {
+        await _fetchDeviceListAnswer(peerId, timeout);
+      } on Object catch (e) {
+        _e2eFlowLog('PEER_IDENTITY_LOOKUP_FAILED', {
+          'peerId': peerId,
+          'error': '$e',
+        });
+      }
+    }
+    return _servedIdentity[peerId]?.identity;
   }
 
   /// Live device ids the server CLAIMS [peerId] has, lowest first.

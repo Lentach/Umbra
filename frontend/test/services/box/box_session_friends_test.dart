@@ -4,6 +4,8 @@ import 'dart:typed_data';
 
 import 'package:fireplace/services/box/box_client.dart';
 import 'package:fireplace/services/box/box_frame.dart';
+import 'package:fireplace/services/box/box_friend_handoff.dart'
+    show kFriendLookupInterval;
 import 'package:fireplace/services/box/box_friends.dart';
 import 'package:fireplace/services/box/box_session.dart';
 import 'package:fireplace/services/box/box_signer.dart';
@@ -1001,8 +1003,7 @@ void main() {
   // (`&& _addressesAsked.add(userId)`): every pass asks again.
   test(
     'however many friends lists and reconnects, a friend is looked up at '
-    'most once per process — a spent lookup included — and a new process '
-    'asks once more',
+    'most once per process — a spent lookup included',
     () async {
       await a.start();
       await b.start();
@@ -1015,13 +1016,109 @@ void main() {
       }
       expect(a.lookups, [5]);
       expect(box.sent, isEmpty);
+    },
+  );
+
+  // Mutation: `_pass` drops `_lookupDue` (the persisted stamp is never read),
+  // or neither `lookupAddresses` nor `takeServedAddresses` writes it.
+  test(
+    'a friend whose live device never gets a handoff is looked up once per '
+    '24 h across processes, not once per process (decision 120, E114n)',
+    () async {
+      await a.start();
+      await b.start();
+      // A friend still on an app that published no request queue: nothing is
+      // ever handed, so `handedAt` stays null and the handoff stays due.
+      a.serves = () => const [];
+      a.session.onFriendsListed();
+      await settle();
+      expect(a.lookups, [5]);
+
+      for (var i = 0; i < 3; i++) {
+        a.clock = a.clock.add(const Duration(hours: 1));
+        await a.restart(lookupAtStart: true);
+        await reconnect(a);
+        expect(a.lookups, [5], reason: 'a new process inside the 24 h');
+      }
+
+      a.clock = a.clock.add(const Duration(hours: 24));
+      await a.restart(lookupAtStart: true);
+      await reconnect(a);
+      expect(a.lookups, [5, 5], reason: 'a day on: asked once more');
 
       await a.restart(lookupAtStart: true);
       await reconnect(a);
-      await reconnect(a);
-      expect(a.lookups, [5, 5]);
+      expect(a.lookups, [5, 5], reason: 'and that one restarts the 24 h');
     },
   );
+
+  // Mutation: `lookupAddresses` writes the stamp only on an answer (drop the
+  // write in its `catch`): an unanswered lookup is asked again at once.
+  test(
+    'a lookup that was made and failed counts toward the 24 h as well',
+    () async {
+      await a.start();
+      await b.start();
+      a.lookupFails = true;
+      a.session.onFriendsListed();
+      await settle();
+      expect(a.lookups, [5]);
+
+      await a.restart(lookupAtStart: true);
+      await reconnect(a);
+      expect(a.lookups, [5]);
+    },
+  );
+
+  // Mutation: `takeServedAddresses` writes no stamp (only the pass's own
+  // lookups count).
+  test('a handle lookup that served the friend\'s addresses counts toward the '
+      '24 h, whoever made it (the list fetch, an event)', () async {
+    await a.start();
+    await b.start();
+    a.session.takeServedAddresses(5, const []);
+    await settle();
+    expect(a.store.friendLookedUpAt(5), isNotNull);
+
+    a.clock = a.clock.add(const Duration(hours: 2));
+    await a.restart(lookupAtStart: true);
+    await reconnect(a);
+    expect(a.lookups, isEmpty);
+  });
+
+  // Mutation: the stamp is compared without the clock-skew guard (a stamp in
+  // the future blocks the lookup until the clock catches up).
+  test('a stamp from the future (the clock went back) does not block the '
+      'lookup', () async {
+    await a.start();
+    await b.start();
+    a.serves = () => const [];
+    a.session.onFriendsListed();
+    await settle();
+    expect(a.lookups, [5]);
+
+    a.clock = a.clock.subtract(const Duration(days: 3));
+    await a.restart(lookupAtStart: true);
+    await reconnect(a);
+    expect(a.lookups, [5, 5]);
+  });
+
+  // Mutation: `_pass` does not prune (`pruneFriendLookups`), or the stamp is
+  // kept per friend list instead of per friend.
+  test('the stamp of an account that is no friend any more is dropped, and '
+      'a friend\'s stamp is its own', () async {
+    await a.start();
+    await b.start();
+    await a.store.noteFriendLookup(77, a.clock);
+    expect(a.store.friendLookedUpAt(77), isNotNull);
+
+    a.serves = () => const [];
+    a.session.onFriendsListed();
+    await settle();
+
+    expect(a.store.friendLookedUpAt(77), isNull, reason: '77 is no friend');
+    expect(a.store.friendLookedUpAt(5), isNotNull);
+  });
 
   // Mutation: `lookupAddresses` keeps the friend in `_addressesAsked` when
   // the lookup answers false (drop the `remove`): the connect that found
@@ -1445,10 +1542,12 @@ void main() {
           await b3.start();
           addTearDown(b3.session.dispose);
           // A device that published its request queue after this process
-          // looked the friend up is learned by a later process.
+          // looked the friend up is learned by a later process — one a day on,
+          // since a lookup of this friend inside 24 h is not repeated (E114n).
           a
             ..peers.add(b3)
-            ..friendLive = {3, 4, 6};
+            ..friendLive = {3, 4, 6}
+            ..clock = a.clock.add(kFriendLookupInterval);
           b3.peers.add(a);
           await a.restart();
           a.session.ownDeviceList = () async => {'pad': 'x' * 20000};

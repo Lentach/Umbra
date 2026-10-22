@@ -77,6 +77,9 @@ class SealedWebContentKv implements ContentKv {
   /// only costs one challenge per queue. `boxalive_v1` (`ContactStore
   /// .siblingAliveKey`) names every linked device and when each was last
   /// heard; a lost-kid row reads as empty and is first known again.
+  /// `boxlook_v1` (`ContactStore.friendLookupKey`) names the friends this
+  /// device looked up by handle and when (decision 120, E114n); a lost-kid row
+  /// reads as empty and each friend is asked once more.
   /// `boxact_v1` (parked box actions: edit text, emoji), `boxlists_v1`
   /// (every box friend's user id + authorization, E50c), `boxdel_v1`
   /// (tombstones naming senders) and `boxseen_v1` (when each chat was last
@@ -85,7 +88,7 @@ class SealedWebContentKv implements ContentKv {
   /// that did not go out, decision 104) holds its words; a lost-kid row
   /// reads undecodable and is skipped, never destroyed.
   static final RegExp _familyKey = RegExp(
-    r'^e2e_\d+_(decrypted_|decrypt_raw_v1_|pendsend_v1_|contact_v1_|boxreq_v1|boxin_v1_|boxsib_v1|boxntf_v1|boxalive_v1|boxact_v1|boxlists_v1|boxdel_v1|boxseen_v1|boxunsent_v1_)',
+    r'^e2e_\d+_(decrypted_|decrypt_raw_v1_|pendsend_v1_|contact_v1_|boxreq_v1|boxin_v1_|boxsib_v1|boxntf_v1|boxalive_v1|boxlook_v1|boxact_v1|boxlists_v1|boxdel_v1|boxseen_v1|boxunsent_v1_)',
   );
   static final RegExp _retireIdKey = RegExp(
     r'^e2e_(\d+)_(?:decrypted_|decrypt_raw_v1_)(\d+)$',

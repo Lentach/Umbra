@@ -22,6 +22,12 @@ const Duration kFriendHandoffRetry = Duration(seconds: 30);
 /// otherwise collect one per reconnect of ours (review).
 const Duration kFriendHandoffResend = Duration(hours: 24);
 
+/// How soon a friend is looked up by handle again for the request queues of its
+/// devices, whatever the process (decision 120, E114n): "once per 24 h per
+/// still-unrouted friend". Remembered by the contact store ([ContactStoreFriendLookups]),
+/// so a PWA opened ten times a day asks once.
+const Duration kFriendLookupInterval = Duration(hours: 24);
+
 /// Moves every existing friendship onto the box (metadata-privacy item 5,
 /// slice (d), owner decision 47): this device's inbound queue for each
 /// friend is handed, as an E2E `queue_handoff`, to every live device of that
@@ -41,8 +47,9 @@ const Duration kFriendHandoffResend = Duration(hours: 24);
 /// ready on this connect (the sibling swap's gate, E3), again when a friends
 /// list arrives and when a friend's device list changes, and visits EVERY
 /// friend (E114c): one with a live device no address is held for, whose
-/// handoff is due, is looked up by handle once per process, so a pair that
-/// never had a route gets one. A device is handed
+/// handoff is due, is looked up by handle once per process and once per
+/// [kFriendLookupInterval] (decision 120, E114n), so a pair that never had a
+/// route gets one. A device is handed
 /// a given queue at most once per connect, and again only
 /// [kFriendHandoffResend] after the last time ([ContactQueue.handedAt],
 /// kept across connects) — sooner once it is heard from ([friendHeard]). No
@@ -174,22 +181,31 @@ class BoxFriendHandoff {
   void takeServedAddresses(int userId, Iterable<ContactOutbound> addresses) {
     _served[userId] = {for (final a in addresses) a.peerDeviceId: a};
     _addressesAsked.add(userId);
+    // Every handle lookup that served this friend's addresses counts toward
+    // the 24 h, whoever made it (the list fetch, an event, the pass).
+    unawaited(_store.noteFriendLookup(userId, _now()));
   }
 
   /// Asks for [userId]'s request queues by handle and waits for the answer to
   /// be taken ([takeServedAddresses]). The lookup itself is bounded to once
-  /// per account per process (E15h); one that fails adds nothing and is
-  /// logged once per friend and error type. Completes true when the lookup
-  /// was made (it may have failed), false when it could not be made yet.
+  /// per account per process (E15h) and, through the pass's [_lookupDue], to
+  /// once per [kFriendLookupInterval] across processes; one that fails adds
+  /// nothing and is logged once per friend and error type. Completes true when
+  /// the lookup was made (it may have failed), false when it could not be made
+  /// yet.
   Future<bool> lookupAddresses(int userId) async {
     final lookup = addressLookup;
     if (lookup == null || _disposed) return false;
     // Marked before the await, so a second caller meanwhile does not ask.
     _addressesAsked.add(userId);
     try {
+      // An answer reached [takeServedAddresses], which stamped it.
       if (await lookup(userId)) return true;
     } on Object catch (e) {
-      // Spent, unanswered or unverifiable: no address is learned.
+      // Spent, unanswered or unverifiable: no address is learned and nothing
+      // stamped it. The lookup was made (or an earlier one this process was),
+      // so it counts toward the 24 h like any other.
+      unawaited(_store.noteFriendLookup(userId, _now()));
       _failed(
         'lookup',
         e.runtimeType.toString(),
@@ -201,6 +217,18 @@ class BoxFriendHandoff {
     // Not ready: nothing was asked, so nothing is spent.
     _addressesAsked.remove(userId);
     return false;
+  }
+
+  /// Whether friend [userId] may be looked up now for its request queues: not
+  /// within [kFriendLookupInterval] of the last lookup of it, which the store
+  /// remembers across processes (decision 120, E114n). A stamp in the future
+  /// (the clock went back) counts as due, or the friend would wait for the
+  /// clock to catch up.
+  bool _lookupDue(int userId) {
+    final at = _store.friendLookedUpAt(userId);
+    if (at == null) return true;
+    final age = _now().difference(at);
+    return age.isNegative || age >= kFriendLookupInterval;
   }
 
   /// Whether our [queue] — the current one when none is given, none yet
@@ -403,6 +431,9 @@ class BoxFriendHandoff {
       for (final record in _store.all)
         if (record.state == ContactState.friend) record.userId,
     ];
+    // The stamps of accounts that are no friend go; this also re-reads the row
+    // from disk, so another tab's lookup is seen by the checks below.
+    await _store.pruneFriendLookups(friends.toSet());
     // Every lookup starts in this one turn, so a connect's lists leave as
     // one batched frame (E20a).
     final lists = await Future.wait([for (final f in friends) lookup(f)]);
@@ -426,10 +457,13 @@ class BoxFriendHandoff {
       // A live device no address is held for, and a handoff to it due: its
       // request queue is asked of the server ONCE this process, by handle
       // (E114c) — never again when the lookup that served this friend's list
-      // already ran, which took its addresses.
+      // already ran, which took its addresses — and not within
+      // [kFriendLookupInterval] of the last lookup of this friend by any
+      // process (decision 120, E114n).
       if (live.any((d) => !targets.containsKey(d) && _handoffDue(userId, d)) &&
           addressLookup != null &&
-          !_addressesAsked.contains(userId)) {
+          !_addressesAsked.contains(userId) &&
+          _lookupDue(userId)) {
         await lookupAddresses(userId);
         if (_disposed || !_accountReady) return;
         targets = {for (final d in live) d: ?targetOf(userId, d)};

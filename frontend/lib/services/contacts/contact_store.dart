@@ -13,6 +13,7 @@ import 'contact_record.dart';
 
 part 'contact_store_alive.dart';
 part 'contact_store_inbox.dart';
+part 'contact_store_lookups.dart';
 part 'contact_store_notifiers.dart';
 part 'contact_store_siblings.dart';
 
@@ -108,6 +109,14 @@ class ContactStore {
   static String siblingAliveKey(int userId) => 'e2e_${userId}_boxalive_v1';
   static const int siblingAliveVersion = 1;
 
+  /// When each FRIEND was last looked up by handle for its request queues
+  /// (decision 120's 24 h bound, E114n, `contact_store_lookups.dart`): outside
+  /// [keyPrefix] for the [requestQueueKey] reasons; no backup carries it, and
+  /// it never leaves the device. Inside `e2e_<uid>_`, so account deletion
+  /// sweeps it; a sealed family on web.
+  static String friendLookupKey(int userId) => 'e2e_${userId}_boxlook_v1';
+  static const int friendLookupVersion = 1;
+
   int? _userId;
   ContentKv? _kv;
   final Map<int, ContactRecord> _records = <int, ContactRecord>{};
@@ -120,6 +129,8 @@ class ContactStore {
   bool _notifiersUnsupported = false;
   _AliveBook _aliveBook = _AliveBook.empty;
   bool _aliveUnsupported = false;
+  _LookupBook _lookupBook = _LookupBook.empty;
+  bool _lookupsUnsupported = false;
   int _undetermined = 0;
 
   /// The box delivery journal ([BoxInboxEntry]), keyed `rid.id`.
@@ -196,6 +207,7 @@ class ContactStore {
             key == siblingsKey(userId) ||
             key == notifiersKey(userId) ||
             key == siblingAliveKey(userId) ||
+            key == friendLookupKey(userId) ||
             key.startsWith(_inboxPrefix(userId)),
       );
     } on Object {
@@ -212,6 +224,7 @@ class ContactStore {
       rows.remove(notifiersKey(userId)),
     );
     final aliveBook = _AliveBook.decode(rows.remove(siblingAliveKey(userId)));
+    final lookupBook = _LookupBook.decode(rows.remove(friendLookupKey(userId)));
     final inbox = _takeInbox(rows, userId);
     UserModel? selfUser;
     for (final entry in rows.entries) {
@@ -253,6 +266,8 @@ class ContactStore {
     _notifiersUnsupported = notifierBook == null;
     _aliveBook = aliveBook ?? _AliveBook.empty;
     _aliveUnsupported = aliveBook == null;
+    _lookupBook = lookupBook ?? _LookupBook.empty;
+    _lookupsUnsupported = lookupBook == null;
     _undetermined = undetermined;
     _inbox
       ..clear()
@@ -281,6 +296,8 @@ class ContactStore {
     _notifiersUnsupported = false;
     _aliveBook = _AliveBook.empty;
     _aliveUnsupported = false;
+    _lookupBook = _LookupBook.empty;
+    _lookupsUnsupported = false;
     _undetermined = 0;
     _records.clear();
     _inbox.clear();

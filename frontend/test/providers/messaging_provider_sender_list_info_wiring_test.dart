@@ -57,7 +57,8 @@ class _ClaimEncryption extends EncryptionProvider {
   void seed(int userId, VerifiedDeviceList list) => _cache[userId] = list;
 
   @override
-  void invalidateDeviceList(int userId) => _cache.remove(userId);
+  void invalidateDeviceList(int userId, {bool byPerson = false}) =>
+      _cache.remove(userId);
 
   @override
   Future<VerifiedDeviceList> getVerifiedDeviceList(
