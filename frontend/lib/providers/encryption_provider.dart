@@ -32,13 +32,13 @@ import '../utils/boot_markers.dart';
 /// PEER-driven event buys (a rebuild request, a newer-list claim), per process.
 /// One minute is the cooldown amendment (xvi) already gives the in-band
 /// refetch (`SenderListInfoRefreshLimiter`). A person's act (the verify dialog,
-/// acknowledging a key) is paced by the person and has no floor.
+/// acknowledging a key) is paced by the person and has no floor and no cap.
 const Duration kBoxRelookupFloor = Duration(minutes: 1);
 
-/// E114m: how many handle lookups of one friend's list an EVENT may buy in one
-/// process, besides the first-sight lookup and the carried one (E114l). A
-/// reset recovery costs about three (the lookup that finds the change, the
-/// dialog, the acknowledgement); the cap only has to stop a loop from
+/// E114m: how many handle lookups of one friend's list PEER- or SERVER-DRIVEN
+/// events may buy in one process, besides the first-sight lookup and the
+/// carried one (E114l). A reset recovery costs about three, all but the first
+/// a person's act and not counted here; the cap only has to stop a loop from
 /// spending one-time pre-keys of the friend's devices without end.
 const int kBoxRelookupCap = 6;
 
@@ -775,30 +775,35 @@ class EncryptionProvider extends ChangeNotifier {
   /// ([_servedIdentityByHandle]). UNTRUSTED, like every served identity.
   final Map<int, ({String identity, DateTime at})> _servedIdentity = {};
 
-  /// Whether an event may buy friend [userId] another lookup now.
+  /// Whether an event may buy friend [userId] another lookup now: under the cap
+  /// and past the floor. A PERSON's act ([byPerson]: acknowledging a key, the
+  /// verify dialog) is never refused: it is paced by the person (a key compared
+  /// out of band), it cannot loop, and a refusal after the acknowledgement had
+  /// dropped the list would leave the friend with none until a restart (found
+  /// on the step 4 drive, after six events had spent the cap).
   bool _relookupAvailable(int userId, {bool byPerson = false}) {
+    if (byPerson) return true;
     if ((_relookups[userId] ?? 0) >= kBoxRelookupCap) return false;
     final at = _relookupAt[userId];
-    return byPerson ||
-        at == null ||
-        _clock().difference(at) >= kBoxRelookupFloor;
+    return at == null || _clock().difference(at) >= kBoxRelookupFloor;
   }
 
   /// An event dropped, or wants, friend [userId]'s list. True: a handle lookup
   /// is owed it (the first of the process needs no token), so the held list may
   /// go; false: none may be made now, the held list stands. A person's act is
-  /// always owed (the list is known wrong), only the cap can still refuse the
-  /// lookup itself.
+  /// always owed (the list is known wrong) and always allowed.
   bool _owedRelookup(int userId, {bool byPerson = false}) {
     if (!_boxListLookupSpent.contains(userId)) return true;
-    if (!byPerson && !_relookupAvailable(userId)) return false;
+    if (!_relookupAvailable(userId, byPerson: byPerson)) return false;
     _relookupOwed[userId] = byPerson || (_relookupOwed[userId] ?? false);
     return true;
   }
 
   /// Whether a handle lookup of friend [userId] may go out now, spending its
   /// budget (E114a, E114m): the first of the process always may; every later
-  /// one needs an event that owes it and [_relookupAvailable].
+  /// one needs an event that owes it and [_relookupAvailable]. Only the
+  /// lookups events bought count toward [kBoxRelookupCap]; every one sets the
+  /// floor the next peer-driven event meets.
   bool _takeLookup(int userId) {
     if (_boxListLookupSpent.add(userId)) {
       _relookupOwed.remove(userId);
@@ -809,10 +814,13 @@ class EncryptionProvider extends ChangeNotifier {
       return false;
     }
     _relookupOwed.remove(userId);
-    final n = (_relookups[userId] ?? 0) + 1;
-    _relookups[userId] = n;
+    if (!byPerson) _relookups[userId] = (_relookups[userId] ?? 0) + 1;
     _relookupAt[userId] = _clock();
-    E2ePersistentDiag.record('BOX_LIST_RELOOKUP', {'userId': userId, 'n': n});
+    E2ePersistentDiag.record('BOX_LIST_RELOOKUP', {
+      'userId': userId,
+      'n': _relookups[userId] ?? 0,
+      if (byPerson) 'by': 'person',
+    });
     return true;
   }
 

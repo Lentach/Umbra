@@ -344,5 +344,44 @@ void main() {
       expect(provider.cachedDeviceList(peerId)?.liveDeviceIds, [5]);
       expect(emitted, isNot(contains('getDeviceList')));
     });
+
+    // Mutation: `_relookupAvailable` applies the cap to a person's act (drive
+    // defect, 10-22: six events spent the cap, the acknowledgement dropped the
+    // list and its refetch was refused — no list until a restart).
+    test('after the events spent the cap, a person who acknowledges the new '
+        "key still gets the friend's list back", () async {
+      await firstSight();
+      for (var i = 0; i < kBoxRelookupCap; i++) {
+        now = now.add(kBoxRelookupFloor);
+        rebuildRequest();
+        await pumpEventQueue();
+      }
+      expect(lookups, 1 + kBoxRelookupCap);
+
+      // The friend resets; no event may look it up now, but the server's own
+      // alarm raises the warning and the person opens the dialog.
+      served = listOf(afterEngine, afterEnrollment, 2, [5]);
+      servedKey = afterKey;
+      await provider.encryptionService.recordPeerIdentityChangedFromServer(
+        peerId,
+      );
+      now = now.add(const Duration(minutes: 10));
+      final shown = await provider.loadPeerIdentityVerification(
+        peerId,
+        timeout: const Duration(seconds: 1),
+      );
+      expect(shown.offeredIdentityBase64, afterKey);
+      expect(lookups, 2 + kBoxRelookupCap, reason: 'a person is no event');
+
+      final advanced = await provider.acknowledgePeerIdentity(
+        peerId,
+        adoptIdentityBase64: shown.offeredIdentityBase64,
+      );
+      await pumpEventQueue();
+
+      expect(advanced, isTrue);
+      expect(lookups, 3 + kBoxRelookupCap);
+      expect(provider.cachedDeviceList(peerId)?.liveDeviceIds, [5]);
+    });
   });
 }
