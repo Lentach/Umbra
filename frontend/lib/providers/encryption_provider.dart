@@ -31,8 +31,10 @@ import '../utils/boot_markers.dart';
 /// E114m: the shortest gap between two lookups of one friend's list that a
 /// PEER-driven event buys (a rebuild request, a newer-list claim), per process.
 /// One minute is the cooldown amendment (xvi) already gives the in-band
-/// refetch (`SenderListInfoRefreshLimiter`). A person's act (the verify dialog,
-/// acknowledging a key) is paced by the person and has no floor and no cap.
+/// refetch (`SenderListInfoRefreshLimiter`). EVERY lookup sets the floor the
+/// next one meets, the first of the process and a carried one included
+/// (E114o). A person's act (the verify dialog, acknowledging a key) is paced
+/// by the person and meets neither floor nor cap.
 const Duration kBoxRelookupFloor = Duration(minutes: 1);
 
 /// E114m: how many handle lookups of one friend's list PEER- or SERVER-DRIVEN
@@ -41,6 +43,14 @@ const Duration kBoxRelookupFloor = Duration(minutes: 1);
 /// a person's act and not counted here; the cap only has to stop a loop from
 /// spending one-time pre-keys of the friend's devices without end.
 const int kBoxRelookupCap = 6;
+
+/// E114p: how many times in a row a friend's list lookup that NOBODY ANSWERED
+/// (a timeout, a dropped socket) is asked again by the next fetch, with no
+/// token, no floor and no cap: it is the same lookup, and the event that
+/// bought it had already dropped the list. Three reaches past the box
+/// refresh's first backoff steps (5 s, 30 s, 2 min); the next lookup an event
+/// buys starts the count over.
+const int kBoxLookupRetries = 3;
 
 /// EncryptionProvider — owns all E2E encryption state, initialization,
 class EncryptionProvider extends ChangeNotifier {
@@ -770,6 +780,10 @@ class EncryptionProvider extends ChangeNotifier {
   final Map<int, DateTime> _relookupAt = {};
   final Map<int, int> _relookups = {};
 
+  /// How many lookups of each friend's list in a row got no answer, until one
+  /// does or the next one an event buys starts the count over (E114p).
+  final Map<int, int> _lookupFailures = {};
+
   /// The account identity each friend's last handle lookup served this
   /// process, and when: what the verify dialog shows without asking again
   /// ([_servedIdentityByHandle]). UNTRUSTED, like every served identity.
@@ -802,26 +816,50 @@ class EncryptionProvider extends ChangeNotifier {
   /// Whether a handle lookup of friend [userId] may go out now, spending its
   /// budget (E114a, E114m): the first of the process always may; every later
   /// one needs an event that owes it and [_relookupAvailable]. Only the
-  /// lookups events bought count toward [kBoxRelookupCap]; every one sets the
-  /// floor the next peer-driven event meets.
+  /// lookups events bought count toward [kBoxRelookupCap]; EVERY one — the
+  /// first and a carried one too — sets the floor the next peer-driven event
+  /// meets (E114o). A lookup nobody answered is asked again with none of
+  /// that, [kBoxLookupRetries] times in a row (E114p): it is the same lookup,
+  /// and the event that bought it may already have dropped the list.
   bool _takeLookup(int userId) {
-    if (_boxListLookupSpent.add(userId)) {
+    final unanswered = _lookupFailures[userId];
+    if (unanswered != null && unanswered <= kBoxLookupRetries) {
       _relookupOwed.remove(userId);
       return true;
     }
-    final byPerson = _relookupOwed[userId];
-    if (byPerson == null || !_relookupAvailable(userId, byPerson: byPerson)) {
-      return false;
+    if (_boxListLookupSpent.add(userId)) {
+      _relookupOwed.remove(userId);
+    } else {
+      final byPerson = _relookupOwed[userId];
+      if (byPerson == null ||
+          !_relookupAvailable(userId, byPerson: byPerson)) {
+        return false;
+      }
+      _relookupOwed.remove(userId);
+      if (!byPerson) _relookups[userId] = (_relookups[userId] ?? 0) + 1;
+      E2ePersistentDiag.record('BOX_LIST_RELOOKUP', {
+        'userId': userId,
+        'n': _relookups[userId] ?? 0,
+        if (byPerson) 'by': 'person',
+      });
     }
-    _relookupOwed.remove(userId);
-    if (!byPerson) _relookups[userId] = (_relookups[userId] ?? 0) + 1;
     _relookupAt[userId] = _clock();
-    E2ePersistentDiag.record('BOX_LIST_RELOOKUP', {
-      'userId': userId,
-      'n': _relookups[userId] ?? 0,
-      if (byPerson) 'by': 'person',
-    });
+    _lookupFailures.remove(userId);
     return true;
+  }
+
+  /// Friend [userId]'s lookup got no answer (a timeout, a dropped socket): the
+  /// next fetch asks again, [kBoxLookupRetries] times in a row at most
+  /// ([_takeLookup]). The durable line: `n` the lookups in a row nobody
+  /// answered, `retry` whether another is owed.
+  void _lookupUnanswered(int userId) {
+    final n = (_lookupFailures[userId] ?? 0) + 1;
+    _lookupFailures[userId] = n;
+    E2ePersistentDiag.record('BOX_LIST_LOOKUP_UNANSWERED', {
+      'userId': userId,
+      'n': n,
+      'retry': n <= kBoxLookupRetries,
+    });
   }
 
   /// A new account: no lookup budget, owed lookup or served identity of the
@@ -832,6 +870,7 @@ class EncryptionProvider extends ChangeNotifier {
     _relookupOwed.clear();
     _relookupAt.clear();
     _relookups.clear();
+    _lookupFailures.clear();
     _servedIdentity.clear();
   }
 
@@ -1155,7 +1194,8 @@ class EncryptionProvider extends ChangeNotifier {
   /// comes from one search of its handle ([lookupBoxPeerList]) — each spends a
   /// one-time pre-key of every device of the peer and names the pair (E15h) —
   /// so it is bounded: the first per process, then one per event that owes it,
-  /// floored and capped ([_takeLookup], E114m). Past that the fetch throws
+  /// floored and capped ([_takeLookup], E114m), and a lookup nobody answered is
+  /// asked again a few times in a row (E114p). Past that the fetch throws
   /// `lookup spent` and the caller keeps what it holds.
   Future<Map<String, dynamic>?> _fetchDeviceListAnswer(
     int userId,
@@ -1178,8 +1218,22 @@ class EncryptionProvider extends ChangeNotifier {
         return Future.error(StateError('box peer $userId: lookup spent'));
       }
       _e2eFlowLog('DEVICE_LIST_BOX_LOOKUP', {'userId': userId});
+      final account = _currentUserId;
       final answer = lookup(userId).timeout(timeout);
       _boxListLookups[userId] = answer;
+      // Counted before any caller sees the answer: a failure one of them
+      // retries at once finds the retry owed (E114p). A lookup of an account
+      // that has since gone says nothing about the one that came.
+      answer
+          .then<void>(
+            (_) {
+              if (_currentUserId == account) _lookupFailures.remove(userId);
+            },
+            onError: (Object _) {
+              if (_currentUserId == account) _lookupUnanswered(userId);
+            },
+          )
+          .ignore();
       answer.whenComplete(() => _boxListLookups.remove(userId)).ignore();
       return answer;
     }
@@ -3759,7 +3813,7 @@ class EncryptionProvider extends ChangeNotifier {
   /// kept from this process's last lookup while it is younger than
   /// [kBoxRelookupFloor] — the lookup that raised the warning is exactly that
   /// one, and it spent the budget a second one would need — else one lookup
-  /// the dialog buys as a person's act (no floor, still capped). When none may
+  /// the dialog buys as a person's act (no floor, no cap, E114o). When none may
   /// be made the last identity served stands, however old; null when no
   /// lookup ever served one.
   Future<String?> _servedIdentityByHandle(int peerId, Duration timeout) async {

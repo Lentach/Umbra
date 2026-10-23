@@ -187,12 +187,13 @@ class BoxFriendHandoff {
   }
 
   /// Asks for [userId]'s request queues by handle and waits for the answer to
-  /// be taken ([takeServedAddresses]). The lookup itself is bounded to once
-  /// per account per process (E15h) and, through the pass's [_lookupDue], to
-  /// once per [kFriendLookupInterval] across processes; one that fails adds
-  /// nothing and is logged once per friend and error type. Completes true when
-  /// the lookup was made (it may have failed), false when it could not be made
-  /// yet.
+  /// be taken ([takeServedAddresses]). The pass asks a friend once per process
+  /// and, through [_lookupDue], once per [kFriendLookupInterval] across
+  /// processes; the lookup is also inside the E2E layer's own budget (the
+  /// first of a process, then one per event, E114m), which can refuse it as
+  /// spent. One that fails adds nothing and is logged once per friend and
+  /// error type. Completes true when the lookup was made (it may have
+  /// failed), false when it could not be made yet.
   Future<bool> lookupAddresses(int userId) async {
     final lookup = addressLookup;
     if (lookup == null || _disposed) return false;
@@ -223,7 +224,9 @@ class BoxFriendHandoff {
   /// within [kFriendLookupInterval] of the last lookup of it, which the store
   /// remembers across processes (decision 120, E114n). A stamp in the future
   /// (the clock went back) counts as due, or the friend would wait for the
-  /// clock to catch up.
+  /// clock to catch up; the lookup it allows stamps the friend at the earlier
+  /// time, which replaces it (`ContactStore.noteFriendLookup`), so that is one
+  /// extra lookup and not one per start.
   bool _lookupDue(int userId) {
     final at = _store.friendLookedUpAt(userId);
     if (at == null) return true;

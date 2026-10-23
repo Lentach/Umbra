@@ -62,12 +62,15 @@ extension ContactStoreFriendLookups on ContactStore {
   /// remembered.
   DateTime? friendLookedUpAt(int userId) => _lookupBook.at[userId];
 
-  /// Friend [userId] was looked up [at]; the stamp only moves forward.
+  /// Friend [userId] was looked up [at]; the last write wins. A stamp later
+  /// than [at] is one a clock that has since gone back wrote, and keeping it
+  /// would make the friend due at every start until the clock passed it
+  /// (`BoxFriendHandoff._lookupDue` counts a stamp from the future as due).
   Future<bool> noteFriendLookup(int userId, DateTime at) => _updateLookups((
     book,
   ) {
     final held = book.at[userId];
-    if (held != null && !at.isAfter(held)) return book;
+    if (held != null && held.isAtSameMomentAs(at)) return book;
     return _LookupBook({...book.at, userId: at});
   });
 

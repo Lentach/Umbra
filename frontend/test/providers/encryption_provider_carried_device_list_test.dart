@@ -101,8 +101,8 @@ void main() {
     });
   }
 
-  Future<EncryptionProvider> freshProvider() async {
-    final p = EncryptionProvider();
+  Future<EncryptionProvider> freshProvider({DateTime Function()? clock}) async {
+    final p = EncryptionProvider(clock: clock);
     p.setEmitCallback((event, data) {
       emitted.add({'event': event, 'data': data});
       if (event == 'checkOwnKeyBundle') p.onOwnKeyBundleStatus({'exists': false});
@@ -343,6 +343,30 @@ void main() {
     expect(again, CarriedListOutcome.refused);
     expect(byHandle, 2);
     expect(lookups(), 0);
+  });
+
+  // Mutation: the first-lookup branch of `_takeLookup` sets no floor, so the
+  // lookup a carried list bought (E114l) leaves the next rebuild request free
+  // to drop the list it just brought and buy another (E114o, second review).
+  test('the carried lookup sets the floor like every lookup: a rebuild request '
+      'seconds later keeps the list it brought', () async {
+    var now = DateTime.utc(2026, 10, 22, 12);
+    final timed = await freshProvider(clock: () => now);
+    final moved = forgedByRevokedDevice(2, devicesUpTo(2));
+    var served = genuine(1, devicesUpTo(1));
+    timed
+      ..listsByHandle = ((peer) => peer == peerId)
+      ..lookupBoxPeerList = (peer) async => served;
+    await timed.getVerifiedDeviceList(peerId);
+
+    now = now.add(const Duration(minutes: 10));
+    served = moved;
+    await timed.adoptCarriedDeviceList(peerId, moved);
+    expect(timed.cachedDeviceList(peerId)?.liveDeviceIds, [1, 2]);
+
+    timed.onSessionRebuildNeeded({'fromUserId': peerId});
+
+    expect(timed.cachedDeviceList(peerId)?.liveDeviceIds, [1, 2]);
   });
 
   test('a carried "not enrolled" is never adopted', () async {

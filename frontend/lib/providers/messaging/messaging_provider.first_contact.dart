@@ -1140,8 +1140,9 @@ extension MessagingFirstContact on MessagingProvider {
   /// devices (`BoxFriendHandoff.addressLookup`, E114b): [lookupBoxPeerList]
   /// keeps them, and the list it serves is adopted like any other. Completes
   /// false, having asked nothing, while E2E is not ready (the caller asks
-  /// again later); throws when the lookup is spent (once per account per
-  /// process, E15h) or answers nothing — the caller then adds no address.
+  /// again later); throws when the lookup is spent (the first of a process,
+  /// then one per event that owes it, E114m) or answers nothing — the caller
+  /// then adds no address.
   Future<bool> lookupFriendAddresses(int userId) async {
     final enc = _encryptionProvider;
     if (enc == null || !enc.isE2EReady) return false;

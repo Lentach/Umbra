@@ -1,7 +1,12 @@
 import 'dart:convert';
 
+import 'package:fireplace/services/backup/history_backup_service.dart';
+import 'package:fireplace/services/contacts/contact_backup.dart';
+import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/services/contacts/contact_store.dart';
 import 'package:fireplace/services/encryption/content_kv.dart';
+import 'package:fireplace/services/encryption_service.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -21,25 +26,29 @@ void main() {
   );
 
   setUp(() async {
+    FlutterSecureStorage.setMockInitialValues({});
     SharedPreferences.setMockInitialValues({});
     kv = await PrefsContentKv.open();
     store = newStore();
     await store.open(1);
   });
 
-  // Mutation: `open` does not decode the row (`_lookupBook` stays empty).
-  test('a stamp survives a new process, per friend, and only moves forward',
+  // Mutation: `open` does not decode the row (`_lookupBook` stays empty), or
+  // `noteFriendLookup` keeps a stamp that is later than the new one (the clock
+  // went back: the stamp from the future then makes the friend due at every
+  // start, second review).
+  test('a stamp survives a new process, per friend, and the last write wins',
       () async {
     expect(store.friendLookedUpAt(42), isNull);
     expect(await store.noteFriendLookup(42, t0), isTrue);
     expect(await store.noteFriendLookup(43, t0.add(const Duration(hours: 1))),
         isTrue);
-    expect(await store.noteFriendLookup(42, t0.subtract(const Duration(days: 1))),
-        isTrue);
+    final back = t0.subtract(const Duration(days: 1));
+    expect(await store.noteFriendLookup(42, back), isTrue);
 
     final again = newStore();
     await again.open(1);
-    expect(again.friendLookedUpAt(42), t0);
+    expect(again.friendLookedUpAt(42), back);
     expect(again.friendLookedUpAt(43), t0.add(const Duration(hours: 1)));
   });
 
@@ -68,14 +77,70 @@ void main() {
     );
   });
 
-  // Mutation: the row is `contact_v1_`-prefixed (a backup would carry it) or
-  // lives outside `e2e_<uid>_` (account deletion would not sweep it).
-  test('the row is outside the contact family and inside the account prefix',
-      () {
-    final key = ContactStore.friendLookupKey(1);
-    expect(key, 'e2e_1_boxlook_v1');
-    expect(key.startsWith(ContactStore.keyPrefix(1)), isFalse);
-    expect(key.startsWith('e2e_1_'), isTrue);
+  // Mutation: the row is `contact_v1_`-prefixed (the history file copies
+  // every row under that prefix, so it would carry which friends this device
+  // looked up and when) or the store reads it back as a contact.
+  test('a stamp is no contact: the history file and the contact backup, which '
+      'copy contacts, never carry it', () async {
+    await store.update(
+      42,
+      (_) => const ContactRecord(
+        userId: 42,
+        username: 'friend',
+        tag: '0042',
+        state: ContactState.friend,
+      ),
+    );
+    await store.noteFriendLookup(42, t0);
+    expect(
+      kv.getKeys(),
+      contains(ContactStore.friendLookupKey(1)),
+      reason: 'control: the stamp row was written',
+    );
+
+    expect(
+      kv.getKeys().where(
+        (k) => k.startsWith(HistoryBackupService.contactPrefix(1)),
+      ),
+      [ContactStore.recordKey(1, 42)],
+    );
+    final again = newStore();
+    await again.open(1);
+    expect(again.all.map((c) => c.userId), [42]);
+    final backup = jsonEncode(
+      ContactBackupPayload(
+        userId: 1,
+        self: null,
+        contacts: again.all.toList(),
+      ).toJson(),
+    );
+    expect(backup, contains('friend'), reason: 'control: the contact is in it');
+    expect(backup, isNot(contains('${t0.millisecondsSinceEpoch}')));
+  });
+
+  // Mutation: the row lives outside `e2e_<uid>_` (the sweep of account
+  // deletion would leave which friends this account looked up).
+  test('account deletion sweeps the stamps with the rest of the account',
+      () async {
+    final service = EncryptionService();
+    await service.initialize(
+      1,
+      checkServerIdentity: () async => const ServerIdentityGuard(exists: false),
+    );
+    await store.noteFriendLookup(42, t0);
+    expect(
+      kv.getString(ContactStore.friendLookupKey(1)),
+      isNotNull,
+      reason: 'control: the stamp row was written',
+    );
+
+    await service.clearAllKeys();
+
+    await kv.reload();
+    expect(kv.getString(ContactStore.friendLookupKey(1)), isNull);
+    final again = newStore();
+    await again.open(1);
+    expect(again.friendLookedUpAt(42), isNull);
   });
 
   // Mutation: `decode` returns the empty book for a newer version.

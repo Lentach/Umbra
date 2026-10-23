@@ -5,6 +5,7 @@ import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/services/device_list/device_authority_engine.dart';
 import 'package:fireplace/services/device_list/device_list_cache.dart';
 import 'package:fireplace/services/device_list/device_list_canonical.dart';
+import 'package:fireplace/utils/e2e_persistent_diag.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:libsignal_protocol_dart/libsignal_protocol_dart.dart';
@@ -22,6 +23,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// The fix: an EVENT buys one more lookup, floored (a peer-driven event, one a
 /// minute) and capped (per process); inside the floor, or past the cap, the
 /// held list stands.
+///
+/// Second review (E114o, E114p): every lookup sets the floor, the first of the
+/// process and the carried one included; and a lookup nobody answered (a
+/// timeout) is asked again by the next fetch, a bounded number of times,
+/// instead of leaving a friend whose list an event had dropped with none.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -40,6 +46,9 @@ void main() {
   late String servedKey;
   late Map<String, dynamic> served;
   var lookups = 0;
+
+  /// The next lookups get no answer (a timeout, a dropped socket).
+  var lookupFails = false;
 
   /// What the real lookup's answer provokes, if anything.
   void Function()? onAnswer;
@@ -75,6 +84,7 @@ void main() {
   /// left to the caller, and the answer's record comes back.
   Future<Map<String, dynamic>?> lookup(int peer) async {
     lookups++;
+    if (lookupFails) throw StateError('box peer $peer: no search answer');
     try {
       await provider.adoptServedAccount(
         peer,
@@ -95,6 +105,8 @@ void main() {
     emitted = [];
     lookups = 0;
     onAnswer = null;
+    lookupFails = false;
+    await E2ePersistentDiag.clear();
     final p = EncryptionProvider(clock: () => now);
     provider = p;
     p
@@ -142,6 +154,7 @@ void main() {
     test('a rebuild request looks the friend up again and the new list is '
         'held, with no id on the wire', () async {
       await firstSight();
+      now = now.add(kBoxRelookupFloor); // past the floor the lookup set
       served = listOf(engine, enrollment, 2, [1, 2]);
 
       rebuildRequest();
@@ -158,6 +171,7 @@ void main() {
         "lookup's own answer — cost exactly ONE extra lookup, and the friend "
         'is never left without a list', () async {
       await firstSight();
+      now = now.add(kBoxRelookupFloor); // past the floor the lookup set
       served = listOf(engine, enrollment, 2, [1, 2]);
       onAnswer = () => provider.invalidateDeviceList(peerId);
 
@@ -206,10 +220,11 @@ void main() {
     });
 
     // Mutation: the in-flight join leaves the token (`_relookupOwed.remove`
-    // dropped from `_fetchDeviceListAnswer`).
-    test('an event during the first-sight lookup is answered by it and leaves '
-        'no lookup owed', () async {
-      onAnswer = () => provider.invalidateDeviceList(peerId);
+    // dropped from `_fetchDeviceListAnswer`). A person's act is the event that
+    // can reach it: a peer-driven one finds the floor the lookup just set.
+    test("a person's act during the first-sight lookup is answered by it and "
+        'leaves no lookup owed', () async {
+      onAnswer = () => provider.invalidateDeviceList(peerId, byPerson: true);
       await provider.getVerifiedDeviceList(peerId);
       onAnswer = null;
       await pumpEventQueue();
@@ -221,6 +236,123 @@ void main() {
         throwsStateError,
       );
       expect(lookups, 1);
+    });
+
+    // Mutation: `_takeLookup` sets no floor for the first lookup of the
+    // process (the one the box refresh makes at connect): a rebuild request
+    // seconds later buys a second lookup at once.
+    test('every lookup sets the floor, the first of the process too: a rebuild '
+        'request seconds after it keeps the held list and buys nothing',
+        () async {
+      await firstSight();
+      served = listOf(engine, enrollment, 2, [1, 2]);
+
+      rebuildRequest();
+      await pumpEventQueue();
+
+      expect(lookups, 1);
+      expect(provider.cachedDeviceList(peerId)?.version, 1);
+
+      now = now.add(kBoxRelookupFloor);
+      rebuildRequest();
+      await pumpEventQueue();
+
+      expect(lookups, 2);
+      expect(provider.cachedDeviceList(peerId)?.version, 2);
+    });
+
+    // Mutation: `_takeLookup` has no retry: the lookup an event bought got no
+    // answer, its token went with it, and the list the event had dropped never
+    // came back (`lookup spent` at every refresh, until a restart).
+    test("a rebuild request's lookup nobody answers is asked again by the next "
+        'refresh, and the friend has its list back with no restart', () async {
+      await firstSight();
+      now = now.add(kBoxRelookupFloor);
+      served = listOf(engine, enrollment, 2, [1, 2]);
+
+      lookupFails = true;
+      rebuildRequest();
+      await pumpEventQueue();
+      expect(lookups, 2, reason: 'the lookup went out and nobody answered');
+      expect(provider.cachedDeviceList(peerId), isNull);
+
+      lookupFails = false;
+      final list = await provider.getVerifiedDeviceList(peerId);
+
+      expect(list.liveDeviceIds, [1, 2]);
+      expect(lookups, 3);
+      // The retry was answered: nothing is owed any more.
+      await expectLater(
+        provider.getVerifiedDeviceList(peerId, forceRefresh: true),
+        throwsStateError,
+      );
+      expect(lookups, 3);
+    });
+
+    // Mutation: the retry has no bound (a friend nobody answers is asked at
+    // every refresh), or the next lookup an event buys does not start the
+    // count over.
+    test('a first lookup nobody answers is asked again by the next refresh, '
+        'three times at most; the next event then starts over', () async {
+      lookupFails = true;
+      for (var i = 0; i < kBoxLookupRetries + 3; i++) {
+        await expectLater(
+          provider.getVerifiedDeviceList(peerId),
+          throwsStateError,
+        );
+      }
+      expect(lookups, 1 + kBoxLookupRetries);
+      expect(provider.cachedDeviceList(peerId), isNull);
+
+      final unanswered = E2ePersistentDiag.entries
+          .where((e) => e.contains('BOX_LIST_LOOKUP_UNANSWERED'))
+          .toList();
+      expect(unanswered, hasLength(1 + kBoxLookupRetries));
+      expect(unanswered.first, allOf(contains('n: 1'), contains('retry: true')));
+      expect(
+        unanswered.last,
+        allOf(contains('n: ${1 + kBoxLookupRetries}'), contains('retry: false')),
+      );
+
+      // The friend is reachable again, but the next lookup an event buys is
+      // not answered either: it starts the count over, so it is retried too.
+      now = now.add(kBoxRelookupFloor);
+      rebuildRequest();
+      await pumpEventQueue();
+      expect(lookups, 2 + kBoxLookupRetries);
+      expect(provider.cachedDeviceList(peerId), isNull);
+
+      lookupFails = false;
+      final list = await provider.getVerifiedDeviceList(peerId);
+
+      expect(list.liveDeviceIds, [1]);
+      expect(lookups, 3 + kBoxLookupRetries);
+    });
+
+    // Mutation: the unanswered count ignores which account asked: a lookup of
+    // the account that signed out, failing late, is counted for the next one.
+    test('a lookup that fails after its account went away says nothing about '
+        'the next one', () async {
+      final gate = Completer<Map<String, dynamic>?>();
+      provider.lookupBoxPeerList = (peer) {
+        lookups++;
+        return gate.future;
+      };
+      final pending = expectLater(
+        provider.getVerifiedDeviceList(peerId),
+        throwsStateError,
+      );
+      provider.clearAll();
+
+      gate.completeError(StateError('box peer $peerId: no search answer'));
+      await pending;
+
+      expect(
+        E2ePersistentDiag.entries.where(
+          (e) => e.contains('BOX_LIST_LOOKUP_UNANSWERED'),
+        ),
+        isEmpty,
+      );
     });
   });
 
@@ -343,6 +475,38 @@ void main() {
       expect(lookups, 3);
       expect(provider.cachedDeviceList(peerId)?.liveDeviceIds, [5]);
       expect(emitted, isNot(contains('getDeviceList')));
+    });
+
+    // Mutation: `_takeLookup` has no retry: the person's token went with the
+    // lookup nobody answered, the acknowledgement had dropped the list, and
+    // every refresh got `lookup spent` — no list until a restart (second
+    // review).
+    test('a lookup nobody answers after the human acknowledged is asked again '
+        'by the next refresh: the friend gets its list back, no restart',
+        () async {
+      await friendResets();
+      now = now.add(const Duration(seconds: 20));
+      final shown = await provider.loadPeerIdentityVerification(
+        peerId,
+        timeout: const Duration(seconds: 1),
+      );
+
+      lookupFails = true;
+      final advanced = await provider.acknowledgePeerIdentity(
+        peerId,
+        adoptIdentityBase64: shown.offeredIdentityBase64,
+      );
+      await pumpEventQueue();
+
+      expect(advanced, isTrue);
+      expect(lookups, 3, reason: "the acknowledgement's lookup went out");
+      expect(provider.cachedDeviceList(peerId), isNull);
+
+      lookupFails = false;
+      final list = await provider.getVerifiedDeviceList(peerId);
+
+      expect(list.liveDeviceIds, [5]);
+      expect(lookups, 4);
     });
 
     // Mutation: `_relookupAvailable` applies the cap to a person's act (drive

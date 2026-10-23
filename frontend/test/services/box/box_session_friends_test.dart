@@ -1000,7 +1000,7 @@ void main() {
   );
 
   // Mutation: `_pass` drops the `_addressesAsked` guard
-  // (`&& _addressesAsked.add(userId)`): every pass asks again.
+  // (`!_addressesAsked.contains(userId)`): every pass asks again.
   test(
     'however many friends lists and reconnects, a friend is looked up at '
     'most once per process — a spent lookup included',
@@ -1087,7 +1087,9 @@ void main() {
   });
 
   // Mutation: the stamp is compared without the clock-skew guard (a stamp in
-  // the future blocks the lookup until the clock catches up).
+  // the future blocks the lookup until the clock catches up), or
+  // `noteFriendLookup` keeps a stamp later than the lookup's own (second
+  // review: the future stamp stayed, so every start found the friend due).
   test('a stamp from the future (the clock went back) does not block the '
       'lookup', () async {
     await a.start();
@@ -1098,6 +1100,12 @@ void main() {
     expect(a.lookups, [5]);
 
     a.clock = a.clock.subtract(const Duration(days: 3));
+    await a.restart(lookupAtStart: true);
+    await reconnect(a);
+    expect(a.lookups, [5, 5]);
+
+    // The lookup the future stamp allowed replaced it: the next start at the
+    // same clock is inside its own 24 h, one extra lookup and no more.
     await a.restart(lookupAtStart: true);
     await reconnect(a);
     expect(a.lookups, [5, 5]);
