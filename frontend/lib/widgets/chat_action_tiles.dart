@@ -33,9 +33,13 @@ import 'ping_glyph.dart';
 
 /// Hands the files of one paperclip pick to the composer, which sends them
 /// IMMEDIATELY, one message per file, in order (owner ruling 2026-10-27:
-/// a gallery pick is the confirmation; no staging step). Policy checks and
-/// rejection toasts happen inside.
-typedef PickedFilesCallback = Future<void> Function(List<PickedAttachment>);
+/// a gallery pick is the confirmation; no staging step). [pickedIn] is the
+/// conversation the paperclip was tapped in: the files arrive only after the
+/// picker closes (and, on web, after every file is read), and on the desktop
+/// split view the user may have opened another chat by then. Policy checks
+/// and rejection toasts happen inside.
+typedef PickedFilesCallback =
+    Future<void> Function(List<PickedAttachment> files, {required int pickedIn});
 
 class ChatActionTiles extends StatelessWidget {
   final double bottomPadding;
@@ -177,8 +181,8 @@ class ChatActionTiles extends StatelessWidget {
 
   /// Paperclip door, per platform (owner rulings 2026-08-19/21/30):
   ///
-  /// - iOS PWA: file_picker fallback, byte-identical to pre-branch behavior
-  ///   (owner ruling 2026-08-30). The anchored-input path was removed after a
+  /// - iOS PWA: file_picker fallback (owner ruling 2026-08-30), several files
+  ///   per pick since 2026-10-27. The anchored-input path was removed after a
   ///   9-variant on-device probe proved the opening mechanism is NOT what
   ///   causes the standalone orb/flash — the real app orbs identically on
   ///   both paths, and only in the installed standalone shell. Parked until
@@ -200,13 +204,19 @@ class ChatActionTiles extends StatelessWidget {
     BuildContext context,
     BuildContext tileContext,
   ) async {
-    if (_requireActiveConversation(context) == null) return;
+    final active = _requireActiveConversation(context);
+    if (active == null) return;
+    final pickedIn = active.$1.id;
 
     if (kIsWeb &&
         webAnchoredFileInputSupported &&
         !isIOSWebKit() &&
         defaultTargetPlatform == TargetPlatform.android) {
-      await _showAndroidAttachmentSheet(context, _tileAnchorRect(tileContext));
+      await _showAndroidAttachmentSheet(
+        context,
+        _tileAnchorRect(tileContext),
+        pickedIn: pickedIn,
+      );
       return;
     }
 
@@ -221,8 +231,9 @@ class ChatActionTiles extends StatelessWidget {
           ...kPickableDocumentExtensions,
         ],
         allowMultiple: true,
-        // Web has no path, so bytes come eagerly there; native reads each
-        // file from its path when its turn to send comes.
+        // Web has no path, so file_picker reads EVERY picked file into RAM
+        // before it returns; native reads each file from its path when its
+        // turn to send comes.
         withData: kIsWeb,
       );
     } finally {
@@ -232,7 +243,7 @@ class ChatActionTiles extends StatelessWidget {
     await onPickedFiles?.call([
       for (final file in pickResult.files)
         PickedAttachment(name: file.name, readBytes: () => _readBytes(file)),
-    ]);
+    ], pickedIn: pickedIn);
   }
 
   static Future<Uint8List?> _readBytes(PlatformFile file) async {
@@ -272,8 +283,9 @@ class ChatActionTiles extends StatelessWidget {
   /// 2026-09-05).
   Future<void> _showAndroidAttachmentSheet(
     BuildContext context,
-    Rect anchor,
-  ) async {
+    Rect anchor, {
+    required int pickedIn,
+  }) async {
     // The modal sheet route unfocuses the composer and drops the keyboard
     // before any door is tapped — that drop is not a user dismiss either.
     // Depth-counted: a door begins its own span synchronously BEFORE this
@@ -298,6 +310,7 @@ class ChatActionTiles extends StatelessWidget {
                 onTap: () => _openDoor(
                   sheetContext,
                   anchor,
+                  pickedIn: pickedIn,
                   accept: 'image/*,video/*',
                   multiple: true,
                 ),
@@ -310,6 +323,7 @@ class ChatActionTiles extends StatelessWidget {
                 onTap: () => _openDoor(
                   sheetContext,
                   anchor,
+                  pickedIn: pickedIn,
                   accept: 'image/*',
                   capture: 'environment',
                 ),
@@ -322,6 +336,7 @@ class ChatActionTiles extends StatelessWidget {
                 onTap: () => _openDoor(
                   sheetContext,
                   anchor,
+                  pickedIn: pickedIn,
                   accept: 'video/*',
                   capture: 'environment',
                 ),
@@ -334,6 +349,7 @@ class ChatActionTiles extends StatelessWidget {
                 onTap: () => _openDoor(
                   sheetContext,
                   anchor,
+                  pickedIn: pickedIn,
                   accept: _dotAccept(kPickableDocumentExtensions),
                   multiple: true,
                 ),
@@ -355,6 +371,7 @@ class ChatActionTiles extends StatelessWidget {
   void _openDoor(
     BuildContext sheetContext,
     Rect anchor, {
+    required int pickedIn,
     required String accept,
     String? capture,
     bool multiple = false,
@@ -372,7 +389,7 @@ class ChatActionTiles extends StatelessWidget {
           await onPickedFiles?.call([
             for (final file in picked)
               PickedAttachment(name: file.name, readBytes: file.readBytes),
-          ]);
+          ], pickedIn: pickedIn);
         })
         .whenComplete(endComposerNativePicker)
         .ignore();

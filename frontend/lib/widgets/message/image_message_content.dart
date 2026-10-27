@@ -78,8 +78,11 @@ class _ImageMessageContentState extends State<ImageMessageContent> {
           }
           final bytes = snap.data!;
           return GestureDetector(
-            onTap: () =>
-                showMediaGallery(context, message: widget.message, bytes: bytes),
+            onTap: () => showMediaGallery(
+              context,
+              message: widget.message,
+              bytes: bytes,
+            ).ignore(),
             child: Image.memory(bytes, fit: BoxFit.contain),
           );
         },

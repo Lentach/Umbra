@@ -65,7 +65,7 @@ Lint conventions are recorded in `frontend/analysis_options.yaml` (relative impo
 
 ## 6. Messaging and UI contracts
 
-- Optimistic send: temp message (`id` = a monotonic NEGATIVE counter, `SENDING`, `tempId` = `temp_<millis>_<userId>`) → encrypt/upload → WS `sendMessage` → `messageSent` replaces temp with real row.
+- Optimistic send: temp message (`id` = a monotonic NEGATIVE counter, `SENDING`, `tempId` = `temp_<millis>_<n>_<userId>` from `_newTempId()`, `<n>` a per-process counter so two sends in one millisecond never share it) → encrypt/upload → WS `sendMessage` → `messageSent` replaces temp with real row.
 - Auto-scroll on new messages: decision is the pure `utils/chat_auto_scroll.dart` (`shouldAutoScrollOnNewMessages`) — OWN sends always scroll to newest (text/emote-panel/media alike); peer messages scroll only near-bottom, else unread badge. Do not rely on the keyboard-open `didChangeMetrics` scroll for send behavior — the emoji panel opens without the keyboard.
 - Text edit: `messageEditEligible` gates own TEXT positive-id sent/delivered/read rows within 15 minutes. `beginEditMessage` shows `EditPreviewBar`; send emits new ciphertext via `editMessage`; reject reverts optimistic content.
 - Message model `copyWith` must include every field. Missing fields silently drop data.

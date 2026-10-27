@@ -113,8 +113,7 @@ extension MessagingSend on MessagingProvider {
     final replyPreview = _buildReplyPreviewFromReplyingTo();
 
     // Generate unique tempId for optimistic message matching
-    final tempId =
-        'temp_${DateTime.now().millisecondsSinceEpoch}_$_currentUserId';
+    final tempId = _newTempId();
 
     // Create optimistic message with SENDING status
     final tempMessage = MessageModel(
@@ -158,8 +157,7 @@ extension MessagingSend on MessagingProvider {
 
     final effectiveExpiresIn =
         _conversationsProvider!.conversationDisappearingTimer;
-    final tempId =
-        'temp_${DateTime.now().millisecondsSinceEpoch}_$_currentUserId';
+    final tempId = _newTempId();
 
     final tempMessage = MessageModel(
       id: -(++MessagingProvider._tempIdSeq),
@@ -206,8 +204,7 @@ extension MessagingSend on MessagingProvider {
 
     final effectiveExpiresIn =
         _conversationsProvider!.conversationDisappearingTimer;
-    final tempId =
-        'temp_${DateTime.now().millisecondsSinceEpoch}_$_currentUserId';
+    final tempId = _newTempId();
     final effectiveReplyToId = _replyingToMessage?.id;
 
     _messages.add(
@@ -347,8 +344,7 @@ extension MessagingSend on MessagingProvider {
       throw StateError('Cannot send voice message: no active conversation');
     }
 
-    final tempId =
-        'temp_${DateTime.now().millisecondsSinceEpoch}_$_currentUserId';
+    final tempId = _newTempId();
     final effectiveReplyToId = _replyingToMessage?.id;
     // Get disappearing timer from conversation (null-safe: stale conv id must
     // not throw mid-send, same reasoning as sendMessage).
@@ -496,8 +492,7 @@ extension MessagingSend on MessagingProvider {
 
     final effectiveExpiresIn =
         _conversationsProvider!.conversationDisappearingTimer;
-    final tempId =
-        'temp_${DateTime.now().millisecondsSinceEpoch}_$_currentUserId';
+    final tempId = _newTempId();
     final effectiveReplyToId = _replyingToMessage?.id;
 
     _messages.add(
@@ -647,8 +642,7 @@ extension MessagingSend on MessagingProvider {
 
     final effectiveExpiresIn =
         _conversationsProvider!.conversationDisappearingTimer;
-    final tempId =
-        'temp_${DateTime.now().millisecondsSinceEpoch}_$_currentUserId';
+    final tempId = _newTempId();
     final effectiveReplyToId = _replyingToMessage?.id;
     // 1. Optimistic message
     _messages.add(
@@ -791,8 +785,7 @@ extension MessagingSend on MessagingProvider {
 
     final effectiveExpiresIn =
         _conversationsProvider!.conversationDisappearingTimer;
-    final tempId =
-        'temp_${DateTime.now().millisecondsSinceEpoch}_$_currentUserId';
+    final tempId = _newTempId();
     final effectiveReplyToId = _replyingToMessage?.id;
     _messages.add(
       _buildOptimisticMediaMessage(
@@ -1511,14 +1504,14 @@ extension MessagingSend on MessagingProvider {
   /// Reuse is the point: the server enforces per-sender uniqueness, so a retry
   /// carrying the same token re-acks the row it already committed rather than
   /// creating a second message the sender cannot tell apart. Uniqueness comes
-  /// from the tempId (`temp_<millis>_<userId>`) plus a random suffix, keeping
+  /// from the tempId (`temp_<millis>_<n>_<userId>`) plus a random suffix, keeping
   /// it inside the DTO's 8..64 character bound.
   String _sendTokenFor(String tempId) => _sendTokenByTempId.putIfAbsent(
     tempId,
     () {
       final suffix = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
       final raw = '$tempId-$suffix'.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '-');
-      // DTO bound is 8..64; a tempId is `temp_<millis>_<userId>`, always
+      // DTO bound is 8..64; a tempId is `temp_<millis>_<n>_<userId>`, always
       // well over 8, so only the upper bound can bite.
       return raw.length <= 64 ? raw : raw.substring(raw.length - 64);
     },

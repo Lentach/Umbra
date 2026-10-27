@@ -24,8 +24,9 @@ enum PickedAttachmentKind { image, video, document, unsupported }
 
 /// One file from a paperclip picker, on its way to the composer.
 ///
-/// The bytes are read when the file's turn to send comes, so a ten-file pick
-/// holds one file in RAM at a time.
+/// The anchored-input doors and native file_picker read the bytes when the
+/// file's turn to send comes; a web file_picker pick (desktop, iOS PWA) has
+/// already read every file into RAM, so there [readBytes] only hands them over.
 class PickedAttachment {
   const PickedAttachment({required this.name, required this.readBytes});
 

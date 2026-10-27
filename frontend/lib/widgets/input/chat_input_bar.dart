@@ -70,6 +70,12 @@ class ChatInputBarState extends State<ChatInputBar>
   @visibleForTesting
   static Future<Uint8List?> Function(Uint8List bytes)? debugTranscodeOverride;
 
+  /// Test seam for the video probe: under `flutter test` the dart:io probe
+  /// answers [VideoPreview.unknown] at once, so nothing can happen DURING it.
+  /// Non-null only under test.
+  @visibleForTesting
+  static Future<VideoPreview> Function(Uint8List bytes)? debugProbeOverride;
+
   final _controller = TextEditingController();
   final _focusNode = FocusNode();
   MessageModel? _lastReplyingTo;
@@ -375,22 +381,26 @@ class ChatInputBarState extends State<ChatInputBar>
   ///
   /// At most [kMaxFilesPerPick] go out; the rest are dropped with a toast.
   /// Files go one after another, each awaited to its socket emit, so the
-  /// peer sees them in pick order and only one file is in RAM at a time.
+  /// peer sees them in pick order. A web file_picker pick arrives with every
+  /// file already read; the other doors read each file on its turn.
   /// A typed draft stays in the field: there is no staging step to attach it
   /// to as a caption.
   ///
-  /// The provider sends into the ACTIVE conversation, so the batch stops the
-  /// moment the user leaves this chat (or this composer unmounts) — never
-  /// does a later file land in whichever chat is open by then. That holds
-  /// inside a file too: a video awaits its transcode and probe after the
-  /// per-file check, and the desktop split view keeps this composer mounted
-  /// across a chat switch. The toast goes on the root overlay, which
+  /// The provider sends into the ACTIVE conversation, so a file goes out only
+  /// while [pickedIn] — the chat the paperclip was tapped in — is still the
+  /// active one: the batch stops the moment the user leaves it (or this
+  /// composer unmounts), never landing a file in whichever chat is open by
+  /// then. That covers the wait before the files arrive (a web pick reads
+  /// every file first) and the waits inside a video (transcode, probe): the
+  /// desktop split view keeps this composer mounted across a chat switch, so
+  /// `mounted` alone is no guard. The toast goes on the root overlay, which
   /// outlives this composer.
-  Future<void> sendPickedFiles(List<PickedAttachment> files) async {
+  Future<void> sendPickedFiles(
+    List<PickedAttachment> files, {
+    required int pickedIn,
+  }) async {
     if (files.isEmpty || !_canAcceptPaste()) return;
     final l10n = AppLocalizations.of(context);
-    final convs = context.read<ConversationsProvider>();
-    final conversationId = convs.activeConversationId;
     final rootOverlay = Overlay.of(context, rootOverlay: true);
     var batch = files;
     if (files.length > kMaxFilesPerPick) {
@@ -400,7 +410,7 @@ class ChatInputBarState extends State<ChatInputBar>
     for (final file in batch) {
       final bytes = await file.readBytes();
       if (!mounted ||
-          _chatSwitchedFrom(conversationId) ||
+          _chatSwitchedFrom(pickedIn) ||
           !await _sendPickedFile(file, bytes)) {
         if (rootOverlay.mounted) {
           showTopSnackBar(
@@ -513,10 +523,11 @@ class ChatInputBarState extends State<ChatInputBar>
       bytes = transcoded;
     }
 
-    final preview = await video_probe.probeVideoPreview(
-      bytes,
-      mimeType: videoMimeForFilename(filename),
-    );
+    final preview = await (debugProbeOverride?.call(bytes) ??
+        video_probe.probeVideoPreview(
+          bytes,
+          mimeType: videoMimeForFilename(filename),
+        ));
     if (!mounted || _chatSwitchedFrom(conversationId)) return false;
     final duration = preview.durationInSeconds;
     if (duration != null &&

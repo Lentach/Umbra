@@ -419,6 +419,17 @@ class MessagingProvider extends ChangeNotifier {
   // if two messages are sent within the same millisecond.
   static int _tempIdSeq = 0;
 
+  // Per-process counter in every tempId: `temp_<millis>_<userId>` alone was
+  // shared by two sends started in the same millisecond, and the second was
+  // dropped as SEND_DUPLICATE_BLOCKED.
+  static int _tempIdMint = 0;
+
+  /// A new optimistic-send id. Opaque everywhere: the server only echoes it
+  /// and the wire id takes it as a prefix (`_sendTokenFor`, ≤ 64 chars).
+  String _newTempId() =>
+      'temp_${clock.now().millisecondsSinceEpoch}_${++_tempIdMint}_'
+      '$_currentUserId';
+
   // ---------- Message State ----------
 
   List<MessageModel> _messages = [];

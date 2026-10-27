@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:clock/clock.dart';
 import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
@@ -513,6 +514,31 @@ void main() {
       provider.sendMessage('caption');
       await Future<void>.delayed(const Duration(milliseconds: 100));
       expect(emitted, ['IMAGE', 'TEXT']); // caption strictly after image
+    });
+
+    // A paperclip batch starts the next file the moment the previous one is
+    // emitted; two sends that start within one millisecond must both go out.
+    test('two images started in the same millisecond both go out', () async {
+      final emitted = <String>[];
+      final provider = _newProvider()
+        ..setMediaUploadServiceForTest(_FakeMediaUpload())
+        ..setEncryptionProvider(_SendReadyEncryption())
+        ..setEmitCallback((event, data) {
+          if (event == 'sendMessage') emitted.add(event);
+        });
+
+      XFile image() =>
+          XFile.fromData(Uint8List.fromList([1, 2, 3]), name: 'a.jpg');
+      final sent = await withClock(
+        Clock.fixed(DateTime.utc(2026, 10, 27, 12)),
+        () => Future.wait([
+          provider.sendImageMessage('tok', image(), 2),
+          provider.sendImageMessage('tok', image(), 2),
+        ]),
+      );
+
+      expect(sent, [isTrue, isTrue]);
+      expect(emitted, hasLength(2));
     });
 
     test('returns false when upload throws', () async {

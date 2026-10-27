@@ -8,6 +8,7 @@ import 'package:fireplace/services/api_service.dart';
 import 'package:fireplace/services/encrypted_media_upload_service.dart';
 import 'package:fireplace/services/media_crypto_service.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
+import 'package:fireplace/utils/video_preview.dart';
 import 'package:fireplace/widgets/input/chat_input_bar.dart';
 import 'package:fireplace/widgets/input/composer_attachment_controller.dart';
 import 'package:fireplace/widgets/input/picked_attachment.dart';
@@ -527,6 +528,27 @@ void main() {
     PickedAttachment photo(String name) =>
         PickedAttachment(name: name, readBytes: () async => kTinyPng);
 
+    // Every pick in this group is tapped in chat 10, the harness's open chat.
+    Future<void> pick(
+      ({GlobalKey<ChatInputBarState> key, List<String> emitted,
+        List<Map<String, dynamic>> emittedData, ConversationsProvider convs}) h,
+      List<PickedAttachment> files,
+    ) => h.key.currentState!.sendPickedFiles(files, pickedIn: 10);
+
+    // A second chat to switch to; the desktop split view keeps the composer
+    // mounted across that switch.
+    void addSecondChat(ConversationsProvider convs) {
+      Map<String, dynamic> conv(int id, int peerId, String peer) => {
+        'id': id,
+        'userOne': {'id': 1, 'username': 'alice', 'tag': '0001'},
+        'userTwo': {'id': peerId, 'username': peer, 'tag': '0003'},
+        'createdAt': '2026-01-01T00:00:00.000Z',
+        'unreadCount': 0,
+        'lastMessage': null,
+      };
+      convs.onConversationsList([conv(10, 2, 'bob'), conv(11, 3, 'carol')]);
+    }
+
     // The duration probe answers VideoPreview.unknown under flutter_test (see
     // the group above); the send proceeds regardless.
     testWidgets('every file goes out at once, one message each, in pick '
@@ -535,7 +557,7 @@ void main() {
       await tester.enterText(find.byType(TextField), 'half-typed');
 
       await tester.runAsync(
-        () => h.key.currentState!.sendPickedFiles([
+        () => pick(h, [
           photo('a.jpg'),
           PickedAttachment(
             name: 'clip.mp4',
@@ -560,7 +582,7 @@ void main() {
       final h = await pumpComposer(tester);
 
       await tester.runAsync(
-        () => h.key.currentState!.sendPickedFiles([
+        () => pick(h, [
           for (var i = 0; i < kMaxFilesPerPick + 2; i++) photo('p$i.jpg'),
         ]),
       );
@@ -585,7 +607,7 @@ void main() {
       final h = await pumpComposer(tester);
 
       await tester.runAsync(
-        () => h.key.currentState!.sendPickedFiles([
+        () => pick(h, [
           photo('a.jpg'),
           PickedAttachment(
             name: 'b.jpg',
@@ -607,29 +629,27 @@ void main() {
       await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
     });
 
-    // Desktop split view keeps this composer mounted across a chat switch, and
-    // a video awaits its transcode and probe AFTER the per-file check: a
-    // switch during that wait must not send the clip into the new chat.
-    testWidgets('switching chats while a video is being prepared sends it '
-        'nowhere and says so', (tester) async {
+    // A video awaits its transcode and its probe AFTER the per-file check.
+    // One test per wait: each check alone must hold its window.
+    testWidgets('switching chats during a video transcode sends it nowhere '
+        'and says so', (tester) async {
       final h = await pumpComposer(tester);
-      Map<String, dynamic> conv(int id, int peerId, String peer) => {
-        'id': id,
-        'userOne': {'id': 1, 'username': 'alice', 'tag': '0001'},
-        'userTwo': {'id': peerId, 'username': peer, 'tag': '0003'},
-        'createdAt': '2026-01-01T00:00:00.000Z',
-        'unreadCount': 0,
-        'lastMessage': null,
-      };
-      h.convs.onConversationsList([conv(10, 2, 'bob'), conv(11, 3, 'carol')]);
+      addSecondChat(h.convs);
       addTearDown(() => ChatInputBarState.debugTranscodeOverride = null);
       ChatInputBarState.debugTranscodeOverride = (bytes) async {
         h.convs.openConversation(11);
         return Uint8List(1024);
       };
+      addTearDown(() => ChatInputBarState.debugProbeOverride = null);
+      ChatInputBarState.debugProbeOverride = (bytes) async {
+        // Once the transcode check is gone, a send could only be stopped
+        // here; reopening chat 10 keeps this check from covering for it.
+        h.convs.openConversation(10);
+        return VideoPreview.unknown;
+      };
 
       await tester.runAsync(
-        () => h.key.currentState!.sendPickedFiles([
+        () => pick(h, [
           PickedAttachment(
             name: 'huge.mp4',
             readBytes: () async => Uint8List(MediaCryptoService.maxBytes + 1),
@@ -647,12 +667,63 @@ void main() {
       await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
     });
 
-    testWidgets('an unreadable or unsupported file is refused and the rest '
-        'still go', (tester) async {
+    // The web path: a clip under the cap is never transcoded, and the web
+    // probe can wait seconds for a picture.
+    testWidgets('switching chats during a video probe sends it nowhere and '
+        'says so', (tester) async {
+      final h = await pumpComposer(tester);
+      addSecondChat(h.convs);
+      addTearDown(() => ChatInputBarState.debugProbeOverride = null);
+      ChatInputBarState.debugProbeOverride = (bytes) async {
+        h.convs.openConversation(11);
+        return VideoPreview.unknown;
+      };
+
+      await tester.runAsync(
+        () => pick(h, [
+          PickedAttachment(
+            name: 'clip.mp4',
+            readBytes: () async => Uint8List(64),
+          ),
+          photo('after.jpg'),
+        ]),
+      );
+      await tester.pump();
+
+      expect(h.emitted, isEmpty);
+      expect(
+        find.text('Some files were not sent — you left the chat'),
+        findsOneWidget,
+      );
+      await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
+    });
+
+    // A web pick reads every file before handing them over; the user can
+    // open another chat in that time.
+    testWidgets('files that arrive after a switch to another chat go nowhere '
+        'and say so', (tester) async {
+      final h = await pumpComposer(tester);
+      addSecondChat(h.convs);
+      h.convs.openConversation(11);
+
+      await tester.runAsync(() => pick(h, [photo('a.jpg'), photo('b.jpg')]));
+      await tester.pump();
+
+      expect(h.emitted, isEmpty);
+      expect(
+        find.text('Some files were not sent — you left the chat'),
+        findsOneWidget,
+      );
+      await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
+    });
+
+    testWidgets('an unsupported file is refused and the rest still go', (
+      tester,
+    ) async {
       final h = await pumpComposer(tester);
 
       await tester.runAsync(
-        () => h.key.currentState!.sendPickedFiles([
+        () => pick(h, [
           PickedAttachment(name: 'scan.heic', readBytes: () async => kTinyPng),
           photo('a.jpg'),
         ]),
