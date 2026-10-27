@@ -101,13 +101,21 @@ class EncryptionProvider extends ChangeNotifier {
   final Map<(int, int), Completer<Map<String, dynamic>>> _pendingPreKeyFetches =
       {};
 
+  /// In-flight `ensureSession` fetch-and-build per (userId, deviceId). A
+  /// second caller joins it until the session is BUILT, not just until the
+  /// bundle arrived: a caller arriving between the two used to see no session
+  /// and no pending fetch, fetch again, and the server refuses a repeat fetch
+  /// for the same pair inside its interval without an answer — a 10 s timeout
+  /// that cost a wiped device its first queue handoff (native, 10-27).
+  final Map<(int, int), Future<void>> _sessionBuilds = {};
+
   /// In-flight identity PROBES (amendment (xlvii) clause 3) — a raw bundle read
   /// that builds no session.
   ///
   /// Deliberately NOT [_pendingPreKeyFetches]. `ensureSession` joins an
-  /// in-flight fetch and returns early because the fetch's owner builds the
-  /// session; a probe owner builds nothing, so sharing the map would leave the
-  /// joiner with no session AND with its force-rebuild flag already consumed.
+  /// in-flight build and returns once it built the session; a probe owner
+  /// builds nothing, so sharing the map would leave a joiner with no session
+  /// AND with its force-rebuild flag already consumed.
   final Map<(int, int), Completer<Map<String, dynamic>>>
   _pendingIdentityProbes = {};
   bool _generatingMoreKeys = false;
@@ -426,66 +434,79 @@ class EncryptionProvider extends ChangeNotifier {
       return;
     }
 
-    // Check if we already have a pending fetch for this address
-    if (_pendingPreKeyFetches.containsKey(addressKey)) {
-      await _pendingPreKeyFetches[addressKey]!.future;
-      return;
+    final inFlight = _sessionBuilds[addressKey];
+    final build = inFlight ?? _fetchAndBuildSession(recipientId, deviceId);
+    if (inFlight == null) {
+      _sessionBuilds[addressKey] = build;
+      build
+          .whenComplete(
+            () => _sessionBuilds.removeWhere(
+              (key, running) => key == addressKey && identical(running, build),
+            ),
+          )
+          .ignore();
     }
-
     // (lix) The in-memory intent is consumed at the top of this method for
-    // dedup, but that consumption is scoped to THIS ATTEMPT. A throw past this
-    // point used to leave `needsRebuild` false for every later call in the
-    // process, so `hasSession` short-circuited at the early return above and
-    // handed back the very session the rebuild existed to replace. A malicious
-    // server reaches that deterministically by never answering
-    // `fetchPreKeyBundle`, and the (lvi) refusal now throws here by design.
-    // The DURABLE intent below is untouched: it was already correct, and it is
-    // what makes the next PROCESS safe.
+    // dedup, but that consumption is scoped to THIS ATTEMPT. A throw used to
+    // leave `needsRebuild` false for every later call in the process, so
+    // `hasSession` short-circuited at the early return above and handed back
+    // the very session the rebuild existed to replace. A malicious server
+    // reaches that deterministically by never answering `fetchPreKeyBundle`,
+    // and the (lvi) refusal now throws here by design. A joiner keeps its own
+    // intent the same way. The DURABLE intent is untouched: it was already
+    // correct, and it is what makes the next PROCESS safe.
     try {
-      final completer = Completer<Map<String, dynamic>>();
-      _pendingPreKeyFetches[addressKey] = completer;
-
-      _e2eFlowLog('SESSION_FETCH_EMIT', {
-        'recipientId': recipientId,
-        'deviceId': deviceId,
-      });
-      // deviceId is omitted for 1 (the server default), so an older server that
-      // predates the field keeps answering — rollout order is server first.
-      _emit?.call('fetchPreKeyBundle', {
-        'userId': recipientId,
-        if (deviceId != 1) 'deviceId': deviceId,
-      });
-
-      // The timeout fails the SHARED completer, so a build that joined this
-      // fetch fails with it instead of waiting forever ([_expireShared]).
-      _expireShared(
-        completer,
-        const Duration(seconds: 10),
-        drop: () {
-          if (identical(_pendingPreKeyFetches[addressKey], completer)) {
-            _pendingPreKeyFetches.remove(addressKey);
-          }
-        },
-        error: () => TimeoutException(
-          'Pre-key bundle fetch timed out for user $recipientId '
-          'device $deviceId',
-        ),
-      );
-      final bundle = await completer.future;
-
-      await _encryptionService.buildSession(
-        recipientId,
-        bundle,
-        deviceId: deviceId,
-        expectedIdentityBase64: await _accountIdentityAnchor(
-          recipientId,
-          skipDeviceId: deviceId,
-        ),
-      );
+      await build;
     } catch (_) {
       if (needsRebuild) _forceSessionRebuild.add(addressKey);
       rethrow;
     }
+  }
+
+  /// The fetch-and-build half of [ensureSession], run once per address at a
+  /// time ([_sessionBuilds]).
+  Future<void> _fetchAndBuildSession(int recipientId, int deviceId) async {
+    final addressKey = (recipientId, deviceId);
+    final completer = Completer<Map<String, dynamic>>();
+    _pendingPreKeyFetches[addressKey] = completer;
+
+    _e2eFlowLog('SESSION_FETCH_EMIT', {
+      'recipientId': recipientId,
+      'deviceId': deviceId,
+    });
+    // deviceId is omitted for 1 (the server default), so an older server that
+    // predates the field keeps answering — rollout order is server first.
+    _emit?.call('fetchPreKeyBundle', {
+      'userId': recipientId,
+      if (deviceId != 1) 'deviceId': deviceId,
+    });
+
+    // The timeout fails the SHARED completer: every caller that joined this
+    // build fails with it instead of waiting forever ([_expireShared]).
+    _expireShared(
+      completer,
+      const Duration(seconds: 10),
+      drop: () {
+        if (identical(_pendingPreKeyFetches[addressKey], completer)) {
+          _pendingPreKeyFetches.remove(addressKey);
+        }
+      },
+      error: () => TimeoutException(
+        'Pre-key bundle fetch timed out for user $recipientId '
+        'device $deviceId',
+      ),
+    );
+    final bundle = await completer.future;
+
+    await _encryptionService.buildSession(
+      recipientId,
+      bundle,
+      deviceId: deviceId,
+      expectedIdentityBase64: await _accountIdentityAnchor(
+        recipientId,
+        skipDeviceId: deviceId,
+      ),
+    );
     debugPrint(
       '[E2E] Session established with userId=$recipientId deviceId=$deviceId',
     );
@@ -494,11 +515,11 @@ class EncryptionProvider extends ChangeNotifier {
       'deviceId': deviceId,
     });
     // Only NOW is the durable intent satisfied (amendment (xlviii) clause 1).
-    // The in-memory flag is consumed at the top of this method so concurrent
-    // callers do not each rebuild, but the persisted one must survive until a
-    // session actually exists — a throw or a kill between those two points has
-    // to leave the intent standing, or the poisoned session is reused silently
-    // on the next launch.
+    // The in-memory flag is consumed at the top of [ensureSession] so
+    // concurrent callers do not each rebuild, but the persisted one must
+    // survive until a session actually exists — a throw or a kill between
+    // those two points has to leave the intent standing, or the poisoned
+    // session is reused silently on the next launch.
     await _encryptionService.clearSessionRebuild(recipientId, deviceId);
   }
 
@@ -1981,13 +2002,16 @@ class EncryptionProvider extends ChangeNotifier {
   /// Clear pending pre-key fetches for [recipientId] (e.g. on send failure
   /// so retry gets a fresh fetch). [deviceId] narrows to one address; absent,
   /// every device's pending fetch for that user is dropped — the send-failure
-  /// caller cannot know which device's fetch died.
+  /// caller cannot know which device's fetch died. The in-flight build waiting
+  /// on it is dropped too, so the retry starts its own instead of joining it.
   void clearPendingPreKeyFetch(int recipientId, {int? deviceId}) {
     if (deviceId != null) {
       _pendingPreKeyFetches.remove((recipientId, deviceId));
+      _sessionBuilds.removeWhere((key, _) => key == (recipientId, deviceId));
       return;
     }
     _pendingPreKeyFetches.removeWhere((key, _) => key.$1 == recipientId);
+    _sessionBuilds.removeWhere((key, _) => key.$1 == recipientId);
   }
 
   // ---------- TEMP storage-durability probes (remove after root cause) ----------
@@ -3916,6 +3940,7 @@ class EncryptionProvider extends ChangeNotifier {
     await _encryptionService.clearAllKeys();
     _e2eInitialized = false;
     _pendingPreKeyFetches.clear();
+    _sessionBuilds.clear();
     _pendingIdentityProbes.clear();
   }
 

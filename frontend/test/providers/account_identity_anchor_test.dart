@@ -56,6 +56,10 @@ void main() {
   /// to leave the verified-list cache COLD (the default every launch begins in).
   Map<String, dynamic>? servedAuthorization;
 
+  /// When set, bundle fetches are HELD here instead of answered, so a test
+  /// decides when (and whether) the stubbed server answers each one.
+  List<int>? heldFetches;
+
   Map<String, dynamic> flatBundleFrom(EncryptionService source) {
     final upload = source.getKeysForUpload();
     expect(upload, isNotNull);
@@ -80,6 +84,7 @@ void main() {
     served = peer;
     bundleFetches = 0;
     servedAuthorization = null;
+    heldFetches = null;
 
     enc = EncryptionProvider();
     enc.setEmitCallback((event, data) {
@@ -88,9 +93,14 @@ void main() {
       }
       if (event == 'fetchPreKeyBundle') {
         bundleFetches++;
+        final deviceId = (data as Map)['deviceId'] as int? ?? 1;
+        if (heldFetches case final held?) {
+          held.add(deviceId);
+          return;
+        }
         enc.onPreKeyBundleResponse({
           'userId': peerId,
-          'deviceId': (data as Map)['deviceId'] ?? 1,
+          'deviceId': deviceId,
           'bundle': flatBundleFrom(served),
         });
       }
@@ -456,6 +466,38 @@ void main() {
         staged,
         reason: 'the candidate the human will compare must not be replaced',
       );
+    });
+  });
+
+  group('two session builds for one device overlap', () {
+    // Native 0.2.71 after a wipe (staging drive 10-27): the connect's session
+    // pre-build fetched the friend's bundle; its answer arrived and, while
+    // that session was still being BUILT, the queue handoff asked for the same
+    // device. No session yet and no fetch pending, so it fetched again; the
+    // server refuses a second fetch for the same pair within its interval
+    // with a bare `error`, the handoff timed out after 10 s, and the friend
+    // kept writing to the dead pre-wipe queue until the next app start.
+    test('the second joins the first build: one fetch, both get the session',
+        () async {
+      heldFetches = [];
+      final first = enc.ensureSession(peerId);
+      await pumpEventQueue();
+      expect(heldFetches, [1]);
+
+      // The server answers the first fetch; the second caller arrives while
+      // that answer is being built into a session. Like the real server, a
+      // repeat fetch inside the interval is never answered.
+      enc.onPreKeyBundleResponse({
+        'userId': peerId,
+        'deviceId': 1,
+        'bundle': flatBundleFrom(peer),
+      });
+      final second = enc.ensureSession(peerId);
+
+      await expectLater(first, completes);
+      await expectLater(second, completes);
+      expect(bundleFetches, 1, reason: 'a repeat fetch is refused by the server');
+      expect(await enc.encryptionService.hasSession(peerId), isTrue);
     });
   });
 }
