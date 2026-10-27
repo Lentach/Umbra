@@ -36,3 +36,6 @@ services:
       - '127.0.0.1:3100:3000'
     environment:
       NODE_ENV: ${STAGING_NODE_ENV:-production}
+      # Phase 4 rehearsals: set STAGING_LEGACY_WRITES_FROZEN=true in .env.staging to
+      # rehearse the freeze; prod keeps its own pin (docker-compose.prod.yml).
+      LEGACY_WRITES_FROZEN: ${STAGING_LEGACY_WRITES_FROZEN:-false}
