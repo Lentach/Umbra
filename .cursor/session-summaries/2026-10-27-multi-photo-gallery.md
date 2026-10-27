@@ -18,8 +18,7 @@
 - Read only (load-bearing): `providers/messaging/messaging_provider.send.dart` (`sendImageMessage` uses the ACTIVE conversation)
 
 ## Verification
-- CI: see Notes (filled after push).
-- `flutter test`: 3281 passed / 14 skipped (was 3271). `flutter analyze` 0 warnings/errors; Dart ratchet 3145 → 3131 (`--update`).
+- CI: green on `a1d1a955` (all 6 jobs: Flutter analyze and tests, Backend tests, E2E wire harness, E2E isolated probes, Web Lock probe, CodeQL).
 - New tests: viewer paging (swipe, thumb pinch, zoomed drag, list shift/close/append) and composer batch (order IMAGE/VIDEO/IMAGE + draft kept, cap, leave mid-batch, unsupported file). Mutants killed: index-shift skip (`next == _index || true`), `scaleEnabled: _zoomed`, no pointer freeze (real red before the fix: thumb pinch turned the page, arena debug showed `HorizontalDragGestureRecognizer` winning).
 - Drive (release web build, dev backend, s4pa@:8201): desktop UA — system picker `isMultiple()=true`, 3 photos sent at once, draft kept; gallery 3/3 → arrow 2/3 → ArrowLeft 1/3. Android UA + touch emulation — four-door sheet, Galeria input `accept=image/*,video/*` `multiple=true`; 12 picked → toast "Naraz można wysłać do 10 plików…", gallery counter 13/13 (3+10, last = 10th file); touch swipe pages; swipe-down closes; thumb pinch zooms and stays 12/13; zoomed horizontal drag pans; back right after a 10-file pick → toast "Część plików nie została wysłana — czat został zamknięty".
 - NOT verified: receiver side (s4oa got nothing — not even a control text — dev box state between these accounts is broken, pre-existing), real iOS PWA picker multi-select, real Android phone, native APK.
