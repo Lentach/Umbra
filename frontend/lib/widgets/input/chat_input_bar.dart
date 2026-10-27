@@ -381,8 +381,11 @@ class ChatInputBarState extends State<ChatInputBar>
   ///
   /// The provider sends into the ACTIVE conversation, so the batch stops the
   /// moment the user leaves this chat (or this composer unmounts) — never
-  /// does a later file land in whichever chat is open by then. The toast for
-  /// that goes on the root overlay, which outlives this composer.
+  /// does a later file land in whichever chat is open by then. That holds
+  /// inside a file too: a video awaits its transcode and probe after the
+  /// per-file check, and the desktop split view keeps this composer mounted
+  /// across a chat switch. The toast goes on the root overlay, which
+  /// outlives this composer.
   Future<void> sendPickedFiles(List<PickedAttachment> files) async {
     if (files.isEmpty || !_canAcceptPaste()) return;
     final l10n = AppLocalizations.of(context);
@@ -396,7 +399,9 @@ class ChatInputBarState extends State<ChatInputBar>
     }
     for (final file in batch) {
       final bytes = await file.readBytes();
-      if (!mounted || convs.activeConversationId != conversationId) {
+      if (!mounted ||
+          _chatSwitchedFrom(conversationId) ||
+          !await _sendPickedFile(file, bytes)) {
         if (rootOverlay.mounted) {
           showTopSnackBar(
             rootOverlay.context,
@@ -406,11 +411,18 @@ class ChatInputBarState extends State<ChatInputBar>
         }
         return;
       }
-      await _sendPickedFile(file, bytes);
     }
   }
 
-  Future<void> _sendPickedFile(PickedAttachment file, Uint8List? bytes) async {
+  /// True when the active chat is no longer [conversationId] — a send now
+  /// would go to the wrong chat. Callers check `mounted` first.
+  bool _chatSwitchedFrom(int? conversationId) =>
+      context.read<ConversationsProvider>().activeConversationId !=
+      conversationId;
+
+  /// False only when the user left the chat before the file could go out
+  /// (the caller stops the batch); refusals and failures return true.
+  Future<bool> _sendPickedFile(PickedAttachment file, Uint8List? bytes) async {
     final l10n = AppLocalizations.of(context);
     final errorColor = Theme.of(context).colorScheme.error;
     if (bytes == null) {
@@ -419,13 +431,13 @@ class ChatInputBarState extends State<ChatInputBar>
         l10n.snackbarCouldNotReadFile,
         backgroundColor: errorColor,
       );
-      return;
+      return true;
     }
     switch (file.kind) {
       case PickedAttachmentKind.image:
         if (bytes.length > MediaCryptoService.maxBytes) {
           showTopSnackBar(context, l10n.snackbarPastedImageTooLarge);
-          return;
+          return true;
         }
         // A send, like the staged path: the keyboard must not collapse
         // underneath it.
@@ -437,7 +449,7 @@ class ChatInputBarState extends State<ChatInputBar>
           mimeType: file.imageMimeType,
         );
       case PickedAttachmentKind.video:
-        await sendPickedVideo(bytes: bytes, filename: file.name);
+        return sendPickedVideo(bytes: bytes, filename: file.name);
       case PickedAttachmentKind.document:
         await AttachmentHandler.sendDocument(
           context,
@@ -452,6 +464,7 @@ class ChatInputBarState extends State<ChatInputBar>
           backgroundColor: errorColor,
         );
     }
+    return true;
   }
 
   /// One picked video → IMMEDIATE send (owner ruling 2026-08-31). iOS's own
@@ -462,10 +475,15 @@ class ChatInputBarState extends State<ChatInputBar>
   /// seconds on a phone. That single probe pass supplies the duration for the
   /// cap AND the geometry + ThumbHash the receiving bubble needs — the
   /// provider never re-probes.
-  Future<void> sendPickedVideo({
+  ///
+  /// Returns false, sending nothing, when the user left the chat it was
+  /// picked in during the transcode or probe; true otherwise.
+  Future<bool> sendPickedVideo({
     required Uint8List bytes,
     required String filename,
   }) async {
+    final conversationId =
+        context.read<ConversationsProvider>().activeConversationId;
     final l10n = AppLocalizations.of(context);
     final ext = filename.contains('.')
         ? filename.split('.').last.toLowerCase()
@@ -476,11 +494,11 @@ class ChatInputBarState extends State<ChatInputBar>
         l10n.videoUnsupportedFormat,
         backgroundColor: Colors.red,
       );
-      return;
+      return true;
     }
     if (bytes.length > MediaCryptoService.maxBytes) {
       final transcoded = await _transcodeOversizeVideo(bytes);
-      if (!mounted) return;
+      if (!mounted || _chatSwitchedFrom(conversationId)) return false;
       if (transcoded == null) {
         // Named actuals, not just the limit: "34 MB, max 20 MB" tells the user
         // WHY this clip failed and roughly how much to trim.
@@ -490,7 +508,7 @@ class ChatInputBarState extends State<ChatInputBar>
           l10n.videoTooLarge(sizeMb),
           backgroundColor: Colors.red,
         );
-        return;
+        return true;
       }
       bytes = transcoded;
     }
@@ -499,7 +517,7 @@ class ChatInputBarState extends State<ChatInputBar>
       bytes,
       mimeType: videoMimeForFilename(filename),
     );
-    if (!mounted) return;
+    if (!mounted || _chatSwitchedFrom(conversationId)) return false;
     final duration = preview.durationInSeconds;
     if (duration != null &&
         duration > MediaCryptoService.maxVideoDurationSeconds) {
@@ -510,7 +528,7 @@ class ChatInputBarState extends State<ChatInputBar>
         l10n.videoTooLong('$minutes:${seconds.toString().padLeft(2, '0')}'),
         backgroundColor: Colors.red,
       );
-      return;
+      return true;
     }
 
     // Same collapse guard the staged-send path arms: this is a send, and the
@@ -524,6 +542,7 @@ class ChatInputBarState extends State<ChatInputBar>
       height: preview.height,
       thumbHash: preview.thumbHash,
     );
+    return true;
   }
 
   /// Move-4 on-device transcode for an oversize pick (owner decision

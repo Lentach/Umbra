@@ -607,6 +607,46 @@ void main() {
       await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
     });
 
+    // Desktop split view keeps this composer mounted across a chat switch, and
+    // a video awaits its transcode and probe AFTER the per-file check: a
+    // switch during that wait must not send the clip into the new chat.
+    testWidgets('switching chats while a video is being prepared sends it '
+        'nowhere and says so', (tester) async {
+      final h = await pumpComposer(tester);
+      Map<String, dynamic> conv(int id, int peerId, String peer) => {
+        'id': id,
+        'userOne': {'id': 1, 'username': 'alice', 'tag': '0001'},
+        'userTwo': {'id': peerId, 'username': peer, 'tag': '0003'},
+        'createdAt': '2026-01-01T00:00:00.000Z',
+        'unreadCount': 0,
+        'lastMessage': null,
+      };
+      h.convs.onConversationsList([conv(10, 2, 'bob'), conv(11, 3, 'carol')]);
+      addTearDown(() => ChatInputBarState.debugTranscodeOverride = null);
+      ChatInputBarState.debugTranscodeOverride = (bytes) async {
+        h.convs.openConversation(11);
+        return Uint8List(1024);
+      };
+
+      await tester.runAsync(
+        () => h.key.currentState!.sendPickedFiles([
+          PickedAttachment(
+            name: 'huge.mp4',
+            readBytes: () async => Uint8List(MediaCryptoService.maxBytes + 1),
+          ),
+          photo('after.jpg'),
+        ]),
+      );
+      await tester.pump();
+
+      expect(h.emitted, isEmpty);
+      expect(
+        find.text('Some files were not sent — you left the chat'),
+        findsOneWidget,
+      );
+      await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
+    });
+
     testWidgets('an unreadable or unsupported file is refused and the rest '
         'still go', (tester) async {
       final h = await pumpComposer(tester);
