@@ -1867,6 +1867,15 @@ class AppLocalizationsEn extends AppLocalizations {
   String get attachmentUnsupportedFileType => 'Unsupported file type';
 
   @override
+  String attachmentPickLimit(int max) {
+    return 'Up to $max files at a time — sending the first $max';
+  }
+
+  @override
+  String get attachmentBatchInterrupted =>
+      'Some files were not sent — you left the chat';
+
+  @override
   String get chatScrollToBottomSemantics => 'Scroll to newest messages';
 
   @override

@@ -3296,6 +3296,18 @@ abstract class AppLocalizations {
   /// **'Nieobsługiwany typ pliku'**
   String get attachmentUnsupportedFileType;
 
+  /// No description provided for @attachmentPickLimit.
+  ///
+  /// In pl, this message translates to:
+  /// **'Naraz można wysłać do {max} plików — wysyłam pierwsze {max}'**
+  String attachmentPickLimit(int max);
+
+  /// No description provided for @attachmentBatchInterrupted.
+  ///
+  /// In pl, this message translates to:
+  /// **'Część plików nie została wysłana — czat został zamknięty'**
+  String get attachmentBatchInterrupted;
+
   /// No description provided for @chatScrollToBottomSemantics.
   ///
   /// In pl, this message translates to:

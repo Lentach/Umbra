@@ -57,7 +57,7 @@ class _SwipeDownToDismissState extends State<SwipeDownToDismiss>
   /// this field for the FIRST time in [dispose], and `createTicker` then looks
   /// up `TickerMode` on a deactivated element ("Looking up a deactivated
   /// widget's ancestor is unsafe"). Caught by the zoom case in
-  /// `test/widgets/fullscreen_image_viewer_dismiss_test.dart`.
+  /// `test/widgets/fullscreen_image_viewer_test.dart`.
   late final AnimationController _slide;
   Tween<double> _slideTween = Tween(begin: 0, end: 0);
 

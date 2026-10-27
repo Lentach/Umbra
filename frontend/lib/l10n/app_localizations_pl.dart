@@ -1898,6 +1898,15 @@ class AppLocalizationsPl extends AppLocalizations {
   String get attachmentUnsupportedFileType => 'Nieobsługiwany typ pliku';
 
   @override
+  String attachmentPickLimit(int max) {
+    return 'Naraz można wysłać do $max plików — wysyłam pierwsze $max';
+  }
+
+  @override
+  String get attachmentBatchInterrupted =>
+      'Część plików nie została wysłana — czat został zamknięty';
+
+  @override
   String get chatScrollToBottomSemantics => 'Przewiń do najnowszych wiadomości';
 
   @override

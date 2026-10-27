@@ -2,19 +2,16 @@ import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 
 import '../../models/message_model.dart';
-import '../../providers/auth_provider.dart';
 import '../../utils/gif_blob_url_stub.dart'
     if (dart.library.html) '../../utils/gif_blob_url_web.dart'
     as gif_blob;
-import 'box_media_source.dart';
+import 'media_gallery.dart';
 import 'media_preview_frame.dart';
-import '../../utils/encrypted_media_loader.dart';
-import '../media/fullscreen_image_viewer.dart';
 
-/// GIF message: fetch, optional decrypt; web uses blob URL for animation.
+/// GIF message: fetch, optional decrypt; web uses blob URL for animation. A
+/// tap opens the chat's swipeable photo/GIF gallery at this GIF.
 class GifMessageContent extends StatefulWidget {
   final MessageModel message;
 
@@ -58,23 +55,14 @@ class _GifMessageContentState extends State<GifMessageContent> {
   }
 
   Future<_GifDisplay> _load() async {
-    final url = widget.message.mediaUrl;
-    if (url == null || url.isEmpty) {
+    if (widget.message.mediaUrl?.isEmpty ?? true) {
       return const _GifDisplay.error();
     }
 
-    final token = context.read<AuthProvider>().token ?? '';
-    final box = boxMediaSourceFor(context, url);
     Uint8List bytes;
     try {
-      bytes = await loadDecryptedMediaBytes(
-        url: url,
-        token: token,
-        key: widget.message.mediaKey,
-        iv: widget.message.mediaIv,
-        box: box,
-      );
-    } catch (_) {
+      bytes = await loadMessageMediaBytes(context, widget.message);
+    } on Object {
       return const _GifDisplay.error();
     }
 
@@ -94,20 +82,11 @@ class _GifMessageContentState extends State<GifMessageContent> {
   }
 
   void _showFullscreen(BuildContext context, _GifDisplay display) {
-    final image = display.networkUrl != null
-        ? Image.network(display.networkUrl!, fit: BoxFit.contain)
-        : display.memoryBytes != null
-        ? Image.memory(display.memoryBytes!, fit: BoxFit.contain)
-        : null;
-    if (image == null) return;
-    showDialog<void>(
-      context: context,
-      builder: (_) => Dialog(
-        backgroundColor: Colors.transparent,
-        insetPadding: EdgeInsets.zero,
-        child: FullscreenImageViewer(image: image),
-      ),
-    );
+    showMediaGallery(
+      context,
+      message: widget.message,
+      bytes: display.memoryBytes,
+    ).ignore();
   }
 
   @override

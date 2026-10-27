@@ -722,6 +722,11 @@
   "settingsAutoplayVideos": "Autoodtwarzanie wideo",
   "settingsAutoplayVideosSubtitle": "Wideo w czacie odtwarzają się bez dźwięku, gdy są widoczne",
   "attachmentUnsupportedFileType": "Nieobsługiwany typ pliku",
+  "attachmentPickLimit": "Naraz można wysłać do {max} plików — wysyłam pierwsze {max}",
+  "@attachmentPickLimit": {
+    "placeholders": { "max": { "type": "int" } }
+  },
+  "attachmentBatchInterrupted": "Część plików nie została wysłana — czat został zamknięty",
   "chatScrollToBottomSemantics": "Przewiń do najnowszych wiadomości",
   "avatarOpenProfileSemantics": "Otwórz profil",
   "passcodeLock": "Blokada kodem",

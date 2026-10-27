@@ -5,11 +5,11 @@ import '../../services/media_crypto_service.dart';
 /// One image staged in the composer awaiting send (Clipboard Phase 2). Bytes
 /// stay in RAM only — never written to disk (spec §3).
 ///
-/// Image-only by design: video used to stage here too, but a picked video now
-/// sends immediately (owner ruling 2026-08-31) because iOS's own
-/// `Retake / Use Video` screen is already the confirmation step. Images keep
-/// staging — a gallery tap is their only confirmation, and they carry
-/// captions.
+/// Paste-only by design: a pasted or keyboard-inserted image stages, because
+/// a paste can happen by accident and it carries the typed caption. Paperclip
+/// picks (photos, videos, documents) send immediately and never stage (owner
+/// rulings 2026-08-31 for video, 2026-10-27 for photos): the picker's own
+/// tap is their confirmation.
 class StagedAttachment {
   const StagedAttachment({
     required this.bytes,

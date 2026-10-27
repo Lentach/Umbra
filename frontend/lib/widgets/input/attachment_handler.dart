@@ -113,6 +113,54 @@ class AttachmentHandler {
     );
   }
 
+  // ── document sending ──────────────────────────────────────────────────────
+
+  /// Sends a picked document as a FILE message — immediately (documents never
+  /// stage), with an uploading toast and a sent / failed toast after.
+  static Future<void> sendDocument(
+    BuildContext context, {
+    required Uint8List bytes,
+    required String fileName,
+    required String mimeType,
+  }) async {
+    final l10n = AppLocalizations.of(context);
+    final messaging = context.read<MessagingProvider>();
+    final auth = context.read<AuthProvider>();
+    final convs = context.read<ConversationsProvider>();
+
+    final conversationId = convs.activeConversationId;
+    if (conversationId == null) {
+      showTopSnackBar(context, l10n.snackbarNoActiveConversation);
+      return;
+    }
+    final conv = convs.getConversationById(conversationId);
+    if (conv == null) return;
+    final recipientId = convs.getOtherUserId(conv);
+    final errorColor = Theme.of(context).colorScheme.error;
+
+    showTopSnackBar(context, l10n.snackbarUploadingDocument);
+    try {
+      await messaging.sendFileMessage(
+        auth.token!,
+        bytes,
+        fileName,
+        mimeType,
+        recipientId,
+      );
+      if (context.mounted) {
+        showTopSnackBar(context, l10n.snackbarDocumentSent);
+      }
+    } on Object catch (e) {
+      if (context.mounted) {
+        showTopSnackBar(
+          context,
+          '${l10n.uploadFailed}: $e',
+          backgroundColor: errorColor,
+        );
+      }
+    }
+  }
+
   // ── GIF picker ────────────────────────────────────────────────────────────
 
   /// Opens the GIF picker sheet and, on selection, calls

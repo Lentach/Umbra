@@ -4,6 +4,10 @@ import 'glass/glass_top_bar.dart';
 
 /// Shows a snackbar-style notification at the **top** of the screen
 /// so it does not cover the chat input bar at the bottom.
+///
+/// [overlay] targets a specific overlay instead of [context]'s; pass the root
+/// overlay together with its own context (`overlay.context`) to toast after
+/// the caller's screen is gone.
 void showTopSnackBar(
   BuildContext context,
   String message, {
@@ -11,9 +15,10 @@ void showTopSnackBar(
   Duration duration = const Duration(milliseconds: 2500),
   VoidCallback? onTap,
   String? actionLabel,
+  OverlayState? overlay,
 }) {
   assert(onTap == null || actionLabel != null);
-  final overlay = Overlay.of(context);
+  final target = overlay ?? Overlay.of(context);
   final theme = Theme.of(context);
   // Default (no explicit color): themed console-style surface — the old
   // inverseSurface default rendered near-white on every dark theme. An
@@ -123,7 +128,7 @@ void showTopSnackBar(
     ),
   );
 
-  overlay.insert(entry);
+  target.insert(entry);
   Future.delayed(duration, () {
     try {
       entry.remove();

@@ -10,6 +10,7 @@ import '../utils/file_utils_stub.dart'
     as file_utils;
 import '../utils/web_ios_webkit.dart';
 import '../utils/web_file_input.dart';
+import '../utils/video_preview.dart' show kSendableVideoExtensions;
 import 'input/composer_keyboard_signals.dart';
 import '../models/conversation_model.dart';
 import '../providers/auth_provider.dart';
@@ -21,6 +22,7 @@ import 'glass/glass_sheet.dart';
 import 'glass/glass_surface.dart';
 import '../theme/rpg_theme.dart';
 import 'input/focus_guard_area.dart';
+import 'input/picked_attachment.dart';
 export 'disappearing_timer_sheet.dart';
 import 'disappearing_timer_sheet.dart';
 import 'top_snackbar.dart';
@@ -29,19 +31,11 @@ import 'dialogs/clear_chat_dialog.dart';
 import 'gif_picker_sheet.dart';
 import 'ping_glyph.dart';
 
-/// Stages a picked image into the composer (existing staged-image flow).
-typedef StageImageCallback =
-    void Function({
-      required Uint8List bytes,
-      required String mimeType,
-      required String filename,
-    });
-
-/// Hands a picked video to the composer, which sends it IMMEDIATELY (policy
-/// checks and rejection toasts happen inside). Unlike images, video never
-/// stages — iOS's own `Retake / Use Video` screen is the confirmation step.
-typedef PickedVideoCallback =
-    Future<void> Function({required Uint8List bytes, required String filename});
+/// Hands the files of one paperclip pick to the composer, which sends them
+/// IMMEDIATELY, one message per file, in order (owner ruling 2026-10-27:
+/// a gallery pick is the confirmation; no staging step). Policy checks and
+/// rejection toasts happen inside.
+typedef PickedFilesCallback = Future<void> Function(List<PickedAttachment>);
 
 class ChatActionTiles extends StatelessWidget {
   final double bottomPadding;
@@ -52,19 +46,15 @@ class ChatActionTiles extends StatelessWidget {
   /// composer heals the blur post-frame through this callback.
   final VoidCallback? onPingSent;
 
-  /// Composer seams (null only in standalone test mounts —
-  /// [_routePickedFile]'s media branches then no-op per branch; the
-  /// document branch is seam-free and still works). Media routes by
-  /// extension: image → staged-image flow, video → immediate send.
-  final StageImageCallback? onStageImage;
-  final PickedVideoCallback? onPickedVideo;
+  /// Composer seam (null only in standalone test mounts, where a pick then
+  /// does nothing).
+  final PickedFilesCallback? onPickedFiles;
 
   const ChatActionTiles({
     super.key,
     this.bottomPadding = 0,
     this.onPingSent,
-    this.onStageImage,
-    this.onPickedVideo,
+    this.onPickedFiles,
   });
 
   @override
@@ -182,18 +172,6 @@ class ChatActionTiles extends StatelessWidget {
     onPingSent?.call();
   }
 
-  static const _galleryImageExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
-  static const _galleryVideoExtensions = ['mp4', 'm4v', 'mov'];
-  static const _documentExtensions = [
-    'pdf',
-    'doc',
-    'docx',
-    'xls',
-    'xlsx',
-    'txt',
-    'csv',
-  ];
-
   static String _dotAccept(List<String> extensions) =>
       extensions.map((e) => '.$e').join(',');
 
@@ -213,10 +191,11 @@ class ChatActionTiles extends StatelessWidget {
   ///   2026-08-30) and offers no gallery door, so the paperclip opens an
   ///   in-app glass sheet with three unambiguous doors: Gallery / Camera /
   ///   File (owner ruling 2026-08-19, re-confirmed wanted 2026-08-30).
-  /// - Desktop web + native: system picker via file_picker, unchanged.
+  /// - Desktop web + native: system picker via file_picker.
   ///
-  /// The result routes by extension: image/video STAGE (send button sends),
-  /// documents send immediately.
+  /// Every door that can browse (all but the two capture doors) allows
+  /// selecting several files; the composer sends them all immediately, in
+  /// order, capped at [kMaxFilesPerPick].
   Future<void> _pickAttachment(
     BuildContext context,
     BuildContext tileContext,
@@ -237,26 +216,33 @@ class ChatActionTiles extends StatelessWidget {
       pickResult = await FilePicker.pickFiles(
         type: FileType.custom,
         allowedExtensions: [
-          ..._galleryImageExtensions,
-          ..._galleryVideoExtensions,
-          ..._documentExtensions,
+          ...kPickableImageExtensions,
+          ...kSendableVideoExtensions,
+          ...kPickableDocumentExtensions,
         ],
-        withData: true,
+        allowMultiple: true,
+        // Web has no path, so bytes come eagerly there; native reads each
+        // file from its path when its turn to send comes.
+        withData: kIsWeb,
       );
     } finally {
       endComposerNativePicker();
     }
     if (pickResult == null || pickResult.files.isEmpty) return;
-    final file = pickResult.files.single;
-    List<int>? bytes;
-    if (file.bytes != null) {
-      bytes = file.bytes!;
-    } else if (!kIsWeb && file.path != null) {
-      bytes = await file_utils.readFileBytes(file.path!);
-    }
+    await onPickedFiles?.call([
+      for (final file in pickResult.files)
+        PickedAttachment(name: file.name, readBytes: () => _readBytes(file)),
+    ]);
+  }
 
-    if (!context.mounted) return;
-    await _routePickedFile(context, fileName: file.name, bytes: bytes);
+  static Future<Uint8List?> _readBytes(PlatformFile file) async {
+    if (file.bytes != null) return file.bytes;
+    if (kIsWeb || file.path == null) return null;
+    try {
+      return Uint8List.fromList(await file_utils.readFileBytes(file.path!));
+    } on Object {
+      return null;
+    }
   }
 
   static Rect _tileAnchorRect(BuildContext tileContext) {
@@ -310,10 +296,10 @@ class ChatActionTiles extends StatelessWidget {
                 label: l10n.attachmentOptionGallery,
                 color: glass.onGlassAccent,
                 onTap: () => _openDoor(
-                  context,
                   sheetContext,
                   anchor,
                   accept: 'image/*,video/*',
+                  multiple: true,
                 ),
               ),
               _AttachmentDoorRow(
@@ -322,7 +308,6 @@ class ChatActionTiles extends StatelessWidget {
                 label: l10n.attachmentOptionCamera,
                 color: glass.onGlassAccent,
                 onTap: () => _openDoor(
-                  context,
                   sheetContext,
                   anchor,
                   accept: 'image/*',
@@ -335,7 +320,6 @@ class ChatActionTiles extends StatelessWidget {
                 label: l10n.attachmentOptionRecordVideo,
                 color: glass.onGlassAccent,
                 onTap: () => _openDoor(
-                  context,
                   sheetContext,
                   anchor,
                   accept: 'video/*',
@@ -348,10 +332,10 @@ class ChatActionTiles extends StatelessWidget {
                 label: l10n.attachmentOptionFile,
                 color: glass.onGlassAccent,
                 onTap: () => _openDoor(
-                  context,
                   sheetContext,
                   anchor,
-                  accept: _dotAccept(_documentExtensions),
+                  accept: _dotAccept(kPickableDocumentExtensions),
+                  multiple: true,
                 ),
               ),
               const SizedBox(height: 8),
@@ -366,159 +350,32 @@ class ChatActionTiles extends StatelessWidget {
 
   /// Door tap: pop the sheet and open the input SYNCHRONOUSLY in the same
   /// gesture stack (a deferred click is silently blocked — 08-19 §3.5), then
-  /// route the result. Fire-and-forget by design: the row's onTap is sync.
+  /// hand the files to the composer. Fire-and-forget by design: the row's
+  /// onTap is sync.
   void _openDoor(
-    BuildContext context,
     BuildContext sheetContext,
     Rect anchor, {
     required String accept,
     String? capture,
+    bool multiple = false,
   }) {
     beginComposerNativePicker();
     Navigator.of(sheetContext).pop();
-    pickFileViaAnchoredInput(
+    pickFilesViaAnchoredInput(
           anchorRect: anchor,
           accept: accept,
           capture: capture,
+          multiple: multiple,
         )
         .then((picked) async {
-          if (picked == null || !context.mounted) return;
-          await _routePickedFile(
-            context,
-            fileName: picked.name,
-            bytes: picked.bytes,
-          );
+          if (picked == null || picked.isEmpty) return;
+          await onPickedFiles?.call([
+            for (final file in picked)
+              PickedAttachment(name: file.name, readBytes: file.readBytes),
+          ]);
         })
         .whenComplete(endComposerNativePicker)
         .ignore();
-  }
-
-  /// Routes a picked file by extension. Routing is EXPLICIT: whitelisted
-  /// image extensions stage as image, video and document extensions send
-  /// immediately (both no-op in callback-less test mounts for the seamed
-  /// branches), and anything else (e.g. an iOS HEIC the device did not
-  /// transcode) gets an honest unsupported-file toast — never a video-shaped
-  /// error for an image.
-  Future<void> _routePickedFile(
-    BuildContext context, {
-    required String fileName,
-    required List<int>? bytes,
-  }) async {
-    final l10n = AppLocalizations.of(context);
-    if (bytes == null) {
-      showTopSnackBar(
-        context,
-        l10n.snackbarCouldNotReadFile,
-        backgroundColor: Theme.of(context).colorScheme.error,
-      );
-      return;
-    }
-    final ext = fileName.contains('.')
-        ? fileName.split('.').last.toLowerCase()
-        : '';
-    if (_galleryImageExtensions.contains(ext)) {
-      if (onStageImage == null) return;
-      onStageImage!(
-        bytes: Uint8List.fromList(bytes),
-        mimeType: _imageMimeForExtension(ext),
-        filename: fileName,
-      );
-      return;
-    }
-    if (_galleryVideoExtensions.contains(ext)) {
-      if (onPickedVideo == null) return;
-      await onPickedVideo!(
-        bytes: Uint8List.fromList(bytes),
-        filename: fileName,
-      );
-      return;
-    }
-    if (_documentExtensions.contains(ext)) {
-      await _sendDocument(context, fileName: fileName, bytes: bytes);
-      return;
-    }
-    showTopSnackBar(
-      context,
-      l10n.attachmentUnsupportedFileType,
-      backgroundColor: Theme.of(context).colorScheme.error,
-    );
-  }
-
-  /// Document branch: always [MessagingProvider.sendFileMessage] — never
-  /// image routing. Sends immediately (documents do not stage).
-  Future<void> _sendDocument(
-    BuildContext context, {
-    required String fileName,
-    required List<int> bytes,
-  }) async {
-    final result = _requireActiveConversation(context);
-    if (result == null) return;
-
-    final l10n = AppLocalizations.of(context);
-    final messaging = context.read<MessagingProvider>();
-    final auth = context.read<AuthProvider>();
-    final ext = fileName.contains('.')
-        ? fileName.split('.').last.toLowerCase()
-        : '';
-
-    showTopSnackBar(context, l10n.snackbarUploadingDocument);
-    try {
-      await messaging.sendFileMessage(
-        auth.token!,
-        bytes,
-        fileName,
-        _mimeForExtension(ext),
-        result.$2,
-      );
-      if (context.mounted) {
-        showTopSnackBar(context, l10n.snackbarDocumentSent);
-      }
-    } catch (e) {
-      if (context.mounted) {
-        showTopSnackBar(
-          context,
-          '${l10n.uploadFailed}: $e',
-          backgroundColor: Theme.of(context).colorScheme.error,
-        );
-      }
-    }
-  }
-
-  static String _imageMimeForExtension(String ext) {
-    switch (ext) {
-      case 'png':
-        return 'image/png';
-      case 'gif':
-        return 'image/gif';
-      case 'webp':
-        return 'image/webp';
-      case 'jpg':
-      case 'jpeg':
-        return 'image/jpeg';
-      default:
-        return 'image/jpeg';
-    }
-  }
-
-  static String _mimeForExtension(String ext) {
-    switch (ext) {
-      case 'pdf':
-        return 'application/pdf';
-      case 'doc':
-        return 'application/msword';
-      case 'docx':
-        return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-      case 'xls':
-        return 'application/vnd.ms-excel';
-      case 'xlsx':
-        return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-      case 'txt':
-        return 'text/plain';
-      case 'csv':
-        return 'text/csv';
-      default:
-        return 'application/octet-stream';
-    }
   }
 
   bool _ensureHasActiveConversation(BuildContext context) {

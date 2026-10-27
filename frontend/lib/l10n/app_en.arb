@@ -739,6 +739,11 @@
   "settingsAutoplayVideos": "Autoplay videos",
   "settingsAutoplayVideosSubtitle": "Videos in chats play muted while they are on screen",
   "attachmentUnsupportedFileType": "Unsupported file type",
+  "attachmentPickLimit": "Up to {max} files at a time — sending the first {max}",
+  "@attachmentPickLimit": {
+    "placeholders": { "max": { "type": "int" } }
+  },
+  "attachmentBatchInterrupted": "Some files were not sent — you left the chat",
   "chatScrollToBottomSemantics": "Scroll to newest messages",
   "avatarOpenProfileSemantics": "Open profile",
   "passcodeLock": "Passcode Lock",

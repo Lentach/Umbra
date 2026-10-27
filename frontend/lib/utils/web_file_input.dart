@@ -4,15 +4,19 @@ import 'dart:ui' show Rect;
 import 'web_file_input_stub.dart'
     if (dart.library.html) 'web_file_input_web.dart' as impl;
 
-/// A file picked through the anchored web `<input type=file>` door.
+/// A file picked through the anchored web `<input type=file>` door. Its bytes
+/// are read on demand, so a multi-file pick holds one file in RAM at a time
+/// instead of all of them at once.
 class WebPickedFile {
-  const WebPickedFile({required this.name, required this.bytes});
+  const WebPickedFile({required this.name, required this.readBytes});
 
   final String name;
-  final Uint8List bytes;
+
+  /// Null when the browser could not read the file.
+  final Future<Uint8List?> Function() readBytes;
 }
 
-/// True only on web, where [pickFileViaAnchoredInput] is implemented.
+/// True only on web, where [pickFilesViaAnchoredInput] is implemented.
 bool get webAnchoredFileInputSupported => impl.webAnchoredFileInputSupported;
 
 /// Opens the browser file dialog from a REAL, RENDERED `<input type=file>`
@@ -33,13 +37,17 @@ bool get webAnchoredFileInputSupported => impl.webAnchoredFileInputSupported;
 /// (deferred clicks are silently blocked by Safari — proven 08-19 §3.5).
 ///
 /// [accept] is the raw accept attribute value; [capture] optionally sets the
-/// capture attribute (Android camera door). Returns null on cancel.
-Future<WebPickedFile?> pickFileViaAnchoredInput({
+/// capture attribute (Android camera door); [multiple] lets the user select
+/// several files. Returns the files in the order the browser lists them, or
+/// null on cancel.
+Future<List<WebPickedFile>?> pickFilesViaAnchoredInput({
   required Rect anchorRect,
   required String accept,
   String? capture,
-}) => impl.pickFileViaAnchoredInput(
+  bool multiple = false,
+}) => impl.pickFilesViaAnchoredInput(
   anchorRect: anchorRect,
   accept: accept,
   capture: capture,
+  multiple: multiple,
 );

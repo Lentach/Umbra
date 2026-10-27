@@ -21,12 +21,13 @@ bool get webAnchoredFileInputSupported => true;
 /// - The element stays attached until change/cancel resolves, then is removed.
 /// - Focus is never touched: the composer's FocusNode state is none of this
 ///   function's business.
-Future<WebPickedFile?> pickFileViaAnchoredInput({
+Future<List<WebPickedFile>?> pickFilesViaAnchoredInput({
   required Rect anchorRect,
   required String accept,
   String? capture,
+  bool multiple = false,
 }) {
-  final completer = Completer<WebPickedFile?>();
+  final completer = Completer<List<WebPickedFile>?>();
 
   // A previous invocation whose dialog was dismissed by an engine without
   // the 'cancel' event leaves its container behind (its Future never
@@ -52,6 +53,7 @@ Future<WebPickedFile?> pickFileViaAnchoredInput({
   input.type = 'file';
   input.accept = accept;
   if (capture != null) input.setAttribute('capture', capture);
+  input.multiple = multiple;
   final istyle = input.style;
   istyle.width = '100%';
   istyle.height = '100%';
@@ -74,7 +76,7 @@ Future<WebPickedFile?> pickFileViaAnchoredInput({
     container.remove();
   }
 
-  void resolve(WebPickedFile? value) {
+  void resolve(List<WebPickedFile>? value) {
     if (completer.isCompleted) return;
     cleanup();
     completer.complete(value);
@@ -82,24 +84,18 @@ Future<WebPickedFile?> pickFileViaAnchoredInput({
 
   changeListener = ((web.Event _) {
     final files = input.files;
-    final file = (files == null || files.length == 0) ? null : files.item(0);
-    if (file == null) {
+    if (files == null || files.length == 0) {
       resolve(null);
       return;
     }
-    final reader = web.FileReader();
-    reader.onloadend = ((web.ProgressEvent _) {
-      final result = reader.result;
-      if (result.isA<JSArrayBuffer>()) {
-        final bytes = (result as JSArrayBuffer).toDart.asUint8List();
-        resolve(
-          WebPickedFile(name: file.name, bytes: Uint8List.fromList(bytes)),
-        );
-      } else {
-        resolve(null);
-      }
-    }).toJS;
-    reader.readAsArrayBuffer(file);
+    // Only the File handles are kept: each one is read when its turn to send
+    // comes, so ten picked photos never sit in RAM together. A File stays
+    // readable after its input leaves the DOM.
+    resolve([
+      for (var i = 0; i < files.length; i++)
+        if (files.item(i) case final file?)
+          WebPickedFile(name: file.name, readBytes: () => _readFile(file)),
+    ]);
   }).toJS;
 
   // 'cancel' (Chrome 113+ / Safari 16.4+, all supported targets) is the ONLY
@@ -122,4 +118,13 @@ Future<WebPickedFile?> pickFileViaAnchoredInput({
   input.click();
 
   return completer.future;
+}
+
+Future<Uint8List?> _readFile(web.File file) async {
+  try {
+    final buffer = await file.arrayBuffer().toDart;
+    return buffer.toDart.asUint8List();
+  } on Object {
+    return null;
+  }
 }

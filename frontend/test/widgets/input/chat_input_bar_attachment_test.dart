@@ -10,10 +10,12 @@ import 'package:fireplace/services/media_crypto_service.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
 import 'package:fireplace/widgets/input/chat_input_bar.dart';
 import 'package:fireplace/widgets/input/composer_attachment_controller.dart';
+import 'package:fireplace/widgets/input/picked_attachment.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// 1x1 transparent PNG so Image.memory decodes without errors.
 final kTinyPng = Uint8List.fromList(const [
@@ -75,6 +77,7 @@ Future<
     GlobalKey<ChatInputBarState> key,
     List<String> emitted,
     List<Map<String, dynamic>> emittedData,
+    ConversationsProvider convs,
   })
 >
 pumpComposer(WidgetTester tester, {Object? throwOnUpload}) async {
@@ -135,10 +138,14 @@ pumpComposer(WidgetTester tester, {Object? throwOnUpload}) async {
       ),
     ),
   );
-  return (key: key, emitted: emitted, emittedData: emittedData);
+  return (key: key, emitted: emitted, emittedData: emittedData, convs: convs);
 }
 
 void main() {
+  // AuthProvider reads its saved token on construction; without a mock that
+  // channel call fails asynchronously and lands in whichever test runs then.
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+
   testWidgets('staged image shows chip; remove clears it', (tester) async {
     final h = await pumpComposer(tester);
 
@@ -513,6 +520,108 @@ void main() {
       expect(find.text('Unsupported video format (MP4 only)'), findsOneWidget);
       expect(h.emitted, isEmpty);
       await tester.pump(const Duration(seconds: 3));
+    });
+  });
+
+  group('paperclip picks send immediately (owner ruling 2026-10-27)', () {
+    PickedAttachment photo(String name) =>
+        PickedAttachment(name: name, readBytes: () async => kTinyPng);
+
+    // The duration probe answers VideoPreview.unknown under flutter_test (see
+    // the group above); the send proceeds regardless.
+    testWidgets('every file goes out at once, one message each, in pick '
+        'order; nothing stages and the draft stays', (tester) async {
+      final h = await pumpComposer(tester);
+      await tester.enterText(find.byType(TextField), 'half-typed');
+
+      await tester.runAsync(
+        () => h.key.currentState!.sendPickedFiles([
+          photo('a.jpg'),
+          PickedAttachment(
+            name: 'clip.mp4',
+            readBytes: () async => Uint8List(64),
+          ),
+          photo('b.png'),
+        ]),
+      );
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(h.emitted, ['IMAGE', 'VIDEO', 'IMAGE']);
+      expect(h.key.currentState!.attachmentControllerForTest.staged, isNull);
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller!.text,
+        'half-typed',
+      );
+    });
+
+    testWidgets('a pick over the cap sends the first $kMaxFilesPerPick and '
+        'says so', (tester) async {
+      final h = await pumpComposer(tester);
+
+      await tester.runAsync(
+        () => h.key.currentState!.sendPickedFiles([
+          for (var i = 0; i < kMaxFilesPerPick + 2; i++) photo('p$i.jpg'),
+        ]),
+      );
+      await tester.pump();
+
+      expect(h.emitted, List.filled(kMaxFilesPerPick, 'IMAGE'));
+      expect(
+        find.text(
+          'Up to $kMaxFilesPerPick files at a time — sending the first '
+          '$kMaxFilesPerPick',
+        ),
+        findsOneWidget,
+      );
+      await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
+    });
+
+    // The provider sends into the ACTIVE chat: a file that kept going after
+    // the user left would land in whichever chat is open by then.
+    testWidgets('leaving the chat mid-batch stops it and says so', (
+      tester,
+    ) async {
+      final h = await pumpComposer(tester);
+
+      await tester.runAsync(
+        () => h.key.currentState!.sendPickedFiles([
+          photo('a.jpg'),
+          PickedAttachment(
+            name: 'b.jpg',
+            readBytes: () async {
+              h.convs.closeConversation();
+              return kTinyPng;
+            },
+          ),
+          photo('c.jpg'),
+        ]),
+      );
+      await tester.pump();
+
+      expect(h.emitted, ['IMAGE']);
+      expect(
+        find.text('Some files were not sent — you left the chat'),
+        findsOneWidget,
+      );
+      await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
+    });
+
+    testWidgets('an unreadable or unsupported file is refused and the rest '
+        'still go', (tester) async {
+      final h = await pumpComposer(tester);
+
+      await tester.runAsync(
+        () => h.key.currentState!.sendPickedFiles([
+          PickedAttachment(name: 'scan.heic', readBytes: () async => kTinyPng),
+          photo('a.jpg'),
+        ]),
+      );
+      await tester.pump();
+
+      expect(h.emitted, ['IMAGE']);
+      expect(find.text('Unsupported file type'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
     });
   });
 }

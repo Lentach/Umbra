@@ -49,6 +49,7 @@ import 'reply_preview_bar.dart';
 import 'edit_preview_bar.dart';
 import 'composer_keyboard_signals.dart';
 import 'composer_emoji_text_editing.dart';
+import 'picked_attachment.dart';
 
 class ChatInputBar extends StatefulWidget {
   const ChatInputBar({super.key});
@@ -134,9 +135,10 @@ class ChatInputBarState extends State<ChatInputBar>
   // GlobalKey to access RecordingControllerState.buildRecordingBar() + methods.
   final _recordingKey = GlobalKey<RecordingControllerState>();
 
-  // Staged media (Clipboard Phase 2 image; a picked video sends immediately
-  // and never stages). Chip renders above the input row; _sendStaged() drains
-  // it honoring the media-then-caption ordering contract (spec §3).
+  // Staged media: a pasted or keyboard-inserted image only (Clipboard Phase
+  // 2); paperclip picks send immediately and never stage. Chip renders above
+  // the input row; _sendStaged() drains it honoring the media-then-caption
+  // ordering contract (spec §3).
   final _attachment = ComposerAttachmentController();
   bool _isSendingStagedMedia = false;
 
@@ -366,24 +368,94 @@ class ChatInputBarState extends State<ChatInputBar>
     );
   }
 
-  /// Gallery/camera image pick → the same staged-image flow as paste
-  /// (stage, chip, send on the trailing button). Toasts on rejection.
-  void stagePickedImage({
-    required Uint8List bytes,
-    required String mimeType,
-    required String filename,
-  }) {
-    if (!_canAcceptPaste()) return;
-    _onPastedImage(bytes, mimeType, filename);
+  /// Paperclip pick → IMMEDIATE send of every picked file, one message each,
+  /// in pick order (owner ruling 2026-10-27: the gallery tap is the
+  /// confirmation; other messengers do not make you press send again).
+  /// Pasted images still stage — a paste can happen by accident.
+  ///
+  /// At most [kMaxFilesPerPick] go out; the rest are dropped with a toast.
+  /// Files go one after another, each awaited to its socket emit, so the
+  /// peer sees them in pick order and only one file is in RAM at a time.
+  /// A typed draft stays in the field: there is no staging step to attach it
+  /// to as a caption.
+  ///
+  /// The provider sends into the ACTIVE conversation, so the batch stops the
+  /// moment the user leaves this chat (or this composer unmounts) — never
+  /// does a later file land in whichever chat is open by then. The toast for
+  /// that goes on the root overlay, which outlives this composer.
+  Future<void> sendPickedFiles(List<PickedAttachment> files) async {
+    if (files.isEmpty || !_canAcceptPaste()) return;
+    final l10n = AppLocalizations.of(context);
+    final convs = context.read<ConversationsProvider>();
+    final conversationId = convs.activeConversationId;
+    final rootOverlay = Overlay.of(context, rootOverlay: true);
+    var batch = files;
+    if (files.length > kMaxFilesPerPick) {
+      showTopSnackBar(context, l10n.attachmentPickLimit(kMaxFilesPerPick));
+      batch = files.sublist(0, kMaxFilesPerPick);
+    }
+    for (final file in batch) {
+      final bytes = await file.readBytes();
+      if (!mounted || convs.activeConversationId != conversationId) {
+        if (rootOverlay.mounted) {
+          showTopSnackBar(
+            rootOverlay.context,
+            l10n.attachmentBatchInterrupted,
+            overlay: rootOverlay,
+          );
+        }
+        return;
+      }
+      await _sendPickedFile(file, bytes);
+    }
   }
 
-  /// Gallery/camera video pick → IMMEDIATE send (owner ruling 2026-08-31).
-  ///
-  /// Video does NOT stage. iOS's own `Retake / Use Video` review screen is
-  /// already the confirmation step, so a composer chip made the user confirm
-  /// the same decision twice. Documents in `ChatActionTiles._routePickedFile`
-  /// have always sent immediately; video now matches them. Images still stage
-  /// — a gallery tap is their only confirmation, and they carry captions.
+  Future<void> _sendPickedFile(PickedAttachment file, Uint8List? bytes) async {
+    final l10n = AppLocalizations.of(context);
+    final errorColor = Theme.of(context).colorScheme.error;
+    if (bytes == null) {
+      showTopSnackBar(
+        context,
+        l10n.snackbarCouldNotReadFile,
+        backgroundColor: errorColor,
+      );
+      return;
+    }
+    switch (file.kind) {
+      case PickedAttachmentKind.image:
+        if (bytes.length > MediaCryptoService.maxBytes) {
+          showTopSnackBar(context, l10n.snackbarPastedImageTooLarge);
+          return;
+        }
+        // A send, like the staged path: the keyboard must not collapse
+        // underneath it.
+        _armComposerCollapseGuard();
+        await AttachmentHandler.sendImage(
+          context,
+          imageBytes: bytes,
+          filename: file.name,
+          mimeType: file.imageMimeType,
+        );
+      case PickedAttachmentKind.video:
+        await sendPickedVideo(bytes: bytes, filename: file.name);
+      case PickedAttachmentKind.document:
+        await AttachmentHandler.sendDocument(
+          context,
+          bytes: bytes,
+          fileName: file.name,
+          mimeType: file.documentMimeType,
+        );
+      case PickedAttachmentKind.unsupported:
+        showTopSnackBar(
+          context,
+          l10n.attachmentUnsupportedFileType,
+          backgroundColor: errorColor,
+        );
+    }
+  }
+
+  /// One picked video → IMMEDIATE send (owner ruling 2026-08-31). iOS's own
+  /// `Retake / Use Video` review screen is already the confirmation step.
   ///
   /// Gate order is deliberate: the cheap extension and size checks run first,
   /// because `probeVideoPreview` loads the whole clip into a decoder and costs
@@ -394,7 +466,6 @@ class ChatInputBarState extends State<ChatInputBar>
     required Uint8List bytes,
     required String filename,
   }) async {
-    if (!_canAcceptPaste()) return;
     final l10n = AppLocalizations.of(context);
     final ext = filename.contains('.')
         ? filename.split('.').last.toLowerCase()
@@ -1408,8 +1479,7 @@ class ChatInputBarState extends State<ChatInputBar>
                 child: ChatActionTiles(
                   bottomPadding: bottomInteractivePadding,
                   onPingSent: _refocusComposerAfterPing,
-                  onStageImage: stagePickedImage,
-                  onPickedVideo: sendPickedVideo,
+                  onPickedFiles: sendPickedFiles,
                 ),
               ),
 
