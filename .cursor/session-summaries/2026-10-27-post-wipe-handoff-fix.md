@@ -41,12 +41,18 @@
   - Fixed build: the same overlap with ONE fetch. `BOX_FRIEND_HANDOFF_SENT` came 1.1 s after `CONTACT_BACKUP_RESTORED`. Y0–Y7 were all on N1's screen (uiautomator), and N1 → P2 "N1reply" arrived.
 - The same fixed APK, multi-file send from the installed app: the system picker (Images › Pictures) selected 3 photos. 3 `BOX_SEND peerTaken 1`, in order, with the new tempIds `temp_<ms>_<n>_137`, and all 3 were shown on P2.
 - Phone-test link smoke (Chrome via the tunnel): login as mpz1027 restored the contact; "tunnel smoke" sent ✓ to mpx1027. `/socket.io` polling answered with the tunnel `Origin`.
+- Receipt check at the tunnel, two separate CDP browser contexts:
+  - **FAIL, pre-existing, not multi-photo:** mpx1027 and then mpy1027 logged in one after the other on fresh storage, so both re-minted (`IDENTITY_MINTED server-bundle-unlocked-remint`, `BOX_ROUTES routed` both). Text both ways showed ✓ and NOTHING arrived either way, not even after reopening both.
+  - Cause not diagnosed. It is the same family as the stale-queue / `foreign_identity` residual: each side's handoff can only reach the other's pre-login queue, whose keys died.
+  - PASS: two API-registered accounts (ipx1027 273, pcy1027 274) on their first login, invited by `name#tag` and accepted. Text both ways, then a 3-photo paperclip pick (`selectMultiple`) arrived in pick order.
 - NOT verified: iOS (the owner's iPhone test is pending); a real Android phone; prod.
 
 ## Notes for next session
 - Next action: the owner tests multi-photo send on his iPhone via the tunnel link.
-  - Accounts: mpx1027 on the iPhone, mpy1027 on the PC browser, password `Test123123`.
+  - Accounts: ownerphone (275, #4007) on the iPhone, ownerpc (276, #9337) on the PC browser, password `Test123123`. Registered via the API and never logged in, so each login is a first mint. He invites `ownerpc#9337` from the iPhone and accepts on the PC.
+  - Do NOT use mpx/mpy: a fresh login on both sides of an existing pair loses messages (above).
   - The tunnel URL dies with `phone-tunnel`; a new URL needs a web rebuild with the new `BASE_URL`.
+- Owner question: both friends logging in again on new storage loses messages both ways (receipt check above). It is pre-existing, so it does not block 0.2.72 by the multi-photo change, but decision 123 makes it a message-loss finding. Diagnose it before or after 0.2.72?
 - After the phone test: release 0.2.72 per `2026-10-21-release-0269.md`. It carries multi-photo send, the composer/tempId fixes and this fix.
   - Remove `%TEMP%/phonetest` and `%TEMP%/stg-drive/apk/{diag,fix}.apk` afterwards.
 - Residual, by design: what a friend sent between the wipe and the new handoff is still lost, because the old queue's keys died with the wipe.
