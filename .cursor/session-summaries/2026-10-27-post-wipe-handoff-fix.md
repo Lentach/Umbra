@@ -53,8 +53,8 @@
   - Accounts: ownerphone (275, #4007) on the iPhone, ownerpc (276, #9337) on the PC browser, password `Test123123`. Registered via the API and never logged in, so each login is a first mint. He invites `ownerpc#9337` from the iPhone and accepts on the PC.
   - Do NOT use mpx/mpy: a fresh login on both sides of an existing pair loses messages (above).
   - The tunnel URL dies with `phone-tunnel`; a new URL needs a web rebuild with the new `BASE_URL`.
-- Owner question: both friends logging in again on new storage loses messages both ways (receipt check above). It is pre-existing, so it does not block 0.2.72 by the multi-photo change, but decision 123 makes it a message-loss finding. Diagnose it before or after 0.2.72?
-- After the phone test: release 0.2.72 per `2026-10-21-release-0269.md`. It carries multi-photo send, the composer/tempId fixes and this fix.
+- Owner decision (10-28, "go b"): 0.2.72 ships after his iPhone test; the re-login-both loss (pre-existing, proven on `ab244533`) gets fixed in 0.2.73.
+- After the phone test passes: deploy 0.2.72 per `2026-10-21-release-0269.md` (backup, `deploy-backend.sh`, `deploy-web.ps1`, APK 20072 + `.env` `ANDROID_APK_*`). `frontend/pubspec.yaml` is already 0.2.72. It carries multi-photo send, the composer/tempId fixes and the wipe fix.
   - Remove `%TEMP%/phonetest` and `%TEMP%/stg-drive/apk/{diag,fix}.apk` afterwards.
 - Residual, by design: what a friend sent between the wipe and the new handoff is still lost, because the old queue's keys died with the wipe.
 - Owner-owed: the iPhone test; the pair tests (SaraLee/BestiaBestia ↔ bob208); the freeze go (not before 10-30).
