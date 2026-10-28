@@ -54,7 +54,7 @@
     "rxjs": "^7.8.1",
     "socket.io": "^4.8.3",
     "typeorm": "^1.1.0",
-    "undici": "^7.29.0",
+    "undici": "^7.30.1",
     "web-push": "^3.6.7"
   },
   "devDependencies": {
