@@ -35,8 +35,8 @@
 
 ## Notes for next session
 - Next: Phase 4.
-  - Owner's pair tests: SaraLee ↔ bob208 and BestiaBestia ↔ bob208. After them, prod `messages_id_seq.last_value` must still read 26956.
-  - The freeze on prod: no earlier than 10-30, on the owner's go.
+  - Owner's pair tests: SaraLee ↔ bob208 (the owner chatted with SaraLee on 10-28; not yet confirmed as Umbra, bob208, both ways) and BestiaBestia ↔ bob208 (test or waive). Prod `messages_id_seq.last_value` read 26956 on 10-28.
+  - The freeze on prod, on the owner's go. There is no date gate: E111c-r says the 7 quiet days were met on 10-27, and the "no earlier than 10-30" in earlier notes has no source.
   - Meanwhile, build the step 4 server half test-first.
 - Re-login-both: parked (decision 124). Pick an option with the owner before building.
 - Dev accounts 277/278 are in the broken state.
