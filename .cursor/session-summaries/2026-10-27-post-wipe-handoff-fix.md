@@ -44,6 +44,7 @@
 - Receipt check at the tunnel, two separate CDP browser contexts:
   - **FAIL, pre-existing, not multi-photo:** mpx1027 and then mpy1027 logged in one after the other on fresh storage, so both re-minted (`IDENTITY_MINTED server-bundle-unlocked-remint`, `BOX_ROUTES routed` both). Text both ways showed ✓ and NOTHING arrived either way, not even after reopening both.
   - Cause not diagnosed. It is the same family as the stale-queue / `foreign_identity` residual: each side's handoff can only reach the other's pre-login queue, whose keys died.
+  - **Pre-existing, proven:** the same drive on a web build of `ab244533` (no `_sessionBuilds`, dev backend @127.0.0.1:8501), with ipx1027 ↔ pcy1027 re-logged one after the other: text both ways ✓, nothing arrived, a reopen did not heal it.
   - PASS: two API-registered accounts (ipx1027 273, pcy1027 274) on their first login, invited by `name#tag` and accepted. Text both ways, then a 3-photo paperclip pick (`selectMultiple`) arrived in pick order.
 - NOT verified: iOS (the owner's iPhone test is pending); a real Android phone; prod.
 
