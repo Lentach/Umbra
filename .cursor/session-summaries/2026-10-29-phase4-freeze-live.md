@@ -30,7 +30,8 @@
   - `printenv LEGACY_WRITES_FROZEN` → `true`, `BOX_ENABLED` → `true`;
   - 0 `error|exception` lines in the 3 minutes after start;
   - counter 26956.
-- NOT verified: a send on prod after the flip, from the owner's device (asked of him); the 0.2.72 APK on a real phone.
+- Post-flip (owner, 10-29 morning): several friends' overnight messages arrived and his replies went out. At 12:53Z: counter 26956, 0 backend errors since the 00:40Z start, container healthy.
+- NOT verified: the 0.2.72 APK on a real phone.
 
 ## Notes for next session
 - Next: the 1–2 week watch (from 10-29). Meanwhile build the step 4 server half test-first. Spec: `2026-10-08-friend-row-gap-check.md` §"What remains for step 4's server half":
@@ -40,7 +41,6 @@
   Rehearse on staging before the owner's go; it ships no earlier than 11-05.
 - Watch signal: a refused old-path send writes nothing and logs nothing on the server, and the counter cannot move. A pair still stuck on the old path shows only as a user report of red "Ponów". Undo = `'false'` + `./deploy-backend.sh`.
 - Owner-owed:
-  - one message from his device after the flip, to confirm ✓;
   - the step 4 go;
   - copying `backup.pass` off the VM.
 - Re-login-both: still PARKED (decision 124).
