@@ -25,7 +25,7 @@ Production backend deploy runs on the VM only: `cd ~/fireplace && ./deploy-backe
 
 - `AppModule` imports Config, Schedule, Throttler, TypeORM, and domain modules: auth, media, users, conversations, messages, friends, blocked, FCM tokens, web push subscriptions, key bundles, push notifications, chat, conversation notification preferences, secret notes, health, version, and the **box** (`src/box/`).
 - **The box is registered only when `BOX_ENABLED=true`** and imports nothing from `auth/`, `users/`, `chat/`, even transitively (I1, `scripts/verify-box-imports.mjs`, CI); contract `docs/contracts/wire.md` "Box"; suite `npm run test:int` (→ rt "Box module").
-- **`LEGACY_WRITES_FROZEN=true` freezes the old path** (Phase 4 step 3): `chat/utils/legacy-freeze.ts` is read by the message, conversation and friend-request services; it refuses new messages, friend requests and chats, and nothing else. Prod pins `'true'` since 10-29 (E111c-r2); contract `docs/contracts/wire.md` "Old-path freeze".
+- **`LEGACY_WRITES_FROZEN=true` freezes the old path** (Phase 4 step 3): `chat/utils/legacy-freeze.ts` is read by the message, conversation, friend-request and device-list services; the freeze refuses new messages, friend requests and chats, and nothing else. Prod pins `'true'` since 10-29 (E111c-r2); contract `docs/contracts/wire.md` "Old-path freeze".
 - **`LEGACY_LISTS_SILENT=true` silences the old lists** (Phase 4 step 4 server half, `legacyListsSilent` in the same file): no `friendsList`, `conversationsList` or `servedMessageIds` (silence, never `[]`), and `getDeviceList(s)` answers only the caller's own id. Prod pins `'false'` until the owner's go; contract `docs/contracts/wire.md` "List silence".
 - `main.ts` sets trust proxy, helmet, global `ValidationPipe({ whitelist:true })`, CORS, and listens on `PORT || 3000` at `0.0.0.0`.
 - Production logger omits debug/verbose. Production CORS is restricted to `ALLOWED_ORIGINS`; dev allows localhost/127.0.0.1/192.168/10.*.
@@ -70,7 +70,7 @@ Entities in `backend/src/**/*.entity.ts` define the dev schema (TypeORM `synchro
 
 - Disconnect needs no presence bookkeeping: Socket.IO drops the socket from `user:<id>` itself, so the room empties only when the LAST tab goes (→ rt "Presence on disconnect").
 - `ChatValidationService.validateCanMessage(senderId, recipientId)` is the shared blocked+friendship gate for messaging/start conversation.
-- `handleStartConversation` requires friendship; emits `openConversation` only to caller and `conversationsList` updates as needed.
+- `handleStartConversation` requires friendship; emits `openConversation` only to caller and `conversationsList` updates as needed (under `LEGACY_LISTS_SILENT=true`: `openConversation` only).
 - `handleGetMessages` must load the conversation and verify caller membership before querying history. Non-members receive empty `messageHistory`.
 - `handleMessageDelivered` must verify caller is the recipient, not sender.
 - `handleMarkConversationRead` verifies membership, marks peer-sent messages read, stamps read-based disappearing expiry, and emits `messageDelivered` to sender and reader.

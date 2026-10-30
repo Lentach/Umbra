@@ -149,6 +149,10 @@ export class ChatDeviceListService {
    *      to decrypt. A fix that silently destroys readable history is worse
    *      than the leak it closes.
    *
+   * While `LEGACY_LISTS_SILENT=true` only rule 1 stands (Phase 4 step 4,
+   * [mayReadDeviceList]); rules 2 and 3 are left for the flag's off state and
+   * go with it at step 5.
+   *
    * A refusal is SILENT, matching the error path below: I5 makes silence
    * fail-closed on the client ("cannot verify", never "no devices"), and
    * answering would itself confirm whether the account exists.
