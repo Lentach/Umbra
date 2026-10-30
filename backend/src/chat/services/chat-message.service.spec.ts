@@ -2362,6 +2362,22 @@ describe('ChatMessageService', () => {
       });
     });
 
+    it('LEGACY_LISTS_SILENT=true: silence, never an empty list (Phase 4 step 4)', async () => {
+      // `[]` here means "destroy all of them": the step 4 silence must never
+      // manufacture one, and does not even run the lookup.
+      env = { LEGACY_LISTS_SILENT: 'true' };
+      findServedMessageIdsMock.mockResolvedValue([7]);
+
+      await service.handleGetServedMessageIds(mockClient as Socket, {
+        requestId: 'abc',
+        messageIds: [7, 8],
+      });
+
+      expect(emitted()).not.toContain('servedMessageIds');
+      expect(emitted()).not.toContain('error');
+      expect(findServedMessageIdsMock).not.toHaveBeenCalled();
+    });
+
     it('rejects a malformed batch without answering it', async () => {
       await service.handleGetServedMessageIds(mockClient as Socket, {
         requestId: 'abc',

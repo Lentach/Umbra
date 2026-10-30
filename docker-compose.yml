@@ -42,6 +42,8 @@ services:
       BOX_ENABLED: ${BOX_ENABLED:-true}
       # Phase 4 step 3 freeze (decision 111); prod pins it in docker-compose.prod.yml.
       LEGACY_WRITES_FROZEN: ${LEGACY_WRITES_FROZEN:-false}
+      # Phase 4 step 4 list silence; prod pins it in docker-compose.prod.yml.
+      LEGACY_LISTS_SILENT: ${LEGACY_LISTS_SILENT:-false}
       FIREBASE_SERVICE_ACCOUNT: ${FIREBASE_SERVICE_ACCOUNT}
       WEB_PUSH_VAPID_PUBLIC_KEY: ${WEB_PUSH_VAPID_PUBLIC_KEY}
       WEB_PUSH_VAPID_PRIVATE_KEY: ${WEB_PUSH_VAPID_PRIVATE_KEY}

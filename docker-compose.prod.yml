@@ -92,6 +92,12 @@ services:
       # both ways and `messages_id_seq` stayed at 26956. Undo = 'false'.
       # Pinned like BOX_ENABLED: a change is a reviewed commit.
       LEGACY_WRITES_FROZEN: 'true'
+      # Phase 4 step 4, server half: 'true' serves no roster (no friendsList,
+      # conversationsList, servedMessageIds; getDeviceList(s) answers only the
+      # caller's own id). Flip only after the freeze watch, the reach check
+      # (decision 122) and a staging rehearsal, on the owner's go. Undo = 'false'.
+      # Pinned like BOX_ENABLED: a change is a reviewed commit.
+      LEGACY_LISTS_SILENT: 'false'
       FIREBASE_SERVICE_ACCOUNT: ${FIREBASE_SERVICE_ACCOUNT:-}
       WEB_PUSH_VAPID_PUBLIC_KEY: ${WEB_PUSH_VAPID_PUBLIC_KEY:?set WEB_PUSH_VAPID_PUBLIC_KEY in ~/fireplace/.env}
       WEB_PUSH_VAPID_PRIVATE_KEY: ${WEB_PUSH_VAPID_PRIVATE_KEY:?set WEB_PUSH_VAPID_PRIVATE_KEY in ~/fireplace/.env}

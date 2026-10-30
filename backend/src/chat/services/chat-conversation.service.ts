@@ -20,7 +20,11 @@ import { MessageMapper } from '../../messages/message.mapper';
 import { isMessageExpired } from '../../messages/message-expiry.util';
 import { SetConversationMuteDto } from '../dto/set-conversation-mute.dto';
 import { ConversationNotificationPreferencesService } from '../../conversation-notification-preferences/conversation-notification-preferences.service';
-import { LEGACY_FROZEN, legacyWritesFrozen } from '../utils/legacy-freeze';
+import {
+  LEGACY_FROZEN,
+  legacyListsSilent,
+  legacyWritesFrozen,
+} from '../utils/legacy-freeze';
 
 @Injectable()
 export class ChatConversationService {
@@ -72,6 +76,12 @@ export class ChatConversationService {
       : await this.conversationsService.findOrCreate(user, otherUser);
     if (!conversation) {
       client.emit('error', { message: LEGACY_FROZEN });
+      return;
+    }
+
+    // Silent lists (Phase 4 step 4): the chat still opens, no roster goes out.
+    if (legacyListsSilent(this.configService)) {
+      client.emit('openConversation', { conversationId: conversation.id });
       return;
     }
 
@@ -176,7 +186,7 @@ export class ChatConversationService {
       this.logger.warn('handleGetConversations: no userId in client.data');
       return;
     }
-
+    if (legacyListsSilent(this.configService)) return;
     this.logger.debug(`handleGetConversations`);
     const [rawConversations, blockedIds, blockedByUserIds] = await Promise.all([
       this.conversationsService.findByUser(userId),
@@ -257,7 +267,9 @@ export class ChatConversationService {
     const payload = { conversationId: dto.conversationId };
     client.emit('conversationDeleted', payload);
 
-    // 7. Refresh conversations list for both users
+    // 7. Refresh conversations list for both users (none while the lists are
+    // silent, Phase 4 step 4).
+    if (legacyListsSilent(this.configService)) return;
     const userConvs = await this.conversationsService.findByUser(userId);
     const userList = await this.conversationsWithUnread(userConvs, userId);
     client.emit('conversationsList', userList);

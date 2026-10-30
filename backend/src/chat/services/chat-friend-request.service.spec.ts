@@ -1175,4 +1175,65 @@ describe('ChatFriendRequestService', () => {
       expect(conversationsService.findOrCreate.mock.calls).toHaveLength(0);
     });
   });
+
+  // Phase 4 step 4, server half: the server stops serving rosters. Silence,
+  // never `[]`: an empty list is an answer a client may act on.
+  describe('LEGACY_LISTS_SILENT=true (Phase 4 step 4)', () => {
+    const events = (emit: unknown) =>
+      (emit as jest.Mock).mock.calls.map(([name]: [string]) => name);
+
+    // Prod's state after the flip: frozen AND silent (boot refuses silent alone).
+    beforeEach(() => {
+      env = { LEGACY_LISTS_SILENT: 'true', LEGACY_WRITES_FROZEN: 'true' };
+      friendsService.getFriends.mockResolvedValue([
+        { id: 2, username: 'bob', tag: '0002', profilePictureUrl: null },
+      ] as unknown as User[]);
+    });
+
+    it('answers getFriends with silence, never a list', async () => {
+      await service.handleGetFriends(mockClient as Socket);
+
+      expect(events(mockClient.emit)).toEqual([]);
+    });
+
+    it('unfriend still tells both sides, with no roster to either', async () => {
+      setOnline(2);
+
+      await service.handleUnfriend(
+        mockClient as Socket,
+        { userId: 2 },
+        mockServer as Server,
+      );
+
+      expect(mockClient.emit).toHaveBeenCalledWith('unfriended', { userId: 2 });
+      expect(mockServer.emit).toHaveBeenCalledWith('unfriended', { userId: 1 });
+      for (const emit of [mockClient.emit, mockServer.emit]) {
+        expect(events(emit)).not.toContain('friendsList');
+        expect(events(emit)).not.toContain('conversationsList');
+      }
+    });
+
+    it('still reports an existing invitation chat ready, with no roster', async () => {
+      usersService.findById
+        .mockResolvedValueOnce(mockSender as unknown as User)
+        .mockResolvedValueOnce(mockRecipient as unknown as User);
+
+      await service.handleEnsureInvitationChat(
+        mockClient as Socket,
+        { peerUserId: 2, correlationId: 'session_1-token' },
+        mockServer as Server,
+      );
+
+      expect(mockClient.emit).toHaveBeenCalledWith('invitationChatReady', {
+        peerUserId: 2,
+        correlationId: 'session_1-token',
+        conversationId: 50,
+        chatReady: true,
+      });
+      for (const emit of [mockClient.emit, mockServer.emit]) {
+        expect(events(emit)).not.toContain('friendsList');
+        expect(events(emit)).not.toContain('conversationsList');
+      }
+    });
+  });
 });

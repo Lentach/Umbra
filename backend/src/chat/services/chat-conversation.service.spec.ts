@@ -43,6 +43,7 @@ describe('ChatConversationService', () => {
             setPinnedMessage: jest.fn(),
             clearPinnedMessage: jest.fn(),
             updateDisappearingTimer: jest.fn(),
+            delete: jest.fn(),
           },
         },
         {
@@ -52,6 +53,7 @@ describe('ChatConversationService', () => {
             getLastMessage: jest.fn().mockResolvedValue(null),
             findMediaUrlsByConversation: jest.fn().mockResolvedValue([]),
             findByIdWithConversation: jest.fn(),
+            deleteAllByConversation: jest.fn(),
           },
         },
         { provide: UsersService, useValue: { findById: jest.fn() } },
@@ -608,6 +610,85 @@ describe('ChatConversationService', () => {
         'conversationMuteUpdated',
         expect.anything(),
       );
+    });
+  });
+
+  // Phase 4 step 4, server half: no conversation roster from the server.
+  // Silence, never `[]`: an empty list is an answer a client may act on.
+  describe('LEGACY_LISTS_SILENT=true (Phase 4 step 4)', () => {
+    const events = (emit: unknown) =>
+      (emit as jest.Mock).mock.calls.map(([name]: [string]) => name);
+    // Both users online; `roomEmit` records what the server sent to a room.
+    const bothOnline = () => {
+      const roomEmit = jest.fn();
+      const server = {
+        to: jest.fn().mockReturnThis(),
+        emit: roomEmit,
+        sockets: {
+          adapter: {
+            rooms: new Map([
+              ['user:1', new Set(['a'])],
+              ['user:2', new Set(['b'])],
+            ]),
+          },
+          sockets: new Map(),
+        },
+      } as unknown as Server;
+      return { server, roomEmit };
+    };
+
+    // Prod's state after the flip: frozen AND silent (boot refuses silent alone).
+    beforeEach(() => {
+      env = { LEGACY_LISTS_SILENT: 'true', LEGACY_WRITES_FROZEN: 'true' };
+      conversationsService.findByUser.mockResolvedValue([
+        { id: 10, userOne: { id: 1 }, userTwo: { id: 2 } } as Conversation,
+      ]);
+    });
+
+    it('answers getConversations with silence, never a list', async () => {
+      await service.handleGetConversations(mockClient as Socket);
+
+      expect(events(mockClient.emit)).toEqual([]);
+    });
+
+    it('still opens an existing chat, with no roster to either side', async () => {
+      const { server, roomEmit } = bothOnline();
+      usersService.findById
+        .mockResolvedValueOnce({ id: 1, username: 'alice' } as User)
+        .mockResolvedValueOnce({ id: 2, username: 'bob' } as User);
+      conversationsService.findByUsers.mockResolvedValue({
+        id: 10,
+      } as Conversation);
+
+      await service.handleStartConversation(
+        mockClient as Socket,
+        { recipientId: 2 },
+        server,
+      );
+
+      expect(mockClient.emit).toHaveBeenCalledWith('openConversation', {
+        conversationId: 10,
+      });
+      expect(events(mockClient.emit)).toEqual(['openConversation']);
+      expect(events(roomEmit)).toEqual([]);
+    });
+
+    it('deleting a chat still confirms it, with no roster to either side', async () => {
+      const { server, roomEmit } = bothOnline();
+      conversationsService.findById.mockResolvedValue({
+        id: 10,
+        userOne: { id: 1 },
+        userTwo: { id: 2 },
+      } as Conversation);
+
+      await service.handleDeleteConversationOnly(
+        mockClient as Socket,
+        { conversationId: 10 },
+        server,
+      );
+
+      expect(events(mockClient.emit)).toEqual(['conversationDeleted']);
+      expect(events(roomEmit)).toEqual([]);
     });
   });
 });

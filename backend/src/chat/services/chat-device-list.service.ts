@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Server, Socket } from 'socket.io';
 import {
   DeviceListRejectedError,
@@ -15,6 +16,7 @@ import { userRoom } from '../utils/user-room';
 import { ChatValidationService } from './chat-validation.service';
 import { ConversationsService } from '../../conversations/conversations.service';
 import { deviceAuthorizationPayload } from '../mappers/device-authorization.mapper';
+import { legacyListsSilent } from '../utils/legacy-freeze';
 
 /**
  * socket.io declares `Socket.data` as `any`; one documented narrowing keeps
@@ -45,6 +47,7 @@ export class ChatDeviceListService {
     private readonly deviceListService: DeviceListService,
     private readonly chatValidationService: ChatValidationService,
     private readonly conversationsService: ConversationsService,
+    private readonly configService: ConfigService,
   ) {}
 
   async handleEnrollDeviceAuthority(
@@ -267,6 +270,10 @@ export class ChatDeviceListService {
    * May `requesterId` read `targetUserId`'s device roster? See the three rules
    * on [handleGetDeviceList] (amendment (xliii)).
    *
+   * While the lists are silent (Phase 4 step 4, decision 114) only rule 1
+   * stands: a friend's list comes over the box or from the handle lookup,
+   * never by id, so the server consults no friendship and no chat.
+   *
    * Ordered cheapest-first: the identity check costs nothing, the messaging
    * predicate is two indexed reads, and the conversation lookup only runs when
    * the messaging predicate has already refused — so the common case (a
@@ -277,6 +284,7 @@ export class ChatDeviceListService {
     targetUserId: number,
   ): Promise<boolean> {
     if (requesterId === targetUserId) return true;
+    if (legacyListsSilent(this.configService)) return false;
     const canMessage = await this.chatValidationService.validateCanMessage(
       requesterId,
       targetUserId,

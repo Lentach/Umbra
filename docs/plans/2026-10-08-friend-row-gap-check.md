@@ -155,6 +155,21 @@ Besides the probe, a client whose `conversationsList` never arrives was still wr
 2. `getDeviceList` / `getDeviceLists`: answer only `userId == caller` (the own list: connect, link ceremony, devices screen, handoff carry) and drop the `areFriends` / `conversations` entitlement (`chat-device-list.service.ts:275-293`); silence for every other id.
 3. `searchUsers` and `fetchPreKeyBundle` stay as they are. Note for the owner: `fetchPreKeyBundle` answers any authenticated caller and claims a pre-key (`chat-key-exchange.service.ts:876-915`), an existing by-id oracle outside 114's wording (E114f).
 4. The reach check above, then the owner's go. Old builds (≤ 0.2.69) reconnect on every resume once `conversationsList` is silent, cannot read a friend's list they do not hold, and never learn a new device of a friend: they must update.
+
+**BUILT 10-30 behind `LEGACY_LISTS_SILENT`** (items 1–2; pinned `'false'` in `docker-compose.prod.yml`, so the flip is a reviewed commit and the undo is `'false'`; boot refuses `'true'` unless `LEGACY_WRITES_FROZEN` is `'true'`, because an open old path still answers a send's `deviceListStale` with the recipient's signed list). Contract `wire.md` "List silence"; calls E124a.
+
+- **Reach check 10-30** (read-only, prod; decision 122): of the 23 accounts in the 25 accepted pairs, 21 opened a session after 0.2.70 (10-22 20:50Z), 11 after 0.2.72. Not since: benz93 (no session since 10-20; waived, 119) and goonboy (48; last 10-21 04:38Z; friends bob208 and alteregobob8 only). 0 live devices without a request queue; no FCM token on any of the 23 (web only).
+- **Staging rehearsal 10-30, passed.** Prod compose, `NODE_ENV=production`, backend = working tree, `LEGACY_WRITES_FROZEN=true`; web build of HEAD `0f9517d7` (`BASE_URL=http://localhost:3100`). Pre-box pair s4p1 (138) ↔ s4p2 (139) seeded as `friend_requests` + `conversations` rows, logged in with the lists served (messages both ways), then the silence switched on and the backend restarted. With `messages_id_seq` flat at 26855 throughout:
+  - after a reload: the chat list and the contacts screen still show the friend; messages both ways;
+  - no peer device list asked by id (0 `REFUSED not_entitled` from the clients); no reconnect on minimise/restore; none in 75 s idle;
+  - raw socket: `getFriends`, `getConversations`, `getServedMessageIds`, `getDeviceList(friend)` unanswered; own `getDeviceList` and `getServerTime` answered;
+  - box first contact s4b1 ↔ s4b2 under silence: invite, accept, messages both ways, no server row;
+  - s4p2 fresh storage + password login: `CONTACT_BACKUP_RESTORED {count: 1}`, the chat back, messages both ways;
+  - s4p1 deletes the pre-box chat (server row deleted), s4p2 sends: nothing shows until s4p1's next app start, then the chat returns with the message and replies work (pre-existing since the freeze; delayed, not lost);
+  - unfriend s4p1 → s4p2: both contact lists empty, server row deleted; account delete s4b2: s4b1's contact and chat gone;
+  - rollback (`'false'`, restart): the lists are served again (`[]` for the emptied accounts), the app loads normally.
+  - Boot with `LEGACY_LISTS_SILENT=true` and the freeze off: refused.
+  - Not covered: native (APK), builds ≤ 0.2.69 (must update, item 4).
 5. Step 5 as before (archive, drop, `MediaCleanupService`, push tables).
 
 ### Size (as built)

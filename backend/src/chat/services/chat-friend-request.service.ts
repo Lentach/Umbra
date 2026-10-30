@@ -28,7 +28,11 @@ import { ChatConversationService } from './chat-conversation.service';
 import { ChatValidationService } from './chat-validation.service';
 import { DevicesService } from '../../key-bundles/devices.service';
 import { DeviceListService } from '../../key-bundles/device-list.service';
-import { LEGACY_FROZEN, legacyWritesFrozen } from '../utils/legacy-freeze';
+import {
+  LEGACY_FROZEN,
+  legacyListsSilent,
+  legacyWritesFrozen,
+} from '../utils/legacy-freeze';
 
 @Injectable()
 export class ChatFriendRequestService {
@@ -75,13 +79,15 @@ export class ChatFriendRequestService {
     }));
   }
 
-  /** Emit friendsList to client and optionally to another socket. */
+  /** Emit friendsList to client and optionally to another socket; none while
+   *  the lists are silent (Phase 4 step 4). */
   private async emitFriendsListToBoth(
     client: Socket,
     server: Server,
     clientUserId: number,
     otherUserId: number | undefined,
   ): Promise<void> {
+    if (legacyListsSilent(this.configService)) return;
     try {
       const clientFriends = await this.friendsService.getFriends(clientUserId);
       client.emit('friendsList', await this.friendsListPayload(clientFriends));
@@ -96,7 +102,8 @@ export class ChatFriendRequestService {
     }
   }
 
-  /** Emit conversationsList to client and optionally to another socket.
+  /** Emit conversationsList to client and optionally to another socket; none
+   *  while the lists are silent (Phase 4 step 4).
    *  Uses the same unread-count + blocked-user filtering as handleGetConversations. */
   private async emitConversationsListToBoth(
     client: Socket,
@@ -104,6 +111,7 @@ export class ChatFriendRequestService {
     clientUserId: number,
     otherUserId: number | undefined,
   ): Promise<void> {
+    if (legacyListsSilent(this.configService)) return;
     try {
       const clientList = await this._buildConversationsList(clientUserId);
       client.emit('conversationsList', clientList);
@@ -769,7 +777,7 @@ export class ChatFriendRequestService {
 
   async handleGetFriends(client: Socket) {
     const userId: number = client.data.user?.id;
-    if (!userId) return;
+    if (!userId || legacyListsSilent(this.configService)) return;
 
     const [friends, blockedIds, blockedByUserIds] = await Promise.all([
       this.friendsService.getFriends(userId),

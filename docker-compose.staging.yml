@@ -39,3 +39,5 @@ services:
       # Phase 4 rehearsals: set STAGING_LEGACY_WRITES_FROZEN=true in .env.staging to
       # rehearse the freeze; prod keeps its own pin (docker-compose.prod.yml).
       LEGACY_WRITES_FROZEN: ${STAGING_LEGACY_WRITES_FROZEN:-false}
+      # Phase 4 step 4: STAGING_LEGACY_LISTS_SILENT=true rehearses the list silence.
+      LEGACY_LISTS_SILENT: ${STAGING_LEGACY_LISTS_SILENT:-false}

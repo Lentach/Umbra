@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ConfigService } from '@nestjs/config';
 import { Socket } from 'socket.io';
 import { ChatDeviceListService } from './chat-device-list.service';
 import { ChatValidationService } from './chat-validation.service';
@@ -31,6 +32,8 @@ describe('ChatDeviceListService.handleGetDeviceList entitlement', () => {
   let pendingReplacementVersion: jest.Mock;
   let emit: jest.Mock;
   let client: Partial<Socket>;
+  // The env as `ConfigService` serves it; `LEGACY_LISTS_SILENT` set per test.
+  let env: Record<string, string | undefined>;
 
   /** The stored row the handler projects when the caller is entitled. */
   const authorizationRow = {
@@ -62,6 +65,7 @@ describe('ChatDeviceListService.handleGetDeviceList entitlement', () => {
     pendingReplacementVersion = jest.fn().mockResolvedValue(null);
     emit = jest.fn();
     client = { data: { user: { id: REQUESTER } }, emit };
+    env = {};
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -72,6 +76,7 @@ describe('ChatDeviceListService.handleGetDeviceList entitlement', () => {
         },
         { provide: ChatValidationService, useValue: { validateCanMessage } },
         { provide: ConversationsService, useValue: { findByUsers } },
+        { provide: ConfigService, useValue: { get: (key: string) => env[key] } },
       ],
     }).compile();
     service = module.get(ChatDeviceListService);
@@ -350,6 +355,59 @@ describe('ChatDeviceListService.handleGetDeviceList entitlement', () => {
         'deviceList',
         expect.objectContaining({ userId: 2147483647 }),
       );
+    });
+  });
+
+  // --- Phase 4 step 4, server half: ONLY the caller's own roster ----------
+  // A friend's list now comes over the box (announcements, handoffs) or from
+  // the handle lookup (decision 114); the server answers no id but the
+  // caller's, so it no longer serves who is whose friend or chat partner.
+  describe('LEGACY_LISTS_SILENT=true (Phase 4 step 4)', () => {
+    beforeEach(() => {
+      env = { LEGACY_LISTS_SILENT: 'true' };
+    });
+
+    it('still serves YOUR OWN roster', async () => {
+      await get(REQUESTER);
+
+      expect(emit).toHaveBeenCalledWith(
+        'deviceList',
+        expect.objectContaining({ userId: REQUESTER }),
+      );
+    });
+
+    it('answers a FRIEND with silence, consulting no friendship', async () => {
+      validateCanMessage.mockResolvedValue({ valid: true });
+
+      await get(TARGET);
+
+      expect(emit).not.toHaveBeenCalled();
+      expect(getAuthorization).not.toHaveBeenCalled();
+      expect(validateCanMessage).not.toHaveBeenCalled();
+    });
+
+    it('answers a CONVERSATION peer with silence, consulting no chat', async () => {
+      findByUsers.mockResolvedValue({ id: 42 });
+
+      await get(TARGET);
+
+      expect(emit).not.toHaveBeenCalled();
+      expect(findByUsers).not.toHaveBeenCalled();
+    });
+
+    it('serves only the caller out of a batch', async () => {
+      validateCanMessage.mockResolvedValue({ valid: true });
+
+      await service.handleGetDeviceLists(client as Socket, {
+        userIds: [TARGET, REQUESTER],
+      });
+
+      expect(emit.mock.calls).toEqual([
+        [
+          'deviceList',
+          { userId: REQUESTER, authorization: authorizationProjection },
+        ],
+      ]);
     });
   });
 });

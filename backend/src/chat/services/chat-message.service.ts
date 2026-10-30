@@ -31,7 +31,11 @@ import {
 import { DEFAULT_DEVICE_ID } from '../../key-bundles/key-bundles.service';
 import { DevicesService } from '../../key-bundles/devices.service';
 import { DeviceListService } from '../../key-bundles/device-list.service';
-import { LEGACY_FROZEN, legacyWritesFrozen } from '../utils/legacy-freeze';
+import {
+  LEGACY_FROZEN,
+  legacyListsSilent,
+  legacyWritesFrozen,
+} from '../utils/legacy-freeze';
 import { AccountAuthorization } from '../../key-bundles/account-authorization.entity';
 
 /**
@@ -760,6 +764,10 @@ export class ChatMessageService {
       );
       return;
     }
+
+    // Silent lists (Phase 4 step 4): the same silence, for every device. The
+    // client reads no answer as "no answer" and purges nothing.
+    if (legacyListsSilent(this.configService)) return;
 
     try {
       const messageIds = await this.messagesService.findServedMessageIds(

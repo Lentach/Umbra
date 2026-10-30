@@ -70,6 +70,16 @@ export class EnvironmentVariables {
   @IsIn(['true', 'false'])
   LEGACY_WRITES_FROZEN?: string;
 
+  /**
+   * `true` silences the old lists (Phase 4 step 4): no `friendsList`,
+   * `conversationsList` or `servedMessageIds`, and `getDeviceList(s)` answers
+   * only the caller's own id. Unset or `false` serves them; any other value
+   * fails boot, as for `BOX_ENABLED`.
+   */
+  @IsOptional()
+  @IsIn(['true', 'false'])
+  LEGACY_LISTS_SILENT?: string;
+
   @IsOptional()
   @IsString()
   MEDIA_DIR?: string;
@@ -134,6 +144,18 @@ export function validate(config: Record<string, any>): EnvironmentVariables {
       )
       .join('; ');
     throw new Error(`Environment validation failed: ${errorMessages}`);
+  }
+
+  // Phase 4 step 4: an open old path still answers a send's `deviceListStale`
+  // with the recipient's signed list and can create chats no client is told
+  // about, so the list silence is only coherent on a frozen old path.
+  if (
+    validatedConfig.LEGACY_LISTS_SILENT === 'true' &&
+    validatedConfig.LEGACY_WRITES_FROZEN !== 'true'
+  ) {
+    throw new Error(
+      'Environment validation failed: LEGACY_LISTS_SILENT=true requires LEGACY_WRITES_FROZEN=true',
+    );
   }
 
   return validatedConfig;
