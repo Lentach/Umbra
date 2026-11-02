@@ -59,11 +59,22 @@ class E2eIdentityCheckUnavailableException implements Exception {
 /// exists). `linkingEnabled` defaults to true because an ABSENT field (older
 /// server) must fail closed to the gating behaviour, never to a mint the
 /// server would refuse.
+///
+/// `resetCompleted` (issue #207): the account holds a COMPLETED, unspent §6.2
+/// ceremony — the server reports `completed` only while the grant is still
+/// spendable. That grant is exactly the authorization the lock waits for, and
+/// it is spent by an upload of a DIFFERENT identity, which a keyless install
+/// can only make by minting one.
 class ServerIdentityGuard {
-  const ServerIdentityGuard({required this.exists, this.linkingEnabled = true});
+  const ServerIdentityGuard({
+    required this.exists,
+    this.linkingEnabled = true,
+    this.resetCompleted = false,
+  });
 
   final bool exists;
   final bool linkingEnabled;
+  final bool resetCompleted;
 }
 
 /// Thrown when a served pre-key bundle carries an identity key that is NOT the
@@ -1524,8 +1535,7 @@ class EncryptionService {
     // of a fresh install on its own — the same shapes come from a storage
     // wipe and from a second-device login — so the server decides (lxxi).
     // It answers for this login's device, which resolves to the live
-    // primary, so "no bundle" means the account never published an identity
-    // (or a completed §6.2 reset is waiting to be spent by our upload).
+    // primary, so "no bundle" means the account never published an identity.
     final residue =
         load == IdentityLoadResult.partial || await _hasPriorInstallResidue(p);
     ServerIdentityGuard? guard;
@@ -1540,6 +1550,13 @@ class EncryptionService {
       throw const E2eIdentityCheckUnavailableException();
     }
     if (guard.exists && guard.linkingEnabled) {
+      if (guard.resetCompleted) {
+        // Issue #207: the lock is armed, but the account's own §6.2 ceremony
+        // has run its delay and authorizes ONE replacement — minted here,
+        // spent by the upload that follows.
+        await _mintForCompletedReset(p, userId);
+        return;
+      }
       E2ePersistentDiag.record(
         residue ? 'IDENTITY_INCOMPLETE' : 'IDENTITY_GUARD_SERVER_BUNDLE_EXISTS',
         {'userId': userId},
@@ -1551,6 +1568,95 @@ class EncryptionService {
       throw const E2eIdentityIncompleteException();
     }
 
+    if (guard.exists) {
+      // (lxxiii) clause 2: the account has a bundle but never enrolled a DAK,
+      // so the server accepts an 'unlocked' replacement — mint instead of
+      // gating. The residue (if any) is discarded PROVEN first; the previous
+      // identity's peers get the §6.0 "identity changed" alarm on upload.
+      E2ePersistentDiag.record('IDENTITY_GUARD_UNLOCKED_REMINT', {
+        'userId': userId,
+      });
+    }
+    await _discardResidueAndMint(
+      p,
+      userId,
+      residue: residue,
+      reason: guard.exists
+          ? 'server-bundle-unlocked-remint'
+          : 'absent-no-residue-server-says-none',
+    );
+  }
+
+  /// Issue #207: the mint a completed §6.2 ceremony authorizes on a keyless
+  /// install of an enrolled account. Serialized across tabs: every gated tab
+  /// of one web install learns of the completion within the same minute, and
+  /// two concurrent mints into one store leave it holding identity Y while
+  /// the upload that spent the grant published X — a re-locked account. The
+  /// store is re-read under the lock, so the tab that comes second loads the
+  /// first tab's identity instead of minting over it.
+  Future<void> _mintForCompletedReset(String p, int userId) {
+    return _sessionCrossContextLock('fireplace-e2e-reset-mint-$userId', () async {
+      _buildStores(p);
+      final load = await _identityStore.loadFromStorage();
+      if (load == IdentityLoadResult.loaded) {
+        needsKeyUpload = _keysForUpload != null;
+        identityIncomplete = false;
+        _initialized = true;
+        return;
+      }
+      await _discardResidueAndMint(
+        p,
+        userId,
+        residue:
+            load == IdentityLoadResult.partial ||
+            await _hasPriorInstallResidue(p),
+        reason: 'identity-reset-completed',
+      );
+    });
+  }
+
+  /// Issue #207, the (lxiv) half: a completed §6.2 ceremony is this install's
+  /// authorization to drop material stamped for another device id — the
+  /// account is about to replace the identity it holds anyway — so the next
+  /// init finds a keyless store and [_mintForCompletedReset] can spend the
+  /// grant. The content store (sealed history) is untouched, as in (lxv).
+  ///
+  /// Under the mint's lock, and re-checked there: a sibling tab that already
+  /// minted has re-homed the stamp, so its fresh identity is left alone.
+  /// Returns false only when the wipe could not be PROVEN, so nothing may be
+  /// minted over it.
+  Future<bool> disposeMismatchedMaterialForReset(int sessionDeviceId) {
+    final userId = _userId;
+    if (userId == null) return Future.value(false);
+    final p = 'e2e_${userId}_';
+    return _sessionCrossContextLock('fireplace-e2e-reset-mint-$userId', () async {
+      if (await confirmMaterialDeviceId(sessionDeviceId)) return true;
+      if (!await _wipeSignalMaterial(p)) {
+        E2ePersistentDiag.record('RESET_STALE_DISPOSAL_DEFERRED', {
+          'userId': userId,
+        });
+        return false;
+      }
+      E2ePersistentDiag.record('RESET_STALE_MATERIAL_DISPOSED', {
+        'userId': userId,
+      });
+      await clearMaterialDeviceStamp();
+      _buildStores(p);
+      _initialized = false;
+      _peersWithChangedIdentity.clear();
+      await _persistIdentityChanged();
+      _pendingSessionRebuilds.clear();
+      await _persistSessionRebuilds();
+      return true;
+    });
+  }
+
+  Future<void> _discardResidueAndMint(
+    String p,
+    int userId, {
+    required bool residue,
+    required String reason,
+  }) async {
     if (residue) {
       // Signal material without a published identity is leftover from an
       // install whose upload never landed. No peer holds a session against
@@ -1576,15 +1682,6 @@ class EncryptionService {
       _pendingSessionRebuilds.clear();
       await _persistSessionRebuilds();
     }
-    if (guard.exists) {
-      // (lxxiii) clause 2: the account has a bundle but never enrolled a DAK,
-      // so the server accepts an 'unlocked' replacement — mint instead of
-      // gating. The residue (if any) was discarded PROVEN above; the previous
-      // identity's peers get the §6.0 "identity changed" alarm on upload.
-      E2ePersistentDiag.record('IDENTITY_GUARD_UNLOCKED_REMINT', {
-        'userId': userId,
-      });
-    }
     // DURABLE on purpose: this is the one branch that mints a new Signal
     // identity, and until 2026-09-04 it left only a debugPrint, so a
     // misclassification could be inferred in the field solely from the
@@ -1592,13 +1689,12 @@ class EncryptionService {
     // above records its refusal; the action itself has to record too.
     E2ePersistentDiag.record('IDENTITY_MINTED', {
       'userId': userId,
-      'reason': guard.exists
-          ? 'server-bundle-unlocked-remint'
-          : 'absent-no-residue-server-says-none',
+      'reason': reason,
     });
     debugPrint('[EncryptionService] Generating new keys (fresh install)');
     await _generateKeys();
     needsKeyUpload = true;
+    identityIncomplete = false;
     _initialized = true;
   }
 

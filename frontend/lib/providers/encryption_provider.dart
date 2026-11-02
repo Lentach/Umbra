@@ -3363,10 +3363,15 @@ class EncryptionProvider extends ChangeNotifier {
     }
     final completer = _pendingOwnBundleCheck;
     if (completer == null || completer.isCompleted) return;
+    final reset = data is Map ? data['identityReset'] : null;
     completer.complete(
       exists == null
           ? null
-          : ServerIdentityGuard(exists: exists, linkingEnabled: linkingEnabled),
+          : ServerIdentityGuard(
+              exists: exists,
+              linkingEnabled: linkingEnabled,
+              resetCompleted: reset is Map && reset['status'] == 'completed',
+            ),
     );
   }
 
@@ -3408,7 +3413,61 @@ class EncryptionProvider extends ChangeNotifier {
       // upload, and that transition has no event either.
       _syncIdentityResetRefresh();
       notifyListeners();
+      _maybeSpendCompletedReset();
     }
+  }
+
+  bool _spendingCompletedReset = false;
+
+  /// Issue #207: the server spends a completed ceremony on the first upload
+  /// of a DIFFERENT identity, and no gate state makes one on its own — a
+  /// keyless install refuses to mint while the lock is armed, a (lxiv)
+  /// mismatched one returns before any publish, and a lock-refused one only
+  /// re-uploads on its next connect. Without this the user waits out the
+  /// delay on the gate and nothing happens. Healthy sessions do nothing: a
+  /// same-identity re-upload spends nothing.
+  void _maybeSpendCompletedReset() {
+    final userId = _currentUserId;
+    if (userId == null || _spendingCompletedReset) return;
+    if (_e2eInitialized) {
+      if (!_identityUploadLocked) return;
+      _spendingCompletedReset = true;
+      unawaited(
+        _encryptionService
+            .getKeyBundleForReupload()
+            .then((bundle) {
+              if (bundle != null) _emit?.call('uploadKeyBundle', bundle);
+              _e2eFlowLog('IDENTITY_RESET_SPEND', {'shape': 'locked'});
+            })
+            .whenComplete(() => _spendingCompletedReset = false),
+      );
+      return;
+    }
+    if (!_identityIncomplete && !_deviceMaterialMismatch) return;
+    _spendingCompletedReset = true;
+    unawaited(
+      _spendCompletedResetOnGate(userId).whenComplete(
+        () => _spendingCompletedReset = false,
+      ),
+    );
+  }
+
+  Future<void> _spendCompletedResetOnGate(int userId) async {
+    _e2eFlowLog('IDENTITY_RESET_SPEND', {
+      'shape': _deviceMaterialMismatch ? 'mismatch' : 'keyless',
+    });
+    if (_deviceMaterialMismatch) {
+      if (!await _encryptionService.disposeMismatchedMaterialForReset(
+        _ownDeviceId,
+      )) {
+        return;
+      }
+      _deviceMaterialMismatch = false;
+    }
+    // The guard re-asks the server, which still reports `completed` while
+    // the grant is spendable — that answer, not this flag, authorizes the
+    // mint inside the service.
+    await initializeE2E(userId);
   }
 
   Completer<ServerIdentityGuard?>? _pendingOwnBundleCheck;
