@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -242,6 +244,33 @@ void main() {
             'from a chronically failing store would churn the 80-entry FIFO '
             'and evict the BOOT_MARKERS wipe forensics',
       );
+    });
+  });
+
+  // Issue #205: a revoked tab deletes its box queues only when the stored
+  // session still names the revoked device; a wrong answer deletes the
+  // queues of a sibling tab that adopted a reset session.
+  group('readSessionDeviceId', () {
+    String jwt(Map<String, Object?> claims) =>
+        'h.${base64Url.encode(utf8.encode(jsonEncode(claims))).replaceAll('=', '')}.s';
+
+    test('answers the deviceId claim; a token without one is device 1',
+        () async {
+      final store = prefsStore();
+      await store.write(access: jwt({'sub': 5, 'deviceId': 7}), refresh: 'r');
+      expect(await store.readSessionDeviceId(), 7);
+      await store.write(access: jwt({'sub': 5}), refresh: 'r');
+      expect(await store.readSessionDeviceId(), 1);
+    });
+
+    test('answers null for no session or a token that does not parse',
+        () async {
+      final store = prefsStore();
+      expect(await store.readSessionDeviceId(), isNull);
+      await store.write(access: 'not-a-jwt', refresh: 'r');
+      expect(await store.readSessionDeviceId(), isNull);
+      await store.write(access: 'h.%%%.s', refresh: 'r');
+      expect(await store.readSessionDeviceId(), isNull);
     });
   });
 }

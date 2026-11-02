@@ -395,8 +395,11 @@ class BoxSession
   /// this device holds — it alone holds their keys; no other device or the
   /// server may (decision 29) — subscribing none, then closes the box.
   /// Best effort: a queue the box does not confirm deleted, or a box that
-  /// is not reached within [wait], is left to the box's reaper.
+  /// is not reached within [wait], is left to the box's reaper. Deletes
+  /// nothing when [proceed] answers false (another tab of this install
+  /// adopted a newer session and shares these queues).
   Future<void> retireRevokedDevice({
+    required Future<bool> proceed,
     Duration wait = const Duration(seconds: 15),
   }) async {
     if (_disposed || _revoked) return;
@@ -409,6 +412,10 @@ class BoxSession
     bool owned() => !_disposed && _store.isOpen && _store.userId == owner;
     try {
       if (owner == null) return;
+      if (!await proceed) {
+        E2eDiagLog.add('BOX_REVOKED_QUEUES_KEPT', const {});
+        return;
+      }
       if (_box.state != BoxState.ready) {
         final ready = _box.states.firstWhere((s) => s == BoxState.ready);
         _box.connect();

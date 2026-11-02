@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -126,6 +127,30 @@ class AuthTokenStore {
       await _removePrefsCopies();
     }
     return (access: access, refresh: refresh);
+  }
+
+  /// The device id the STORED session names: its access token's `deviceId`
+  /// claim (a token without one is device 1, §8). Null when no session is
+  /// stored, it cannot be read or does not parse. On web every tab of the
+  /// install shares it, so a tab that adopted a §6.2 rebind has already
+  /// moved it to the new id (issue #205).
+  Future<int?> readSessionDeviceId() async {
+    final stored = await read();
+    final access = stored.access;
+    if (stored.readFailed || access == null) return null;
+    final parts = access.split('.');
+    if (parts.length != 3) return null;
+    try {
+      final claims = jsonDecode(
+        utf8.decode(base64Url.decode(base64Url.normalize(parts[1]))),
+      );
+      if (claims is! Map) return null;
+      final deviceId = claims['deviceId'];
+      if (deviceId == null) return 1;
+      return deviceId is int ? deviceId : null;
+    } on FormatException {
+      return null;
+    }
   }
 
   Future<void> write({required String access, required String refresh}) async {

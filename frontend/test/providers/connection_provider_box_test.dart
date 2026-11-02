@@ -92,6 +92,8 @@ void main() {
   late _QuietEncryption encryption;
   late FakeBoxSockets sockets;
   late List<String> boxUrls;
+  // The device id the install's stored session names (every tab shares it).
+  int? storedDeviceId;
 
   final address = {
     'rid': boxB64(Uint8List(32)..fillRange(0, 32, 0x21)),
@@ -110,6 +112,7 @@ void main() {
         _ => {'ok': true},
       };
     boxUrls = [];
+    storedDeviceId = 2;
     encryption = _QuietEncryption();
     connection = _RecordingConnection(socketService: account)
       ..setProviders(
@@ -126,6 +129,7 @@ void main() {
           boxUrls.add(baseUrl);
           return BoxClient(baseUrl: baseUrl, socketFactory: sockets.call);
         },
+        storedSessionDeviceId: () async => storedDeviceId,
       );
   });
 
@@ -480,6 +484,8 @@ void main() {
       await connection.connect(1, 'token', 'http://api.test', immediate: true);
       expect(sockets.sockets, hasLength(1), reason: 'the gate opens no box');
       account.serve('deviceRevoked', {'deviceId': 2});
+      await pumpEventQueue();
+      expect(sockets.sockets, hasLength(2), reason: 'opened only to delete');
       final box = sockets.last..serverConnect('S2');
       await pumpEventQueue();
 
@@ -518,6 +524,7 @@ void main() {
       // Account 1 is revoked before its box connects, logs out, and
       // account 2 signs in on the same install at once.
       account.serve('deviceRevoked', {'deviceId': 2});
+      await pumpEventQueue();
       final retiring = sockets.last;
       connection.disconnect(isLogout: true);
       await connection.connect(2, 'token', 'http://api.test', immediate: true);
@@ -527,6 +534,25 @@ void main() {
 
       expect(deletedOn(retiring), isEmpty);
       expect(store.requestQueue, isNotNull);
+    });
+
+    // Mutation: drop the stored-session check from `_onOwnDeviceRevoked`.
+    test('a gate-shaped revoke (no reason) after a sibling tab adopted a '
+        'reset session deletes nothing', () async {
+      await connection.connect(1, 'token', 'http://api.test');
+      encryption.onE2EReady!();
+      final box = sockets.last..serverConnect('S1');
+      await pumpEventQueue();
+
+      // Another tab of this install ran the §6.2 reset: the shared session
+      // now names its new device; this tab missed the live eviction and
+      // reconnects on its old token, which the connect gate refuses.
+      storedDeviceId = 7;
+      account.serve('deviceRevoked', {'deviceId': 2});
+      await pumpEventQueue();
+
+      expect(deletedOn(box), isEmpty);
+      expect(box.disposed, isTrue, reason: 'the box still closes');
     });
   });
 }

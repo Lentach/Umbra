@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import '../config/app_config.dart';
 import '../constants/app_constants.dart';
 import '../services/api_service.dart';
+import '../services/auth_token_store.dart';
 import '../services/box/box_client.dart';
 import '../services/box/box_media_fetcher.dart';
 import '../services/box/box_media_store.dart';
@@ -174,10 +175,14 @@ class ConnectionProvider extends ChangeNotifier {
     ContactStore? contactStore,
     ContactBackupService? contactBackup,
     BoxClient Function(String baseUrl)? boxClient,
+    Future<int?> Function()? storedSessionDeviceId,
   }) {
     _contactStore = contactStore;
     _contactBackup = contactBackup;
     _boxClient = boxClient;
+    if (storedSessionDeviceId != null) {
+      _storedSessionDeviceId = storedSessionDeviceId;
+    }
     if (contactStore != null) contactBackup?.attach(contactStore);
     friends.contactStore = contactStore;
     conversations.contactStore = contactStore;
@@ -1859,18 +1864,32 @@ class ConnectionProvider extends ChangeNotifier {
     // ids from EVERY socket but the recovering one, and another tab of the
     // recovering install still sits on the old id with the same store: its
     // queues are the recovering tab's, so only a plain revoke deletes them.
-    if (reason == null) _retireRevokedBox();
+    // The connect gate gives no reason, so a tab that missed the live
+    // eviction is told apart by the stored session (shared by every tab):
+    // a rebind moved it to the new id, a revoke left it on the revoked one.
+    // Read BEFORE the logout below clears it.
+    if (reason == null && deviceId is int) {
+      _retireRevokedBox(
+        _storedSessionDeviceId().then((stored) => stored == deviceId),
+      );
+    }
     notifyListeners();
     onDeviceRevoked?.call(reason);
   }
 
+  /// The device id the stored session names (`AuthTokenStore`); a test
+  /// seam ([setProviders]).
+  Future<int?> Function() _storedSessionDeviceId = () =>
+      AuthTokenStore().readSessionDeviceId();
+
   /// The box delete of a revoked device's queues still running, if any.
   Future<void>? _boxRetiring;
 
-  /// Issue #205: this device's queues go with it. Taken out of the
-  /// providers first, so nothing sends or subscribes through it meanwhile;
-  /// the logout that follows finds no box to close.
-  void _retireRevokedBox() {
+  /// Issue #205: this device's queues go with it — when [stillThisDevice]
+  /// says the install holds no newer session. Taken out of the providers
+  /// first, so nothing sends or subscribes through it meanwhile; the logout
+  /// that follows finds no box to close.
+  void _retireRevokedBox(Future<bool> stillThisDevice) {
     final box = _box;
     if (box == null) return;
     _box = null;
@@ -1880,7 +1899,7 @@ class ConnectionProvider extends ChangeNotifier {
       ..boxSiblings = null
       ..boxFriends = null
       ..boxFirstContact = null;
-    final retiring = box.retireRevokedDevice();
+    final retiring = box.retireRevokedDevice(proceed: stillThisDevice);
     _boxRetiring = retiring;
     unawaited(
       retiring.whenComplete(() {
