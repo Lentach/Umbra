@@ -16,6 +16,7 @@
   - `ConnectionProvider` starts `BoxSession` at the first E2E-ready only. `BoxSession.start` is idempotent; `resume`/`storeOpened` wait for it.
   - On `deviceRevoked` without a reason, `BoxSession.retireRevokedDevice` deletes every queue the device holds. It subscribes none and stops if another account opens the store. Logout closes the store after it.
   - Backend: a §6.2 reset eviction now carries `reason: 'reset'`, and the client deletes nothing for a reason (reviewer P2).
+  - `cd03e894`: the connect gate (`chat.gateway.ts:131`) sends no reason. A reasonless revoke now deletes only while the shared stored session (`AuthTokenStore.readSessionDeviceId`) still names the revoked id, so a tab that missed the live reset eviction keeps the recovering tab's queues (advisory).
   - Decisions E29a (narrows decision 29 client-side), wire.md, e2e-invariants, traps.
 - **Prod evidence behind #205 (read-only):**
   - bob208's Android (device 11, revoked 10-20) signed in again with the password on 11-01, landing on device 1 (`resolveLoginDeviceId`), and sat on the link gate.
@@ -37,16 +38,16 @@
 - Read only: `encryption_provider.dart` (`_initializeE2EInner`, `needsDeviceLink`), `queue_keys.dart`, `box_client.dart`
 
 ## Verification
-- CI: 6/6 success on `514f759e` (#205); 6/6 on `18382d52` (flip).
+- CI: 6/6 success on `514f759e` (#205), on `cd03e894` (gate-path fix), and on `18382d52` (flip).
 - Prod after the flip:
   - `env` shows all three flags `true`.
   - `/version` `18382d52`, `/health` ok.
   - 0 restarts, 0 warn/error at +10 min.
 - #205 gates:
-  - Flutter 3292/14 skipped (verifier OK).
+  - Flutter 3295/14 skipped (verifier OK).
   - Backend 1263/71 (verifier OK).
   - Dart ratchet 3131 (held); backend ESLint ratchet 850/147; tsc clean.
-  - 6 new tests red before the fix. Two review-fix mutants were killed: the store-owner check and the reason guard.
+  - 7 new provider tests and 2 token-store tests, red before the fix. Three review-fix mutants were killed: the store-owner check, the reason guard and the stored-session check.
   - Reviewer: P1 (another account's queues deleted) and P2 (reset tab) fixed, each with a test.
 - Drive, dev stack with prod flags (frozen + silent), release web build of the working tree, CDP Chrome:
   - **A (primary, linking enabled):** box opened after E2E.
@@ -55,6 +56,7 @@
   - **A revoked B:** B sent `deleteQueue` ×2, showed "To urządzenie usunięto…", `box_queues` 226 → 225 (B −2, A's rotation +1).
   - **B re-login:** gate again, no box socket.
   - Re-driven on the final build with device C: same (`deleteQueue` ×2, 227 → 226).
+  - After `cd03e894`, device D (linked as 8): stored session decoded as 8, a plain revoke still sent `deleteQueue` ×2 (228 → 227), and D logged out.
 - NOT verified:
   - native Android;
   - passcode-locked boot (box now waits for the unlock);
