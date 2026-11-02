@@ -94,10 +94,12 @@ services:
       LEGACY_WRITES_FROZEN: 'true'
       # Phase 4 step 4, server half: 'true' serves no roster (no friendsList,
       # conversationsList, servedMessageIds; getDeviceList(s) answers only the
-      # caller's own id). Flip only after the freeze watch, the reach check
-      # (decision 122) and a staging rehearsal, on the owner's go. Undo = 'false'.
+      # caller's own id). ON since 11-02 on the owner's go, after the freeze
+      # watch, the reach check (decision 122) and the staging rehearsal.
+      # Undo = 'false'. Boot refuses 'true' with LEGACY_WRITES_FROZEN 'false':
+      # to reopen the old path, set this 'false' first.
       # Pinned like BOX_ENABLED: a change is a reviewed commit.
-      LEGACY_LISTS_SILENT: 'false'
+      LEGACY_LISTS_SILENT: 'true'
       FIREBASE_SERVICE_ACCOUNT: ${FIREBASE_SERVICE_ACCOUNT:-}
       WEB_PUSH_VAPID_PUBLIC_KEY: ${WEB_PUSH_VAPID_PUBLIC_KEY:?set WEB_PUSH_VAPID_PUBLIC_KEY in ~/fireplace/.env}
       WEB_PUSH_VAPID_PRIVATE_KEY: ${WEB_PUSH_VAPID_PRIVATE_KEY:?set WEB_PUSH_VAPID_PRIVATE_KEY in ~/fireplace/.env}
