@@ -393,9 +393,9 @@ class BoxSession
   /// can read what reaches its queues any more, and while they exist a
   /// friend holding an old list keeps filling them. Deletes every queue
   /// this device holds — it alone holds their keys; no other device or the
-  /// server may (decision 29) — subscribing none, then closes the box.
-  /// Best effort: a queue the box does not confirm deleted, or a box that
-  /// is not reached within [wait], is left to the box's reaper. Deletes
+  /// server may (decision 29) — taking and subscribing none, then closes the
+  /// box. Best effort: whatever is not confirmed deleted within [wait] of
+  /// the call — box reached or not — is left to the box's reaper. Deletes
   /// nothing when [proceed] answers false (another tab of this install
   /// adopted a newer session and shares these queues).
   Future<void> retireRevokedDevice({
@@ -405,11 +405,20 @@ class BoxSession
     if (_disposed || _revoked) return;
     _revoked = true;
     _retry?.cancel();
+    final deadline = _now().add(wait);
+    // Nothing more is taken, and a (re)connection re-signs no queue: what
+    // reaches them now goes with them.
+    _inbox.dispose();
+    _box.forgetAll();
     // The store this device's queue keys live in. The logout that follows
     // may let another account open the same store object before the delete
     // is done (a sign-in within [wait]): its queues are never touched.
     final owner = _store.userId;
-    bool owned() => !_disposed && _store.isOpen && _store.userId == owner;
+    bool keepGoing() =>
+        !_disposed &&
+        _store.isOpen &&
+        _store.userId == owner &&
+        _now().isBefore(deadline);
     try {
       if (owner == null) return;
       if (!await proceed) {
@@ -419,13 +428,13 @@ class BoxSession
       if (_box.state != BoxState.ready) {
         final ready = _box.states.firstWhere((s) => s == BoxState.ready);
         _box.connect();
-        await ready.timeout(wait);
+        await ready.timeout(deadline.difference(_now()));
         // `ready` completes from inside the box's synchronous state
         // dispatch; closing the box there throws. Leave it first.
         await Future<void>.delayed(Duration.zero);
       }
-      if (owned()) {
-        final held = await _retireQueues(owned);
+      if (keepGoing()) {
+        final held = await _retireQueues(keepGoing);
         E2eDiagLog.add('BOX_REVOKED_QUEUES_RETIRED', {'held': held});
       }
     } on Object catch (e) {
@@ -1057,9 +1066,9 @@ class BoxSession
   }
 
   /// Deletes every queue this device holds, read from the store ONCE up
-  /// front; stops at the first [owned] that answers false. Returns how many
-  /// it held.
-  Future<int> _retireQueues(bool Function() owned) async {
+  /// front; stops at the first [keepGoing] that answers false. Returns how
+  /// many it held.
+  Future<int> _retireQueues(bool Function() keepGoing) async {
     final inbound = [
       for (final record in _store.all)
         for (final queue in record.queues) (record.userId, queue),
@@ -1071,15 +1080,15 @@ class BoxSession
     ];
     final held = inbound.length + retiring.length + own.length;
     for (final (peer, queue) in inbound) {
-      if (!owned()) return held;
+      if (!keepGoing()) return held;
       await _keys.retireInbound(peer, queue);
     }
     for (final queue in retiring) {
-      if (!owned()) return held;
+      if (!keepGoing()) return held;
       await _keys.retire(queue);
     }
     for (final auth in own) {
-      if (!owned()) return held;
+      if (!keepGoing()) return held;
       await _box.deleteQueue(auth);
     }
     return held;

@@ -143,10 +143,10 @@ export class ChatKeyExchangeService {
    * of its PRE-reset device id, which this teardown just revoked, so a
    * room-wide emit reaches it — and the client's `deviceRevoked` handler does
    * NOT filter on device id (`connection_provider.dart:_onOwnDeviceRevoked`
-   * reads the id only for its diagnostic line, then logs out unconditionally).
-   * It would therefore wipe the very session it had just adopted from the ack,
-   * moments earlier. Sparing it from `disconnect()` alone does not help: the
-   * event alone is enough to destroy the recovery.
+   * logs out unconditionally; the id only decides whether the box queues are
+   * deleted). It would therefore wipe the very session it had just adopted
+   * from the ack, moments earlier. Sparing it from `disconnect()` alone does
+   * not help: the event alone is enough to destroy the recovery.
    *
    * Excluded server-side rather than filtered client-side on purpose. A client
    * that ignored a `deviceRevoked` whose id did not match its own would also
@@ -159,6 +159,7 @@ export class ChatKeyExchangeService {
     server: Server,
     exceptSocketId: string,
     reason: 'restored' | 'reset',
+    callerDeviceId: number,
   ): void {
     let kicked = 0;
     for (const revokedDeviceId of revokedDeviceIds) {
@@ -170,12 +171,13 @@ export class ChatKeyExchangeService {
             userId,
             deviceId: revokedDeviceId,
             // (lxxviii): a restore is not a takeover — the revoked device's
-            // client words the logout accordingly. A reset says so too (issue
-            // #205): another tab of the recovering install still sits on the
-            // old id and shares its box queues, so the client deletes a
-            // revoked device's queues only when no reason is given (a plain
-            // revoke, or the connect gate).
+            // client words the logout accordingly.
             reason,
+            // Issue #205: the caller's own pre-reset id moved onto its new
+            // one. Another tab of the recovering install still sits on it and
+            // shares its box queues, so that client keeps them; every other
+            // revoked device deletes its own.
+            rehomed: revokedDeviceId === callerDeviceId,
           });
         const sockets = socketsForDevice(server, userId, revokedDeviceId);
         for (const socket of sockets) {
@@ -434,6 +436,7 @@ export class ChatKeyExchangeService {
           server,
           client.id,
           restored ? 'restored' : 'reset',
+          deviceId,
         );
       }
     } catch (error) {

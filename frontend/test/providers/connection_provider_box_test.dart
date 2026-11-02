@@ -469,6 +469,32 @@ void main() {
       expect(box.disposed, isTrue);
     });
 
+    // Mutation: drop `forgetAll` from `retireRevokedDevice`.
+    test('deviceRevoked while the box connection is down reconnects it '
+        'subscribing no queue, and deletes them', () async {
+      await connection.connect(1, 'token', 'http://api.test');
+      encryption.onE2EReady!();
+      final first = sockets.last..serverConnect('S1');
+      await pumpEventQueue();
+      expect(framesOn(first, 'subscribe'), isPositive);
+      first.serverDrop();
+
+      account.serve('deviceRevoked', {'deviceId': 2});
+      await pumpEventQueue();
+      final box = sockets.last;
+      expect(box, isNot(same(first)), reason: 'opened again to delete');
+      box.serverConnect('S2');
+      await pumpEventQueue();
+
+      final resubscribed = [
+        for (final f in box.emitted)
+          if (f.event == 'subscribe') ...f.frame['subs']! as List<Object?>,
+      ];
+      expect(resubscribed, isEmpty);
+      expect(deletedOn(box), contains(address['rid']));
+      expect(box.disposed, isTrue);
+    });
+
     test('a revoked device that never got E2E opens the box only to delete '
         'its queues, never to subscribe them', () async {
       // A first session left this device's queues in the store.
@@ -494,19 +520,44 @@ void main() {
       expect(box.disposed, isTrue);
     });
 
-    // Mutation: drop the `reason == null` condition in `_onOwnDeviceRevoked`.
-    test('a reset or restore eviction deletes nothing: another tab of the '
-        'recovering install holds the same queues', () async {
-      await connection.connect(1, 'token', 'http://api.test');
-      encryption.onE2EReady!();
-      final box = sockets.last..serverConnect('S1');
-      await pumpEventQueue();
+    // Mutation: drop the `rehomed` condition in `_onOwnDeviceRevoked`.
+    for (final reason in ['reset', 'restored']) {
+      test("a $reason eviction of the recovering install's own old id "
+          '(rehomed) deletes nothing: another of its tabs holds the same '
+          'queues', () async {
+        await connection.connect(1, 'token', 'http://api.test');
+        encryption.onE2EReady!();
+        final box = sockets.last..serverConnect('S1');
+        await pumpEventQueue();
 
-      account.serve('deviceRevoked', {'deviceId': 2, 'reason': 'reset'});
-      await pumpEventQueue();
+        account.serve('deviceRevoked', {
+          'deviceId': 2,
+          'reason': reason,
+          'rehomed': true,
+        });
+        await pumpEventQueue();
 
-      expect(deletedOn(box), isEmpty);
-    });
+        expect(deletedOn(box), isEmpty);
+      });
+
+      // Mutation: gate the delete on `reason == null` again.
+      test('a $reason eviction of any other device deletes its queues',
+          () async {
+        await connection.connect(1, 'token', 'http://api.test');
+        encryption.onE2EReady!();
+        final box = sockets.last..serverConnect('S1');
+        await pumpEventQueue();
+
+        account.serve('deviceRevoked', {
+          'deviceId': 2,
+          'reason': reason,
+          'rehomed': false,
+        });
+        await pumpEventQueue();
+
+        expect(deletedOn(box), contains(address['rid']));
+      });
+    }
 
     // Mutation: drop the store-owner check from `retireRevokedDevice`.
     test('another account signing in while the delete waits for the box '

@@ -599,6 +599,10 @@ class BoxClient {
   /// Drops [rid] from the resubscribe set. Local only.
   void forget(Uint8List rid) => _set.remove(boxB64(rid));
 
+  /// Empties the resubscribe set: the next connection subscribes no queue.
+  /// Local only — a live subscription stays until the queue is deleted.
+  void forgetAll() => _set.clear();
+
   /// How this client proves [rid] — held for every queue it subscribed —
   /// or null. Lets a reader ack a delivery on a queue its owner record no
   /// longer holds, so it does not keep one of the 16 window slots.

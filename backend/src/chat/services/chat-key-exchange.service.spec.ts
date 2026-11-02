@@ -437,9 +437,18 @@ describe('ChatKeyExchangeService', () => {
         expect(mockServer.emit).toHaveBeenCalledWith('deviceRevoked', {
           userId: 1,
           deviceId: 1,
-          // Issue #205: a reset says so, and the client then keeps the
-          // superseded id's box queues (another tab of this install has them).
           reason: 'reset',
+          // Issue #205: device 1 is the caller's own pre-reset id. Another
+          // tab of the recovering install still sits on it and shares its
+          // box queues, so that client keeps them...
+          rehomed: true,
+        });
+        // ...while any other superseded device deletes its own.
+        expect(mockServer.emit).toHaveBeenCalledWith('deviceRevoked', {
+          userId: 1,
+          deviceId: 2,
+          reason: 'reset',
+          rehomed: false,
         });
         // ...then dropped, which is what actually ends the access.
         expect(kickedOne.disconnect).toHaveBeenCalled();
@@ -507,10 +516,10 @@ describe('ChatKeyExchangeService', () => {
 
         // AND IT IS NEVER TOLD IT WAS REVOKED. This matters more than the
         // disconnect: the client's handler does NOT filter on device id
-        // (connection_provider.dart `_onOwnDeviceRevoked` reads the id only for
-        // its diagnostic line, then logs out unconditionally), so a room-wide
-        // announcement would make the recovering device wipe the very session
-        // it adopted from the ack a moment earlier.
+        // (connection_provider.dart `_onOwnDeviceRevoked` logs out
+        // unconditionally), so a room-wide announcement would make the
+        // recovering device wipe the very session it adopted from the ack a
+        // moment earlier.
         expect(
           delivered.filter(
             (d) => d.socketId === 'sock-caller' && d.event === 'deviceRevoked',
@@ -737,6 +746,9 @@ describe('ChatKeyExchangeService', () => {
           // (lxxviii): a restore is not a takeover; the client words the
           // logout accordingly.
           reason: 'restored',
+          // Issue #205: not the restoring caller's own id, so it deletes its
+          // box queues.
+          rehomed: false,
         });
         expect(kicked.disconnect).toHaveBeenCalled();
       });

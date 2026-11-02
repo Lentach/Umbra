@@ -1392,6 +1392,34 @@ void main() {
     },
   );
 
+  // Mutation: drop the deadline from `retireRevokedDevice`'s `keepGoing`.
+  test(
+    'retireRevokedDevice deletes nothing more once its wait is spent, even '
+    'with the box reached in time: the rest is left to the reaper',
+    () async {
+      await a.start();
+      await a.store.update(
+        5,
+        (c) => c!.copyWith(queues: [_queue(0x10), _queue(0x20)]),
+      );
+      // Every delete takes longer than the whole wait.
+      final route = box.sockets.respond!;
+      box.sockets.respond = (socket, f) {
+        if (f.event == 'deleteQueue') {
+          a.clock = a.clock.add(const Duration(seconds: 20));
+        }
+        return route(socket, f);
+      };
+
+      await a.session.retireRevokedDevice(proceed: Future.value(true));
+
+      expect(
+        a.socket.emitted.where((f) => f.event == 'deleteQueue'),
+        hasLength(1),
+      );
+    },
+  );
+
   group('slice (e): device announcements', () {
     test(
       "a handoff into a friend's REQUEST queue carries this account's list "

@@ -1,8 +1,8 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:jwt_decoder/jwt_decoder.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../utils/e2e_persistent_diag.dart';
@@ -138,14 +138,8 @@ class AuthTokenStore {
     final stored = await read();
     final access = stored.access;
     if (stored.readFailed || access == null) return null;
-    final parts = access.split('.');
-    if (parts.length != 3) return null;
     try {
-      final claims = jsonDecode(
-        utf8.decode(base64Url.decode(base64Url.normalize(parts[1]))),
-      );
-      if (claims is! Map) return null;
-      final deviceId = claims['deviceId'];
+      final deviceId = JwtDecoder.decode(access)['deviceId'];
       if (deviceId == null) return 1;
       return deviceId is int ? deviceId : null;
     } on FormatException {

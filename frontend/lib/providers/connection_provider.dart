@@ -1128,12 +1128,7 @@ class ConnectionProvider extends ChangeNotifier {
       unawaited(BoxPushNids.clear());
       _boxMedia?.dispose();
       _boxMedia = null;
-      _messagingProvider
-        ?..boxOutbox = null
-        ..boxSiblings = null
-        ..boxFriends = null
-        ..boxFirstContact = null
-        ..boxMedia = null;
+      _unwireBox();
       _boxUserId = null;
     }
 
@@ -1860,15 +1855,16 @@ class ConnectionProvider extends ChangeNotifier {
     _reconnectManager.resetAttempts();
     _socketService.disconnect();
     _isConnected = false;
-    // A §6.2 reset or a restore (`reason` set) evicts the superseded device
-    // ids from EVERY socket but the recovering one, and another tab of the
-    // recovering install still sits on the old id with the same store: its
-    // queues are the recovering tab's, so only a plain revoke deletes them.
-    // The connect gate gives no reason, so a tab that missed the live
-    // eviction is told apart by the stored session (shared by every tab):
-    // a rebind moved it to the new id, a revoke left it on the revoked one.
-    // Read BEFORE the logout below clears it.
-    if (reason == null && deviceId is int) {
+    // A §6.2 reset or a restore moves the recovering install off its old id
+    // and evicts that id (`rehomed`) from every socket but the recovering
+    // one: another tab of that install still sits on it with the same store,
+    // so its queues are the recovering tab's. Every other revoked id deletes.
+    // The connect gate says neither, so a tab that missed the live eviction
+    // is told apart by the stored session (shared by every tab): a rebind
+    // moved it to the new id, a revoke left it on the revoked one. Read
+    // BEFORE the logout below clears it.
+    final rehomed = data is Map && data['rehomed'] == true;
+    if (!rehomed && deviceId is int) {
       _retireRevokedBox(
         _storedSessionDeviceId().then((stored) => stored == deviceId),
       );
@@ -1894,11 +1890,7 @@ class ConnectionProvider extends ChangeNotifier {
     if (box == null) return;
     _box = null;
     _boxUserId = null;
-    _messagingProvider
-      ?..boxOutbox = null
-      ..boxSiblings = null
-      ..boxFriends = null
-      ..boxFirstContact = null;
+    _unwireBox();
     final retiring = box.retireRevokedDevice(proceed: stillThisDevice);
     _boxRetiring = retiring;
     unawaited(
@@ -1906,6 +1898,17 @@ class ConnectionProvider extends ChangeNotifier {
         if (identical(_boxRetiring, retiring)) _boxRetiring = null;
       }),
     );
+  }
+
+  /// Takes the box out of the messaging provider: nothing sends, fetches or
+  /// subscribes through it any more.
+  void _unwireBox() {
+    _messagingProvider
+      ?..boxOutbox = null
+      ..boxSiblings = null
+      ..boxFriends = null
+      ..boxFirstContact = null
+      ..boxMedia = null;
   }
 
   // ---------- Dispose ----------
