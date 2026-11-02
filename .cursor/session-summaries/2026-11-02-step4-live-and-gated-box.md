@@ -77,7 +77,7 @@
   - a friend's stale list keeps writing into them until then (decision 59);
   - another install on the recovering caller's old id (a password login lands on the primary's id) keeps its queues;
   - #206: a device revoked while offline follows its queues on reconnect before the gate tells it.
-- Seen, not investigated: a gate tab whose reset ceremony completed did not spend it after a reload (the drive scripted the upload).
+- #207 (likely bug): a gate-started reset on a stale-material install is never spent (evidence in the issue).
 - Step 5 after a few days of step 4.
 - Drive recipe:
   - `%TEMP%/p4s4drive/h.mjs` (+ `intercept.js`: `__fp.wsOpened` kinds, `boxEmits`); `spendreset.cjs <token>` spends a completed ceremony.
