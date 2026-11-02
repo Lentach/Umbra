@@ -437,6 +437,9 @@ describe('ChatKeyExchangeService', () => {
         expect(mockServer.emit).toHaveBeenCalledWith('deviceRevoked', {
           userId: 1,
           deviceId: 1,
+          // Issue #205: a reset says so, and the client then keeps the
+          // superseded id's box queues (another tab of this install has them).
+          reason: 'reset',
         });
         // ...then dropped, which is what actually ends the access.
         expect(kickedOne.disconnect).toHaveBeenCalled();
@@ -732,7 +735,7 @@ describe('ChatKeyExchangeService', () => {
           userId: 1,
           deviceId: 2,
           // (lxxviii): a restore is not a takeover; the client words the
-          // logout accordingly. Absent on every other teardown.
+          // logout accordingly.
           reason: 'restored',
         });
         expect(kicked.disconnect).toHaveBeenCalled();

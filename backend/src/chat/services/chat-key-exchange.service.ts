@@ -158,7 +158,7 @@ export class ChatKeyExchangeService {
     revokedDeviceIds: number[],
     server: Server,
     exceptSocketId: string,
-    reason?: 'restored',
+    reason: 'restored' | 'reset',
   ): void {
     let kicked = 0;
     for (const revokedDeviceId of revokedDeviceIds) {
@@ -170,9 +170,12 @@ export class ChatKeyExchangeService {
             userId,
             deviceId: revokedDeviceId,
             // (lxxviii): a restore is not a takeover — the revoked device's
-            // client words the logout accordingly. Absent on every other
-            // teardown, so the historic payload is byte-identical.
-            ...(reason ? { reason } : {}),
+            // client words the logout accordingly. A reset says so too (issue
+            // #205): another tab of the recovering install still sits on the
+            // old id and shares its box queues, so the client deletes a
+            // revoked device's queues only when no reason is given (a plain
+            // revoke, or the connect gate).
+            reason,
           });
         const sockets = socketsForDevice(server, userId, revokedDeviceId);
         for (const socket of sockets) {
@@ -430,7 +433,7 @@ export class ChatKeyExchangeService {
           roster.revokedDeviceIds,
           server,
           client.id,
-          restored ? 'restored' : undefined,
+          restored ? 'restored' : 'reset',
         );
       }
     } catch (error) {

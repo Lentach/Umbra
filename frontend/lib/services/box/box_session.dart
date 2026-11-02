@@ -202,6 +202,14 @@ class BoxSession
   Timer? _retry;
   bool _disposed = false;
 
+  /// [start] ran: the box is followed. A device that cannot do E2E duty
+  /// under its session — the link gate — never starts it (issue #205).
+  bool _started = false;
+
+  /// This device was revoked ([retireRevokedDevice]): no queue is followed,
+  /// made or registered again.
+  bool _revoked = false;
+
   /// The app's reader of box deliveries (`MessagingProvider`). Wiring one
   /// offers it everything that landed in the journal meanwhile.
   BoxInboxConsumer? get consumer => _inbox.consumer;
@@ -349,14 +357,19 @@ class BoxSession
   Future<bool> announceOwnList(Map<String, dynamic> auth) =>
       _disposed ? Future.value(false) : _friends.announceOwnList(auth);
 
-  /// Connects the box and starts following it.
+  /// Connects the box and starts following it. Only for a device that does
+  /// E2E duty under its session (`ConnectionProvider` calls it once E2E is
+  /// ready): a device on the link gate would subscribe the queues it holds
+  /// and take messages it can never show (issue #205). Idempotent.
   void start() {
+    if (_started || _disposed || _revoked) return;
+    _started = true;
     _inbox.start();
     _notifiers?.start();
     _subscriptions
       ..add(
         _box.states.listen((state) {
-          if (state != BoxState.ready) return;
+          if (state != BoxState.ready || _revoked) return;
           if (_request == null) unawaited(_ensure());
           if (_self == null) unawaited(_ensureSelf());
           unawaited(_receive());
@@ -370,9 +383,51 @@ class BoxSession
     _box.connect();
   }
 
-  /// Reconnects the box after [close] (the account reconnected).
+  /// Reconnects the box after [close] (the account reconnected); a box
+  /// never [start]ed stays closed.
   void resume() {
-    if (!_disposed) _box.connect();
+    if (!_disposed && _started && !_revoked) _box.connect();
+  }
+
+  /// The server revoked this device (`deviceRevoked`, issue #205): nobody
+  /// can read what reaches its queues any more, and while they exist a
+  /// friend holding an old list keeps filling them. Deletes every queue
+  /// this device holds — it alone holds their keys; no other device or the
+  /// server may (decision 29) — subscribing none, then closes the box.
+  /// Best effort: a queue the box does not confirm deleted, or a box that
+  /// is not reached within [wait], is left to the box's reaper.
+  Future<void> retireRevokedDevice({
+    Duration wait = const Duration(seconds: 15),
+  }) async {
+    if (_disposed || _revoked) return;
+    _revoked = true;
+    _retry?.cancel();
+    // The store this device's queue keys live in. The logout that follows
+    // may let another account open the same store object before the delete
+    // is done (a sign-in within [wait]): its queues are never touched.
+    final owner = _store.userId;
+    bool owned() => !_disposed && _store.isOpen && _store.userId == owner;
+    try {
+      if (owner == null) return;
+      if (_box.state != BoxState.ready) {
+        final ready = _box.states.firstWhere((s) => s == BoxState.ready);
+        _box.connect();
+        await ready.timeout(wait);
+        // `ready` completes from inside the box's synchronous state
+        // dispatch; closing the box there throws. Leave it first.
+        await Future<void>.delayed(Duration.zero);
+      }
+      if (owned()) {
+        final held = await _retireQueues(owned);
+        E2eDiagLog.add('BOX_REVOKED_QUEUES_RETIRED', {'held': held});
+      }
+    } on Object catch (e) {
+      E2eDiagLog.add('BOX_REVOKED_RETIRE_FAILED', {
+        'error': e.runtimeType.toString(),
+      });
+    } finally {
+      dispose();
+    }
   }
 
   /// The app came back from the background
@@ -404,6 +459,7 @@ class BoxSession
   /// unlocked, or a slow open landed after the budget. Every earlier attempt
   /// found it closed, and neither socket will say "ready" again on its own.
   void storeOpened() {
+    if (!_started || _revoked) return;
     if (_request == null) unawaited(_ensure());
     if (_self == null) unawaited(_ensureSelf());
     unawaited(_receive());
@@ -990,18 +1046,36 @@ class BoxSession
     if (_disposed) return;
     // Best effort (decision 113, E114i): a queue the box does not confirm
     // deleted stays for its reaper, and the account is going either way.
-    for (final record in [..._store.all]) {
-      for (final queue in [...record.queues]) {
-        await _keys.retireInbound(record.userId, queue);
-      }
+    await _retireQueues(() => !_disposed);
+  }
+
+  /// Deletes every queue this device holds, read from the store ONCE up
+  /// front; stops at the first [owned] that answers false. Returns how many
+  /// it held.
+  Future<int> _retireQueues(bool Function() owned) async {
+    final inbound = [
+      for (final record in _store.all)
+        for (final queue in record.queues) (record.userId, queue),
+    ];
+    final retiring = [..._store.retiringSelfQueues];
+    final own = [
+      for (final queue in [_store.selfQueue, _store.requestQueue])
+        if (queue != null) ?QueueKeys.authOf(queue),
+    ];
+    final held = inbound.length + retiring.length + own.length;
+    for (final (peer, queue) in inbound) {
+      if (!owned()) return held;
+      await _keys.retireInbound(peer, queue);
     }
-    for (final retiring in [..._store.retiringSelfQueues]) {
-      await _keys.retire(retiring);
+    for (final queue in retiring) {
+      if (!owned()) return held;
+      await _keys.retire(queue);
     }
-    for (final own in [_store.selfQueue, _store.requestQueue]) {
-      final auth = own == null ? null : QueueKeys.authOf(own);
-      if (auth != null) await _box.deleteQueue(auth);
+    for (final auth in own) {
+      if (!owned()) return held;
+      await _box.deleteQueue(auth);
     }
+    return held;
   }
 
   /// Called when a box-made record changed outside the messaging reader —
@@ -1047,7 +1121,8 @@ class BoxSession
   /// offers what the journal holds. The box keeps the set and re-signs it on
   /// every reconnect, so each queue is subscribed here once per session.
   Future<void> _receive() async {
-    if (_disposed || _box.state != BoxState.ready || !_store.isOpen) return;
+    if (_disposed || _revoked || _box.state != BoxState.ready) return;
+    if (!_store.isOpen) return;
     final following = {for (final rid in _box.subscribed) boxB64(rid)};
     final missing = [
       for (final queue in _keys.inbound())
@@ -1059,7 +1134,9 @@ class BoxSession
   }
 
   Future<void> _ensure() async {
-    if (_ensuring || _disposed || _box.state != BoxState.ready) return;
+    if (_ensuring || _disposed || _revoked || _box.state != BoxState.ready) {
+      return;
+    }
     _ensuring = true;
     try {
       final queue = await _keys.ensureRequest();
@@ -1072,7 +1149,8 @@ class BoxSession
   }
 
   Future<void> _ensureSelf() async {
-    if (_ensuringSelf || _disposed || _box.state != BoxState.ready) return;
+    if (_ensuringSelf || _disposed || _revoked) return;
+    if (_box.state != BoxState.ready) return;
     _ensuringSelf = true;
     try {
       final queue = await _keys.ensureSelf();

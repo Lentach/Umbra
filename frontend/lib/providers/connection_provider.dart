@@ -538,13 +538,16 @@ class ConnectionProvider extends ChangeNotifier {
         // Another account's chats must not outlive it in the push worker.
         if (_box != null) unawaited(BoxPushNids.clear());
         _boxUserId = userId;
+        // Started only once E2E is ready (issue #205): a device on the link
+        // gate holds no identity of its own, so whatever its queues take it
+        // can never show — and taking it is what empties them.
         _box = BoxSession(
           box: boxClient(baseUrl),
           store: contacts,
           emit: emit,
           // E9: box push registration on every contact queue.
           push: PushBoxSource(),
-        )..start();
+        );
         final session = _box!;
         _boxMedia = BoxMediaFetcher(
           store: BoxMediaStore.device(),
@@ -590,7 +593,11 @@ class ConnectionProvider extends ChangeNotifier {
             ..boxAlive = BoxSiblingAlive(store: contacts);
           _encryptionProvider?.lookupBoxPeerList = messaging.lookupBoxPeerList;
         }
-        if (_encryptionProvider?.isE2EReady == true) _box!.e2eReady();
+        if (_encryptionProvider?.isE2EReady == true) {
+          _box!
+            ..start()
+            ..e2eReady();
+        }
       } else {
         _box!.resume();
       }
@@ -609,8 +616,12 @@ class ConnectionProvider extends ChangeNotifier {
       // A box delivery refused because E2E was not ready waits in the
       // journal; nothing else would offer it again before a reconnect.
       _box?.drainInbox();
-      // Sibling queues: a handoff can be encrypted now.
-      _box?.e2eReady();
+      // Issue #205: the box is followed from the first E2E-ready on; a
+      // device on the link gate never gets here. Sibling queues: a handoff
+      // can be encrypted now.
+      _box
+        ?..start()
+        ..e2eReady();
       // Decision 21: the device lists a box send reads are looked up here,
       // once per connect — never by a send.
       _refreshBoxDeviceLists();
@@ -1094,7 +1105,19 @@ class ConnectionProvider extends ChangeNotifier {
       _friendsProvider?.clearAll();
       _conversationsProvider?.clearAll();
       _messagingProvider?.clearAll();
-      _contactStore?.close();
+      // A revoked device's box may still be deleting its queues (issue
+      // #205): the store holds their keys, so it closes after that.
+      final store = _contactStore;
+      final retiring = _boxRetiring;
+      if (retiring == null) {
+        store?.close();
+      } else {
+        unawaited(
+          retiring.whenComplete(() {
+            if (_currentUserId == null) store?.close();
+          }),
+        );
+      }
       _box?.dispose();
       _box = null;
       unawaited(BoxPushNids.clear());
@@ -1832,8 +1855,38 @@ class ConnectionProvider extends ChangeNotifier {
     _reconnectManager.resetAttempts();
     _socketService.disconnect();
     _isConnected = false;
+    // A §6.2 reset or a restore (`reason` set) evicts the superseded device
+    // ids from EVERY socket but the recovering one, and another tab of the
+    // recovering install still sits on the old id with the same store: its
+    // queues are the recovering tab's, so only a plain revoke deletes them.
+    if (reason == null) _retireRevokedBox();
     notifyListeners();
     onDeviceRevoked?.call(reason);
+  }
+
+  /// The box delete of a revoked device's queues still running, if any.
+  Future<void>? _boxRetiring;
+
+  /// Issue #205: this device's queues go with it. Taken out of the
+  /// providers first, so nothing sends or subscribes through it meanwhile;
+  /// the logout that follows finds no box to close.
+  void _retireRevokedBox() {
+    final box = _box;
+    if (box == null) return;
+    _box = null;
+    _boxUserId = null;
+    _messagingProvider
+      ?..boxOutbox = null
+      ..boxSiblings = null
+      ..boxFriends = null
+      ..boxFirstContact = null;
+    final retiring = box.retireRevokedDevice();
+    _boxRetiring = retiring;
+    unawaited(
+      retiring.whenComplete(() {
+        if (identical(_boxRetiring, retiring)) _boxRetiring = null;
+      }),
+    );
   }
 
   // ---------- Dispose ----------

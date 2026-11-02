@@ -132,31 +132,29 @@ void main() {
   tearDown(() => connection.disconnect(isLogout: true));
 
   test(
-    "connect() opens the box on the account's server; the request queue is "
-    'published once the account socket is ready, and not again after the '
-    'server accepted it',
+    "the box opens on the account's server once E2E is ready; the request "
+    'queue is published once the account socket is ready, and not again '
+    'after the server accepted it',
     () async {
       await connection.connect(1, 'token', 'http://api.test');
       expect(boxUrls, ['http://api.test']);
+      account.serve('socketReady', {'deviceId': 2});
+      encryption.onE2EReady!();
       expect(sockets.last.url, 'http://api.test/box');
       sockets.last.serverConnect('S1');
-      await pumpEventQueue();
-
-      // Nothing is published before this connect's E2E is ready: a device on
-      // the link gate (no identity) holds the PRIMARY's token.
-      account.serve('socketReady', {'deviceId': 2});
-      await pumpEventQueue();
-      expect(connection.published, isEmpty);
-      encryption.onE2EReady!();
       await pumpEventQueue();
       expect(connection.published, [
         {'sid': address['sid'], 'sealPub': isA<String>()},
       ]);
 
+      // Nothing is published before THIS connect's E2E is ready: a link
+      // rebind adopts the identity on the old token.
       account
         ..serve('requestQueueSet', {'success': true})
         ..drop()
         ..serve('socketReady', {'deviceId': 2});
+      await pumpEventQueue();
+      expect(connection.published, hasLength(1));
       encryption.onE2EReady!();
       await pumpEventQueue();
       expect(connection.published, hasLength(1));
@@ -203,6 +201,7 @@ void main() {
 
   test('logout closes the box; the next account gets its own', () async {
     await connection.connect(1, 'token', 'http://api.test');
+    encryption.onE2EReady!();
     final first = sockets.last;
     connection.disconnect(isLogout: true);
     expect(first.disposed, isTrue);
@@ -226,6 +225,7 @@ void main() {
       'ping, even when the account socket survived; the new one resubscribes',
       () async {
         await connection.connect(1, 'token', 'http://api.test');
+        encryption.onE2EReady!();
         final suspended = sockets.last..serverConnect('S1');
         await pumpEventQueue();
         final held = ridsSubscribedOn(suspended);
@@ -254,6 +254,7 @@ void main() {
 
     test('and keeps one the server pings (decision 76)', () async {
       await connection.connect(1, 'token', 'http://api.test');
+      encryption.onE2EReady!();
       final live = sockets.last..serverConnect('S1');
       await pumpEventQueue();
       live.lastHeardAt = DateTime.now().subtract(const Duration(minutes: 2));
@@ -287,6 +288,7 @@ void main() {
     "account's socket",
     () async {
       await connection.connect(1, 'token', 'http://api.test');
+      encryption.onE2EReady!();
       sockets.last.serverConnect('S1');
       await pumpEventQueue();
       account.serve('socketReady', {'deviceId': 2});
@@ -340,16 +342,15 @@ void main() {
       addTearDown(() => booted.disconnect(isLogout: true));
 
       await booted.connect(1, 'token', 'http://api.test');
-      boxes.last.serverConnect('S1');
-      await pumpEventQueue();
       lockedAccount.serve('socketReady', {'deviceId': 2});
       await pumpEventQueue();
-      expect(booted.published, isEmpty, reason: 'the vault is locked');
+      // A locked vault parks E2E init, so the box waits for the unlock.
+      expect(boxes.sockets, isEmpty);
 
       locked = false;
       await encryption.onPasscodeLockRestore!();
-      // A locked vault parks E2E init until the unlock; it is ready now.
       encryption.onE2EReady!();
+      boxes.last.serverConnect('S1');
       await pumpEventQueue();
       expect(booted.published, [
         {'sid': address['sid'], 'sealPub': isA<String>()},
@@ -382,13 +383,12 @@ void main() {
           wired.events.where((e) => e == 'getOwnRequestQueues').length;
 
       await wired.connect(1, 'token', 'http://api.test');
-      sockets.last.serverConnect('S1');
-      await pumpEventQueue();
       account.serve('socketReady', {'deviceId': 2});
       await pumpEventQueue();
       expect(asks(), 0, reason: 'E2E is not ready');
 
       encryption.onE2EReady!();
+      sockets.last.serverConnect('S1');
       await pumpEventQueue();
       expect(asks(), 1);
 
@@ -410,4 +410,123 @@ void main() {
       expect(asks(), 3);
     },
   );
+
+  // Issue #205: a device that cannot do E2E duty under its session — the
+  // link gate (identity incomplete, stale material) or a server that could
+  // not be asked — must not collect messages it can never show.
+  group('a device that is not (or no longer) a linked device', () {
+    int framesOn(FakeBoxSocket socket, String event) =>
+        socket.emitted.where((f) => f.event == event).length;
+
+    Set<Object?> deletedOn(FakeBoxSocket socket) => {
+      for (final f in socket.emitted)
+        if (f.event == 'deleteQueue') f.frame['rid'],
+    };
+
+    // Mutation: start the box in `connect` regardless of E2E.
+    test('opens no box while E2E is not ready (the link gate), and opens it '
+        'once E2E is', () async {
+      await connection.connect(1, 'token', 'http://api.test');
+      account.serve('socketReady', {'deviceId': 1});
+      await pumpEventQueue();
+      expect(
+        sockets.sockets,
+        isEmpty,
+        reason: 'a gated device would subscribe and drain its queues',
+      );
+
+      encryption.onE2EReady!();
+      await pumpEventQueue();
+      expect(sockets.sockets, hasLength(1));
+      expect(sockets.last.connectCalled, isTrue);
+    });
+
+    test('a reconnect before E2E is ready does not open it either', () async {
+      await connection.connect(1, 'token', 'http://api.test');
+      await connection.connect(1, 'token', 'http://api.test', immediate: true);
+      expect(sockets.sockets, isEmpty);
+    });
+
+    // Mutation: drop the retire from `_onOwnDeviceRevoked`.
+    test('deviceRevoked deletes every queue this device holds, subscribes '
+        'nothing more and closes the box', () async {
+      await connection.connect(1, 'token', 'http://api.test');
+      encryption.onE2EReady!();
+      final box = sockets.last..serverConnect('S1');
+      await pumpEventQueue();
+      expect(store.requestQueue, isNotNull, reason: 'the session made one');
+      final subscribes = framesOn(box, 'subscribe');
+
+      account.serve('deviceRevoked', {'deviceId': 2});
+      await pumpEventQueue();
+
+      expect(deletedOn(box), contains(address['rid']));
+      expect(framesOn(box, 'subscribe'), subscribes);
+      expect(box.disposed, isTrue);
+    });
+
+    test('a revoked device that never got E2E opens the box only to delete '
+        'its queues, never to subscribe them', () async {
+      // A first session left this device's queues in the store.
+      await connection.connect(1, 'token', 'http://api.test');
+      encryption.onE2EReady!();
+      sockets.last.serverConnect('S1');
+      await pumpEventQueue();
+      expect(store.requestQueue, isNotNull);
+      connection.disconnect(isLogout: true);
+
+      // Signed in again on the link gate; the server says it was revoked.
+      encryption.clearAll();
+      await connection.connect(1, 'token', 'http://api.test', immediate: true);
+      expect(sockets.sockets, hasLength(1), reason: 'the gate opens no box');
+      account.serve('deviceRevoked', {'deviceId': 2});
+      final box = sockets.last..serverConnect('S2');
+      await pumpEventQueue();
+
+      expect(deletedOn(box), contains(address['rid']));
+      expect(framesOn(box, 'subscribe'), 0);
+      expect(box.disposed, isTrue);
+    });
+
+    // Mutation: drop the `reason == null` condition in `_onOwnDeviceRevoked`.
+    test('a reset or restore eviction deletes nothing: another tab of the '
+        'recovering install holds the same queues', () async {
+      await connection.connect(1, 'token', 'http://api.test');
+      encryption.onE2EReady!();
+      final box = sockets.last..serverConnect('S1');
+      await pumpEventQueue();
+
+      account.serve('deviceRevoked', {'deviceId': 2, 'reason': 'reset'});
+      await pumpEventQueue();
+
+      expect(deletedOn(box), isEmpty);
+    });
+
+    // Mutation: drop the store-owner check from `retireRevokedDevice`.
+    test('another account signing in while the delete waits for the box '
+        'never loses its queues', () async {
+      // Account 1's queues are in the store; account 2's too.
+      await connection.connect(2, 'token', 'http://api.test');
+      encryption.onE2EReady!();
+      sockets.last.serverConnect('S1');
+      await pumpEventQueue();
+      expect(store.requestQueue, isNotNull);
+      connection.disconnect(isLogout: true);
+      encryption.clearAll();
+      await connection.connect(1, 'token', 'http://api.test', immediate: true);
+
+      // Account 1 is revoked before its box connects, logs out, and
+      // account 2 signs in on the same install at once.
+      account.serve('deviceRevoked', {'deviceId': 2});
+      final retiring = sockets.last;
+      connection.disconnect(isLogout: true);
+      await connection.connect(2, 'token', 'http://api.test', immediate: true);
+      expect(store.userId, 2);
+      retiring.serverConnect('S2');
+      await pumpEventQueue();
+
+      expect(deletedOn(retiring), isEmpty);
+      expect(store.requestQueue, isNotNull);
+    });
+  });
 }
