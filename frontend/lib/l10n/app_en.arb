@@ -46,7 +46,7 @@
   },
   "devicesRevokeAction": "Remove device",
   "devicesRevokeTitle": "Remove this device?",
-  "devicesRevokeExplainer": "It will be signed out. Its messages stay.",
+  "devicesRevokeExplainer": "It will be signed out. Linked again, it starts fresh, without its old messages.",
   "devicesRevokeFailed": "Could not remove that device. Try again.",
   "deviceRevokedNotice": "This device was removed. Sign in and link it again.",
   "deviceMismatchTitle": "This device was removed from the account",
@@ -296,7 +296,7 @@
   "linkGateTitle": "Link this device",
   "linkGateBody": "This device has no account keys. Link it from the primary device.",
   "linkGateWaiting": "Waiting for your main device…",
-  "linkGateStaleBody": "Keys here are stale — linking replaces them.",
+  "linkGateStaleBody": "Keys here are stale. Linking starts this device fresh — its old messages are removed.",
   "linkGateNoPrimaryQuestion": "No longer have your main device?",
   "linkGateResetHint": "Reset: new keys after 6 h, other devices signed out, old history lost.",
   "linkGateResetPendingTitle": "Key reset in progress",
@@ -821,7 +821,7 @@
   "@siblingSilentTitle": {
     "placeholders": { "name": { "type": "String" } }
   },
-  "siblingSilentBody": "This device has not been used for 30 days. If you remove it, it is signed out and its messages stay. If you still use it, keep it.",
+  "siblingSilentBody": "This device has not been used for 30 days. If you remove it, it is signed out, and linked again it starts fresh. If you still use it, keep it.",
   "siblingSilentKeep": "Keep",
   "recoveryKeyRequiredForLinking": "Linking requires a recovery phrase — you'll create it next.",
   "linkGateRestoreAction": "I have my recovery phrase",

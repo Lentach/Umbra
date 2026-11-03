@@ -95,6 +95,11 @@ class BoxFriendHandoff {
   /// (e), E50e); null or empty: none known.
   Future<Set<int>?> Function(int userId)? revokedDevices;
 
+  /// Whether this device holds a Signal session with friend `userId`'s
+  /// device `deviceId` (issue #208). Null: never asked, every held address
+  /// is used as before.
+  Future<bool> Function(int userId, int deviceId)? hasSession;
+
   /// Each friend device's request queue as that friend's last handle lookup
   /// served it, by friend and device (E114b). RAM only: a request queue
   /// changes when its device re-publishes, and the next process asks again
@@ -343,12 +348,50 @@ class BoxFriendHandoff {
         .where((o) => o.peerDeviceId == deviceId)
         .firstOrNull;
     if (held != null) return (to: held, viaRequest: false);
-    final request =
-        _served[userId]?[deviceId] ??
-        record?.boxOrigin?.addresses
-            .where((a) => a.peerDeviceId == deviceId)
-            .firstOrNull;
+    final request = _requestOf(userId, deviceId);
     return request == null ? null : (to: request, viaRequest: true);
+  }
+
+  ContactOutbound? _requestOf(int userId, int deviceId) =>
+      _served[userId]?[deviceId] ??
+      _store
+          .byUserId(userId)
+          ?.boxOrigin
+          ?.addresses
+          .where((a) => a.peerDeviceId == deviceId)
+          .firstOrNull;
+
+  /// [targetOf] for a HANDOFF (issue #208). A held address with no session
+  /// behind it on this device came from the contact backup — the queue the
+  /// friend made for ANOTHER device of this account — so the handoff would
+  /// open a session there: a PreKey message the friend refuses unasked
+  /// (`prekey_unasked`; a revoked device holds that queue's sid and the
+  /// account identity too). A friend takes a new device of an enrolled
+  /// account only on its request queue, with the account's signed list
+  /// beside the frame. Such a device goes there — a known request queue,
+  /// else none, so the pass looks the friend up. An un-enrolled account
+  /// carries no list; its handoff keeps the held address (decision 88).
+  Future<Map<int, _Target>> _handoffTargets(
+    int userId,
+    Iterable<int> live, {
+    required bool enrolled,
+  }) async {
+    final session = hasSession;
+    final targets = <int, _Target>{};
+    for (final device in live) {
+      final target = targetOf(userId, device);
+      if (target == null) continue;
+      if (enrolled &&
+          !target.viaRequest &&
+          session != null &&
+          !await session(userId, device)) {
+        final request = _requestOf(userId, device);
+        if (request != null) targets[device] = (to: request, viaRequest: true);
+        continue;
+      }
+      targets[device] = target;
+    }
+    return targets;
   }
 
   /// Seals [frame] to [target] — as an account-bearing frame of this
@@ -444,6 +487,9 @@ class BoxFriendHandoff {
     // ONE subscribe frame (chunked by the client past 256): the box counts
     // subscribe frames, 60 per 15 min per IP.
     final plans = <({int userId, ContactQueue queue, Map<int, _Target> to})>[];
+    // Issue #208: whether a new session's handoff must take a request queue.
+    final enrolled =
+        hasSession != null && await ownDeviceList?.call() != null;
     for (var i = 0; i < friends.length; i++) {
       if (_disposed || !_accountReady) return;
       final live = lists[i];
@@ -456,7 +502,7 @@ class BoxFriendHandoff {
         await _rotateAwayFromRevoked(userId, revoked);
       }
       await _retireExpired(userId);
-      var targets = {for (final d in live) d: ?targetOf(userId, d)};
+      var targets = await _handoffTargets(userId, live, enrolled: enrolled);
       // A live device no address is held for, and a handoff to it due: its
       // request queue is asked of the server ONCE this process, by handle
       // (E114c) — never again when the lookup that served this friend's list
@@ -469,7 +515,7 @@ class BoxFriendHandoff {
           _lookupDue(userId)) {
         await lookupAddresses(userId);
         if (_disposed || !_accountReady) return;
-        targets = {for (final d in live) d: ?targetOf(userId, d)};
+        targets = await _handoffTargets(userId, live, enrolled: enrolled);
       }
       if (targets.isEmpty) continue;
       final hadQueue = _store.byUserId(userId)?.queues.isNotEmpty ?? false;

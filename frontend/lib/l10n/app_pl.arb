@@ -44,7 +44,7 @@
   },
   "devicesRevokeAction": "Usu\u0144 urz\u0105dzenie",
   "devicesRevokeTitle": "Usun\u0105\u0107 to urz\u0105dzenie?",
-  "devicesRevokeExplainer": "Zostanie wylogowane. Jego wiadomości zostają.",
+  "devicesRevokeExplainer": "Zostanie wylogowane. Gdy połączysz je ponownie, zacznie od zera, bez starych wiadomości.",
   "devicesRevokeFailed": "Nie uda\u0142o si\u0119 usun\u0105\u0107 tego urz\u0105dzenia. Spr\u00f3buj ponownie.",
   "deviceRevokedNotice": "To urządzenie usunięto z konta. Zaloguj się i połącz je ponownie.",
   "deviceMismatchTitle": "To urz\u0105dzenie zosta\u0142o usuni\u0119te z konta",
@@ -294,7 +294,7 @@
   "linkGateTitle": "Połącz to urządzenie",
   "linkGateBody": "To urządzenie nie ma kluczy konta. Połącz je z urządzenia głównego.",
   "linkGateWaiting": "Czekam na urządzenie główne…",
-  "linkGateStaleBody": "Klucze tutaj są nieaktualne — połączenie je zastąpi.",
+  "linkGateStaleBody": "Klucze tutaj są nieaktualne. Połączenie zacznie to urządzenie od zera — stare wiadomości z niego znikną.",
   "linkGateNoPrimaryQuestion": "Nie masz już urządzenia głównego?",
   "linkGateResetHint": "Reset: nowe klucze po 6 h, inne urządzenia wylogowane, stara historia przepada.",
   "linkGateResetPendingTitle": "Reset kluczy w toku",
@@ -813,7 +813,7 @@
   "@siblingSilentTitle": {
     "placeholders": { "name": { "type": "String" } }
   },
-  "siblingSilentBody": "To urządzenie nie było używane od 30 dni. Po usunięciu zostanie wylogowane, a jego wiadomości zostaną. Jeśli nadal go używasz, zostaw je.",
+  "siblingSilentBody": "To urządzenie nie było używane od 30 dni. Po usunięciu zostanie wylogowane, a połączone ponownie zacznie od zera. Jeśli nadal go używasz, zostaw je.",
   "siblingSilentKeep": "Zostaw",
   "recoveryKeyRequiredForLinking": "Łączenie wymaga frazy odzyskiwania — utworzysz ją za chwilę.",
   "linkGateRestoreAction": "Mam frazę odzyskiwania",

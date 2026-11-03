@@ -150,7 +150,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get devicesRevokeExplainer =>
-      'It will be signed out. Its messages stay.';
+      'It will be signed out. Linked again, it starts fresh, without its old messages.';
 
   @override
   String get devicesRevokeFailed => 'Could not remove that device. Try again.';
@@ -721,7 +721,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get linkGateStaleBody =>
-      'Keys here are stale — linking replaces them.';
+      'Keys here are stale. Linking starts this device fresh — its old messages are removed.';
 
   @override
   String get linkGateNoPrimaryQuestion => 'No longer have your main device?';
@@ -2125,7 +2125,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get siblingSilentBody =>
-      'This device has not been used for 30 days. If you remove it, it is signed out and its messages stay. If you still use it, keep it.';
+      'This device has not been used for 30 days. If you remove it, it is signed out, and linked again it starts fresh. If you still use it, keep it.';
 
   @override
   String get siblingSilentKeep => 'Keep';

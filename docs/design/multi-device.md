@@ -3218,6 +3218,23 @@ that is the designed outcome).
     became the account's"): drop the retraction → the relaunch shows the alarm; drop the instant match →
     a foreign replacement's alarm is swallowed.
 
+- **Amendment 2026-11-03 (issue #208, owner: "when relinked it should have messages that will flow
+  to the new device, it shouldn't have any past messages" — option "wipe everything: fresh start"):**
+  - **(xc) — A LINK MAKES A NEW DEVICE, AND NOTHING OF THE OLD ONE FOLLOWS IT.** Replaces the (lxv)
+    sentence "the content store is untouched, so the §5.5 'messages stay' promise holds": the promise
+    now holds only until the install is linked again. Prod 11-03: a revoked Android linked again kept
+    its box queues, sibling book and request queue, drained the old queues into unreadable rows, and
+    its stale sibling ack kept the primary from ever learning its new self-queue, so every primary
+    send was refused `own_uncovered` until the phone was unlinked. Clause 1: the §5.1 adopt (and a
+    stale gate's §6.2 disposal) wipes the account's whole `e2e_<uid>_` namespace, proven, after the
+    app has closed the contact store; contacts return from the contact backup. Clause 2: an install
+    whose material stamp names another id than the STORED session is gated from the first frame and
+    never reaches E2E-ready, even before `socketReady` confirms the id. Same direction as Signal
+    Desktop (relink: "Transfer" or "Delete all data"), WhatsApp companions and Wire (a removed client
+    clears its data). Copy:
+    `devicesRevokeExplainer`, `siblingSilentBody`, `linkGateStaleBody` say a re-linked device starts
+    fresh. Detail and residuals: `frontend/docs/e2e-invariants.md` (#208 bullet).
+
 - **Next gate:** T11 implementation review, then the T1–T11 merge decision. The T1–T8 phase
   gate itself is CLOSED 2026-08-22: three reviewers, verdicts SHIP / SHIP WITH FIXES ×2; the
   test-integrity findings are folded at `4c0e0bf`; the four security findings were T9. **T10 (xlv)

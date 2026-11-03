@@ -285,6 +285,16 @@ class BoxSession
     _friends.revokedDevices = lookup;
   }
 
+  /// Whether this device holds a Signal session with a friend's device
+  /// (issue #208; `EncryptionProvider.hasSessionWith`): a handoff that would
+  /// open one goes to that device's request queue.
+  Future<bool> Function(int userId, int deviceId)? get friendHasSession =>
+      _friends.hasSession;
+
+  set friendHasSession(Future<bool> Function(int userId, int deviceId)? check) {
+    _friends.hasSession = check;
+  }
+
   /// One handle lookup of a friend, for the request queues of its devices
   /// (E114b; `MessagingProvider.lookupFriendAddresses`): the answer reaches
   /// [takeServedAddresses].

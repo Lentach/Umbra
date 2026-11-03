@@ -347,7 +347,7 @@ abstract class AppLocalizations {
   /// No description provided for @devicesRevokeExplainer.
   ///
   /// In pl, this message translates to:
-  /// **'Zostanie wylogowane. Jego wiadomości zostają.'**
+  /// **'Zostanie wylogowane. Gdy połączysz je ponownie, zacznie od zera, bez starych wiadomości.'**
   String get devicesRevokeExplainer;
 
   /// No description provided for @devicesRevokeFailed.
@@ -1301,7 +1301,7 @@ abstract class AppLocalizations {
   /// No description provided for @linkGateStaleBody.
   ///
   /// In pl, this message translates to:
-  /// **'Klucze tutaj są nieaktualne — połączenie je zastąpi.'**
+  /// **'Klucze tutaj są nieaktualne. Połączenie zacznie to urządzenie od zera — stare wiadomości z niego znikną.'**
   String get linkGateStaleBody;
 
   /// No description provided for @linkGateNoPrimaryQuestion.
@@ -3731,7 +3731,7 @@ abstract class AppLocalizations {
   /// No description provided for @siblingSilentBody.
   ///
   /// In pl, this message translates to:
-  /// **'To urządzenie nie było używane od 30 dni. Po usunięciu zostanie wylogowane, a jego wiadomości zostaną. Jeśli nadal go używasz, zostaw je.'**
+  /// **'To urządzenie nie było używane od 30 dni. Po usunięciu zostanie wylogowane, a połączone ponownie zacznie od zera. Jeśli nadal go używasz, zostaw je.'**
   String get siblingSilentBody;
 
   /// No description provided for @siblingSilentKeep.

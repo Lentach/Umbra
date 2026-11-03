@@ -151,7 +151,7 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get devicesRevokeExplainer =>
-      'Zostanie wylogowane. Jego wiadomości zostają.';
+      'Zostanie wylogowane. Gdy połączysz je ponownie, zacznie od zera, bez starych wiadomości.';
 
   @override
   String get devicesRevokeFailed =>
@@ -731,7 +731,7 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get linkGateStaleBody =>
-      'Klucze tutaj są nieaktualne — połączenie je zastąpi.';
+      'Klucze tutaj są nieaktualne. Połączenie zacznie to urządzenie od zera — stare wiadomości z niego znikną.';
 
   @override
   String get linkGateNoPrimaryQuestion => 'Nie masz już urządzenia głównego?';
@@ -2158,7 +2158,7 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get siblingSilentBody =>
-      'To urządzenie nie było używane od 30 dni. Po usunięciu zostanie wylogowane, a jego wiadomości zostaną. Jeśli nadal go używasz, zostaw je.';
+      'To urządzenie nie było używane od 30 dni. Po usunięciu zostanie wylogowane, a połączone ponownie zacznie od zera. Jeśli nadal go używasz, zostaw je.';
 
   @override
   String get siblingSilentKeep => 'Zostaw';

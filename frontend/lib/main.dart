@@ -304,10 +304,29 @@ class _AuthGateState extends State<AuthGate> {
         });
       }
       _previousGated = gated;
+      // Issue #208: the shell stays hidden until local storage has said
+      // whether this install is still the device it was (a few ms) — else a
+      // re-signed-in old device painted its chat list before the gate. Local
+      // reads only: an offline start still reaches its cached chats.
+      final userId = auth.currentUser?.id;
+      final lifeChecked = context.select<EncryptionProvider, bool>(
+        (e) => userId == null || e.previousLifeCheckedFor == userId,
+      );
+      if (!lifeChecked) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          unawaited(
+            context.read<EncryptionProvider>().checkPreviousDeviceLife(userId!),
+          );
+        });
+      }
       return Stack(
         children: [
-          Offstage(offstage: gated, child: const MainShell()),
-          if (gated) const DeviceLinkGateScreen(),
+          Offstage(offstage: gated || !lifeChecked, child: const MainShell()),
+          if (gated)
+            const DeviceLinkGateScreen()
+          else if (!lifeChecked)
+            const Scaffold(body: Center(child: BootHoneycomb())),
         ],
       );
     }

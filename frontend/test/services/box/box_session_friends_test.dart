@@ -999,6 +999,64 @@ void main() {
     },
   );
 
+  // Issue #208: a re-linked (or newly linked) device restores the friend's
+  // address from the contact backup — the queue the friend made for ANOTHER
+  // device of this account. A handoff there opens a session: a PreKey message
+  // the friend refuses unasked (prod/dev 11-03, `prekey_unasked`), so the
+  // friend never learned the new device and its messages never reached it.
+  // Mutation: `_handoffTargets` keeps the held address whatever the session.
+  test(
+    'a device of an enrolled account with no session behind a held address '
+    "hands off through that friend device's REQUEST queue, never the held "
+    'address, and the friend takes it',
+    () async {
+      await b.start();
+      await a.start();
+      final held = ContactOutbound(
+        peerDeviceId: 3,
+        sid: boxB64(_bytes(32, 0xEE)),
+        sealPub: boxB64(_bytes(32, 0xEF)),
+      );
+      await a.store.update(5, (c) => c!.copyWith(outbound: [held]));
+      a.session
+        ..ownDeviceList = (() async => {'listVersion': 7})
+        ..friendHasSession = ((_, _) async => false);
+
+      a.session.onFriendsListed();
+      await settle();
+
+      expect(box.sent, isNot(contains(held.sid)));
+      expect(box.sent, contains(b.store.requestQueue!.sid));
+      expect(b.outboundOf(2)?.sid, a.friend.queues.single.sid);
+    },
+  );
+
+  // Mutation: `_handoffTargets` sends every held address to the request
+  // queue (drops the session check).
+  test(
+    'with a session behind the held address, the handoff takes that address '
+    'and costs no lookup',
+    () async {
+      await b.start();
+      await a.start();
+      final held = ContactOutbound(
+        peerDeviceId: 3,
+        sid: boxB64(_bytes(32, 0xEE)),
+        sealPub: boxB64(_bytes(32, 0xEF)),
+      );
+      await a.store.update(5, (c) => c!.copyWith(outbound: [held]));
+      a.session
+        ..ownDeviceList = (() async => {'listVersion': 7})
+        ..friendHasSession = ((_, _) async => true);
+
+      a.session.onFriendsListed();
+      await settle();
+
+      expect(box.sent, contains(held.sid));
+      expect(a.lookups, isEmpty);
+    },
+  );
+
   // Mutation: `_pass` drops the `_addressesAsked` guard
   // (`!_addressesAsked.contains(userId)`): every pass asks again.
   test(

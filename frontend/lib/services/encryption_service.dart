@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:libsignal_protocol_dart/libsignal_protocol_dart.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'encryption/content_kv.dart';
 import 'encryption/prekey_identity.dart';
 import 'encryption/sealed_web_content_kv.dart';
@@ -1485,16 +1486,7 @@ class EncryptionService {
     // the loader below restores it). Cleared only when the account
     // CHANGES — a same-user re-run (passcode re-lock → unlock) must keep the
     // unpersisted refusals.
-    if (_userId != userId) {
-      _peersWithChangedIdentity.clear();
-      _peerKeyChangeNotes.clear();
-      _peersRefusedIdentity.clear();
-      _pendingSessionRebuilds.clear();
-      _deviceListPins.clear();
-      _peerDeviceLists.clear();
-      _boxListsReadyAtMs = null;
-      _announcedOwnList = null;
-    }
+    if (_userId != userId) _forgetAccountRam();
     _userId = userId;
     final p = 'e2e_${userId}_'; // per-user storage key prefix
 
@@ -1619,19 +1611,27 @@ class EncryptionService {
   /// authorization to drop material stamped for another device id — the
   /// account is about to replace the identity it holds anyway — so the next
   /// init finds a keyless store and [_mintForCompletedReset] can spend the
-  /// grant. The content store (sealed history) is untouched, as in (lxv).
+  /// grant. Issue #208: the install becomes a NEW device, so EVERYTHING of
+  /// the device it was goes, sealed history and box queues included
+  /// ([_wipeAccountNamespace]); the reset already tells the user "stara
+  /// historia przepada". [beforeWipe] runs first, under the lock and only
+  /// when the wipe will happen: the caller closes the contact store there.
   ///
   /// Under the mint's lock, and re-checked there: a sibling tab that already
   /// minted has re-homed the stamp, so its fresh identity is left alone.
   /// Returns false only when the wipe could not be PROVEN, so nothing may be
   /// minted over it.
-  Future<bool> disposeMismatchedMaterialForReset(int sessionDeviceId) {
+  Future<bool> disposeMismatchedMaterialForReset(
+    int sessionDeviceId, {
+    Future<void> Function()? beforeWipe,
+  }) {
     final userId = _userId;
     if (userId == null) return Future.value(false);
     final p = 'e2e_${userId}_';
     return _sessionCrossContextLock('fireplace-e2e-reset-mint-$userId', () async {
       if (await confirmMaterialDeviceId(sessionDeviceId)) return true;
-      if (!await _wipeSignalMaterial(p)) {
+      await beforeWipe?.call();
+      if (!await _wipeAccountNamespace(userId)) {
         E2ePersistentDiag.record('RESET_STALE_DISPOSAL_DEFERRED', {
           'userId': userId,
         });
@@ -1640,13 +1640,8 @@ class EncryptionService {
       E2ePersistentDiag.record('RESET_STALE_MATERIAL_DISPOSED', {
         'userId': userId,
       });
-      await clearMaterialDeviceStamp();
       _buildStores(p);
       _initialized = false;
-      _peersWithChangedIdentity.clear();
-      await _persistIdentityChanged();
-      _pendingSessionRebuilds.clear();
-      await _persistSessionRebuilds();
       return true;
     });
   }
@@ -1741,14 +1736,14 @@ class EncryptionService {
 
   /// Deletes every Signal-material key under [p] — identity, sessions,
   /// pre-keys, signed pre-keys, peer trust — leaving the content store and
-  /// non-Signal records untouched. Shared by the (lxxi) never-published
-  /// residue discard and the (lxv) stale-material disposal.
+  /// non-Signal records untouched. The (lxxi) never-published residue
+  /// discard; a NEW device life wipes everything instead
+  /// ([_wipeAccountNamespace]).
   ///
   /// Returns whether the wipe is PROVEN complete: the store was listed AND
   /// every Signal-material row under [p] was deleted. `false` means at least
-  /// one row may still exist. The (lxv) caller ignores that (it immediately
-  /// overwrites the identity slot; a partial wipe beats none); the (lxxi)
-  /// caller MUST NOT mint over a row it could not see or could not remove.
+  /// one row may still exist, and the caller MUST NOT mint over a row it
+  /// could not see or could not remove.
   Future<bool> _wipeSignalMaterial(String p) async {
     final Map<String, String> all;
     try {
@@ -1780,6 +1775,70 @@ class EncryptionService {
     return deletedAll;
   }
 
+  /// Issue #208: deletes EVERY row of [userId]'s `e2e_<uid>_` namespace —
+  /// Signal material, the material stamp, the contact store (box queues,
+  /// sibling book, request queue, journal), sealed history and the box
+  /// catch-up mark — so the install holds nothing of the device it used to
+  /// be. Three places hold that namespace: secure storage, the content store
+  /// and plain SharedPreferences (the catch-up mark). The session tokens and
+  /// the contact-backup key live outside it and survive.
+  ///
+  /// Returns whether the wipe is PROVEN complete (every store listed, every
+  /// row deleted). The material stamp goes LAST from secure storage, so a
+  /// wipe that stops part-way still reads as a previous life on the next
+  /// start instead of passing for a healthy device.
+  Future<bool> _wipeAccountNamespace(int userId) async {
+    final p = 'e2e_${userId}_';
+    final stampKey = _materialDeviceKey(userId);
+    var proven = true;
+    try {
+      final kv = await _sharedPrefs;
+      await _reloadPrefsForCrossContext(kv);
+      for (final key in kv.getKeys().where((k) => k.startsWith(p)).toList()) {
+        await kv.remove(key);
+      }
+    } on Object catch (_) {
+      proven = false;
+    }
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      for (final key in prefs.getKeys().where((k) => k.startsWith(p)).toList()) {
+        await prefs.remove(key);
+      }
+    } on Object catch (_) {
+      proven = false;
+    }
+    final Map<String, String> all;
+    try {
+      all = await _storage.readAll();
+    } on Object catch (_) {
+      return false;
+    }
+    final keys = all.keys.where((k) => k.startsWith(p) && k != stampKey);
+    for (final key in [...keys, if (all.containsKey(stampKey)) stampKey]) {
+      try {
+        await _storage.delete(key: key);
+      } on Object catch (_) {
+        proven = false;
+      }
+    }
+    _storage.clearPrefsCache();
+    _forgetAccountRam();
+    return proven;
+  }
+
+  /// The per-account collections the loaders in [initialize] ADD to.
+  void _forgetAccountRam() {
+    _peersWithChangedIdentity.clear();
+    _peerKeyChangeNotes.clear();
+    _peersRefusedIdentity.clear();
+    _pendingSessionRebuilds.clear();
+    _deviceListPins.clear();
+    _peerDeviceLists.clear();
+    _boxListsReadyAtMs = null;
+    _announcedOwnList = null;
+  }
+
   /// §5.1 provisioning adopt (Phase 2 T3, spec §12 item (ii)): install the
   /// account identity the primary transported in the ceremony blob, on a
   /// device that has NO identity of its own.
@@ -1795,8 +1854,18 @@ class EncryptionService {
   /// identity before adopting. Passed ONLY by the ceremony when this install
   /// is in the (lxiv) device-material-mismatch state — material stamped for a
   /// device the account has revoked. The SAS confirmation plus authenticated
-  /// blob is the user's consent; the content store (sealed history) is
-  /// untouched, so the §5.5 "messages stay" promise holds.
+  /// blob is the user's consent.
+  ///
+  /// Issue #208 (owner, 2026-11-03: a re-linked device starts fresh): the
+  /// adopt makes this install a NEW device of the account, so nothing of any
+  /// device it was before may follow it — not its box queues (their backlog
+  /// is sealed to sessions the link ends, so it would surface as unreadable
+  /// rows), not its sibling book (a stale "sibling acked our self-queue" kept
+  /// it from ever handing the primary its new address, and the primary then
+  /// refused every send), and not its history. The WHOLE `e2e_<uid>_`
+  /// namespace goes; contacts come back from the contact backup like on any
+  /// fresh install. The caller closes the contact store first
+  /// (`EncryptionProvider.prepareFreshDeviceLife`).
   Future<void> adoptProvisionedIdentity({
     required int userId,
     required String ikPubBase64,
@@ -1832,35 +1901,28 @@ class EncryptionService {
     );
     base64Decode(dakPubBase64); // validity gate only
 
-    // (lxxiii) clause 4: the wipe runs whenever RESIDUE is present — a held
-    // identity OR surviving prekeys/sessions/next_pre_key_id with no identity
-    // — never only when an identity exists. A held identity is the (lxv)
-    // stale shape and requires the ceremony's disposal authorization (gated
-    // above); a NEVER-PUBLISHED residue needs no separate consent: no peer
-    // holds a ratchet against unpublished material, and the SAS plus the
-    // authenticated blob already authorized installing over this store. The
-    // wipe must be PROVEN before the first store write — installing the
+    // The wipe must be PROVEN before the first store write — installing the
     // received identity over foreign prekeys and a stale prekey counter is
-    // the stranded-ratchet shape (lxxi)'s rider exists to prevent. Unproven
-    // → the ceremony fails (the controller's catch aborts 'adopt_failed')
-    // and the gate stays.
-    final residue =
-        holdsIdentity || await _hasPriorInstallResidue(existingPrefix);
-    if (residue) {
-      if (holdsIdentity) {
-        // (lxv): every input parsed; the stale material may now go.
-        E2ePersistentDiag.record('LINK_STALE_MATERIAL_DISPOSED', {
-          'userId': userId,
-        });
-      }
-      if (!await _wipeSignalMaterial(existingPrefix)) {
-        E2ePersistentDiag.record('LINK_RESIDUE_DISPOSAL_DEFERRED', {
-          'userId': userId,
-        });
-        throw StateError(
-          'adoptProvisionedIdentity: residue disposal not proven',
-        );
-      }
+    // the stranded-ratchet shape (lxxi)'s rider exists to prevent, and a
+    // surviving box queue or sibling book is issue #208. A NEVER-PUBLISHED
+    // residue needs no separate consent ((lxxiii) clause 4): no peer holds a
+    // ratchet against unpublished material, and the SAS plus the
+    // authenticated blob already authorized installing over this store.
+    // Unproven → the ceremony fails (the controller's catch aborts
+    // 'adopt_failed') and the gate stays.
+    if (holdsIdentity) {
+      // (lxv): every input parsed; the stale material may now go.
+      E2ePersistentDiag.record('LINK_STALE_MATERIAL_DISPOSED', {
+        'userId': userId,
+      });
+    }
+    if (!await _wipeAccountNamespace(userId)) {
+      E2ePersistentDiag.record('LINK_RESIDUE_DISPOSAL_DEFERRED', {
+        'userId': userId,
+      });
+      throw StateError(
+        'adoptProvisionedIdentity: residue disposal not proven',
+      );
     }
 
     _userId = userId;
@@ -3027,6 +3089,19 @@ class EncryptionService {
   }
 
   String _materialDeviceKey(int userId) => 'e2e_${userId}_material_device_v1';
+
+  /// Issue #208: the device id [userId]'s material on this install is
+  /// stamped for, read WITHOUT the TOFU write of [confirmMaterialDeviceId] —
+  /// null when nothing is stamped or storage cannot be read (never evidence
+  /// of a previous life). Works before [initialize] has run for [userId].
+  Future<int?> materialDeviceStamp(int userId) async {
+    try {
+      final raw = await _storage.read(key: _materialDeviceKey(userId));
+      return raw == null ? null : int.tryParse(raw);
+    } on Object catch (_) {
+      return null;
+    }
+  }
 
   /// (lxiv) clause 2 — which device id this install's Signal material was
   /// provisioned for. TOFU: absent → stamp [deviceId] and answer true; present

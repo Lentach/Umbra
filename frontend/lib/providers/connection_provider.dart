@@ -184,6 +184,9 @@ class ConnectionProvider extends ChangeNotifier {
       _storedSessionDeviceId = storedSessionDeviceId;
     }
     if (contactStore != null) contactBackup?.attach(contactStore);
+    // Issue #208: an install on the link gate is not a live device; its store
+    // is the view of the device it used to be.
+    contactBackup?.mayPublish = () => !encryption.needsDeviceLink;
     friends.contactStore = contactStore;
     conversations.contactStore = contactStore;
     _encryptionProvider = encryption;
@@ -194,6 +197,9 @@ class ConnectionProvider extends ChangeNotifier {
     // sweep needs the conversation peers, and a provider must not read
     // another provider directly.
     encryption
+      // Issue #208: one stored-session reader for both providers.
+      ..storedSessionDeviceId = (() => _storedSessionDeviceId())
+      ..onFreshDeviceLife = _startFreshDeviceLife
       ..sessionRebuildPeers = () {
         final uid = _currentUserId;
         if (uid == null) return const <int>[];
@@ -580,6 +586,13 @@ class ConnectionProvider extends ChangeNotifier {
             // Slice (e): a new device's handoff carries its account's list.
             ..ownDeviceList = messaging.ownDeviceList
             ..friendRevokedDevices = messaging.friendRevokedDevices
+            // Issue #208: a new session's handoff takes a request queue.
+            ..friendHasSession = ((user, device) async =>
+                await _encryptionProvider?.hasSessionWith(
+                  user,
+                  deviceId: device,
+                ) ??
+                false)
             ..onBoxReady = messaging.onBoxReady
             // Slice (g): one delivered receipt per drain (E61d).
             ..onReadsIdle = messaging.onBoxReadsIdle
@@ -1106,7 +1119,10 @@ class ConnectionProvider extends ChangeNotifier {
       _pushInitialized = false;
       _currentUserId = null;
       _reconnectManager.tokenForReconnect = null;
-      _encryptionProvider?.clearAll();
+      _encryptionProvider
+        ?..clearAll()
+        // Issue #208: the next session may name another device.
+        ..forgetPreviousDeviceLife();
       _friendsProvider?.clearAll();
       _conversationsProvider?.clearAll();
       _messagingProvider?.clearAll();
@@ -1898,6 +1914,36 @@ class ConnectionProvider extends ChangeNotifier {
         if (identical(_boxRetiring, retiring)) _boxRetiring = null;
       }),
     );
+  }
+
+  /// Issue #208: the link adopt (or a reset's disposal) is about to wipe the
+  /// account's storage on this install, which becomes a NEW device. The box
+  /// of the old life stops, the contact store forgets its view and the chat
+  /// lists empty, so the reconnect that follows opens an empty store and
+  /// hydrates it the way a fresh install does. The contact backup resolves
+  /// again first: its restore was already applied to the store being wiped,
+  /// and until it is re-armed no upload may replace the server's copy with
+  /// an empty view.
+  Future<void> _startFreshDeviceLife() async {
+    _box?.dispose();
+    _box = null;
+    _boxUserId = null;
+    unawaited(BoxPushNids.clear());
+    _boxMedia?.dispose();
+    _boxMedia = null;
+    _unwireBox();
+    _friendsProvider?.clearAll();
+    _conversationsProvider?.clearAll();
+    _messagingProvider?.clearAll();
+    _contactStore?.close();
+    final backup = _contactBackup;
+    if (backup != null) {
+      await _withinBudget(
+        backup.restartForEmptiedStore(),
+        kContactBackupRestoreBudget,
+      );
+    }
+    notifyListeners();
   }
 
   /// Takes the box out of the messaging provider: nothing sends, fetches or

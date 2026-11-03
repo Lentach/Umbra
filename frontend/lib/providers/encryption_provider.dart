@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import '../models/message_model.dart';
 import '../services/account_enrolled_hint.dart';
 import '../services/audio_cache_store.dart';
+import '../services/auth_token_store.dart';
 import '../services/box/box_media_url.dart';
 import '../services/contacts/contact_store.dart' show kBoxRedeliveryWindow;
 import '../services/e2e_lock_revoker.dart';
@@ -713,6 +714,95 @@ class EncryptionProvider extends ChangeNotifier {
     });
     _e2eFlowLog('E2E_DEVICE_MISMATCH', {'sessionDeviceId': deviceId});
     notifyListeners();
+  }
+
+  /// The device id the STORED session names (`AuthTokenStore`, shared by
+  /// every tab of a web install); a test seam.
+  Future<int?> Function() storedSessionDeviceId = () =>
+      AuthTokenStore().readSessionDeviceId();
+
+  /// Issue #208: this install's material is stamped for a device id the
+  /// stored session does not name — the device it used to be (revoked, or
+  /// signed out and back in onto the primary's id). Read from local storage
+  /// only, so it is known before the socket, and without the TOFU stamp of
+  /// [EncryptionService.confirmMaterialDeviceId]. Unreadable = not stale.
+  Future<bool> _holdsPreviousDeviceLife(int userId) async {
+    final session = await storedSessionDeviceId();
+    if (session == null) return false;
+    final stamped = await _encryptionService.materialDeviceStamp(userId);
+    return stamped != null && stamped != session;
+  }
+
+  /// Issue #208: whether this install is a previous device life of the
+  /// signed-in account ([_holdsPreviousDeviceLife]). It gates like a (lxiv)
+  /// mismatch ([needsDeviceLink], [linkDisposesStaleMaterial]) but is known
+  /// from local storage at once, so `AuthGate` shows the link gate from the
+  /// first frame instead of the chat list until `socketReady`. Kept apart
+  /// from [deviceMaterialMismatch] because every fresh connect clears that
+  /// one; this one belongs to the account and the stored session, is
+  /// re-read by every E2E init (a link or a reset disposal clears the stamp)
+  /// and forgotten at logout ([forgetPreviousDeviceLife]).
+  bool get previousDeviceLife => _previousDeviceLife;
+  bool _previousDeviceLife = false;
+
+  /// The account [previousDeviceLife] was last read for; `AuthGate` keeps
+  /// the shell hidden until it names the signed-in user.
+  int? get previousLifeCheckedFor => _previousLifeCheckedFor;
+  int? _previousLifeCheckedFor;
+  Future<void>? _previousLifeCheck;
+
+  /// Reads [previousDeviceLife] for [userId] once (joins a read in flight).
+  /// Local reads only, bounded, so a storage read that hangs costs the boot
+  /// screen three seconds, never the app.
+  Future<void> checkPreviousDeviceLife(int userId) {
+    return _previousLifeCheck ??= () async {
+      try {
+        final stale = await _holdsPreviousDeviceLife(userId)
+            .timeout(const Duration(seconds: 3), onTimeout: () => false);
+        _notePreviousDeviceLife(userId, stale);
+      } finally {
+        _previousLifeCheck = null;
+      }
+    }();
+  }
+
+  void _notePreviousDeviceLife(int userId, bool stale) {
+    if (stale && !_previousDeviceLife) {
+      _e2eFlowLog('E2E_PREVIOUS_DEVICE_LIFE', {'userId': userId});
+    }
+    if (_previousDeviceLife == stale && _previousLifeCheckedFor == userId) {
+      return;
+    }
+    _previousDeviceLife = stale;
+    _previousLifeCheckedFor = userId;
+    notifyListeners();
+  }
+
+  /// Logout: the next session may name another device.
+  void forgetPreviousDeviceLife() {
+    _previousDeviceLife = false;
+    _previousLifeCheckedFor = null;
+  }
+
+  /// Issue #208: tears down everything the app holds of this account's
+  /// current device life (box, contact store, chat lists) — set by
+  /// `ConnectionProvider` — before the link adopt or a reset's disposal wipes
+  /// its storage; the reconnect that follows starts the new life from an
+  /// empty store, as a fresh install does.
+  Future<void> Function()? onFreshDeviceLife;
+
+  /// The link adopt's hook (`EncryptionServiceLinkGateway`): see
+  /// [onFreshDeviceLife]. The decrypt caches and the peer lists name records
+  /// of the old life (local ids restart from the base in a new one).
+  Future<void> prepareFreshDeviceLife() async {
+    await onFreshDeviceLife?.call();
+    _decryptedContentCache.clear();
+    _retiredIds.clear();
+    _decryptedLedger.clear();
+    _forceSessionRebuild.clear();
+    _deviceListCache.clear();
+    _forgetFriendLookups();
+    _e2eFlowLog('E2E_FRESH_DEVICE_LIFE', {});
   }
 
   /// The cached verified list for [userId], or null when none is held.
@@ -2257,8 +2347,15 @@ class EncryptionProvider extends ChangeNotifier {
       // (lxiv) clause 2 gate: refuse E2E duty when the session's device id
       // contradicts the id this install's material was provisioned for —
       // placed before ANY publish so a mismatched install never uploads.
-      if (_ownDeviceIdConfirmed &&
-          !await _encryptionService.confirmMaterialDeviceId(_ownDeviceId)) {
+      // Issue #208: the STORED session decides too, because this init runs
+      // at transport connect, before `socketReady` confirms the id — an
+      // unconfirmed stale install used to come up E2E-ready here and start
+      // the box on the queues of the device it used to be.
+      final previousLife = await _holdsPreviousDeviceLife(userId);
+      _notePreviousDeviceLife(userId, previousLife);
+      if (previousLife ||
+          _ownDeviceIdConfirmed &&
+              !await _encryptionService.confirmMaterialDeviceId(_ownDeviceId)) {
         _deviceMaterialMismatch = true;
         _e2eInitialized = false;
         E2ePersistentDiag.record('E2E_DEVICE_MISMATCH', {
@@ -2907,7 +3004,7 @@ class EncryptionProvider extends ChangeNotifier {
   /// Owned here so the devices screen's CTA gate and the ceremony's disposal
   /// authorization cannot drift apart.
   bool get linkDisposesStaleMaterial =>
-      deviceMaterialMismatch || identityUploadLocked;
+      deviceMaterialMismatch || identityUploadLocked || previousDeviceLife;
 
   /// True while a (lxxviii) phrase restore has ADOPTED the backup identity
   /// and not finished — including a FAILED one, which is exactly the state
@@ -3459,6 +3556,8 @@ class EncryptionProvider extends ChangeNotifier {
     if (_deviceMaterialMismatch) {
       if (!await _encryptionService.disposeMismatchedMaterialForReset(
         _ownDeviceId,
+        // Issue #208: the disposal wipes the store the contact store reads.
+        beforeWipe: prepareFreshDeviceLife,
       )) {
         return;
       }

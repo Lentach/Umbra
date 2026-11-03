@@ -98,9 +98,14 @@ abstract class LinkIdentityGateway {
 
 /// Production gateway over the app's one EncryptionService instance.
 class EncryptionServiceLinkGateway implements LinkIdentityGateway {
-  EncryptionServiceLinkGateway(this._service);
+  EncryptionServiceLinkGateway(this._service, {this.beforeAdopt});
 
   final EncryptionService _service;
+
+  /// Issue #208: runs right before the adopt wipes this install's account
+  /// namespace — `EncryptionProvider.prepareFreshDeviceLife` closes the
+  /// contact store and drops what the app holds of the old device life.
+  final Future<void> Function()? beforeAdopt;
 
   @override
   Future<String?> ownIdentityPublicKeyBase64() =>
@@ -116,13 +121,16 @@ class EncryptionServiceLinkGateway implements LinkIdentityGateway {
     required String ikPrivBase64,
     required String dakPubBase64,
     bool disposeStaleMaterial = false,
-  }) => _service.adoptProvisionedIdentity(
-    userId: userId,
-    ikPubBase64: ikPubBase64,
-    ikPrivBase64: ikPrivBase64,
-    dakPubBase64: dakPubBase64,
-    disposeStaleMaterial: disposeStaleMaterial,
-  );
+  }) async {
+    await beforeAdopt?.call();
+    await _service.adoptProvisionedIdentity(
+      userId: userId,
+      ikPubBase64: ikPubBase64,
+      ikPrivBase64: ikPrivBase64,
+      dakPubBase64: dakPubBase64,
+      disposeStaleMaterial: disposeStaleMaterial,
+    );
+  }
 
   @override
   Future<void> discardProvisionedIdentity(int userId) =>
@@ -395,6 +403,14 @@ class LinkCeremonyController extends ChangeNotifier
     // Covers the rebind reconnect of this install's own ceremony and any
     // `deviceListChanged` broadcast that landed while it was between sockets.
     refreshDeviceList();
+    // Issue #208: the gate now mounts from the first frame, before the
+    // socket is authenticated, and an `openProvisioning` sent then reaches no
+    // server handler — the gate spun forever with no code. Still opening at
+    // `socketReady` means nothing was opened: ask again.
+    if (newDeviceStep == NewDeviceLinkStep.opening &&
+        _openProvisioningId == null) {
+      _emit('openProvisioning', {'role': 'new'});
+    }
   }
 
   // ---------- Enable linking (primary enrollment) ----------

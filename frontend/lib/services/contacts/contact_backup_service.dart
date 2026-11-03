@@ -263,6 +263,28 @@ class ContactBackupService {
     if (_dirty && _state == ContactBackupState.ready) await uploadNow();
   }
 
+  /// Issue #208: the store this account's graph lived in is being emptied
+  /// for a new device life (a link). Resolves the row again exactly as a
+  /// cold start does — the cached key opens it and re-arms the restore — so
+  /// the next open fills the empty store. Meanwhile no upload may go out:
+  /// first the session is idle, then the pending restore refuses them, and
+  /// either is what keeps an empty view off the server's only copy.
+  Future<void> restartForEmptiedStore() async {
+    final userId = _userId;
+    final token = _token;
+    if (userId == null || token == null) return;
+    _resetSession();
+    await onSession(userId: userId, token: token);
+  }
+
+  /// Issue #208: false while this install is not a live device of the
+  /// account (the link gate: a revoked device signed back in, or a keyless
+  /// one). Its store holds the view of the device it used to be, and
+  /// publishing that would replace the account's graph — a friendship the
+  /// other devices made since came back to a later link as a pending
+  /// invitation. The owed upload waits ([flushPending] after the link).
+  bool Function()? mayPublish;
+
   /// Writes every restored contact the store does NOT already hold, and the
   /// account's own profile when the store has none. Upgrade-only by
   /// construction: a local record always wins, because it is newer than any
@@ -452,6 +474,10 @@ class ContactBackupService {
     final userId = _userId;
     if (store == null || userId == null) return false;
     if (_state != ContactBackupState.ready) {
+      _dirty = true;
+      return false;
+    }
+    if (mayPublish?.call() == false) {
       _dirty = true;
       return false;
     }

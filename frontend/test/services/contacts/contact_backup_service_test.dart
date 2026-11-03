@@ -232,6 +232,58 @@ void main() {
     },
   );
 
+  // Issue #208: a link empties the store the restore was already applied to.
+  test(
+    'an emptied store (a re-link) is filled again, and never uploaded empty',
+    () async {
+      await seedRow(password: 'pw', contacts: [_friend(41), _friend(42)]);
+      final svc = await service();
+      svc.attach(store);
+      await svc.onSession(userId: 7, token: 'jwt', password: 'pw');
+      expect(await svc.applyRestore(), 2);
+
+      store.close();
+      for (final key in kv.getKeys().toList()) {
+        if (key.startsWith('e2e_7_')) await kv.remove(key);
+      }
+      await svc.restartForEmptiedStore();
+      await store.open(7);
+
+      expect(await svc.uploadNow(), isFalse);
+      expect(backend.puts, isEmpty, reason: 'an empty view must not replace the row');
+      expect(await svc.applyRestore(), 2);
+      expect(store.byUserId(41)?.username, 'peer41');
+      expect(store.byUserId(42)?.username, 'peer42');
+    },
+  );
+
+  // Issue #208: a revoked device signed back in sits on the link gate with
+  // the view of the device it used to be; published, that view replaced the
+  // account's graph (dev 11-03: a friendship made since came back to the next
+  // link as a pending invitation).
+  test(
+    'an install that may not publish (the link gate) never uploads its view, '
+    'and the owed upload goes out once it may',
+    () async {
+      await seedRow(password: 'pw', contacts: [_friend(41)]);
+      final svc = await service();
+      svc.attach(store);
+      await svc.onSession(userId: 7, token: 'jwt', password: 'pw');
+      await svc.applyRestore();
+      var gated = true;
+      svc.mayPublish = () => !gated;
+
+      await store.update(42, (_) => _friend(42));
+      await store.settled;
+      expect(await svc.uploadNow(), isFalse);
+      expect(backend.puts, isEmpty);
+
+      gated = false;
+      await svc.flushPending();
+      expect(backend.puts, hasLength(1));
+    },
+  );
+
   test(
     'a restore never overwrites a record the device already holds',
     () async {
