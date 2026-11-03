@@ -51,6 +51,11 @@
   - re-link (device 27) → 3 contacts, no history;
   - fa25 reached it; its af24 reached F after the retry below;
   - primary qa27 ✓ with the phone linked.
+  - fa21 and fa23 never left F: the harness lost them, and F's RAM log (`f_ram2.txt`, 21:11–21:34) shows why:
+    - no `SEND_START` at all near either one; a failed send would log one and keep a red row (decision 104), and F's chat has no row;
+    - the only two sends are fa20 (21:17:36, `frames: 3` = devices 7, 22, 24) and fa22 (21:21:05, `frames: 2` = 7, 22, so the revoked phone was already left out);
+    - fa21 was typed while F's tab was in the background: `LIFECYCLE` at 21:18:31, resumed 21:21:04;
+    - fa23 was typed while another window had focus. [INFERENCE: CDP input went nowhere.] F's device-list moves in that window all succeeded: `BOX_FRIEND_QUEUE_ROTATED` 21:18:21, `BOX_FRIEND_HANDOFF {device: 27}` 21:32:29.
 - NOT verified: iOS PWA, prod, release APK.
 
 ## Notes for next session
