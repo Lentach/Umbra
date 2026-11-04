@@ -7,7 +7,9 @@ import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/providers/friends_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
+import 'package:fireplace/services/api_service.dart';
 import 'package:fireplace/services/device_link/link_ceremony_controller.dart';
+import 'package:fireplace/services/push_service.dart';
 import 'package:fireplace/services/socket_service.dart';
 import 'package:fireplace/services/server_clock.dart';
 import 'package:fireplace/utils/message_ids.dart';
@@ -119,8 +121,10 @@ class FakeSocketService extends SocketService {
 }
 
 class RecordingConnectionProvider extends ConnectionProvider {
-  RecordingConnectionProvider({required SocketService socketService})
-      : super(socketService: socketService);
+  RecordingConnectionProvider({
+    required SocketService socketService,
+    super.pushService,
+  }) : super(socketService: socketService);
 
   final emitted = <MapEntry<String, dynamic>>[];
 
@@ -128,6 +132,24 @@ class RecordingConnectionProvider extends ConnectionProvider {
   void emit(String event, dynamic data) {
     emitted.add(MapEntry(event, data));
   }
+}
+
+/// Records each push registration, touching no platform channel.
+class _RecordingPush extends PushService {
+  _RecordingPush() : super(ApiService(baseUrl: 'http://api.test'));
+
+  final registrations = <String>[];
+
+  @override
+  Future<void> initialize(
+    String jwtToken, {
+    String? Function()? currentJwtToken,
+    void Function(int conversationId)? onNavigateToConversation,
+  }) async => registrations.add('initialize');
+
+  @override
+  Future<void> registerAgain(String jwtToken) async =>
+      registrations.add('registerAgain');
 }
 
 /// Records the local-plaintext maintenance calls `_onSocketReady` fires.
@@ -400,6 +422,31 @@ void main() {
       expect(pushStates, [
         {'clientVisible': true},
       ]);
+    });
+
+    // Issue #208: an unlink finds a device's push token, and the box
+    // notifiers on it, only under that device's id. Mutation: drop the
+    // `registerAgain` in the `socketReady` handler.
+    test('push registers again when a session names another device id',
+        () async {
+      final push = _RecordingPush();
+      final linked = RecordingConnectionProvider(
+        socketService: fakeSocket,
+        pushService: push,
+      );
+      addTearDown(linked.disconnect);
+      await linked.connect(1, 'test-token', 'http://localhost:3000');
+      fakeSocket
+        ..simulateTransportConnect()
+        ..simulateSocketReady(payload: {'deviceId': 1})
+        ..simulateSocketReady(payload: {'deviceId': 1});
+      await pumpEventQueue();
+      expect(push.registrations, ['initialize']);
+
+      // The link rebound this session to device 9.
+      fakeSocket.simulateSocketReady(payload: {'deviceId': 9});
+      await pumpEventQueue();
+      expect(push.registrations, ['initialize', 'registerAgain']);
     });
   });
 

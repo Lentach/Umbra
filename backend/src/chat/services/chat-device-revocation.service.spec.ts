@@ -148,7 +148,7 @@ describe('ChatDeviceRevocationService', () => {
       transaction: jest.fn(async (cb: (m: EntityManager) => Promise<void>) =>
         cb(manager),
       ),
-      query: jest.fn().mockResolvedValue([]),
+      query: jest.fn().mockResolvedValue([[], 0]),
     };
     roomEmit = jest.fn();
     kickedSocket = { id: 'revoked-socket', disconnect: jest.fn() };

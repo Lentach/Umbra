@@ -3,6 +3,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { Server, Socket } from 'socket.io';
 import { RefreshTokensService } from '../../auth/refresh-tokens.service';
+import { deleteNotifiersOnPushTokens } from '../../box/box-notifier-teardown';
 import { FcmTokensService } from '../../fcm-tokens/fcm-tokens.service';
 import { WebPushSubscriptionsService } from '../../web-push-subscriptions/web-push-subscriptions.service';
 import {
@@ -242,17 +243,13 @@ export class ChatDeviceRevocationService {
 
       // ---- post-commit: the revocation is now durable ----
 
-      // Push rows live in other modules and cannot join the transaction. A
-      // failure here means the revoked device keeps receiving notifications,
-      // so it is loud, but it must not turn a committed revocation into an
-      // error answer the client would retry.
       // Issue #208 (owner, 2026-11-04): the box wakes a device through the
       // push token its notifiers were registered with, and a friend whose
       // list still names the revoked device keeps filling that device's old
       // queues until it next opens — each send a "new message" on a closed
-      // phone. The device's notifiers go with its tokens. Matched by token
-      // only, never logged: no queue is tied to a device anywhere.
-      // Read BEFORE the token rows below are deleted.
+      // phone. The device's notifiers go with its tokens
+      // ([deleteNotifiersOnPushTokens]), read BEFORE the token rows below
+      // are deleted.
       try {
         const tokens = await this.fcmTokensService.tokensForDevice(
           userId,
@@ -263,16 +260,7 @@ export class ChatDeviceRevocationService {
             userId,
             dto.deviceId,
           );
-        if (tokens.length > 0 || endpoints.length > 0) {
-          await this.dataSource.query(
-            `DELETE FROM public.box_notifiers
-              WHERE (platform <> 'webpush' AND token = ANY($1::text[]))
-                 OR (platform = 'webpush' AND EXISTS (
-                      SELECT 1 FROM unnest($2::text[]) AS e(endpoint)
-                       WHERE strpos(token, e.endpoint) > 0))`,
-            [tokens, endpoints],
-          );
-        }
+        await deleteNotifiersOnPushTokens(this.dataSource, tokens, endpoints);
       } catch (error) {
         this.logger.error(
           `[revoke] box notifier teardown FAILED deviceId=${dto.deviceId}: ${
@@ -280,6 +268,10 @@ export class ChatDeviceRevocationService {
           }`,
         );
       }
+      // Push rows live in other modules and cannot join the transaction. A
+      // failure here means the revoked device keeps receiving notifications,
+      // so it is loud, but it must not turn a committed revocation into an
+      // error answer the client would retry.
       try {
         await this.fcmTokensService.removeForDevice(userId, dto.deviceId);
         await this.webPushSubscriptionsService.removeForDevice(

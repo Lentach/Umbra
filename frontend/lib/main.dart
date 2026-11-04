@@ -312,7 +312,7 @@ class _AuthGateState extends State<AuthGate> {
       // (`awaitingIdentityVerdict`, capped): a password login on a new
       // device used to paint the chat list for seconds before the gate.
       final userId = auth.currentUser?.id;
-      final lifeChecked = context.select<EncryptionProvider, bool>(
+      final shellMayShow = context.select<EncryptionProvider, bool>(
         (e) =>
             userId == null ||
             (e.previousLifeCheckedFor == userId && !e.awaitingIdentityVerdict),
@@ -330,10 +330,10 @@ class _AuthGateState extends State<AuthGate> {
       }
       return Stack(
         children: [
-          Offstage(offstage: gated || !lifeChecked, child: const MainShell()),
+          Offstage(offstage: gated || !shellMayShow, child: const MainShell()),
           if (gated)
             const DeviceLinkGateScreen()
-          else if (!lifeChecked)
+          else if (!shellMayShow)
             const Scaffold(body: Center(child: BootHoneycomb())),
         ],
       );

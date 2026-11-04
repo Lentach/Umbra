@@ -1454,7 +1454,7 @@ void main() {
   // Mutation: drop the deadline from `retireRevokedDevice`'s `keepGoing`.
   test(
     'retireRevokedDevice deletes nothing more once its wait is spent, even '
-    'with the box reached in time: the rest is left to the reaper',
+    'with the box reached in time: the rest stays owed in boxgone_v1',
     () async {
       await a.start();
       await a.store.update(

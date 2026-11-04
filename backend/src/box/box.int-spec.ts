@@ -15,6 +15,7 @@ import { setTimeout as sleep } from 'timers/promises';
 import { DataSource } from 'typeorm';
 import { HttpThrottlerGuard } from '../common/http-throttler.guard';
 import { runMigrations } from '../database/migration-runner';
+import { deleteNotifiersOnPushTokens } from './box-notifier-teardown';
 import {
   BOX_PUSH_TRANSPORT,
   type BoxPush,
@@ -1439,6 +1440,35 @@ describeWithDb('box over real sockets and Postgres', () => {
       bob.disconnect();
       await sleep(3500);
       expect(pushes).toEqual([]);
+    });
+
+    // Issue #208, decision 125: a revoked device's notifiers go with its
+    // own push tokens. Mutation: match web push by substring (`strpos`).
+    it("an unlink deletes exactly the notifiers on the device's own tokens", async () => {
+      const bob = await connect();
+      const queues = [
+        await createQueue(bob),
+        await createQueue(bob),
+        await createQueue(bob),
+        await createQueue(bob),
+      ];
+      const endpoint = 'https://fcm.googleapis.com/fcm/send/box-it-13';
+      const revokedWeb = webPushToken('box-it-13');
+      // Another device's subscription whose endpoint merely STARTS with it.
+      const otherWeb = webPushToken('box-it-13x');
+      await activateNotifier(bob, queues[0], 'fcm-token_box:13');
+      await activateNotifier(bob, queues[1], revokedWeb, 'webpush');
+      await activateNotifier(bob, queues[2], otherWeb, 'webpush');
+      await activateNotifier(bob, queues[3], 'fcm-token_box:14');
+
+      await deleteNotifiersOnPushTokens(db, ['fcm-token_box:13'], [endpoint]);
+
+      expect(await notifierRows(queues)).toEqual(
+        [
+          `${queues[2].nid}:${otherWeb}`,
+          `${queues[3].nid}:fcm-token_box:14`,
+        ].sort(),
+      );
     });
   });
 

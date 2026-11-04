@@ -87,6 +87,59 @@ void main() {
     ),
   );
 
+  // Issue #208 (owner 11-04): a phrase restore starts fresh only for a device
+  // the account unlinked; a live secondary that signed out and back in keeps
+  // its history. Mutation: drop the `revokedAtMs == null` test.
+  test('only a stamped device the served list revoked counts as unlinked',
+      () async {
+    FlutterSecureStorage.setMockInitialValues({
+      'e2e_${userId}_material_device_v1': '2',
+    });
+    SharedPreferences.setMockInitialValues({});
+    final provider = EncryptionProvider(
+      service: EncryptionService(),
+      backupCodec: codec(),
+    );
+    Map<String, dynamic>? served;
+    provider.setEmitCallback((event, _) {
+      if (event != 'getDeviceList') return;
+      scheduleMicrotask(
+        () => provider.onDeviceList({
+          'userId': userId,
+          'authorization': served,
+        }),
+      );
+    });
+    String list({int? revokedAtMs}) => base64Encode(
+      encodeCanonicalDeviceList(
+        DeviceList(
+          userId: userId,
+          version: 3,
+          devices: [
+            const DeviceListEntry(deviceId: 1, platform: 'web', addedAtMs: 1),
+            DeviceListEntry(
+              deviceId: 2,
+              platform: 'android',
+              addedAtMs: 2,
+              revokedAtMs: revokedAtMs,
+            ),
+          ],
+        ),
+      ),
+    );
+
+    served = {'listCanonical': list()};
+    expect(await provider.stampedDeviceRevoked(userId), isFalse);
+    served = {'listCanonical': list(revokedAtMs: 3)};
+    expect(await provider.stampedDeviceRevoked(userId), isTrue);
+    served = null;
+    expect(
+      await provider.stampedDeviceRevoked(userId),
+      isTrue,
+      reason: 'a never-enrolled account has no live secondary',
+    );
+  });
+
   test('happy path: nonce → proof upload → rebind → OTPs → list → rebuilds',
       () async {
     final sealed = await arrangeSealedBackup();
