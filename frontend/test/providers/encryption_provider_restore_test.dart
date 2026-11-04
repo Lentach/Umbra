@@ -147,17 +147,45 @@ void main() {
   // failure.
   group('a phrase restore on a previous device life', () {
     Future<({EncryptionProvider provider, List<String> log, List<int> fresh})>
-    staleRestore({required bool listAnswers, int? revokedAtMs = 3}) async {
+    staleRestore({
+      required bool listAnswers,
+      int? revokedAtMs = 3,
+      bool mismatch = false,
+      bool rebinds = false,
+    }) async {
       final sealed = await arrangeSealedBackup();
-      FlutterSecureStorage.setMockInitialValues({
-        'e2e_${userId}_material_device_v1': '2',
-      });
+      void answerKeyCheck(EncryptionProvider p) =>
+          p.setEmitCallback((event, _) {
+            if (event == 'checkOwnKeyBundle') {
+              p.onOwnKeyBundleStatus({'exists': false});
+            }
+          });
+      if (mismatch) {
+        // The drive-3 shape: a previous life minted material as device 2.
+        final life1 = EncryptionProvider(service: EncryptionService());
+        answerKeyCheck(life1);
+        life1.setOwnDeviceId(2);
+        await life1.initializeE2E(userId);
+        await pumpEventQueue(times: 200);
+      } else {
+        FlutterSecureStorage.setMockInitialValues({
+          'e2e_${userId}_material_device_v1': '2',
+        });
+      }
       final provider = EncryptionProvider(
         service: EncryptionService(),
         backupCodec: codec(),
       )..storedSessionDeviceId = (() async => 7);
+      if (mismatch) {
+        answerKeyCheck(provider);
+        provider.setOwnDeviceId(7);
+      }
       await provider.initializeE2E(userId);
       await provider.checkPreviousDeviceLife(userId);
+      if (mismatch) {
+        await pumpEventQueue(times: 200);
+        expect(provider.deviceMaterialMismatch, isTrue, reason: 'precondition');
+      }
       final log = <String>[];
       final fresh = <int>[];
       provider.onFreshDeviceLife = () async => fresh.add(1);
@@ -203,7 +231,18 @@ void main() {
                 .onRegistrationLockNonce({'nonce': base64Encode([1, 2, 3])}));
           case 'uploadKeyBundle':
             scheduleMicrotask(() => provider.onKeyBundleUploaded(
-                {'success': false, 'error': 'restore_refused'}));
+                rebinds
+                    ? {
+                        'success': true,
+                        'identityChanged': false,
+                        'restored': true,
+                        'deviceId': 8,
+                        'nextListVersion': 4,
+                      }
+                    : {'success': false, 'error': 'restore_refused'}));
+          case 'updateDeviceList':
+            scheduleMicrotask(() => provider
+                .onDeviceListUpdated({'success': true, 'listVersion': 4}));
         }
       });
       expect(provider.restoreMayStartFresh, isTrue, reason: 'precondition');
@@ -232,6 +271,27 @@ void main() {
       expect(r.provider.restoreFailure, IdentityRestoreFailure.failed);
       expect(r.fresh, isEmpty);
       expect(r.log, isNot(contains('uploadKeyBundle')));
+    });
+
+    // Issue #208 drive 3: the (lxiv) mismatch flag outlived the rebind (the
+    // restore's reconnect is a reconnect, so `onConnect` keeps it) and the
+    // rebound device got no one-time pre-keys. Mutation: drop the clear in
+    // `_restoreObserveUploadAck`.
+    test('a mismatch-flagged install uploads its OTPs after the rebind',
+        () async {
+      final r = await staleRestore(
+        listAnswers: true,
+        mismatch: true,
+        rebinds: true,
+      );
+      expect(r.provider.restoreStage, IdentityRestoreStage.done);
+      expect(r.fresh, [1]);
+      expect(r.log, contains('uploadOneTimePreKeys'));
+      expect(
+        r.log.indexOf('uploadKeyBundle'),
+        lessThan(r.log.indexOf('uploadOneTimePreKeys')),
+      );
+      expect(r.provider.deviceMaterialMismatch, isFalse);
     });
   });
 

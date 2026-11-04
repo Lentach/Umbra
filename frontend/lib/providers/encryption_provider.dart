@@ -3008,6 +3008,13 @@ class EncryptionProvider extends ChangeNotifier {
     if (pending == null || pending.isCompleted || data is! Map) return;
     if (data['success'] == true && data['restored'] != true) return;
     _pendingRestoreUploadAck = null;
+    if (data['success'] == true) {
+      // Issue #208: the adopt cleared the (lxiv) stamp and this ack is the
+      // rebind onto a fresh device id, so the mismatch is over. The restore's
+      // reconnect is a reconnect (`onConnect` keeps the flag), and left set
+      // it dropped the stashed OTPs this same ack is about to release.
+      _deviceMaterialMismatch = false;
+    }
     pending.complete(Map<String, dynamic>.from(data));
   }
 

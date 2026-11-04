@@ -11,6 +11,7 @@
   - The gate retire waits for the account socket (`socketReady` trigger) and the same revoked check; a live secondary's queues stay for its restore or link.
   - Web-push notifiers matched on the exact JSON endpoint, in `box/box-notifier-teardown.ts` (`deleteNotifiersOnPushTokens`, `CASE` guards the cast), int-tested on Postgres.
   - Standards: `[rows, rowCount]` mock, push re-register test (`ConnectionProvider(pushService:)` seam), stale test title, `shellMayShow`, comment moved, traps split.
+- OTP fix (owner: "fix it now"): the restore's `restored` ack clears `_deviceMaterialMismatch` (`_restoreObserveUploadAck`) before the flush releases the stashed one-time pre-keys; before, a mismatch-flagged install dropped them (`OTP_UPLOAD_DROPPED {reason: device_material_mismatch}`) because the rebind reconnect keeps the flag.
 
 ## Key files
 - Frontend: `providers/{connection,encryption}_provider.dart`, `services/encryption_service.dart`, `services/box/{box_session,box_friend_handoff}.dart`, `services/contacts/{contact_store,contact_store_owed_deletes}.dart`, `services/push_service.dart`, `main.dart`.
@@ -26,10 +27,10 @@
   - device 18 revoked while its tab was closed → password login → stale gate → 2 rows gone from `box_queues` (rid diff), none added: the acceptance check, by SQL;
   - live secondary 23 signed out (Wyloguj) and back in: stale gate, 0 rows gone from `box_queues`; phrase restore (fresh phrase from the primary; the drive-2 phrase predates the reset and failed `identity_locked`) → `RESTORE_STALE_MATERIAL_DISPOSED`, no `E2E_FRESH_DEVICE_LIFE`, all 12 `flutter.e2e_283_*` rows kept, 0 queues gone, rebound to 26, gate released.
   - unlinked device 18's tab, password login → stale gate → phrase restore: RAM log `E2E_PREVIOUS_DEVICE_LIFE` → `DEVICE_LIST_FETCH_EMIT` → `BOX_PREVIOUS_LIFE_RETIRE` → `BOX_REVOKED_QUEUES_RETIRED {held: 2, owed: 0}`, then `DEVICE_LIST_FETCH_EMIT` → `RESTORE_STALE_MATERIAL_DISPOSED` → `E2E_FRESH_DEVICE_LIFE` → rebound to 28, gate released (`x3_t_restore_ram.txt`). `held: 2` on a second gate visit [INFERENCE: the 2 already deleted on the first, still in the store until the wipe; a harmless repeat].
-- Found, NOT fixed: a restore on a mismatch-flagged install drops its one-time pre-keys (`OTP_UPLOAD_DROPPED {reason: device_material_mismatch}`: `_deviceMaterialMismatch` outlives the rebind), on BOTH restore shapes (seen on device 26, keep; and 28, fresh); device 26 had 0 OTPs, still 0 after a reload. Owner to decide: fix before 0.2.74 or after.
+- OTP drop (found in drive 3 on devices 26 and 28, both restore shapes), FIXED: new test "a mismatch-flagged install uploads its OTPs after the rebind" (real stale material minted as device 2, session 7); red before the fix, mutant (drop the clear) killed and reverted; Flutter 3342 passed / 14 skipped, analyzer 0, Dart lint PASS. Drive 4 (web build with the fix): keyless tab U restored → device 30 (28 revoked); tab T (material 28) password login → `E2E_DEVICE_MISMATCH {sessionDeviceId: 30, materialDeviceId: 28}` → phrase restore → `E2E_FRESH_DEVICE_LIFE`, `OTP_UPLOAD_AFTER_ACK {count: 20}`, rebound to 32, no `OTP_UPLOAD_DROPPED`; SQL: 20 `one_time_pre_keys` rows for device 32, created at the rebind second (`x4_t_otp_restore_ram.txt`).
 
 ## Notes for next session
-- Next action: owner rulings — the restore OTP drop before or after 0.2.74; then the 0.2.74 OK (backend decision 125 + web + APK) and `production-vm-deploy`.
+- Next action: the owner's 0.2.74 OK (backend decision 125 + web + APK), then `production-vm-deploy`.
 - NOT verified on a device: lock-only restore (needs `identityUploadLocked`); a reset whose teardown throws (fault injection); `onSessionLost` with an open in flight at a socket drop; a real FCM wake (no service account); iOS PWA, prod, release APK.
 - Seen, not changed: the contact-backup prompt opens on top of the link gate on web.
 - Owner-owed: the 0.2.74 OK; 0.2.73 on his phone; the step-4 both-ways test; copying `backup.pass` off the VM.
