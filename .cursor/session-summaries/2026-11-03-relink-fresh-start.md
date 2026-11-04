@@ -25,6 +25,7 @@
 ## Verification
 - Round 1: CI 6/6 `63764ec8`; 3315 tests; mutants killed: adopt Signal-only wipe; previous-life init gate removed; `_notePreviousDeviceLife` no-op; restart without `onSession`; handoff keeping the held address; handoff ignoring the session; `mayPublish` ignored. Prod read-only SQL (owner OK): bob208 devices 1/11/18, 18 reused 11's `requestSid`, no "karol" account (stale local residue). Drives: web revoke → gate → re-link 3 contacts, no history; emulator link → revoke → gate → re-link (device 27) both ways. fa21/fa23 never left F (tab backgrounded / no focus): `.planning/208-relink/findings.md`.
 - Review 1: CI 6/6 `c59e1a96`; drive B (device 37 → unlink → gate, no chat-list frame → device 39, `held: 6`).
+- CI: 6/6 success on `80b98d53` (review 2 + gaps: backend, Flutter, E2E wire, isolated probes, Web Lock probe, CodeQL).
 - Review 2: Flutter 3335 passed / 14 skipped, backend 1264, analyzer 0, Dart lint 3130, backend ratchet PASS. Mutants killed and reverted: socket-drop re-send; answered-before-drop not re-sent; stale restore Signal-only; lock-only restore wiping; reset `beforeWipe` failure; owed row wiped; keyless verdict wait; keyless wait removed from `AuthGate`; hard-deadline retire; owed delete not drained; gate-time delete dropped; pre-take stamp re-read dropped. Backend: notifier teardown has a failure-path test (no mutant run).
 - Drive (emulator debug APK + web, 11-04 15:45–16:14):
   - fresh install, password login: 87/87 frames login → honeycomb → gate, no chat list (`u_login.mp4`);
