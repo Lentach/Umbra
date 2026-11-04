@@ -5,7 +5,7 @@ One-off runbook for the release that drops the old server path (migration `0027`
 ## Gates (all before the owner is asked for the go)
 
 1. #208 shipped (0.2.74), master merged into `feat/phase4-step5`, PR #210 mergeable, CI green on its head sha (`gh api repos/Lentach/Umbra/commits/<sha>/check-runs`).
-2. The Android revoke path driven on a device (decision 130). PASSED 11-05 (evidence: decisions log E130a).
+2. The Android revoke path driven on a device (decision 130). PASSED 11-05 on `cfc968db` (evidence: decisions log E130a). Repeat ONCE on the merged release APK (the shipped binary is the merge with #208, which touches `main.dart`, where `onBackgroundMessage` is wired): revoked + closed → `[wake-up] revoked-device check: stopped` and the notifier gone on the next send; live + closed → `notRevoked`. Recipe in `.cursor/session-summaries/2026-11-04-phase4-step5-built.md` (Verification, Android drive). Delete the drive APK from BOTH `build/app/outputs/flutter-apk/` and `apk/release/` afterwards: it is throwaway-signed and points at `127.0.0.1:3100`.
 3. The decision 86 count re-run read-only and shown to the owner (query below).
 4. The owner's explicit go (decision 129). Not bundled with any other release.
 
