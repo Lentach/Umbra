@@ -140,6 +140,101 @@ void main() {
     );
   });
 
+  // Issue #208 (owner 11-04): a restore on an install stamped for another
+  // device id starts fresh only when the served list names that id revoked,
+  // and fails, touching nothing, when the list does not answer. Mutations:
+  // pass `freshDeviceLife: restoreMayStartFresh`; drop the `device_list`
+  // failure.
+  group('a phrase restore on a previous device life', () {
+    Future<({EncryptionProvider provider, List<String> log, List<int> fresh})>
+    staleRestore({required bool listAnswers, int? revokedAtMs = 3}) async {
+      final sealed = await arrangeSealedBackup();
+      FlutterSecureStorage.setMockInitialValues({
+        'e2e_${userId}_material_device_v1': '2',
+      });
+      final provider = EncryptionProvider(
+        service: EncryptionService(),
+        backupCodec: codec(),
+      )..storedSessionDeviceId = (() async => 7);
+      await provider.initializeE2E(userId);
+      await provider.checkPreviousDeviceLife(userId);
+      final log = <String>[];
+      final fresh = <int>[];
+      provider.onFreshDeviceLife = () async => fresh.add(1);
+      final served = base64Encode(
+        encodeCanonicalDeviceList(
+          DeviceList(
+            userId: userId,
+            version: 3,
+            devices: [
+              const DeviceListEntry(deviceId: 1, platform: 'web', addedAtMs: 1),
+              DeviceListEntry(
+                deviceId: 2,
+                platform: 'web',
+                addedAtMs: 2,
+                revokedAtMs: revokedAtMs,
+              ),
+            ],
+          ),
+        ),
+      );
+      provider.setEmitCallback((event, data) {
+        log.add(event);
+        switch (event) {
+          case 'getIdentityBackup':
+            scheduleMicrotask(() => provider.onIdentityBackup({
+                  'exists': true,
+                  'blob': sealed.blob,
+                  'salt': sealed.salt,
+                  'iterations': sealed.iterations,
+                }));
+          case 'getDeviceList':
+            scheduleMicrotask(
+              listAnswers
+                  ? () => provider.onDeviceList({
+                        'userId': userId,
+                        'authorization': {'listCanonical': served},
+                      })
+                  // The socket drops: every pending fetch fails at once.
+                  : provider.onDisconnect,
+            );
+          case 'getRegistrationLockNonce':
+            scheduleMicrotask(() => provider
+                .onRegistrationLockNonce({'nonce': base64Encode([1, 2, 3])}));
+          case 'uploadKeyBundle':
+            scheduleMicrotask(() => provider.onKeyBundleUploaded(
+                {'success': false, 'error': 'restore_refused'}));
+        }
+      });
+      expect(provider.restoreMayStartFresh, isTrue, reason: 'precondition');
+      await provider.restoreFromPhrase(phrase);
+      return (provider: provider, log: log, fresh: fresh);
+    }
+
+    test('starts fresh when the list names the stamped device revoked',
+        () async {
+      final r = await staleRestore(listAnswers: true);
+      expect(r.fresh, [1]);
+      expect(r.log, contains('uploadKeyBundle'));
+    });
+
+    test('keeps its history when the list names the stamped device live',
+        () async {
+      final r = await staleRestore(listAnswers: true, revokedAtMs: null);
+      expect(r.fresh, isEmpty);
+      expect(r.log, contains('uploadKeyBundle'));
+    });
+
+    test('fails before adopting anything when the list does not answer',
+        () async {
+      final r = await staleRestore(listAnswers: false);
+      expect(r.provider.restoreStage, IdentityRestoreStage.failed);
+      expect(r.provider.restoreFailure, IdentityRestoreFailure.failed);
+      expect(r.fresh, isEmpty);
+      expect(r.log, isNot(contains('uploadKeyBundle')));
+    });
+  });
+
   test('happy path: nonce → proof upload → rebind → OTPs → list → rebuilds',
       () async {
     final sealed = await arrangeSealedBackup();
