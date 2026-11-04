@@ -18,7 +18,7 @@
 - Docs: `e2e-invariants.md`, `multi-device.md` (xc), `wire.md`, `metadata-privacy-decisions.md` (125), `traps.md`, `CLAUDE.md` counts.
 
 ## Verification
-- CI 6/6 on `63764ec8`, `c59e1a96`, `80b98d53`; this commit: see the #208 comment.
+- CI 6/6 on `63764ec8`, `c59e1a96`, `80b98d53`, and on `a56e382d` (review 3: backend, Flutter, E2E wire, isolated probes, Web Lock probe, CodeQL). #208 comment 6641992393.
 - Review 3 gates: Flutter 3338 passed / 14 skipped, backend 1264 / 71, analyzer 0, Dart lint 3130, backend ratchet PASS, int test on dev Postgres. Mutants killed and reverted: retire without the revoked check; `stampedDeviceRevoked` ignoring `revokedAt`; no `registerAgain`; substring endpoint match. A dropped `CASE` survived (PG short-circuits here): kept as a guard, not claimed.
 - Drive 3 (web build of this tree, dev account `r208a`):
   - planted `web_push_subscription` for device 13 + webpush notifiers on its endpoint and on `…web13x`, plus an FCM control; revoked 13 from the primary → only the exact-endpoint row went;
@@ -27,7 +27,7 @@
 - Found, NOT fixed: a restore on a mismatch-flagged install drops its one-time pre-keys (`OTP_UPLOAD_DROPPED {reason: device_material_mismatch}`: `_deviceMaterialMismatch` outlives the rebind); device 26 had 0 OTPs, still 0 after a reload. Pre-existing for the fresh-start shape too [INFERENCE: the flag check in `_flushStashedOneTimePreKeyUpload` does not depend on `freshDeviceLife`]. Owner to decide: fix before 0.2.74 or after.
 
 ## Notes for next session
-- Next action: owner OK for 0.2.74 — backend (decision 125) + web + APK; then `production-vm-deploy`.
+- Next action: owner rulings — the restore OTP drop before or after 0.2.74; then the 0.2.74 OK (backend decision 125 + web + APK) and `production-vm-deploy`.
 - NOT verified on a device: lock-only restore (needs `identityUploadLocked`); a reset whose teardown throws (fault injection); `onSessionLost` with an open in flight at a socket drop; a real FCM wake (no service account); iOS PWA, prod, release APK.
 - Seen, not changed: the contact-backup prompt opens on top of the link gate on web.
 - Owner-owed: the 0.2.74 OK; 0.2.73 on his phone; the step-4 both-ways test; copying `backup.pass` off the VM.
