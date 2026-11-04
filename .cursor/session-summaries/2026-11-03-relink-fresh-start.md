@@ -33,8 +33,16 @@
   - planted 3 `box_notifiers` rows; unlink 41 while closed → its token's row gone, device 7's and the control row kept;
   - F's next send `frames: 3` (41 dropped); relaunch → logged out → password login → stale gate, no chat list (`u_relog.mp4`); `BOX_PREVIOUS_LIFE_RETIRE` 15:52:32, `BOX_REVOKED_QUEUES_RETIRED {held: 5, owed: 0}` 15:52:35, link at 15:54;
   - bug above, fixed, rebuilt: device 43 → 45, box up 4 s after the link, F's u4 `frames: 4` reached it; ap5 went after sibling 32 swapped (ghost 39 revoked first).
-- Evidence: `%TEMP%/p4s4drive/evidence/w208r/` (`u_*`).
-- NOT verified on a device: owed deletes (`owed: 0` here), `openProvisioning` re-send timing, stale / keyless / lock-only phrase restore, reset on a stale web install, voice-note cache clear, web push endpoint teardown, a real FCM wake (dev has no service account); iOS PWA, prod, release APK.
+- Drive 2 (web build of `80b98d53` + same APK, 11-04 16:40–17:10; throwaway dev account `r208a` id 283, phrase in `v_phrase.txt`):
+  - owed deletes: stale tab, backend `docker pause`d at boot → `BOX_REVOKED_QUEUES_RETIRED {held: 3, owed: 3}`, `boxgone_v1` row written; unpause → stale phrase restore → `E2E_FRESH_DEVICE_LIFE`, then `BOX_OWED_QUEUES_DELETED {deleted: 3, owed: 0}`, row gone;
+  - stale phrase restore (other tab): `RESTORE_STALE_MATERIAL_DISPOSED` + `E2E_FRESH_DEVICE_LIFE`; keyless restore (fresh origin): neither logged;
+  - reset on a stale tab (no phrase, `deadlineAt` aged by SQL): `IDENTITY_RESET_SPEND {shape: mismatch}` → `E2E_FRESH_DEVICE_LIFE` → `RESET_STALE_MATERIAL_DISPOSED` → device 11;
+  - voice note on the phone: `281474976710691.audio` cached → unlink, re-link → `audio_cache` gone → next note `…698.audio` (ids still rising);
+  - `openProvisioning`: stale gate booted with the backend paused shows no code; code appears 4 s after unpause.
+  - Web linking needs installed mode: CDP init script `navigator.standalone = true`.
+- Evidence: `%TEMP%/p4s4drive/evidence/w208r/` (`u_*`, `v_*`).
+- NOT verified on a device: lock-only restore (needs `identityUploadLocked`); a reset whose teardown throws (needs fault injection); `onSessionLost` with a provisioning open in flight while the socket drops (drive 2 covered only "sent before the socket was ready"); web-push endpoint teardown; a real FCM wake (dev has no service account); iOS PWA, prod, release APK.
+- Seen, not changed: the contact-backup prompt ("Chroń swoje kontakty") opens on top of the link gate on web.
 
 ## Notes for next session
 - Next action: owner OK for 0.2.74 — backend (decision 125) + web + APK; then `production-vm-deploy`.
