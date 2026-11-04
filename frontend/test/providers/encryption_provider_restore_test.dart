@@ -230,16 +230,22 @@ void main() {
             scheduleMicrotask(() => provider
                 .onRegistrationLockNonce({'nonce': base64Encode([1, 2, 3])}));
           case 'uploadKeyBundle':
-            scheduleMicrotask(() => provider.onKeyBundleUploaded(
-                rebinds
-                    ? {
-                        'success': true,
-                        'identityChanged': false,
-                        'restored': true,
-                        'deviceId': 8,
-                        'nextListVersion': 4,
-                      }
-                    : {'success': false, 'error': 'restore_refused'}));
+            scheduleMicrotask(() {
+              if (!rebinds) {
+                provider.onKeyBundleUploaded(
+                    {'success': false, 'error': 'restore_refused'});
+                return;
+              }
+              // The ConnectionProvider contract: adopt + reconnect FIRST.
+              log.add('RECONNECTED');
+              provider.onKeyBundleUploaded({
+                'success': true,
+                'identityChanged': false,
+                'restored': true,
+                'deviceId': 8,
+                'nextListVersion': 4,
+              });
+            });
           case 'updateDeviceList':
             scheduleMicrotask(() => provider
                 .onDeviceListUpdated({'success': true, 'listVersion': 4}));
@@ -275,24 +281,30 @@ void main() {
 
     // Issue #208 drive 3: the (lxiv) mismatch flag outlived the rebind (the
     // restore's reconnect is a reconnect, so `onConnect` keeps it) and the
-    // rebound device got no one-time pre-keys. Mutation: drop the clear in
+    // restore ack dropped the stashed one-time pre-keys; a kept-history
+    // restore then had none at all. Mutation: drop the clear in
     // `_restoreObserveUploadAck`.
-    test('a mismatch-flagged install uploads its OTPs after the rebind',
-        () async {
-      final r = await staleRestore(
-        listAnswers: true,
-        mismatch: true,
-        rebinds: true,
-      );
-      expect(r.provider.restoreStage, IdentityRestoreStage.done);
-      expect(r.fresh, [1]);
-      expect(r.log, contains('uploadOneTimePreKeys'));
-      expect(
-        r.log.indexOf('uploadKeyBundle'),
-        lessThan(r.log.indexOf('uploadOneTimePreKeys')),
-      );
-      expect(r.provider.deviceMaterialMismatch, isFalse);
-    });
+    for (final (shape, revokedAtMs) in [('fresh', 3), ('kept', null)]) {
+      test('a mismatch-flagged $shape restore uploads its OTPs once, '
+          'after the rebind', () async {
+        final r = await staleRestore(
+          listAnswers: true,
+          revokedAtMs: revokedAtMs,
+          mismatch: true,
+          rebinds: true,
+        );
+        expect(r.provider.restoreStage, IdentityRestoreStage.done);
+        expect(r.fresh, revokedAtMs == null ? isEmpty : [1]);
+        final uploads = r.log.where((e) => e == 'uploadOneTimePreKeys');
+        expect(uploads, hasLength(1));
+        expect(
+          r.log.indexOf('RECONNECTED'),
+          lessThan(r.log.indexOf('uploadOneTimePreKeys')),
+          reason: 'OTPs must ride the rebound device id',
+        );
+        expect(r.provider.deviceMaterialMismatch, isFalse);
+      });
+    }
   });
 
   test('happy path: nonce → proof upload → rebind → OTPs → list → rebuilds',
