@@ -5,12 +5,6 @@ String _inboxPrefix(int userId) => 'e2e_${userId}_boxin_v1_';
 String _inboxKey(int userId, String rid, String id) =>
     '${_inboxPrefix(userId)}$rid.$id';
 
-/// The next local message id (decision 14). Plain: it names no one. Bumped
-/// under the account's cross-context lock and never lowered, so an id is
-/// never handed out twice — not after its record is deleted, expired or
-/// retired, and not by two web tabs.
-String _localIdCounterKey(int userId) => 'e2e_${userId}_boxlid_v1';
-
 const int _inboxVersion = 1;
 
 /// How long the box can still push a delivery again: its message TTL
@@ -217,7 +211,7 @@ extension ContactStoreInbox on ContactStore {
       () => _lock(ContactStore.lockName(userId), () async {
         if (_generation != generation) return false;
         final key = _inboxKey(userId, rid, id);
-        final counterKey = _localIdCounterKey(userId);
+        final counterKey = ContactStore.localIdCounterKey(userId);
         final rows = await ContactStore._readWhere(
           kv,
           (k) => k == key || k == counterKey,
@@ -290,7 +284,7 @@ extension ContactStoreInbox on ContactStore {
     return _serial(
       () => _lock(ContactStore.lockName(userId), () async {
         if (_generation != generation) return false;
-        final counterKey = _localIdCounterKey(userId);
+        final counterKey = ContactStore.localIdCounterKey(userId);
         final rows = await ContactStore._readWhere(kv, (k) => k == counterKey);
         final first = _nextLocalId(kv, userId, rows[counterKey]);
         if (!await kv.setString(counterKey, '${first + count}')) return false;

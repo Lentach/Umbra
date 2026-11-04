@@ -3225,15 +3225,19 @@ that is the designed outcome).
     now holds only until the install is linked again. Prod 11-03: a revoked Android linked again kept
     its box queues, sibling book and request queue, drained the old queues into unreadable rows, and
     its stale sibling ack kept the primary from ever learning its new self-queue, so every primary
-    send was refused `own_uncovered` until the phone was unlinked. Clause 1: the §5.1 adopt (and a
-    stale gate's §6.2 disposal) wipes the account's whole `e2e_<uid>_` namespace, proven, after the
-    app has closed the contact store; contacts return from the contact backup. Clause 2: an install
-    whose material stamp names another id than the STORED session is gated from the first frame and
-    never reaches E2E-ready, even before `socketReady` confirms the id. Same direction as Signal
-    Desktop (relink: "Transfer" or "Delete all data"), WhatsApp companions and Wire (a removed client
-    clears its data). Copy:
-    `devicesRevokeExplainer`, `siblingSilentBody`, `linkGateStaleBody` say a re-linked device starts
-    fresh. Detail and residuals: `frontend/docs/e2e-invariants.md` (#208 bullet).
+    send was refused `own_uncovered` until the phone was unlinked. Clause 1: the §5.1 adopt, a
+    phrase restore on a stale install (owner 11-03: "fresh start too"; a keyless restore keeps its
+    history) and a stale gate's §6.2 disposal wipe the account's whole `e2e_<uid>_` namespace,
+    proven, once the input has parsed; first the old life's box deletes its queues (it alone holds
+    their keys) and the app closes the contact store; contacts return from the contact backup. The
+    local message-id counter survives (decision 14: never lowered). Clause 2: an install whose
+    material stamp names another id than the STORED session is gated from the first frame and
+    never reaches E2E-ready, even before `socketReady` confirms the id; that includes a live
+    secondary that signed out and back in (owner 11-03: it starts fresh too). Same direction as
+    Signal Desktop (relink: "Transfer" or "Delete all data"), WhatsApp companions and Wire (a
+    removed client clears its data). Copy: `devicesRevokeExplainer`, `siblingSilentBody`,
+    `linkGateStaleBody` and `linkGateScanBody` say a linked device starts fresh. Detail and
+    residuals: `frontend/docs/e2e-invariants.md` (#208 bullet).
 
 - **Next gate:** T11 implementation review, then the T1–T11 merge decision. The T1–T8 phase
   gate itself is CLOSED 2026-08-22: three reviewers, verdicts SHIP / SHIP WITH FIXES ×2; the

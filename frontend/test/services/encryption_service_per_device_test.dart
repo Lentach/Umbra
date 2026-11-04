@@ -108,6 +108,24 @@ void main() {
       },
     );
 
+    // Issue #208: a handoff over a session the friend never answered is a
+    // PreKey message it refuses unasked. Mutation: answer `hasSession`.
+    test('a session this device opened is ANSWERED only once a reply from '
+        'that device decrypts', () async {
+      await alice.buildSession(bobId, flatBundleFrom(bobDev1), expectedIdentityBase64: null);
+      expect(await alice.hasSession(bobId), isTrue);
+      expect(await alice.hasAnsweredSession(bobId, deviceId: 1), isFalse);
+
+      final hello = await alice.encrypt(bobId, 'hello');
+      expect(await alice.hasAnsweredSession(bobId, deviceId: 1), isFalse);
+      expect(await bobDev1.decrypt(aliceId, hello), 'hello');
+      final reply = await bobDev1.encrypt(aliceId, 'hi');
+      expect(await alice.decrypt(bobId, reply), 'hi');
+
+      expect(await alice.hasAnsweredSession(bobId, deviceId: 1), isTrue);
+      expect(await alice.hasAnsweredSession(bobId, deviceId: 2), isFalse);
+    });
+
     test('serialization lock names do not collapse two devices of one peer, '
         'and device 1 keeps the exact legacy name', () async {
       final lockNames = <String>[];

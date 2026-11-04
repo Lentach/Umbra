@@ -2096,7 +2096,7 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get linkGateScanBody =>
-      'Zeskanuj kod z urządzenia głównego albo pokaż mu ten.';
+      'Zeskanuj kod z urządzenia głównego albo pokaż mu ten. Połączenie zacznie to urządzenie od zera.';
 
   @override
   String get recoveryKeyBackupExplainer =>

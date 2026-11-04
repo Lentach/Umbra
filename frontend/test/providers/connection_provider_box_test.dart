@@ -605,5 +605,39 @@ void main() {
       expect(deletedOn(box), isEmpty);
       expect(box.disposed, isTrue, reason: 'the box still closes');
     });
+
+    // Issue #208. Mutations: drop the retire from `_startFreshDeviceLife`;
+    // close the store before the delete ends; drop `BoxCatchUp.forget`.
+    test("a new device life (the link adopt) deletes the old life's queues "
+        'from the gate, then closes the store and forgets the catch-up '
+        'mark', () async {
+      // A first life left this device's queues in the store.
+      await connection.connect(1, 'token', 'http://api.test');
+      encryption.onE2EReady!();
+      sockets.last.serverConnect('S1');
+      await pumpEventQueue();
+      expect(store.requestQueue, isNotNull);
+      connection.disconnect(isLogout: true);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('e2e_1_boxsync_v1', '{"at":1}');
+
+      // Signed in again on the link gate: no box was started.
+      encryption.clearAll();
+      await connection.connect(1, 'token', 'http://api.test', immediate: true);
+      expect(sockets.sockets, hasLength(1));
+
+      final starting = encryption.onFreshDeviceLife!();
+      await pumpEventQueue();
+      expect(sockets.sockets, hasLength(2), reason: 'opened only to delete');
+      final box = sockets.last;
+      expect(store.isOpen, isTrue, reason: 'the queue keys are still needed');
+      box.serverConnect('S2');
+      await starting;
+
+      expect(deletedOn(box), contains(address['rid']));
+      expect(framesOn(box, 'subscribe'), 0);
+      expect(store.isOpen, isFalse);
+      expect(prefs.containsKey('e2e_1_boxsync_v1'), isFalse);
+    });
   });
 }

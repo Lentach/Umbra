@@ -3635,7 +3635,7 @@ abstract class AppLocalizations {
   /// No description provided for @linkGateScanBody.
   ///
   /// In pl, this message translates to:
-  /// **'Zeskanuj kod z urządzenia głównego albo pokaż mu ten.'**
+  /// **'Zeskanuj kod z urządzenia głównego albo pokaż mu ten. Połączenie zacznie to urządzenie od zera.'**
   String get linkGateScanBody;
 
   /// No description provided for @recoveryKeyBackupExplainer.

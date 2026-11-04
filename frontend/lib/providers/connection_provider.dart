@@ -6,7 +6,7 @@ import 'package:flutter/foundation.dart';
 import '../config/app_config.dart';
 import '../constants/app_constants.dart';
 import '../services/api_service.dart';
-import '../services/auth_token_store.dart';
+import '../services/box/box_catch_up.dart';
 import '../services/box/box_client.dart';
 import '../services/box/box_media_fetcher.dart';
 import '../services/box/box_media_store.dart';
@@ -21,7 +21,7 @@ import '../services/push_box_source.dart';
 import '../services/push_service.dart';
 import '../services/device_link/dak_store.dart';
 import '../services/device_link/link_ceremony_controller.dart'
-    show EncryptionServiceLinkGateway, ProvisioningEventSink, linkPlatformLabel;
+    show ProvisioningEventSink, linkPlatformLabel;
 import '../services/device_list/device_authority_engine.dart';
 import '../services/server_clock.dart';
 import '../services/socket_service.dart';
@@ -181,7 +181,7 @@ class ConnectionProvider extends ChangeNotifier {
     _contactBackup = contactBackup;
     _boxClient = boxClient;
     if (storedSessionDeviceId != null) {
-      _storedSessionDeviceId = storedSessionDeviceId;
+      encryption.storedSessionDeviceId = storedSessionDeviceId;
     }
     if (contactStore != null) contactBackup?.attach(contactStore);
     // Issue #208: an install on the link gate is not a live device; its store
@@ -197,8 +197,6 @@ class ConnectionProvider extends ChangeNotifier {
     // sweep needs the conversation peers, and a provider must not read
     // another provider directly.
     encryption
-      // Issue #208: one stored-session reader for both providers.
-      ..storedSessionDeviceId = (() => _storedSessionDeviceId())
       ..onFreshDeviceLife = _startFreshDeviceLife
       ..sessionRebuildPeers = () {
         final uid = _currentUserId;
@@ -318,6 +316,11 @@ class ConnectionProvider extends ChangeNotifier {
   /// device that just lost everything; undershooting shows that device "no
   /// contacts", which is the outcome this whole PR exists to prevent.
   static const Duration kContactBackupRestoreBudget = Duration(seconds: 8);
+
+  /// Issue #208: how long a new device life waits for the old life's queues
+  /// to be deleted before the wipe takes their keys; what is left by then
+  /// goes to the box's reaper. Bounded because the link ceremony waits on it.
+  static const Duration kFreshLifeQueueDeleteBudget = Duration(seconds: 10);
 
   /// Bumped by every [connect] that gets past the cooldown; a connect that
   /// suspended on the store open compares it afterwards and yields to any
@@ -586,11 +589,12 @@ class ConnectionProvider extends ChangeNotifier {
             // Slice (e): a new device's handoff carries its account's list.
             ..ownDeviceList = messaging.ownDeviceList
             ..friendRevokedDevices = messaging.friendRevokedDevices
-            // Issue #208: a new session's handoff takes a request queue.
-            ..friendHasSession = ((user, device) async =>
-                await _encryptionProvider?.hasSessionWith(
+            // Issue #208: a handoff the friend never answered takes a
+            // request queue.
+            ..friendAnswered = ((user, device) async =>
+                await _encryptionProvider?.friendAnsweredSession(
                   user,
-                  deviceId: device,
+                  device,
                 ) ??
                 false)
             ..onBoxReady = messaging.onBoxReady
@@ -1123,29 +1127,10 @@ class ConnectionProvider extends ChangeNotifier {
         ?..clearAll()
         // Issue #208: the next session may name another device.
         ..forgetPreviousDeviceLife();
-      _friendsProvider?.clearAll();
-      _conversationsProvider?.clearAll();
-      _messagingProvider?.clearAll();
       // A revoked device's box may still be deleting its queues (issue
-      // #205): the store holds their keys, so it closes after that.
-      final store = _contactStore;
-      final retiring = _boxRetiring;
-      if (retiring == null) {
-        store?.close();
-      } else {
-        unawaited(
-          retiring.whenComplete(() {
-            if (_currentUserId == null) store?.close();
-          }),
-        );
-      }
-      _box?.dispose();
-      _box = null;
-      unawaited(BoxPushNids.clear());
-      _boxMedia?.dispose();
-      _boxMedia = null;
-      _unwireBox();
-      _boxUserId = null;
+      // #205): the store holds their keys, so it closes after that — unless
+      // a new session opened it meanwhile.
+      unawaited(_releaseAccountState(mayClose: () => _currentUserId == null));
     }
 
     notifyListeners();
@@ -1448,9 +1433,7 @@ class ConnectionProvider extends ChangeNotifier {
     }
     _reenrollInFlight = true;
     try {
-      final identity = await EncryptionServiceLinkGateway(
-        encryption.encryptionService,
-      ).ownIdentityKeyPair();
+      final identity = await encryption.linkGateway().ownIdentityKeyPair();
       if (identity == null) {
         E2ePersistentDiag.record('RESET_REENROLL_NO_IDENTITY', {});
         return;
@@ -1882,17 +1865,13 @@ class ConnectionProvider extends ChangeNotifier {
     final rehomed = data is Map && data['rehomed'] == true;
     if (!rehomed && deviceId is int) {
       _retireRevokedBox(
-        _storedSessionDeviceId().then((stored) => stored == deviceId),
+        (_encryptionProvider?.storedSessionDeviceId() ?? Future.value())
+            .then((stored) => stored == deviceId),
       );
     }
     notifyListeners();
     onDeviceRevoked?.call(reason);
   }
-
-  /// The device id the stored session names (`AuthTokenStore`); a test
-  /// seam ([setProviders]).
-  Future<int?> Function() _storedSessionDeviceId = () =>
-      AuthTokenStore().readSessionDeviceId();
 
   /// The box delete of a revoked device's queues still running, if any.
   Future<void>? _boxRetiring;
@@ -1900,14 +1879,21 @@ class ConnectionProvider extends ChangeNotifier {
   /// Issue #205: this device's queues go with it — when [stillThisDevice]
   /// says the install holds no newer session. Taken out of the providers
   /// first, so nothing sends or subscribes through it meanwhile; the logout
-  /// that follows finds no box to close.
-  void _retireRevokedBox(Future<bool> stillThisDevice) {
+  /// that follows finds no box to close. Whatever is not deleted within
+  /// [wait] is left to the box's reaper.
+  void _retireRevokedBox(
+    Future<bool> stillThisDevice, {
+    Duration wait = const Duration(seconds: 15),
+  }) {
     final box = _box;
     if (box == null) return;
     _box = null;
     _boxUserId = null;
     _unwireBox();
-    final retiring = box.retireRevokedDevice(proceed: stillThisDevice);
+    final retiring = box.retireRevokedDevice(
+      proceed: stillThisDevice,
+      wait: wait,
+    );
     _boxRetiring = retiring;
     unawaited(
       retiring.whenComplete(() {
@@ -1916,15 +1902,15 @@ class ConnectionProvider extends ChangeNotifier {
     );
   }
 
-  /// Issue #208: the link adopt (or a reset's disposal) is about to wipe the
-  /// account's storage on this install, which becomes a NEW device. The box
-  /// of the old life stops, the contact store forgets its view and the chat
-  /// lists empty, so the reconnect that follows opens an empty store and
-  /// hydrates it the way a fresh install does. The contact backup resolves
-  /// again first: its restore was already applied to the store being wiped,
-  /// and until it is re-armed no upload may replace the server's copy with
-  /// an empty view.
-  Future<void> _startFreshDeviceLife() async {
+  /// Takes the box, its media and the chat lists out of the app and closes
+  /// the contact store — after a revoked box that is still deleting its
+  /// queues ([_boxRetiring], issue #205): the store holds their keys.
+  /// Completes once the store is closed; [mayClose], asked when the delete
+  /// ends, keeps it open for a session that started meanwhile.
+  Future<void> _releaseAccountState({bool Function()? mayClose}) {
+    _friendsProvider?.clearAll();
+    _conversationsProvider?.clearAll();
+    _messagingProvider?.clearAll();
     _box?.dispose();
     _box = null;
     _boxUserId = null;
@@ -1932,10 +1918,37 @@ class ConnectionProvider extends ChangeNotifier {
     _boxMedia?.dispose();
     _boxMedia = null;
     _unwireBox();
-    _friendsProvider?.clearAll();
-    _conversationsProvider?.clearAll();
-    _messagingProvider?.clearAll();
-    _contactStore?.close();
+    final store = _contactStore;
+    final retiring = _boxRetiring;
+    if (retiring == null) {
+      store?.close();
+      return Future.value();
+    }
+    return retiring.whenComplete(() {
+      if (mayClose?.call() ?? true) store?.close();
+    });
+  }
+
+  /// Issue #208: the link adopt, a stale restore or a reset's disposal is
+  /// about to wipe the account's storage on this install, which becomes a
+  /// NEW device. The old life's queues are deleted first — the store about
+  /// to go holds the only keys to them, and while they exist a friend's old
+  /// list keeps filling them and waking this device for nothing. Then the
+  /// box stops, the contact store closes, the chat lists empty and the box
+  /// catch-up mark goes (it would ask a sibling for the old life's
+  /// messages), so the reconnect that follows opens an empty store and
+  /// hydrates it the way a fresh install does. The contact backup resolves
+  /// again last: its restore was already applied to the store being wiped,
+  /// and until it is re-armed no upload may replace the server's copy with
+  /// an empty view. Throws when the catch-up mark stays: the wipe must not
+  /// run then.
+  Future<void> _startFreshDeviceLife() async {
+    final userId = _currentUserId;
+    _retireRevokedBox(Future.value(true), wait: kFreshLifeQueueDeleteBudget);
+    await _releaseAccountState();
+    if (userId != null && !await BoxCatchUp.forget(userId)) {
+      throw StateError('fresh device life: catch-up mark kept');
+    }
     final backup = _contactBackup;
     if (backup != null) {
       await _withinBudget(

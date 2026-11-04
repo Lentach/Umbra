@@ -55,10 +55,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
     final controller = LinkCeremonyController(
       userId: userId,
       emit: connection.emit,
-      identity: EncryptionServiceLinkGateway(
-        encryption.encryptionService,
-        beforeAdopt: encryption.prepareFreshDeviceLife,
-      ),
+      identity: encryption.linkGateway(),
       adoptSession: auth.adoptProvisionedSession,
       // (lxv)/(lxvii): the ceremony may dispose stale material — (lxiv)
       // mismatch or a lock-refused identity. Read live at blob time — the

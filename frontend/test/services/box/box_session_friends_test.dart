@@ -1001,13 +1001,14 @@ void main() {
 
   // Issue #208: a re-linked (or newly linked) device restores the friend's
   // address from the contact backup — the queue the friend made for ANOTHER
-  // device of this account. A handoff there opens a session: a PreKey message
-  // the friend refuses unasked (prod/dev 11-03, `prekey_unasked`), so the
-  // friend never learned the new device and its messages never reached it.
-  // Mutation: `_handoffTargets` keeps the held address whatever the session.
+  // device of this account. A handoff there is a PreKey message (no session,
+  // or one this device opened unanswered — the box connect's prebuild) the
+  // friend refuses unasked (prod/dev 11-03, `prekey_unasked`), so the friend
+  // never learned the new device and its messages never reached it.
+  // Mutation: `_handoffTargets` keeps the held address whatever the answer.
   test(
-    'a device of an enrolled account with no session behind a held address '
-    "hands off through that friend device's REQUEST queue, never the held "
+    'a device of an enrolled account the friend device never answered hands '
+    "off through that friend device's REQUEST queue, never the held "
     'address, and the friend takes it',
     () async {
       await b.start();
@@ -1020,7 +1021,7 @@ void main() {
       await a.store.update(5, (c) => c!.copyWith(outbound: [held]));
       a.session
         ..ownDeviceList = (() async => {'listVersion': 7})
-        ..friendHasSession = ((_, _) async => false);
+        ..friendAnswered = ((_, _) async => false);
 
       a.session.onFriendsListed();
       await settle();
@@ -1032,10 +1033,10 @@ void main() {
   );
 
   // Mutation: `_handoffTargets` sends every held address to the request
-  // queue (drops the session check).
+  // queue (drops the answer check).
   test(
-    'with a session behind the held address, the handoff takes that address '
-    'and costs no lookup',
+    'with a session the friend device answered behind the held address, the '
+    'handoff takes that address and costs no lookup',
     () async {
       await b.start();
       await a.start();
@@ -1047,7 +1048,7 @@ void main() {
       await a.store.update(5, (c) => c!.copyWith(outbound: [held]));
       a.session
         ..ownDeviceList = (() async => {'listVersion': 7})
-        ..friendHasSession = ((_, _) async => true);
+        ..friendAnswered = ((_, _) async => true);
 
       a.session.onFriendsListed();
       await settle();

@@ -16,7 +16,7 @@ import '../services/encryption_service.dart';
 import '../services/device_link/dak_store.dart';
 import '../services/device_link/identity_backup.dart';
 import '../services/device_link/link_ceremony_controller.dart'
-    show linkPlatformLabel;
+    show EncryptionServiceLinkGateway, linkPlatformLabel;
 import '../services/device_list/device_list_cache.dart';
 import '../services/device_list/device_list_canonical.dart';
 import '../services/device_list/device_authority_engine.dart';
@@ -717,24 +717,29 @@ class EncryptionProvider extends ChangeNotifier {
   }
 
   /// The device id the STORED session names (`AuthTokenStore`, shared by
-  /// every tab of a web install); a test seam.
+  /// every tab of a web install). The one reader for both providers:
+  /// `ConnectionProvider.setProviders` may replace it (a test seam).
   Future<int?> Function() storedSessionDeviceId = () =>
       AuthTokenStore().readSessionDeviceId();
 
   /// Issue #208: this install's material is stamped for a device id the
   /// stored session does not name — the device it used to be (revoked, or
-  /// signed out and back in onto the primary's id). Read from local storage
-  /// only, so it is known before the socket, and without the TOFU stamp of
+  /// signed out and back in onto the primary's id). Both ids, or null when
+  /// the install is not a previous life. Read from local storage only, so it
+  /// is known before the socket, and without the TOFU stamp of
   /// [EncryptionService.confirmMaterialDeviceId]. Unreadable = not stale.
-  Future<bool> _holdsPreviousDeviceLife(int userId) async {
+  Future<({int session, int stamped})?> _previousDeviceLifeIds(
+    int userId,
+  ) async {
     final session = await storedSessionDeviceId();
-    if (session == null) return false;
+    if (session == null) return null;
     final stamped = await _encryptionService.materialDeviceStamp(userId);
-    return stamped != null && stamped != session;
+    if (stamped == null || stamped == session) return null;
+    return (session: session, stamped: stamped);
   }
 
   /// Issue #208: whether this install is a previous device life of the
-  /// signed-in account ([_holdsPreviousDeviceLife]). It gates like a (lxiv)
+  /// signed-in account ([_previousDeviceLifeIds]). It gates like a (lxiv)
   /// mismatch ([needsDeviceLink], [linkDisposesStaleMaterial]) but is known
   /// from local storage at once, so `AuthGate` shows the link gate from the
   /// first frame instead of the chat list until `socketReady`. Kept apart
@@ -742,13 +747,14 @@ class EncryptionProvider extends ChangeNotifier {
   /// one; this one belongs to the account and the stored session, is
   /// re-read by every E2E init (a link or a reset disposal clears the stamp)
   /// and forgotten at logout ([forgetPreviousDeviceLife]).
-  bool get previousDeviceLife => _previousDeviceLife;
-  bool _previousDeviceLife = false;
+  bool get previousDeviceLife => _previousLife?.stale ?? false;
 
   /// The account [previousDeviceLife] was last read for; `AuthGate` keeps
   /// the shell hidden until it names the signed-in user.
-  int? get previousLifeCheckedFor => _previousLifeCheckedFor;
-  int? _previousLifeCheckedFor;
+  int? get previousLifeCheckedFor => _previousLife?.userId;
+
+  /// The last verdict and whom it is for; null = not read since logout.
+  ({int userId, bool stale})? _previousLife;
   Future<void>? _previousLifeCheck;
 
   /// Reads [previousDeviceLife] for [userId] once (joins a read in flight).
@@ -757,45 +763,62 @@ class EncryptionProvider extends ChangeNotifier {
   Future<void> checkPreviousDeviceLife(int userId) {
     return _previousLifeCheck ??= () async {
       try {
-        final stale = await _holdsPreviousDeviceLife(userId)
-            .timeout(const Duration(seconds: 3), onTimeout: () => false);
-        _notePreviousDeviceLife(userId, stale);
+        final ids = await _previousDeviceLifeIds(
+          userId,
+        ).timeout(const Duration(seconds: 3), onTimeout: () => null);
+        _notePreviousDeviceLife(userId, ids);
       } finally {
         _previousLifeCheck = null;
       }
     }();
   }
 
-  void _notePreviousDeviceLife(int userId, bool stale) {
-    if (stale && !_previousDeviceLife) {
-      _e2eFlowLog('E2E_PREVIOUS_DEVICE_LIFE', {'userId': userId});
+  void _notePreviousDeviceLife(
+    int userId,
+    ({int session, int stamped})? ids,
+  ) {
+    final stale = ids != null;
+    if (stale && !previousDeviceLife) {
+      _e2eFlowLog('E2E_PREVIOUS_DEVICE_LIFE', {
+        'userId': userId,
+        'sessionDeviceId': ids.session,
+        'materialDeviceId': ids.stamped,
+      });
     }
-    if (_previousDeviceLife == stale && _previousLifeCheckedFor == userId) {
-      return;
-    }
-    _previousDeviceLife = stale;
-    _previousLifeCheckedFor = userId;
+    if (_previousLife == (userId: userId, stale: stale)) return;
+    _previousLife = (userId: userId, stale: stale);
     notifyListeners();
   }
 
   /// Logout: the next session may name another device.
-  void forgetPreviousDeviceLife() {
-    _previousDeviceLife = false;
-    _previousLifeCheckedFor = null;
-  }
+  void forgetPreviousDeviceLife() => _previousLife = null;
 
   /// Issue #208: tears down everything the app holds of this account's
-  /// current device life (box, contact store, chat lists) — set by
-  /// `ConnectionProvider` — before the link adopt or a reset's disposal wipes
-  /// its storage; the reconnect that follows starts the new life from an
-  /// empty store, as a fresh install does.
+  /// current device life (box and its queues, contact store, chat lists) —
+  /// set by `ConnectionProvider` — before the link adopt, a restore or a
+  /// reset's disposal wipes its storage; the reconnect that follows starts
+  /// the new life from an empty store, as a fresh install does.
   Future<void> Function()? onFreshDeviceLife;
 
-  /// The link adopt's hook (`EncryptionServiceLinkGateway`): see
-  /// [onFreshDeviceLife]. The decrypt caches and the peer lists name records
-  /// of the old life (local ids restart from the base in a new one).
+  /// Destroys every cached voice note (a test seam): plaintext of the old
+  /// life that no wipe of the account namespace reaches.
+  Future<void> Function() clearVoiceNoteCache = AudioCacheStore.clear;
+
+  /// The `beforeWipe` of every path into a new device life (the link
+  /// adopt, a stale restore, a reset's disposal): see [onFreshDeviceLife].
+  /// The decrypt caches and the peer lists name records of the old life.
+  /// The voice-note cache goes best effort: local ids never repeat across
+  /// lives (`ContactStore.localIdCounterKey`), so a file left behind is
+  /// old plaintext on disk, never a new message's audio.
   Future<void> prepareFreshDeviceLife() async {
     await onFreshDeviceLife?.call();
+    try {
+      await clearVoiceNoteCache();
+    } on Object catch (e) {
+      E2ePersistentDiag.record('FRESH_LIFE_AUDIO_CLEAR_FAILED', {
+        'error': e.runtimeType.toString(),
+      });
+    }
     _decryptedContentCache.clear();
     _retiredIds.clear();
     _decryptedLedger.clear();
@@ -804,6 +827,13 @@ class EncryptionProvider extends ChangeNotifier {
     _forgetFriendLookups();
     _e2eFlowLog('E2E_FRESH_DEVICE_LIFE', {});
   }
+
+  /// The §5.1 link ceremony's identity gateway, for every screen that runs
+  /// one: the adopt starts a fresh device life ([prepareFreshDeviceLife]).
+  EncryptionServiceLinkGateway linkGateway() => EncryptionServiceLinkGateway(
+    _encryptionService,
+    beforeWipe: prepareFreshDeviceLife,
+  );
 
   /// The cached verified list for [userId], or null when none is held.
   VerifiedDeviceList? cachedDeviceList(int userId) =>
@@ -1430,6 +1460,17 @@ class EncryptionProvider extends ChangeNotifier {
   Future<bool> hasSessionWith(int peerUserId, {int deviceId = 1}) async {
     if (!_e2eInitialized) return false;
     return _encryptionService.hasSession(peerUserId, deviceId: deviceId);
+  }
+
+  /// Issue #208: whether [peerUserId]'s device [deviceId] has answered our
+  /// session ([EncryptionService.hasAnsweredSession]); false when E2E is not
+  /// initialized. A handoff over an unanswered one is refused unasked.
+  Future<bool> friendAnsweredSession(int peerUserId, int deviceId) async {
+    if (!_e2eInitialized) return false;
+    return _encryptionService.hasAnsweredSession(
+      peerUserId,
+      deviceId: deviceId,
+    );
   }
 
   /// Delete the local Signal session with [peerUserId] (sender or recipient).
@@ -2351,17 +2392,21 @@ class EncryptionProvider extends ChangeNotifier {
       // at transport connect, before `socketReady` confirms the id — an
       // unconfirmed stale install used to come up E2E-ready here and start
       // the box on the queues of the device it used to be.
-      final previousLife = await _holdsPreviousDeviceLife(userId);
-      _notePreviousDeviceLife(userId, previousLife);
-      if (previousLife ||
+      final previous = await _previousDeviceLifeIds(userId);
+      _notePreviousDeviceLife(userId, previous);
+      if (previous != null ||
           _ownDeviceIdConfirmed &&
               !await _encryptionService.confirmMaterialDeviceId(_ownDeviceId)) {
         _deviceMaterialMismatch = true;
         _e2eInitialized = false;
-        E2ePersistentDiag.record('E2E_DEVICE_MISMATCH', {
-          'sessionDeviceId': _ownDeviceId,
-        });
-        _e2eFlowLog('E2E_DEVICE_MISMATCH', {'sessionDeviceId': _ownDeviceId});
+        // The stored session's id when the previous life decided: before
+        // `socketReady` [_ownDeviceId] is only the unconfirmed default.
+        final diag = {
+          'sessionDeviceId': previous?.session ?? _ownDeviceId,
+          'materialDeviceId': ?previous?.stamped,
+        };
+        E2ePersistentDiag.record('E2E_DEVICE_MISMATCH', diag);
+        _e2eFlowLog('E2E_DEVICE_MISMATCH', diag);
         notifyListeners();
         return;
       }
@@ -2701,7 +2746,10 @@ class EncryptionProvider extends ChangeNotifier {
         // Same authorization as the §5.1 ceremony's disposal: a held identity
         // is only disposed when the server already stated it will never serve
         // ((lxv)/(lxvii)); with no identity there is nothing to authorize.
+        // Issue #208: that same stale install becomes a new device, from an
+        // empty store.
         disposeStaleMaterial: linkDisposesStaleMaterial,
+        beforeWipe: prepareFreshDeviceLife,
       );
     } catch (e) {
       return _failRestore(

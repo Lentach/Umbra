@@ -798,7 +798,7 @@
   "linkEnterCodeManually": "Type the code",
   "linkNewCodeLabel": "Code from the main device",
   "linkPrimaryShowCodeExplainer": "Scan this code with the new device.",
-  "linkGateScanBody": "Scan the primary's code, or show it this one.",
+  "linkGateScanBody": "Scan the primary's code, or show it this one. Linking starts this device fresh.",
   "recoveryKeyBackupExplainer": "These 12 words recover your password and the account after losing a device. Whoever has them owns it. Shown once.",
   "recoveryKeyConfirmTitle": "Confirm you saved the words",
   "recoveryKeyConfirmPrompt": "Enter word #{n}",

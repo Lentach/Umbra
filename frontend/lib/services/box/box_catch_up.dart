@@ -354,6 +354,14 @@ class BoxCatchUp {
     );
   }
 
+  /// Issue #208: a new device life has no "last on the box" — a kept mark
+  /// would ask a sibling for the messages of the device this install used to
+  /// be. False when the row could not be removed.
+  static Future<bool> forget(int userId) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.remove(markKey(userId));
+  }
+
   static DateTime? _time(Object? ms) => ms is int && ms > 0
       ? DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true)
       : null;

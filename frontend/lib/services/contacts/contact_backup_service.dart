@@ -282,7 +282,9 @@ class ContactBackupService {
   /// one). Its store holds the view of the device it used to be, and
   /// publishing that would replace the account's graph — a friendship the
   /// other devices made since came back to a later link as a pending
-  /// invitation. The owed upload waits ([flushPending] after the link).
+  /// invitation. A refused upload stays owed while gated; the link that
+  /// ends the gate drops it with the old store ([restartForEmptiedStore]):
+  /// it was the old life's view, never this device's.
   bool Function()? mayPublish;
 
   /// Writes every restored contact the store does NOT already hold, and the

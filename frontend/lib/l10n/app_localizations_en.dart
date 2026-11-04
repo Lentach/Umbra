@@ -2064,7 +2064,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get linkGateScanBody =>
-      'Scan the primary\'s code, or show it this one.';
+      'Scan the primary\'s code, or show it this one. Linking starts this device fresh.';
 
   @override
   String get recoveryKeyBackupExplainer =>

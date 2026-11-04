@@ -790,7 +790,7 @@
   "linkEnterCodeManually": "Wpisz kod ręcznie",
   "linkNewCodeLabel": "Kod z urządzenia głównego",
   "linkPrimaryShowCodeExplainer": "Zeskanuj ten kod nowym urządzeniem.",
-  "linkGateScanBody": "Zeskanuj kod z urządzenia głównego albo pokaż mu ten.",
+  "linkGateScanBody": "Zeskanuj kod z urządzenia głównego albo pokaż mu ten. Połączenie zacznie to urządzenie od zera.",
   "recoveryKeyBackupExplainer": "Te 12 słów odzyskuje hasło i konto po utracie urządzenia. Kto je zna, ma Twoje konto. Pokazujemy je raz.",
   "recoveryKeyConfirmTitle": "Potwierdź, że masz słowa zapisane",
   "recoveryKeyConfirmPrompt": "Wpisz słowo nr {n}",

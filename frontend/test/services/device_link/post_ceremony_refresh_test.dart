@@ -182,4 +182,51 @@ void main() {
     await pumpEventQueue();
     expect(notified, 1);
   });
+
+  // Issue #208: the link gate mounts before the socket is authenticated.
+  group('the new-device open', () {
+    int opens() => emitted.where((e) => e.$1 == 'openProvisioning').length;
+    const first = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    const second = 'bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+
+    // Mutation: drop the re-send from `onSessionReady`.
+    test('sent before the session was ready is asked again at socketReady',
+        () async {
+      final controller = build();
+      addTearDown(controller.dispose);
+      await controller.startNewDeviceFlow(platform: 'web');
+      controller.onSessionReady();
+      expect(opens(), 2, reason: 'the first open reached no handler');
+    });
+
+    // Mutation: re-send for every flow still `opening`.
+    test('sent on a ready session is never sent twice', () async {
+      final controller = build();
+      addTearDown(controller.dispose);
+      controller.onSessionReady();
+      await controller.startNewDeviceFlow(platform: 'web');
+      controller.onSessionReady(); // a reconnect while the answer is in flight
+      expect(opens(), 1, reason: 'every open allocates a device id');
+    });
+
+    // Mutation: drop the cancel of an extra stage.
+    test('answered twice keeps the first stage and cancels the second',
+        () async {
+      final controller = build();
+      addTearDown(controller.dispose);
+      await controller.startNewDeviceFlow(platform: 'web');
+      controller
+        ..onSessionReady()
+        ..onProvisioningOpened({'success': true, 'provisioningId': first})
+        ..onProvisioningOpened({'success': true, 'provisioningId': second});
+
+      expect(controller.oobCode, contains(first));
+      expect(
+        emitted.where((e) => e.$1 == 'cancelProvisioning').map((e) => e.$2),
+        [
+          {'provisioningId': second},
+        ],
+      );
+    });
+  });
 }

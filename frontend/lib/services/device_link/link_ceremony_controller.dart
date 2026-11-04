@@ -98,14 +98,15 @@ abstract class LinkIdentityGateway {
 
 /// Production gateway over the app's one EncryptionService instance.
 class EncryptionServiceLinkGateway implements LinkIdentityGateway {
-  EncryptionServiceLinkGateway(this._service, {this.beforeAdopt});
+  EncryptionServiceLinkGateway(this._service, {this.beforeWipe});
 
   final EncryptionService _service;
 
-  /// Issue #208: runs right before the adopt wipes this install's account
-  /// namespace — `EncryptionProvider.prepareFreshDeviceLife` closes the
-  /// contact store and drops what the app holds of the old device life.
-  final Future<void> Function()? beforeAdopt;
+  /// Issue #208: runs inside the adopt once the blob has parsed, right
+  /// before it wipes this install's account namespace —
+  /// `EncryptionProvider.prepareFreshDeviceLife` stops the old life's box,
+  /// deletes its queues and closes the contact store.
+  final Future<void> Function()? beforeWipe;
 
   @override
   Future<String?> ownIdentityPublicKeyBase64() =>
@@ -121,16 +122,14 @@ class EncryptionServiceLinkGateway implements LinkIdentityGateway {
     required String ikPrivBase64,
     required String dakPubBase64,
     bool disposeStaleMaterial = false,
-  }) async {
-    await beforeAdopt?.call();
-    await _service.adoptProvisionedIdentity(
-      userId: userId,
-      ikPubBase64: ikPubBase64,
-      ikPrivBase64: ikPrivBase64,
-      dakPubBase64: dakPubBase64,
-      disposeStaleMaterial: disposeStaleMaterial,
-    );
-  }
+  }) => _service.adoptProvisionedIdentity(
+    userId: userId,
+    ikPubBase64: ikPubBase64,
+    ikPrivBase64: ikPrivBase64,
+    dakPubBase64: dakPubBase64,
+    disposeStaleMaterial: disposeStaleMaterial,
+    beforeWipe: beforeWipe,
+  );
 
   @override
   Future<void> discardProvisionedIdentity(int userId) =>
@@ -266,6 +265,13 @@ class LinkCeremonyController extends ChangeNotifier
   String _platform = 'web';
   Timer? _expiryTimer;
   bool _identityAdopted = false;
+
+  /// Issue #208: whether `socketReady` has been seen since this controller
+  /// was made, and whether the new-device `openProvisioning` went out before
+  /// it — the only open that may have reached no server handler and is
+  /// asked again at [onSessionReady].
+  bool _sessionSeenReady = false;
+  bool _openSentBeforeReady = false;
 
   // ---------- Devices list ----------
 
@@ -405,12 +411,15 @@ class LinkCeremonyController extends ChangeNotifier
     refreshDeviceList();
     // Issue #208: the gate now mounts from the first frame, before the
     // socket is authenticated, and an `openProvisioning` sent then reaches no
-    // server handler — the gate spun forever with no code. Still opening at
-    // `socketReady` means nothing was opened: ask again.
-    if (newDeviceStep == NewDeviceLinkStep.opening &&
-        _openProvisioningId == null) {
-      _emit('openProvisioning', {'role': 'new'});
-    }
+    // server handler — the gate spun forever with no code. Only that open
+    // is asked again; an answer to both is folded in [onProvisioningOpened].
+    final resend =
+        _openSentBeforeReady &&
+        newDeviceStep == NewDeviceLinkStep.opening &&
+        _openProvisioningId == null;
+    _sessionSeenReady = true;
+    _openSentBeforeReady = false;
+    if (resend) _emit('openProvisioning', {'role': 'new'});
   }
 
   // ---------- Enable linking (primary enrollment) ----------
@@ -1014,6 +1023,7 @@ class LinkCeremonyController extends ChangeNotifier
     _identityAdopted = false;
     newDeviceStep = NewDeviceLinkStep.opening;
     notifyListeners();
+    _openSentBeforeReady = !_sessionSeenReady;
     _emit('openProvisioning', {'role': 'new'});
   }
 
@@ -1070,7 +1080,18 @@ class LinkCeremonyController extends ChangeNotifier
       _onPrimaryShowOpened(data);
       return;
     }
-    if (newDeviceStep != NewDeviceLinkStep.opening) return;
+    if (newDeviceStep != NewDeviceLinkStep.opening) {
+      // Issue #208: the answer to an open re-sent at `socketReady` while the
+      // first one was in fact handled — the server made a second stage, which
+      // nothing will ever use. Freed at once instead of left to expire.
+      final extra = data is Map ? data['provisioningId'] : null;
+      if (extra is String &&
+          _openProvisioningId != null &&
+          extra != _openProvisioningId) {
+        _emit('cancelProvisioning', {'provisioningId': extra});
+      }
+      return;
+    }
     if (data is! Map || data['success'] != true) {
       newDeviceError = data is Map && data['error'] is String
           ? data['error'] as String

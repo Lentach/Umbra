@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:libsignal_protocol_dart/libsignal_protocol_dart.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'contacts/contact_store.dart' show ContactStore;
 import 'encryption/content_kv.dart';
 import 'encryption/prekey_identity.dart';
 import 'encryption/sealed_web_content_kv.dart';
@@ -1736,9 +1736,10 @@ class EncryptionService {
 
   /// Deletes every Signal-material key under [p] — identity, sessions,
   /// pre-keys, signed pre-keys, peer trust — leaving the content store and
-  /// non-Signal records untouched. The (lxxi) never-published residue
-  /// discard; a NEW device life wipes everything instead
-  /// ([_wipeAccountNamespace]).
+  /// non-Signal records untouched. Used where the install stays the device
+  /// it is: the (lxxi) never-published residue discard and a keyless
+  /// restore's residue wipe ([adoptRestoredIdentity]); a NEW device life
+  /// wipes everything instead ([_wipeAccountNamespace]).
   ///
   /// Returns whether the wipe is PROVEN complete: the store was listed AND
   /// every Signal-material row under [p] was deleted. `false` means at least
@@ -1775,49 +1776,53 @@ class EncryptionService {
     return deletedAll;
   }
 
-  /// Issue #208: deletes EVERY row of [userId]'s `e2e_<uid>_` namespace —
-  /// Signal material, the material stamp, the contact store (box queues,
-  /// sibling book, request queue, journal), sealed history and the box
-  /// catch-up mark — so the install holds nothing of the device it used to
-  /// be. Three places hold that namespace: secure storage, the content store
-  /// and plain SharedPreferences (the catch-up mark). The session tokens and
-  /// the contact-backup key live outside it and survive.
+  /// Issue #208: deletes EVERY row of [userId]'s `e2e_<uid>_` namespace this
+  /// service holds — Signal material, the material stamp, the content store
+  /// (box queues, sibling book, request queue, journal, sealed history) — so
+  /// the install keeps nothing of the device it used to be. Kept: the local
+  /// message-id counter ([ContactStore.localIdCounterKey]; decision 14:
+  /// never lowered, so no id of the new life names a cache entry of the
+  /// old one), and what lives outside the namespace (session tokens, the
+  /// contact-backup key). The box catch-up mark is the caller's
+  /// (`ConnectionProvider._startFreshDeviceLife`).
   ///
-  /// Returns whether the wipe is PROVEN complete (every store listed, every
-  /// row deleted). The material stamp goes LAST from secure storage, so a
-  /// wipe that stops part-way still reads as a previous life on the next
+  /// Returns whether the wipe is PROVEN complete: both stores listed and
+  /// every delete confirmed (`ContentKv.remove` answers false for a refused
+  /// commit). The material stamp goes LAST and only after a proven wipe, so
+  /// a wipe that stops part-way still reads as a previous life on the next
   /// start instead of passing for a healthy device.
   Future<bool> _wipeAccountNamespace(int userId) async {
     final p = 'e2e_${userId}_';
     final stampKey = _materialDeviceKey(userId);
+    final keepKey = ContactStore.localIdCounterKey(userId);
     var proven = true;
+    final Map<String, String> secure;
     try {
-      final kv = await _sharedPrefs;
-      await _reloadPrefsForCrossContext(kv);
-      for (final key in kv.getKeys().where((k) => k.startsWith(p)).toList()) {
-        await kv.remove(key);
-      }
-    } on Object catch (_) {
-      proven = false;
-    }
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      for (final key in prefs.getKeys().where((k) => k.startsWith(p)).toList()) {
-        await prefs.remove(key);
-      }
-    } on Object catch (_) {
-      proven = false;
-    }
-    final Map<String, String> all;
-    try {
-      all = await _storage.readAll();
+      secure = await _storage.readAll();
     } on Object catch (_) {
       return false;
     }
-    final keys = all.keys.where((k) => k.startsWith(p) && k != stampKey);
-    for (final key in [...keys, if (all.containsKey(stampKey)) stampKey]) {
+    for (final key in secure.keys.toList()) {
+      if (!key.startsWith(p) || key == stampKey) continue;
       try {
         await _storage.delete(key: key);
+      } on Object catch (_) {
+        proven = false;
+      }
+    }
+    try {
+      final kv = await _sharedPrefs;
+      await _reloadPrefsForCrossContext(kv);
+      final doomed = kv.getKeys().where((k) => k.startsWith(p) && k != keepKey);
+      for (final key in doomed.toList()) {
+        if (!await kv.remove(key)) proven = false;
+      }
+    } on Object catch (_) {
+      proven = false;
+    }
+    if (proven && secure.containsKey(stampKey)) {
+      try {
+        await _storage.delete(key: stampKey);
       } on Object catch (_) {
         proven = false;
       }
@@ -1864,14 +1869,16 @@ class EncryptionService {
   /// it from ever handing the primary its new address, and the primary then
   /// refused every send), and not its history. The WHOLE `e2e_<uid>_`
   /// namespace goes; contacts come back from the contact backup like on any
-  /// fresh install. The caller closes the contact store first
-  /// (`EncryptionProvider.prepareFreshDeviceLife`).
+  /// fresh install. [beforeWipe] runs once every input has parsed and right
+  /// before the wipe — never for a blob that is refused — and the caller
+  /// closes the contact store there (`EncryptionProvider.prepareFreshDeviceLife`).
   Future<void> adoptProvisionedIdentity({
     required int userId,
     required String ikPubBase64,
     required String ikPrivBase64,
     required String dakPubBase64,
     bool disposeStaleMaterial = false,
+    Future<void> Function()? beforeWipe,
   }) async {
     // Invariant lock (T3 review NOTE): adopting over a device that already
     // holds ANY identity would silently orphan every session keyed to it —
@@ -1916,6 +1923,7 @@ class EncryptionService {
         'userId': userId,
       });
     }
+    await beforeWipe?.call();
     if (!await _wipeAccountNamespace(userId)) {
       E2ePersistentDiag.record('LINK_RESIDUE_DISPOSAL_DEFERRED', {
         'userId': userId,
@@ -1931,11 +1939,13 @@ class EncryptionService {
 
     final registrationId = generateRegistrationId(false);
     await _identityStore.initialize(identityKeyPair, registrationId);
-    // (lxiv): adopted material is re-homed by this ceremony — drop any stamp
-    // from a previous life; the post-rebind connect re-stamps the assigned id.
+    // (lxiv): adopted material is re-homed by this ceremony. The proven wipe
+    // already took the stamp; this covers a TOFU confirm that re-stamped the
+    // old session's id between the wipe and here — the post-rebind connect
+    // re-stamps the assigned id.
     try {
       await _storage.delete(key: _materialDeviceKey(userId));
-    } catch (_) {}
+    } on Object catch (_) {}
 
     final signedPreKey = generateSignedPreKey(identityKeyPair, 0);
     await _signedPreKeyStore.storeSignedPreKey(signedPreKey.id, signedPreKey);
@@ -2069,10 +2079,19 @@ class EncryptionService {
   /// ones — the identity is preserved, never re-minted — while the signed
   /// prekey and one-time prekeys are fresh (their private halves died with the
   /// wipe; peers re-key).
+  ///
+  /// Issue #208 (owner, 2026-11-03: "fresh start too"): with
+  /// [disposeStaleMaterial] the install is a previous device life of the
+  /// account, so the restore makes it a new device the same way a link does
+  /// — the WHOLE `e2e_<uid>_` namespace goes ([_wipeAccountNamespace]),
+  /// after [beforeWipe] closed the contact store. A keyless install (it
+  /// lost its keys, nothing stale) keeps its history: only Signal residue
+  /// goes.
   Future<void> adoptRestoredIdentity({
     required int userId,
     required IdentityBackupPayload payload,
     bool disposeStaleMaterial = false,
+    Future<void> Function()? beforeWipe,
   }) async {
     if (payload.userId != userId) {
       throw StateError(
@@ -2134,14 +2153,23 @@ class EncryptionService {
       }
     }
 
-    final residue =
-        holdsIdentity || await _hasPriorInstallResidue(existingPrefix);
-    if (residue) {
+    if (disposeStaleMaterial) {
       if (holdsIdentity) {
         E2ePersistentDiag.record('RESTORE_STALE_MATERIAL_DISPOSED', {
           'userId': userId,
         });
       }
+      await beforeWipe?.call();
+      if (!await _wipeAccountNamespace(userId)) {
+        E2ePersistentDiag.record('RESTORE_RESIDUE_DISPOSAL_DEFERRED', {
+          'userId': userId,
+        });
+        throw StateError(
+          'adoptRestoredIdentity: residue disposal not proven',
+        );
+      }
+    } else if (holdsIdentity ||
+        await _hasPriorInstallResidue(existingPrefix)) {
       if (!await _wipeSignalMaterial(existingPrefix)) {
         E2ePersistentDiag.record('RESTORE_RESIDUE_DISPOSAL_DEFERRED', {
           'userId': userId,
@@ -2288,6 +2316,19 @@ class EncryptionService {
   Future<bool> hasSession(int userId, {int deviceId = _deviceId}) async {
     final address = SignalProtocolAddress(userId.toString(), deviceId);
     return _sessionStore.containsSession(address);
+  }
+
+  /// Issue #208: whether a session with [userId]'s device [deviceId] exists
+  /// AND that device has answered it — a message from it decrypted on this
+  /// session. A session this device opened and nobody answered yet (the box
+  /// connect's prebuild from a served bundle, say) still puts the PreKey
+  /// header on every message (libsignal's pending pre-key), and a friend
+  /// reads such a message on its own queue only when it asked for it.
+  Future<bool> hasAnsweredSession(int userId, {required int deviceId}) async {
+    final address = SignalProtocolAddress(userId.toString(), deviceId);
+    if (!await _sessionStore.containsSession(address)) return false;
+    final record = await _sessionStore.loadSession(address);
+    return !record.sessionState.hasUnacknowledgedPreKeyMessage();
   }
 
   /// Delete the session with the given user. Forces a fresh X3DH exchange
@@ -3096,11 +3137,17 @@ class EncryptionService {
   /// of a previous life). Works before [initialize] has run for [userId].
   Future<int?> materialDeviceStamp(int userId) async {
     try {
-      final raw = await _storage.read(key: _materialDeviceKey(userId));
-      return raw == null ? null : int.tryParse(raw);
+      return await _readMaterialStamp(userId);
     } on Object catch (_) {
       return null;
     }
+  }
+
+  /// The stamped device id, or null when none is stored. Throws on a
+  /// storage failure: each caller decides what an unreadable stamp means.
+  Future<int?> _readMaterialStamp(int userId) async {
+    final raw = await _storage.read(key: _materialDeviceKey(userId));
+    return raw == null ? null : int.tryParse(raw);
   }
 
   /// (lxiv) clause 2 — which device id this install's Signal material was
@@ -3113,16 +3160,17 @@ class EncryptionService {
   Future<bool> confirmMaterialDeviceId(int deviceId) async {
     final userId = _userId;
     if (userId == null) return true;
-    final key = _materialDeviceKey(userId);
     try {
-      final existing = await _storage.read(key: key);
-      final parsed = existing == null ? null : int.tryParse(existing);
-      if (parsed == null) {
-        await _storage.write(key: key, value: deviceId.toString());
+      final stamped = await _readMaterialStamp(userId);
+      if (stamped == null) {
+        await _storage.write(
+          key: _materialDeviceKey(userId),
+          value: deviceId.toString(),
+        );
         return true;
       }
-      return parsed == deviceId;
-    } catch (_) {
+      return stamped == deviceId;
+    } on Object catch (_) {
       // A storage failure is not evidence of a foreign install; fail open so
       // a flaky read cannot take a healthy device out of E2E duty. The server
       // guard ((lxiv) clause 1) still refuses a genuinely foreign write.

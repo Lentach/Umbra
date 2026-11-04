@@ -97,6 +97,13 @@ class ContactStore {
   /// [requestQueueKey] reasons, and no backup carries it (decision 28).
   static String siblingsKey(int userId) => 'e2e_${userId}_boxsib_v1';
 
+  /// The next local message id (decision 14). Plain: it names no one. Bumped
+  /// under the account's cross-context lock and never lowered, so an id is
+  /// never handed out twice — not after its record is deleted, expired or
+  /// retired, not by two web tabs, and not across a device life (issue
+  /// #208: the fresh-start wipe keeps this row).
+  static String localIdCounterKey(int userId) => 'e2e_${userId}_boxlid_v1';
+
   /// Which normal inbound queues have an active box push notifier, and for
   /// which push target (E9, `contact_store_notifiers.dart`): outside
   /// [keyPrefix] for the [requestQueueKey] reasons; no backup carries it.
