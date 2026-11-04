@@ -18,7 +18,7 @@
 - Tests: new `test/services/device_link/relink_fresh_start_test.dart`; edited `connection_provider_box_test.dart`, `post_ceremony_refresh_test.dart`, `encryption_service_per_device_test.dart`, `box_session_friends_test.dart`.
 
 ## Verification
-- CI: 6/6 success on `63764ec8` (round 1). Review round: see the follow-up line below.
+- CI: 6/6 success on `63764ec8` (round 1) and on `c59e1a96` (review round: backend, Flutter, E2E wire, isolated probes, Web Lock probe, CodeQL).
 - `flutter test` 3324 passed, 14 skipped (verifier OK); Dart lint ratchet 3130 PASS; `flutter analyze` 0 warnings/errors.
 - Mutants, round 1: 7 killed. Review round: 7 mutants (M1–M7) on the new guards, each killed by its test, all reverted (grep `MUTANT` empty); the per-mutant list was not recorded before compaction.
 - Drive A (web + debug APK, 11-03/04 00:xx): device unlinked while closed → friend's message only on the primary → password login → honeycomb → stale gate, no chat list (every frame of `and2_relog.mp4`) → re-link: `BOX_REVOKED_QUEUES_RETIRED {held: 5}`, `CONTACT_BACKUP_RESTORED {count: 3}`, no old messages; F `BOX_FRIEND_HANDOFF {acked, handedBack}`.
