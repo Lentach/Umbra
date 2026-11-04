@@ -72,7 +72,7 @@ type RevocationRefusal =
  * where the list says revoked while the device still holds a working session
  * (every gate denies on the stamp: the socket, the guarded routes and
  * `/auth/refresh`), or vice versa. Its refresh row is KEPT on purpose
- * (decision 129, E129a): a closed device can only ask `/auth/refresh` "was I
+ * (decision 130, E130a): a closed device can only ask `/auth/refresh` "was I
  * revoked?", and the row is what that answers from. The list mutation reuses
  * T2's gate (`applySignedListUpdate`): the server never mints a list version,
  * and a revocation is just a mutation whose canonical bytes carry `revokedAt`.
@@ -233,6 +233,7 @@ export class ChatDeviceRevocationService {
       }
 
       // ---- post-commit: the revocation is now durable ----
+
 
       // A security action never waits on a stuck link (§5.1 + amendment
       // (xxv)): every pending stage of the account is now stale by

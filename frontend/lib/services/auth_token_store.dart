@@ -53,7 +53,7 @@ class AuthTokenStore {
 
   /// Web only (a no-op elsewhere): the refresh token and API origin the push
   /// service worker asks `/auth/refresh` with while the app is closed, to
-  /// learn whether this device was revoked (decision 129, E129a). Written
+  /// learn whether this device was revoked (decision 130, E130a). Written
   /// with every token write, removed with every clear.
   final WakeSessionWriter _wakeSessionWriter;
   final Future<void> Function() _wakeSessionClearer;

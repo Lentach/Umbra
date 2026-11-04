@@ -65,6 +65,7 @@ void main() {
     'e2e_${ownUserId}_decrypted_123',
   ];
   const counterKey = 'e2e_${ownUserId}_boxlid_v1';
+  const owedKey = 'e2e_${ownUserId}_boxgone_v1';
 
   Future<SharedPreferences> seedOldLife() async {
     final prefs = await SharedPreferences.getInstance();
@@ -72,6 +73,7 @@ void main() {
       await prefs.setString(key, '{}');
     }
     await prefs.setString(counterKey, '281474976710700');
+    await prefs.setString(owedKey, '{"v":1,"q":[]}');
     return prefs;
   }
 
@@ -104,6 +106,12 @@ void main() {
         '281474976710700',
         reason: 'a lowered local-id counter names the old life\'s cache '
             'entries (voice notes) again (decision 14)',
+      );
+      expect(
+        prefs.containsKey(owedKey),
+        isTrue,
+        reason: "the old life's queues the box has not confirmed deleted are "
+            "the new life's box's to delete",
       );
       expect(
         await fresh.encryptionService.materialDeviceStamp(ownUserId),
@@ -202,6 +210,7 @@ void main() {
         userId: ownUserId,
         payload: backupOf(generateIdentityKeyPair()),
         disposeStaleMaterial: true,
+        freshDeviceLife: true,
         beforeWipe: () async => teardowns++,
       );
 
@@ -225,6 +234,49 @@ void main() {
       await prefs.reload();
       expect(prefs.containsKey('e2e_${ownUserId}_decrypted_123'), isTrue);
       expect(teardowns, 0);
+    });
+
+    // Mutation: wipe the whole namespace whenever a held identity may be
+    // disposed (owner 2026-11-04: a lock refusal alone keeps history).
+    test('on an install the lock refused, never unlinked, keeps its history',
+        () async {
+      final held = await linkedAs(2);
+      final prefs = await seedOldLife();
+      var teardowns = 0;
+
+      await held.encryptionService.adoptRestoredIdentity(
+        userId: ownUserId,
+        payload: backupOf(generateIdentityKeyPair()),
+        disposeStaleMaterial: true,
+        beforeWipe: () async => teardowns++,
+      );
+
+      await prefs.reload();
+      expect(prefs.containsKey('e2e_${ownUserId}_decrypted_123'), isTrue);
+      expect(teardowns, 0);
+    });
+  });
+
+  group("a completed reset's disposal", () {
+    // Mutation: let a `beforeWipe` failure escape the disposal.
+    test('whose fresh-life teardown fails keeps the stamp and mints nothing',
+        () async {
+      final old = await linkedAs(2);
+      await seedOldLife();
+
+      final disposed = await old.encryptionService
+          .disposeMismatchedMaterialForReset(
+            9,
+            beforeWipe: () async =>
+                throw StateError('fresh device life: catch-up mark kept'),
+          );
+
+      expect(disposed, isFalse);
+      expect(
+        await old.encryptionService.materialDeviceStamp(ownUserId),
+        2,
+        reason: 'the install stays on the gate',
+      );
     });
   });
 
@@ -270,6 +322,36 @@ void main() {
       await sameDevice.checkPreviousDeviceLife(ownUserId);
 
       expect(sameDevice.needsDeviceLink, isFalse);
+    });
+
+    // Mutation: drop the identity read from `checkPreviousDeviceLife`.
+    test('an install holding no identity keeps the shell hidden until the '
+        'server has said whether it must link', () async {
+      final provider = EncryptionProvider()
+        ..storedSessionDeviceId = (() async => 1);
+      provider.setEmitCallback((event, data) {
+        if (event == 'checkOwnKeyBundle') {
+          provider.onOwnKeyBundleStatus({'exists': true});
+        }
+      });
+
+      await provider.checkPreviousDeviceLife(ownUserId);
+      expect(provider.awaitingIdentityVerdict, isTrue);
+
+      await provider.initializeE2E(ownUserId);
+      await pumpEventQueue(times: 200);
+      expect(provider.needsDeviceLink, isTrue, reason: 'precondition');
+      expect(provider.awaitingIdentityVerdict, isFalse);
+    });
+
+    test('an install holding its identity is never held back', () async {
+      await linkedAs(2);
+      final provider = EncryptionProvider()
+        ..storedSessionDeviceId = (() async => 2);
+
+      await provider.checkPreviousDeviceLife(ownUserId);
+
+      expect(provider.awaitingIdentityVerdict, isFalse);
     });
   });
 }

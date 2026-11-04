@@ -11,6 +11,7 @@ import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/services/contacts/contact_store.dart';
 import 'package:fireplace/services/encryption/content_kv.dart';
 import 'package:fireplace/services/socket_service.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -38,7 +39,8 @@ class _AccountSocket extends SocketService {
       _onDisconnect = callback;
 
   void serve(String event, Object? payload) {
-    for (final handler in _handlers[event] ?? const <void Function(dynamic)>[]) {
+    for (final handler
+        in _handlers[event] ?? const <void Function(dynamic)>[]) {
       handler(payload);
     }
   }
@@ -100,7 +102,8 @@ void main() {
       };
     boxUrls = [];
     storedDeviceId = 2;
-    encryption = _QuietEncryption();
+    encryption = _QuietEncryption()
+      ..storedSessionDeviceId = (() async => storedDeviceId);
     connection = _RecordingConnection(socketService: account)
       ..setProviders(
         encryption: encryption,
@@ -116,7 +119,6 @@ void main() {
           boxUrls.add(baseUrl);
           return BoxClient(baseUrl: baseUrl, socketFactory: sockets.call);
         },
-        storedSessionDeviceId: () async => storedDeviceId,
       );
   });
 
@@ -392,7 +394,10 @@ void main() {
       await pumpEventQueue();
       expect(asks(), 2, reason: 'the answer reached the session');
 
-      account.serve('ownRequestQueues', {'success': false, 'error': 'internal'});
+      account.serve('ownRequestQueues', {
+        'success': false,
+        'error': 'internal',
+      });
       encryption.invalidateDeviceList(42);
       await pumpEventQueue();
       expect(asks(), 2, reason: "a peer's list says nothing about siblings");
@@ -528,22 +533,24 @@ void main() {
       });
 
       // Mutation: gate the delete on `reason == null` again.
-      test('a $reason eviction of any other device deletes its queues',
-          () async {
-        await connection.connect(1, 'token', 'http://api.test');
-        encryption.onE2EReady!();
-        final box = sockets.last..serverConnect('S1');
-        await pumpEventQueue();
+      test(
+        'a $reason eviction of any other device deletes its queues',
+        () async {
+          await connection.connect(1, 'token', 'http://api.test');
+          encryption.onE2EReady!();
+          final box = sockets.last..serverConnect('S1');
+          await pumpEventQueue();
 
-        account.serve('deviceRevoked', {
-          'deviceId': 2,
-          'reason': reason,
-          'rehomed': false,
-        });
-        await pumpEventQueue();
+          account.serve('deviceRevoked', {
+            'deviceId': 2,
+            'reason': reason,
+            'rehomed': false,
+          });
+          await pumpEventQueue();
 
-        expect(deletedOn(box), contains(address['rid']));
-      });
+          expect(deletedOn(box), contains(address['rid']));
+        },
+      );
     }
 
     // Mutation: drop the store-owner check from `retireRevokedDevice`.
@@ -625,6 +632,72 @@ void main() {
       expect(framesOn(box, 'subscribe'), 0);
       expect(store.isOpen, isFalse);
       expect(prefs.containsKey('e2e_1_boxsync_v1'), isFalse);
+    });
+
+    // Issue #208. Mutation: drop `onPreviousDeviceLife`'s retire.
+    test("a previous device life deletes the old life's queues while still "
+        'on the gate, before any link, subscribing none', () async {
+      FlutterSecureStorage.setMockInitialValues({
+        'e2e_1_material_device_v1': '2',
+      });
+      // A first life, as device 2, left its queues in the store.
+      await connection.connect(1, 'token', 'http://api.test');
+      encryption.onE2EReady!();
+      sockets.last.serverConnect('S1');
+      await pumpEventQueue();
+      expect(store.requestQueue, isNotNull);
+      connection.disconnect(isLogout: true);
+
+      // Signed in again with the password: the session names device 7.
+      storedDeviceId = 7;
+      encryption.clearAll();
+      await connection.connect(1, 'token', 'http://api.test', immediate: true);
+      expect(sockets.sockets, hasLength(1), reason: 'the gate opens no box');
+
+      await encryption.checkPreviousDeviceLife(1);
+      await pumpEventQueue();
+      expect(encryption.previousDeviceLife, isTrue, reason: 'precondition');
+      expect(sockets.sockets, hasLength(2), reason: 'opened only to delete');
+      final box = sockets.last..serverConnect('S2');
+      await pumpEventQueue();
+
+      expect(deletedOn(box), contains(address['rid']));
+      expect(framesOn(box, 'subscribe'), 0);
+      expect(box.disposed, isTrue);
+    });
+
+    // Issue #208, found driving: the link's reconnect still saw the gate's
+    // cached verdict and retired the new life's box, so the re-linked phone
+    // took nothing until the app was opened again. Mutation: drop the stamp
+    // re-read in front of `_retirePreviousLifeQueues`' take.
+    test("the reconnect right after a link keeps the new life's box", () async {
+      FlutterSecureStorage.setMockInitialValues({
+        'e2e_1_material_device_v1': '2',
+      });
+      storedDeviceId = 7;
+      await connection.connect(1, 'token', 'http://api.test');
+      await encryption.checkPreviousDeviceLife(1);
+      await pumpEventQueue();
+      expect(encryption.previousDeviceLife, isTrue, reason: 'precondition');
+      final retired = sockets.last..serverConnect('S1');
+      await pumpEventQueue();
+      expect(retired.disposed, isTrue, reason: 'precondition: gate retire');
+
+      // The link adopted device 9: stamp and session agree again, while the
+      // provider's verdict is still the gate's until the init re-reads it.
+      FlutterSecureStorage.setMockInitialValues({
+        'e2e_1_material_device_v1': '9',
+      });
+      storedDeviceId = 9;
+      await connection.connect(1, 'token', 'http://api.test', immediate: true);
+      await pumpEventQueue();
+      encryption.onE2EReady!();
+      final box = sockets.last..serverConnect('S2');
+      await pumpEventQueue();
+
+      expect(identical(box, retired), isFalse);
+      expect(box.disposed, isFalse, reason: 'the new life must keep its box');
+      expect(deletedOn(box), isEmpty);
     });
   });
 }

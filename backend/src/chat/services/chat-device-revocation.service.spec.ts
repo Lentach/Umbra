@@ -69,9 +69,10 @@ describe('ChatDeviceRevocationService', () => {
   let devicesService: { listForUser: jest.Mock; revoke: jest.Mock };
   let deviceListService: { applySignedListUpdate: jest.Mock };
   let keyBundlesService: { purgeDeviceMaterial: jest.Mock };
+
   let stages: ProvisioningStagesService;
   let manager: EntityManager;
-  let dataSource: { transaction: jest.Mock };
+  let dataSource: { transaction: jest.Mock; query: jest.Mock };
   let service: ChatDeviceRevocationService;
   let server: { to: jest.Mock; sockets: unknown };
   let roomEmit: jest.Mock;
@@ -121,12 +122,14 @@ describe('ChatDeviceRevocationService', () => {
       applySignedListUpdate: jest.fn().mockResolvedValue(2),
     };
     keyBundlesService = { purgeDeviceMaterial: jest.fn() };
+
     stages = new ProvisioningStagesService();
     manager = { getRepository: jest.fn() } as unknown as EntityManager;
     dataSource = {
       transaction: jest.fn(async (cb: (m: EntityManager) => Promise<void>) =>
         cb(manager),
       ),
+      query: jest.fn().mockResolvedValue([]),
     };
     roomEmit = jest.fn();
     kickedSocket = { id: 'revoked-socket', disconnect: jest.fn() };
@@ -371,6 +374,7 @@ describe('ChatDeviceRevocationService', () => {
         kickedSocket.disconnect.mock.invocationCallOrder[0],
       );
     });
+
   });
 
   it('ignores an unauthenticated socket without emitting', async () => {

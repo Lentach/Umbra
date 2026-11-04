@@ -519,7 +519,7 @@ class ConversationsProvider extends ChangeNotifier {
   /// record with the time it was set (E15k's `timerAt`), and — when the box
   /// carries the friend (`ContactRecord.onBoxRoute`) — told to the friend's
   /// devices and our siblings by [onLocalChatTimerChanged]. The server is never
-  /// told (decision 125's step 5 cutover).
+  /// told (decision 126's step 5 cutover).
   void setDisappearingTimer(int conversationId, int? timer) {
     final index = _conversations.indexWhere((c) => c.id == conversationId);
     if (index == -1) return;

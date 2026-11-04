@@ -209,6 +209,32 @@ void main() {
       expect(opens(), 1, reason: 'every open allocates a device id');
     });
 
+    // Mutation: drop the owed open from `onSessionLost`.
+    test('unanswered when the socket dropped is asked again at the next '
+        'socketReady', () async {
+      final controller = build();
+      addTearDown(controller.dispose);
+      controller.onSessionReady();
+      await controller.startNewDeviceFlow(platform: 'web');
+      controller
+        ..onSessionLost()
+        ..onSessionReady();
+      expect(opens(), 2, reason: 'the answer left with the old socket');
+    });
+
+    test('answered before the socket dropped is not asked again', () async {
+      final controller = build();
+      addTearDown(controller.dispose);
+      controller.onSessionReady();
+      await controller.startNewDeviceFlow(platform: 'web');
+      controller
+        ..onProvisioningOpened({'success': true, 'provisioningId': first})
+        ..onSessionLost()
+        ..onSessionReady();
+      expect(opens(), 1);
+      expect(controller.oobCode, contains(first));
+    });
+
     // Mutation: drop the cancel of an extra stage.
     test('answered twice keeps the first stage and cancels the second',
         () async {

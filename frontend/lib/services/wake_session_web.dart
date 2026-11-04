@@ -11,7 +11,7 @@ const String _storeName = 'kv';
 const String _sessionKey = 'wake-session';
 
 /// Leaves the worker the one thing it needs to ask the server whether this
-/// device was revoked while the app is closed (decision 129, E129a): the
+/// device was revoked while the app is closed (decision 130, E130a): the
 /// refresh token and the API origin, as `{refresh, api}`.
 ///
 /// The worker cannot read localStorage, where the session lives on web, and

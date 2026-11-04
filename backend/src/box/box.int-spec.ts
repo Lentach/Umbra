@@ -1459,7 +1459,7 @@ describeWithDb('box over real sockets and Postgres', () => {
       return rows;
     }
 
-    // Decision 129 (E129a): a revoked, closed device ends its own wake-ups by
+    // Decision 130 (E130a): a revoked, closed device ends its own wake-ups by
     // dropping its push registration, and the box must then forget the
     // notifier by itself — it ties no queue to a device, so nothing else can.
     it('a wake-up the push service answers "gone" (UNREGISTERED / 404 / 410) deletes that notifier, and only that token on that queue', async () => {

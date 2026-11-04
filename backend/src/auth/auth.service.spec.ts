@@ -418,7 +418,7 @@ describe('AuthService', () => {
       expect(signed.deviceId).toBe(1);
     });
 
-    // Decision 129 (E129a): the revoked-device answer is the refresh token
+    // Decision 130 (E130a): the revoked-device answer is the refresh token
     // service's; what the AUTH service owes it is the predicate, reading a
     // session with no device column as device 1 (§8), like every other gate.
     it('hands the refresh token service a revoked-device predicate that reads a NULL device as device 1', async () => {

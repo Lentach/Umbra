@@ -51,7 +51,7 @@ Entities in `backend/src/**/*.entity.ts` define the dev schema (TypeORM `synchro
 - Raw SQL must quote camelCase: `"requestSid"`, `"expiresAt"`, `"createdAt"`. Column casing is PER ENTITY; check the entity, never guess (→ schema "Column casing incident").
 - `repo.query()` on Postgres returns `[rows, rowCount]` for DELETE/UPDATE (even with `RETURNING`), plain `rows` only for SELECT — destructure `const [rows] = ...`; mocked `repo.query` specs MUST mock the `[rows, rowCount]` tuple (→ schema "repo.query() result shape incidents").
 - `users` unique key is `(username, tag)`, not username alone.
-- **`0027_phase4_step5_drop_old_tables.sql` dropped `message_envelopes`, `reaction_keys`, `conversation_notification_preferences`, `messages`, `conversations`, `friend_requests`, `blocked_users`, `web_push_subscription` and `fcm_token`** (no cascade). It is NOT reversible by DDL: restore means loading rows from the offline gpg archive (decision 127), and no code reads them (→ schema "Phase 4 step 5 drop (migration 0027)").
+- **`0027_phase4_step5_drop_old_tables.sql` dropped `message_envelopes`, `reaction_keys`, `conversation_notification_preferences`, `messages`, `conversations`, `friend_requests`, `blocked_users`, `web_push_subscription` and `fcm_token`** (no cascade). It is NOT reversible by DDL: restore means loading rows from the offline gpg archive (decision 128), and no code reads them (→ schema "Phase 4 step 5 drop (migration 0027)").
 - Account deletion relies on `ON DELETE CASCADE` FKs to `users` as the orphan backstop (→ schema "Foreign keys and cascades").
 - `devices."requestSid"` / `"requestSealPub"` are written only by `setRequestQueue` on the session's own LIVE row (→ schema "devices request queue").
 
@@ -65,7 +65,7 @@ Entities in `backend/src/**/*.entity.ts` define the dev schema (TypeORM `synchro
 ## 6. Socket.IO contracts and rate limits
 
 - Disconnect needs no presence bookkeeping: Socket.IO drops the socket from `user:<id>` itself, so the room empties only when the LAST tab goes (→ rt "Presence on disconnect").
-- `typing` / `recordingVoice` (`ChatPresenceService`) relay to a recipient that has a live socket after DTO validation, with no friend or block check and no database access (decision 125: a block is device-only).
+- `typing` / `recordingVoice` (`ChatPresenceService`) relay to a recipient that has a live socket after DTO validation, with no friend or block check and no database access (decision 126: a block is device-only).
 - `getDeviceList` / `getDeviceLists` answer ONLY the caller's own user id; any other id is silence (`[device-list] REFUSED reason=not_entitled`), with no friendship or conversation lookup.
 - `searchUsers` and `fetchPreKeyBundle` stay by-id/handle oracles for any authenticated caller (rate-limited); with `BOX_ENABLED` off `searchUsers` serves no device or list.
 - Gateway throttles are source-truth in `chat.gateway.ts` (summary → rt "Gateway throttles"). `typing`, `recordingVoice` and several others are not throttled.

@@ -1,4 +1,4 @@
--- Metadata privacy, Phase 4 step 5 (decisions 86, 115, 125, 127, 128; owner's go
+-- Metadata privacy, Phase 4 step 5 (decisions 86, 115, 126, 128, 129; owner's go
 -- 11-04): the old server path is gone for good. After this release nothing
 -- reads or writes these tables: the old-path chat gateway handlers, the
 -- friend/conversation/block services, the account push senders and the
@@ -21,7 +21,7 @@
 -- stay. The three enum types that only `messages` / `friend_requests` used go
 -- with them. Owned sequences (`*_id_seq`) go with their tables.
 --
--- NOT REVERSIBLE BY DDL (decision 127). The archive is the safety net: before
+-- NOT REVERSIBLE BY DDL (decision 128). The archive is the safety net: before
 -- this ships, the gpg-encrypted pg_dump of these tables and the `msgs/`
 -- attachment directory are copied off the VM (scp) to the owner's PC; the VM's
 -- 14-day backup rotation is NOT the archive. Restoring means loading rows from

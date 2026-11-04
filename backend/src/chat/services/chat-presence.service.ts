@@ -9,7 +9,7 @@ import { isUserOnline, userRoom } from '../utils/user-room';
  * `typing` / `recordingVoice` relays. A frame is relayed only when the payload
  * parses and the recipient has a live socket; there is no friendship or block
  * check, because the server keeps no friend or block rows any more (Phase 4
- * step 5, decision 125: a block is device-only, so a blocked sender's typing
+ * step 5, decision 126: a block is device-only, so a blocked sender's typing
  * indicator is hidden by the blocking device, not by the server). Both are
  * un-throttled keystroke-rate events, so nothing here touches the database.
  */

@@ -49,6 +49,7 @@ class ConnectionProvider extends ChangeNotifier {
   final ChatReconnectManager _reconnectManager = ChatReconnectManager();
   late final PushService _pushService = PushService();
   bool _pushInitialized = false;
+
   int? _coldStartConversationId;
   DateTime? _lastConnectStartedAt;
   Timer? _debouncedConnectTimer;
@@ -165,14 +166,10 @@ class ConnectionProvider extends ChangeNotifier {
     ContactStore? contactStore,
     ContactBackupService? contactBackup,
     BoxClient Function(String baseUrl)? boxClient,
-    Future<int?> Function()? storedSessionDeviceId,
   }) {
     _contactStore = contactStore;
     _contactBackup = contactBackup;
     _boxClient = boxClient;
-    if (storedSessionDeviceId != null) {
-      encryption.storedSessionDeviceId = storedSessionDeviceId;
-    }
     if (contactStore != null) contactBackup?.attach(contactStore);
     // Issue #208: an install on the link gate is not a live device; its store
     // is the view of the device it used to be.
@@ -188,6 +185,9 @@ class ConnectionProvider extends ChangeNotifier {
     // another provider directly.
     encryption
       ..onFreshDeviceLife = _startFreshDeviceLife
+      ..onPreviousDeviceLife = () {
+        unawaited(_retirePreviousLifeQueues());
+      }
       ..sessionRebuildPeers = () {
         final uid = _currentUserId;
         if (uid == null) return const <int>[];
@@ -295,7 +295,8 @@ class ConnectionProvider extends ChangeNotifier {
 
   /// Issue #208: how long a new device life waits for the old life's queues
   /// to be deleted before the wipe takes their keys; what is left by then
-  /// goes to the box's reaper. Bounded because the link ceremony waits on it.
+  /// stays owed in `boxgone_v1`, which the wipe keeps. Bounded because the
+  /// link ceremony waits on it.
   static const Duration kFreshLifeQueueDeleteBudget = Duration(seconds: 10);
 
   /// Bumped by every [connect] that gets past the cooldown; a connect that
@@ -566,7 +567,7 @@ class ConnectionProvider extends ChangeNotifier {
             ..friendAnswered = ((user, device) async =>
                 await _encryptionProvider?.friendAnsweredSession(
                   user,
-                  device,
+                  deviceId: device,
                 ) ??
                 false)
             ..onBoxReady = messaging.onBoxReady
@@ -594,6 +595,10 @@ class ConnectionProvider extends ChangeNotifier {
         }
       } else {
         _box!.resume();
+      }
+      // Issue #208: found a previous device life before this box existed.
+      if (_encryptionProvider?.previousDeviceLife == true) {
+        unawaited(_retirePreviousLifeQueues());
       }
     }
 
@@ -667,6 +672,7 @@ class ConnectionProvider extends ChangeNotifier {
     // join a dead request instead of sending a fresh one (0.2.66: a box send
     // waited on it forever, "sending" with no error).
     _encryptionProvider?.onDisconnect();
+    _provisioningSink?.onSessionLost();
     _socketService.connect(baseUrl: baseUrl, token: token);
 
     // 8. Register socket event listeners (routed to sub-providers)
@@ -709,6 +715,7 @@ class ConnectionProvider extends ChangeNotifier {
       _isConnected = false;
       _accountReady = false;
       _box?.accountLost();
+      _provisioningSink?.onSessionLost();
       notifyListeners();
 
       if (!_intentionalDisconnect) {
@@ -1236,11 +1243,9 @@ class ConnectionProvider extends ChangeNotifier {
     }
     _reenrollInFlight = true;
     try {
-      final identity = await encryption.linkGateway().ownIdentityKeyPair();
-      if (identity == null) {
-        E2ePersistentDiag.record('RESET_REENROLL_NO_IDENTITY', {});
-        return;
-      }
+      // Throws when the service holds no identity (RESET_REENROLL_FAILED).
+      final identity = await encryption.encryptionService
+          .identityKeyPairForLinking();
       final engine = DeviceAuthorityEngine();
       final payload = engine.mintEnrollment(
         userId: userId,
@@ -1522,9 +1527,10 @@ class ConnectionProvider extends ChangeNotifier {
     // BEFORE the logout below clears it.
     final rehomed = data is Map && data['rehomed'] == true;
     if (!rehomed && deviceId is int) {
-      _retireRevokedBox(
-        (_encryptionProvider?.storedSessionDeviceId() ?? Future.value())
-            .then((stored) => stored == deviceId),
+      _retireOwnQueues(
+        (_encryptionProvider?.storedSessionDeviceId() ?? Future.value()).then(
+          (stored) => stored == deviceId,
+        ),
       );
     }
     notifyListeners();
@@ -1534,14 +1540,14 @@ class ConnectionProvider extends ChangeNotifier {
   /// The box delete of a revoked device's queues still running, if any.
   Future<void>? _boxRetiring;
 
-  /// Issue #205: this device's queues go with it — when [stillThisDevice]
+  /// Issue #205/#208: this device's queues go with it — when [stillThisDevice]
   /// says the install holds no newer session. Taken out of the providers
   /// first, so nothing sends or subscribes through it meanwhile; the logout
-  /// that follows finds no box to close. Whatever is not deleted within
-  /// [wait] is left to the box's reaper.
-  void _retireRevokedBox(
+  /// or fresh device life that follows finds no box to close. Whatever is not
+  /// deleted within [wait] stays owed in `boxgone_v1`.
+  void _retireOwnQueues(
     Future<bool> stillThisDevice, {
-    Duration wait = const Duration(seconds: 15),
+    Duration wait = BoxSession.kRetireWait,
   }) {
     final box = _box;
     if (box == null) return;
@@ -1589,9 +1595,11 @@ class ConnectionProvider extends ChangeNotifier {
 
   /// Issue #208: the link adopt, a stale restore or a reset's disposal is
   /// about to wipe the account's storage on this install, which becomes a
-  /// NEW device. The old life's queues are deleted first — the store about
-  /// to go holds the only keys to them, and while they exist a friend's old
-  /// list keeps filling them and waking this device for nothing. Then the
+  /// NEW device. The old life's queues are deleted first (unless the gate
+  /// already did, [_retirePreviousLifeQueues]) — the store about to go holds
+  /// the only keys to them; a delete the box does not confirm in time is
+  /// kept in the store's `boxgone_v1` row, which the wipe keeps, and the
+  /// new life's box finishes it. Then the
   /// box stops, the contact store closes, the chat lists empty and the box
   /// catch-up mark goes (it would ask a sibling for the old life's
   /// messages), so the reconnect that follows opens an empty store and
@@ -1602,7 +1610,7 @@ class ConnectionProvider extends ChangeNotifier {
   /// run then.
   Future<void> _startFreshDeviceLife() async {
     final userId = _currentUserId;
-    _retireRevokedBox(Future.value(true), wait: kFreshLifeQueueDeleteBudget);
+    _retireOwnQueues(Future.value(true), wait: kFreshLifeQueueDeleteBudget);
     await _releaseAccountState();
     if (userId != null && !await BoxCatchUp.forget(userId)) {
       throw StateError('fresh device life: catch-up mark kept');
@@ -1615,6 +1623,26 @@ class ConnectionProvider extends ChangeNotifier {
       );
     }
     notifyListeners();
+  }
+
+  /// Issue #208: this install is a previous device life of the account (the
+  /// stale link gate): every way out of the gate — a link, a stale restore,
+  /// a reset — starts a new device life, so the old life's queues are
+  /// deleted NOW rather than at the link. While they exist a friend whose
+  /// list still names the old device fills them and wakes this device with
+  /// pushes nobody can read. The stamp is re-read BEFORE the box is taken:
+  /// the reconnect right after a link still sees the cached verdict, and
+  /// retiring on it would stop the new life's box. A delete the box does not
+  /// confirm stays owed in `boxgone_v1`.
+  Future<void> _retirePreviousLifeQueues() async {
+    final encryption = _encryptionProvider;
+    final userId = _currentUserId;
+    final box = _box;
+    if (encryption == null || userId == null || box == null) return;
+    if (!await encryption.stillPreviousDeviceLife(userId)) return;
+    if (!identical(_box, box) || _currentUserId != userId) return;
+    E2eDiagLog.add('BOX_PREVIOUS_LIFE_RETIRE', const {});
+    _retireOwnQueues(encryption.stillPreviousDeviceLife(userId));
   }
 
   /// Takes the box out of the messaging provider: nothing sends, fetches or

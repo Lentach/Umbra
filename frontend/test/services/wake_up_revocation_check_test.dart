@@ -25,7 +25,7 @@ class _MemoryState implements WakeCheckStateStore {
 }
 
 void main() {
-  group('decision 129 (E129a): a closed, revoked device ends its own wake-ups',
+  group('decision 130 (E130a): a closed, revoked device ends its own wake-ups',
       () {
     late DateTime now;
     late _MemoryState state;

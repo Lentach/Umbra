@@ -275,7 +275,7 @@ void main() {
     });
   });
 
-  // Decision 129 (E129a), web: the push worker cannot read localStorage, so
+  // Decision 130 (E130a), web: the push worker cannot read localStorage, so
   // the page leaves it the refresh token and the API origin it asks
   // `/auth/refresh` with while the app is closed. Off web the writer is a
   // no-op; here it is injected.

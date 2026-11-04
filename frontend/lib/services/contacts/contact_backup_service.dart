@@ -264,7 +264,8 @@ class ContactBackupService {
   }
 
   /// Issue #208: the store this account's graph lived in is being emptied
-  /// for a new device life (a link). Resolves the row again exactly as a
+  /// for a new device life (a link, a stale phrase restore or a reset's
+  /// disposal). Resolves the row again exactly as a
   /// cold start does — the cached key opens it and re-arms the restore — so
   /// the next open fills the empty store. Meanwhile no upload may go out:
   /// first the session is idle, then the pending restore refuses them, and
@@ -282,9 +283,10 @@ class ContactBackupService {
   /// one). Its store holds the view of the device it used to be, and
   /// publishing that would replace the account's graph — a friendship the
   /// other devices made since came back to a later link as a pending
-  /// invitation. A refused upload stays owed while gated; the link that
-  /// ends the gate drops it with the old store ([restartForEmptiedStore]):
-  /// it was the old life's view, never this device's.
+  /// invitation. A refused upload stays owed while gated; the fresh device
+  /// life that ends the gate (a link, a stale restore, a reset's disposal)
+  /// drops it with the old store ([restartForEmptiedStore]): it was the old
+  /// life's view, never this device's.
   bool Function()? mayPublish;
 
   /// Writes every restored contact the store does NOT already hold, and the

@@ -486,7 +486,7 @@ function handleBoxWakeUp(payload) {
     });
 }
 
-// ---------- A revoked, closed device ends its own wake-ups (decision 129) ----------
+// ---------- A revoked, closed device ends its own wake-ups (decision 130) ----------
 // The box ties no queue to a device or an account (decisions 81, 115), so a
 // friend whose list still names a device that was revoked while closed keeps
 // waking it. After a box wake-up this worker asks `POST /auth/refresh`, with
@@ -707,7 +707,7 @@ self.addEventListener('push', function (event) {
   // Box wake-up with a queue id (decision 77): one card per chat.
   if (payload.type === 'new_message' && typeof payload.n === 'string') {
     // The card first; then, with no page of ours open, whether this device
-    // was revoked (decision 129). `finally` keeps the card's own outcome.
+    // was revoked (decision 130). `finally` keeps the card's own outcome.
     event.waitUntil(handleBoxWakeUp(payload).finally(endWakeUpsIfRevoked));
     return;
   }

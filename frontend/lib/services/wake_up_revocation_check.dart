@@ -4,7 +4,7 @@ import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
 /// What `POST /auth/refresh` says about the session it was shown (decision
-/// 129, E129a).
+/// 129, E130a).
 enum SessionStanding {
   /// `401 {message: 'Device revoked'}`: the server revoked this device. The
   /// ONLY answer that counts as revoked.

@@ -114,7 +114,7 @@ describe('RefreshTokensService', () => {
     expect(repo.save).not.toHaveBeenCalled();
   });
 
-  // Decision 129 (E129a): a device closed past its access JWT's 24 h can only
+  // Decision 130 (E130a): a device closed past its access JWT's 24 h can only
   // ask /auth/refresh whether it was revoked, so the answer has to be its own
   // — not the `Invalid refresh token` that logout, a password change and an
   // expiry also give — and the refusal must not extend the row.

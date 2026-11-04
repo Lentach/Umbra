@@ -544,7 +544,7 @@ class FriendsProvider extends ChangeNotifier {
   }
 
   /// Ends the friendship with [userId] on this device and, for a friend the
-  /// box carries, over the box (decision 125; the server holds no row). False
+  /// box carries, over the box (decision 126; the server holds no row). False
   /// when a friendship the box carries could not end — our other devices
   /// could not be told, so nothing was ended or sent (E15j); the caller tells
   /// the user to retry.

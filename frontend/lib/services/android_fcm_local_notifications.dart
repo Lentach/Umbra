@@ -99,7 +99,7 @@ class _PrefsWakeCheckState implements WakeCheckStateStore {
 
 RevokedWakeUpCheck? _wakeUpCheck;
 
-/// Decision 129 (E129a): a closed, revoked device ends its own wake-ups. Runs
+/// Decision 130 (E130a): a closed, revoked device ends its own wake-ups. Runs
 /// AFTER the card (the wake-up is never delayed), asks the server whether this
 /// install's stored session belongs to a revoked device and, on the explicit
 /// answer only, deletes the FCM token (see [RevokedWakeUpCheck]). The queues

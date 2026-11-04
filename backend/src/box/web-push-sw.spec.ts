@@ -441,12 +441,12 @@ describe('web-push-sw.js', () => {
     });
   });
 
-  // Decision 129 (E129a): a device revoked while closed ends its own
+  // Decision 130 (E130a): a device revoked while closed ends its own
   // wake-ups. The box cannot (it ties no queue to a device), so after a box
   // wake-up the worker asks `POST /auth/refresh`, with the token the page left
   // in `wake-session`, whether the device was revoked, and unsubscribes on the
   // explicit answer ONLY.
-  describe('a revoked, closed device ends its own wake-ups (decision 129)', () => {
+  describe('a revoked, closed device ends its own wake-ups (decision 130)', () => {
     const SESSION = {
       'wake-session': { refresh: 'RT-1', api: 'https://app.test' },
     };

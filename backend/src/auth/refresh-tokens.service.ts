@@ -71,7 +71,7 @@ export class RefreshTokensService {
    * old token. Sliding the existing row preserves sticky sessions without
    * weakening explicit revoke/password-change invalidation.
    *
-   * A REVOKED device's row is kept, not deleted (decision 129, E129a): it is
+   * A REVOKED device's row is kept, not deleted (decision 130, E130a): it is
    * the only thing a device woken after its access JWT expired can ask "was I
    * revoked?" with. It is refused HERE, before the slide, with its own answer
    * (`Device revoked`) instead of the `Invalid refresh token` that logout, a

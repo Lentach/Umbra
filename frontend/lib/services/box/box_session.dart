@@ -18,6 +18,7 @@ import 'box_push_nids.dart';
 import 'box_sibling_rotation.dart';
 import 'box_sibling_swap.dart';
 import 'box_siblings.dart';
+import 'box_signer.dart' show BoxAuthKey;
 import 'box_wire.dart';
 import 'queue_keys.dart';
 import 'queue_seal.dart';
@@ -288,12 +289,9 @@ class BoxSession
   /// Whether a friend's device has answered this device's Signal session
   /// with it (issue #208; `EncryptionProvider.friendAnsweredSession`): a
   /// handoff over no answered session goes to that device's request queue.
-  Future<bool> Function(int userId, int deviceId)? get friendAnswered =>
-      _friends.answered;
+  SessionAnswered? get friendAnswered => _friends.answered;
 
-  set friendAnswered(Future<bool> Function(int userId, int deviceId)? check) {
-    _friends.answered = check;
-  }
+  set friendAnswered(SessionAnswered? check) => _friends.answered = check;
 
   /// One handle lookup of a friend, for the request queues of its devices
   /// (E114b; `MessagingProvider.lookupFriendAddresses`): the answer reaches
@@ -375,6 +373,7 @@ class BoxSession
           if (_request == null) unawaited(_ensure());
           if (_self == null) unawaited(_ensureSelf());
           unawaited(_receive());
+          unawaited(_deleteOwedQueues());
           _swap.run();
           _rotation.run();
           _registerPush();
@@ -391,18 +390,26 @@ class BoxSession
     if (!_disposed && _started && !_revoked) _box.connect();
   }
 
-  /// The server revoked this device (`deviceRevoked`, issue #205): nobody
-  /// can read what reaches its queues any more, and while they exist a
-  /// friend holding an old list keeps filling them. Deletes every queue
-  /// this device holds — it alone holds their keys; no other device or the
-  /// server may (decision 29) — taking and subscribing none, then closes the
-  /// box. Best effort: whatever is not confirmed deleted within [wait] of
-  /// the call — box reached or not — is left to the box's reaper. Deletes
-  /// nothing when [proceed] answers false (another tab of this install
-  /// adopted a newer session and shares these queues).
+  /// How long [retireRevokedDevice] waits by default before recording what
+  /// is left as owed (`boxgone_v1`).
+  static const Duration kRetireWait = Duration(seconds: 15);
+
+  /// The server revoked this device (`deviceRevoked`, issue #205), or the
+  /// install is about to become a new device (issue #208, a fresh device
+  /// life): nobody can read what reaches its queues any more, and while they
+  /// exist a friend holding an old list keeps filling them. Deletes every
+  /// queue this device holds — it alone holds their keys; no other device or
+  /// the server may (decision 29) — taking and subscribing none, then closes
+  /// the box. Best effort: whatever is not confirmed deleted within [wait]
+  /// of the call — box reached or not, a delete in flight included — is
+  /// recorded as owed in the store (`boxgone_v1`, issue #208), which the
+  /// install's next ready box deletes. Deletes nothing when [proceed]
+  /// answers false (another tab of this install adopted a newer session and
+  /// shares these queues). The diag keeps its #205 name,
+  /// `BOX_REVOKED_QUEUES_RETIRED`.
   Future<void> retireRevokedDevice({
     required Future<bool> proceed,
-    Duration wait = const Duration(seconds: 15),
+    Duration wait = kRetireWait,
   }) async {
     if (_disposed || _revoked) return;
     _revoked = true;
@@ -430,15 +437,30 @@ class BoxSession
       if (_box.state != BoxState.ready) {
         final ready = _box.states.firstWhere((s) => s == BoxState.ready);
         _box.connect();
-        await ready.timeout(deadline.difference(_now()));
+        try {
+          await ready.timeout(deadline.difference(_now()));
+        } on TimeoutException {
+          // Nothing can be deleted now: every queue is owed.
+        }
         // `ready` completes from inside the box's synchronous state
         // dispatch; closing the box there throws. Leave it first.
         await Future<void>.delayed(Duration.zero);
       }
-      if (keepGoing()) {
-        final held = await _retireQueues(keepGoing);
-        E2eDiagLog.add('BOX_REVOKED_QUEUES_RETIRED', {'held': held});
+      final reached = _box.state == BoxState.ready;
+      final retired = await _retireQueues(
+        () => reached && keepGoing(),
+        deadline: deadline,
+      );
+      // Issue #208: what the box did not confirm is deleted by the next
+      // life's box, never left to the reaper — unless another account took
+      // the store meanwhile.
+      if (_store.isOpen && _store.userId == owner) {
+        await _oweDeletes(retired.owed);
       }
+      E2eDiagLog.add('BOX_REVOKED_QUEUES_RETIRED', {
+        'held': retired.held,
+        'owed': retired.owed.length,
+      });
     } on Object catch (e) {
       E2eDiagLog.add('BOX_REVOKED_RETIRE_FAILED', {
         'error': e.runtimeType.toString(),
@@ -480,6 +502,7 @@ class BoxSession
     if (!_started || _revoked) return;
     if (_request == null) unawaited(_ensure());
     if (_self == null) unawaited(_ensureSelf());
+    if (_box.state == BoxState.ready) unawaited(_deleteOwedQueues());
     unawaited(_receive());
     _swap.run();
     _rotation.run();
@@ -788,8 +811,7 @@ class BoxSession
           .firstOrNull;
       // What the device last said about relaying (decision 101 A, E101b)
       // holds on its new queue; the frame that said it may be this handoff.
-      final relays =
-          _friendRelays[(userId, deviceId)] ?? held?.relays ?? false;
+      final relays = _friendRelays[(userId, deviceId)] ?? held?.relays ?? false;
       if (held?.sid == sid &&
           held?.sealPub == sealPub &&
           held?.relays == relays) {
@@ -1068,32 +1090,93 @@ class BoxSession
   }
 
   /// Deletes every queue this device holds, read from the store ONCE up
-  /// front; stops at the first [keepGoing] that answers false. Returns how
-  /// many it held.
-  Future<int> _retireQueues(bool Function() keepGoing) async {
-    final inbound = [
+  /// front; stops at the first [keepGoing] that answers false, and stops
+  /// waiting on a delete still in flight at [deadline]. Returns how many it
+  /// held and the queues whose delete was not confirmed ([_oweDeletes]).
+  Future<({int held, List<BoxQueueAuth> owed})> _retireQueues(
+    bool Function() keepGoing, {
+    DateTime? deadline,
+  }) async {
+    final deletes = <(BoxQueueAuth?, Future<bool> Function())>[
       for (final record in _store.all)
-        for (final queue in record.queues) (record.userId, queue),
-    ];
-    final retiring = [..._store.retiringSelfQueues];
-    final own = [
+        for (final queue in record.queues)
+          (
+            QueueKeys.authOf(queue),
+            () => _keys.retireInbound(record.userId, queue),
+          ),
+      for (final queue in [..._store.retiringSelfQueues])
+        (QueueKeys.authOf(queue.queue), () => _keys.retire(queue)),
       for (final queue in [_store.selfQueue, _store.requestQueue])
-        if (queue != null) ?QueueKeys.authOf(queue),
+        if (queue != null)
+          if (QueueKeys.authOf(queue) case final auth?)
+            (auth, () async => await _box.deleteQueue(auth) is BoxOk),
     ];
-    final held = inbound.length + retiring.length + own.length;
-    for (final (peer, queue) in inbound) {
-      if (!keepGoing()) return held;
-      await _keys.retireInbound(peer, queue);
+    final owed = <BoxQueueAuth>[];
+    var next = 0;
+    try {
+      for (; next < deletes.length; next++) {
+        if (!keepGoing()) break;
+        final pending = deletes[next].$2();
+        final done = await (deadline == null
+            ? pending
+            : pending.timeout(deadline.difference(_now())));
+        if (!done) {
+          if (deletes[next].$1 case final auth?) owed.add(auth);
+        }
+      }
+    } on TimeoutException {
+      // The one in flight is owed with the rest.
     }
-    for (final queue in retiring) {
-      if (!keepGoing()) return held;
-      await _keys.retire(queue);
+    for (; next < deletes.length; next++) {
+      if (deletes[next].$1 case final auth?) owed.add(auth);
     }
-    for (final auth in own) {
-      if (!keepGoing()) return held;
-      await _box.deleteQueue(auth);
+    return (held: deletes.length, owed: owed);
+  }
+
+  /// Issue #208: queues whose delete the retire could not confirm go to the
+  /// store's `boxgone_v1` row, which the fresh-start wipe keeps; the next
+  /// life's box deletes them ([_deleteOwedQueues]).
+  Future<void> _oweDeletes(List<BoxQueueAuth> owed) async {
+    if (owed.isEmpty || !_store.isOpen) return;
+    await _store.addOwedQueueDeletes([
+      for (final auth in owed)
+        (rid: boxB64(auth.rid), key: boxB64(auth.key.bytes)),
+    ]);
+  }
+
+  bool _deletingOwed = false;
+
+  /// Deletes the queues an ended device life of this install still owes
+  /// ([_oweDeletes]); a delete the box does not confirm stays owed for the
+  /// next ready box.
+  Future<void> _deleteOwedQueues() async {
+    if (_deletingOwed || _disposed || _revoked || !_store.isOpen) return;
+    _deletingOwed = true;
+    try {
+      final owed = await _store.owedQueueDeletes();
+      if (owed.isEmpty) return;
+      final gone = <String>[];
+      for (final queue in owed) {
+        if (_disposed || _revoked || _box.state != BoxState.ready) break;
+        final rid = boxB64Decode(queue.rid, kBoxRidBytes);
+        final key = boxB64Decode(queue.key, 64);
+        if (rid == null ||
+            key == null ||
+            await _box.deleteQueue(
+                  BoxQueueAuth(rid: rid, key: BoxAuthKey.fromBytes(key)),
+                )
+                is BoxOk) {
+          gone.add(queue.rid);
+        }
+      }
+      if (gone.isNotEmpty) await _store.dropOwedQueueDeletes(gone);
+      E2eDiagLog.add('BOX_OWED_QUEUES_DELETED', {
+        'deleted': gone.length,
+        'owed': owed.length - gone.length,
+      });
+    } finally {
+      _deletingOwed = false;
     }
-    return held;
   }
 
   /// Called when a box-made record changed outside the messaging reader —

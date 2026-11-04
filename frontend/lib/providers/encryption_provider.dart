@@ -52,6 +52,10 @@ const int kBoxRelookupCap = 6;
 /// buys starts the count over.
 const int kBoxLookupRetries = 3;
 
+/// Issue #208: the stored session's device id and the one this install's
+/// material is stamped for, when they differ (a previous device life).
+typedef _DeviceLifeIds = ({int session, int stamped});
+
 /// EncryptionProvider — owns all E2E encryption state, initialization,
 class EncryptionProvider extends ChangeNotifier {
   EncryptionProvider({
@@ -709,7 +713,7 @@ class EncryptionProvider extends ChangeNotifier {
   /// the install is not a previous life. Read from local storage only, so it
   /// is known before the socket, and without the TOFU stamp of
   /// [EncryptionService.confirmMaterialDeviceId]. Unreadable = not stale.
-  Future<({int session, int stamped})?> _previousDeviceLifeIds(
+  Future<_DeviceLifeIds?> _previousDeviceLifeIds(
     int userId,
   ) async {
     final session = await storedSessionDeviceId();
@@ -738,6 +742,26 @@ class EncryptionProvider extends ChangeNotifier {
   ({int userId, bool stale})? _previousLife;
   Future<void>? _previousLifeCheck;
 
+  /// Issue #208: the install held no identity for the signed-in account
+  /// when its life was read ([EncryptionService.holdsNoIdentity]) — a
+  /// brand-new install, or one that lost its keys. Its gate verdict needs
+  /// the server, so `AuthGate` keeps the shell hidden behind the boot
+  /// honeycomb until E2E is ready, the gate is due, or the check is
+  /// unavailable; [kIdentityVerdictWait] caps the wait. Without it a
+  /// password login on a new device painted the chat list for a few
+  /// seconds before the gate.
+  bool get awaitingIdentityVerdict =>
+      _keylessBootFor != null &&
+      _keylessBootFor == _previousLife?.userId &&
+      !_identityVerdictWaitSpent &&
+      !_identityVerdictIn;
+  bool get _identityVerdictIn =>
+      _e2eInitialized || needsDeviceLink || identityCheckUnavailable;
+  static const Duration kIdentityVerdictWait = Duration(seconds: 20);
+  int? _keylessBootFor;
+  bool _identityVerdictWaitSpent = false;
+  Timer? _identityVerdictTimer;
+
   /// Reads [previousDeviceLife] for [userId] once (joins a read in flight).
   /// Local reads only, bounded, so a storage read that hangs costs the boot
   /// screen three seconds, never the app.
@@ -747,6 +771,10 @@ class EncryptionProvider extends ChangeNotifier {
         final ids = await _previousDeviceLifeIds(
           userId,
         ).timeout(const Duration(seconds: 3), onTimeout: () => null);
+        final keyless = await _encryptionService
+            .holdsNoIdentity(userId)
+            .timeout(const Duration(seconds: 3), onTimeout: () => false);
+        if (keyless) _awaitIdentityVerdict(userId);
         _notePreviousDeviceLife(userId, ids);
       } finally {
         _previousLifeCheck = null;
@@ -754,12 +782,36 @@ class EncryptionProvider extends ChangeNotifier {
     }();
   }
 
+  void _awaitIdentityVerdict(int userId) {
+    if (_identityVerdictIn) return;
+    _keylessBootFor = userId;
+    _identityVerdictWaitSpent = false;
+    _identityVerdictTimer?.cancel();
+    _identityVerdictTimer = Timer(kIdentityVerdictWait, () {
+      _identityVerdictWaitSpent = true;
+      notifyListeners();
+    });
+  }
+
+  /// The keyless boot wait ends for good at the first verdict (E2E ready,
+  /// gate due, check unavailable): its timer must not outlive it.
+  @override
+  void notifyListeners() {
+    if (_identityVerdictTimer != null && _identityVerdictIn) {
+      _identityVerdictTimer!.cancel();
+      _identityVerdictTimer = null;
+      _keylessBootFor = null;
+    }
+    super.notifyListeners();
+  }
+
   void _notePreviousDeviceLife(
     int userId,
-    ({int session, int stamped})? ids,
+    _DeviceLifeIds? ids,
   ) {
     final stale = ids != null;
-    if (stale && !previousDeviceLife) {
+    final found = stale && !previousDeviceLife;
+    if (found) {
       _e2eFlowLog('E2E_PREVIOUS_DEVICE_LIFE', {
         'userId': userId,
         'sessionDeviceId': ids.session,
@@ -769,10 +821,26 @@ class EncryptionProvider extends ChangeNotifier {
     if (_previousLife == (userId: userId, stale: stale)) return;
     _previousLife = (userId: userId, stale: stale);
     notifyListeners();
+    if (found) onPreviousDeviceLife?.call();
   }
 
+  /// Issue #208: set by `ConnectionProvider` — this install was just found
+  /// to be a previous device life ([previousDeviceLife]); its old queues are
+  /// deleted at once, not at the link.
+  void Function()? onPreviousDeviceLife;
+
+  /// Re-reads, from local storage, whether this install is still a previous
+  /// device life of [userId] — the delete's last word before it runs.
+  Future<bool> stillPreviousDeviceLife(int userId) async =>
+      await _previousDeviceLifeIds(userId) != null;
+
   /// Logout: the next session may name another device.
-  void forgetPreviousDeviceLife() => _previousLife = null;
+  void forgetPreviousDeviceLife() {
+    _previousLife = null;
+    _keylessBootFor = null;
+    _identityVerdictTimer?.cancel();
+    _identityVerdictTimer = null;
+  }
 
   /// Issue #208: tears down everything the app holds of this account's
   /// current device life (box and its queues, contact store, chat lists) —
@@ -781,20 +849,17 @@ class EncryptionProvider extends ChangeNotifier {
   /// the new life from an empty store, as a fresh install does.
   Future<void> Function()? onFreshDeviceLife;
 
-  /// Destroys every cached voice note (a test seam): plaintext of the old
-  /// life that no wipe of the account namespace reaches.
-  Future<void> Function() clearVoiceNoteCache = AudioCacheStore.clear;
-
   /// The `beforeWipe` of every path into a new device life (the link
   /// adopt, a stale restore, a reset's disposal): see [onFreshDeviceLife].
   /// The decrypt caches and the peer lists name records of the old life.
-  /// The voice-note cache goes best effort: local ids never repeat across
-  /// lives (`ContactStore.localIdCounterKey`), so a file left behind is
-  /// old plaintext on disk, never a new message's audio.
+  /// The voice-note cache — old plaintext that no wipe of the account
+  /// namespace reaches — goes best effort: local ids never repeat across
+  /// lives (`ContactStore.localIdCounterKey`), so a file left behind is old
+  /// plaintext on disk, never a new message's audio.
   Future<void> prepareFreshDeviceLife() async {
     await onFreshDeviceLife?.call();
     try {
-      await clearVoiceNoteCache();
+      await AudioCacheStore.clear();
     } on Object catch (e) {
       E2ePersistentDiag.record('FRESH_LIFE_AUDIO_CLEAR_FAILED', {
         'error': e.runtimeType.toString(),
@@ -936,8 +1001,7 @@ class EncryptionProvider extends ChangeNotifier {
       _relookupOwed.remove(userId);
     } else {
       final byPerson = _relookupOwed[userId];
-      if (byPerson == null ||
-          !_relookupAvailable(userId, byPerson: byPerson)) {
+      if (byPerson == null || !_relookupAvailable(userId, byPerson: byPerson)) {
         return false;
       }
       _relookupOwed.remove(userId);
@@ -1401,7 +1465,10 @@ class EncryptionProvider extends ChangeNotifier {
   /// Issue #208: whether [peerUserId]'s device [deviceId] has answered our
   /// session ([EncryptionService.hasAnsweredSession]); false when E2E is not
   /// initialized. A handoff over an unanswered one is refused unasked.
-  Future<bool> friendAnsweredSession(int peerUserId, int deviceId) async {
+  Future<bool> friendAnsweredSession(
+    int peerUserId, {
+    required int deviceId,
+  }) async {
     if (!_e2eInitialized) return false;
     return _encryptionService.hasAnsweredSession(
       peerUserId,
@@ -2451,9 +2518,11 @@ class EncryptionProvider extends ChangeNotifier {
         // Same authorization as the §5.1 ceremony's disposal: a held identity
         // is only disposed when the server already stated it will never serve
         // ((lxv)/(lxvii)); with no identity there is nothing to authorize.
-        // Issue #208: that same stale install becomes a new device, from an
-        // empty store.
+        // Issue #208: an install stamped for a revoked device id becomes a
+        // new device, from an empty store; a lock refusal alone keeps its
+        // history ([restoreStartsFresh]).
         disposeStaleMaterial: linkDisposesStaleMaterial,
+        freshDeviceLife: restoreStartsFresh,
         beforeWipe: prepareFreshDeviceLife,
       );
     } catch (e) {
@@ -2750,14 +2819,22 @@ class EncryptionProvider extends ChangeNotifier {
   bool _identityUploadLocked = false;
   bool get identityUploadLocked => _identityUploadLocked;
 
-  /// (lxvii) clause 2: the two shapes of EXISTING identity the §5.1 ceremony
-  /// may dispose before adopting — material stamped for a revoked device id
-  /// ((lxiv) mismatch) and an identity the registration lock refused. Both are
+  /// (lxvii) clause 2: the shapes of EXISTING identity the §5.1 ceremony may
+  /// dispose before adopting — material stamped for a revoked device id
+  /// ((lxiv) mismatch, or #208's [previousDeviceLife] known before
+  /// `socketReady`) and an identity the registration lock refused. All are
   /// server-stated facts that this identity will never serve this session.
   /// Owned here so the devices screen's CTA gate and the ceremony's disposal
   /// authorization cannot drift apart.
   bool get linkDisposesStaleMaterial =>
       deviceMaterialMismatch || identityUploadLocked || previousDeviceLife;
+
+  /// Issue #208 (owner, 2026-11-03/04): a phrase restore starts this install
+  /// fresh — the whole account namespace goes — only when it is a previous
+  /// device life of the account (stamped for a revoked device id). A lock
+  /// refusal alone keeps the install's history: only its Signal material is
+  /// disposed ([linkDisposesStaleMaterial]).
+  bool get restoreStartsFresh => deviceMaterialMismatch || previousDeviceLife;
 
   /// True while a (lxxviii) phrase restore has ADOPTED the backup identity
   /// and not finished — including a FAILED one, which is exactly the state
@@ -3840,6 +3917,7 @@ class EncryptionProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    _identityVerdictTimer?.cancel();
     // Only if still ours: a later provider may already have taken the seam.
     if (_revoker.onRevoke == revokeForPasscodeLock) {
       _revoker
