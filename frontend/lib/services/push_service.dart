@@ -205,6 +205,31 @@ class PushService {
     }
   }
 
+  /// Issue #208: registers this install's push token again under [jwtToken]
+  /// — called when the session moved to another device id (a link's rebind,
+  /// a restore, a reset). The server attributes a token to the device whose
+  /// JWT registered it, and an unlink deletes that device's tokens AND the
+  /// box notifiers on them; a token left under the old id kept waking an
+  /// unlinked phone. Best effort, like [initialize]; asks for no permission.
+  Future<void> registerAgain(String jwtToken) async {
+    if (kIsWeb) {
+      await _registerExistingWebSubscription(jwtToken);
+      return;
+    }
+    try {
+      final settings = await FirebaseMessaging.instance.getNotificationSettings();
+      if (settings.authorizationStatus != AuthorizationStatus.authorized &&
+          settings.authorizationStatus != AuthorizationStatus.provisional) {
+        return;
+      }
+      final fcmToken = await FirebaseMessaging.instance.getToken();
+      if (fcmToken == null) return;
+      await _api.registerFcmToken(jwtToken, fcmToken, _currentPlatform());
+    } on Object catch (_) {
+      // Best-effort only.
+    }
+  }
+
   /// Unregister FCM token from the server and delete it from Firebase.
   /// Call on logout BEFORE clearing the JWT.
   Future<void> unregister(String jwtToken) async {

@@ -246,6 +246,40 @@ export class ChatDeviceRevocationService {
       // failure here means the revoked device keeps receiving notifications,
       // so it is loud, but it must not turn a committed revocation into an
       // error answer the client would retry.
+      // Issue #208 (owner, 2026-11-04): the box wakes a device through the
+      // push token its notifiers were registered with, and a friend whose
+      // list still names the revoked device keeps filling that device's old
+      // queues until it next opens — each send a "new message" on a closed
+      // phone. The device's notifiers go with its tokens. Matched by token
+      // only, never logged: no queue is tied to a device anywhere.
+      // Read BEFORE the token rows below are deleted.
+      try {
+        const tokens = await this.fcmTokensService.tokensForDevice(
+          userId,
+          dto.deviceId,
+        );
+        const endpoints =
+          await this.webPushSubscriptionsService.endpointsForDevice(
+            userId,
+            dto.deviceId,
+          );
+        if (tokens.length > 0 || endpoints.length > 0) {
+          await this.dataSource.query(
+            `DELETE FROM public.box_notifiers
+              WHERE (platform <> 'webpush' AND token = ANY($1::text[]))
+                 OR (platform = 'webpush' AND EXISTS (
+                      SELECT 1 FROM unnest($2::text[]) AS e(endpoint)
+                       WHERE strpos(token, e.endpoint) > 0))`,
+            [tokens, endpoints],
+          );
+        }
+      } catch (error) {
+        this.logger.error(
+          `[revoke] box notifier teardown FAILED deviceId=${dto.deviceId}: ${
+            error instanceof Error ? error.name : 'unknown'
+          }`,
+        );
+      }
       try {
         await this.fcmTokensService.removeForDevice(userId, dto.deviceId);
         await this.webPushSubscriptionsService.removeForDevice(

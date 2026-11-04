@@ -160,7 +160,9 @@ void main() {
           create: (_) => SettingsProvider(),
         ),
         ChangeNotifierProvider<EncryptionProvider>.value(value: encryption),
-        ChangeNotifierProvider<FriendsProvider>(create: (_) => FriendsProvider()),
+        ChangeNotifierProvider<FriendsProvider>(
+          create: (_) => FriendsProvider(),
+        ),
         ChangeNotifierProvider<ConversationsProvider>(
           create: (_) => ConversationsProvider(),
         ),
@@ -232,6 +234,10 @@ void main() {
   testWidgets('a healthy install renders the shell and never the gate', (
     tester,
   ) async {
+    // Holds its identity: a keyless install waits behind the honeycomb.
+    FlutterSecureStorage.setMockInitialValues({
+      'e2e_7_identity_record_v1': '{}',
+    });
     await tester.pumpWidget(authGateHost(_FakeEncryption(), _FakeAuth()));
     await pumpFrames(tester);
 
@@ -240,6 +246,28 @@ void main() {
 
     await teardown(tester);
   });
+
+  testWidgets(
+    'a keyless install paints no chat list before its verdict, then the gate',
+    (tester) async {
+      final encryption = _FakeEncryption();
+      await tester.pumpWidget(authGateHost(encryption, _FakeAuth()));
+      await pumpFrames(tester);
+
+      // Issue #208: a password login on a new device painted the chat list
+      // for seconds before the gate.
+      expect(find.byType(MainShell), findsNothing);
+      expect(find.byKey(const Key('device-link-gate')), findsNothing);
+
+      encryption
+        ..incomplete = true
+        ..notifyListeners();
+      await pumpFrames(tester);
+      expect(find.byKey(const Key('device-link-gate')), findsOneWidget);
+
+      await teardown(tester);
+    },
+  );
 
   testWidgets('the UNKNOWN outcome gates too — never a keyless shell', (
     tester,
@@ -369,9 +397,7 @@ void main() {
       await tester.pumpWidget(gateHost(_FakeEncryption(incomplete: true)));
       await pumpFrames(tester);
 
-      final restoreTop = tester
-          .getTopLeft(find.byType(LinkRestoreSection))
-          .dy;
+      final restoreTop = tester.getTopLeft(find.byType(LinkRestoreSection)).dy;
       final resetTop = tester
           .getTopLeft(find.byKey(const Key('link-gate-start-reset')))
           .dy;

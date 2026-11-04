@@ -71,6 +71,10 @@ abstract class ProvisioningEventSink {
   /// rebind's reconnect returns before its transport exists, and an
   /// account-room broadcast that landed between sockets is gone.
   void onSessionReady();
+
+  /// The session's socket dropped or was replaced: an emit still waiting
+  /// for its answer may never get one.
+  void onSessionLost();
 }
 
 /// The narrow identity surface the ceremony needs. Production wraps
@@ -266,12 +270,12 @@ class LinkCeremonyController extends ChangeNotifier
   Timer? _expiryTimer;
   bool _identityAdopted = false;
 
-  /// Issue #208: whether `socketReady` has been seen since this controller
-  /// was made, and whether the new-device `openProvisioning` went out before
-  /// it — the only open that may have reached no server handler and is
-  /// asked again at [onSessionReady].
-  bool _sessionSeenReady = false;
-  bool _openSentBeforeReady = false;
+  /// Issue #208: whether the current socket is authenticated, and whether
+  /// the new-device `openProvisioning` may have reached no server handler —
+  /// sent before `socketReady`, or still unanswered when the socket was
+  /// lost. Only such an open is asked again at [onSessionReady].
+  bool _sessionReady = false;
+  bool _openOwed = false;
 
   // ---------- Devices list ----------
 
@@ -411,15 +415,25 @@ class LinkCeremonyController extends ChangeNotifier
     refreshDeviceList();
     // Issue #208: the gate now mounts from the first frame, before the
     // socket is authenticated, and an `openProvisioning` sent then reaches no
-    // server handler — the gate spun forever with no code. Only that open
-    // is asked again; an answer to both is folded in [onProvisioningOpened].
+    // server handler — the gate spun forever with no code. Only an owed open
+    // ([onSessionLost]) is asked again; an answer to both is folded in
+    // [onProvisioningOpened].
     final resend =
-        _openSentBeforeReady &&
+        _openOwed &&
         newDeviceStep == NewDeviceLinkStep.opening &&
         _openProvisioningId == null;
-    _sessionSeenReady = true;
-    _openSentBeforeReady = false;
+    _sessionReady = true;
+    _openOwed = false;
     if (resend) _emit('openProvisioning', {'role': 'new'});
+  }
+
+  @override
+  void onSessionLost() {
+    _sessionReady = false;
+    if (newDeviceStep == NewDeviceLinkStep.opening &&
+        _openProvisioningId == null) {
+      _openOwed = true;
+    }
   }
 
   // ---------- Enable linking (primary enrollment) ----------
@@ -1023,7 +1037,7 @@ class LinkCeremonyController extends ChangeNotifier
     _identityAdopted = false;
     newDeviceStep = NewDeviceLinkStep.opening;
     notifyListeners();
-    _openSentBeforeReady = !_sessionSeenReady;
+    _openOwed = !_sessionReady;
     _emit('openProvisioning', {'role': 'new'});
   }
 

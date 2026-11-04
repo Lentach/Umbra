@@ -73,11 +73,17 @@ describe('ChatDeviceRevocationService', () => {
   let deviceListService: { applySignedListUpdate: jest.Mock };
   let keyBundlesService: { purgeDeviceMaterial: jest.Mock };
   let refreshTokensService: { revokeForDevice: jest.Mock };
-  let fcmTokensService: { removeForDevice: jest.Mock };
-  let webPushService: { removeForDevice: jest.Mock };
+  let fcmTokensService: {
+    removeForDevice: jest.Mock;
+    tokensForDevice: jest.Mock;
+  };
+  let webPushService: {
+    removeForDevice: jest.Mock;
+    endpointsForDevice: jest.Mock;
+  };
   let stages: ProvisioningStagesService;
   let manager: EntityManager;
-  let dataSource: { transaction: jest.Mock };
+  let dataSource: { transaction: jest.Mock; query: jest.Mock };
   let service: ChatDeviceRevocationService;
   let server: { to: jest.Mock; sockets: unknown };
   let roomEmit: jest.Mock;
@@ -128,14 +134,21 @@ describe('ChatDeviceRevocationService', () => {
     };
     keyBundlesService = { purgeDeviceMaterial: jest.fn() };
     refreshTokensService = { revokeForDevice: jest.fn().mockResolvedValue(1) };
-    fcmTokensService = { removeForDevice: jest.fn() };
-    webPushService = { removeForDevice: jest.fn() };
+    fcmTokensService = {
+      removeForDevice: jest.fn(),
+      tokensForDevice: jest.fn().mockResolvedValue(['fcm-token-of-2']),
+    };
+    webPushService = {
+      removeForDevice: jest.fn(),
+      endpointsForDevice: jest.fn().mockResolvedValue([]),
+    };
     stages = new ProvisioningStagesService();
     manager = { getRepository: jest.fn() } as unknown as EntityManager;
     dataSource = {
       transaction: jest.fn(async (cb: (m: EntityManager) => Promise<void>) =>
         cb(manager),
       ),
+      query: jest.fn().mockResolvedValue([]),
     };
     roomEmit = jest.fn();
     kickedSocket = { id: 'revoked-socket', disconnect: jest.fn() };
@@ -405,6 +418,24 @@ describe('ChatDeviceRevocationService', () => {
         expect.stringContaining('push teardown FAILED'),
       );
       // The revocation is durable, so the kick must still happen.
+      expect(kickedSocket.disconnect).toHaveBeenCalledTimes(1);
+    });
+
+    // Issue #208: the box notifiers on the device's tokens go first; their
+    // failure must cost neither the token teardown nor the kick.
+    it('still drops the push rows and kicks when the box notifier teardown fails', async () => {
+      dataSource.query.mockRejectedValue(new Error('pg down'));
+      const client = makeClient(1);
+      await run(client);
+
+      expect(lastEmit(client, 'deviceRevocationCompleted')).toMatchObject({
+        success: true,
+      });
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('box notifier teardown FAILED'),
+      );
+      expect(fcmTokensService.removeForDevice).toHaveBeenCalledWith(USER_ID, 2);
+      expect(webPushService.removeForDevice).toHaveBeenCalledWith(USER_ID, 2);
       expect(kickedSocket.disconnect).toHaveBeenCalledTimes(1);
     });
   });

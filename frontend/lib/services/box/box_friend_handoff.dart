@@ -28,6 +28,10 @@ const Duration kFriendHandoffResend = Duration(hours: 24);
 /// so a PWA opened ten times a day asks once.
 const Duration kFriendLookupInterval = Duration(hours: 24);
 
+/// Whether friend `userId`'s device `deviceId` has answered this device's
+/// Signal session with it (issue #208, `EncryptionProvider.friendAnsweredSession`).
+typedef SessionAnswered = Future<bool> Function(int userId, int deviceId);
+
 /// Moves every existing friendship onto the box (metadata-privacy item 5,
 /// slice (d), owner decision 47): this device's inbound queue for each
 /// friend is handed, as an E2E `queue_handoff`, to every live device of that
@@ -95,10 +99,10 @@ class BoxFriendHandoff {
   /// (e), E50e); null or empty: none known.
   Future<Set<int>?> Function(int userId)? revokedDevices;
 
-  /// Whether friend `userId`'s device `deviceId` has answered this device's
-  /// Signal session with it (issue #208). Null: never asked, every held
-  /// address is used as before.
-  Future<bool> Function(int userId, int deviceId)? answered;
+  /// Whether a friend device has answered this device's Signal session with
+  /// it (issue #208). Null: never asked, every held address is used as
+  /// before.
+  SessionAnswered? answered;
 
   /// Each friend device's request queue as that friend's last handle lookup
   /// served it, by friend and device (E114b). RAM only: a request queue
@@ -370,21 +374,21 @@ class BoxFriendHandoff {
   /// account identity too). A friend takes a new device of an enrolled
   /// account only on its request queue, with the account's signed list
   /// beside the frame. Such a device goes there — a known request queue,
-  /// else none, so the pass looks the friend up. [answered] is given only
-  /// for an enrolled account; an un-enrolled one carries no list, so its
-  /// handoff keeps the held address (decision 88).
+  /// else none, so the pass looks the friend up. [requireAnswer] is given
+  /// only for an enrolled account; an un-enrolled one carries no list, so
+  /// its handoff keeps the held address (decision 88).
   Future<Map<int, _Target>> _handoffTargets(
     int userId,
     Iterable<int> live, {
-    required Future<bool> Function(int userId, int deviceId)? answered,
+    required SessionAnswered? requireAnswer,
   }) async {
     final targets = <int, _Target>{};
     for (final device in live) {
       final target = targetOf(userId, device);
       if (target == null) continue;
-      if (answered != null &&
+      if (requireAnswer != null &&
           !target.viaRequest &&
-          !await answered(userId, device)) {
+          !await requireAnswer(userId, device)) {
         final request = _requestOf(userId, device);
         if (request != null) targets[device] = (to: request, viaRequest: true);
         continue;
@@ -490,9 +494,9 @@ class BoxFriendHandoff {
     // Issue #208: a handoff the friend device never answered takes a request
     // queue — for an enrolled account only, whose frame carries the signed
     // list there.
-    final check = answered;
-    final answeredCheck =
-        check != null && await ownDeviceList?.call() != null ? check : null;
+    final ask = answered;
+    final requireAnswer =
+        ask != null && await ownDeviceList?.call() != null ? ask : null;
     for (var i = 0; i < friends.length; i++) {
       if (_disposed || !_accountReady) return;
       final live = lists[i];
@@ -508,7 +512,7 @@ class BoxFriendHandoff {
       var targets = await _handoffTargets(
         userId,
         live,
-        answered: answeredCheck,
+        requireAnswer: requireAnswer,
       );
       // A live device no address is held for, and a handoff to it due: its
       // request queue is asked of the server ONCE this process, by handle
@@ -525,7 +529,7 @@ class BoxFriendHandoff {
         targets = await _handoffTargets(
           userId,
           live,
-          answered: answeredCheck,
+          requireAnswer: requireAnswer,
         );
       }
       if (targets.isEmpty) continue;

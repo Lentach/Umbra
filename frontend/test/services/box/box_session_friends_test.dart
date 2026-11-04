@@ -1479,6 +1479,75 @@ void main() {
     },
   );
 
+  // Mutation: await each delete without the deadline in `_retireQueues`.
+  test(
+    'retireRevokedDevice stops waiting on a delete the box never answers '
+    'once its wait is spent (issue #208: the link waits on it)',
+    () async {
+      await a.start();
+      await a.store.update(
+        5,
+        (c) => c!.copyWith(queues: [_queue(0x10), _queue(0x20)]),
+      );
+      final route = box.sockets.respond!;
+      box.sockets.respond = (socket, f) =>
+          f.event == 'deleteQueue' ? null : route(socket, f);
+
+      final watch = Stopwatch()..start();
+      await a.session
+          .retireRevokedDevice(
+            proceed: Future.value(true),
+            wait: const Duration(milliseconds: 200),
+          )
+          .timeout(const Duration(seconds: 5));
+
+      expect(watch.elapsed, lessThan(const Duration(seconds: 2)));
+      expect(
+        a.socket.emitted.where((f) => f.event == 'deleteQueue'),
+        hasLength(1),
+      );
+    },
+  );
+
+  // Issue #208. Mutations: drop `_oweDeletes` from `retireRevokedDevice`;
+  // drop `_deleteOwedQueues` from the ready box.
+  test(
+    'a delete the box did not confirm in the wait stays owed, and the next '
+    "session's ready box deletes it instead of leaving it to the reaper",
+    () async {
+      await a.start();
+      final first = _queue(0x10);
+      final second = _queue(0x20);
+      await a.store.update(
+        5,
+        (c) => c!.copyWith(queues: [first, second]),
+      );
+      final route = box.sockets.respond!;
+      box.sockets.respond = (socket, f) =>
+          f.event == 'deleteQueue' ? null : route(socket, f);
+
+      await a.session.retireRevokedDevice(
+        proceed: Future.value(true),
+        wait: const Duration(milliseconds: 200),
+      );
+      expect(
+        (await a.store.owedQueueDeletes()).map((q) => q.rid),
+        containsAll([first.rid, second.rid]),
+      );
+
+      box.sockets.respond = route;
+      await a.restart();
+
+      expect(
+        a.socket.emitted
+            .where((f) => f.event == 'deleteQueue')
+            .map((f) => f.frame['rid']),
+        containsAll([first.rid, second.rid]),
+      );
+      expect(await a.store.owedQueueDeletes(), isEmpty);
+    },
+  );
+
   group('slice (e): device announcements', () {
     test(
       "a handoff into a friend's REQUEST queue carries this account's list "

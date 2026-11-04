@@ -39,6 +39,18 @@ export class FcmTokensService {
       .execute();
   }
 
+  /**
+   * The FCM tokens registered by exactly this device (never a NULL row:
+   * those cannot be attributed, and another live device may own them).
+   */
+  async tokensForDevice(userId: number, deviceId: number): Promise<string[]> {
+    const rows = await this.fcmTokenRepo.find({
+      where: { userId, deviceId },
+      select: { token: true },
+    });
+    return rows.map((row) => row.token);
+  }
+
   async removeByTokenForUser(userId: number, token: string): Promise<void> {
     await this.fcmTokenRepo.delete({ userId, token });
   }

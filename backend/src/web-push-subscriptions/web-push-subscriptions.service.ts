@@ -61,6 +61,21 @@ export class WebPushSubscriptionsService {
       .execute();
   }
 
+  /**
+   * The endpoints registered by exactly this device (never a NULL row:
+   * those cannot be attributed, and another live device may own them).
+   */
+  async endpointsForDevice(
+    userId: number,
+    deviceId: number,
+  ): Promise<string[]> {
+    const rows = await this.subscriptionRepo.find({
+      where: { userId, deviceId },
+      select: { endpoint: true },
+    });
+    return rows.map((row) => row.endpoint);
+  }
+
   async removeByEndpointForUser(
     userId: number,
     endpoint: string,

@@ -14,6 +14,7 @@ import 'contact_record.dart';
 part 'contact_store_alive.dart';
 part 'contact_store_inbox.dart';
 part 'contact_store_lookups.dart';
+part 'contact_store_owed_deletes.dart';
 part 'contact_store_notifiers.dart';
 part 'contact_store_siblings.dart';
 
@@ -103,6 +104,11 @@ class ContactStore {
   /// retired, not by two web tabs, and not across a device life (issue
   /// #208: the fresh-start wipe keeps this row).
   static String localIdCounterKey(int userId) => 'e2e_${userId}_boxlid_v1';
+
+  /// Queues of an ended device life still owed a box delete (issue #208,
+  /// `contact_store_owed_deletes.dart`): the fresh-start wipe keeps this row
+  /// so the next life deletes them; a sealed family on web.
+  static String owedQueueDeletesKey(int userId) => 'e2e_${userId}_boxgone_v1';
 
   /// Which normal inbound queues have an active box push notifier, and for
   /// which push target (E9, `contact_store_notifiers.dart`): outside

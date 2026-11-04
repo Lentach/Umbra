@@ -307,12 +307,20 @@ class _AuthGateState extends State<AuthGate> {
       // Issue #208: the shell stays hidden until local storage has said
       // whether this install is still the device it was (a few ms) — else a
       // re-signed-in old device painted its chat list before the gate. Local
-      // reads only: an offline start still reaches its cached chats.
+      // reads only: an offline start still reaches its cached chats. An
+      // install holding no identity waits for the server's verdict too
+      // (`awaitingIdentityVerdict`, capped): a password login on a new
+      // device used to paint the chat list for seconds before the gate.
       final userId = auth.currentUser?.id;
       final lifeChecked = context.select<EncryptionProvider, bool>(
+        (e) =>
+            userId == null ||
+            (e.previousLifeCheckedFor == userId && !e.awaitingIdentityVerdict),
+      );
+      final lifeRead = context.select<EncryptionProvider, bool>(
         (e) => userId == null || e.previousLifeCheckedFor == userId,
       );
-      if (!lifeChecked) {
+      if (!lifeRead) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted) return;
           unawaited(

@@ -1619,7 +1619,8 @@ class EncryptionService {
   ///
   /// Under the mint's lock, and re-checked there: a sibling tab that already
   /// minted has re-homed the stamp, so its fresh identity is left alone.
-  /// Returns false only when the wipe could not be PROVEN, so nothing may be
+  /// Returns false when the wipe could not be PROVEN or [beforeWipe] failed:
+  /// the stamp survives, the install stays on the gate, and nothing may be
   /// minted over it.
   Future<bool> disposeMismatchedMaterialForReset(
     int sessionDeviceId, {
@@ -1630,10 +1631,18 @@ class EncryptionService {
     final p = 'e2e_${userId}_';
     return _sessionCrossContextLock('fireplace-e2e-reset-mint-$userId', () async {
       if (await confirmMaterialDeviceId(sessionDeviceId)) return true;
-      await beforeWipe?.call();
-      if (!await _wipeAccountNamespace(userId)) {
+      var proven = false;
+      Object? failure;
+      try {
+        await beforeWipe?.call();
+        proven = await _wipeAccountNamespace(userId);
+      } on Object catch (e) {
+        failure = e;
+      }
+      if (!proven) {
         E2ePersistentDiag.record('RESET_STALE_DISPOSAL_DEFERRED', {
           'userId': userId,
+          'error': ?failure?.runtimeType.toString(),
         });
         return false;
       }
@@ -1782,7 +1791,9 @@ class EncryptionService {
   /// the install keeps nothing of the device it used to be. Kept: the local
   /// message-id counter ([ContactStore.localIdCounterKey]; decision 14:
   /// never lowered, so no id of the new life names a cache entry of the
-  /// old one), and what lives outside the namespace (session tokens, the
+  /// old one), the queues the old life still owes a box delete
+  /// ([ContactStore.owedQueueDeletesKey]: the new life's box deletes them),
+  /// and what lives outside the namespace (session tokens, the
   /// contact-backup key). The box catch-up mark is the caller's
   /// (`ConnectionProvider._startFreshDeviceLife`).
   ///
@@ -1794,7 +1805,10 @@ class EncryptionService {
   Future<bool> _wipeAccountNamespace(int userId) async {
     final p = 'e2e_${userId}_';
     final stampKey = _materialDeviceKey(userId);
-    final keepKey = ContactStore.localIdCounterKey(userId);
+    final kept = {
+      ContactStore.localIdCounterKey(userId),
+      ContactStore.owedQueueDeletesKey(userId),
+    };
     var proven = true;
     final Map<String, String> secure;
     try {
@@ -1813,7 +1827,9 @@ class EncryptionService {
     try {
       final kv = await _sharedPrefs;
       await _reloadPrefsForCrossContext(kv);
-      final doomed = kv.getKeys().where((k) => k.startsWith(p) && k != keepKey);
+      final doomed = kv.getKeys().where(
+        (k) => k.startsWith(p) && !kept.contains(k),
+      );
       for (final key in doomed.toList()) {
         if (!await kv.remove(key)) proven = false;
       }
@@ -2081,16 +2097,18 @@ class EncryptionService {
   /// wipe; peers re-key).
   ///
   /// Issue #208 (owner, 2026-11-03: "fresh start too"): with
-  /// [disposeStaleMaterial] the install is a previous device life of the
-  /// account, so the restore makes it a new device the same way a link does
-  /// — the WHOLE `e2e_<uid>_` namespace goes ([_wipeAccountNamespace]),
-  /// after [beforeWipe] closed the contact store. A keyless install (it
-  /// lost its keys, nothing stale) keeps its history: only Signal residue
-  /// goes.
+  /// [freshDeviceLife] the install is a previous device life of the account
+  /// (stamped for a revoked device id), so the restore makes it a new device
+  /// the same way a link does — the WHOLE `e2e_<uid>_` namespace goes
+  /// ([_wipeAccountNamespace]), after [beforeWipe] closed the contact store.
+  /// Any other install keeps its history: only Signal residue goes, and a
+  /// DIFFERENT held identity only with [disposeStaleMaterial] (owner,
+  /// 2026-11-04: a lock refusal alone keeps history).
   Future<void> adoptRestoredIdentity({
     required int userId,
     required IdentityBackupPayload payload,
     bool disposeStaleMaterial = false,
+    bool freshDeviceLife = false,
     Future<void> Function()? beforeWipe,
   }) async {
     if (payload.userId != userId) {
@@ -2120,7 +2138,7 @@ class EncryptionService {
     } catch (_) {
       throw IdentityBackupCorrupt('identity_record');
     }
-    if (holdsIdentity && !disposeStaleMaterial) {
+    if (holdsIdentity && !disposeStaleMaterial && !freshDeviceLife) {
       // A RETRY of this same restore is not a second identity: the (lxxviii)
       // machine adopts, then still has to fetch a nonce, upload and re-sign
       // the roster, and any of those can die on a flaky connection. Refusing
@@ -2153,31 +2171,24 @@ class EncryptionService {
       }
     }
 
-    if (disposeStaleMaterial) {
-      if (holdsIdentity) {
-        E2ePersistentDiag.record('RESTORE_STALE_MATERIAL_DISPOSED', {
-          'userId': userId,
-        });
-      }
+    Never deferred() {
+      E2ePersistentDiag.record('RESTORE_RESIDUE_DISPOSAL_DEFERRED', {
+        'userId': userId,
+      });
+      throw StateError('adoptRestoredIdentity: residue disposal not proven');
+    }
+
+    if (holdsIdentity && (disposeStaleMaterial || freshDeviceLife)) {
+      E2ePersistentDiag.record('RESTORE_STALE_MATERIAL_DISPOSED', {
+        'userId': userId,
+      });
+    }
+    if (freshDeviceLife) {
       await beforeWipe?.call();
-      if (!await _wipeAccountNamespace(userId)) {
-        E2ePersistentDiag.record('RESTORE_RESIDUE_DISPOSAL_DEFERRED', {
-          'userId': userId,
-        });
-        throw StateError(
-          'adoptRestoredIdentity: residue disposal not proven',
-        );
-      }
+      if (!await _wipeAccountNamespace(userId)) deferred();
     } else if (holdsIdentity ||
         await _hasPriorInstallResidue(existingPrefix)) {
-      if (!await _wipeSignalMaterial(existingPrefix)) {
-        E2ePersistentDiag.record('RESTORE_RESIDUE_DISPOSAL_DEFERRED', {
-          'userId': userId,
-        });
-        throw StateError(
-          'adoptRestoredIdentity: residue disposal not proven',
-        );
-      }
+      if (!await _wipeSignalMaterial(existingPrefix)) deferred();
     }
 
     _userId = userId;
@@ -3140,6 +3151,19 @@ class EncryptionService {
       return await _readMaterialStamp(userId);
     } on Object catch (_) {
       return null;
+    }
+  }
+
+  /// Issue #208: whether this install holds no identity for [userId] — a
+  /// brand-new install, or one that lost its keys — read before
+  /// [initialize]. False when storage cannot be read (never evidence).
+  Future<bool> holdsNoIdentity(int userId) async {
+    try {
+      final p = 'e2e_${userId}_';
+      return await _storage.read(key: '${p}identity_record_v1') == null &&
+          await _storage.read(key: '${p}identity_key_pair') == null;
+    } on Object catch (_) {
+      return false;
     }
   }
 

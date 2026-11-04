@@ -86,9 +86,12 @@ class SealedWebContentKv implements ContentKv {
   /// read here, E73a), all `EncryptionService`: a lost-kid row reads as
   /// empty and the next write replaces it. `boxunsent_v1_` (a box message
   /// that did not go out, decision 104) holds its words; a lost-kid row
-  /// reads undecodable and is skipped, never destroyed.
+  /// reads undecodable and is skipped, never destroyed. `boxgone_v1`
+  /// (`ContactStore.owedQueueDeletesKey`, issue #208) holds the auth keys of
+  /// an ended life's queues still owed a delete; a lost-kid row reads
+  /// unparseable and those queues go to the box's reaper.
   static final RegExp _familyKey = RegExp(
-    r'^e2e_\d+_(decrypted_|decrypt_raw_v1_|pendsend_v1_|contact_v1_|boxreq_v1|boxin_v1_|boxsib_v1|boxntf_v1|boxalive_v1|boxlook_v1|boxact_v1|boxlists_v1|boxdel_v1|boxseen_v1|boxunsent_v1_)',
+    r'^e2e_\d+_(decrypted_|decrypt_raw_v1_|pendsend_v1_|contact_v1_|boxreq_v1|boxin_v1_|boxsib_v1|boxntf_v1|boxalive_v1|boxlook_v1|boxact_v1|boxlists_v1|boxdel_v1|boxseen_v1|boxunsent_v1_|boxgone_v1)',
   );
   static final RegExp _retireIdKey = RegExp(
     r'^e2e_(\d+)_(?:decrypted_|decrypt_raw_v1_)(\d+)$',

@@ -118,7 +118,10 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   setUp(() {
-    FlutterSecureStorage.setMockInitialValues({});
+    // Holds its identity: a keyless install waits behind the honeycomb.
+    FlutterSecureStorage.setMockInitialValues({
+      'e2e_7_identity_record_v1': '{}',
+    });
     SharedPreferences.setMockInitialValues({});
   });
 
