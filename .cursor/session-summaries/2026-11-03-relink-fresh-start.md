@@ -18,7 +18,7 @@
 - Docs: `e2e-invariants.md`, `multi-device.md` (xc), `wire.md`, `metadata-privacy-decisions.md` (125), `traps.md`, `CLAUDE.md` counts.
 
 ## Verification
-- CI 6/6 on `63764ec8`, `c59e1a96`, `80b98d53`, and on `a56e382d` (review 3: backend, Flutter, E2E wire, isolated probes, Web Lock probe, CodeQL). #208 comment 6641992393.
+- CI 6/6 on `63764ec8`, `c59e1a96`, `80b98d53`, `a56e382d` (review 3) and `54f3d1f8` (restore tests): backend, Flutter, E2E wire, isolated probes, Web Lock probe, CodeQL. #208 comments 6641992393 and the follow-up.
 - Review 3 gates: Flutter 3338 passed / 14 skipped, backend 1264 / 71, analyzer 0, Dart lint 3130, backend ratchet PASS, int test on dev Postgres. Mutants killed and reverted: retire without the revoked check; `stampedDeviceRevoked` ignoring `revokedAt`; no `registerAgain`; substring endpoint match. A dropped `CASE` survived (PG short-circuits here): kept as a guard, not claimed.
 - Follow-up (advisory: the fresh half of the restore was not driven): 3 `restoreFromPhrase` tests on a previous device life (list says revoked → fresh; live → kept; no answer → `device_list`, nothing adopted); mutants killed and reverted: `freshDeviceLife: restoreMayStartFresh`; unknown list treated as keep. Flutter 3341 passed / 14 skipped, Dart lint 3130.
 - Drive 3 (web build of this tree, dev account `r208a`):
