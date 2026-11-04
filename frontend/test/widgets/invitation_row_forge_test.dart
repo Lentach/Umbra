@@ -24,7 +24,6 @@ Widget _host(InvitationRowState state, {bool disableAnimations = false}) {
           onDecline: () {},
           onOpenChat: () {},
           onDone: () {},
-          onCreateChat: () {},
         ),
       ),
     ),

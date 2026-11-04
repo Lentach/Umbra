@@ -398,13 +398,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get invitationChatReady => 'Chat ready';
 
   @override
-  String get invitationChatNeedsRetry => 'Chat setup needs retry';
-
-  @override
   String get invitationOpenChat => 'Open chat';
-
-  @override
-  String get invitationCreateChat => 'Create chat';
 
   @override
   String get invitationDone => 'Done';
@@ -428,32 +422,6 @@ class AppLocalizationsEn extends AppLocalizations {
   String get invitationDeclineFailed => 'Could not decline the invitation';
 
   @override
-  String get invitationChatSetupFailed => 'Could not set up the chat';
-
-  @override
-  String get invitationFailedUserNotFound => 'That user no longer exists';
-
-  @override
-  String get invitationFailedSelf => 'You cannot invite yourself';
-
-  @override
-  String get invitationFailedBlocked => 'You cannot invite this user';
-
-  @override
-  String get invitationFailedAlreadyFriends => 'You are already connected';
-
-  @override
-  String get invitationFailedDuplicate => 'Invitation already sent';
-
-  @override
-  String get invitationFailedInvalidPayload =>
-      'Something was wrong with that request';
-
-  @override
-  String get invitationFailedNotFriends =>
-      'You are not connected with this user';
-
-  @override
   String invitationSemanticIncoming(String name) {
     return '$name, invitation received, wants to connect';
   }
@@ -469,18 +437,10 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
-  String invitationSemanticAcceptedNotReady(String name) {
-    return '$name, invitation accepted, chat setup needs retry';
-  }
-
-  @override
   String get encryptedMessage => 'Encrypted message';
 
   @override
   String get newMessagePreview => 'New message';
-
-  @override
-  String get decryptingMessage => 'Decrypting…';
 
   @override
   String get messageNoLongerStoredOnThisDevice =>
@@ -503,11 +463,8 @@ class AppLocalizationsEn extends AppLocalizations {
       'Earlier messages aren\'t available on this device';
 
   @override
-  String get devicesSyncingNote => 'Syncing your devices…';
-
-  @override
   String boxFriendOlderAppNote(String name) {
-    return '$name has an older version of the app. Messages are encrypted, but the server can see when you write to each other.';
+    return '$name has an older version of the app and can\'t receive your messages until they update.';
   }
 
   @override
@@ -861,10 +818,6 @@ class AppLocalizationsEn extends AppLocalizations {
   String get blockUser => 'Block user';
 
   @override
-  String get conversationDeletedByOther =>
-      'Conversation deleted by the other user';
-
-  @override
   String get noMessagesYet => 'No messages yet';
 
   @override
@@ -873,9 +826,6 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get boxEndNotSynced =>
       'Couldn\'t reach your other devices. Nothing changed — try again.';
-
-  @override
-  String get cantTypeToThisUser => 'You can\'t type to this user';
 
   @override
   String get recordingVoice => 'Recording voice…';
@@ -971,20 +921,20 @@ class AppLocalizationsEn extends AppLocalizations {
   String get actionTileDisappearingMessages => 'Disappearing messages';
 
   @override
-  String get actionTileClearChat => 'Delete chat for both sides';
+  String get actionTileClearChat => 'Delete chat on this device';
 
   @override
-  String get clearChatHoldLabel => 'Keep holding — deletes for both';
+  String get clearChatHoldLabel => 'Keep holding — deletes here';
 
   @override
-  String get clearChatConfirmTitle => 'Delete this chat for both of you?';
+  String get clearChatConfirmTitle => 'Delete this chat on this device?';
 
   @override
   String get clearChatConfirmBody =>
-      'Every message, photo, video and voice note in this chat is deleted from the server for you AND for the other person. This cannot be undone, and it includes messages from before this device was linked.';
+      'Every message, photo, video and voice note in this chat is deleted from this device. The other person keeps their copy. This cannot be undone.';
 
   @override
-  String get clearChatConfirmAction => 'Delete for both';
+  String get clearChatConfirmAction => 'Delete here';
 
   @override
   String get disappearingTimerTitle => 'Disappearing messages';
@@ -1631,11 +1581,6 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String messageReactionSemantics(Object emoji, Object state) {
     return 'Reaction $emoji, $state';
-  }
-
-  @override
-  String messageReactionUnreadable(int count) {
-    return 'Reaction not readable on this device ($count)';
   }
 
   @override

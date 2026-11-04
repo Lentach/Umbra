@@ -28,7 +28,11 @@ void main() {
   late IdentityKeyPair peerIdentity;
   late Map<String, dynamic> enrollmentPayload;
 
-  /// The wire `authorization` map `getDeviceList` answers with, as the
+  /// What the peer handle lookup answers (`lookupBoxPeerList`).
+  late Map<String, dynamic>? Function() served;
+  var lookups = 0;
+
+  /// The wire `authorization` map the list is served as, as the
   /// backend serves it (chat-device-list.service.ts).
   Map<String, dynamic> authorizationV1() => {
     'dakPub': enrollmentPayload['dakPub'],
@@ -86,35 +90,43 @@ void main() {
       peerId,
       base64Encode(peerIdentity.getPublicKey().serialize()),
     );
+
+    // Peers are looked up by handle; `served` is what that lookup answers.
+    lookups = 0;
+    served = () => null;
+    provider
+      ..listsByHandle = ((peer) => peer == peerId)
+      ..lookupBoxPeerList = (peer) async {
+        lookups++;
+        return served();
+      };
   });
+
+  int lookupCount() => lookups;
 
   int deviceListFetchCount() =>
       emitted.where((e) => e['event'] == 'getDeviceList').length;
 
-  test('a verified list is cached and reused without a second fetch', () async {
-    provider.setEmitCallback((event, data) {
-      emitted.add({'event': event, 'data': data});
-      if (event == 'getDeviceList') {
-        provider.onDeviceList({
-          'userId': peerId,
-          'authorization': authorizationV1(),
-        });
-      }
-    });
-    final first = await provider.getVerifiedDeviceList(peerId);
-    expect(first.enrolled, isTrue);
-    expect(first.version, 1);
-    expect(first.liveDeviceIds, [1]);
-    expect(deviceListFetchCount(), 1);
+  test(
+    'a verified list is cached and reused without a second lookup',
+    () async {
+      served = authorizationV1;
+      final first = await provider.getVerifiedDeviceList(peerId);
+      expect(first.enrolled, isTrue);
+      expect(first.version, 1);
+      expect(first.liveDeviceIds, [1]);
+      expect(lookupCount(), 1);
 
-    final second = await provider.getVerifiedDeviceList(peerId);
-    expect(
-      identical(first, second),
-      isTrue,
-      reason: 'cache hit must not refetch',
-    );
-    expect(deviceListFetchCount(), 1);
-  });
+      final second = await provider.getVerifiedDeviceList(peerId);
+      expect(
+        identical(first, second),
+        isTrue,
+        reason: 'cache hit must not look up again',
+      );
+      expect(lookupCount(), 1);
+      expect(deviceListFetchCount(), 0, reason: 'a peer is never named by id');
+    },
+  );
 
   test(
     'an invalid chain is rejected and NOT cached (falsification 4)',
@@ -139,12 +151,7 @@ void main() {
       forged['listCanonical'] = resigned['listCanonical'];
       forged['listSignature'] = resigned['listSignature'];
 
-      provider.setEmitCallback((event, data) {
-        emitted.add({'event': event, 'data': data});
-        if (event == 'getDeviceList') {
-          provider.onDeviceList({'userId': peerId, 'authorization': forged});
-        }
-      });
+      served = () => forged;
       await expectLater(
         provider.getVerifiedDeviceList(peerId),
         throwsA(
@@ -166,24 +173,14 @@ void main() {
   test('a served ROLLBACK is detected against the pinned version, even '
       'after invalidation (falsification 3)', () async {
     var serveVersion = 2;
-    provider.setEmitCallback((event, data) {
-      emitted.add({'event': event, 'data': data});
-      if (event == 'getDeviceList') {
-        provider.onDeviceList({
-          'userId': peerId,
-          'authorization': serveVersion == 1
-              ? authorizationV1()
-              : authorizationAt(2),
-        });
-      }
-    });
+    served = () => serveVersion == 1 ? authorizationV1() : authorizationAt(2);
     final v2 = await provider.getVerifiedDeviceList(peerId);
     expect(v2.version, 2);
     expect(v2.liveDeviceIds, [1, 2]);
 
-    // The cache entry is dropped (deviceListChanged), but the PIN survives:
-    // a correctly-signed OLDER list must still be refused.
-    provider.invalidateDeviceList(peerId);
+    // The cache entry is dropped (an event that owes a lookup), but the PIN
+    // survives: a correctly-signed OLDER list must still be refused.
+    provider.invalidateDeviceList(peerId, byPerson: true);
     serveVersion = 1;
     await expectLater(
       provider.getVerifiedDeviceList(peerId),
@@ -200,31 +197,16 @@ void main() {
 
   test('re-serving the SAME pinned version is a legitimate refresh, '
       'not a rollback', () async {
-    provider.setEmitCallback((event, data) {
-      emitted.add({'event': event, 'data': data});
-      if (event == 'getDeviceList') {
-        provider.onDeviceList({
-          'userId': peerId,
-          'authorization': authorizationAt(2),
-        });
-      }
-    });
+    served = () => authorizationAt(2);
     await provider.getVerifiedDeviceList(peerId);
-    final refreshed = await provider.getVerifiedDeviceList(
-      peerId,
-      forceRefresh: true,
-    );
+    provider.invalidateDeviceList(peerId, byPerson: true);
+    final refreshed = await provider.getVerifiedDeviceList(peerId);
     expect(refreshed.version, 2);
   });
 
   test('a non-enrolled peer (authorization: null) is single-device: '
       'device 1 only, no version', () async {
-    provider.setEmitCallback((event, data) {
-      emitted.add({'event': event, 'data': data});
-      if (event == 'getDeviceList') {
-        provider.onDeviceList({'userId': peerId, 'authorization': null});
-      }
-    });
+    served = () => null;
     final list = await provider.getVerifiedDeviceList(peerId);
     expect(list.enrolled, isFalse);
     expect(list.version, isNull);
@@ -234,22 +216,14 @@ void main() {
   test('an authorization:null answer for an ALREADY-ENROLLED party is refused '
       'as a rollback, not cached as single-device (amendment (xix))', () async {
     var serveEnrolled = true;
-    provider.setEmitCallback((event, data) {
-      emitted.add({'event': event, 'data': data});
-      if (event == 'getDeviceList') {
-        provider.onDeviceList({
-          'userId': peerId,
-          'authorization': serveEnrolled ? authorizationAt(2) : null,
-        });
-      }
-    });
+    served = () => serveEnrolled ? authorizationAt(2) : null;
     final v2 = await provider.getVerifiedDeviceList(peerId);
     expect(v2.liveDeviceIds, [1, 2]);
 
     // Enrollment is durable (§5.2), so "no enrollment row" for a party we
     // already verified is never legitimate. Caching it would narrow the
     // fan-out to device 1 and silently drop that party's other devices.
-    provider.invalidateDeviceList(peerId);
+    provider.invalidateDeviceList(peerId, byPerson: true);
     serveEnrolled = false;
     await expectLater(
       provider.getVerifiedDeviceList(peerId),
@@ -268,28 +242,28 @@ void main() {
     );
   });
 
-  test('an unanswered fetch times out with an error — never a guessed list '
-      '(falsification 9)', () async {
+  test('an unanswered fetch of the OWN list times out with an error — never '
+      'a guessed list (falsification 9)', () async {
     await expectLater(
       provider.getVerifiedDeviceList(
-        peerId,
+        ownUserId,
         timeout: const Duration(milliseconds: 50),
       ),
       throwsA(isA<TimeoutException>()),
     );
-    expect(provider.cachedDeviceList(peerId), isNull);
+    expect(provider.cachedDeviceList(ownUserId), isNull);
   });
 
   test('a caller that JOINS an unanswered fetch fails with it — never waits '
       'forever (a lost answer stalled every box send, 0.2.66)', () async {
-    // The first lookup's request died with a replaced socket; the next
+    // The first fetch's request died with a replaced socket; the next
     // connect's refresh asks again and joins it.
     final first = provider.getVerifiedDeviceList(
-      peerId,
+      ownUserId,
       timeout: const Duration(milliseconds: 50),
     );
     final joiner = provider.getVerifiedDeviceList(
-      peerId,
+      ownUserId,
       timeout: const Duration(milliseconds: 50),
     );
     await expectLater(first, throwsA(isA<TimeoutException>()));
@@ -311,17 +285,10 @@ void main() {
     'an enrolled answer for a peer with NO pinned identity fails closed',
     () async {
       const strangerId = 314;
-      provider.setEmitCallback((event, data) {
-        emitted.add({'event': event, 'data': data});
-        if (event == 'getDeviceList') {
-          // A structurally valid record, but this client holds no TOFU key
-          // for the stranger — the chain has no anchor, so nothing verifies.
-          provider.onDeviceList({
-            'userId': strangerId,
-            'authorization': authorizationV1(),
-          });
-        }
-      });
+      provider.listsByHandle = (peer) => peer == strangerId;
+      // A structurally valid record, but this client holds no TOFU key for
+      // the stranger — the chain has no anchor, so nothing verifies.
+      served = authorizationV1;
       await expectLater(
         provider.getVerifiedDeviceList(strangerId),
         throwsA(
@@ -336,69 +303,11 @@ void main() {
     },
   );
 
-  test(
-    'batched lookups started in one turn leave as ONE getDeviceLists frame '
-    'naming every user, and each resolves from its own deviceList answer '
-    '(item 5, E20a)',
-    () async {
-      final frames = <Map<String, dynamic>>[];
-      provider.setEmitCallback((event, data) {
-        frames.add({'event': event, 'data': data});
-      });
-
-      final lookups = [
-        for (final user in [peerId, 43, 44])
-          provider.getVerifiedDeviceList(
-            user,
-            forceRefresh: true,
-            batched: true,
-          ),
-      ];
-      await pumpEventQueue();
-
-      expect(frames, [
-        {
-          'event': 'getDeviceLists',
-          'data': {
-            'userIds': [peerId, 43, 44],
-          },
-        },
-      ]);
-      provider
-        ..onDeviceList({'userId': 44, 'authorization': null})
-        ..onDeviceList({'userId': peerId, 'authorization': authorizationV1()})
-        ..onDeviceList({'userId': 43, 'authorization': null});
-      final lists = await Future.wait(lookups);
-      expect(lists.map((l) => l.enrolled), [isTrue, isFalse, isFalse]);
-    },
-  );
-
-  test('a lone batched lookup goes out as the plain getDeviceList', () async {
-    final frames = <String>[];
-    provider.setEmitCallback((event, data) {
-      frames.add(event);
-      if (event == 'getDeviceList') {
-        provider.onDeviceList({'userId': peerId, 'authorization': null});
-      }
-    });
-
-    await provider.getVerifiedDeviceList(peerId, batched: true);
-
-    expect(frames, ['getDeviceList']);
-  });
-
-  group('a friend is looked up by handle, never by id (decision 114)', () {
+  group('a peer is looked up by handle, never by id (decision 114)', () {
     const stranger = 99;
 
-    // Mutation: `_fetchDeviceListAnswer` asks `isBoxOnlyPeer` alone.
     test('its list comes from the handle lookup and no id leaves', () async {
-      final lookups = <int>[];
-      provider
-        ..listsByHandle = ((peer) => peer == peerId)
-        ..lookupBoxPeerList = (peer) async {
-          lookups.add(peer);
-          return authorizationV1();
-        };
+      served = authorizationV1;
 
       final list = await provider.getVerifiedDeviceList(
         peerId,
@@ -407,41 +316,38 @@ void main() {
 
       expect(list.enrolled, isTrue);
       expect(list.liveDeviceIds, [1]);
-      expect(lookups, [peerId]);
+      expect(lookupCount(), 1);
       expect(
-        emitted.where(
-          (e) => e['event'] == 'getDeviceList' || e['event'] == 'getDeviceLists',
-        ),
+        emitted.where((e) => e['event'] == 'getDeviceList'),
         isEmpty,
       );
       // Held now: asking again costs nothing, and the one lookup per account
       // per process (E15h) is not spent twice.
       await provider.getVerifiedDeviceList(peerId);
-      expect(lookups, [peerId]);
+      expect(lookupCount(), 1);
     });
 
-    // Mutation: `listIsByHandle` answers true for everyone.
-    test('the own list and a peer with no record still go by id', () async {
-      provider
-        ..listsByHandle = ((peer) => peer == peerId)
-        ..lookupBoxPeerList = (peer) async => fail('looked up $peer');
-
-      for (final user in [ownUserId, stranger]) {
-        await expectLater(
-          provider.getVerifiedDeviceList(
-            user,
-            timeout: const Duration(milliseconds: 50),
-          ),
-          throwsA(isA<TimeoutException>()),
-        );
-      }
+    test('the own list goes by id; a peer that cannot be looked up fails '
+        'closed and no id is emitted for it', () async {
+      await expectLater(
+        provider.getVerifiedDeviceList(
+          ownUserId,
+          timeout: const Duration(milliseconds: 50),
+        ),
+        throwsA(isA<TimeoutException>()),
+      );
+      await expectLater(
+        provider.getVerifiedDeviceList(stranger),
+        throwsA(isA<StateError>()),
+      );
 
       expect(
         emitted
             .where((e) => e['event'] == 'getDeviceList')
             .map((e) => (e['data'] as Map)['userId']),
-        [ownUserId, stranger],
+        [ownUserId],
       );
+      expect(lookupCount(), 0);
     });
   });
 }

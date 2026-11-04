@@ -30,6 +30,10 @@ import 'package:fireplace/l10n/app_localizations.dart';
 
 import 'publish_stub.dart' if (dart.library.js_interop) 'publish_web.dart';
 import 'package:fireplace/models/message_model.dart';
+import 'package:fireplace/services/contacts/contact_record.dart';
+
+import '../support/chat_seed.dart';
+import '../support/contact_seed.dart';
 import 'package:fireplace/models/user_model.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
 import 'package:fireplace/widgets/conversation_tile.dart';
@@ -65,7 +69,7 @@ class GlassPreviewApp extends StatelessWidget {
 
     final pinned = Uri.base.queryParameters['pinned'] == '1';
     final conversations = ConversationsProvider()..setCurrentUserId(1);
-    conversations.onConversationsList([
+    seedConversations(conversations, [
       {
         'id': 10,
         'userOne': {'id': 1, 'username': 'alice', 'tag': '0001'},
@@ -126,10 +130,11 @@ class GlassPreviewApp extends StatelessWidget {
         }),
     ]);
     messaging.loadCachedMessages(10);
-    final friends = FriendsProvider()..setCurrentUserId(1);
     // Friends for the Chats "+" honeycomb picker. Deliberately mixed-length
     // names: the caption has to ellipsize gracefully, not silently clip.
-    friends.onFriendsList([
+    // Invitations: three inbound and three sent over the box, plus Nina's and
+    // Luca's already accepted — all four row states at once.
+    final records = [
       for (final entry in const [
         [2, 'Zosia'],
         [8, 'Ada'],
@@ -139,105 +144,29 @@ class GlassPreviewApp extends StatelessWidget {
         [12, 'Konstantyna'],
         [13, 'Filip'],
       ])
-        {
-          'id': entry[0],
-          'username': entry[1],
-          'tag': '00${entry[0]}',
-          'profilePictureUrl': null,
-        },
-    ]);
-    Map<String, dynamic> invitation({
-      required int id,
-      required int senderId,
-      required String senderName,
-      required int receiverId,
-      required String receiverName,
-      int? conversationId,
-      bool? chatReady,
-    }) => {
-      'id': id,
-      'sender': {'id': senderId, 'username': senderName, 'tag': '000$senderId'},
-      'receiver': {
-        'id': receiverId,
-        'username': receiverName,
-        'tag': '000$receiverId',
-      },
-      'status': 'pending',
-      'createdAt': '2026-07-28T12:00:00.000Z',
-      'conversationId': conversationId,
-      'chatReady': ?chatReady,
-    };
-    // Raw socket payloads, exactly like the provider tests. Two accepted
-    // payloads atomically replace their matching pending rows, leaving the
-    // preview with all four row states at once.
-    friends.onFriendRequestsList([
-      invitation(
-        id: 101,
-        senderId: 2,
-        senderName: 'Mara',
-        receiverId: 1,
-        receiverName: 'alice',
-      ),
-      invitation(
-        id: 102,
-        senderId: 3,
-        senderName: 'Olek',
-        receiverId: 1,
-        receiverName: 'alice',
-      ),
-      invitation(
-        id: 103,
-        senderId: 4,
-        senderName: 'Nina',
-        receiverId: 1,
-        receiverName: 'alice',
-      ),
-    ]);
-    friends.onSentRequestsList([
-      invitation(
-        id: 201,
-        senderId: 1,
-        senderName: 'alice',
-        receiverId: 5,
-        receiverName: 'Iwo',
-      ),
-      invitation(
-        id: 202,
-        senderId: 1,
-        senderName: 'alice',
-        receiverId: 6,
-        receiverName: 'Sara',
-      ),
-      invitation(
-        id: 203,
-        senderId: 1,
-        senderName: 'alice',
-        receiverId: 7,
-        receiverName: 'Luca',
-      ),
-    ]);
-    friends.onFriendRequestAccepted(
-      invitation(
-        id: 103,
-        senderId: 4,
-        senderName: 'Nina',
-        receiverId: 1,
-        receiverName: 'alice',
-        conversationId: 44,
-        chatReady: true,
-      ),
-    );
-    friends.onFriendRequestAccepted(
-      invitation(
-        id: 203,
-        senderId: 1,
-        senderName: 'alice',
-        receiverId: 7,
-        receiverName: 'Luca',
-        chatReady: false,
-      ),
-    );
+        contactRecord(
+          entry[0] as int,
+          entry[1] as String,
+          ContactState.friend,
+          chatId: entry[0] == 2 ? 10 : null,
+        ),
+      contactRecord(20, 'Mara', ContactState.pendingIn, box: true),
+      contactRecord(21, 'Olek', ContactState.pendingIn, box: true),
+      contactRecord(22, 'Nina', ContactState.friend, box: true),
+      contactRecord(5, 'Iwo', ContactState.pendingOut, box: true),
+      contactRecord(6, 'Sara', ContactState.pendingOut, box: true),
+      contactRecord(7, 'Luca', ContactState.friend, box: true),
+    ];
 
+    return SeededStoreHost(
+      records: records,
+      selfId: 1,
+      selfName: 'alice',
+      builder: (context, store) {
+    // The accepted rows: Nina's request (incoming) and Luca's (outgoing).
+    final friends = friendsOver(store)
+      ..onBoxFriendshipMade(22, outgoing: false)
+      ..onBoxFriendshipMade(7, outgoing: true);
     return MultiProvider(
       providers: [
         ChangeNotifierProvider<ConversationsProvider>.value(
@@ -290,6 +219,8 @@ class GlassPreviewApp extends StatelessWidget {
           _ => const _ChatListPreview(),
         },
       ),
+    );
+      },
     );
   }
 }

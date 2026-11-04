@@ -20,8 +20,8 @@
 //     needs an account nothing else depends on — never a shared fixture.
 //
 // It follows the house pattern for probes with special preconditions
-// (`seed_long_history_probe_test.dart`, `recovered_identity_probe_test.dart`):
-// skipped unless a dart-define asks for it.
+// (`box_roundtrip_test.dart`, `encryption_proof_test.dart`): skipped unless a
+// dart-define asks for it.
 //
 // THE DELAY IS AGED, NOT WAITED (spec §12 (xxxvi)). §6.2's shortest real path
 // is one hour with a valid recovery phrase. This ages

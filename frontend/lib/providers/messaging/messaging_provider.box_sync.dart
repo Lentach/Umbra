@@ -410,7 +410,7 @@ extension MessagingBoxSync on MessagingProvider {
     convs
       ..applyNewerLastMessages(newest)
       ..seedBoxUnread(unread);
-    final viewing = _effectiveActiveConversationId ?? _paginationConversationId;
+    final viewing = _effectiveActiveConversationId ?? _openConversationId;
     if (newest.containsKey(viewing)) await _mergeLocalBoxRows(viewing);
   }
 

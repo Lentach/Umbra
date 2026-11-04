@@ -19,6 +19,7 @@ import {
   BOX_PUSH_TRANSPORT,
   type BoxPush,
   type BoxPushTransport,
+  type PushOutcome,
 } from './box-push.transport';
 import { BoxReaper } from './box-reaper.service';
 import {
@@ -157,10 +158,13 @@ describeWithDb('box over real sockets and Postgres', () => {
     token: string;
     data: BoxPush;
   }[] = [];
+  /** What the recorded push service answers; a test makes it say `gone`. */
+  let pushOutcome: (token: string) => PushOutcome | Promise<PushOutcome> = () =>
+    'sent';
   const transport: BoxPushTransport = {
-    send: (platform, token, data) => {
+    send: async (platform, token, data) => {
       pushes.push({ platform, token, data });
-      return Promise.resolve('sent');
+      return await pushOutcome(token);
     },
   };
   const sockets: ClientSocket[] = [];
@@ -1439,6 +1443,85 @@ describeWithDb('box over real sockets and Postgres', () => {
       bob.disconnect();
       await sleep(3500);
       expect(pushes).toEqual([]);
+    });
+
+    /** The notifier rows of `queues` once they read `expected` (8 s at most). */
+    async function notifierRowsLike(
+      queues: Queue[],
+      expected: string[],
+    ): Promise<string[]> {
+      const deadline = Date.now() + 8000;
+      let rows = await notifierRows(queues);
+      while (Date.now() < deadline && rows.join() !== expected.join()) {
+        await sleep(100);
+        rows = await notifierRows(queues);
+      }
+      return rows;
+    }
+
+    // Decision 129 (E129a): a revoked, closed device ends its own wake-ups by
+    // dropping its push registration, and the box must then forget the
+    // notifier by itself — it ties no queue to a device, so nothing else can.
+    it('a wake-up the push service answers "gone" (UNREGISTERED / 404 / 410) deletes that notifier, and only that token on that queue', async () => {
+      const bob = await connect();
+      const alice = await connect();
+      const dropped = await createQueue(bob);
+      const kept = await createQueue(bob);
+      const stale = 'fcm-token_box:gone-1';
+      const live = 'fcm-token_box:gone-2';
+      await activateNotifier(bob, dropped, stale);
+      await activateNotifier(bob, kept, live);
+      pushes.length = 0;
+
+      pushOutcome = (token) => (token === stale ? 'gone' : 'sent');
+      try {
+        // Nothing subscribed: each send owes a wake-up.
+        await call(alice, 'send', { v: 1, sid: dropped.sid, blob: blob() });
+        await call(alice, 'send', { v: 1, sid: kept.sid, blob: blob() });
+        await until(() => pushes.length === 2, 8000);
+        expect(
+          await notifierRowsLike([dropped, kept], [`${kept.nid}:${live}`]),
+        ).toEqual([`${kept.nid}:${live}`]);
+
+        // Another send to the queue whose notifier went wakes nobody.
+        pushes.length = 0;
+        await call(alice, 'send', { v: 1, sid: dropped.sid, blob: blob() });
+        await sleep(3500);
+        expect(pushes).toEqual([]);
+      } finally {
+        pushOutcome = () => 'sent';
+      }
+    });
+
+    it('a "gone" answer never drops a notifier a newer registration replaced meanwhile', async () => {
+      const bob = await connect();
+      const alice = await connect();
+      const queue = await createQueue(bob);
+      const stale = 'fcm-token_box:gone-3';
+      await activateNotifier(bob, queue, stale);
+      pushes.length = 0;
+
+      // The device re-registered under a new token while the old one's push
+      // was in flight (a new login on the install): the row is the new one's.
+      pushOutcome = async (token) => {
+        if (token === stale) {
+          await activateNotifier(bob, queue, 'fcm-token_box:gone-4');
+          return 'gone';
+        }
+        return 'sent';
+      };
+      try {
+        await call(alice, 'send', { v: 1, sid: queue.sid, blob: blob() });
+        // The wake-up to the old token, then the new token's challenge push.
+        await until(() => pushes.length >= 2, 8000);
+        const row = `${queue.nid}:fcm-token_box:gone-4`;
+        expect(await notifierRowsLike([queue], [row])).toEqual([row]);
+        // The old token's `gone` lands after its activation: the row stays.
+        await sleep(1000);
+        expect(await notifierRows([queue])).toEqual([row]);
+      } finally {
+        pushOutcome = () => 'sent';
+      }
     });
   });
 

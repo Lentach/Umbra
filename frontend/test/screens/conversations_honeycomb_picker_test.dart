@@ -14,10 +14,15 @@ import 'package:fireplace/theme/rpg_theme.dart';
 import 'package:fireplace/widgets/chat_honeycomb_picker.dart';
 import 'package:fireplace/widgets/hex_avatar.dart';
 import 'package:flutter/material.dart';
+import 'package:fireplace/services/box/box_client.dart';
+import 'package:fireplace/services/contacts/contact_backup_service.dart';
+import 'package:fireplace/services/contacts/contact_store.dart';
+import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../support/contact_seed.dart';
 import '../support/passcode_fakes.dart';
 
 class _FakeAuthProvider extends AuthProvider {
@@ -36,6 +41,26 @@ class _FakeAuthProvider extends AuthProvider {
 }
 
 class _FakeConnectionProvider extends ConnectionProvider {
+  /// The screen wires a store of its own (never opened here); the providers
+  /// under test already read the seeded one, which this keeps.
+  @override
+  void setProviders({
+    required EncryptionProvider encryption,
+    required FriendsProvider friends,
+    required ConversationsProvider conversations,
+    required MessagingProvider messaging,
+    ContactStore? contactStore,
+    ContactBackupService? contactBackup,
+    BoxClient Function(String baseUrl)? boxClient,
+    Future<int?> Function()? storedSessionDeviceId,
+  }) => super.setProviders(
+    encryption: encryption,
+    friends: friends,
+    conversations: conversations,
+    messaging: messaging,
+    contactStore: friends.contactStore,
+  );
+
   @override
   Future<void> connect(
     int userId,
@@ -89,39 +114,31 @@ Widget _host({
   );
 }
 
-FriendsProvider _friends(List<UserModel> users) =>
-    FriendsProvider()..onFriendsList([
-      for (final user in users)
-        {
-          'id': user.id,
-          'username': user.username,
-          'tag': user.tag,
-          'profilePictureUrl': user.profilePictureUrl,
-        },
-    ]);
-
-FriendsProvider _friendsWithInvite(List<UserModel> users) =>
-    _friends(users)..onFriendRequestsList([
-      {
-        'id': 11,
-        'sender': {'id': 5, 'username': 'Nina', 'tag': '0005'},
-        'receiver': {'id': 1, 'username': 'Marta', 'tag': '0007'},
-        'status': 'pending',
-        'createdAt': '2026-07-29T12:00:00.000Z',
-      },
-    ]);
-
-ConversationsProvider _conversationsWithAda() {
-  return ConversationsProvider()
-    ..setCurrentUserId(1)
-    ..onConversationsList([
-      {
-        'id': 42,
-        'userOne': {'id': 1, 'username': 'Marta', 'tag': '0007'},
-        'userTwo': {'id': 2, 'username': 'Ada', 'tag': '0002'},
-        'createdAt': '2026-07-27T12:00:00.000Z',
-      },
-    ]);
+/// Account 1 (Marta) with [friends] in a real contact store: Ada (2) has the
+/// chat 42 from before the box, an [invite] is an inbound box request from
+/// Nina (5).
+Future<({FriendsProvider friends, ConversationsProvider conversations})>
+_session(
+  WidgetTester tester, {
+  List<UserModel> friends = const [],
+  bool invite = false,
+}) async {
+  final store = (await tester.runAsync(
+    () => openContactStore([
+      for (final user in friends)
+        contactRecord(
+          user.id,
+          user.username,
+          ContactState.friend,
+          chatId: user.id == 2 ? 42 : null,
+        ),
+      if (invite) contactRecord(5, 'Nina', ContactState.pendingIn, box: true),
+    ], selfName: 'Marta'),
+  ))!;
+  return (
+    friends: friendsOver(store),
+    conversations: conversationsOver(store),
+  );
 }
 
 Future<void> _openPicker(WidgetTester tester) async {
@@ -135,15 +152,16 @@ void main() {
   testWidgets('the Chats plus opens a honeycomb and opens its conversation', (
     tester,
   ) async {
-    final conversations = _conversationsWithAda();
+    final s = await _session(
+      tester,
+      friends: [
+        UserModel(id: 2, username: 'Ada', tag: '0002'),
+        UserModel(id: 3, username: 'Borys', tag: '0003'),
+      ],
+    );
+    final conversations = s.conversations;
     await tester.pumpWidget(
-      _host(
-        friends: _friends([
-          UserModel(id: 2, username: 'Ada', tag: '0002'),
-          UserModel(id: 3, username: 'Borys', tag: '0003'),
-        ]),
-        conversations: conversations,
-      ),
+      _host(friends: s.friends, conversations: conversations),
     );
     await tester.pump();
 
@@ -168,8 +186,9 @@ void main() {
   testWidgets('the picker gives an empty friend list a useful state', (
     tester,
   ) async {
+    final s = await _session(tester);
     await tester.pumpWidget(
-      _host(friends: _friends([]), conversations: ConversationsProvider()),
+      _host(friends: s.friends, conversations: s.conversations),
     );
     await tester.pump();
 
@@ -260,14 +279,15 @@ void _pickerNameTests() {
   testWidgets('every picker terminal is captioned with its username', (
     tester,
   ) async {
+    final s = await _session(
+      tester,
+      friends: [
+        UserModel(id: 2, username: 'Ada', tag: '0002'),
+        UserModel(id: 3, username: 'Borys', tag: '0003'),
+      ],
+    );
     await tester.pumpWidget(
-      _host(
-        friends: _friends([
-          UserModel(id: 2, username: 'Ada', tag: '0002'),
-          UserModel(id: 3, username: 'Borys', tag: '0003'),
-        ]),
-        conversations: _conversationsWithAda(),
-      ),
+      _host(friends: s.friends, conversations: s.conversations),
     );
     await tester.pump();
     await _openPicker(tester);
@@ -286,13 +306,13 @@ void _pickerNameTests() {
   testWidgets('an inbound invitation is a comb terminal that opens the queue', (
     tester,
   ) async {
+    final s = await _session(
+      tester,
+      friends: [UserModel(id: 2, username: 'Ada', tag: '0002')],
+      invite: true,
+    );
     await tester.pumpWidget(
-      _host(
-        friends: _friendsWithInvite([
-          UserModel(id: 2, username: 'Ada', tag: '0002'),
-        ]),
-        conversations: _conversationsWithAda(),
-      ),
+      _host(friends: s.friends, conversations: s.conversations),
     );
     await tester.pump();
     await _openPicker(tester);
@@ -330,11 +350,12 @@ void _pickerNameTests() {
   testWidgets('no invitations leaves the comb free of the invitation hint', (
     tester,
   ) async {
+    final s = await _session(
+      tester,
+      friends: [UserModel(id: 2, username: 'Ada', tag: '0002')],
+    );
     await tester.pumpWidget(
-      _host(
-        friends: _friends([UserModel(id: 2, username: 'Ada', tag: '0002')]),
-        conversations: _conversationsWithAda(),
-      ),
+      _host(friends: s.friends, conversations: s.conversations),
     );
     await tester.pump();
     await _openPicker(tester);
@@ -345,14 +366,15 @@ void _pickerNameTests() {
 
   testWidgets('the comb LEADS with the add socket and it opens the '
       'invitations screen', (tester) async {
+    final s = await _session(
+      tester,
+      friends: [
+        UserModel(id: 2, username: 'Ada', tag: '0002'),
+        UserModel(id: 3, username: 'Borys', tag: '0003'),
+      ],
+    );
     await tester.pumpWidget(
-      _host(
-        friends: _friends([
-          UserModel(id: 2, username: 'Ada', tag: '0002'),
-          UserModel(id: 3, username: 'Borys', tag: '0003'),
-        ]),
-        conversations: _conversationsWithAda(),
-      ),
+      _host(friends: s.friends, conversations: s.conversations),
     );
     await tester.pump();
     await _openPicker(tester);
@@ -385,8 +407,9 @@ void _pickerNameTests() {
   testWidgets('the empty picker offers the same invite door as a button', (
     tester,
   ) async {
+    final s = await _session(tester);
     await tester.pumpWidget(
-      _host(friends: _friends([]), conversations: ConversationsProvider()),
+      _host(friends: s.friends, conversations: s.conversations),
     );
     await tester.pump();
     await _openPicker(tester);

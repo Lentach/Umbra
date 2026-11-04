@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
-import 'package:http_parser/http_parser.dart';
 import 'package:image_picker/image_picker.dart';
 
 import 'session_refresh_exception.dart';
@@ -42,15 +41,14 @@ class ApiService {
   /// Avatar upload: bounded server-side at 5 MB, so 60 s is generous.
   static const Duration _kMediaTimeout = Duration(seconds: 60);
 
-  /// Encrypted chat media (upload AND fetch). Deliberately far longer than
-  /// [_kMediaTimeout]: these payloads run to [MediaCryptoService.maxBytes] and
-  /// the deadline is a hard cap on the WHOLE request, not an idle timeout, so
-  /// a slow-but-progressing transfer gets killed by a tight budget. At 20 MB
-  /// a 60 s deadline needs ~2.8 Mbps sustained; 180 s tolerates ~0.9 Mbps.
+  /// Media fetch. Deliberately far longer than [_kMediaTimeout]: payloads run
+  /// to [MediaCryptoService.maxBytes] and the deadline is a hard cap on the
+  /// WHOLE request, not an idle timeout, so a slow-but-progressing transfer
+  /// gets killed by a tight budget. At 20 MB a 60 s deadline needs ~2.8 Mbps
+  /// sustained; 180 s tolerates ~0.9 Mbps.
   ///
-  /// The fetch side matters more than the upload: `fetchMediaBytes` buffers
-  /// the whole file with no streaming and no resume, so a timeout there is not
-  /// a slow video — it is a permanently unplayable one.
+  /// `fetchMediaBytes` buffers the whole file with no streaming and no resume,
+  /// so a timeout there is not a slow video — it is a permanently unplayable one.
   static const Duration _kLargeMediaTimeout = Duration(seconds: 180);
 
   static const Duration _kDefaultTimeout = Duration(seconds: 20);
@@ -395,111 +393,6 @@ class ApiService {
     }
   }
 
-  Future<void> registerFcmToken(
-    String jwtToken,
-    String fcmToken,
-    String platform,
-  ) async {
-    final response = await _httpClient.post(
-      Uri.parse('$baseUrl/users/fcm-token'),
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer $jwtToken',
-      },
-      body: jsonEncode({'token': fcmToken, 'platform': platform}),
-    ).timeout(_kDefaultTimeout);
-
-    if (response.statusCode != 200 && response.statusCode != 201) {
-      throw Exception('Failed to register FCM token');
-    }
-  }
-
-  Future<void> removeFcmToken(String jwtToken, String fcmToken) async {
-    final response = await _httpClient.delete(
-      Uri.parse('$baseUrl/users/fcm-token'),
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer $jwtToken',
-      },
-      body: jsonEncode({'token': fcmToken}),
-    ).timeout(_kDefaultTimeout);
-
-    if (response.statusCode != 200 && response.statusCode != 201) {
-      throw Exception('Failed to remove FCM token');
-    }
-  }
-
-  Future<void> registerWebPushSubscription(
-    String jwtToken,
-    Map<String, dynamic> subscription,
-  ) async {
-    final response = await _httpClient.post(
-      Uri.parse('$baseUrl/users/web-push-subscription'),
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer $jwtToken',
-      },
-      body: jsonEncode(subscription),
-    ).timeout(_kDefaultTimeout);
-
-    if (response.statusCode != 200 && response.statusCode != 201) {
-      throw Exception('Failed to register Web Push subscription');
-    }
-  }
-
-  Future<void> removeWebPushSubscription(
-    String jwtToken,
-    String endpoint,
-  ) async {
-    final response = await _httpClient.delete(
-      Uri.parse('$baseUrl/users/web-push-subscription'),
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer $jwtToken',
-      },
-      body: jsonEncode({'endpoint': endpoint}),
-    ).timeout(_kDefaultTimeout);
-
-    if (response.statusCode != 200 && response.statusCode != 201) {
-      throw Exception('Failed to remove Web Push subscription');
-    }
-  }
-
-  /// Upload an AES-encrypted media blob to [POST /media/upload].
-  Future<Map<String, dynamic>> uploadEncryptedMedia({
-    required String token,
-    required Uint8List encryptedBytes,
-    required String mediaType,
-    int? duration,
-    int? expiresIn,
-    String? fileName,
-  }) async {
-    final request = http.MultipartRequest(
-      'POST',
-      Uri.parse('$baseUrl/media/upload'),
-    );
-    request.headers['Authorization'] = 'Bearer $token';
-    request.fields['mediaType'] = mediaType;
-    if (duration != null) request.fields['duration'] = duration.toString();
-    if (expiresIn != null) request.fields['expiresIn'] = expiresIn.toString();
-    if (fileName != null) request.fields['fileName'] = fileName;
-
-    request.files.add(
-      http.MultipartFile.fromBytes(
-        'file',
-        encryptedBytes,
-        filename: 'encrypted.bin',
-        contentType: MediaType('application', 'octet-stream'),
-      ),
-    );
-
-    final response = await _sendMultipart(request, _kLargeMediaTimeout);
-    if (response.statusCode != 200 && response.statusCode != 201) {
-      throw Exception(_errorMessage(response, 'Upload failed'));
-    }
-    return jsonDecode(response.body) as Map<String, dynamic>;
-  }
-
   Future<String> createSecretNote(String token, String ciphertext, int expiresIn) async {
     final response = await _httpClient.post(
       Uri.parse('$baseUrl/notes'),
@@ -583,13 +476,13 @@ class ApiService {
   /// works on every platform — web included. See [rewriteLoopbackMediaUrl].
   String _effectiveMediaUrl(String url) => rewriteLoopbackMediaUrl(url, baseUrl);
 
-  Future<Uint8List> fetchMediaBytes(String url, String token) async {
+  Future<Uint8List> fetchMediaBytes(String url) async {
     final resolved = _effectiveMediaUrl(url);
     final resolvedUri = Uri.tryParse(resolved);
     final baseUri = Uri.tryParse(baseUrl);
     // The media `mediaUrl` arrives in the (sender-controlled, server-unvalidated)
     // E2E envelope, so only ever talk to the backend origin or the legacy
-    // Cloudinary host — and only ever send the JWT to our own origin.
+    // Cloudinary host. No credentials are sent: avatars are public.
     final sameOrigin = resolvedUri != null &&
         baseUri != null &&
         resolvedUri.scheme == baseUri.scheme &&
@@ -599,17 +492,13 @@ class ApiService {
         resolvedUri.scheme == 'https' &&
         resolvedUri.host == 'res.cloudinary.com';
     if (!sameOrigin && !isLegacyCloudinary) {
-      // H-04: never fetch an attacker-chosen host (so the token cannot leak to it).
+      // H-04: never fetch an attacker-chosen host.
       throw Exception(
         'Refusing to fetch media from untrusted host: ${resolvedUri?.host}',
       );
     }
-    // Credentials go to our own backend only — never cross-origin.
-    final headers = sameOrigin && resolved.contains('/media/msgs/')
-        ? {'Authorization': 'Bearer $token'}
-        : <String, String>{};
     final response = await _httpClient
-        .get(Uri.parse(resolved), headers: headers)
+        .get(Uri.parse(resolved))
         .timeout(_kLargeMediaTimeout);
     if (response.statusCode != 200) {
       throw Exception('Media fetch failed: ${response.statusCode}');

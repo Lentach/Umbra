@@ -6,7 +6,6 @@ import 'package:shared_preferences_platform_interface/types.dart';
 
 import 'package:fireplace/services/encryption/content_kv.dart';
 import 'package:fireplace/services/encryption_service.dart';
-import 'package:fireplace/utils/e2e_diag_log.dart';
 
 /// The decrypt ledger answers "did this id's plaintext ever exist?".
 ///
@@ -295,34 +294,6 @@ void main() {
       expect(result.wipedIds, contains(18910));
       expect(await service.decryptedLedgerIds(), isNot(contains(18910)));
       expect(await service.retiredMessageIds(), contains(18910));
-    });
-
-    test('stampRecordExpiry upgrades a live record in place', () async {
-      final deadline = DateTime.utc(2026, 8, 10, 12);
-      await service.saveDecryptedContent(18920, {'content': 'read-mode'});
-
-      await service.stampRecordExpiry(18920, deadline);
-
-      final record = await service.getDecryptedContent(18920);
-      expect(record!['_expiresAt'], deadline.millisecondsSinceEpoch);
-    });
-
-    test('a stamp with no record is a LOGGED no-op, never a write', () async {
-      // The silent version of this miss is how five still-served records died
-      // on 2026-08-02: the stamp raced the persist, vanished without a trace,
-      // and the old never-read fallback later authorized their destruction.
-      E2eDiagLog.clear();
-
-      await service.stampRecordExpiry(18921, DateTime.utc(2026, 8, 10));
-
-      expect(await service.recordExists(18921), isFalse);
-      expect(
-        E2eDiagLog.entries.any(
-          (e) => e.contains('EXPIRY_STAMP_MISS') && e.contains('18921'),
-        ),
-        isTrue,
-        reason: 'a lost stamp must be visible in the diag ring',
-      );
     });
   });
 

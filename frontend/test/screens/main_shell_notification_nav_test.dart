@@ -16,34 +16,34 @@ import 'package:flutter_test/flutter_test.dart';
 /// (setState / Navigator.pushAndRemoveUntil / setActiveConversation) is thin
 /// and device-proven.
 void main() {
-  group('shouldConsumeNotificationNav (first-snapshot gate)', () {
+  group('shouldConsumeNotificationNav (contact-store gate)', () {
     test('does not consume when no id is pending', () {
       expect(
         shouldConsumeNotificationNav(
           pendingConversationId: null,
-          hasLoadedConversationsOnce: true,
+          hasLoadedConversations: true,
         ),
         isFalse,
       );
     });
 
-    test('does not consume before the first conversations snapshot', () {
-      // Cold start: a tap arriving before the server list would otherwise
+    test('does not consume before the chat list was read', () {
+      // Cold start: a tap arriving before the store was read would otherwise
       // mount a chat for an unverified id (empty screen, dead send).
       expect(
         shouldConsumeNotificationNav(
           pendingConversationId: 3,
-          hasLoadedConversationsOnce: false,
+          hasLoadedConversations: false,
         ),
         isFalse,
       );
     });
 
-    test('consumes once an id is pending AND the snapshot has arrived', () {
+    test('consumes once an id is pending AND the list was read', () {
       expect(
         shouldConsumeNotificationNav(
           pendingConversationId: 3,
-          hasLoadedConversationsOnce: true,
+          hasLoadedConversations: true,
         ),
         isTrue,
       );

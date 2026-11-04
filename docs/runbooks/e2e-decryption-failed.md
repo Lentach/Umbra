@@ -47,12 +47,9 @@ were not what they claimed to be.
 `DECRYPT_DECISION` timestamp is when the receiver ATTEMPTED the decrypt, not
 when the message was sent. Wires are poisoned at ENCRYPT time on the sender's
 device. Before classifying any duplicate as new-vs-pre-fix, date the row and
-identify the sender:
-
-```bash
-docker compose -f docker-compose.prod.yml exec db psql -U postgres -d chatdb \
-  -c 'SELECT id, sender_id, conversation_id, created_at FROM messages WHERE id IN (<ids>);'
-```
+identify the sender. The server keeps no message rows any more (the `messages`
+table was dropped in Phase 4 step 5): date it from the diag/log timestamps of
+the sending device, or from the offline archive for a pre-step-5 id.
 
 Then check the SENDER's footer version at that time — a peer PWA keeps running
 its cached old bundle until fully closed + reopened (can be days after a

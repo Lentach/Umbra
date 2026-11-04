@@ -1,41 +1,34 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ConfigService } from '@nestjs/config';
 import { Socket } from 'socket.io';
 import { ChatDeviceListService } from './chat-device-list.service';
-import { ChatValidationService } from './chat-validation.service';
 import { DeviceListService } from '../../key-bundles/device-list.service';
-import { ConversationsService } from '../../conversations/conversations.service';
 
 /**
- * WHO MAY READ AN ACCOUNT'S DEVICE ROSTER (spec §12 amendment (xliii)).
+ * WHO MAY READ AN ACCOUNT'S DEVICE ROSTER (spec §12 amendment (xliii), as
+ * narrowed by Phase 4 step 5).
  *
- * `getDeviceList` used the requester id only to check that SOMEONE was
- * authenticated, then served whatever `userId` the payload named. That made it
- * a device-count, platform and timeline oracle over every account on the
- * instance: walk the ids and learn how many devices each user runs, on which
- * platforms, when each was added and when any was revoked — precise profiling
- * in an app whose whole premise is metadata minimisation, on a repository
- * public since 2026-08-18.
+ * `getDeviceList` once served whatever `userId` the payload named, which made
+ * it a device-count, platform and timeline oracle over every account on the
+ * instance; amendment (xliii) then limited it to friends and conversation
+ * partners. Both entitlements read the friend and conversation rows, which are
+ * gone, so the server now answers ONLY the caller's own id. A friend's list
+ * comes over the box or from the `searchUsers` handle lookup.
  *
- * These tests pin the three ways in and, just as importantly, the way OUT: a
+ * These tests pin the one way in and, just as importantly, the way OUT: a
  * refusal must stay SILENT, because answering at all would confirm whether an
  * account exists.
  */
-describe('ChatDeviceListService.handleGetDeviceList entitlement', () => {
+describe('ChatDeviceListService.handleGetDeviceList (own roster only)', () => {
   const REQUESTER = 7;
   const TARGET = 9;
 
   let service: ChatDeviceListService;
   let getAuthorization: jest.Mock;
-  let validateCanMessage: jest.Mock;
-  let findByUsers: jest.Mock;
   let pendingReplacementVersion: jest.Mock;
   let emit: jest.Mock;
   let client: Partial<Socket>;
-  // The env as `ConfigService` serves it; `LEGACY_LISTS_SILENT` set per test.
-  let env: Record<string, string | undefined>;
 
-  /** The stored row the handler projects when the caller is entitled. */
+  /** The stored row the handler projects. */
   const authorizationRow = {
     dakPub: 'dak',
     enrollmentSig: 'sig',
@@ -53,19 +46,11 @@ describe('ChatDeviceListService.handleGetDeviceList entitlement', () => {
 
   beforeEach(async () => {
     getAuthorization = jest.fn().mockResolvedValue(authorizationRow);
-    // Refuses by default, so every test states its OWN reason for being let in
-    // and nothing passes merely because the harness was permissive.
-    validateCanMessage = jest.fn().mockResolvedValue({
-      valid: false,
-      error: 'You can only message friends',
-    });
-    findByUsers = jest.fn().mockResolvedValue(null);
     // The ordinary account owes no replacement enrollment, so the (xlv)
-    // clause 2 guard stands aside and these tests exercise entitlement.
+    // clause 2 guard stands aside and these tests exercise the own-id rule.
     pendingReplacementVersion = jest.fn().mockResolvedValue(null);
     emit = jest.fn();
     client = { data: { user: { id: REQUESTER } }, emit };
-    env = {};
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -74,9 +59,6 @@ describe('ChatDeviceListService.handleGetDeviceList entitlement', () => {
           provide: DeviceListService,
           useValue: { getAuthorization, pendingReplacementVersion },
         },
-        { provide: ChatValidationService, useValue: { validateCanMessage } },
-        { provide: ConversationsService, useValue: { findByUsers } },
-        { provide: ConfigService, useValue: { get: (key: string) => env[key] } },
       ],
     }).compile();
     service = module.get(ChatDeviceListService);
@@ -94,27 +76,9 @@ describe('ChatDeviceListService.handleGetDeviceList entitlement', () => {
       'deviceList',
       expect.objectContaining({ userId: REQUESTER }),
     );
-    expect(validateCanMessage).not.toHaveBeenCalled();
   });
 
-  it('serves a peer you may message', async () => {
-    validateCanMessage.mockResolvedValue({ valid: true });
-
-    await get(TARGET);
-
-    expect(validateCanMessage).toHaveBeenCalledWith(REQUESTER, TARGET);
-    expect(emit).toHaveBeenCalledWith(
-      'deviceList',
-      expect.objectContaining({
-        userId: TARGET,
-        authorization: authorizationProjection,
-      }),
-    );
-    // The carve-out is not consulted when the cheap predicate already passed.
-    expect(findByUsers).not.toHaveBeenCalled();
-  });
-
-  it('REFUSES a stranger, in silence', async () => {
+  it('answers ANY other account with silence, and reads nothing', async () => {
     await get(TARGET);
 
     // Silence is fail-closed on the client (I5: an unanswered fetch means
@@ -122,43 +86,24 @@ describe('ChatDeviceListService.handleGetDeviceList entitlement', () => {
     // confirm whether the account exists.
     expect(emit).not.toHaveBeenCalled();
     expect(getAuthorization).not.toHaveBeenCalled();
-  });
-
-  it('still serves a peer you share a CONVERSATION with, after a block', async () => {
-    // The carve-out, and it is required rather than convenient: the accept-side
-    // gate needs this list to decrypt, so without it a peer who unfriends or
-    // blocks you makes history you ALREADY RECEIVED permanently unreadable.
-    validateCanMessage.mockResolvedValue({ valid: false, error: 'blocked' });
-    findByUsers.mockResolvedValue({ id: 42 });
-
-    await get(TARGET);
-
-    expect(findByUsers).toHaveBeenCalledWith(REQUESTER, TARGET);
-    expect(emit).toHaveBeenCalledWith(
-      'deviceList',
-      expect.objectContaining({ userId: TARGET }),
-    );
+    expect(pendingReplacementVersion).not.toHaveBeenCalled();
   });
 
   it('refuses an unauthenticated socket without touching the database', async () => {
     client = { data: {}, emit };
 
-    await get(TARGET);
+    await get(REQUESTER);
 
     expect(emit).not.toHaveBeenCalled();
-    expect(validateCanMessage).not.toHaveBeenCalled();
     expect(getAuthorization).not.toHaveBeenCalled();
   });
 
-  it('echoes the stored listCanonical verbatim for an entitled caller', async () => {
-    // Falsification 23: the bytes are re-verified bit-for-bit by the peer, so
-    // the gate must not have changed what an ENTITLED caller receives.
-    validateCanMessage.mockResolvedValue({ valid: true });
-
-    await get(TARGET);
+  it('echoes the stored listCanonical verbatim', async () => {
+    // Falsification 23: the bytes are re-verified bit-for-bit by the peer.
+    await get(REQUESTER);
 
     expect(emit).toHaveBeenCalledWith('deviceList', {
-      userId: TARGET,
+      userId: REQUESTER,
       authorization: {
         dakPub: 'dak',
         enrollmentSig: 'sig',
@@ -222,10 +167,9 @@ describe('ChatDeviceListService.handleGetDeviceList entitlement', () => {
 
   it('REFUSES an ENROLLED account that owes a replacement enrollment', async () => {
     // The default beforeEach row is present; only the owed replacement differs.
-    validateCanMessage.mockResolvedValue({ valid: true });
     pendingReplacementVersion.mockResolvedValue(4);
 
-    await get(TARGET);
+    await get(REQUESTER);
 
     // Before (l) the `!row` conjunct skipped the guard here and served the
     // orphaned roster, and the sender was shown a SUCCESSFUL send while the
@@ -234,100 +178,77 @@ describe('ChatDeviceListService.handleGetDeviceList entitlement', () => {
   });
 
   it('serves an enrolled account that owes nothing, so the guard is not a blanket refusal', async () => {
-    validateCanMessage.mockResolvedValue({ valid: true });
     pendingReplacementVersion.mockResolvedValue(null);
 
-    await get(TARGET);
+    await get(REQUESTER);
 
     expect(emit).toHaveBeenCalledWith(
       'deviceList',
-      expect.objectContaining({ userId: TARGET }),
+      expect.objectContaining({ userId: REQUESTER }),
     );
   });
 
-  // --- getDeviceLists: the same rules, applied to each user of a batch -------
-  // One request covers every friend at connect (item 5, E20a) without spending
-  // one `getDeviceList` per friend from the shared fetch bucket. It may never
-  // become a way around the per-user rules above.
+  // --- getDeviceLists: the same own-id rule, applied to each user of a batch --
+  // The batch verb may never become a way around the per-user rule above.
   describe('getDeviceLists (batch)', () => {
-    const STRANGER = 11;
-    const OWING = 12;
-
     const getMany = (data: unknown) =>
       service.handleGetDeviceLists(client as Socket, data);
 
-    it('serves each entitled user of a batch and stays silent on the rest', async () => {
-      validateCanMessage.mockImplementation((_from: number, to: number) =>
-        Promise.resolve(
-          to === TARGET ? { valid: true } : { valid: false, error: 'nope' },
-        ),
-      );
-
-      await getMany({ userIds: [STRANGER, TARGET] });
+    it('serves only the caller out of a batch and stays silent on the rest', async () => {
+      await getMany({ userIds: [TARGET, REQUESTER, 11] });
 
       expect(emit.mock.calls).toEqual([
         [
           'deviceList',
-          { userId: TARGET, authorization: authorizationProjection },
+          { userId: REQUESTER, authorization: authorizationProjection },
         ],
       ]);
-      expect(getAuthorization).not.toHaveBeenCalledWith(STRANGER);
+      expect(getAuthorization).not.toHaveBeenCalledWith(TARGET);
+      expect(getAuthorization).not.toHaveBeenCalledWith(11);
     });
 
-    it('stays silent for a user who owes a replacement enrollment, serving the rest', async () => {
-      validateCanMessage.mockResolvedValue({ valid: true });
-      pendingReplacementVersion.mockImplementation((userId: number) =>
-        Promise.resolve(userId === OWING ? 4 : null),
-      );
+    it('stays silent for the caller who owes a replacement enrollment', async () => {
+      pendingReplacementVersion.mockResolvedValue(4);
 
-      await getMany({ userIds: [OWING, TARGET] });
+      await getMany({ userIds: [REQUESTER, TARGET] });
 
-      expect(emit.mock.calls).toEqual([
-        [
-          'deviceList',
-          { userId: TARGET, authorization: authorizationProjection },
-        ],
-      ]);
+      expect(emit).not.toHaveBeenCalled();
     });
 
-    it('serves the rest when one user of the batch fails to load', async () => {
-      validateCanMessage.mockResolvedValue({ valid: true });
-      getAuthorization.mockImplementation((userId: number) =>
-        userId === STRANGER
-          ? Promise.reject(new Error('db down'))
-          : Promise.resolve(authorizationRow),
-      );
+    it('does not throw when the own roster fails to load', async () => {
+      getAuthorization.mockRejectedValue(new Error('db down'));
 
-      await getMany({ userIds: [STRANGER, TARGET] });
+      await expect(
+        getMany({ userIds: [REQUESTER, TARGET] }),
+      ).resolves.toBeUndefined();
 
-      expect(emit.mock.calls).toEqual([
-        [
-          'deviceList',
-          { userId: TARGET, authorization: authorizationProjection },
-        ],
-      ]);
+      expect(emit).not.toHaveBeenCalled();
     });
 
-    it('serves a full batch of 256 users', async () => {
-      validateCanMessage.mockResolvedValue({ valid: true });
-      const userIds = Array.from({ length: 256 }, (_, i) => i + 100);
+    it('accepts a full batch of 256 users', async () => {
+      const userIds = [
+        REQUESTER,
+        ...Array.from({ length: 255 }, (_, i) => i + 100),
+      ];
 
       await getMany({ userIds });
 
-      const served = (emit.mock.calls as [string, { userId: number }][]).map(
-        ([, payload]) => payload.userId,
-      );
-      expect(served).toEqual(userIds);
+      expect(emit.mock.calls).toEqual([
+        [
+          'deviceList',
+          { userId: REQUESTER, authorization: authorizationProjection },
+        ],
+      ]);
     });
 
     it.each([
-      ['a user named twice', { userIds: [TARGET, STRANGER, TARGET] }],
+      ['a user named twice', { userIds: [TARGET, REQUESTER, TARGET] }],
       [
         'more than 256 users',
         { userIds: Array.from({ length: 257 }, (_, i) => i + 100) },
       ],
       ['no users', { userIds: [] }],
-      ['user id 0', { userIds: [TARGET, 0] }],
+      ['user id 0', { userIds: [REQUESTER, 0] }],
       ['a user id above 2^31-1', { userIds: [2147483648] }],
       ['a fractional user id', { userIds: [9.5] }],
       ['a user id as a string', { userIds: ['9'] }],
@@ -336,18 +257,15 @@ describe('ChatDeviceListService.handleGetDeviceList entitlement', () => {
     ])(
       'refuses a batch with %s whole, in silence, touching nothing',
       async (_label, data) => {
-        validateCanMessage.mockResolvedValue({ valid: true });
-
         await getMany(data);
 
         expect(emit).not.toHaveBeenCalled();
-        expect(validateCanMessage).not.toHaveBeenCalled();
         expect(getAuthorization).not.toHaveBeenCalled();
       },
     );
 
     it('accepts the largest user id, 2^31-1', async () => {
-      validateCanMessage.mockResolvedValue({ valid: true });
+      client = { data: { user: { id: 2147483647 } }, emit };
 
       await getMany({ userIds: [2147483647] });
 
@@ -355,59 +273,6 @@ describe('ChatDeviceListService.handleGetDeviceList entitlement', () => {
         'deviceList',
         expect.objectContaining({ userId: 2147483647 }),
       );
-    });
-  });
-
-  // --- Phase 4 step 4, server half: ONLY the caller's own roster ----------
-  // A friend's list now comes over the box (announcements, handoffs) or from
-  // the handle lookup (decision 114); the server answers no id but the
-  // caller's, so it no longer serves who is whose friend or chat partner.
-  describe('LEGACY_LISTS_SILENT=true (Phase 4 step 4)', () => {
-    beforeEach(() => {
-      env = { LEGACY_LISTS_SILENT: 'true' };
-    });
-
-    it('still serves YOUR OWN roster', async () => {
-      await get(REQUESTER);
-
-      expect(emit).toHaveBeenCalledWith(
-        'deviceList',
-        expect.objectContaining({ userId: REQUESTER }),
-      );
-    });
-
-    it('answers a FRIEND with silence, consulting no friendship', async () => {
-      validateCanMessage.mockResolvedValue({ valid: true });
-
-      await get(TARGET);
-
-      expect(emit).not.toHaveBeenCalled();
-      expect(getAuthorization).not.toHaveBeenCalled();
-      expect(validateCanMessage).not.toHaveBeenCalled();
-    });
-
-    it('answers a CONVERSATION peer with silence, consulting no chat', async () => {
-      findByUsers.mockResolvedValue({ id: 42 });
-
-      await get(TARGET);
-
-      expect(emit).not.toHaveBeenCalled();
-      expect(findByUsers).not.toHaveBeenCalled();
-    });
-
-    it('serves only the caller out of a batch', async () => {
-      validateCanMessage.mockResolvedValue({ valid: true });
-
-      await service.handleGetDeviceLists(client as Socket, {
-        userIds: [TARGET, REQUESTER],
-      });
-
-      expect(emit.mock.calls).toEqual([
-        [
-          'deviceList',
-          { userId: REQUESTER, authorization: authorizationProjection },
-        ],
-      ]);
     });
   });
 });

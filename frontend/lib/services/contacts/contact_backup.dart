@@ -22,10 +22,10 @@
 // also removes a cross-device private-key leak and the multi-device clobber of
 // two devices uploading different `queues[]` under one row.
 //
-// Of `legacy` (server-side ids) only the chat id is kept: once Phase 4 makes
-// the server's lists silent nothing re-supplies it, and a friend from before
-// the box would restore with no chat (decision 107). Request ids stay out:
-// they name rows that end, and a stale one would outlive its row.
+// Of `legacy` (server-side ids) only the chat id is kept: nothing re-supplies
+// it (the server keeps no conversation row since Phase 4 step 5), and a friend
+// from before the box would restore with no chat (decision 107). Request ids
+// stay out: they name rows that ended, and a stale one would outlive its row.
 
 import 'dart:convert';
 import 'dart:math';

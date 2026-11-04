@@ -36,14 +36,6 @@ class _AccountSocket extends SocketService {
   @override
   void onDisconnect(void Function(dynamic) callback) =>
       _onDisconnect = callback;
-  @override
-  void getConversations() {}
-  @override
-  void getFriendRequests() {}
-  @override
-  void getFriends() {}
-  @override
-  void getBlockedList() {}
 
   void serve(String event, Object? payload) {
     for (final handler in _handlers[event] ?? const <void Function(dynamic)>[]) {
@@ -75,11 +67,6 @@ class _QuietEncryption extends EncryptionProvider {
   Future<void> drainPurgeBacklog() async {}
   @override
   Future<void> sweepDestroyablePlaintext() async {}
-  @override
-  Future<void> reconcileStoredPlaintext(
-    Future<Set<int>?> Function(Set<int> batch) askServer, {
-    bool force = false,
-  }) async {}
 }
 
 void main() {

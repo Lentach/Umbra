@@ -328,14 +328,6 @@ class BoxSession
     if (!_disposed) unawaited(_swap.onOwnRequestQueues(data));
   }
 
-  /// `friendsList`: a friend it names for the first time is visited by the
-  /// handoff pass once the store holds what the list wrote (item 5). Its
-  /// `devices` are not read (E114b): a friend's request queues come from a
-  /// handle lookup.
-  void onFriendsListed() {
-    if (!_disposed) _friends.friendsListed();
-  }
-
   /// Friend [userId]'s verified device list was dropped or moved (a device
   /// linked or revoked): its devices may have changed, so the handoff runs
   /// again — and rotates our queue away from a revoked one (E50e).

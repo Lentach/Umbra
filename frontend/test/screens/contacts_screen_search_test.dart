@@ -2,10 +2,10 @@ import 'package:fireplace/l10n/app_localizations.dart';
 import 'package:fireplace/models/user_model.dart';
 import 'package:fireplace/providers/auth_provider.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
-import 'package:fireplace/providers/friends_provider.dart';
 import 'package:fireplace/providers/settings_provider.dart';
 import 'package:fireplace/screens/contacts_screen.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
+import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/widgets/contact_network_view.dart';
 import 'package:fireplace/widgets/main_tab_screen_header.dart';
 import 'package:flutter/material.dart';
@@ -13,6 +13,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../support/contact_seed.dart';
 
 /// AuthProvider fake: only [currentUser] matters to the Contacts tab.
 class _FakeAuthProvider extends AuthProvider {
@@ -24,15 +26,24 @@ class _FakeAuthProvider extends AuthProvider {
   UserModel? get currentUser => _user;
 }
 
-Widget _host({
+Future<Widget> _host(
+  WidgetTester tester, {
   required List<String> friendNames,
   SettingsProvider? settings,
-}) {
-  final friends = FriendsProvider()
-    ..onFriendsList([
+}) async {
+  // The store is prefs-backed like the settings are: it must not reset them.
+  final store = (await tester.runAsync(
+    () => openContactStore([
       for (var i = 0; i < friendNames.length; i++)
-        {'id': 100 + i, 'username': friendNames[i], 'tag': '0001'},
-    ]);
+        ContactRecord(
+          userId: 100 + i,
+          username: friendNames[i],
+          tag: '0001',
+          state: ContactState.friend,
+        ),
+    ], resetPrefs: false),
+  ))!;
+  final friends = friendsOver(store);
   return MultiProvider(
     providers: [
       ChangeNotifierProvider<AuthProvider>(
@@ -75,7 +86,7 @@ void main() {
   testWidgets('the magnifier swaps the title for the search field', (
     tester,
   ) async {
-    await tester.pumpWidget(_host(friendNames: names));
+    await tester.pumpWidget(await _host(tester, friendNames: names));
     await tester.pumpAndSettle();
 
     expect(find.text('Contacts'), findsOneWidget);
@@ -90,7 +101,7 @@ void main() {
   });
 
   testWidgets('no search band eats vertical space', (tester) async {
-    await tester.pumpWidget(_host(friendNames: names));
+    await tester.pumpWidget(await _host(tester, friendNames: names));
     await tester.pumpAndSettle();
 
     // Content clears the header and nothing else (the old 54px search band
@@ -108,7 +119,7 @@ void main() {
   });
 
   testWidgets('search filters the network view', (tester) async {
-    await tester.pumpWidget(_host(friendNames: names));
+    await tester.pumpWidget(await _host(tester, friendNames: names));
     await tester.pumpAndSettle();
 
     for (final name in names) {
@@ -126,7 +137,7 @@ void main() {
   });
 
   testWidgets('the same query filters the classic list', (tester) async {
-    await tester.pumpWidget(_host(friendNames: names));
+    await tester.pumpWidget(await _host(tester, friendNames: names));
     await tester.pumpAndSettle();
 
     await _openSearch(tester);
@@ -143,7 +154,7 @@ void main() {
   });
 
   testWidgets('close restores the title and the full set', (tester) async {
-    await tester.pumpWidget(_host(friendNames: names));
+    await tester.pumpWidget(await _host(tester, friendNames: names));
     await tester.pumpAndSettle();
 
     await _openSearch(tester);
@@ -162,7 +173,7 @@ void main() {
   });
 
   testWidgets('escape closes the search field', (tester) async {
-    await tester.pumpWidget(_host(friendNames: names));
+    await tester.pumpWidget(await _host(tester, friendNames: names));
     await tester.pumpAndSettle();
 
     await _openSearch(tester);
@@ -178,7 +189,7 @@ void main() {
   });
 
   testWidgets('no search entry point without contacts', (tester) async {
-    await tester.pumpWidget(_host(friendNames: const []));
+    await tester.pumpWidget(await _host(tester, friendNames: const []));
     await tester.pumpAndSettle();
 
     expect(find.byIcon(Icons.search), findsNothing);
@@ -190,7 +201,9 @@ void main() {
     tester,
   ) async {
     final settings = SettingsProvider(initialThemePreference: 'dark');
-    await tester.pumpWidget(_host(friendNames: names, settings: settings));
+    await tester.pumpWidget(
+      await _host(tester, friendNames: names, settings: settings),
+    );
     await tester.pumpAndSettle();
     expect(find.byType(ContactNetworkView), findsOneWidget);
 
@@ -206,7 +219,7 @@ void main() {
     // Remount with a FRESH provider: the choice has to come back off disk,
     // not out of the instance that is still in memory.
     await tester.pumpWidget(const SizedBox.shrink());
-    await tester.pumpWidget(_host(friendNames: names));
+    await tester.pumpWidget(await _host(tester, friendNames: names));
     await tester.pumpAndSettle();
     expect(find.byType(ContactNetworkView), findsNothing);
     expect(find.byIcon(Icons.hub_outlined), findsOneWidget);
@@ -216,7 +229,7 @@ void main() {
     tester,
   ) async {
     SharedPreferences.setMockInitialValues({'contacts_list_view': true});
-    await tester.pumpWidget(_host(friendNames: names));
+    await tester.pumpWidget(await _host(tester, friendNames: names));
     await tester.pumpAndSettle();
 
     expect(find.byType(ContactNetworkView), findsNothing);

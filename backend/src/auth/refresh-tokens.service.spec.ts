@@ -11,6 +11,7 @@ import { RefreshToken } from './refresh-token.entity';
 describe('RefreshTokensService', () => {
   let service: RefreshTokensService;
   let repo: jest.Mocked<Repository<RefreshToken>>;
+  const live = jest.fn<Promise<boolean>, [number, number | null]>();
 
   beforeEach(async () => {
     const mockRepo = {
@@ -19,6 +20,7 @@ describe('RefreshTokensService', () => {
       findOne: jest.fn(),
       remove: jest.fn(),
       delete: jest.fn(),
+      query: jest.fn(),
     };
 
     const module = await Test.createTestingModule({
@@ -34,6 +36,8 @@ describe('RefreshTokensService', () => {
     service = module.get(RefreshTokensService);
     repo = module.get(getRepositoryToken(RefreshToken));
     jest.clearAllMocks();
+    // A device that is not revoked, unless a test says otherwise.
+    live.mockResolvedValue(false);
   });
 
   it('hashToken is deterministic', () => {
@@ -61,9 +65,10 @@ describe('RefreshTokensService', () => {
 
   it('consumeAndSlide throws when token unknown', async () => {
     repo.findOne.mockResolvedValue(null);
-    await expect(service.consumeAndSlide('unknown')).rejects.toThrow(
-      UnauthorizedException,
+    await expect(service.consumeAndSlide('unknown', live)).rejects.toThrow(
+      new UnauthorizedException('Invalid refresh token'),
     );
+    expect(live).not.toHaveBeenCalled();
   });
 
   it('consumeAndSlide extends the existing refresh token instead of invalidating a lost response retry', async () => {
@@ -77,7 +82,7 @@ describe('RefreshTokensService', () => {
     repo.findOne.mockResolvedValue(oldRow);
     repo.save.mockImplementation(async (e: RefreshToken) => e);
 
-    const result = await service.consumeAndSlide('old-plain');
+    const result = await service.consumeAndSlide('old-plain', live);
 
     expect(repo.findOne).toHaveBeenCalledWith({
       where: { tokenHash: RefreshTokensService.hashToken('old-plain') },
@@ -101,12 +106,53 @@ describe('RefreshTokensService', () => {
     } as RefreshToken;
     repo.findOne.mockResolvedValue(expiredRow);
 
-    await expect(service.consumeAndSlide('expired-plain')).rejects.toThrow(
-      new UnauthorizedException('Refresh token expired'),
-    );
+    await expect(
+      service.consumeAndSlide('expired-plain', live),
+    ).rejects.toThrow(new UnauthorizedException('Refresh token expired'));
 
     expect(repo.remove).toHaveBeenCalledWith(expiredRow);
     expect(repo.save).not.toHaveBeenCalled();
+  });
+
+  // Decision 129 (E129a): a device closed past its access JWT's 24 h can only
+  // ask /auth/refresh whether it was revoked, so the answer has to be its own
+  // — not the `Invalid refresh token` that logout, a password change and an
+  // expiry also give — and the refusal must not extend the row.
+  it("consumeAndSlide refuses a revoked device's row as 'Device revoked' — before the slide, keeping the row", async () => {
+    const oldExpiry = new Date(Date.now() + 60_000);
+    const row = {
+      id: 'revoked-token-id',
+      userId: 42,
+      deviceId: 2,
+      tokenHash: RefreshTokensService.hashToken('revoked-plain'),
+      expiresAt: oldExpiry,
+    } as RefreshToken;
+    repo.findOne.mockResolvedValue(row);
+    live.mockResolvedValue(true);
+
+    await expect(
+      service.consumeAndSlide('revoked-plain', live),
+    ).rejects.toThrow(new UnauthorizedException('Device revoked'));
+
+    expect(live).toHaveBeenCalledWith(42, 2);
+    // Named once: reading these off the class-typed repo trips `unbound-method`.
+    const writes = repo as unknown as { save: jest.Mock; remove: jest.Mock };
+    expect(writes.save).not.toHaveBeenCalled();
+    expect(writes.remove).not.toHaveBeenCalled();
+    expect(row.expiresAt).toBe(oldExpiry);
+  });
+
+  it('consumeAndSlide asks about the pre-Phase-1 (NULL device) row as it is stored; the caller reads it as device 1', async () => {
+    repo.findOne.mockResolvedValue({
+      userId: 7,
+      deviceId: null,
+      expiresAt: new Date(Date.now() + 60_000),
+    } as RefreshToken);
+    repo.save.mockImplementation(async (e: RefreshToken) => e);
+
+    await service.consumeAndSlide('legacy-plain', live);
+
+    expect(live).toHaveBeenCalledWith(7, null);
   });
 
   it('revokeByPlain removes matching tokens and ignores unknown tokens', async () => {
@@ -131,22 +177,24 @@ describe('RefreshTokensService', () => {
     expect(repo.remove).toHaveBeenCalledWith(row);
   });
 
-  it('revokeAllForUser deletes refresh sessions by userId', async () => {
+  it("revokeAllForUser deletes the account's sessions EXCEPT those of an already-revoked device", async () => {
     await service.revokeAllForUser(42);
 
-    expect(repo.delete).toHaveBeenCalledWith({ userId: 42 });
-  });
-
-  it('revokeForDevice deletes ONE device session and leaves the others signed in', async () => {
-    repo.delete.mockResolvedValue({ affected: 2, raw: [] });
-
-    await expect(service.revokeForDevice(42, 2)).resolves.toBe(2);
-
-    // Scoped by the pair, so the primary performing a §5.5 revocation keeps
-    // its own session. A NULL device_id row is deliberately NOT matched:
-    // it cannot be attributed to a device, and matching it would sign out
-    // the pre-Phase-1 session of whoever is revoking.
-    expect(repo.delete).toHaveBeenCalledWith({ userId: 42, deviceId: 2 });
+    // Named once: reading `query` off the class-typed repo trips `unbound-method`.
+    const query = (repo as unknown as { query: jest.Mock }).query;
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+    const flat = sql.replace(/\s+/g, ' ');
+    expect(params).toEqual([42]);
+    // The rows of a revoked device are what /auth/refresh answers "Device
+    // revoked" from; a NULL device_id (pre-Phase-1) is nobody's and goes.
+    expect(flat).toContain(
+      'DELETE FROM public.refresh_tokens WHERE user_id = $1',
+    );
+    expect(flat).toContain('device_id IS NULL OR device_id NOT IN (');
+    expect(flat).toContain(
+      'SELECT "deviceId" FROM public.devices WHERE "userId" = $1 AND "revokedAt" IS NOT NULL',
+    );
+    expect(query).toHaveBeenCalledTimes(1);
   });
 
   // The §6.2 roster teardown (amendment (xxviii)) is atomic ONLY if these
@@ -161,26 +209,26 @@ describe('RefreshTokensService', () => {
     // relies on elsewhere: a bare jest.fn has no `this` to lose, while
     // asserting through the class-typed repo method trips `unbound-method`.
     let txSave: jest.Mock<Promise<RefreshToken>, [RefreshToken]>;
-    let txDelete: jest.Mock;
+    let txQuery: jest.Mock;
     let getRepository: jest.Mock;
     let manager: { getRepository: jest.Mock };
     let defaultSave: jest.Mock;
-    let defaultDelete: jest.Mock;
+    let defaultQuery: jest.Mock;
 
     beforeEach(() => {
       txSave = jest.fn((e: RefreshToken) => Promise.resolve(e));
-      txDelete = jest.fn().mockResolvedValue({ affected: 1, raw: [] });
+      txQuery = jest.fn().mockResolvedValue([[], 1]);
       getRepository = jest.fn().mockReturnValue({
         create: jest.fn((e: RefreshToken) => e),
         save: txSave,
-        delete: txDelete,
+        query: txQuery,
       });
       manager = { getRepository };
       // Re-typed as plain jest.Mock properties: reading them off the
       // class-typed repo directly is what trips `unbound-method`.
-      const raw = repo as unknown as { save: jest.Mock; delete: jest.Mock };
+      const raw = repo as unknown as { save: jest.Mock; query: jest.Mock };
       defaultSave = raw.save;
-      defaultDelete = raw.delete;
+      defaultQuery = raw.query;
     });
 
     it('createToken writes through the manager, not the default repo', async () => {
@@ -197,18 +245,9 @@ describe('RefreshTokensService', () => {
       await service.revokeAllForUser(42, manager as never);
 
       expect(getRepository).toHaveBeenCalledWith(RefreshToken);
-      expect(txDelete).toHaveBeenCalledWith({ userId: 42 });
-      expect(defaultDelete).not.toHaveBeenCalled();
-    });
-
-    it('revokeForDevice deletes through the manager, not the default repo', async () => {
-      await expect(
-        service.revokeForDevice(42, 2, manager as never),
-      ).resolves.toBe(1);
-
-      expect(getRepository).toHaveBeenCalledWith(RefreshToken);
-      expect(txDelete).toHaveBeenCalledWith({ userId: 42, deviceId: 2 });
-      expect(defaultDelete).not.toHaveBeenCalled();
+      expect(txQuery).toHaveBeenCalledTimes(1);
+      expect(txQuery.mock.calls[0][1]).toEqual([42]);
+      expect(defaultQuery).not.toHaveBeenCalled();
     });
   });
 });

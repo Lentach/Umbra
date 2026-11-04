@@ -12,9 +12,7 @@ import '../providers/encryption_provider.dart';
 import '../providers/messaging_provider.dart';
 import '../providers/passcode_provider.dart';
 import '../providers/settings_provider.dart';
-import '../services/api_service.dart';
 import '../services/push_service.dart';
-import '../config/app_config.dart';
 import '../config/app_version_info.dart';
 import '../models/user_model.dart';
 import '../widgets/local_node_core.dart';
@@ -48,9 +46,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     'https://fireplace.ignorelist.com/welcome/',
   );
   String? _appVersionLine;
-  late final PushService _pushService = PushService(
-    ApiService(baseUrl: AppConfig.baseUrl),
-  );
+  final PushService _pushService = PushService();
 
   @override
   void initState() {
@@ -198,10 +194,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _enableWebPushNotifications() async {
-    final token = context.read<AuthProvider>().token;
-    if (token == null) return;
-
-    final result = await _pushService.requestWebPushFromUserGesture(token);
+    final result = await _pushService.requestWebPushFromUserGesture();
     if (!mounted) return;
     showWebPushRequestFeedback(context, result);
   }

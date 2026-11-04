@@ -8,7 +8,6 @@ import 'package:video_player/video_player.dart';
 
 import '../../l10n/app_localizations.dart';
 import '../../models/message_model.dart';
-import '../../providers/auth_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/box/box_media_url.dart';
 import '../../utils/e2e_persistent_diag.dart';
@@ -22,7 +21,7 @@ import 'video_playback_session.dart';
 /// can substitute a controller-free fake — a real [VideoPlayerController]
 /// needs the platform channel the test binding does not have.
 typedef VideoSessionFactory =
-    VideoPlaybackSession Function(MessageModel message, String token);
+    VideoPlaybackSession Function(MessageModel message);
 
 /// Fraction of the bubble's height that must be inside the viewport before
 /// inline playback starts, and the release floor it must fall below before it
@@ -281,20 +280,13 @@ class _VideoMessageContentState extends State<VideoMessageContent>
       _diag('VIDEO_INLINE_SKIPPED', 'newer_clip_holds_slot');
       return;
     }
-    String token;
-    try {
-      token = Provider.of<AuthProvider>(context, listen: false).token ?? '';
-    } on ProviderNotFoundException {
-      token = '';
-    }
     final factory =
         widget.sessionFactory ??
-        (message, token) => VideoPlaybackSession(
+        (message) => VideoPlaybackSession(
           message: message,
-          token: token,
           box: boxMediaSourceFor(context, message.mediaUrl),
         );
-    final session = factory(widget.message, token);
+    final session = factory(widget.message);
     _session = session;
     final failure = await session.load();
     // Torn down (revoked, scrolled out, disposed) while loading: the session

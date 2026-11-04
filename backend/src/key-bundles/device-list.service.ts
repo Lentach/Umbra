@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, In, Repository } from 'typeorm';
+import { EntityManager, Repository } from 'typeorm';
 import { AccountAuthorization } from './account-authorization.entity';
 import { KeyBundle } from './key-bundle.entity';
 import { DevicesService } from './devices.service';
@@ -18,8 +18,8 @@ const PG_UNIQUE_VIOLATION = '23505';
 
 /**
  * TypeORM surfaces the Postgres SQLSTATE either directly or under
- * `driverError` depending on the failing call — same dual shape
- * `conversations.service.ts` handles. Runtime-narrowed, no shape assertions.
+ * `driverError` depending on the failing call. Runtime-narrowed, no shape
+ * assertions.
  */
 function isUniqueViolation(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) return false;
@@ -169,58 +169,6 @@ export class DeviceListService {
       published.identityPublicKey,
       stored,
     );
-  }
-
-  /**
-   * The accounts of [userIds] that owe a replacement enrollment — the
-   * [pendingReplacementVersion] predicate for many accounts in three queries
-   * however many there are (the friends list, metadata-privacy item 5).
-   */
-  async pendingReplacementUserIds(userIds: number[]): Promise<Set<number>> {
-    const owed = new Set<number>();
-    if (userIds.length === 0) return owed;
-
-    // The PUBLISHED identity per account: its lowest device's bundle, the
-    // same account-scoped lookup as the single-account path.
-    const published = new Map<number, string>();
-    for (const bundle of await this.keyBundleRepo.find({
-      where: { userId: In(userIds) },
-      select: { userId: true, deviceId: true, identityPublicKey: true },
-      order: { userId: 'ASC', deviceId: 'ASC' },
-    })) {
-      if (!published.has(bundle.userId)) {
-        published.set(bundle.userId, bundle.identityPublicKey);
-      }
-    }
-    if (published.size === 0) return owed;
-
-    const stored = new Map(
-      (
-        await this.authorizationRepo.find({
-          where: { userId: In([...published.keys()]) },
-        })
-      ).map((row) => [row.userId, row]),
-    );
-    const unenrolled = [...published.keys()].filter((id) => !stored.has(id));
-    const liveDeviceIds = new Map<number, number[]>();
-    if (unenrolled.length > 0) {
-      for (const device of await this.devicesService.listLiveForUsers(
-        unenrolled,
-      )) {
-        const ids = liveDeviceIds.get(device.userId) ?? [];
-        ids.push(device.deviceId);
-        liveDeviceIds.set(device.userId, ids);
-      }
-    }
-
-    for (const [userId, identityPublicKey] of published) {
-      const row = stored.get(userId);
-      const version = row
-        ? enrolledReplacementVersion(userId, identityPublicKey, row)
-        : unenrolledReplacementVersion(liveDeviceIds.get(userId) ?? []);
-      if (version !== null) owed.add(userId);
-    }
-    return owed;
   }
 
   /**

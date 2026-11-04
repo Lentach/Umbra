@@ -34,13 +34,12 @@ class NotificationNavDecision {
 }
 
 /// True when a pending notification deep-link may be consumed: an id is pending
-/// AND the first server conversation snapshot has arrived. Consuming earlier
-/// races an empty list (cold start) or mounts a chat for a stale/deleted id.
+/// AND the chat list was read from the contact store. Consuming earlier races
+/// an empty list (cold start) or mounts a chat for a stale/deleted id.
 bool shouldConsumeNotificationNav({
   required int? pendingConversationId,
-  required bool hasLoadedConversationsOnce,
-}) =>
-    pendingConversationId != null && hasLoadedConversationsOnce;
+  required bool hasLoadedConversations,
+}) => pendingConversationId != null && hasLoadedConversations;
 
 /// Decide what the shell does with a freshly-consumed notification id.
 ///

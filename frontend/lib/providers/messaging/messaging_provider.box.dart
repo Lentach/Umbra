@@ -1,5 +1,8 @@
 part of '../messaging_provider.dart';
 
+// Extension methods on MessagingProvider's own state: notifyListeners() is legitimate here.
+// ignore_for_file: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
+
 /// A box send's plan (slice (c)): one address per live peer device that
 /// has one, and — sibling queues part B — one self-queue per live other
 /// device of ours. `addressed` names the peer devices addressed when some
@@ -297,7 +300,7 @@ extension MessagingBox on MessagingProvider {
   }
 
   /// Whether friend [userId]'s VERIFIED list names [deviceId] live: the held
-  /// list, else one batched lookup. False when it cannot be verified. A
+  /// list, else one lookup. False when it cannot be verified. A
   /// friend is never looked up here (E114e): its lookup is a search that
   /// spends one-time pre-keys and names the pair (E15h), and this runs on
   /// frame reads — a frame never times a lookup.
@@ -306,11 +309,11 @@ extension MessagingBox on MessagingProvider {
     if (enc == null) return false;
     try {
       final held = enc.cachedDeviceList(userId);
-      if (held == null && (enc.listIsByHandle(userId) || _boxOnlyPeer(userId))) {
+      if (held == null &&
+          (enc.listIsByHandle(userId) || _boxOnlyPeer(userId))) {
         return false;
       }
-      final list =
-          held ?? await enc.getVerifiedDeviceList(userId, batched: true);
+      final list = held ?? await enc.getVerifiedDeviceList(userId);
       return list.isLiveDevice(deviceId);
     } on Object {
       return false;
@@ -551,16 +554,15 @@ extension MessagingBox on MessagingProvider {
   }
 
   /// The device ids friend [userId]'s VERIFIED list names live — the
-  /// [FriendLiveDevices] the box's friend handoff hands to. Batched, so a
-  /// connect's pass costs one lookup frame (E20a); null when it cannot be
-  /// verified now.
+  /// [FriendLiveDevices] the box's friend handoff hands to; null when it
+  /// cannot be verified now.
   Future<Set<int>?> friendLiveDevices(int userId) async {
     final enc = _encryptionProvider;
     if (enc == null || !enc.isE2EReady) return null;
     try {
       final list =
           enc.cachedDeviceList(userId) ??
-          await enc.getVerifiedDeviceList(userId, batched: true);
+          await enc.getVerifiedDeviceList(userId);
       return list.liveDeviceIds.toSet();
     } on Object {
       return null;
@@ -569,7 +571,7 @@ extension MessagingBox on MessagingProvider {
 
   /// Whether the chat with [peerUserId] shows the "older app" notice (owner
   /// decision 48): this device is on the box, [peerUserId] is a friend, and
-  /// its messages still take the old path because some live device of the
+  /// its messages cannot go out because some live device of the
   /// friend has handed us no queue — the peer half of [_boxRoute]'s rule,
   /// read from the same record and list. Never blocks a send.
   bool boxFriendPending(int peerUserId) {
@@ -892,7 +894,7 @@ extension MessagingBox on MessagingProvider {
       // sibling's box took every frame (decision 20).
     );
     return _withBoxExtras(
-      _withEnvelope(row, parsed, box: true),
+      _withEnvelope(row, parsed),
       parsed,
     ).then((copy) => _consumeBoxMessage(copy, receivedAt: receivedAt));
   }
@@ -1050,7 +1052,7 @@ extension MessagingBox on MessagingProvider {
     // device keeps our old queue's sid for 30 d (E50e) and claims any device
     // id. A list naming it REVOKED is a verdict, finished at once; an absent
     // or undecided one waits only while the box could still redeliver it.
-    if (!await _originDeviceIsLive(msg, refetch: false)) {
+    if (!await _originDeviceIsLive(msg)) {
       final device = msg.originDeviceId ?? 1;
       final revoked =
           enc
@@ -1215,11 +1217,7 @@ extension MessagingBox on MessagingProvider {
             : sentAt;
         return _consumeBoxMessage(
           await _withBoxExtras(
-            _withEnvelope(
-              msg,
-              parsed,
-              box: true,
-            ).copyWith(createdAt: createdAt),
+            _withEnvelope(msg, parsed).copyWith(createdAt: createdAt),
             parsed,
           ),
           receivedAt: receivedAt,
@@ -1398,7 +1396,7 @@ extension MessagingBox on MessagingProvider {
   /// deadline and when it started, so a restart keeps counting.
   void _startBoxCountdowns(int conversationId) {
     if (_conversationsProvider?.isClientVisible == false) return;
-    final viewing = _effectiveActiveConversationId ?? _paginationConversationId;
+    final viewing = _effectiveActiveConversationId ?? _openConversationId;
     if (conversationId != viewing) return;
     final own = _currentUserId;
     // Whole ms: the stored start and the row's deadline must agree.
@@ -1578,15 +1576,12 @@ extension MessagingBox on MessagingProvider {
   }
 
   void _showBoxMessage(MessageModel msg) {
-    final viewing = _effectiveActiveConversationId ?? _paginationConversationId;
+    final viewing = _effectiveActiveConversationId ?? _openConversationId;
     final inView = msg.conversationId == viewing;
-    // A chat made over the box that was deleted here comes back with its
-    // next message, as a server chat does (owner decision 52).
-    if (isLocalConversationId(msg.conversationId)) {
-      _conversationsProvider?.revealLocalChat(msg.conversationId);
-    }
-    // A sibling's sent ping is ours: nothing arrived, as for an old-path
-    // self-sync copy.
+    // A chat that was deleted here comes back with its next message
+    // (owner decision 52).
+    _conversationsProvider?.revealChat(msg.conversationId);
+    // A sibling's sent ping is ours: nothing arrived.
     if (inView &&
         msg.messageType == MessageType.ping &&
         msg.senderId != _currentUserId &&
@@ -1623,7 +1618,7 @@ extension MessagingBox on MessagingProvider {
     final rows = await _localBoxRows(conversationId);
     final unsent = await _unsentBoxRows(conversationId);
     if ((rows.isEmpty && unsent.isEmpty) || _isDisposed) return;
-    final viewing = _effectiveActiveConversationId ?? _paginationConversationId;
+    final viewing = _effectiveActiveConversationId ?? _openConversationId;
     if (viewing != conversationId) return;
     final held = {for (final m in _messages) m.id};
     final heldTempIds = {for (final m in _messages) ?m.tempId};
@@ -1674,14 +1669,11 @@ extension MessagingBox on MessagingProvider {
         if (!heldTempIds.contains(row.tempId)) row,
     ];
     if (missing.isNotEmpty) {
-      _messages = [..._messages, ...missing]
-        ..sort((a, b) {
-          final byTime = a.createdAt.compareTo(b.createdAt);
-          return byTime != 0 ? byTime : a.id.compareTo(b.id);
-        });
+      _messages = [..._messages, ...missing]..sort(_byTimeThenId);
       if (_conversationCache.containsKey(conversationId)) {
         _updateCache(conversationId);
       }
+      _reEnrichAllReplyQuotes();
       notifyListeners();
     }
     if (rows.isEmpty) return;
@@ -1709,7 +1701,8 @@ extension MessagingBox on MessagingProvider {
         .firstOrNull;
     return [
       for (final MapEntry(key: id, value: record) in records.entries)
-        ?_boxRowFrom(id, conversationId, record, conversation),
+        if (isLocalMessageId(id))
+          ?_boxRowFrom(id, conversationId, record, conversation),
     ];
   }
 
@@ -1941,6 +1934,9 @@ extension MessagingBox on MessagingProvider {
     final newest = <int, MessageModel>{};
     final unread = <int, Set<int>>{};
     for (final MapEntry(key: id, value: record) in records.entries) {
+      // Only a box message: an old-path record a launch left on disk is
+      // never shown (decision 99), only swept by the retention pass.
+      if (!isLocalMessageId(id)) continue;
       final conversationId = record[PlaintextRecordCodec.conversationIdKey];
       if (conversationId is! int || _deletedMessageIds.contains(id)) continue;
       final row = _boxRowFrom(
@@ -1978,7 +1974,7 @@ extension MessagingBox on MessagingProvider {
     if (own == null || _conversationsProvider?.isClientVisible == false) {
       return;
     }
-    final viewing = _effectiveActiveConversationId ?? _paginationConversationId;
+    final viewing = _effectiveActiveConversationId ?? _openConversationId;
     if (conversationId != viewing) return;
     DateTime? upTo;
     for (final m in _messages) {
@@ -1996,28 +1992,23 @@ extension MessagingBox on MessagingProvider {
     unawaited(_encryptionProvider?.markBoxChatSeen(conversationId, upTo));
   }
 
-  /// Where a TEXT to [recipientId] goes over the box (slice (c), decision
+  /// Where a message to [recipientId] goes over the box (slice (c), decision
   /// 16 as amended by 101 A): only when the peer is covered — EVERY live
   /// device of it has a box address, or at least one does and some
   /// addressed live device relays ([_boxCoversLive]) — and every live
   /// OTHER device of ours has a self-queue address (sibling queues part B,
-  /// E5) — one message is never split across the two paths, because an
-  /// old-path copy is a server row naming the pair that the box devices
-  /// would then be served as `none_for_device`. Frames go to the addressed
+  /// E5): one message is never split. Frames go to the addressed
   /// live devices only; when some live one is not, the route's `addressed`
-  /// names them, so they relay to the rest. Null = the old path, and ONLY
-  /// on evidence: a verified list naming a device with no address.
+  /// names them, so they relay to the rest. Null = no route, and ONLY
+  /// on evidence: a verified list naming a device with no address; the
+  /// caller then fails the row (the box is the only path).
   /// A list that cannot be verified THROWS (the caller fails the row for a
-  /// retry): the peer is box-covered as far as we know, and on web
-  /// socket.io would replay an old-path emit buffered while offline as a
-  /// server row.
+  /// retry).
   ///
   /// [addresses] is the outbox's answer for the peer, taken by the caller
-  /// WITHOUT an await, so a peer with none (every chat until the handoff
-  /// slice) reaches the old path's emit on exactly the turns it always did.
+  /// WITHOUT an await: a peer with none has no route at all.
   ///
-  /// Both lists come from the verified cache (the peer path of
-  /// `getDeviceList` stays until PR4.1): unlike the old path, the box has no
+  /// Both lists come from the verified cache: the box has no
   /// server bounce to catch a device we did not know about. Both are the
   /// ones THIS connect verified ([refreshBoxDeviceLists], decision 21); a
   /// send never looks one up, which would hand the server the pair (the
@@ -2131,8 +2122,8 @@ extension MessagingBox on MessagingProvider {
   }
 
   /// Whether [peerUserId] is a friend made over the box (owner decision
-  /// 52): the server does not know the pair, so nothing sent to it may take
-  /// the old path — a send the box cannot carry FAILS instead.
+  /// 52): the server does not know the pair, so no request naming it
+  /// (`requestSessionRebuild`) is ever made for it.
   bool _boxOnlyPeer(int peerUserId) =>
       boxFriends?.contactOf(peerUserId)?.boxOrigin != null ||
       _conversationsProvider?.getConversationById(
@@ -2140,38 +2131,22 @@ extension MessagingBox on MessagingProvider {
           ) !=
           null;
 
-  /// Whether media send [tempId] to [recipientId] tries the box first (item
-  /// 3 / media wiring): the peer has box addresses and, as for a text, a
-  /// reply's quote can be named. Synchronous on purpose: an uncovered
-  /// peer's old path keeps exactly the turns it always had (traps: "image
-  /// emits before caption"). A friend made over the box always goes there:
-  /// it has no old path ([_sendMediaOverBox] fails what the box cannot carry).
-  bool _boxMayCarryMedia(int recipientId, String tempId) {
-    if (_boxOnlyPeer(recipientId)) return true;
-    final outbox = boxOutbox;
-    if (outbox == null || outbox.addressesFor(recipientId).isEmpty) {
-      return false;
-    }
-    final row = _messages.where((m) => m.tempId == tempId).firstOrNull;
-    return row?.replyToMessageId == null || _boxQuoteOf(row?.replyTo) != null;
-  }
-
-  /// Sends attachment [tempId] to a peer the box covers (item 3 / media
-  /// wiring, E17a): the route is decided BEFORE anything is uploaded, then
-  /// the file is encrypted whole, padded to a ladder rung, uploaded ONCE and
-  /// sent as frames carrying its id ([_uploadBoxMediaAndSend]).
+  /// Sends attachment [tempId] to a peer over the box (item 3 / media
+  /// wiring, E17a) — the only path an attachment has: the route is decided
+  /// BEFORE anything is uploaded, then the file is encrypted whole, padded
+  /// to a ladder rung, uploaded ONCE and sent as frames carrying its id
+  /// ([_uploadBoxMediaAndSend]).
   ///
-  /// [bytes] is the plaintext of a first send, whose null answer is the old
-  /// path — only on evidence ([_boxRoute]), with nothing encrypted for the
-  /// box. Without [bytes] this is a retry of an upload that never succeeded
-  /// (E17b): it uploads the SAME held ciphertext, key and IV, and a route
-  /// gone since fails the row. A list that cannot be verified, a refused
-  /// upload or no answer fails it too (decisions 19, 31), never the old
-  /// path, and so does a reply whose quote cannot be named: it is never
-  /// sent without it. Each of those holds the encrypted file for its retry.
-  /// [recording] is a voice note's plaintext file, deleted once the upload
-  /// succeeds.
-  Future<bool?> _sendMediaOverBox({
+  /// A peer with no route, a list that cannot be verified, a refused upload
+  /// or no answer fails the row ('Ponów', decisions 19, 31) — never an
+  /// upload to the server. So does a reply whose quote cannot be named: it
+  /// is never sent without it. Each of those holds the encrypted file for
+  /// its retry (E17b); a route that is simply absent holds it too, so the
+  /// retry uploads once the peer has one. [bytes] is the plaintext of a first
+  /// send; without it this is a retry of an upload that never succeeded: it
+  /// uploads the SAME held ciphertext, key and IV. [recording] is a voice
+  /// note's plaintext file, deleted once the upload succeeds.
+  Future<bool> _sendMediaOverBox({
     required int recipientId,
     required String tempId,
     required String messageType,
@@ -2185,8 +2160,7 @@ extension MessagingBox on MessagingProvider {
     int? mediaHeight,
     String? mediaThumbHash,
   }) async {
-    // An account-socket error says nothing about the box: the row is not
-    // failed under an upload in flight.
+    // The row is not failed under an upload in flight.
     _boxInFlight.add(tempId);
     try {
       // Before the first await: the row leaves [_messages] once the user
@@ -2198,10 +2172,8 @@ extension MessagingBox on MessagingProvider {
       );
       final outbox = boxOutbox;
       final addresses = outbox?.addressesFor(recipientId) ?? const {};
-      // A friend made over the box has no old path to fall back to.
-      final oldPath = bytes != null && !_boxOnlyPeer(recipientId);
       if (outbox == null || addresses.isEmpty) {
-        if (oldPath) return null;
+        if (bytes != null) await _holdBoxMedia(tempId, bytes, recording);
         _e2eFlowLog('BOX_RETRY_NO_ROUTE', {'tempId': tempId});
         _markMessageFailed(tempId, 'Could not send. Try again.');
         return false;
@@ -2215,7 +2187,7 @@ extension MessagingBox on MessagingProvider {
         rethrow;
       }
       if (route == null) {
-        if (oldPath) return null;
+        if (bytes != null) await _holdBoxMedia(tempId, bytes, recording);
         _e2eFlowLog('BOX_RETRY_NO_ROUTE', {'tempId': tempId});
         _markMessageFailed(tempId, 'Could not send. Try again.');
         return false;
@@ -2231,17 +2203,6 @@ extension MessagingBox on MessagingProvider {
         _markMessageFailed(tempId, 'Could not send. Try again.');
         return false;
       }
-      // The key before any further await (the durability invariant).
-      _pendingSendContent[tempId] = <String, dynamic>{
-        'content': content,
-        'messageType': messageType,
-        'mediaKey': body.key,
-        'mediaIv': body.iv,
-        'mediaDuration': ?mediaDuration,
-        'mediaWidth': ?mediaWidth,
-        'mediaHeight': ?mediaHeight,
-        'mediaThumbHash': ?mediaThumbHash,
-      };
       return await _uploadBoxMediaAndSend(
         route,
         body,
@@ -2276,7 +2237,7 @@ extension MessagingBox on MessagingProvider {
     Uint8List bytes,
     String? recording,
   ) async {
-    final encrypted = await _mediaUpload.encrypt(bytes);
+    final encrypted = await _mediaCrypto.encrypt(bytes);
     return _boxMediaBodies[tempId] = (
       ciphertext: encrypted.ciphertext,
       key: encrypted.keyBase64,
@@ -2362,9 +2323,6 @@ extension MessagingBox on MessagingProvider {
         });
       }
     }
-    final pending = _pendingAfterUpload(tempId);
-    if (pending == null) return false;
-    pending['mediaUrl'] = url;
     return _encryptAndSend(
       recipientId: recipientId,
       content: content,

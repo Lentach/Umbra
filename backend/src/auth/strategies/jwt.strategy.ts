@@ -49,8 +49,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     // path applies, so the two surfaces cannot disagree about who is calling.
     const deviceId = payload.deviceId ?? DEFAULT_DEVICE_ID;
     // A revoked device keeps a valid access JWT until natural expiry, and
-    // without this it would keep every guarded REST route — media upload above
-    // all. Amendment (xxii): deny ONLY on an explicit `revokedAt`; a MISSING
+    // without this it would keep every guarded REST route (account delete,
+    // contact backup, profile photos). Amendment (xxii): deny ONLY on an explicit `revokedAt`; a MISSING
     // row must never deny, or every pre-Phase-1 account (no `devices` row
     // until its first socket connect) loses HTTP access.
     if (await this.devicesService.isRevoked(user.id, deviceId)) {

@@ -11,22 +11,31 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
-Future<ConversationsProvider> _openSheet(
+import '../support/chat_seed.dart';
+
+/// Records what the sheet asks the provider to set.
+class _RecordingConversations extends ConversationsProvider {
+  final timerCalls = <(int, int?)>[];
+
+  @override
+  void setDisappearingTimer(int conversationId, int? timer) {
+    timerCalls.add((conversationId, timer));
+    super.setDisappearingTimer(conversationId, timer);
+  }
+}
+
+Future<_RecordingConversations> _openSheet(
   WidgetTester tester, {
   int? initialSeconds,
   int activeConversationId = 1,
   Locale locale = const Locale('en'),
   ThemeData? theme,
   String? themePreference,
-  void Function(String event, dynamic data)? onEmit,
 }) async {
-  final convs = ConversationsProvider()..openConversation(activeConversationId);
-  if (onEmit != null) {
-    convs.setEmitCallback(onEmit);
-  }
-  // Production opener reads the timer from the ACTIVE conversation; seed it
-  // through the same event the backend uses.
-  convs.onConversationsList([
+  final convs = _RecordingConversations()
+    ..openConversation(activeConversationId);
+  // Production opener reads the timer from the ACTIVE conversation.
+  seedConversations(convs, [
     {
       'id': activeConversationId,
       'userOne': {'id': 1, 'username': 'alice', 'tag': '0001'},
@@ -124,59 +133,30 @@ void main() {
       expect(find.byType(DisappearingTimerSheet), findsNothing);
     });
 
-    testWidgets('turn off emits null seconds', (tester) async {
-      Map<String, dynamic>? emitted;
-      await _openSheet(
-        tester,
-        initialSeconds: 86400,
-        onEmit: (event, data) {
-          if (event == 'setDisappearingTimer') {
-            emitted = data as Map<String, dynamic>;
-          }
-        },
-      );
+    testWidgets('turn off sets a null timer', (tester) async {
+      final convs = await _openSheet(tester, initialSeconds: 86400);
 
       await _tapSheetButton(tester, 'Turn off');
 
-      expect(emitted, isNotNull);
-      expect(emitted!['conversationId'], 1);
-      expect(emitted!['seconds'], isNull);
+      expect(convs.timerCalls, [(1, null)]);
     });
 
     testWidgets('set timer keeps selected seconds', (tester) async {
-      Map<String, dynamic>? emitted;
-      await _openSheet(
-        tester,
-        initialSeconds: 300,
-        onEmit: (event, data) {
-          if (event == 'setDisappearingTimer') {
-            emitted = data as Map<String, dynamic>;
-          }
-        },
-      );
+      final convs = await _openSheet(tester, initialSeconds: 300);
 
       await _tapSheetButton(tester, 'Set timer');
 
-      expect(emitted!['seconds'], 300);
+      expect(convs.timerCalls, [(1, 300)]);
     });
 
     testWidgets('30 days exactly is valid and applies', (tester) async {
-      Map<String, dynamic>? emitted;
-      await _openSheet(
-        tester,
-        initialSeconds: 2592000,
-        onEmit: (event, data) {
-          if (event == 'setDisappearingTimer') {
-            emitted = data as Map<String, dynamic>;
-          }
-        },
-      );
+      final convs = await _openSheet(tester, initialSeconds: 2592000);
 
       expect(find.text('30 days'), findsOneWidget);
 
       await _tapSheetButton(tester, 'Set timer');
 
-      expect(emitted!['seconds'], 2592000);
+      expect(convs.timerCalls, [(1, 2592000)]);
       expect(find.byType(DisappearingTimerSheet), findsNothing);
     });
 

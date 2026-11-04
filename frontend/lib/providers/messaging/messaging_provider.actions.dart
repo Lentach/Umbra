@@ -7,43 +7,37 @@ part of '../messaging_provider.dart';
 // ignore_for_file: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
 
 /// User- and timer-driven mutations: read / clear / delete / pin / react / expiry.
+/// Every message a chat holds has a local id and a wire id, so each action is
+/// local to this device or goes over the box; a row with neither cannot be
+/// acted on.
 extension MessagingActions on MessagingProvider {
-  /// Do NOT emit READ from a backgrounded client. A hidden PWA with a mounted
+  /// The chat on screen was read: its disappearing messages start counting
+  /// (decision 41), the peer is told when the switch is on (slice (g), E61d),
+  /// and a restart does not count them as unread again (decision 73).
+  ///
+  /// Do NOT run from a backgrounded client. A hidden PWA with a mounted
   /// chat route used to mark every arriving message READ while the user was
   /// away (field bug, users 48/90, Aug 2026). Fail-open on a missing provider:
   /// desktop and existing tests keep the old behavior. Recovery marking on
-  /// return is guaranteed because every foreground path refetches history
+  /// return is guaranteed because every foreground path re-opens the chat
   /// (connection_provider._onSocketReady / _resyncAfterResume /
-  /// chat_resume_reassert.dart) and that refetch calls markConversationRead
-  /// again with this gate passing.
+  /// chat_resume_reassert.dart) and that calls markConversationRead again with
+  /// this gate passing.
   void markConversationRead(int conversationId) {
     if (_conversationsProvider?.isClientVisible == false) return;
-    // A box message has no server read mark: its countdown starts here, at
-    // the same moments (decision 41), the peer is told it was read when the
-    // switch is on (slice (g), E61d), and a restart does not count it as
-    // unread again (decision 73).
     _startBoxCountdowns(conversationId);
     _sendBoxReadReceipt(conversationId);
     _markBoxChatSeen(conversationId);
-    // A local chat has no server row to mark (owner decision 52).
-    if (isLocalConversationId(conversationId)) return;
-    _emit?.call('markConversationRead', {'conversationId': conversationId});
   }
 
-  /// A local chat (owner decision 52) is cleared on this device alone: its
-  /// records and rows go as a server `chatHistoryCleared` would take them.
-  void clearChatHistory(int conversationId) {
-    if (isLocalConversationId(conversationId)) {
-      _handleChatHistoryCleared({'conversationId': conversationId});
-      return;
-    }
-    _emit?.call('clearChatHistory', {'conversationId': conversationId});
-  }
+  /// A chat is cleared on this device alone (owner decision 52): its records
+  /// and rows go.
+  void clearChatHistory(int conversationId) =>
+      _clearChatLocally(conversationId);
 
   void deleteMessage(int messageId, {required bool forEveryone}) {
-    // A box message that did not go out (decision 104) has no server row
-    // and no record: deleting it drops this device's kept copy, nothing
-    // else.
+    // A box message that did not go out (decision 104) has no record:
+    // deleting it drops this device's kept copy, nothing else.
     final unsent = _messages
         .where((m) => m.id == messageId && m.tempId != null)
         .firstOrNull;
@@ -60,48 +54,33 @@ extension MessagingActions on MessagingProvider {
       notifyListeners();
       return;
     }
-    if (isLocalMessageId(messageId)) {
-      // A box message (decision 14) has no server row to delete: "for me"
-      // is this device's copy, "for everyone" goes over the box (item 4).
-      if (forEveryone) {
-        _deleteOverBox(messageId).ignore();
-        return;
-      }
-      final conversationId = messageById(messageId)?.conversationId;
-      if (conversationId == null) return;
-      _handleMessageDeleted({
-        'messageId': messageId,
-        'conversationId': conversationId,
-      });
+    if (!isLocalMessageId(messageId)) return;
+    // "For me" is this device's copy, "for everyone" goes over the box
+    // (item 4).
+    if (forEveryone) {
+      _deleteOverBox(messageId).ignore();
       return;
     }
-    _emit?.call('deleteMessage', {
-      'messageId': messageId,
-      'mode': forEveryone ? 'for_everyone' : 'for_me',
-    });
+    final conversationId = messageById(messageId)?.conversationId;
+    if (conversationId == null) return;
+    _deleteMessageLocally(messageId, conversationId);
   }
 
-  /// Optimistically apply a TEXT edit to a sent message, then encrypt the new
-  /// plaintext over the existing Signal session and emit `editMessage` — or,
-  /// for a box message, send it over the box (item 4). Only own TEXT rows
-  /// with a server row or a wire id are editable.
+  /// Optimistically apply a TEXT edit to a sent message, then send it over
+  /// the box (item 4). Only own TEXT rows with a local id and a wire id are
+  /// editable.
   void editMessage(int messageId, String newContent) {
     final trimmed = newContent.trim();
     if (trimmed.isEmpty || _currentUserId == null) return;
     final activeConversationId = _conversationsProvider?.activeConversationId;
     if (activeConversationId == null) return;
-    final conv = _conversationsProvider!.conversations
-        .where((c) => c.id == activeConversationId)
-        .firstOrNull;
-    if (conv == null) return;
-    final recipientId = conv_helpers.getOtherUserId(conv, _currentUserId);
 
     final idx = _messages.indexWhere((m) => m.id == messageId);
     if (idx == -1) return;
     final original = _messages[idx];
-    final box = isLocalMessageId(messageId);
     if (original.senderId != _currentUserId ||
-        !hasActionTarget(messageId, wireId: original.wireId) ||
+        !isLocalMessageId(messageId) ||
+        original.wireId == null ||
         original.messageType != MessageType.text ||
         DateTime.now().difference(original.createdAt) >= kMessageEditWindow) {
       cancelEditMessage();
@@ -112,16 +91,10 @@ extension MessagingActions on MessagingProvider {
       return;
     }
 
-    // A NEW user-initiated edit gets a FULL staleness budget. The retry counter
-    // is keyed by messageId (an edit has no tempId to make it unique), so
-    // without this reset a row that bounced earlier would carry that spent
-    // budget forever and a later, perfectly repairable edit would be reverted
-    // after fewer than three attempts — possibly none.
-    _staleResendAttempts.remove('edit:$messageId');
     _pendingEdits[messageId] = original;
     // A box edit's time is its envelope's `ts`, in whole ms: every device
     // keeps the same `editedAt` for last-writer-wins (E19b).
-    final editedAt = box ? _wholeMsNow() : DateTime.now();
+    final editedAt = _wholeMsNow();
     final edited = original.copyWith(content: trimmed, editedAt: editedAt);
     _messages[idx] = edited;
     _reEnrichAllReplyQuotes();
@@ -136,110 +109,13 @@ extension MessagingActions on MessagingProvider {
     cancelEditMessage();
     notifyListeners();
 
-    if (box) {
-      _editOverBox(original, trimmed, editedAt).ignore();
-      return;
-    }
-    _encryptAndEmitEdit(
-      messageId: messageId,
-      recipientId: recipientId,
-      content: trimmed,
-    );
+    _editOverBox(original, trimmed, editedAt).ignore();
   }
 
-  /// Encrypt [content] for every live device of both parties and emit
-  /// `editMessage` (spec §5.7 full re-fan).
-  ///
-  /// On any failure the optimistic update is reverted. TEXT only; link preview
-  /// is intentionally not regenerated in v1 (kept as-is).
-  Future<void> _encryptAndEmitEdit({
-    required int messageId,
-    required int recipientId,
-    required String content,
-  }) async {
-    if (!(_encryptionProvider?.isE2EReady ?? false)) {
-      _revertPendingEdit(messageId, 'Encryption not ready');
-      return;
-    }
-    try {
-      // The SAME address resolution a send runs: an edit re-fans over the
-      // CURRENT device list, so a device linked after the original send is
-      // addressed here and has its `none_for_device` placeholder upgraded.
-      final plan = _resolveFanOut(recipientId);
-      final envelopeJson = jsonEncode(
-        E2eEnvelope.build(
-          content,
-          // An edit is a ciphertext-bearing message, so it carries the layer-2
-          // cross-check like every other one (§12 amendment (xxxiv)).
-          senderListInfo: plan.senderListInfo.toJson(),
-        ),
-      );
-
-      final envelopes = <Map<String, dynamic>>[];
-      String? legacyCiphertext;
-      for (final target in plan.fanOut
-          ? plan.targets
-          : [(userId: recipientId, deviceId: 1)]) {
-        await _encryptionProvider!.ensureSession(
-          target.userId,
-          deviceId: target.deviceId,
-        );
-        final ciphertext = await _encryptionProvider!.encrypt(
-          target.userId,
-          envelopeJson,
-          deviceId: target.deviceId,
-        );
-        // Mirror send: enforce the server's per-ciphertext cap so an over-long
-        // edit fails clearly here instead of bouncing back from validation.
-        if (ciphertext.length > 65536) {
-          _revertPendingEdit(messageId, 'Message is too long to send');
-          return;
-        }
-        if (plan.fanOut) {
-          envelopes.add({
-            'userId': target.userId,
-            'deviceId': target.deviceId,
-            'ciphertext': ciphertext,
-          });
-        } else {
-          legacyCiphertext = ciphertext;
-        }
-      }
-
-      _emit?.call('editMessage', {
-        'messageId': messageId,
-        'content': '[encrypted]',
-        if (plan.fanOut) 'envelopes': envelopes,
-        if (!plan.fanOut) 'encryptedContent': legacyCiphertext,
-        // Quoted only for an ENROLLED party: the server treats an absent stamp
-        // as a mismatch, and an unenrolled party has no list to be stale
-        // against (spec §12 amendments (v)/(xxxi)).
-        if (plan.recipientList?.version != null)
-          'recipientListVersion': plan.recipientList!.version,
-        if (plan.ownList?.version != null)
-          'senderListVersion': plan.ownList!.version,
-      });
-      // Sender owns plaintext: persist the FULL edited row (content + editedAt +
-      // kept link preview) so reloads (own-message restore) show the edit and
-      // nothing is silently dropped.
-      final i = _messages.indexWhere((m) => m.id == messageId);
-      if (i != -1) await _persistDecryptedContent(_messages[i]);
-      _e2eFlowLog('EDIT_EMIT', {
-        'messageId': messageId,
-        'fanOut': plan.fanOut,
-        'envelopes': envelopes.length,
-      });
-    } catch (e) {
-      _e2eFlowLog('EDIT_FAILED', {'messageId': messageId});
-      _revertPendingEdit(messageId, 'Edit failed');
-    }
-  }
-
-  /// Restore the pre-edit row after a reject/failure: in-memory row, the
-  /// persisted plaintext cache (written optimistically on the success path), and
-  /// the conversation-list preview. Without all three a rejected edit would
-  /// resurrect on reopen and diverge from the peer (server is authoritative).
-  void _revertPendingEdit(int messageId, String reason) {
+  /// Restore the pre-edit row after a failure: in-memory row, the persisted
+  /// plaintext record, and the conversation-list preview. Without all three a
+  /// failed edit would resurrect on reopen and diverge from the peer.
+  void _revertPendingEdit(int messageId) {
     final original = _pendingEdits.remove(messageId);
     if (original == null) return;
     final idx = _messages.indexWhere((m) => m.id == messageId);
@@ -250,34 +126,22 @@ extension MessagingActions on MessagingProvider {
         _updateCache(original.conversationId);
       }
     }
-    // Roll back the persisted plaintext written by _encryptAndEmitEdit.
+    // Roll back the persisted plaintext written with the optimistic edit.
     _persistDecryptedContent(original).ignore();
     final lastMessages = _conversationsProvider?.lastMessages;
     if (lastMessages != null &&
         lastMessages[original.conversationId]?.id == messageId) {
-      _conversationsProvider?.updateLastMessage(original.conversationId, original);
+      _conversationsProvider?.updateLastMessage(
+        original.conversationId,
+        original,
+      );
     }
     notifyListeners();
   }
 
   void pinMessage(int conversationId, int messageId) {
-    if (isLocalMessageId(messageId)) {
-      _pinOverBox(conversationId, messageId).ignore();
-      return;
-    }
-    if (!isServerMessageId(messageId)) return;
-    final local = messageById(messageId);
-    if (local != null) {
-      _conversationsProvider?.setPinnedPreviewOptimistic(
-        conversationId,
-        messageId,
-        local,
-      );
-    }
-    _emit?.call('pinMessage', {
-      'conversationId': conversationId,
-      'messageId': messageId,
-    });
+    if (!isLocalMessageId(messageId)) return;
+    _pinOverBox(conversationId, messageId).ignore();
   }
 
   void unpinMessage(int conversationId) {
@@ -287,47 +151,23 @@ extension MessagingActions on MessagingProvider {
     final shown = convs?.getConversationById(conversationId)?.pinnedMessageId;
     if (pin != null && pin.pinned && shown != null && isLocalMessageId(shown)) {
       _unpinOverBox(conversationId, pin).ignore();
-      return;
     }
-    // A local chat has no server pin to clear (decision 45 needs one).
-    if (isLocalConversationId(conversationId)) return;
-    _emit?.call('unpinMessage', {'conversationId': conversationId});
   }
 
-  /// Adds a reaction, blinded — or, on a box message, as a plain emoji over
-  /// the box (item 4, E19d). Returns false when this device could not, in
-  /// which case the caller SHOWS that — a silent no-op looks like a dead tap.
+  /// Adds a reaction as a plain emoji over the box (item 4, E19d). Returns
+  /// false when this device could not, in which case the caller SHOWS that —
+  /// a silent no-op looks like a dead tap.
   Future<bool> addReaction(int messageId, String emoji) =>
       isLocalMessageId(messageId)
       ? _reactOverBox(messageId, emoji, on: true)
-      : _emitReaction('addReaction', messageId, emoji);
+      : Future.value(false);
 
   /// Removes a reaction, as [addReaction] adds one. False has the same
   /// meaning.
   Future<bool> removeReaction(int messageId, String emoji) =>
       isLocalMessageId(messageId)
       ? _reactOverBox(messageId, emoji, on: false)
-      : _emitReaction('removeReaction', messageId, emoji);
-
-  /// The one path both reaction actions take.
-  ///
-  /// The wire value is a blinded token, never the emoji (design §3.1): the
-  /// server stores reaction keys verbatim, so an emoji here is an emoji in the
-  /// database. When no token can be produced the action FAILS — it does not
-  /// fall back to plaintext, which would silently re-open exactly the hole
-  /// this closes.
-  Future<bool> _emitReaction(String event, int messageId, String emoji) async {
-    final emit = _emit;
-    if (emit == null || !isServerMessageId(messageId)) return false;
-    final conversationId =
-        messageById(messageId)?.conversationId ??
-        _effectiveActiveConversationId;
-    if (conversationId == null) return false;
-    final wireKey = await _reactionWireKey(conversationId, emoji);
-    if (wireKey == null) return false;
-    emit(event, {'messageId': messageId, 'emoji': wireKey});
-    return true;
-  }
+      : Future.value(false);
 
   /// Remove messages whose expiresAt has passed. Called every second by ChatDetailScreen timer.
   void removeExpiredMessages() {

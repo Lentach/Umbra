@@ -168,36 +168,3 @@ class SenderListInfoChecker {
     return SenderListInfoOutcome.consistent;
   }
 }
-
-/// One re-fetch in flight per account, and one per cooldown window — the
-/// rate limit amendment (xvi) requires. Cheap, in-memory, per session: a
-/// bogus claim on every inbound message must not become a fetch storm.
-class SenderListInfoRefreshLimiter {
-  SenderListInfoRefreshLimiter({
-    this.cooldown = const Duration(minutes: 1),
-    DateTime Function()? clock,
-  }) : _clock = clock ?? DateTime.now;
-
-  final Duration cooldown;
-  final DateTime Function() _clock;
-  final Map<int, DateTime> _lastRefreshAt = {};
-  final Set<int> _inFlight = {};
-
-  /// True when a refresh for [userId] may start NOW. Claims arriving while one
-  /// is in flight are dropped, not queued: they carry no new information.
-  bool tryBegin(int userId) {
-    if (_inFlight.contains(userId)) return false;
-    final last = _lastRefreshAt[userId];
-    if (last != null && _clock().difference(last) < cooldown) return false;
-    _inFlight.add(userId);
-    _lastRefreshAt[userId] = _clock();
-    return true;
-  }
-
-  void end(int userId) => _inFlight.remove(userId);
-
-  void reset() {
-    _inFlight.clear();
-    _lastRefreshAt.clear();
-  }
-}

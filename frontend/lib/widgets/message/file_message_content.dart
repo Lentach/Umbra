@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 
 import '../../l10n/app_localizations.dart';
 import '../../models/message_model.dart';
-import '../../providers/auth_provider.dart';
 import '../../theme/rpg_theme.dart';
 import '../../utils/download_utils_web.dart'
     if (dart.library.io) '../../utils/download_utils_io.dart'
@@ -34,7 +32,6 @@ class _FileMessageContentState extends State<FileMessageContent> {
 
   Future<void> _downloadDocument(BuildContext context) async {
     final l10n = AppLocalizations.of(context);
-    final token = context.read<AuthProvider>().token ?? '';
     final url = widget.message.mediaUrl;
     if (url == null || url.isEmpty) return;
     final box = boxMediaSourceFor(context, url);
@@ -45,7 +42,6 @@ class _FileMessageContentState extends State<FileMessageContent> {
       if (key != null && iv != null) {
         final plain = await loadDecryptedMediaBytes(
           url: url,
-          token: token,
           key: key,
           iv: iv,
           box: box,

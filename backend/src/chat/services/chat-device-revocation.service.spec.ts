@@ -9,9 +9,6 @@ import {
 } from '../../key-bundles/device-list.service';
 import { encodeCanonicalDeviceList } from '../../key-bundles/device-list-canonical.util';
 import { ProvisioningStagesService } from '../../key-bundles/provisioning-stages.service';
-import { RefreshTokensService } from '../../auth/refresh-tokens.service';
-import { FcmTokensService } from '../../fcm-tokens/fcm-tokens.service';
-import { WebPushSubscriptionsService } from '../../web-push-subscriptions/web-push-subscriptions.service';
 import { Device } from '../../key-bundles/device.entity';
 
 /**
@@ -72,9 +69,6 @@ describe('ChatDeviceRevocationService', () => {
   let devicesService: { listForUser: jest.Mock; revoke: jest.Mock };
   let deviceListService: { applySignedListUpdate: jest.Mock };
   let keyBundlesService: { purgeDeviceMaterial: jest.Mock };
-  let refreshTokensService: { revokeForDevice: jest.Mock };
-  let fcmTokensService: { removeForDevice: jest.Mock };
-  let webPushService: { removeForDevice: jest.Mock };
   let stages: ProvisioningStagesService;
   let manager: EntityManager;
   let dataSource: { transaction: jest.Mock };
@@ -127,9 +121,6 @@ describe('ChatDeviceRevocationService', () => {
       applySignedListUpdate: jest.fn().mockResolvedValue(2),
     };
     keyBundlesService = { purgeDeviceMaterial: jest.fn() };
-    refreshTokensService = { revokeForDevice: jest.fn().mockResolvedValue(1) };
-    fcmTokensService = { removeForDevice: jest.fn() };
-    webPushService = { removeForDevice: jest.fn() };
     stages = new ProvisioningStagesService();
     manager = { getRepository: jest.fn() } as unknown as EntityManager;
     dataSource = {
@@ -153,10 +144,7 @@ describe('ChatDeviceRevocationService', () => {
       deviceListService as unknown as DeviceListService,
       devicesService as unknown as DevicesService,
       keyBundlesService as unknown as KeyBundlesService,
-      refreshTokensService as unknown as RefreshTokensService,
       stages,
-      fcmTokensService as unknown as FcmTokensService,
-      webPushService as unknown as WebPushSubscriptionsService,
     );
     warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
     errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation();
@@ -291,7 +279,7 @@ describe('ChatDeviceRevocationService', () => {
   });
 
   describe('the durable half is ONE transaction', () => {
-    it('stamps, mutates the list, drops sessions and purges material with the SAME manager', async () => {
+    it('stamps, mutates the list and purges material with the SAME manager (the refresh row stays: /auth/refresh answers from it)', async () => {
       const client = makeClient(1);
       await run(client);
 
@@ -300,11 +288,6 @@ describe('ChatDeviceRevocationService', () => {
       expect(deviceListService.applySignedListUpdate).toHaveBeenCalledWith(
         USER_ID,
         { listCanonical: revokingCanonical(), listSignature: 'dak-sig' },
-        manager,
-      );
-      expect(refreshTokensService.revokeForDevice).toHaveBeenCalledWith(
-        USER_ID,
-        2,
         manager,
       );
       expect(keyBundlesService.purgeDeviceMaterial).toHaveBeenCalledWith(
@@ -352,20 +335,16 @@ describe('ChatDeviceRevocationService', () => {
         error: 'stale_version',
       });
       // Post-commit teardown must not run for a rolled-back revocation.
-      expect(fcmTokensService.removeForDevice).not.toHaveBeenCalled();
-      expect(webPushService.removeForDevice).not.toHaveBeenCalled();
       expect(kickedSocket.disconnect).not.toHaveBeenCalled();
     });
   });
 
   describe('post-commit teardown', () => {
-    it('deletes the revoked device push rows, preempts stages, tells then kicks', async () => {
+    it('preempts stages, tells then kicks', async () => {
       const stage = stages.open(USER_ID, 'some-socket', 3);
       const client = makeClient(1);
       await run(client);
 
-      expect(fcmTokensService.removeForDevice).toHaveBeenCalledWith(USER_ID, 2);
-      expect(webPushService.removeForDevice).toHaveBeenCalledWith(USER_ID, 2);
       // Amendment (xxv): account-wide, even though this stage holds device 3.
       expect(stages.get(stage.provisioningId)).toBeNull();
       expect(roomEmit).toHaveBeenCalledWith('deviceRevoked', {
@@ -391,21 +370,6 @@ describe('ChatDeviceRevocationService', () => {
       expect(roomEmit.mock.invocationCallOrder[noticeOrder]).toBeLessThan(
         kickedSocket.disconnect.mock.invocationCallOrder[0],
       );
-    });
-
-    it('still reports success when the push teardown fails, and says so loudly', async () => {
-      webPushService.removeForDevice.mockRejectedValue(new Error('pg down'));
-      const client = makeClient(1);
-      await run(client);
-
-      expect(lastEmit(client, 'deviceRevocationCompleted')).toMatchObject({
-        success: true,
-      });
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining('push teardown FAILED'),
-      );
-      // The revocation is durable, so the kick must still happen.
-      expect(kickedSocket.disconnect).toHaveBeenCalledTimes(1);
     });
   });
 

@@ -357,7 +357,7 @@ E2E round trip, push-with-app-killed, voice/image, and the LINK ceremony (checkl
 
 **First command on the owner's REAL phone, before any claim about its state:**
 `adb shell dumpsys package com.fireplace.app | grep -E "versionCode|firstInstallTime"`. An empty
-`fcm_token` for the account proves only that no LIVE push registration exists — not that the app is
+`fcm_token` row for the account (that account-push table was dropped in Phase 4 step 5; the box notifier is the only push registration now) proved only that no LIVE push registration existed — not that the app is
 absent — and the 0.1.24 build (versionCode `10024`, 2026-09-02) was made FOR that phone. Three
 outcomes, three different flows:
 

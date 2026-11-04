@@ -7,19 +7,9 @@ import { AuthModule } from './auth/auth.module';
 import { MediaModule } from './media/media.module';
 import { UsersModule } from './users/users.module';
 import { ChatModule } from './chat/chat.module';
-import { ConversationsModule } from './conversations/conversations.module';
-import { MessagesModule } from './messages/messages.module';
-import { FriendsModule } from './friends/friends.module';
-import { BlockedModule } from './blocked/blocked.module';
-import { FcmTokensModule } from './fcm-tokens/fcm-tokens.module';
+import { LinkPreviewModule } from './link-preview/link-preview.module';
 import { KeyBundlesModule } from './key-bundles/key-bundles.module';
-import { PushNotificationsModule } from './push-notifications/push-notifications.module';
 import { User } from './users/user.entity';
-import { Conversation } from './conversations/conversation.entity';
-import { Message } from './messages/message.entity';
-import { FriendRequest } from './friends/friend-request.entity';
-import { BlockedUser } from './blocked/blocked-user.entity';
-import { FcmToken } from './fcm-tokens/fcm-token.entity';
 import { KeyBundle } from './key-bundles/key-bundle.entity';
 import { OneTimePreKey } from './key-bundles/one-time-pre-key.entity';
 import { IdentityChangeAudit } from './key-bundles/identity-change-audit.entity';
@@ -30,19 +20,13 @@ import { SecretNotesModule } from './secret-notes/secret-notes.module';
 import { validate } from './config/env.validation';
 import { HealthModule } from './health/health.module';
 import { VersionModule } from './version/version.module';
-import { WebPushSubscription } from './web-push-subscriptions/web-push-subscription.entity';
-import { WebPushSubscriptionsModule } from './web-push-subscriptions/web-push-subscriptions.module';
 import { RefreshToken } from './auth/refresh-token.entity';
 import { APP_GUARD } from '@nestjs/core';
 import { HttpThrottlerGuard } from './common/http-throttler.guard';
 
-import { ConversationNotificationPreference } from './conversation-notification-preferences/conversation-notification-preference.entity';
-import { ConversationNotificationPreferencesModule } from './conversation-notification-preferences/conversation-notification-preferences.module';
 import { ProfilePhoto } from './users/profile-photo.entity';
 import { Device } from './key-bundles/device.entity';
 import { AccountAuthorization } from './key-bundles/account-authorization.entity';
-import { MessageEnvelope } from './messages/message-envelope.entity';
-import { ReactionKey } from './reaction-keys/reaction-key.entity';
 import { ContactBackup } from './backup/contact-backup.entity';
 import { BackupModule } from './backup/backup.module';
 import { BoxModule, BOX_ENTITIES } from './box/box.module';
@@ -54,7 +38,7 @@ import { BoxModule, BOX_ENTITIES } from './box/box.module';
       isGlobal: true,
       envFilePath: ['.env.local', '.env'],
     }),
-    // Schedule cron jobs for message expiration
+    // Schedule cron jobs (secret-note expiry, identity reset, box reaper)
     ScheduleModule.forRoot(),
     // Rate limiting: 100 requests per 15 minutes globally
     ThrottlerModule.forRoot([
@@ -77,25 +61,16 @@ import { BoxModule, BOX_ENTITIES } from './box/box.module';
         database: configService.get('DB_NAME'),
         entities: [
           User,
-          Conversation,
-          Message,
-          FriendRequest,
-          BlockedUser,
-          FcmToken,
-          WebPushSubscription,
           RefreshToken,
           Device,
           AccountAuthorization,
-          MessageEnvelope,
           KeyBundle,
           OneTimePreKey,
           IdentityChangeAudit,
           IdentityResetRequest,
           RecoveryKey,
           SecretNote,
-          ConversationNotificationPreference,
           ProfilePhoto,
-          ReactionKey,
           ContactBackup,
           ...BOX_ENTITIES,
         ],
@@ -105,17 +80,10 @@ import { BoxModule, BOX_ENTITIES } from './box/box.module';
     MediaModule,
     AuthModule,
     UsersModule,
-    ConversationsModule,
-    MessagesModule,
-    FriendsModule,
-    BlockedModule,
-    FcmTokensModule,
-    WebPushSubscriptionsModule,
     KeyBundlesModule,
     BackupModule,
-    PushNotificationsModule,
     ChatModule,
-    ConversationNotificationPreferencesModule,
+    LinkPreviewModule,
     SecretNotesModule,
     HealthModule,
     VersionModule,

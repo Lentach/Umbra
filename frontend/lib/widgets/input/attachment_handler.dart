@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../l10n/app_localizations.dart';
-import '../../providers/auth_provider.dart';
 import '../../providers/conversations_provider.dart';
 import '../../providers/messaging_provider.dart';
 import '../gif_picker_sheet.dart';
@@ -37,7 +36,6 @@ class AttachmentHandler {
     required String mimeType,
   }) async {
     final messaging = context.read<MessagingProvider>();
-    final auth = context.read<AuthProvider>();
     final convs = context.read<ConversationsProvider>();
 
     final conversationId = convs.activeConversationId;
@@ -57,7 +55,7 @@ class AttachmentHandler {
         name: filename,
         mimeType: mimeType,
       );
-      return await messaging.sendImageMessage(auth.token!, xfile, recipientId);
+      return await messaging.sendImageMessage(xfile, recipientId);
     } catch (e) {
       if (!context.mounted) return false;
       showTopSnackBar(
@@ -88,7 +86,6 @@ class AttachmentHandler {
     String? thumbHash,
   }) async {
     final messaging = context.read<MessagingProvider>();
-    final auth = context.read<AuthProvider>();
     final convs = context.read<ConversationsProvider>();
 
     final conversationId = convs.activeConversationId;
@@ -103,7 +100,6 @@ class AttachmentHandler {
     final recipientId = convs.getOtherUserId(conv);
 
     return messaging.sendVideoMessage(
-      auth.token!,
       videoBytes,
       recipientId,
       duration: durationSeconds,
@@ -125,7 +121,6 @@ class AttachmentHandler {
   }) async {
     final l10n = AppLocalizations.of(context);
     final messaging = context.read<MessagingProvider>();
-    final auth = context.read<AuthProvider>();
     final convs = context.read<ConversationsProvider>();
 
     final conversationId = convs.activeConversationId;
@@ -141,7 +136,6 @@ class AttachmentHandler {
     showTopSnackBar(context, l10n.snackbarUploadingDocument);
     try {
       await messaging.sendFileMessage(
-        auth.token!,
         bytes,
         fileName,
         mimeType,
@@ -179,12 +173,11 @@ class AttachmentHandler {
     final recipientId = convs.getOtherUserId(conv);
 
     final messaging = context.read<MessagingProvider>();
-    final auth = context.read<AuthProvider>();
 
     GifPickerSheet.show(
       context,
       onGifSelected: (gifUrl) {
-        messaging.sendGif(auth.token!, gifUrl, recipientId);
+        messaging.sendGif(gifUrl, recipientId);
       },
     );
   }

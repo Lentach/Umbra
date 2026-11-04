@@ -33,15 +33,12 @@ import '../services/contacts/contact_store.dart';
 import '../services/device_list/device_list_cache.dart';
 import '../services/device_list/sender_list_info.dart';
 import '../services/media_crypto_service.dart';
-import '../services/encrypted_media_upload_service.dart';
 import '../services/encryption/prekey_identity.dart'
     show FriendFrameIdentity, friendFrameIdentity;
 import '../services/encryption_service.dart';
 import '../services/incoming_message_sound_service.dart';
 import '../services/link_preview_service.dart';
 import '../services/plaintext_record_codec.dart';
-import '../services/reactions/reaction_display.dart';
-import '../services/reactions/reaction_key_service.dart';
 import '../utils/anti_quantum_note_link.dart';
 import '../utils/decryption_failure_policy.dart';
 import '../utils/e2e_diag_log.dart';
@@ -93,7 +90,6 @@ int _deliveryStatusRank(MessageDeliveryStatus status) {
   }
 }
 
-const int _pageSize = 50;
 const String kDecryptionFailedLabel = '[Decryption failed]';
 const String kEncryptedPlaceholderLabel = '[encrypted]';
 const String kRetiredMessageLabel = '[Message no longer stored on this device]';
@@ -116,22 +112,11 @@ class MessagingProvider extends ChangeNotifier {
   // ---------- Dependencies ----------
 
   late final ApiService _api = ApiService(baseUrl: AppConfig.baseUrl);
-  final MediaCryptoService _mediaCrypto = MediaCryptoService();
-
-  late final EncryptedMediaUploadService _mediaUploadDefault =
-      EncryptedMediaUploadService(api: _api, crypto: _mediaCrypto);
-
-  /// Test override for the media upload service. Null in production.
-  /// Mirrors `_activeConversationIdOverrideForTest`.
-  EncryptedMediaUploadService? _mediaUploadOverrideForTest;
-
-  /// Effective media upload service — test override if set, else the default.
-  EncryptedMediaUploadService get _mediaUpload =>
-      _mediaUploadOverrideForTest ?? _mediaUploadDefault;
+  MediaCryptoService _mediaCrypto = MediaCryptoService();
 
   @visibleForTesting
-  void setMediaUploadServiceForTest(EncryptedMediaUploadService service) {
-    _mediaUploadOverrideForTest = service;
+  void setMediaCryptoForTest(MediaCryptoService crypto) {
+    _mediaCrypto = crypto;
   }
 
   /// Callback to emit socket events. Set by the wiring layer.
@@ -154,92 +139,26 @@ class MessagingProvider extends ChangeNotifier {
   /// Test-only override for activeConversationId.
   int? _activeConversationIdOverrideForTest;
 
-  // ---------- Reaction keys (docs/design/reaction-privacy.md) ----------
-
-  /// Built on first use, because it needs [_encryptionProvider] — which the
-  /// wiring layer sets after construction.
-  ReactionKeyService? _reactionKeys;
-
-  /// Pending `fetchReactionKey` round trips, keyed by conversation id — the
-  /// one field the answer carries back, and the only thing that makes two
-  /// concurrent fetches distinguishable.
-  final Map<int, Completer<Map<String, dynamic>?>> _reactionKeyFetches = {};
-
-  /// The pending `uploadReactionKey`, if any.
-  ///
-  /// Only ONE at a time: a second caller is refused outright rather than
-  /// risking a mis-correlated answer. An upload happens at most once per
-  /// conversation and is triggered by a tap, so the collision needs two taps
-  /// in two chats inside one round trip.
-  Completer<Map<String, dynamic>?>? _reactionKeyUpload;
-
-  /// The conversation [_reactionKeyUpload] is waiting for, so a late answer
-  /// naming a different one is discarded instead of completing this slot.
-  int? _reactionKeyUploadConversationId;
-
-  /// Matches `_servedIdRequestTimeout`: a socket answer that never arrives
-  /// must fail the acquisition rather than pin a completer forever.
-  static const Duration _reactionKeyRequestTimeout = Duration(seconds: 20);
-
-  /// Conversations whose key this session has already tried and failed to
-  /// fetch, so a chat full of unreadable chips asks ONCE instead of once per
-  /// rendered row.
-  final Set<int> _reactionKeyAttempted = {};
-
   // ---------- E2E Encryption ----------
 
-  /// Single delayed retry for a failed text message (e.g. recipient had no key bundle, then came online).
+  /// Single delayed retry for a failed message after a timeout (e.g. the
+  /// device-list lookup the box route waits on).
   Timer? _delayedRetryTimer;
   String? _delayedRetryTempId;
-  bool _decryptingHistory = false;
-
-  /// Peers whose messages failed during the current history decrypt pass.
-  Set<int>? _historyDecryptFailedPeers;
-
-  /// Dedupes session-rebuild emits within one history decrypt pass.
-  Set<int>? _historySessionRebuildRequested;
-
-  /// Peers whose live decrypt failed; retried after a short debounce (no per-message SESSION_RESET).
-  final Set<int> _liveDecryptFailedPeers = {};
-  Timer? _liveDecryptRetryTimer;
 
   /// Peers already told to re-key after our identity reset (once per session).
   final Set<int> _identityResetRebuildNotified = {};
 
   /// Peers we already sent `requestSessionRebuild` to. Cleared per peer when a
   /// decrypt from them succeeds; cleared wholesale on fresh connect/logout.
-  /// Without this, every history pass re-asked the peer to re-key (the
-  /// SESSION_RESET{historyRetry} loop), forcing rebuild churn on every send.
+  /// Without this, every failed read re-asked the peer to re-key (the
+  /// SESSION_RESET loop), forcing rebuild churn on every send.
   final Set<int> _rebuildRequestedPeers = {};
 
-  /// True when a peer's in-band `senderListInfo` showed that OUR OWN devices
-  /// disagree about our own device list (spec §12 amendment (xvii)). Benign by
-  /// definition — our devices have not converged — so the UI shows a calm
-  /// "syncing devices" note and NEVER the identity-changed surface. Cleared as
-  /// soon as a claim agrees with what we hold.
-  bool _devicesSyncing = false;
-
-  bool get devicesSyncing => _devicesSyncing;
-
-  /// One device-list re-fetch in flight per account, and one per cooldown —
-  /// the rate limit amendment (xvi) requires, so a bogus claim attached to
-  /// every inbound message cannot become a fetch storm.
-  final SenderListInfoRefreshLimiter _listRefreshLimiter =
-      SenderListInfoRefreshLimiter();
-
-  /// Message ids the accept-side revocation gate WITHHELD (spec §12 amendments
-  /// (e)/(xxvii)): either the sender's verified list shows the origin device
-  /// revoked/absent, or we hold no verified list for that sender yet.
-  ///
-  /// Load-bearing: without it the post-retry sweep would stamp
-  /// `[Decryption failed]` over a row nothing has failed on, and the recovery
-  /// pass would ask the peer to re-key a session that is perfectly healthy.
-  final Set<int> _acceptGateWithheldIds = {};
-
-  /// tempIds whose `sendMessage` emit already happened — a second emit for the
-  /// same optimistic message would advance the ratchet again and hand the
-  /// recipient an undecryptable duplicate. Released on send failure (so user
-  /// retry works); cleared on connect/logout with [_pendingSendContent].
+  /// tempIds whose send attempt is running or has gone out — a second
+  /// attempt for the same optimistic message would advance the ratchet again
+  /// and hand the recipient an undecryptable duplicate. Released on send
+  /// failure (so user retry works); cleared on connect/logout.
   final Set<String> _emittedSendTempIds = {};
 
   /// tempIds whose LAST send attempt was refused by the account-anchor gate
@@ -271,20 +190,18 @@ class MessagingProvider extends ChangeNotifier {
   void markSendRefusedForIdentityForTest(String tempId) =>
       _identityRefusedSendTempIds.add(tempId);
 
-  /// The `sendToken` minted per tempId (spec §5.4 + §12 amendment (ix)).
+  /// The `sendToken` minted per tempId: the message's wire id (spec §5.4).
   ///
   /// One token per SEND, deliberately REUSED by a retry of the same optimistic
-  /// message: the server enforces per-sender uniqueness, so a retry that
-  /// reuses it re-acks the row already committed instead of duplicating the
-  /// message. It is also the lost-ack reconcile key, because a new-model row
-  /// carries no ciphertext for its own origin device. Cleared with
-  /// [_pendingSendContent].
+  /// message, so a device already holding the message drops the repeat by wire
+  /// id. Cleared on a fresh connect and sign-out; a reconnect keeps the box
+  /// sends' (see [_boxTempIds]).
   final Map<String, String> _sendTokenByTempId = {};
 
   /// TempIds a box send has handed at least one frame to (PR3.1 slice (c)).
-  /// Their wire id survives a same-user reconnect and a retry never falls
-  /// back to the old path: the box may already have delivered the message
-  /// to some devices, and only the box reader drops a copy by wire id.
+  /// Their wire id survives a same-user reconnect: the box may already have
+  /// delivered the message to some devices, and only the box reader drops a
+  /// copy by wire id.
   final Set<String> _boxTempIds = {};
 
   /// TempIds whose box send is running now: nothing else may fail or resend
@@ -293,8 +210,7 @@ class MessagingProvider extends ChangeNotifier {
 
   /// TempIds this device keeps as box messages that did not go out
   /// (decision 104): kept by this session's send or restored with their
-  /// chat. Only these are dropped when the old path takes the send, and
-  /// only these rows are deleted on the device alone.
+  /// chat. Only these rows are deleted on the device alone.
   final Set<String> _boxUnsentTempIds = {};
 
   /// A revoke announcement is running (E50d): one at a time.
@@ -324,17 +240,12 @@ class MessagingProvider extends ChangeNotifier {
     },
     // The OWN list is asked by id (it names only the caller). A covered
     // peer is always a friend, whose list is the one held or one handle
-    // lookup (decision 114, E114a): never named to the server by id, so
-    // never a batched `getDeviceLists` frame (E20a's batch is gone for it).
+    // lookup (decision 114, E114a): never named to the server by id.
     fetch: (user) async {
       final enc = _encryptionProvider;
       if (enc == null) throw StateError('no encryption provider');
       if (user == _currentUserId) {
-        await enc.getVerifiedDeviceList(
-          user,
-          forceRefresh: true,
-          batched: true,
-        );
+        await enc.getVerifiedDeviceList(user, forceRefresh: true);
         _markBoxListsReady(enc);
         unawaited(_announceOwnListIfRevoked());
         return;
@@ -392,28 +303,8 @@ class MessagingProvider extends ChangeNotifier {
     if (userId == _currentUserId) unawaited(_siblingAlivePass());
   }
 
-  /// Stale-list resend attempts per tempId (spec §5.2 cap of 3, then a
-  /// surfaced failure). Cleared with [_pendingSendContent].
-  final Map<String, int> _staleResendAttempts = {};
-
-  /// tempIds currently being resent after a `deviceListStale` refusal. The row
-  /// is still SENDING (never flashed as failed), so [retryFailedMessage] needs
-  /// this to know the resend is legitimate.
-  final Set<String> _staleResendTempIds = {};
-
-  /// Incremented on each new messageHistory to cancel stale in-flight decrypt loops.
-  /// Each loop captures its generation at start and exits when the counter changes.
-  int _decryptHistoryGeneration = 0;
-  final List<Map<String, dynamic>> _incomingMessageQueue = [];
-
-  /// Serializes live decrypt per sender so Signal ratchet order is preserved.
+  /// Serializes box reads per sender so Signal ratchet order is preserved.
   final Map<int, Future<void>> _decryptChainBySender = {};
-
-  /// Plaintext content + link preview + type/media keyed by tempId — survives
-  /// _messages list overwrites (e.g. when messageHistory arrives before messageSent).
-  /// Value: {'content': String, 'messageType'?: String, 'mediaUrl'?: String,
-  ///         'mediaDuration'?: int, 'linkPreviewUrl'?: String, ...}
-  final Map<String, Map<String, dynamic>> _pendingSendContent = {};
 
   // Monotonic counter for temporary negative message IDs — prevents collision
   // if two messages are sent within the same millisecond.
@@ -433,25 +324,19 @@ class MessagingProvider extends ChangeNotifier {
   // ---------- Message State ----------
 
   List<MessageModel> _messages = [];
-  bool _isLoadingMore = false;
-  bool _hasMore = false;
-  int _paginationConversationId = -1;
-  int _paginationOffset = 0;
-  bool _isPaginationLoad = false;
-  Completer<void>? _paginationCompleter;
 
-  /// Monotonic id per [getMessages] emit; paired FIFO in [_pendingHistoryFetchSeq].
-  int _historyFetchSeq = 0;
-  final Map<int, List<int>> _pendingHistoryFetchSeq = {};
+  /// The chat [getMessages] last opened (-1 = none): where a box message is
+  /// shown while [ConversationsProvider] names no active chat yet.
+  int _openConversationId = -1;
 
   /// Per-conversation message cache for the current session.
-  /// Populated/updated by onMessageHistory (after decryption) and all mutation handlers.
+  /// Populated/updated by [getMessages] and all mutation handlers.
   /// Survives back-navigation (clearMessages) and socket reconnects (onConnect).
   /// Cleared only on logout (clearAll).
   final Map<int, List<MessageModel>> _conversationCache = {};
 
-  /// IDs of messages we were told were deleted (messageDeleted). Used so a late
-  /// messageHistory response doesn't re-add them.
+  /// IDs of messages deleted on this device or for everyone: a later read of
+  /// a stored record must not show them again.
   final Set<int> _deletedMessageIds = {};
 
   /// Message being replied to (set when user taps Reply in bubble bottom sheet).
@@ -461,18 +346,18 @@ class MessagingProvider extends ChangeNotifier {
   /// menu; cleared on send/cancel). Drives the composer "editing" banner.
   MessageModel? _editingMessage;
 
-  /// Pre-edit row kept per messageId so a server reject (`editMessageFailed`) or
-  /// an encrypt failure can restore the optimistic in-place update verbatim
-  /// (copyWith can't reset editedAt to null, so we keep the whole row).
+  /// Pre-edit row kept per messageId so a box edit no device took can
+  /// restore the optimistic in-place update verbatim (copyWith can't reset
+  /// editedAt to null, so we keep the whole row).
   final Map<int, MessageModel> _pendingEdits = {};
 
   bool _showPingEffect = false;
 
   /// Message ids whose ping effect already fired this provider lifetime.
   /// Transient event-dedup only (NOT a persisted played-ids cache): a
-  /// redelivered/duplicate `newMessage` for a ping still reaches live decrypt,
-  /// so this guarantees the effect flips at most once per id. Cleared on
-  /// disconnect/fresh-connect with the rest of the transient decrypt state.
+  /// redelivered box frame for a ping still reaches the reader, so this
+  /// guarantees the effect flips at most once per id. Cleared on
+  /// fresh-connect with the rest of the transient state.
   final Set<int> _pingEffectFiredIds = {};
 
   /// Box messages shown whose plaintext record has not been PROVEN stored
@@ -480,12 +365,8 @@ class MessagingProvider extends ChangeNotifier {
   /// the journal's next offer stores it.
   final Map<int, MessageModel> _boxUnsaved = {};
 
-  /// Fired after every history decrypt pass (`ConnectionProvider` drains the
-  /// box journal): a box message refused for "no session" may decrypt now.
-  void Function()? onHistoryDecryptPassFinished;
-
-  /// Where a text goes when it can go over the box (PR3.1 slice (c));
-  /// `ConnectionProvider` wires the account session's one. Null = old path.
+  /// Where a message goes: the box, the only path. `ConnectionProvider`
+  /// wires the account session's one. Null = no route: every send fails.
   BoxOutbox? boxOutbox;
 
   /// This account's own devices over the box (PR3.1 sibling queues): where a
@@ -507,7 +388,7 @@ class MessagingProvider extends ChangeNotifier {
 
   /// First contact over the box (slice (f), decisions 52–55): the records a
   /// request makes and the queue it offers. `ConnectionProvider` wires the
-  /// account session's one; null = every request takes the old path.
+  /// account session's one; null = every request fails.
   BoxFirstContactLink? boxFirstContact;
 
   /// One `searchUsers` of a handle and its raw answer (null: none came) —
@@ -627,158 +508,15 @@ class MessagingProvider extends ChangeNotifier {
 
   // ---------- Public Getters ----------
 
-  /// The rows the UI shows. Rows that predate this device are omitted here and
-  /// ONLY here: pre-link rows (content == [kNotLinkedYetMessageLabel], spec §12
-  /// amendment (lxxxi)), and UNREADABLE rows the server stamped before this
-  /// install's identity became the account's (amendment (lxxxvi), boundary =
-  /// [EncryptionProvider.ownIdentitySince]). They stay in [_messages] and in
-  /// storage, are never destroyed on the marker, and the decrypt/reconcile
-  /// passes keep seeing them. The screen renders one divider for the whole run
-  /// instead ([hiddenPreLinkCount]).
-  ///
-  /// Rebuilt lazily after every [notifyListeners] — every mutation of
-  /// [_messages] ends in one, so a consumer never reads a stale view — or when
-  /// the boundary moved, and returns [_messages] itself when nothing is
-  /// hidden, so the common case allocates nothing.
-  List<MessageModel> get messages {
-    final since = _encryptionProvider?.ownIdentitySince;
-    final cached = _visibleMessages;
-    if (cached != null &&
-        identical(_visibleSource, _messages) &&
-        _visibleSince == since) {
-      return cached;
-    }
-    _visibleSource = _messages;
-    _visibleSince = since;
-    var hidden = 0;
-    for (final m in _messages) {
-      if (_predatesThisDevice(m, since)) hidden++;
-    }
-    _hiddenPreLinkCount = hidden;
-    return _visibleMessages = hidden == 0
-        ? _messages
-        : List.unmodifiable(
-            _messages.where((m) => !_predatesThisDevice(m, since)),
-          );
-  }
-
-  /// The row the chat list draws [lastMessage]'s preview from, or null for NO
-  /// preview text (amendment (lxxxviii) A1).
-  ///
-  /// The server's `conversationsList` serves every E2E row as `[encrypted]`
-  /// and only a LIVE event replaces it, so after any restart every chat's
-  /// last SERVER message arrives that way (a newer box message is restored
-  /// from its record with its plaintext, [applyStoredBoxLastMessages]). For
-  /// such a row:
-  ///   1. the plaintext this install holds for that id (the decrypt cache, else
-  ///      the persisted copy) → that row, so the real text or media label;
-  ///   2. else a PEER row that is still unread ([unreadCount] > 0) and does
-  ///      not predate this device → [lastMessage] itself, which the tile shows
-  ///      as "New message" — even when its decrypt failed here, because the
-  ///      thread shows that row and the list must not blank it;
-  ///   3. else null: a read row, an OWN row, or a row that predates this
-  ///      device must not claim to be new.
-  /// While the persisted copy is still being read the answer is null too — an
-  /// empty line, never a false "New message" over a chat already read.
-  ///
-  /// Any other row keeps its own content unless this install can never read
-  /// it (the verdict [messages] hides a row on), which gets no text either.
-  MessageModel? listPreviewFor(
-    MessageModel lastMessage, {
-    required int unreadCount,
-  }) {
-    final since = _encryptionProvider?.ownIdentitySince;
-    if (lastMessage.content != kEncryptedPlaceholderLabel ||
-        _hasUsableDecryptedContent(lastMessage)) {
-      return _predatesThisDevice(lastMessage, since) ? null : lastMessage;
-    }
-    final cached = _encryptionProvider?.getCachedDecryption(lastMessage.id);
-    if (cached != null &&
-        _hasUsableDecryptedContent(cached) &&
-        !_isEditStale(lastMessage.editedAt, cached.editedAt)) {
-      return cached;
-    }
-    if (!_listPlaintext.containsKey(lastMessage.id)) {
-      _readListPlaintext(lastMessage).ignore();
-      return null;
-    }
-    final stored = _listPlaintext[lastMessage.id];
-    if (stored != null) return stored;
-    final isNew =
-        lastMessage.senderId != _currentUserId &&
-        unreadCount > 0 &&
-        !_predatesThisDevice(lastMessage, since);
-    return isNew ? lastMessage : null;
-  }
-
-  /// The persisted plaintext looked up for [listPreviewFor], by message id:
-  /// the restored row, or null when this install holds none. An absent key
-  /// means "not answered yet". Cleared on logout.
-  final Map<int, MessageModel?> _listPlaintext = {};
-
-  /// Ids whose [_listPlaintext] read is in flight, so a list rebuilt while it
-  /// runs does not start a second one.
-  final Set<int> _listPlaintextReads = {};
-
-  /// Reads the persisted plaintext for a chat-list row, then re-notifies so
-  /// the list redraws. Waits for the E2E layer: before it is up the store is
-  /// not bound to the user and every read would look like a miss. The screen
-  /// rebuilds the list when it comes up, which asks again.
-  Future<void> _readListPlaintext(MessageModel row) async {
-    final enc = _encryptionProvider;
-    if (enc == null || !enc.isE2EReady || !_listPlaintextReads.add(row.id)) {
-      return;
-    }
-    final user = _currentUserId;
-    MessageModel? held;
-    try {
-      final payload = await enc.getDecryptedContent(row.id);
-      final storedEditedAt = DateTime.tryParse(
-        payload?['editedAt'] as String? ?? '',
-      );
-      if (payload != null &&
-          payload['content'] != kDecryptionFailedLabel &&
-          !_isEditStale(row.editedAt, storedEditedAt)) {
-        final restored = _restoreFromPersistedPayload(row, payload);
-        if (_hasUsableDecryptedContent(restored)) held = restored;
-      }
-    } finally {
-      _listPlaintextReads.remove(row.id);
-    }
-    if (_isDisposed || user != _currentUserId) return;
-    _listPlaintext[row.id] = held;
-    notifyListeners();
-  }
-
-  /// How many rows of the loaded history [messages] hides because they predate
-  /// this device — its link, or its identity. Non-zero → the thread shows one
-  /// "earlier messages aren't available on this device" divider at its oldest
-  /// end.
-  int get hiddenPreLinkCount {
-    messages; // refresh the cache
-    return _hiddenPreLinkCount;
-  }
-
-  List<MessageModel>? _visibleMessages;
-  List<MessageModel>? _visibleSource;
-  DateTime? _visibleSince;
-  int _hiddenPreLinkCount = 0;
-
-  @override
-  void notifyListeners() {
-    _visibleMessages = null;
-    super.notifyListeners();
-  }
+  /// The rows of the open chat, oldest first.
+  List<MessageModel> get messages => _messages;
 
   MessageModel? get replyingToMessage => _replyingToMessage;
   MessageModel? get editingMessage => _editingMessage;
   bool get showPingEffect => _showPingEffect;
-  bool get isDecryptingHistory => _decryptingHistory;
   int? get currentUserId => _currentUserId;
-  bool get isLoadingMore => _isLoadingMore;
-  bool get hasMoreMessages => _hasMore;
 
-  /// Test-only: seed the cache directly without going through onMessageHistory.
+  /// Test-only: seed the cache directly without going through [getMessages].
   @visibleForTesting
   void seedCacheForTest(int conversationId, List<MessageModel> messages) {
     _conversationCache[conversationId] = List.from(messages);
@@ -896,13 +634,6 @@ class MessagingProvider extends ChangeNotifier {
     );
   }
 
-  Future<void> _waitForE2EReady({int maxAttempts = 100}) async {
-    for (var i = 0; i < maxAttempts; i++) {
-      if (_encryptionProvider?.isE2EReady ?? false) return;
-      await Future.delayed(const Duration(milliseconds: 100));
-    }
-  }
-
   Future<T> _runDecryptSerialized<T>(
     int senderId,
     Future<T> Function() action,
@@ -996,316 +727,6 @@ class MessagingProvider extends ChangeNotifier {
     _tokenForReconnect = token;
   }
 
-  // ---------- Reaction keys ----------
-
-  /// The reaction-key service, built on first use.
-  ///
-  /// Null until the E2E stack is wired: without it there is no session to
-  /// wrap a key to and nothing to store it in, so callers fall back to
-  /// rendering placeholders rather than pretending.
-  ReactionKeyService? get _reactionKeyService {
-    final encryption = _encryptionProvider;
-    if (encryption == null) return null;
-    return _reactionKeys ??= ReactionKeyService(
-      store: encryption.encryptionService,
-      request: _reactionKeyRequest,
-      resolveTargets: _reactionKeyTargets,
-      encryptFor: (userId, deviceId, plaintext) async {
-        await encryption.ensureSession(userId, deviceId: deviceId);
-        return encryption.encrypt(userId, plaintext, deviceId: deviceId);
-      },
-      // No `messageId`: this ciphertext is not a message row, so it has no
-      // durable replay record to bind to.
-      decryptFrom: (senderUserId, senderDeviceId, ciphertext) => encryption
-          .decrypt(senderUserId, ciphertext, deviceId: senderDeviceId),
-    );
-  }
-
-  /// Every device of the two participants that a wrapped key must reach.
-  ///
-  /// RESOLVES the device lists rather than reading the send path's cache.
-  /// The send path may fall back to "device 1" because the SERVER refuses a
-  /// legacy send whenever either party is enrolled (`deviceListStale`), so a
-  /// bad guess there costs one refused send. `uploadReactionKey` has no such
-  /// gate: a guess that misses a live device publishes an epoch that device
-  /// can never obtain a key for, and the epoch-0 rule then forbids it from
-  /// healing itself. So a guess here is permanent damage, and this fails
-  /// CLOSED instead — an empty list makes the create refuse and the tap show
-  /// its snackbar.
-  ///
-  /// `getVerifiedDeviceList` answers affirmatively for both shapes: an
-  /// enrolled account's signed list, or the synthesized single device 1 for a
-  /// non-enrolled one. Own other devices are always included; the send path
-  /// adds them only when fanning out, which is exactly the case this must not
-  /// inherit.
-  Future<List<ReactionKeyTarget>> _reactionKeyTargets(int peerUserId) async {
-    final encryption = _encryptionProvider;
-    final ownUserId = _currentUserId;
-    if (encryption == null || ownUserId == null) return const [];
-    final VerifiedDeviceList peerList;
-    final VerifiedDeviceList ownList;
-    try {
-      peerList = await encryption.getVerifiedDeviceList(peerUserId);
-      ownList = await encryption.getVerifiedDeviceList(ownUserId);
-    } on Object catch (_) {
-      // Fail closed: `getVerifiedDeviceList` throws on a timeout, a missing
-      // TOFU identity or a failed chain, and none of those license a guess.
-      return const [];
-    }
-    final ownDeviceId = encryption.ownDeviceId;
-    return [
-      for (final deviceId in peerList.liveDeviceIds)
-        (userId: peerUserId, deviceId: deviceId),
-      for (final deviceId in ownList.liveDeviceIds)
-        // Never this device: it stores the key directly, and the server
-        // refuses a self-addressed envelope for the origin device.
-        if (deviceId != ownDeviceId) (userId: ownUserId, deviceId: deviceId),
-    ];
-  }
-
-  /// One socket request/response round trip for the reaction-key protocol.
-  ///
-  /// Returns null when there is no answer to be had (no socket, a collision
-  /// on the single upload slot, or a timeout). The caller reads that as a
-  /// refusal, which is the safe reading: nothing is created and no chip is
-  /// claimed to be readable.
-  Future<Map<String, dynamic>?> _reactionKeyRequest(
-    String event,
-    Map<String, dynamic> payload,
-  ) async {
-    final emit = _emit;
-    if (emit == null) return null;
-
-    if (event == 'fetchReactionKey') {
-      final conversationId = payload['conversationId'] as int;
-      // A fetch already in flight for this conversation IS this fetch: the
-      // answer is addressed by conversation id, so both callers want the same
-      // one and a second emit would only race the first.
-      final existing = _reactionKeyFetches[conversationId];
-      // The timeout is applied to the SHARED future too. Returning the bare
-      // completer future handed the piggybacking caller a future that only
-      // the originator's `finally` could ever release: when the answer never
-      // came, the originator timed out and dropped the map entry while the
-      // second caller awaited a completer nobody would complete — and since
-      // that caller's acquisition was itself registered as in-flight, every
-      // later one queued behind it forever.
-      if (existing != null) {
-        return existing.future.timeout(
-          _reactionKeyRequestTimeout,
-          onTimeout: () => null,
-        );
-      }
-      final pending = Completer<Map<String, dynamic>?>();
-      _reactionKeyFetches[conversationId] = pending;
-      emit(event, payload);
-      return _awaitReactionKeyAnswer(
-        pending,
-        () => _reactionKeyFetches.remove(conversationId),
-      );
-    }
-
-    if (_reactionKeyUpload != null) return null;
-    final pending = Completer<Map<String, dynamic>?>();
-    _reactionKeyUpload = pending;
-    // Remembered so a late answer for a DIFFERENT conversation cannot be read
-    // as this one's: the two are otherwise indistinguishable, and mistaking
-    // them persists a key the server never accepted.
-    _reactionKeyUploadConversationId = payload['conversationId'] as int?;
-    emit(event, payload);
-    return _awaitReactionKeyAnswer(pending, () {
-      _reactionKeyUpload = null;
-      _reactionKeyUploadConversationId = null;
-    });
-  }
-
-  Future<Map<String, dynamic>?> _awaitReactionKeyAnswer(
-    Completer<Map<String, dynamic>?> pending,
-    void Function() release,
-  ) async {
-    try {
-      return await pending.future.timeout(_reactionKeyRequestTimeout);
-    } on TimeoutException {
-      return null;
-    } finally {
-      // Always released: a slot held by a dead request would refuse every
-      // later upload for the life of the process.
-      release();
-    }
-  }
-
-  /// Server answer to `uploadReactionKey`.
-  ///
-  /// Dropped unless it names the conversation the pending upload was for. The
-  /// slot is released on timeout, so without this check a slow answer for
-  /// conversation A could complete a later upload for conversation B — and
-  /// `_create` would persist B's key under A's epoch, a key no peer device
-  /// ever received and which `loadReactionKey` would then serve forever.
-  void onReactionKeyUploaded(dynamic data) {
-    final pending = _reactionKeyUpload;
-    if (pending == null || pending.isCompleted) return;
-    final map = data is Map<String, dynamic> ? data : null;
-    final answeredFor = map?['conversationId'];
-    final expected = _reactionKeyUploadConversationId;
-    if (answeredFor is int && expected != null && answeredFor != expected) {
-      return;
-    }
-    pending.complete(map);
-  }
-
-  /// Server answer to `fetchReactionKey`.
-  void onReactionKeyResponse(dynamic data) {
-    final map = data is Map<String, dynamic> ? data : null;
-    final conversationId = map?['conversationId'];
-    if (conversationId is int) {
-      final pending = _reactionKeyFetches[conversationId];
-      if (pending != null && !pending.isCompleted) pending.complete(map);
-      return;
-    }
-    // `invalid_payload` answers with a null conversation id when the request
-    // carried no usable one. Nothing can be correlated, so every waiter is
-    // told — a refusal is the right answer for all of them, and leaving them
-    // to time out would stall each acquisition for 20s.
-    for (final pending in _reactionKeyFetches.values.toList()) {
-      if (!pending.isCompleted) pending.complete(map);
-    }
-  }
-
-  /// Turns a wire reaction map into the one the UI renders.
-  ///
-  /// Applied where reactions ENTER (history, new message, `reactionUpdated`)
-  /// rather than at render time, so every downstream reader — chips, the
-  /// context menu's own-reaction check, the toggle — sees one shape and needs
-  /// no codec of its own.
-  Map<String, List<int>> _renderableReactions(
-    int conversationId,
-    Map<String, List<int>> wire,
-  ) {
-    if (wire.isEmpty) return wire;
-    final resolved = resolveReactionKeys(
-      wire,
-      _reactionKeys?.cachedCodec(conversationId),
-    );
-    if (resolved.keys.any(isUnresolvedReactionKey)) {
-      _fetchReactionKeyOnce(conversationId);
-    }
-    return resolved;
-  }
-
-  MessageModel _withRenderableReactions(MessageModel msg) =>
-      msg.reactions.isEmpty
-      ? msg
-      : msg.copyWith(
-          reactions: _renderableReactions(msg.conversationId, msg.reactions),
-        );
-
-  /// Starts at most one background key acquisition per conversation.
-  ///
-  /// A chat can render fifty unreadable chips; it must ask the server once.
-  /// Never creates a key: this runs without the user asking for anything, and
-  /// creating one advances the epoch.
-  void _fetchReactionKeyOnce(int conversationId) {
-    if (!_reactionKeyAttempted.add(conversationId)) return;
-    final service = _reactionKeyService;
-    final peerUserId = _peerUserIdFor(conversationId);
-    if (service == null || peerUserId == null) {
-      _reactionKeyAttempted.remove(conversationId);
-      return;
-    }
-    unawaited(
-      service
-          .ensureCodec(conversationId, peerUserId: peerUserId)
-          .then((result) {
-            if (result.codec != null) {
-              _reRenderReactions(conversationId);
-              return;
-            }
-            // TRANSIENT failures release the latch so the next message in
-            // this chat tries again. `refused` is transient too and used not
-            // to be: it is what a dead socket, a 20s timeout and the fetch
-            // throttle all produce, so treating it as terminal latched a
-            // whole conversation into placeholder chips until app restart,
-            // long after the socket recovered.
-            //
-            // Only `noKeyYet` (this device is not in the mailbox at this
-            // epoch) and `undecryptable` (the row was already spent) stay
-            // latched — nothing this device does makes those resolve, and
-            // re-pulling would only burn ratchet steps.
-            if (result.failure == ReactionKeyFailure.unavailable ||
-                result.failure == ReactionKeyFailure.refused) {
-              _reactionKeyAttempted.remove(conversationId);
-            }
-          })
-          .catchError((Object _) {
-            // A throw here would otherwise surface as an unhandled zone
-            // error; the chat simply keeps its placeholders and may retry.
-            _reactionKeyAttempted.remove(conversationId);
-          }),
-    );
-  }
-
-  /// Re-maps already-stored reactions for [conversationId] once its key lands.
-  ///
-  /// Safe to run repeatedly: an already-resolved emoji key passes through
-  /// untouched, so this only ever turns tokens into emoji.
-  void _reRenderReactions(int conversationId) {
-    var changed = false;
-    for (var i = 0; i < _messages.length; i++) {
-      final msg = _messages[i];
-      if (msg.conversationId != conversationId || msg.reactions.isEmpty) {
-        continue;
-      }
-      if (!msg.reactions.keys.any(isUnresolvedReactionKey)) continue;
-      _messages[i] = _withRenderableReactions(msg);
-      changed = true;
-    }
-    final cached = _conversationCache[conversationId];
-    if (cached != null) {
-      for (var i = 0; i < cached.length; i++) {
-        final msg = cached[i];
-        if (msg.reactions.isEmpty) continue;
-        if (!msg.reactions.keys.any(isUnresolvedReactionKey)) continue;
-        cached[i] = _withRenderableReactions(msg);
-        changed = true;
-      }
-    }
-    if (changed) notifyListeners();
-  }
-
-  /// The wire value a reaction must be sent as, or null if this device cannot
-  /// produce one.
-  ///
-  /// Null is NEVER downgraded to the plain emoji: that would put the reaction
-  /// back on the server in the clear, which is the entire thing this change
-  /// removes. The caller reports the failure instead.
-  Future<String?> _reactionWireKey(int conversationId, String emoji) async {
-    // Already a token (the user tapped an existing chip that this device could
-    // not name): it is unnameable here, so it cannot be toggled here either.
-    if (isUnresolvedReactionKey(emoji)) return null;
-    final service = _reactionKeyService;
-    final peerUserId = _peerUserIdFor(conversationId);
-    if (service == null || peerUserId == null) return null;
-    final result = await service.ensureCodec(
-      conversationId,
-      peerUserId: peerUserId,
-      // A tap is the deliberate act that may mint the conversation's first
-      // key. The service still refuses to re-key an existing epoch.
-      mayCreate: true,
-    );
-    final codec = result.codec;
-    if (codec == null) return null;
-    // A key just arrived: chips rendered as placeholders can be named now.
-    _reRenderReactions(conversationId);
-    return codec.tokenFor(emoji);
-  }
-
-  int? _peerUserIdFor(int conversationId) {
-    final conv = _conversationsProvider?.conversations
-        .where((c) => c.id == conversationId)
-        .firstOrNull;
-    if (conv == null) return null;
-    return conv_helpers.getOtherUserId(conv, _currentUserId);
-  }
-
   // ---------- Reply-To ----------
 
   VoidCallback? _composerFocusRequest;
@@ -1388,9 +809,6 @@ class MessagingProvider extends ChangeNotifier {
   /// Called on socket connect. Clears message state for fresh connect,
   /// preserves for reconnect (same user).
   void onConnect(bool isReconnect) {
-    _decryptHistoryGeneration++; // cancel any in-flight history decrypt
-    _pendingHistoryFetchSeq.clear();
-
     if (!isReconnect) {
       // Fresh connect or switch user: clear ALL message state
       _messages = [];
@@ -1405,7 +823,6 @@ class MessagingProvider extends ChangeNotifier {
       _replyingToMessage = null;
       _editingMessage = null;
       _pendingEdits.clear();
-      _pendingSendContent.clear();
       _emittedSendTempIds.clear();
       _identityRefusedSendTempIds.clear();
       _sendTokenByTempId.clear();
@@ -1418,9 +835,6 @@ class MessagingProvider extends ChangeNotifier {
       _boxReadReported.clear();
       _boxSeenMarked.clear();
       _boxTypingSentAt.clear();
-      _staleResendAttempts.clear();
-      _staleResendTempIds.clear();
-      _incomingMessageQueue.clear();
       _identityResetRebuildNotified.clear();
       _rebuildRequestedPeers.clear();
       // Fresh connect / user switch: forget which pings already fired.
@@ -1429,12 +843,6 @@ class MessagingProvider extends ChangeNotifier {
       // Local ids restart at the same base for every account: an unsaved
       // row of the previous session must never be stored into this one.
       _boxUnsaved.clear();
-      // A different user (or the same user, freshly signed in) must not
-      // inherit either the cached `K_react` codecs or the per-conversation
-      // "already asked" latch: the codecs are key material for an account
-      // that is no longer signed in, and the latch would keep a healthy chat
-      // on placeholder chips.
-      _resetReactionKeyState();
       _cancelDelayedRetryIfAny();
     } else {
       // Reconnect (same user): keep messages to avoid flicker.
@@ -1451,8 +859,6 @@ class MessagingProvider extends ChangeNotifier {
       _replyingToMessage = null;
       _editingMessage = null;
       _pendingEdits.clear();
-      _pendingSendContent
-          .clear(); // retry was cancelled; orphaned entries serve no purpose
       _emittedSendTempIds.clear();
       _identityRefusedSendTempIds.clear();
       // A box send's retry must reuse its wire id, or a device the failed
@@ -1461,38 +867,15 @@ class MessagingProvider extends ChangeNotifier {
         (tempId, _) => !_boxTempIds.contains(tempId),
       );
       _boxLists.reset();
-      _staleResendAttempts.clear();
-      _staleResendTempIds.clear();
-      // Same user, so the codecs stay valid — but every conversation gets
-      // another chance to fetch: the latch was most likely set BY the
-      // disconnect that caused this reconnect.
-      _reactionKeyAttempted.clear();
-      _reactionKeyFetches.clear();
-      _reactionKeyUpload = null;
-      _reactionKeyUploadConversationId = null;
       _cancelDelayedRetryIfAny();
     }
 
     notifyListeners();
   }
 
-  /// Drops every trace of reaction-key state (fresh connect, user switch,
-  /// logout). Key material in RAM must not outlive the session that fetched
-  /// it, and a pending round trip must not complete into the next one.
-  void _resetReactionKeyState() {
-    _reactionKeys?.clear();
-    _reactionKeys = null;
-    _reactionKeyAttempted.clear();
-    _reactionKeyFetches.clear();
-    _reactionKeyUpload = null;
-    _reactionKeyUploadConversationId = null;
-  }
-
   /// Called on socket disconnect. Cancels timers.
   void onDisconnect() {
     _cancelDelayedRetryIfAny();
-    _liveDecryptRetryTimer?.cancel();
-    _liveDecryptRetryTimer = null;
     for (final t in _typingTimers.values) {
       t.cancel();
     }
@@ -1504,7 +887,6 @@ class MessagingProvider extends ChangeNotifier {
   void clearAll() {
     _messages = [];
     _conversationCache.clear();
-    _pendingHistoryFetchSeq.clear();
     _deletedMessageIds.clear();
     _typingStatus.clear();
     for (final t in _typingTimers.values) {
@@ -1517,16 +899,7 @@ class MessagingProvider extends ChangeNotifier {
     _editingMessage = null;
     _pendingEdits.clear();
     _showPingEffect = false;
-    _pendingSendContent.clear();
-    _incomingMessageQueue.clear();
     _decryptChainBySender.clear();
-    _decryptingHistory = false;
-    _decryptHistoryGeneration++;
-    _liveDecryptRetryTimer?.cancel();
-    _liveDecryptRetryTimer = null;
-    _liveDecryptFailedPeers.clear();
-    _listPlaintext.clear();
-    _listPlaintextReads.clear();
     _identityResetRebuildNotified.clear();
     _rebuildRequestedPeers.clear();
     _pingEffectFiredIds.clear();
@@ -1549,10 +922,6 @@ class MessagingProvider extends ChangeNotifier {
     _boxReadReported.clear();
     _boxSeenMarked.clear();
     _boxTypingSentAt.clear();
-    _staleResendAttempts.clear();
-    _staleResendTempIds.clear();
-    // Logout: `K_react` for every visited conversation is in RAM here.
-    _resetReactionKeyState();
     _cancelDelayedRetryIfAny();
     _dropBoxActionRetries();
     _boxPaused.clear();
@@ -1564,11 +933,8 @@ class MessagingProvider extends ChangeNotifier {
 
   /// Clear messages for the active conversation (used when clearing active chat).
   void clearMessages() {
-    _finishPaginationLoad();
     _messages = [];
-    _hasMore = false;
-    _paginationOffset = 0;
-    _paginationConversationId = -1;
+    _openConversationId = -1;
     notifyListeners();
   }
 

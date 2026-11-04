@@ -1,5 +1,4 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { Server, Socket } from 'socket.io';
 import {
   DeviceListRejectedError,
@@ -13,10 +12,7 @@ import {
 } from '../dto/device-list.dto';
 import { validateDto } from '../utils/dto.validator';
 import { userRoom } from '../utils/user-room';
-import { ChatValidationService } from './chat-validation.service';
-import { ConversationsService } from '../../conversations/conversations.service';
 import { deviceAuthorizationPayload } from '../mappers/device-authorization.mapper';
-import { legacyListsSilent } from '../utils/legacy-freeze';
 
 /**
  * socket.io declares `Socket.data` as `any`; one documented narrowing keeps
@@ -43,12 +39,7 @@ function socketUserId(client: Socket): number | undefined {
 export class ChatDeviceListService {
   private readonly logger = new Logger(ChatDeviceListService.name);
 
-  constructor(
-    private readonly deviceListService: DeviceListService,
-    private readonly chatValidationService: ChatValidationService,
-    private readonly conversationsService: ConversationsService,
-    private readonly configService: ConfigService,
-  ) {}
+  constructor(private readonly deviceListService: DeviceListService) {}
 
   async handleEnrollDeviceAuthority(
     client: Socket,
@@ -127,35 +118,21 @@ export class ChatDeviceListService {
   }
 
   /**
-   * Serves the stored enrollment + list to a caller ENTITLED to it: peers run
-   * the I7 chain themselves and need the full record, in the byte-exact form
-   * of [deviceAuthorizationPayload].
+   * Serves the stored enrollment + list of the CALLER'S OWN account, in the
+   * byte-exact form of [deviceAuthorizationPayload]: the I7 own-skew re-fetch,
+   * the connect refresh, the link ceremony and the devices screen read it, and
+   * it discloses nothing the caller does not already hold.
    *
-   * Entitlement (amendment (xliii)). This used to serve ANY account's roster
-   * to ANY authenticated caller, which made it a device-count, platform and
-   * timeline oracle over every user on the instance — a precise profiling
-   * surface in an app whose premise is metadata minimisation, on a repository
-   * public since 2026-08-18. Three ways in, in cost order:
+   * OWN ID ONLY (Phase 4 step 5; decisions 114, 117). This once served any
+   * account's roster to any authenticated caller, and then (amendment (xliii))
+   * to friends and conversation partners. Both entitlements read the friend and
+   * conversation rows, which are gone: a friend's list now arrives over the box
+   * or from the `searchUsers` handle lookup, never by id, so the server
+   * consults no friendship and no chat.
    *
-   *   1. YOUR OWN list. Always. The I7 own-skew re-fetch depends on it and it
-   *      discloses nothing you do not already hold.
-   *   2. Someone you may message — friends and not blocked either way. The
-   *      predicate the gateway already uses everywhere else; no new
-   *      authorisation concept is introduced here.
-   *   3. Someone you share a conversation with, even if rule 2 now refuses.
-   *      REQUIRED, not a convenience: a peer who later unfriends or blocks you
-   *      would otherwise render history you ALREADY RECEIVED permanently
-   *      undecryptable, because the accept-side gate needs their verified list
-   *      to decrypt. A fix that silently destroys readable history is worse
-   *      than the leak it closes.
-   *
-   * While `LEGACY_LISTS_SILENT=true` only rule 1 stands (Phase 4 step 4,
-   * [mayReadDeviceList]); rules 2 and 3 are left for the flag's off state and
-   * go with it at step 5.
-   *
-   * A refusal is SILENT, matching the error path below: I5 makes silence
-   * fail-closed on the client ("cannot verify", never "no devices"), and
-   * answering would itself confirm whether the account exists.
+   * A request for any other id is SILENT, matching the error path below: I5
+   * makes silence fail-closed on the client ("cannot verify", never "no
+   * devices"), and answering would itself confirm whether the account exists.
    */
   async handleGetDeviceList(client: Socket, data: unknown): Promise<void> {
     const requesterId = socketUserId(client);
@@ -173,9 +150,8 @@ export class ChatDeviceListService {
 
   /**
    * `getDeviceLists { userIds }` (metadata-privacy item 5, E20a): one request
-   * for every friend at connect, instead of one `getDeviceList` per friend
-   * from the shared fetch bucket. Each user named gets EXACTLY the
-   * [handleGetDeviceList] treatment — the same entitlement, the same
+   * for several users at once. Each user named gets EXACTLY the
+   * [handleGetDeviceList] treatment — the same own-id rule, the same
    * replacement-owed refusal, the same `deviceList` answer — so a batch can
    * never reach a roster a single request could not. A refused user stays
    * silent while the others are served; an invalid batch (empty, over 256, a
@@ -216,7 +192,7 @@ export class ChatDeviceListService {
 
   /**
    * The per-user rule both verbs share: emit `deviceList` for [userId] when
-   * [requesterId] is entitled and the account owes no replacement enrollment,
+   * it is the caller's own and the account owes no replacement enrollment,
    * else nothing. Throws on a lookup failure; each caller decides what a
    * failure silences.
    */
@@ -225,7 +201,7 @@ export class ChatDeviceListService {
     requesterId: number,
     userId: number,
   ): Promise<void> {
-    if (!(await this.mayReadDeviceList(requesterId, userId))) {
+    if (requesterId !== userId) {
       this.logger.warn(`[device-list] REFUSED reason=not_entitled`);
       return;
     }
@@ -268,39 +244,5 @@ export class ChatDeviceListService {
       userId,
       authorization: deviceAuthorizationPayload(row),
     });
-  }
-
-  /**
-   * May `requesterId` read `targetUserId`'s device roster? See the three rules
-   * on [handleGetDeviceList] (amendment (xliii)).
-   *
-   * While the lists are silent (Phase 4 step 4, decision 114) only rule 1
-   * stands: a friend's list comes over the box or from the handle lookup,
-   * never by id, so the server consults no friendship and no chat.
-   *
-   * Ordered cheapest-first: the identity check costs nothing, the messaging
-   * predicate is two indexed reads, and the conversation lookup only runs when
-   * the messaging predicate has already refused — so the common case (a
-   * friend) never pays for the carve-out.
-   */
-  private async mayReadDeviceList(
-    requesterId: number,
-    targetUserId: number,
-  ): Promise<boolean> {
-    if (requesterId === targetUserId) return true;
-    if (legacyListsSilent(this.configService)) return false;
-    const canMessage = await this.chatValidationService.validateCanMessage(
-      requesterId,
-      targetUserId,
-    );
-    if (canMessage.valid) return true;
-    // The history carve-out: they can no longer message each other, but a
-    // conversation between them exists, so messages already delivered still
-    // need this list to decrypt.
-    const conversation = await this.conversationsService.findByUsers(
-      requesterId,
-      targetUserId,
-    );
-    return conversation != null;
   }
 }

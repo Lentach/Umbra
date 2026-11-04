@@ -166,20 +166,6 @@ class BoxFriendHandoff {
     run();
   }
 
-  /// A `friendsList` arrived: it may name a friend this device has no record
-  /// of yet, and what it writes is what the pass reads. The list's own
-  /// `devices` are NOT read (E114b): addresses come from handoffs and from
-  /// a handle lookup.
-  ///
-  /// The pass runs once the contact store has settled: the same list is
-  /// what writes a friend first named here into the store (`FriendsProvider`
-  /// queues that write just before), and a pass that reads the store before
-  /// it lands skips that friend until the next connect (found live: a
-  /// friendship made while this device was away).
-  void friendsListed() {
-    unawaited(_store.settled.then((_) => run()));
-  }
-
   /// The request queues a handle lookup of friend [userId] served (E114b),
   /// one per live device that published one: where a handoff goes until that
   /// device hands us its own queue. Replaces what an earlier lookup served.

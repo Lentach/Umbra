@@ -27,6 +27,8 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../support/chat_seed.dart';
+
 /// Decision 102 catch-up sync between own devices 1 (this one) and 3. The
 /// real plaintext store and contact store; Signal is faked: an outbound
 /// "ciphertext" is `3:` + base64(plaintext), an inbound one decrypts to
@@ -265,18 +267,18 @@ void main() {
     cards = 0;
     conversations = ConversationsProvider()
       ..contactStore = store
-      ..setCurrentUserId(1)
-      ..onConversationsList([
-        {
-          'id': 10,
-          'userOne': {'id': 1, 'username': 'alice', 'tag': '0001'},
-          'userTwo': {'id': 2, 'username': 'bob', 'tag': '0002'},
-          'createdAt': '2026-01-01T00:00:00.000Z',
-          'unreadCount': 0,
-          'lastMessage': null,
-        },
-      ])
-      ..openConversation(10);
+      ..setCurrentUserId(1);
+    seedConversations(conversations, [
+      {
+        'id': 10,
+        'userOne': {'id': 1, 'username': 'alice', 'tag': '0001'},
+        'userTwo': {'id': 2, 'username': 'bob', 'tag': '0002'},
+        'createdAt': '2026-01-01T00:00:00.000Z',
+        'unreadCount': 0,
+        'lastMessage': null,
+      },
+    ]);
+    conversations.openConversation(10);
     await store.settled;
     provider = MessagingProvider()
       ..setConversationsProvider(conversations)

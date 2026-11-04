@@ -20,13 +20,12 @@ import '../providers/messaging_provider.dart'
 /// (live QA 2026-08-31). Anything added here reaches both; anything added to
 /// only one of them drifts.
 ///
-/// [isMine] and [decryptInProgress] are what the bubble knows and the replica
-/// does not, so they default to the safe "no relabel" values.
+/// [isMine] is what the bubble knows and the replica does not, so it
+/// defaults to the safe "no relabel" value.
 String? sentinelDisplayText(
   BuildContext context,
   MessageModel message, {
   bool isMine = false,
-  bool decryptInProgress = false,
 }) {
   // Resolved LAZILY per branch, NEVER hoisted: a row carrying real content must
   // render without an [AppLocalizations] ancestor. Hoisting it made every plain
@@ -39,11 +38,6 @@ String? sentinelDisplayText(
   }
   if (content == kEncryptionNotInitializedLabel) {
     return AppLocalizations.of(context).encryptionNotInitialized;
-  }
-  // Still working on it: it WILL resolve. Keeps the model's own predicate, so a
-  // row with no ciphertext never claims to be waiting on the pass.
-  if (decryptInProgress && message.displayAsEncryptedPlaceholder) {
-    return AppLocalizations.of(context).decryptingMessage;
   }
   // Tried and terminally lost. The post-retry sweep writes this label, so by
   // the time a row carries it the pass is done with it.
@@ -60,11 +54,9 @@ String? sentinelDisplayText(
   // requires ciphertext and a fan-out row carries none for its own origin
   // device (amendment (ix)), so it misses exactly this row.
   //
-  // Deliberately NOT extended to PEER rows: a peer `[encrypted]` may simply be
-  // awaiting the pass (the frame before `decryptInProgress` goes true would
-  // flash a false "can't be read"), and an unresolved peer row is rewritten to
-  // `[Decryption failed]` by the sweep above anyway.
-  if (!decryptInProgress && isMine && content == kEncryptedPlaceholderLabel) {
+  // Deliberately NOT extended to PEER rows: an unresolved peer row is
+  // rewritten to `[Decryption failed]` anyway.
+  if (isMine && content == kEncryptedPlaceholderLabel) {
     return AppLocalizations.of(context).messageUnreadableOnThisDevice;
   }
   return null;
@@ -95,14 +87,12 @@ String? sentinelUnreadableReason(
   BuildContext context,
   MessageModel message, {
   bool isMine = false,
-  bool decryptInProgress = false,
 }) {
-  if (decryptInProgress && message.displayAsEncryptedPlaceholder) return null;
   final content = message.content;
   if (content == kDecryptionFailedLabel) {
     return AppLocalizations.of(context).messageUnreadableReasonKeysGone;
   }
-  if (!decryptInProgress && isMine && content == kEncryptedPlaceholderLabel) {
+  if (isMine && content == kEncryptedPlaceholderLabel) {
     return AppLocalizations.of(context).messageUnreadableReasonOwnCopyGone;
   }
   return null;
@@ -118,14 +108,8 @@ String messageDisplayContent(
   BuildContext context,
   MessageModel message, {
   bool isMine = false,
-  bool decryptInProgress = false,
 }) {
-  final mapped = sentinelDisplayText(
-    context,
-    message,
-    isMine: isMine,
-    decryptInProgress: decryptInProgress,
-  );
+  final mapped = sentinelDisplayText(context, message, isMine: isMine);
   if (mapped != null) return mapped;
   if (message.content.isNotEmpty) return message.content;
   return AppLocalizations.of(context).unsupportedMessageType;

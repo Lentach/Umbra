@@ -1,11 +1,15 @@
 // Phase 0a takeover alarm (multi-device spec §6.0), wire-level.
 //
 // The server branch under test: `upsertKeyBundle` with a DIFFERENT
-// identityPublicKey than stored must (1) alert the account's OTHER live
-// sessions via `ownIdentityReplaced` — excluding the uploading socket, which
-// caused the event — and (2) alert every conversation peer via
-// `peerIdentityChanged`. The same-identity re-upload (the client's normal
-// every-connect path) must stay silent on both events.
+// identityPublicKey than stored must alert the account's OTHER live sessions
+// via `ownIdentityReplaced` — excluding the uploading socket, which caused the
+// event. The same-identity re-upload (the client's normal every-connect path)
+// must stay silent.
+//
+// The peer half of the alarm (`peerIdentityChanged` to conversation peers) is
+// gone with the server's conversation table (Phase 4 step 5): a peer learns of
+// an identity change from the next bundle or device list it fetches, which the
+// registration-lock and reset probes cover.
 //
 // PHASE 0b INTERACTION: the registration lock (§6.1) now REFUSES an
 // unauthorized identity replacement outright, writing nothing — so there is no
@@ -27,7 +31,6 @@ void main() {
   group('takeover alarm (Phase 0a)', () {
     final baseUrl = e2eBaseUrl();
     late E2eClient victim;
-    late E2eClient peer;
     late E2eClient victimTab;
     E2eClient? replacement;
     // Captured before the storage wipe below destroys the record: the 0b lock
@@ -42,32 +45,10 @@ void main() {
       SharedPreferences.setMockInitialValues({});
 
       victim = E2eClient('vic', baseUrl);
-      peer = E2eClient('peer', baseUrl);
       await victim.registerFresh();
-      await peer.registerFresh();
       await victim.connectSocket();
-      await peer.connectSocket();
       await victim.initializeAndUploadKeys();
-      await peer.initializeAndUploadKeys();
       victimPair = await victim.exportIdentityPair();
-
-      // Friendship + conversation: `peerIdentityChanged` goes to CONVERSATION
-      // peers, so the pair must actually share one.
-      victim.socketService.sendFriendRequest(peer.userId);
-      final request = await peer.events.next(
-        'newFriendRequest',
-        where: (p) =>
-            p is Map &&
-            p['sender'] is Map &&
-            (p['sender'] as Map)['id'] == victim.userId,
-        reason: 'peer receiving the friend request',
-      ) as Map;
-      victim.events.discard('friendRequestAccepted');
-      peer.socketService.acceptFriendRequest(request['id'] as int);
-      await victim.events.next(
-        'friendRequestAccepted',
-        reason: 'victim accept confirmation',
-      );
 
       // A second live session of the victim's account (another tab/device).
       victimTab = E2eClient('victab', baseUrl)..adoptAccountFrom(victim);
@@ -86,13 +67,12 @@ void main() {
 
     tearDownAll(() {
       victim.dispose();
-      peer.dispose();
       victimTab.dispose();
       replacement?.dispose();
     });
 
     test(
-      'identity replacement alerts other sessions and conversation peers; '
+      'identity replacement alerts the account\'s other sessions; '
       'same-identity re-upload stays silent',
       () async {
         final replacementKeys = await replacement!.initializeKeys();
@@ -102,7 +82,6 @@ void main() {
 
         victim.events.discard('ownIdentityReplaced');
         victimTab.events.discard('ownIdentityReplaced');
-        peer.events.discard('peerIdentityChanged');
 
         // Authorized under the 0b lock: the previous identity key signs the
         // new one against a nonce issued to the uploading session.
@@ -136,29 +115,15 @@ void main() {
           reason: 'the replacing session must not alarm itself',
         );
 
-        // The conversation peer gets the corroborating event.
-        final peerAlarm = await peer.events.next(
-          'peerIdentityChanged',
-          where: (p) => p is Map && p['userId'] == victim.userId,
-          reason: 'conversation peer must see the identity change',
-        ) as Map;
-        expect(peerAlarm['occurredAt'], isA<String>());
-
         // Same-identity re-upload — the client's normal every-connect path —
         // must raise NO alarm anywhere.
         victim.events.discard('ownIdentityReplaced');
         victimTab.events.discard('ownIdentityReplaced');
-        peer.events.discard('peerIdentityChanged');
         await replacement!.uploadKeyBundle(replacementKeys);
         await victimTab.events.none(
           'ownIdentityReplaced',
           within: const Duration(seconds: 3),
           reason: 'same-identity re-upload must stay silent (sessions)',
-        );
-        await peer.events.none(
-          'peerIdentityChanged',
-          within: const Duration(seconds: 3),
-          reason: 'same-identity re-upload must stay silent (peers)',
         );
       },
       timeout: const Timeout(Duration(minutes: 2)),

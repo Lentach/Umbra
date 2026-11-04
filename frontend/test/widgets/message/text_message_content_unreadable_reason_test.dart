@@ -24,7 +24,6 @@ MessageModel _msg(String content) => MessageModel(
 Widget _host(
   MessageModel m, {
   bool isMine = false,
-  bool decryptInProgress = false,
 }) => MaterialApp(
   locale: const Locale('pl'),
   localizationsDelegates: AppLocalizations.localizationsDelegates,
@@ -36,7 +35,6 @@ Widget _host(
       textColor: Colors.black,
       isDark: false,
       maxWidth: 300,
-      decryptInProgress: decryptInProgress,
     ),
   ),
 );
@@ -88,26 +86,5 @@ void main() {
         findsOneWidget);
     expect(find.text(pl.messageUnreadableReasonKeysGone), findsNothing);
     expect(find.text(pl.messageUnreadableReasonOwnCopyGone), findsNothing);
-  });
-
-  testWidgets('a row still being decrypted is not declared dead', (
-    tester,
-  ) async {
-    final pl = await _pl();
-    await tester.pumpWidget(
-      _host(
-        _msg(kEncryptedPlaceholderLabel),
-        isMine: true,
-        decryptInProgress: true,
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    expect(
-      find.text(pl.messageUnreadableReasonOwnCopyGone),
-      findsNothing,
-      reason: 'the pass may still resolve it; claiming the keys are gone '
-          'mid-pass is the false alarm this guard exists for',
-    );
   });
 }

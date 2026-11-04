@@ -15,6 +15,11 @@
 //     kept the new keys and dropped the dead ones);
 //   * both directions work.
 //
+// The PreKey ciphertexts are handed from sender to recipient IN-PROCESS: no
+// server handler relays messages any more (Phase 4 step 5), and the claim
+// that matters here — the served bundle/OTP is current-epoch and decrypts —
+// needs no transport.
+//
 // Upload ORDER changed on 2026-08-19 and this file mirrors the client: the
 // identity is published first and the keys are released by its ack. It used to
 // emit both back to back ("unsafe production order"), which is how key material
@@ -49,7 +54,6 @@ void main() {
 
   late E2eClient alice; // recipient who regenerates identity
   late E2eClient bob; // sender
-  late int conversationId;
   late String epoch1Identity;
   // The 0b registration lock (§6.1) requires the PREVIOUS identity key to
   // authorize a replacement, and clearAllKeys() below destroys it. This file's
@@ -127,53 +131,6 @@ void main() {
                 as Map)['identityPublicKey']
             as String;
     epoch1Pair = await alice.exportIdentityPair();
-
-    // Friendship + conversation.
-    alice.socketService.sendFriendRequest(bob.userId);
-    final request =
-        await bob.events.next(
-              'newFriendRequest',
-              where: (p) =>
-                  p is Map &&
-                  p['sender'] is Map &&
-                  (p['sender'] as Map)['id'] == alice.userId,
-              reason: 'bob receiving alice friend request',
-            )
-            as Map;
-    bob.events.discard('friendRequestAccepted');
-    alice.events.discard('friendRequestAccepted');
-    bob.events.discard('openConversation');
-    alice.events.discard('openConversation');
-    bob.socketService.acceptFriendRequest(request['id'] as int);
-    final aliceAccepted =
-        await alice.events.next('friendRequestAccepted', reason: 'alice accept')
-            as Map;
-    final bobAccepted =
-        await bob.events.next('friendRequestAccepted', reason: 'bob accept')
-            as Map;
-    expect(aliceAccepted['conversationId'], isA<int>());
-    expect(bobAccepted['conversationId'], isA<int>());
-    expect(aliceAccepted['chatReady'], isTrue);
-    expect(bobAccepted['chatReady'], isTrue);
-    final aliceConversationId = aliceAccepted['conversationId'] as int;
-    final bobConversationId = bobAccepted['conversationId'] as int;
-    expect(bobConversationId, aliceConversationId);
-
-    await bob.events.none(
-      'openConversation',
-      within: const Duration(seconds: 3),
-      reason: 'accepting an invitation must not auto-open chat',
-    );
-    alice.events.discard('openConversation');
-    alice.socketService.startConversation(bob.userId);
-    final aliceOpen =
-        await alice.events.next(
-              'openConversation',
-              reason: 'alice startConversation',
-            )
-            as Map;
-    conversationId = bobConversationId;
-    expect(aliceOpen['conversationId'], conversationId);
   });
 
   tearDownAll(() {
@@ -181,12 +138,11 @@ void main() {
     bob.dispose();
   });
 
-  /// bob builds a fresh session from alice's CURRENT server bundle and sends a
+  /// bob builds a fresh session from alice's CURRENT server bundle and makes a
   /// PreKey message; alice must decrypt it to the exact plaintext. Returns the
   /// served bundle so the caller can assert epoch identity/OTP presence.
   Future<Map<String, dynamic>> bobPreKeyToAlice(
     String content,
-    String tempId,
   ) async {
     await bob.encryption.deleteSession(alice.userId); // force a fresh X3DH
     final bundle = await bob.fetchBundleFor(alice.userId);
@@ -197,11 +153,9 @@ void main() {
       3,
       reason: 'fresh session opener must be a PreKey (3:)',
     );
-    await bob.sendEncrypted(alice.userId, ct, tempId: tempId);
-    final recv = await alice.awaitNewMessage(tempId);
     // The load-bearing assertion: a stale OTP would throw Bad Mac here.
     expect(
-      await alice.decryptText(bob.userId, recv['encryptedContent'] as String),
+      await alice.decryptText(bob.userId, ct),
       content,
       reason: 'alice must decrypt bob\'s PreKey message (no stale OTP served)',
     );
@@ -247,10 +201,7 @@ void main() {
         // 3. bob -> alice PreKey, repeated to drain several current-epoch OTPs.
         //    Every claim must be epoch-2 and must decrypt.
         for (var i = 0; i < 3; i++) {
-          final bundle = await bobPreKeyToAlice(
-            'epoch2-msg-$i-$runTag',
-            's-b2a-$i-$runTag',
-          );
+          final bundle = await bobPreKeyToAlice('epoch2-msg-$i-$runTag');
           expect(
             bundle['identityPublicKey'],
             epoch2Identity,
@@ -271,15 +222,7 @@ void main() {
         await alice.encryption.buildSession(bob.userId, bobBundle, expectedIdentityBase64: null);
         final ct = await alice.encryptText(bob.userId, 'reverse-$runTag');
         expect(wireType(ct), 3);
-        await alice.sendEncrypted(bob.userId, ct, tempId: 's-a2b-$runTag');
-        final recv = await bob.awaitNewMessage('s-a2b-$runTag');
-        expect(
-          await bob.decryptText(
-            alice.userId,
-            recv['encryptedContent'] as String,
-          ),
-          'reverse-$runTag',
-        );
+        expect(await bob.decryptText(alice.userId, ct), 'reverse-$runTag');
       },
       timeout: const Timeout(Duration(minutes: 2)),
     );

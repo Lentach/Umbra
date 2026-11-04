@@ -172,8 +172,11 @@ export class AuthService {
   }
 
   async refreshWithToken(refreshTokenPlain: string) {
-    const session =
-      await this.refreshTokensService.consumeAndSlide(refreshTokenPlain);
+    const session = await this.refreshTokensService.consumeAndSlide(
+      refreshTokenPlain,
+      (userId, deviceId) =>
+        this.devicesService.isRevoked(userId, deviceId ?? DEFAULT_DEVICE_ID),
+    );
     const user = await this.usersService.findById(session.userId);
     if (!user) {
       throw new UnauthorizedException();

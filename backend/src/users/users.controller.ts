@@ -27,15 +27,9 @@ import {
   ResetPasswordDto,
   DeleteAccountDto,
   VerifyPasswordDto,
-  RegisterFcmTokenDto,
-  RemoveFcmTokenDto,
   UpdateProfileAboutDto,
-  RegisterWebPushSubscriptionDto,
-  RemoveWebPushSubscriptionDto,
 } from './dto/user.dto';
 import { ReorderProfilePhotosDto } from './dto/reorder-profile-photos.dto';
-import { FcmTokensService } from '../fcm-tokens/fcm-tokens.service';
-import { WebPushSubscriptionsService } from '../web-push-subscriptions/web-push-subscriptions.service';
 import { validateAvatarMagicBytes } from '../media/magic-bytes.validator';
 
 @Controller('users')
@@ -45,8 +39,6 @@ export class UsersController {
   constructor(
     private usersService: UsersService,
     private storageService: LocalStorageService,
-    private fcmTokensService: FcmTokensService,
-    private webPushSubscriptionsService: WebPushSubscriptionsService,
   ) {}
 
   @Post('profile-picture')
@@ -267,68 +259,5 @@ export class UsersController {
     await this.usersService.deleteAccount(userId, dto.password);
 
     return { message: 'Account deleted successfully' };
-  }
-
-  @Post('fcm-token')
-  @UseGuards(JwtAuthGuard)
-  @Throttle({ default: { limit: 30, ttl: 900000 } })
-  async registerFcmToken(
-    @Body() dto: RegisterFcmTokenDto,
-    // `deviceId` always present since the §5.5 gate landed in JwtStrategy.
-    @Request() req: { user: { id: number; deviceId: number } },
-  ) {
-    const userId = req.user.id;
-    // Which device owns this endpoint (spec §12 amendment (xxiv)) — without
-    // it a §5.5 revocation cannot stop pushing to the revoked device.
-    await this.fcmTokensService.upsert(
-      userId,
-      dto.token,
-      dto.platform,
-      req.user.deviceId,
-    );
-    return { message: 'FCM token registered' };
-  }
-
-  @Delete('fcm-token')
-  @UseGuards(JwtAuthGuard)
-  @Throttle({ default: { limit: 30, ttl: 900000 } })
-  async removeFcmToken(@Body() dto: RemoveFcmTokenDto, @Request() req) {
-    await this.fcmTokensService.removeByTokenForUser(req.user.id, dto.token);
-    return { message: 'FCM token removed' };
-  }
-
-  @Post('web-push-subscription')
-  @UseGuards(JwtAuthGuard)
-  @Throttle({ default: { limit: 30, ttl: 900000 } })
-  async registerWebPushSubscription(
-    @Body() dto: RegisterWebPushSubscriptionDto,
-    @Request() req: { user: { id: number; deviceId: number } },
-  ) {
-    const userId = req.user.id;
-    await this.webPushSubscriptionsService.upsert({
-      userId,
-      // See the FCM note above (amendment (xxiv)).
-      deviceId: req.user.deviceId,
-      endpoint: dto.endpoint,
-      p256dh: dto.keys.p256dh,
-      auth: dto.keys.auth,
-      userAgent: dto.userAgent ?? null,
-      expirationTime: dto.expirationTime ?? null,
-    });
-    return { message: 'Web push subscription registered' };
-  }
-
-  @Delete('web-push-subscription')
-  @UseGuards(JwtAuthGuard)
-  @Throttle({ default: { limit: 30, ttl: 900000 } })
-  async removeWebPushSubscription(
-    @Body() dto: RemoveWebPushSubscriptionDto,
-    @Request() req,
-  ) {
-    await this.webPushSubscriptionsService.removeByEndpointForUser(
-      req.user.id,
-      dto.endpoint,
-    );
-    return { message: 'Web push subscription removed' };
   }
 }

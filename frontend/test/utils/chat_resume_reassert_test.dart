@@ -1,8 +1,11 @@
+import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/utils/chat_resume_reassert.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import '../support/chat_seed.dart';
 
 Map<String, dynamic> _convJson(int id) => {
       'id': id,
@@ -60,31 +63,41 @@ class _ResumeHostState extends State<_ResumeHost> with WidgetsBindingObserver {
 }
 
 void main() {
-  test('reassertOpenConversationOnResume re-sets active conversation + refetches',
+  test('reassertOpenConversationOnResume re-sets active conversation + reloads',
       () {
     final convs = ConversationsProvider();
-    convs.onConversationsList([_convJson(10)]);
+    seedConversations(convs, [_convJson(10)]);
     final messaging = MessagingProvider();
     messaging.setConversationsProvider(convs);
-    final emitted = <String>[];
-    messaging.setEmitCallback((event, data) => emitted.add(event));
+    messaging.seedMessagesForTest(10, [
+      MessageModel(
+        id: 5,
+        content: 'hi',
+        senderId: 2,
+        senderUsername: 'bob',
+        conversationId: 10,
+        createdAt: DateTime.utc(2026, 1, 1, 12),
+      ),
+    ]);
 
     // Simulate the iOS-resume clear: ChatDetailScreen.dispose() nulled the
-    // active conversation while the chat was still on screen.
+    // active conversation and the shown rows while the chat was on screen.
     convs.closeConversation();
+    messaging.clearMessages();
     expect(convs.activeConversationId, isNull);
+    expect(messaging.messages, isEmpty);
 
     reassertOpenConversationOnResume(convs, messaging, 10);
 
     expect(convs.activeConversationId, 10);
-    expect(emitted, contains('getMessages'),
-        reason: 'open chat must be refetched on resume');
+    expect(messaging.messages.map((m) => m.id), [5],
+        reason: 'open chat must be reloaded on resume');
   });
 
   testWidgets('app resume re-asserts the open conversation via lifecycle hook',
       (tester) async {
     final convs = ConversationsProvider();
-    convs.onConversationsList([_convJson(10)]);
+    seedConversations(convs, [_convJson(10)]);
     final messaging = MessagingProvider();
     messaging.setConversationsProvider(convs);
 

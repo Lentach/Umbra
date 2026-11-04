@@ -13,7 +13,7 @@ class _FakeConversationsProvider extends ConversationsProvider {
   Map<int, int> get unreadCounts => fakeUnread;
 
   @override
-  bool get hasLoadedConversationsOnce => fakeLoadedOnce;
+  bool get hasLoadedConversations => fakeLoadedOnce;
 
   void poke() => notifyListeners();
 }
@@ -70,7 +70,7 @@ void main() {
         debounce: debounce,
       );
 
-  test('does not write before the first conversations snapshot (no startup wipe)',
+  test('does not write before the chat list was read (no startup wipe)',
       () async {
     conversations.fakeLoadedOnce = false;
     final sync = buildSync();
@@ -99,7 +99,7 @@ void main() {
   test('clears a badge it never set itself (stale SW badge regression)',
       () async {
     // App opens with zero local unread while the OS badge still shows an old
-    // SW-written count: the first flush after the snapshot must send clear.
+    // SW-written count: the first flush after the store was read must send clear.
     conversations.fakeLoadedOnce = true;
     conversations.fakeUnread = {};
     final sync = buildSync();

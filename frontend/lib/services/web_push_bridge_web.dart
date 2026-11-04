@@ -123,7 +123,7 @@ class WebPushBridge {
   /// This browser's push subscription as the box takes it (E9):
   /// `PushSubscription.toJSON()`, JSON-encoded, with nothing the box's parser
   /// refuses (it takes `endpoint`, `keys` and `expirationTime` only — never
-  /// the `userAgent` the account-side registration adds). Null without a
+  /// the `userAgent` that `_toPayload` adds). Null without a
   /// subscription or permission.
   Future<String?> boxToken() async {
     if (!isSupported || notificationPermission != 'granted') return null;

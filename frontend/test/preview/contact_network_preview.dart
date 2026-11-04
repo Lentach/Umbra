@@ -13,7 +13,7 @@ import 'package:fireplace/l10n/app_localizations.dart';
 import 'package:fireplace/models/user_model.dart';
 import 'package:fireplace/providers/auth_provider.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
-import 'package:fireplace/providers/friends_provider.dart';
+import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/providers/settings_provider.dart';
 import 'package:fireplace/screens/contacts_screen.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
@@ -21,6 +21,8 @@ import 'package:fireplace/widgets/contact_network_view.dart';
 import 'package:fireplace/widgets/console_glyphs.dart';
 import 'package:fireplace/widgets/glass/glass_bottom_nav.dart';
 import 'package:fireplace/widgets/main_tab_screen_header.dart';
+
+import '../support/contact_seed.dart';
 
 void main() => runApp(const ContactNetworkPreviewApp());
 
@@ -72,39 +74,14 @@ class ContactNetworkPreviewApp extends StatelessWidget {
     );
   }
 
-  /// The real ContactsScreen against seeded providers: friends via the
-  /// socket-event JSON path, the local user via an unsigned preview JWT.
+  /// The real ContactsScreen against a seeded contact store: friends, inbound
+  /// and outbound box requests, the local user via an unsigned preview JWT.
   Widget _seededContactsScreen(
     List<UserModel> contacts,
     int pending,
     int invites,
   ) {
     const inviteeNames = ['Iwo', 'Sara', 'Luca', 'Nina', 'Olek'];
-    final friends = FriendsProvider()
-      ..onFriendsList([
-        for (final contact in contacts)
-          {
-            'id': contact.id,
-            'username': contact.username,
-            'tag': contact.tag,
-            'profilePictureUrl': contact.profilePictureUrl,
-          },
-      ])
-      ..onSentRequestsList([
-        for (var i = 0; i < invites; i++)
-          {
-            'id': 900 + i,
-            'sender': {'id': 700, 'username': 'Marta', 'tag': '0007'},
-            'receiver': {
-              'id': 800 + i,
-              'username': inviteeNames[i % inviteeNames.length],
-              'tag': '08${i.toString().padLeft(2, '0')}',
-            },
-            'status': 'pending',
-            'createdAt': '2026-07-29T12:00:00.000Z',
-          },
-      ])
-      ..onPendingRequestsCount({'count': pending});
     String b64(Map<String, Object> json) =>
         base64Url.encode(utf8.encode(jsonEncode(json))).replaceAll('=', '');
     final auth = AuthProvider()
@@ -112,16 +89,44 @@ class ContactNetworkPreviewApp extends StatelessWidget {
         '${b64({'alg': 'none'})}.'
         '${b64({'sub': 700, 'username': 'Marta', 'tag': '0007', 'exp': DateTime.now().millisecondsSinceEpoch ~/ 1000 + 3600})}.x',
       );
-    return MultiProvider(
-      providers: [
-        ChangeNotifierProvider.value(value: auth),
-        ChangeNotifierProvider.value(value: friends),
-        ChangeNotifierProvider(create: (_) => ConversationsProvider()),
-        ChangeNotifierProvider(
-          create: (_) => SettingsProvider(initialThemePreference: 'dark'),
-        ),
+    return SeededStoreHost(
+      records: [
+        for (final contact in contacts)
+          ContactRecord(
+            userId: contact.id,
+            username: contact.username,
+            tag: contact.tag,
+            avatarUrl: contact.profilePictureUrl,
+            state: ContactState.friend,
+          ),
+        for (var i = 0; i < pending; i++)
+          contactRecord(
+            600 + i,
+            inviteeNames[i % inviteeNames.length],
+            ContactState.pendingIn,
+            box: true,
+          ),
+        for (var i = 0; i < invites; i++)
+          contactRecord(
+            800 + i,
+            inviteeNames[i % inviteeNames.length],
+            ContactState.pendingOut,
+            box: true,
+          ),
       ],
-      child: const ContactsScreen(),
+      selfId: 700,
+      selfName: 'Marta',
+      builder: (context, store) => MultiProvider(
+        providers: [
+          ChangeNotifierProvider.value(value: auth),
+          ChangeNotifierProvider.value(value: friendsOver(store)),
+          ChangeNotifierProvider(create: (_) => ConversationsProvider()),
+          ChangeNotifierProvider(
+            create: (_) => SettingsProvider(initialThemePreference: 'dark'),
+          ),
+        ],
+        child: const ContactsScreen(),
+      ),
     );
   }
 }

@@ -1,5 +1,8 @@
 part of '../messaging_provider.dart';
 
+// Extension methods on MessagingProvider's own state: notifyListeners() is legitimate here.
+// ignore_for_file: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
+
 /// A box message action NO device took (metadata-privacy item 4, E19a,
 /// E19l): its optimistic state is already undone, and the chat screen says
 /// so. A reaction reports through its own `Future<bool>`.
@@ -119,8 +122,7 @@ class _BoxActionRetry {
 }
 
 /// [reactions] with [reactor]'s one reaction set to [emoji], or taken off
-/// every emoji when [emoji] is null — one reaction per user, as the server
-/// keeps them on the old path (E19e).
+/// every emoji when [emoji] is null — one reaction per user (E19e).
 Map<String, List<int>> _reactorSet(
   Map<String, List<int>> reactions,
   int reactor,
@@ -157,7 +159,7 @@ DateTime _wholeMsNow() => DateTime.fromMillisecondsSinceEpoch(
 /// decisions 45–46, E19a–E19d): each travels as an E2E envelope
 /// `t: react|pin|edit|del` naming its target by `tg: {s, w}` — the sender
 /// and wire id, the one name every device shares for a box message — along
-/// the route a box message takes. An old-path row keeps its server events.
+/// the route a box message takes.
 extension MessagingBoxActions on MessagingProvider {
   /// Sends one action on [target], a message of [conversationId], exactly
   /// as a box message travels (E19a): a Signal message per live peer device
@@ -733,11 +735,8 @@ extension MessagingBoxActions on MessagingProvider {
     if (target != null) {
       _boxUnsaved.remove(target.id);
       // The local path of delete-for-me: purge (media copy included via
-      // `onBoxMediaDestroyed`) and drop the row — no server event.
-      _handleMessageDeleted({
-        'messageId': target.id,
-        'conversationId': conversationId,
-      });
+      // `onBoxMediaDestroyed`) and drop the row.
+      _deleteMessageLocally(target.id, conversationId);
     }
     await _clearBoxQuotes(conversationId, wire);
     final convs = _conversationsProvider;
@@ -878,7 +877,7 @@ extension MessagingBoxActions on MessagingProvider {
     final ours = identical(_pendingEdits[original.id], original);
     if (!sent) {
       // A newer edit of this row is in flight: it owns the row now.
-      if (ours) _revertPendingEdit(original.id, 'Box edit failed');
+      if (ours) _revertPendingEdit(original.id);
       _boxActionFailed(BoxActionFailure.edit);
       return;
     }
@@ -922,8 +921,7 @@ extension MessagingBoxActions on MessagingProvider {
 
   /// Pins box message [messageId] (decision 45): shown at once, sent over
   /// the box, then kept once ANY device took it (the rest are retried,
-  /// E19l); a server pin still held in this chat is cleared with ONE
-  /// `unpinMessage`. A pin NO device took restores what it displaced.
+  /// E19l). A pin NO device took restores what it displaced.
   Future<void> _pinOverBox(int conversationId, int messageId) async {
     final convs = _conversationsProvider;
     final target = messageById(messageId);
@@ -949,14 +947,8 @@ extension MessagingBoxActions on MessagingProvider {
           BoxPin(at: at, senderId: wire.senderId, wireId: wire.wireId),
           shown: target,
         )) {
-      convs.onPinMessageFailed({'conversationId': conversationId});
+      convs.revertOptimisticPin(conversationId);
       if (!sent) _boxActionFailed(BoxActionFailure.pin);
-      return;
-    }
-    // Peeked, not taken: the entry goes only when `messageUnpinned` answers,
-    // so a socket down right now leaves it for the next box pin to clear.
-    if (convs.serverPinOf(conversationId) != null) {
-      _emit?.call('unpinMessage', {'conversationId': conversationId});
     }
   }
 
@@ -974,7 +966,7 @@ extension MessagingBoxActions on MessagingProvider {
       on: false,
     );
     if (!sent || !_takeBoxPin(conversationId, BoxPin(at: at))) {
-      convs.onPinMessageFailed({'conversationId': conversationId});
+      convs.revertOptimisticPin(conversationId);
       if (!sent) _boxActionFailed(BoxActionFailure.pin);
     }
   }

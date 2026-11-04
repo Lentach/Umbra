@@ -9,8 +9,10 @@ import * as path from 'path';
 
 /**
  * Box media on disk, under `MEDIA_DIR/box/` — its own directory on purpose:
- * `MediaCleanupService` deletes every file in `msgs/` that no `messages` row
- * references, which would be every box file. The filename is a fresh UUID,
+ * `msgs/` was the old account-keyed attachment directory (its routes and
+ * orphan sweep are gone since Phase 4 step 5; any files left in it are the
+ * deploy's to archive and remove), and nothing account-keyed may share a
+ * directory with the box. The filename is a fresh UUID,
  * never the capability id, so a directory listing grants no downloads.
  */
 @Injectable()

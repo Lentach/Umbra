@@ -946,7 +946,7 @@ void main() {
   }
 
   test('a request to an account one of whose devices publishes no request '
-      'address takes the old path (E15a)', () async {
+      'address FAILS: there is no old path (E15a)', () async {
     final entry = bob.searchEntry;
     final d1 = (entry['devices'] as List).first as Map<String, dynamic>;
     final partial = {
@@ -958,7 +958,7 @@ void main() {
     };
     expect(
       await alice.reader.sendBoxFriendRequest(partial),
-      FirstContactSend.oldPath,
+      FirstContactSend.failed,
     );
     await settle();
     expect(alice.recordOf(5), isNull);
@@ -966,8 +966,8 @@ void main() {
   });
 
   test(
-    'with E2E not ready, a request to an account not all on the box takes '
-    'the old path, which needs no E2E; one the box would carry fails',
+    'with E2E not ready, a request to an account not all on the box FAILS, '
+    'as does one the box would carry (there is no old path)',
     () async {
       final entry = bob.searchEntry;
       final d1 = (entry['devices'] as List).first as Map<String, dynamic>;
@@ -981,7 +981,7 @@ void main() {
       alice.enc.ready = false;
       expect(
         await alice.reader.sendBoxFriendRequest(partial),
-        FirstContactSend.oldPath,
+        FirstContactSend.failed,
       );
       expect(
         await alice.reader.sendBoxFriendRequest(bob.searchEntry),
@@ -994,13 +994,13 @@ void main() {
   );
 
   test('a request from an account with a live sibling this device holds no '
-      'self-queue address for takes the old path (E15a)', () async {
+      'self-queue address for FAILS: there is no old path (E15a)', () async {
     alice.enc
       ..ownId = 1
       ..ownLive = [1, 2];
     expect(
       await alice.reader.sendBoxFriendRequest(bob.searchEntry),
-      FirstContactSend.oldPath,
+      FirstContactSend.failed,
     );
     await settle();
     expect(alice.recordOf(5), isNull);
@@ -1081,7 +1081,7 @@ void main() {
   });
 
   test('a request whose verified list names a live device the answer did not '
-      'serve takes the old path (E15a)', () async {
+      'serve FAILS: there is no old path (E15a)', () async {
     alice.enc.servedList = VerifiedDeviceList.enrolled(
       version: 1,
       listHash: 'H' * 44,
@@ -1092,7 +1092,7 @@ void main() {
     );
     expect(
       await alice.reader.sendBoxFriendRequest(bob.searchEntry),
-      FirstContactSend.oldPath,
+      FirstContactSend.failed,
     );
     await settle();
     expect(alice.recordOf(5), isNull);

@@ -132,9 +132,8 @@ matter are the ones no anonymous load touches. Serve the real bundle behind the 
 3. `nginx:alpine` with the bundle as root, the API proxied to `host.docker.internal:<backend port>`,
    and `include snippets/fireplace-security-headers.conf` **mounted from `infra/nginx/`** — mount
    the real file so the rehearsal cannot drift from what prod serves.
-4. Seed two accounts by `POST /auth/register`, then one `conversations` row and one accepted
-   `friend_requests` row by SQL (columns are snake_case: `user_one_id`/`user_two_id`,
-   `sender_id`/`receiver_id`).
+4. Seed two accounts by `POST /auth/register` (no server friend/conversation rows exist since Phase 4
+   step 5: contacts are made on the devices over the box).
 5. Drive it with CDP: **portrait viewport** (the app shows "rotate your device" and eats every tap
    otherwise), pixel clicks from screenshots, `Input.insertText` for the login fields,
    `overridePermissions` for mic/camera, and read violations from the `Log` domain — NOT from a
@@ -336,8 +335,8 @@ Media and `.env` restore are manual.
 |---|---|
 | DB | `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASS`, `DB_NAME` |
 | Auth/CORS | `JWT_SECRET` (>=32 chars, generated once and persisted — do NOT rotate during normal deploys or host moves; if exposed, rotate only after sticky-session refresh is deployed, since valid refresh tokens mint new access JWTs without re-login), `ALLOWED_ORIGINS` |
-| Media | `MEDIA_BASE_URL`, `MEDIA_DIR`, `MEDIA_CLEANUP_GRACE_MS`, `MEDIA_X_ACCEL_REDIRECT` |
-| Push | `FIREBASE_SERVICE_ACCOUNT`, `WEB_PUSH_VAPID_PUBLIC_KEY`, `WEB_PUSH_VAPID_PRIVATE_KEY`, `WEB_PUSH_VAPID_SUBJECT` |
+| Media | `MEDIA_BASE_URL`, `MEDIA_DIR`, `MEDIA_X_ACCEL_REDIRECT` |
+| Push (box wake-up only) | `FIREBASE_SERVICE_ACCOUNT`, `WEB_PUSH_VAPID_PUBLIC_KEY`, `WEB_PUSH_VAPID_PRIVATE_KEY`, `WEB_PUSH_VAPID_SUBJECT` |
 | Frontend dart-defines | `BASE_URL`, `GIPHY_API_KEY`, `WEB_PUSH_VAPID_PUBLIC_KEY`, `GIT_COMMIT`, `BUILD_TIME` |
 | Deploy metadata | `APP_VERSION`, `GIT_COMMIT`, `BUILD_TIME` |
 
@@ -349,9 +348,9 @@ Rotating the pair (decision 90): (1) new pair in `~/fireplace/.env` and `~/firep
 shares the pair), then `cd ~/fireplace-inbox && docker compose up -d --force-recreate` (the inbox reads
 its `.env` only at container start); (2) `./deploy-backend.sh`; (3) `.\deploy-web.ps1 -VapidPublicKey
 <new public key>` (the script's default is the OLD key until edited); (4) delete every
-`web_push_subscription` row created before step 3 (all old-key: an old bundle re-registers its row at
-login, and 403 is never pruned, only 404/410; a live row deleted by mistake comes back at that page's
-next open, which re-registers it). Pages swap their subscription at the next open; an engine that wants
+`box_notifiers` row with `platform='webpush'` created before step 3 (all old-key; the account table
+`web_push_subscription` was dropped in Phase 4 step 5, so the box notifier is the only web registration
+left; the push service's 404/410 prune a row, a 403 never does). Pages swap their subscription at the next open; an engine that wants
 a gesture (iOS) shows the red "Powiadomienia są wyłączone" line on the chat list instead. Until a user
 opens the app, no web push reaches them, and box messages expire unread after 30 days: tell users on
 rotation day. No rollback to an old-key bundle: every page would swap back and iPhones need a tap again.

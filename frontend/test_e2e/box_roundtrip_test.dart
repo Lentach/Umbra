@@ -18,14 +18,18 @@
 //      refused on the ack — also on a fresh connection — while another
 //      address still proceeds (PR1.0's `X-Real-IP` resolution, through the
 //      real stack).
-//   3. item 5 (slice (d), the migration handoff, decision 47): the same two
-//      accounts become friends on the old path; one side's `BoxSession`
-//      starts while the other still "predates the box" and hands nothing;
-//      the other then starts, finds the first side's request queue in its
-//      friends list and hands its queue off; the first side hands its own
-//      back with no reconnect; a box message round-trips; no `messages` row
-//      appears and neither queue row names an account. The same two
-//      registrations: nothing is added to the register bucket.
+//   3. item 5 (slice (d), the migration handoff, decision 47): two contacts
+//      that are already FRIENDS in each device's local store (the server holds
+//      no friendship any more, Phase 4 step 5); one side's `BoxSession` starts
+//      while the other still "predates the box" and hands nothing; the other
+//      then starts, finds the first side's request queue by handle lookup and
+//      hands its queue off; the first side hands its own back with no
+//      reconnect; a box message round-trips and neither queue row names an
+//      account. The same two registrations: nothing is added to the register
+//      bucket.
+//   4. slice (f), first contact (decision 6): two strangers meet through one
+//      `searchUsers` answer and the box alone; neither queue row names an
+//      account.
 //
 // Opt-in, and it MUST stay that way: it registers two accounts, and
 // `/auth/register` is 10 per HOUR per IP with an in-memory counter that the
@@ -241,16 +245,6 @@ class _AppSide {
       where: (p) => p is Map && p['success'] == true,
       reason: '${me.label} publishes its request queue',
     );
-  }
-
-  /// A friends list arrived (the server still serves one at connect): the
-  /// pass visits the friend. Its `devices` are not read (E114b); the friend's
-  /// request queues come from [_lookup].
-  Future<void> listFriends() async {
-    me.events.discard('friendsList');
-    me.socketService.getFriends();
-    await me.events.next('friendsList', reason: '${me.label} friends list');
-    session.onFriendsListed();
   }
 
   /// The app's handle lookup of [friend] (E114b): one real `searchUsers`,
@@ -702,10 +696,10 @@ void main() {
       );
 
       test(
-        'item 5: an existing friendship moves onto the box — the side that '
+        'item 5: an existing friend contact moves onto the box — the side that '
         "updates later hands its queue into the other side's request queue, "
-        'that side hands its own back with no reconnect, a box message then '
-        'round-trips, and the migration writes no messages row',
+        'that side hands its own back with no reconnect, and a box message '
+        'then round-trips',
         () async {
           // Signal keys and the content store need the mocked platform
           // storage (the harness's other e2e files do the same).
@@ -713,26 +707,12 @@ void main() {
           SharedPreferences.setMockInitialValues({});
           await alice.initializeAndUploadKeys();
           await bob.initializeAndUploadKeys();
-          alice.socketService.sendFriendRequest(bob.userId);
-          final request =
-              await bob.events.next(
-                    'newFriendRequest',
-                    where: (p) =>
-                        p is Map &&
-                        p['sender'] is Map &&
-                        (p['sender'] as Map)['id'] == alice.userId,
-                    reason: 'friend request',
-                  )
-                  as Map;
-          bob.socketService.acceptFriendRequest(request['id'] as int);
-          await alice.events.next('friendRequestAccepted', reason: 'accept');
 
           final a = _AppSide(alice, bob, box(ip: _randomIp()));
           await a.start();
           // Bob's app predates the box: he published no request queue, so a
           // handle lookup names none, so alice hands nothing off and makes no
           // queue.
-          await a.listFriends();
           await Future<void>.delayed(const Duration(seconds: 1));
           expect(a.record.queues, isEmpty);
           expect(a.address, isNull);
@@ -740,7 +720,6 @@ void main() {
           // Bob updates. Alice's session hears nothing new from its server.
           final b = _AppSide(bob, alice, box(ip: _randomIp()));
           await b.start();
-          await b.listFriends();
           await _until(
             () =>
                 a.address != null &&
@@ -765,12 +744,7 @@ void main() {
           );
           await _until(() => b.read.contains(text), 'bob reads it');
 
-          // Nothing of the migration or the message is a server row.
-          final rows = await e2eSql(
-            'SELECT count(*) FROM public.messages '
-            'WHERE sender_id IN (${alice.userId}, ${bob.userId})',
-          );
-          expect(rows.single.single, '0');
+          // Nothing of the migration or the message names an account.
           for (final (side, account) in [(a, alice), (b, bob)]) {
             final queue = side.record.queues.single;
             final stored = await _rows(
@@ -797,29 +771,11 @@ void main() {
         'slice (f), first contact (decision 6): a search names the request '
         'queue, a claim-bearing request is kept unread, the accept checks it '
         'against the key a second search serves and hands a queue back, a '
-        'message goes each way — and no server row is written for any of it',
+        'message goes each way — and no queue row names an account',
         () async {
           // Runs after item 5 on the same two accounts (their keys, uploaded
           // there; no registration is spent): the box knows neither side,
           // since each store here starts empty.
-          Future<int> count(String table, String where) async => int.parse(
-            (await e2eSql(
-              'SELECT count(*) FROM public.$table WHERE $where',
-            )).single.single,
-          );
-          final pair = '(${alice.userId}, ${bob.userId})';
-          Future<List<int>> serverRows() async => [
-            await count(
-              'friend_requests',
-              'sender_id IN $pair AND receiver_id IN $pair',
-            ),
-            await count(
-              'conversations',
-              'user_one_id IN $pair AND user_two_id IN $pair',
-            ),
-            await count('messages', 'sender_id IN $pair'),
-          ];
-          final before = await serverRows();
 
           final a = _FirstContactSide(alice, bob, box(ip: _randomIp()));
           final b = _FirstContactSide(bob, alice, box(ip: _randomIp()));
@@ -959,8 +915,22 @@ void main() {
             'a message each way',
           );
 
-          // The server wrote nothing for the friendship or the messages.
-          expect(await serverRows(), before);
+          // Nothing of the friendship or the messages names an account.
+          for (final (side, account) in [(a, alice), (b, bob)]) {
+            final stored = await _rows(
+              'box_queues',
+              'rid',
+              boxB64Decode(side.record!.queues.single.rid, 32)!,
+            );
+            expect(stored, hasLength(1));
+            for (final client in [alice, bob]) {
+              expect(
+                _carriesAccount(stored.single, client),
+                isFalse,
+                reason: "${account.label}'s queue names ${client.label}",
+              );
+            }
+          }
           a.session.dispose();
           b.session.dispose();
         },

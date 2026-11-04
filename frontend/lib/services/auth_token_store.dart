@@ -1,3 +1,4 @@
+import 'dart:async' show unawaited;
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -5,8 +6,15 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:jwt_decoder/jwt_decoder.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../config/app_config.dart';
 import '../utils/e2e_persistent_diag.dart';
 import 'secure_kv.dart';
+import 'wake_session_stub.dart'
+    if (dart.library.html) 'wake_session_web.dart';
+
+/// Writes the record the push worker reads (see [AuthTokenStore]).
+typedef WakeSessionWriter =
+    Future<void> Function({required String refresh, required String api});
 
 /// Where the JWT + refresh token live at rest.
 ///
@@ -33,9 +41,46 @@ import 'secure_kv.dart';
 /// treat as "do not decide", never as logged-out. Failed writes are recorded
 /// durably so a "logged out next boot" finally has a paper trail.
 class AuthTokenStore {
-  AuthTokenStore({SecureKv? secure, bool? useSecureStorage})
-    : _secure = secure ?? const FlutterSecureStorageKv(FlutterSecureStorage()),
-      _useSecure = useSecureStorage ?? (!kIsWeb && Platform.isAndroid);
+  AuthTokenStore({
+    SecureKv? secure,
+    bool? useSecureStorage,
+    WakeSessionWriter? wakeSessionWriter,
+    Future<void> Function()? wakeSessionClearer,
+  }) : _secure = secure ?? const FlutterSecureStorageKv(FlutterSecureStorage()),
+       _useSecure = useSecureStorage ?? (!kIsWeb && Platform.isAndroid),
+       _wakeSessionWriter = wakeSessionWriter ?? writeWakeSession,
+       _wakeSessionClearer = wakeSessionClearer ?? clearWakeSession;
+
+  /// Web only (a no-op elsewhere): the refresh token and API origin the push
+  /// service worker asks `/auth/refresh` with while the app is closed, to
+  /// learn whether this device was revoked (decision 129, E129a). Written
+  /// with every token write, removed with every clear.
+  final WakeSessionWriter _wakeSessionWriter;
+  final Future<void> Function() _wakeSessionClearer;
+
+  /// The refresh token last mirrored by this instance's [read].
+  String? _mirroredRefresh;
+
+  /// Never throws: a missed mirror is made good by the next token write.
+  Future<void> _leaveWakeSession(String? refresh, {bool once = false}) async {
+    if (refresh == null || refresh.isEmpty) return;
+    if (once && _mirroredRefresh == refresh) return;
+    _mirroredRefresh = refresh;
+    try {
+      await _wakeSessionWriter(refresh: refresh, api: AppConfig.baseUrl);
+    } on Object {
+      _mirroredRefresh = null;
+    }
+  }
+
+  Future<void> _forgetWakeSession() async {
+    _mirroredRefresh = null;
+    try {
+      await _wakeSessionClearer();
+    } on Object {
+      // Removed again by the next logout.
+    }
+  }
 
   final SecureKv _secure;
 
@@ -90,6 +135,8 @@ class AuthTokenStore {
       }
       try {
         final r = await _readOnce();
+        // A session restored by a build that predates the mirror has none yet.
+        unawaited(_leaveWakeSession(r.refresh, once: true));
         return (access: r.access, refresh: r.refresh, readFailed: false);
       } catch (e) {
         lastError = e;
@@ -151,6 +198,7 @@ class AuthTokenStore {
     for (var attempt = 0; attempt < 2; attempt++) {
       try {
         await _writeOnce(access, refresh);
+        await _leaveWakeSession(refresh);
         return;
       } catch (_) {
         if (attempt == 0) {
@@ -179,6 +227,7 @@ class AuthTokenStore {
   }
 
   Future<void> clear() async {
+    await _forgetWakeSession();
     await clearContactBackupKey();
     if (!_useSecure) {
       try {

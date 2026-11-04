@@ -64,7 +64,8 @@ void main() {
     final upload = source.getKeysForUpload();
     expect(upload, isNotNull);
     final keyBundle = (upload!['keyBundle'] as Map).cast<String, dynamic>();
-    final otps = (upload['oneTimePreKeys'] as List).cast<Map<String, dynamic>>();
+    final otps = (upload['oneTimePreKeys'] as List)
+        .cast<Map<String, dynamic>>();
     expect(otps, isNotEmpty);
     return {
       ...keyBundle,
@@ -78,15 +79,30 @@ void main() {
     SharedPreferences.setMockInitialValues({});
 
     peer = EncryptionService();
-    await peer.initialize(peerId, checkServerIdentity: () async => const ServerIdentityGuard(exists: false));
+    await peer.initialize(
+      peerId,
+      checkServerIdentity: () async => const ServerIdentityGuard(exists: false),
+    );
     mallory = EncryptionService();
-    await mallory.initialize(99, checkServerIdentity: () async => const ServerIdentityGuard(exists: false));
+    await mallory.initialize(
+      99,
+      checkServerIdentity: () async => const ServerIdentityGuard(exists: false),
+    );
     served = peer;
     bundleFetches = 0;
     servedAuthorization = null;
     heldFetches = null;
 
     enc = EncryptionProvider();
+    // Left null the cache stays EMPTY, the cold-cache state every launch
+    // begins in; a test opts in by setting `servedAuthorization`.
+    enc
+      ..listsByHandle = ((user) => user == peerId)
+      ..lookupBoxPeerList = (user) async {
+        final served = servedAuthorization;
+        if (served == null) throw StateError('no list served');
+        return served;
+      };
     enc.setEmitCallback((event, data) {
       if (event == 'checkOwnKeyBundle') {
         enc.onOwnKeyBundleStatus({'exists': false});
@@ -102,15 +118,6 @@ void main() {
           'userId': peerId,
           'deviceId': deviceId,
           'bundle': flatBundleFrom(served),
-        });
-      }
-      if (event == 'getDeviceList') {
-        // Answered ONLY when a test opts in. Left null the cache stays EMPTY,
-        // which is the cold-cache state every launch begins in.
-        if (servedAuthorization == null) return;
-        enc.onDeviceList({
-          'userId': peerId,
-          'authorization': servedAuthorization,
         });
       }
     });
@@ -171,8 +178,9 @@ void main() {
       // (lv) is a hard prerequisite of (lvi): without the banner this ruling
       // would trade a MITM window for a permanent unexplained lockout.
       expect(enc.peersWithChangedIdentity, contains(peerId));
-      final verification = await enc.encryptionService
-          .peerIdentityVerification(peerId);
+      final verification = await enc.encryptionService.peerIdentityVerification(
+        peerId,
+      );
       expect(
         verification.offeredIdentityBase64,
         flatBundleFrom(mallory)['identityPublicKey'],
@@ -262,50 +270,53 @@ void main() {
       );
     });
 
-    test('so a LATER attempt actually rebuilds instead of short-circuiting',
-        () async {
-      await pinPeerHonestly();
-      await enc.ensureSession(peerId);
+    test(
+      'so a LATER attempt actually rebuilds instead of short-circuiting',
+      () async {
+        await pinPeerHonestly();
+        await enc.ensureSession(peerId);
 
-      enc.markSessionRebuild(peerId);
-      served = mallory;
-      await expectLater(
-        enc.ensureSession(peerId),
-        throwsA(isA<AccountIdentityMismatch>()),
-      );
+        enc.markSessionRebuild(peerId);
+        served = mallory;
+        await expectLater(
+          enc.ensureSession(peerId),
+          throwsA(isA<AccountIdentityMismatch>()),
+        );
 
-      // The server stops lying. The retry must go through the FULL rebuild —
-      // asserting only that it "completes" would pass even when the intent was
-      // lost, because the early return completes too. The fetch count is what
-      // tells a real rebuild from a short-circuit.
-      served = peer;
-      final fetchesBefore = bundleFetches;
-      await expectLater(enc.ensureSession(peerId), completes);
-      expect(
-        bundleFetches,
-        fetchesBefore + 1,
-        reason: 'a restored intent must drive a genuine refetch and rebuild',
-      );
-      expect(
-        enc.needsSessionRebuild(peerId),
-        isFalse,
-        reason: 'a successful rebuild finally consumes the intent',
-      );
-    });
+        // The server stops lying. The retry must go through the FULL rebuild —
+        // asserting only that it "completes" would pass even when the intent was
+        // lost, because the early return completes too. The fetch count is what
+        // tells a real rebuild from a short-circuit.
+        served = peer;
+        final fetchesBefore = bundleFetches;
+        await expectLater(enc.ensureSession(peerId), completes);
+        expect(
+          bundleFetches,
+          fetchesBefore + 1,
+          reason: 'a restored intent must drive a genuine refetch and rebuild',
+        );
+        expect(
+          enc.needsSessionRebuild(peerId),
+          isFalse,
+          reason: 'a successful rebuild finally consumes the intent',
+        );
+      },
+    );
 
+    test(
+      'POSITIVE CONTROL: a SUCCESSFUL rebuild consumes the intent once',
+      () async {
+        await pinPeerHonestly();
+        await enc.ensureSession(peerId);
 
-    test('POSITIVE CONTROL: a SUCCESSFUL rebuild consumes the intent once',
-        () async {
-      await pinPeerHonestly();
-      await enc.ensureSession(peerId);
+        enc.markSessionRebuild(peerId);
+        await expectLater(enc.ensureSession(peerId), completes);
 
-      enc.markSessionRebuild(peerId);
-      await expectLater(enc.ensureSession(peerId), completes);
-
-      // The restore must not re-arm a rebuild that succeeded, or every send
-      // would rebuild forever.
-      expect(enc.needsSessionRebuild(peerId), isFalse);
-    });
+        // The restore must not re-arm a rebuild that succeeded, or every send
+        // would rebuild forever.
+        expect(enc.needsSessionRebuild(peerId), isFalse);
+      },
+    );
   });
 
   // (lxi)/(lxii)/(lxiii), from the SECOND gate round, which reviewed (lv)/(lvi)
@@ -350,8 +361,8 @@ void main() {
 
       // 2. Cache a genuinely VERIFIED list naming devices 1 and 2, so the
       //    per-device scan has a candidate to find at all. Driven through the
-      //    real request/answer round trip: onDeviceList completes a pending
-      //    fetch, so an unsolicited push caches nothing.
+      //    real handle lookup (`lookupBoxPeerList`), the only way a peer's
+      //    list is fetched.
       servedAuthorization = {
         'dakPub': enrollment['dakPub'],
         'enrollmentSig': enrollment['enrollmentSig'],
@@ -400,18 +411,20 @@ void main() {
       );
     });
 
-    test('POSITIVE CONTROL: the per-device row still answers with NO anchor',
-        () async {
-      // A peer known only from a per-device row (pre-(xlvi) storage, or an
-      // anchor that never landed) must still get an expectation rather than
-      // none — that fallback is what (lvi) exists for.
-      expect(
-        await enc.encryptionService.peerTofuIdentityBase64(peerId),
-        isNull,
-      );
-      await expectLater(enc.ensureSession(peerId), completes);
-      expect(enc.peersWithChangedIdentity, isEmpty);
-    });
+    test(
+      'POSITIVE CONTROL: the per-device row still answers with NO anchor',
+      () async {
+        // A peer known only from a per-device row (pre-(xlvi) storage, or an
+        // anchor that never landed) must still get an expectation rather than
+        // none — that fallback is what (lvi) exists for.
+        expect(
+          await enc.encryptionService.peerTofuIdentityBase64(peerId),
+          isNull,
+        );
+        await expectLater(enc.ensureSession(peerId), completes);
+        expect(enc.peersWithChangedIdentity, isEmpty);
+      },
+    );
   });
 
   group('(lxii) a failed anchor READ is not an absence', () {
@@ -451,7 +464,11 @@ void main() {
       // repeated with a rotating key, held the ceremony permanently
       // un-completable.
       final rotating = EncryptionService();
-      await rotating.initialize(77, checkServerIdentity: () async => const ServerIdentityGuard(exists: false));
+      await rotating.initialize(
+        77,
+        checkServerIdentity: () async =>
+            const ServerIdentityGuard(exists: false),
+      );
       served = rotating;
       enc.markSessionRebuild(peerId);
       await expectLater(
@@ -477,27 +494,33 @@ void main() {
     // server refuses a second fetch for the same pair within its interval
     // with a bare `error`, the handoff timed out after 10 s, and the friend
     // kept writing to the dead pre-wipe queue until the next app start.
-    test('the second joins the first build: one fetch, both get the session',
-        () async {
-      heldFetches = [];
-      final first = enc.ensureSession(peerId);
-      await pumpEventQueue();
-      expect(heldFetches, [1]);
+    test(
+      'the second joins the first build: one fetch, both get the session',
+      () async {
+        heldFetches = [];
+        final first = enc.ensureSession(peerId);
+        await pumpEventQueue();
+        expect(heldFetches, [1]);
 
-      // The server answers the first fetch; the second caller arrives while
-      // that answer is being built into a session. Like the real server, a
-      // repeat fetch inside the interval is never answered.
-      enc.onPreKeyBundleResponse({
-        'userId': peerId,
-        'deviceId': 1,
-        'bundle': flatBundleFrom(peer),
-      });
-      final second = enc.ensureSession(peerId);
+        // The server answers the first fetch; the second caller arrives while
+        // that answer is being built into a session. Like the real server, a
+        // repeat fetch inside the interval is never answered.
+        enc.onPreKeyBundleResponse({
+          'userId': peerId,
+          'deviceId': 1,
+          'bundle': flatBundleFrom(peer),
+        });
+        final second = enc.ensureSession(peerId);
 
-      await expectLater(first, completes);
-      await expectLater(second, completes);
-      expect(bundleFetches, 1, reason: 'a repeat fetch is refused by the server');
-      expect(await enc.encryptionService.hasSession(peerId), isTrue);
-    });
+        await expectLater(first, completes);
+        await expectLater(second, completes);
+        expect(
+          bundleFetches,
+          1,
+          reason: 'a repeat fetch is refused by the server',
+        );
+        expect(await enc.encryptionService.hasSession(peerId), isTrue);
+      },
+    );
   });
 }

@@ -88,24 +88,31 @@ void main() {
     return signedBy(stranger, strangerEnrollment, version, devices);
   }
 
-  int lookups() =>
-      emitted.where((e) => e['event'] == 'getDeviceList').length;
+  /// Lookups of the peer's list, by handle (`lookupBoxPeerList`).
+  int lookups() => emitted.where((e) => e['event'] == 'lookup').length;
 
-  /// Serves [answer] to every `getDeviceList`.
-  void serve(Map<String, dynamic>? Function() answer) {
-    provider.setEmitCallback((event, data) {
-      emitted.add({'event': event, 'data': data});
-      if (event == 'getDeviceList') {
-        provider.onDeviceList({'userId': peerId, 'authorization': answer()});
-      }
-    });
+  /// Serves [answer] to every lookup of the peer's list by handle.
+  void serveTo(EncryptionProvider p, Map<String, dynamic>? Function() answer) {
+    p
+      ..listsByHandle = ((user) => user == peerId)
+      ..lookupBoxPeerList = (user) async {
+        emitted.add({
+          'event': 'lookup',
+          'data': {'userId': user},
+        });
+        return answer();
+      };
   }
+
+  void serve(Map<String, dynamic>? Function() answer) =>
+      serveTo(provider, answer);
 
   Future<EncryptionProvider> freshProvider({DateTime Function()? clock}) async {
     final p = EncryptionProvider(clock: clock);
     p.setEmitCallback((event, data) {
       emitted.add({'event': event, 'data': data});
-      if (event == 'checkOwnKeyBundle') p.onOwnKeyBundleStatus({'exists': false});
+      if (event == 'checkOwnKeyBundle')
+        p.onOwnKeyBundleStatus({'exists': false});
     });
     await p.initializeE2E(ownUserId);
     return p;
@@ -177,22 +184,25 @@ void main() {
     );
   });
 
-  test('E50a: the fallback lookup is spent once per account per session', () async {
-    await serverVerified();
-    serve(() => genuine(1, devicesUpTo(2)));
+  test(
+    'E50a: the fallback lookup is spent once per account per session',
+    () async {
+      await serverVerified();
+      serve(() => genuine(1, devicesUpTo(2)));
 
-    await provider.adoptCarriedDeviceList(
-      peerId,
-      forgedByRevokedDevice(5, devicesUpTo(3)),
-    );
-    final second = await provider.adoptCarriedDeviceList(
-      peerId,
-      forgedByRevokedDevice(6, devicesUpTo(3)),
-    );
+      await provider.adoptCarriedDeviceList(
+        peerId,
+        forgedByRevokedDevice(5, devicesUpTo(3)),
+      );
+      final second = await provider.adoptCarriedDeviceList(
+        peerId,
+        forgedByRevokedDevice(6, devicesUpTo(3)),
+      );
 
-    expect(second, CarriedListOutcome.refused);
-    expect(lookups(), 1, reason: 'a forger must not buy a lookup per frame');
-  });
+      expect(second, CarriedListOutcome.refused);
+      expect(lookups(), 1, reason: 'a forger must not buy a lookup per frame');
+    },
+  );
 
   group('BOX-CARRIED-LIST-ORACLE: a carried list the pinned identity does '
       'not vouch for spends no lookup', () {
@@ -213,18 +223,21 @@ void main() {
       expect(provider.cachedDeviceList(peerId)?.liveDeviceIds, [1, 2]);
     });
 
-    test('a DAK the identity never endorsed, with no server list yet', () async {
-      serve(() => genuine(1, devicesUpTo(2)));
+    test(
+      'a DAK the identity never endorsed, with no server list yet',
+      () async {
+        serve(() => genuine(1, devicesUpTo(2)));
 
-      final outcome = await provider.adoptCarriedDeviceList(
-        peerId,
-        forgedByStranger(5, devicesUpTo(4)),
-      );
+        final outcome = await provider.adoptCarriedDeviceList(
+          peerId,
+          forgedByStranger(5, devicesUpTo(4)),
+        );
 
-      expect(outcome, CarriedListOutcome.refused);
-      expect(lookups(), 0);
-      expect(provider.cachedDeviceList(peerId), isNull);
-    });
+        expect(outcome, CarriedListOutcome.refused);
+        expect(lookups(), 0);
+        expect(provider.cachedDeviceList(peerId), isNull);
+      },
+    );
 
     test('an endorsed DAK whose list signature does not verify', () async {
       await serverVerified();
@@ -389,15 +402,7 @@ void main() {
 
     expect(next.cachedDeviceList(peerId)?.version, 2);
     expect(next.cachedDeviceList(peerId)?.liveDeviceIds, [1, 2, 3]);
-    next.setEmitCallback((event, data) {
-      emitted.add({'event': event, 'data': data});
-      if (event == 'getDeviceList') {
-        next.onDeviceList({
-          'userId': peerId,
-          'authorization': genuine(2, devicesUpTo(3)),
-        });
-      }
-    });
+    serveTo(next, () => genuine(2, devicesUpTo(3)));
 
     final forged = await next.adoptCarriedDeviceList(
       peerId,
@@ -419,7 +424,7 @@ void main() {
 
     provider
       ..keepsDeviceListFor = ((peer) => peer == peerId)
-      ..invalidateDeviceList(peerId);
+      ..invalidateDeviceList(peerId, byPerson: true);
     serve(() => genuine(2, devicesUpTo(3)));
     await provider.getVerifiedDeviceList(peerId);
     await pumpEventQueue();

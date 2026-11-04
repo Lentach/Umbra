@@ -3,12 +3,10 @@ import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 
 import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/message_model.dart';
-import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
 import '../../services/audio_cache_store.dart';
 import '../../services/media_crypto_service.dart';
@@ -168,9 +166,8 @@ class _PlaybackControllerState extends State<PlaybackController>
     if (mediaUrl == null || mediaUrl.isEmpty) {
       throw Exception('No media URL');
     }
-    final token = context.read<AuthProvider>().token ?? '';
     // A box voice note (item 3 / media wiring) comes from this device's
-    // copy or the box, never `/media` with a token.
+    // copy or the box, never `/media`.
     final box = boxMediaSourceFor(context, mediaUrl);
 
     _loadCancelled = false;
@@ -191,7 +188,6 @@ class _PlaybackControllerState extends State<PlaybackController>
         if (box != null) {
           plain = await loadDecryptedMediaBytes(
             url: mediaUrl,
-            token: token,
             key: mk,
             iv: mi,
             box: box,
@@ -199,7 +195,7 @@ class _PlaybackControllerState extends State<PlaybackController>
         } else {
           final raw = await ApiService(
             baseUrl: AppConfig.baseUrl,
-          ).fetchMediaBytes(mediaUrl, token);
+          ).fetchMediaBytes(mediaUrl);
           if (raw.length > MediaCryptoService.maxBytes) {
             throw Exception('Audio too large');
           }
@@ -224,7 +220,7 @@ class _PlaybackControllerState extends State<PlaybackController>
             _cachedFilePath = null;
           }
         }
-        _cachedFilePath ??= await _downloadCacheAndPlay(mediaUrl, token, box);
+        _cachedFilePath ??= await _downloadCacheAndPlay(mediaUrl, box);
       }
 
       if (mounted) setState(() => _isLoading = false);
@@ -281,7 +277,6 @@ class _PlaybackControllerState extends State<PlaybackController>
   /// path), and starts playback from memory. Returns the cache path.
   Future<String> _downloadCacheAndPlay(
     String url,
-    String token,
     BoxCiphertextSource? box,
   ) async {
     // Native-only: the web branch of _loadAndPlayAudio decrypts into memory
@@ -297,16 +292,14 @@ class _PlaybackControllerState extends State<PlaybackController>
     if (box != null) {
       plain = await loadDecryptedMediaBytes(
         url: url,
-        token: token,
         key: mk,
         iv: mi,
         box: box,
       );
     } else {
-      final raw = await ApiService(baseUrl: AppConfig.baseUrl).fetchMediaBytes(
-        url,
-        token,
-      );
+      final raw = await ApiService(
+        baseUrl: AppConfig.baseUrl,
+      ).fetchMediaBytes(url);
       if (raw.length > MediaCryptoService.maxBytes) {
         throw Exception('Audio too large');
       }

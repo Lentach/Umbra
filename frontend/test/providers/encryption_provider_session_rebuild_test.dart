@@ -190,11 +190,24 @@ void main() {
       FlutterSecureStorage.setMockInitialValues({});
       SharedPreferences.setMockInitialValues({});
 
-      final provider = EncryptionProvider();
-      // `authorization: null` is the one answer that verifies without a chain
-      // — enough to prove a list is HELD, and then emptied.
-      await provider.adoptDeliveredDeviceList(114, null);
+      // The provider's clock is moved past the relookup floor after the list
+      // is held: a friend's list is dropped only when a lookup may be bought.
+      var now = DateTime.utc(2026, 11, 4);
+      final provider = EncryptionProvider(clock: () => now);
+      provider
+        ..setEmitCallback((event, data) {
+          if (event == 'checkOwnKeyBundle') {
+            provider.onOwnKeyBundleStatus({'exists': false});
+          }
+        })
+        ..listsByHandle = ((peer) => peer == 114)
+        // `authorization: null` is the one answer that verifies without a
+        // chain — enough to prove a list is HELD, and then emptied.
+        ..lookupBoxPeerList = ((peer) async => null);
+      await provider.initializeE2E(7);
+      await provider.getVerifiedDeviceList(114);
       expect(provider.cachedDeviceList(114), isNotNull);
+      now = now.add(kBoxRelookupFloor * 2);
 
       provider.onSessionRebuildNeeded({'fromUserId': 114});
 

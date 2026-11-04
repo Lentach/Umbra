@@ -247,14 +247,16 @@ void main() {
     );
     lookups = 0;
     served = () => genuine(1, devices({3}));
-    enc = _Me()..keepsDeviceListFor = (peer) => peer == _friend;
+    enc = _Me()
+      ..keepsDeviceListFor = ((peer) => peer == _friend)
+      ..listsByHandle = ((peer) => peer == _friend)
+      ..lookupBoxPeerList = ((peer) async {
+        lookups++;
+        return served();
+      });
     enc.setEmitCallback((event, data) {
       if (event == 'checkOwnKeyBundle') {
         enc.onOwnKeyBundleStatus({'exists': false});
-      }
-      if (event == 'getDeviceList' && (data as Map)['userId'] == _friend) {
-        lookups++;
-        enc.onDeviceList({'userId': _friend, 'authorization': served()});
       }
       if (event == 'getDeviceList' && (data as Map)['userId'] == 1) {
         enc.onDeviceList({'userId': 1, 'authorization': ownServed?.call()});
@@ -360,7 +362,7 @@ void main() {
       'still runs the rotation pass: the list is adopted before any check '
       'and stands (E50e)', () async {
     served = () => genuine(2, devices({3, 4}));
-    enc.invalidateDeviceList(_friend);
+    enc.invalidateDeviceList(_friend, byPerson: true);
     await enc.getVerifiedDeviceList(_friend);
     lookups = 0;
 
@@ -395,7 +397,7 @@ void main() {
     'lookup and runs the handoff pass, which rotates our queue (E50d/E50e)',
     () async {
       served = () => genuine(2, devices({3, 4}));
-      enc.invalidateDeviceList(_friend);
+      enc.invalidateDeviceList(_friend, byPerson: true);
       await enc.getVerifiedDeviceList(_friend);
       lookups = 0;
 
@@ -549,7 +551,14 @@ void main() {
         ...genuine(2, devices({3})),
         'listSignature': genuine(3, devices({3, 4}))['listSignature'],
       };
-      final next = _Me()..keepsDeviceListFor = (peer) => peer == _friend;
+      final next = _Me()
+        ..keepsDeviceListFor = ((peer) => peer == _friend)
+        ..listsByHandle = ((peer) => peer == _friend)
+        // Our own answer comes first; the friend's refused one arrives last.
+        ..lookupBoxPeerList = ((peer) async {
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+          return broken;
+        });
       next.setEmitCallback((event, data) {
         if (event == 'checkOwnKeyBundle') {
           next.onOwnKeyBundleStatus({'exists': false});
@@ -558,14 +567,9 @@ void main() {
           final d = data as Map;
           final users = d['userIds'] as List? ?? [d['userId']];
           for (final user in users.cast<int>()) {
-            // Our own answer first; the friend's refused one arrives last.
-            Future<void>.delayed(
-              Duration(milliseconds: user == _friend ? 50 : 0),
-              () => next.onDeviceList({
-                'userId': user,
-                'authorization': user == _friend ? broken : null,
-              }),
-            );
+            Future<void>.microtask(
+              () => next.onDeviceList({'userId': user, 'authorization': null}),
+            ).ignore();
           }
         }
       });

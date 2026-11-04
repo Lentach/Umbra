@@ -373,6 +373,13 @@ Future<void> settle() async {
   }
 }
 
+extension on BoxSession {
+  /// Asks for a handoff pass the way production does after the connect's own:
+  /// `e2eReady()` runs one (every other gate is open by then). A pass that
+  /// finds one running makes another after it.
+  void runPass() => e2eReady();
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -402,8 +409,8 @@ void main() {
     () async {
       await a.start();
       await b.start();
-      a.session.onFriendsListed();
-      b.session.onFriendsListed();
+      a.session.runPass();
+      b.session.runPass();
       await settle();
 
       final aQueue = a.friend.queues.single;
@@ -418,8 +425,7 @@ void main() {
       a.session
         ..accountLost()
         ..accountReady(2)
-        ..e2eReady()
-        ..onFriendsListed();
+        ..e2eReady();
       await settle();
       expect(box.sent, hasLength(sends), reason: 'b already acked our queue');
       expect(a.friend.queues, hasLength(1));
@@ -435,8 +441,8 @@ void main() {
       await b.start();
       // No address yet: kept for the handoff to come.
       await a.session.friendRelays(5, 3, relays: true);
-      a.session.onFriendsListed();
-      b.session.onFriendsListed();
+      a.session.runPass();
+      b.session.runPass();
       await settle();
 
       expect(a.outboundOf(3)?.relays, isTrue);
@@ -460,7 +466,7 @@ void main() {
       await b.start();
       // The lookup serves no request queue for it: an old app publishes none.
       a.serves = () => const [];
-      a.session.onFriendsListed();
+      a.session.runPass();
       await settle();
       expect(a.lookups, [5]);
       expect(a.friend.queues, isEmpty);
@@ -469,7 +475,7 @@ void main() {
 
       // b updates and looks a up: a's request queue is served, and a hears
       // nothing new from the box.
-      b.session.onFriendsListed();
+      b.session.runPass();
       await settle();
 
       expect(a.outboundOf(3)?.sid, b.friend.queues.single.sid);
@@ -484,7 +490,7 @@ void main() {
       a.friendState = state;
       await a.start();
       await b.start();
-      a.session.onFriendsListed();
+      a.session.runPass();
       await settle();
 
       expect(a.friend.queues, isEmpty);
@@ -500,7 +506,7 @@ void main() {
       a.friendLive = {};
       await a.start();
       await b.start();
-      a.session.onFriendsListed();
+      a.session.runPass();
       await settle();
 
       expect(a.lookups, isEmpty);
@@ -511,33 +517,15 @@ void main() {
   );
 
   test(
-    'a friend the list names for the first time — its record still being '
-    'written when the list reaches the box — is handed our queue at once '
-    '(found live: befriended while this device was away)',
-    () async {
-      a.friendState = null;
-      await a.start();
-      await b.start();
-
-      unawaited(a.store.update(5, (_) => a.recordAs(ContactState.friend)));
-      a.session.onFriendsListed();
-      await settle();
-
-      expect(b.outboundOf(2)?.sid, a.friend.queues.single.sid);
-      expect(a.outboundOf(3)?.sid, b.friend.queues.single.sid);
-    },
-  );
-
-  test(
     'a device that has not acknowledged yet is handed our queue once per '
-    'connect, however many friends lists arrive meanwhile',
+    'connect, however many passes are asked for meanwhile',
     () async {
       await a.start();
       await b.start();
       b.deaf = true;
-      a.session.onFriendsListed();
+      a.session.runPass();
       await settle();
-      a.session.onFriendsListed();
+      a.session.runPass();
       await settle();
 
       final toB = b.store.requestQueue!.sid;
@@ -547,13 +535,13 @@ void main() {
 
   test(
     'a friend whose handoff could not be read for want of an anchor is '
-    'handed our queue at once, not on the next connect or friends list: our '
+    'handed our queue at once, not on the next connect or pass: our '
     'session build pins the anchor, so the pair converges in this pass (E20c)',
     () async {
       a.encryptFails = true;
       await a.start();
       await b.start();
-      a.session.onFriendsListed();
+      a.session.runPass();
       await settle();
       final toB = b.store.requestQueue!.sid;
       expect(box.sent.where((sid) => sid == toB), isEmpty);
@@ -574,7 +562,7 @@ void main() {
       await a.start();
       await b.start();
       b.deaf = true;
-      a.session.onFriendsListed();
+      a.session.runPass();
       await settle();
       final toB = b.store.requestQueue!.sid;
       int handoffs() => box.sent.where((sid) => sid == toB).length;
@@ -584,8 +572,7 @@ void main() {
         a.session
           ..accountLost()
           ..accountReady(2)
-          ..e2eReady()
-          ..onFriendsListed();
+          ..e2eReady();
         await settle();
       }
 
@@ -608,7 +595,7 @@ void main() {
       await a.start();
       await b.start();
       b.deaf = true;
-      a.session.onFriendsListed();
+      a.session.runPass();
       await settle();
       final toB = b.store.requestQueue!.sid;
       int handoffs() => box.sent.where((sid) => sid == toB).length;
@@ -618,8 +605,7 @@ void main() {
         a.session
           ..accountLost()
           ..accountReady(2)
-          ..e2eReady()
-          ..onFriendsListed();
+          ..e2eReady();
         await settle();
       }
 
@@ -665,7 +651,7 @@ void main() {
           'retryAfterMs': 1000,
         }
         ..subscribeRefusedOn = a.socket;
-      a.session.onFriendsListed();
+      a.session.runPass();
       await settle();
       expect(a.friend.queues, hasLength(1));
       expect(box.sent, isEmpty);
@@ -689,13 +675,13 @@ void main() {
       box
         ..subscribeRefusal = {'ok': false, 'code': 'internal'}
         ..subscribeRefusedOn = a.socket;
-      a.session.onFriendsListed();
+      a.session.runPass();
       await settle();
       expect(a.friend.queues, hasLength(1));
       expect(box.sent, isEmpty);
 
       box.subscribeRefusal = null;
-      a.session.onFriendsListed();
+      a.session.runPass();
       await settle();
 
       final queue = a.friend.queues.single;
@@ -711,15 +697,14 @@ void main() {
       a.encryptFails = true;
       await a.start();
       await b.start();
-      a.session.onFriendsListed();
+      a.session.runPass();
       await settle();
       a.session.handOffTo(5);
       await settle();
       a.session
         ..accountLost()
         ..accountReady(2)
-        ..e2eReady()
-        ..onFriendsListed();
+        ..e2eReady();
       await settle();
 
       final failed = E2ePersistentDiag.entries
@@ -800,7 +785,7 @@ void main() {
       };
       final before = socket.emitted.where((f) => f.event == 'subscribe').length;
 
-      session.onFriendsListed();
+      session.runPass();
       for (var i = 0; i < 10; i++) {
         await settle();
       }
@@ -871,10 +856,10 @@ void main() {
         a.emitted.clear();
 
         await a.session.rekeyFriend(5, 3);
-        a.session.onFriendsListed();
+        a.session.runPass();
         await settle();
         await a.session.rekeyFriend(5, 3);
-        a.session.onFriendsListed();
+        a.session.runPass();
         await settle();
 
         expect(a.lookups, [5]);
@@ -924,7 +909,7 @@ void main() {
       };
       await a.start();
       await b.start();
-      a.session.onFriendsListed();
+      a.session.runPass();
       await settle();
       expect(a.friend.queues, isEmpty);
       expect(box.sent, isEmpty);
@@ -937,21 +922,19 @@ void main() {
     },
   );
 
-  /// A reconnect of [device]: the socket drops and comes back, a friends list
-  /// arrives.
+  /// A reconnect of [device]: the socket drops and comes back, a pass runs.
   Future<void> reconnect(_Device device) async {
     device.session
       ..accountLost()
       ..accountReady(device.deviceId)
-      ..e2eReady()
-      ..onFriendsListed();
+      ..e2eReady();
     await settle();
   }
 
   // Mutation: `_pass` candidates back to "only friends holding an address":
   // nothing is looked up, nothing handed, neither side converges.
   test(
-    'a connect with NO friends list at all looks an unrouted friend up once '
+    'a connect that runs no further pass looks an unrouted friend up once '
     'and hands our queue to the request queue that lookup named: both sides '
     'converge (E114c)',
     () async {
@@ -974,7 +957,7 @@ void main() {
   // asking whether that device has a target (drop `!targets.containsKey(d)`).
   test(
     'a friend whose every live device already has a held address costs ZERO '
-    'lookups, across reconnects and friends lists',
+    'lookups, across reconnects and passes',
     () async {
       await a.start();
       final held = ContactOutbound(
@@ -986,7 +969,7 @@ void main() {
 
       for (var i = 0; i < 3; i++) {
         await reconnect(a);
-        a.session.onFriendsListed();
+        a.session.runPass();
         await settle();
       }
 
@@ -1023,7 +1006,7 @@ void main() {
         ..ownDeviceList = (() async => {'listVersion': 7})
         ..friendAnswered = ((_, _) async => false);
 
-      a.session.onFriendsListed();
+      a.session.runPass();
       await settle();
 
       expect(box.sent, isNot(contains(held.sid)));
@@ -1050,7 +1033,7 @@ void main() {
         ..ownDeviceList = (() async => {'listVersion': 7})
         ..friendAnswered = ((_, _) async => true);
 
-      a.session.onFriendsListed();
+      a.session.runPass();
       await settle();
 
       expect(box.sent, contains(held.sid));
@@ -1061,7 +1044,7 @@ void main() {
   // Mutation: `_pass` drops the `_addressesAsked` guard
   // (`!_addressesAsked.contains(userId)`): every pass asks again.
   test(
-    'however many friends lists and reconnects, a friend is looked up at '
+    'however many passes and reconnects, a friend is looked up at '
     'most once per process — a spent lookup included',
     () async {
       await a.start();
@@ -1070,7 +1053,7 @@ void main() {
 
       for (var i = 0; i < 3; i++) {
         await reconnect(a);
-        a.session.onFriendsListed();
+        a.session.runPass();
         await settle();
       }
       expect(a.lookups, [5]);
@@ -1089,7 +1072,7 @@ void main() {
       // A friend still on an app that published no request queue: nothing is
       // ever handed, so `handedAt` stays null and the handoff stays due.
       a.serves = () => const [];
-      a.session.onFriendsListed();
+      a.session.runPass();
       await settle();
       expect(a.lookups, [5]);
 
@@ -1119,7 +1102,7 @@ void main() {
       await a.start();
       await b.start();
       a.lookupFails = true;
-      a.session.onFriendsListed();
+      a.session.runPass();
       await settle();
       expect(a.lookups, [5]);
 
@@ -1154,7 +1137,7 @@ void main() {
     await a.start();
     await b.start();
     a.serves = () => const [];
-    a.session.onFriendsListed();
+    a.session.runPass();
     await settle();
     expect(a.lookups, [5]);
 
@@ -1180,7 +1163,7 @@ void main() {
     expect(a.store.friendLookedUpAt(77), isNotNull);
 
     a.serves = () => const [];
-    a.session.onFriendsListed();
+    a.session.runPass();
     await settle();
 
     expect(a.store.friendLookedUpAt(77), isNull, reason: '77 is no friend');
@@ -1272,7 +1255,7 @@ void main() {
       await a.start();
       await b.start();
       b.deaf = true;
-      a.session.onFriendsListed();
+      a.session.runPass();
       await settle();
       final toB = b.store.requestQueue!.sid;
       int handoffs() => box.sent.where((sid) => sid == toB).length;
@@ -1309,7 +1292,7 @@ void main() {
 
       await reconnect(a);
       await reconnect(a);
-      a.session.onFriendsListed();
+      a.session.runPass();
       await settle();
 
       expect(a.lookups, [5]);
@@ -1346,9 +1329,9 @@ void main() {
           state: ContactState.friend,
         ),
       );
-      a.session.onFriendsListed();
+      a.session.runPass();
       await settle();
-      a.session.onFriendsListed();
+      a.session.runPass();
       await settle();
       expect(routes(), [
         '{friends: 1, routed: 0, owed: 1}',
@@ -1379,7 +1362,7 @@ void main() {
         sid: handoff.sid,
         sealPub: handoff.sealPub,
       );
-      a.session.onFriendsListed();
+      a.session.runPass();
       await settle();
       expect(routes(), hasLength(3));
     },
@@ -1490,7 +1473,7 @@ void main() {
         a.session.ownDeviceList = () async => {'listVersion': 7};
         b.session.ownDeviceList = () async => {'listVersion': 9};
 
-        a.session.onFriendsListed();
+        a.session.runPass();
         await settle();
 
         expect(b.carried, [
@@ -1512,7 +1495,7 @@ void main() {
         await a.start();
         await b.start();
         await b2.start();
-        a.session.onFriendsListed();
+        a.session.runPass();
         await settle();
         expect(a.friend.queues.single.ackedBy, unorderedEquals([3, 4]));
       });
@@ -1646,7 +1629,7 @@ void main() {
           b3.peers.add(a);
           await a.restart();
           a.session.ownDeviceList = () async => {'pad': 'x' * 20000};
-          a.session.onFriendsListed();
+          a.session.runPass();
           await settle();
 
           expect(b3.outboundOf(2)?.sid, a.friend.queues.single.sid);

@@ -128,8 +128,8 @@ describe('JwtStrategy.validate', () => {
       mockUsersService.findById.mockResolvedValue(liveUser);
       mockDevicesService.isRevoked.mockResolvedValue(true);
 
-      // This is the only thing standing between a revoked device and
-      // POST /media/upload for the remaining life of its access token.
+      // This is the only thing standing between a revoked device and every
+      // guarded REST route for the remaining life of its access token.
       await expect(
         strategy.validate({
           sub: 1,

@@ -2,7 +2,6 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Server, Socket } from 'socket.io';
 import { UsersService } from '../../users/users.service';
-import { FriendsService } from '../../friends/friends.service';
 import { DevicesService } from '../../key-bundles/devices.service';
 import { DeviceListService } from '../../key-bundles/device-list.service';
 import {
@@ -34,8 +33,8 @@ function socketUser(client: Socket): AuthenticatedSocketData['user'] {
  * identity call: per addressable device a bundle (its next one-time pre-key
  * spent), the request queue that device published, and the account's
  * DAK-signed list so the searcher verifies the device set instead of taking
- * the server's word. With the box off it answers strangers only, with no
- * device and no list, and claims nothing. Residual
+ * the server's word. With the box off it answers with no device and no list,
+ * and claims nothing. Residual
  * (design §5): identity sees "A looked up B", once — the search is not logged.
  *
  * `setRequestQueue` is how a device publishes that queue.
@@ -46,7 +45,6 @@ export class ChatSearchService {
 
   constructor(
     private readonly usersService: UsersService,
-    private readonly friendsService: FriendsService,
     private readonly devicesService: DevicesService,
     private readonly deviceListService: DeviceListService,
     private readonly chatKeyExchangeService: ChatKeyExchangeService,
@@ -69,27 +67,16 @@ export class ChatSearchService {
       // spend a pre-key it is not going to hand out. With the box on, a friend
       // is answered like anyone (owner decision 4): a friendship made over the
       // box has no server row, so the server cannot tell, and must not appear
-      // to. With the box off (release N step A, G5 owner call) a friend still
-      // answers empty: the clients before N do not filter friends, so they
-      // would offer a dead invitation and spend a one-time pre-key per device
-      // on every search. A stranger is answered, but with no device and no
-      // list: only a box first contact uses them, so a claim would spend a
-      // pre-key for nothing (G5 review). UNSET is off, as `app.module.ts`
-      // registers BoxModule.
+      // to. Since Phase 4 step 5 NO friendship has a server row, so the box-off
+      // branch no longer tells friends from strangers either: a stranger is
+      // answered, but with no device and no list: only a box first contact
+      // uses them, so a claim would spend a pre-key for nothing (G5 review).
+      // UNSET is off, as `app.module.ts` registers BoxModule.
       if (!user || user.id === currentUserId) {
         client.emit('searchUsersResult', []);
         return;
       }
       const boxOn = this.configService.get<string>('BOX_ENABLED') === 'true';
-      if (
-        !boxOn &&
-        (await this.friendsService.getFriends(currentUserId)).some(
-          (friend) => friend.id === user.id,
-        )
-      ) {
-        client.emit('searchUsersResult', []);
-        return;
-      }
       client.emit('searchUsersResult', [
         {
           ...UserMapper.toPayload(user),

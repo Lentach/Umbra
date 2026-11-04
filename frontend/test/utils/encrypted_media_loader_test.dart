@@ -9,12 +9,10 @@ class _FakeApi extends ApiService {
   _FakeApi(this._bytes) : super(baseUrl: 'http://test');
   final Uint8List _bytes;
   String? lastUrl;
-  String? lastToken;
 
   @override
-  Future<Uint8List> fetchMediaBytes(String url, String token) async {
+  Future<Uint8List> fetchMediaBytes(String url) async {
     lastUrl = url;
-    lastToken = token;
     return _bytes;
   }
 }
@@ -41,7 +39,6 @@ void main() {
 
       final out = await loadDecryptedMediaBytes(
         url: 'u',
-        token: 't',
         api: api,
         crypto: crypto,
       );
@@ -49,7 +46,6 @@ void main() {
       expect(out, [1, 2, 3]);
       expect(crypto.called, isFalse);
       expect(api.lastUrl, 'u');
-      expect(api.lastToken, 't');
     });
 
     test('decrypts when both key and iv are present', () async {
@@ -58,7 +54,6 @@ void main() {
 
       final out = await loadDecryptedMediaBytes(
         url: 'u',
-        token: 't',
         key: 'K',
         iv: 'IV',
         api: api,
@@ -77,7 +72,6 @@ void main() {
 
       final out = await loadDecryptedMediaBytes(
         url: 'u',
-        token: 't',
         key: 'K',
         api: api,
         crypto: crypto,
@@ -93,7 +87,6 @@ void main() {
 
       final out = await loadDecryptedMediaBytes(
         url: 'u',
-        token: 't',
         iv: 'IV',
         api: api,
         crypto: crypto,
@@ -107,7 +100,7 @@ void main() {
       final api = _FakeApi(Uint8List(MediaCryptoService.maxBytes + 1));
 
       expect(
-        () => loadDecryptedMediaBytes(url: 'u', token: 't', api: api),
+        () => loadDecryptedMediaBytes(url: 'u', api: api),
         throwsA(isA<Exception>()),
       );
     });
@@ -124,7 +117,6 @@ void main() {
         final atTag = _FakeApi(Uint8List(MediaCryptoService.maxBytes + 16));
         final out = await loadDecryptedMediaBytes(
           url: 'u',
-          token: 't',
           key: 'k',
           iv: 'i',
           api: atTag,
@@ -137,7 +129,6 @@ void main() {
         expect(
           () => loadDecryptedMediaBytes(
             url: 'u',
-            token: 't',
             key: 'k',
             iv: 'i',
             api: overTag,

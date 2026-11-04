@@ -20,6 +20,8 @@ import 'package:libsignal_protocol_dart/libsignal_protocol_dart.dart'
     show NoSessionException;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../support/chat_seed.dart';
+
 /// The real plaintext store; Signal and the device list are faked. An
 /// outbound "ciphertext" is `2:` + base64(plaintext), so a frame handed to
 /// the box can be read back.
@@ -211,19 +213,18 @@ void main() {
     encryption = _SiblingEncryption(service);
     link = _Link();
     emitted = [];
-    final conversations = ConversationsProvider()
-      ..setCurrentUserId(1)
-      ..onConversationsList([
-        {
-          'id': 10,
-          'userOne': {'id': 1, 'username': 'alice', 'tag': '0001'},
-          'userTwo': {'id': 2, 'username': 'bob', 'tag': '0002'},
-          'createdAt': '2026-01-01T00:00:00.000Z',
-          'unreadCount': 0,
-          'lastMessage': null,
-        },
-      ])
-      ..openConversation(10);
+    final conversations = ConversationsProvider()..setCurrentUserId(1);
+    seedConversations(conversations, [
+      {
+        'id': 10,
+        'userOne': {'id': 1, 'username': 'alice', 'tag': '0001'},
+        'userTwo': {'id': 2, 'username': 'bob', 'tag': '0002'},
+        'createdAt': '2026-01-01T00:00:00.000Z',
+        'unreadCount': 0,
+        'lastMessage': null,
+      },
+    ]);
+    conversations.openConversation(10);
     provider = MessagingProvider()
       ..setConversationsProvider(conversations)
       ..setEncryptionProvider(encryption)

@@ -54,11 +54,6 @@ class ChatMessageBubble extends StatelessWidget {
     context,
     message,
     isMine: isMine,
-    // Must match what the BODY renders: this string also feeds the
-    // inline-vs-stacked timestamp probe, so measuring the unreadable sentence
-    // while `TextMessageContent` paints "Decrypting…" can flip that layout
-    // decision for the duration of the pass.
-    decryptInProgress: historyDecryptInFlight(context),
   );
 
   String _replyDisplayContent(BuildContext context, ReplyToPreview replyTo) {
@@ -127,17 +122,12 @@ class ChatMessageBubble extends StatelessWidget {
       bubbleRenderBox: renderBox,
       isMine: isMine,
       currentUserId: auth.currentUser?.id,
-      // `decryptInProgress` is captured HERE, where providers are in scope,
-      // and handed over as a plain field: the replica itself stays
-      // provider-free (it mounts in an Overlay), but it must not disagree with
-      // the bubble underneath it. Without this an own `[encrypted]` row read
-      // "Decrypting…" in the bubble and "can't be read" in the overlay.
+      // The replica itself stays provider-free (it mounts in an Overlay).
       bubblePreviewBuilder: (_) => MessageContextMenuBubbleHighlight(
         message: message,
         isMine: isMine,
         maxWidth: bubbleSize.width,
         themePreference: themePreference,
-        decryptInProgress: historyDecryptInFlight(context, listen: false),
       ),
       onReply: () => messaging.setReplyingTo(message),
       onCopy: !message.hasCopyablePlaintext
