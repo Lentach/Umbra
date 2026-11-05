@@ -7,7 +7,7 @@ One-off runbook for the release that drops the old server path (migration `0027`
 1. #208 shipped (0.2.74), master merged into `feat/phase4-step5`, PR #210 mergeable, CI green on its head sha (`gh api repos/Lentach/Umbra/commits/<sha>/check-runs`). Code merged 11-05 (`e86da5f9`, CI 7/7); only #208's version bump is left to merge.
 2. The Android revoke path driven on a device (decision 130). PASSED 11-05 on `cfc968db` (evidence: decisions log E130a). Repeated on the merged release APK 11-05 (`e86da5f9`): PASSED both ways. Repeat it only if the merge brings code, not just the version bump: once on the merged release APK (the shipped binary is the merge with #208, which touches `main.dart`, where `onBackgroundMessage` is wired): revoked + closed → `[wake-up] revoked-device check: stopped` and the notifier gone on the next send; live + closed → `notRevoked`. Recipe in `.cursor/session-summaries/2026-11-04-phase4-step5-built.md` (Verification, Android drive). Delete the drive APK from BOTH `build/app/outputs/flutter-apk/` and `apk/release/` afterwards: it is throwaway-signed and points at `127.0.0.1:3100`.
 3. The decision 86 count re-run read-only and shown to the owner (query below).
-4. The owner's explicit go (decision 129). Not bundled with any other release.
+4. The owner's explicit go (decision 129), no sooner than 24 h after 0.2.74 is verified on prod (decision 132). Not bundled with any other release.
 
 ## Decision 86 count (read-only)
 
@@ -47,7 +47,7 @@ done
 sha256sum "$A"/*.gpg
 ```
 
-On the PC: `scp -r ubuntu@51.68.138.13:fireplace-backups/step5-archive-<ts> <owner's folder>`, then compare `sha256sum`. `backup.pass` is NOT copied with it (kept apart, as for every backup). Restore later: decrypt, `createdb`, `pg_restore --exit-on-error schema.dump`, then `pg_restore --disable-triggers old-tables-data.dump`.
+On the PC (decision 134): `scp ubuntu@51.68.138.13:fireplace-backups/step5-archive-<ts>/*.gpg "$USERPROFILE/Desktop/umbra-archive-step5/"`, save the VM's `sha256sum` output there as `SHA256SUMS`, and compare it with a local `sha256sum`. `backup.pass` is NOT copied with it (kept apart, as for every backup). Restore later: decrypt, `createdb`, `pg_restore --exit-on-error schema.dump`, then `pg_restore --disable-triggers old-tables-data.dump`.
 
 ### 2. Backup + backend (VM)
 
@@ -72,7 +72,7 @@ Build per `android-release.md` (release keystore), publish `umbra-0.2.75.apk`, s
 docker run --rm -v fireplace_media_storage:/m alpine rm -rf /m/msgs
 ```
 
-### Release notes (decisions 118, 127)
+### Release notes (decisions 118, 127; approved as written, 133)
 
 EN: "This update removes the old message system from the server. Pictures, videos and files sent with app versions from before mid-October are deleted from the server and can no longer be opened. Older text messages from that time disappear on their own within 30 days. Blocks are now kept only on your device."
 

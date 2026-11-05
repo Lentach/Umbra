@@ -31,7 +31,7 @@
 - Next action: once #208 ships 0.2.74 (its pubspec bump lands on master), merge master once more (expect only the version line + docs), bump `pubspec.yaml` to 0.2.75, CI green, then ask the owner for the go per the runbook. Gates 1 (code), 2 (Android) and 3 (count) are done.
 - Deploy runbook: `docs/runbooks/phase4-step5-deploy.md` (gates, archive commands, backup, order, `msgs/` removal, release notes EN/PL, rollback). Android gate (decision 130) PASSED 11-05.
 - Then the deploy (owner's go, decision 129), per the runbook.
-- Owner-owed: the step 5 go; whether unblock should re-invite (today it only clears the block, as for box friends).
+- Owner 11-05 (decisions 132–135): ship 0.2.74 now; step 5 no sooner than 24 h after 0.2.74 is verified; release notes as written; archive to `Desktop\umbra-archive-step5`; unblock only lifts the block. Owner-owed: the step 5 go itself.
 - Open: rehearsal pair C lost messages (`DECRYPT_FAIL InvalidKeyIdException`) after the machine drop; three clean reruns passed, [INFERENCE] a damaged key store; watch for it. After unfriend/block of the last chat the "?" screen stays open (pre-existing auto-pop rule).
 - Recipes: dev stack `docker compose -p p4s5 -f docker-compose.yml -f %TEMP%/p4s5/compose.override.yml up -d`; web drive in the eval `browser` needs `flt-semantics-placeholder` click and `page.bringToFront()` before typing; real Web Push needs real Chrome + `--dart-define=WEB_PUSH_VAPID_PUBLIC_KEY`.
 - Traps: `git worktree remove --force` follows a junction (traps.md, Agent tooling).
