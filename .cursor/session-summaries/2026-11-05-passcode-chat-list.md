@@ -24,9 +24,9 @@ Branch `fix/passcode-chat-list` (off master `0f63fb75` = #211 merged). **Version
 - Prod flags (`LEGACY_WRITES_FROZEN=true`, `LEGACY_LISTS_SILENT=true` on the dev backend): reload + unlock → live log `CONTACT_STORE_UNAVAILABLE {locked}`, no `CONV_LIST`, `E2E_RESTORE_UNLOCK` → `SIG_SEAL_OPEN` → `E2E_INIT_DONE`; Czaty lists both chats.
 - Suites: `flutter test` 3346 passed / 14 skipped; `flutter analyze` 0 errors or warnings (3130 infos = baseline).
 - CI: 7/7 success on `6fab94b9` (PR #212); master merge `37187b90` 6/6 success (CodeQL not run on the merge commit).
-- Prod deploy: `deploy-web.ps1` from a throwaway worktree at `37187b90` → `PUBLISHED_OK`; `post-deploy-smoke.mjs --commit 37187b90` 8/8; `/version.json` 0.2.75/37187b90, `/version` 0.2.74/f3bdc1c9; backend logs 10 min after: 0 errors, `healthy`. NOT verified on prod: a real passcode user's unlock (owner to relay).
+- Prod deploy: `deploy-web.ps1` from a throwaway worktree at `37187b90` → `PUBLISHED_OK`; `post-deploy-smoke.mjs --commit 37187b90` 8/8; `/version.json` 0.2.75/37187b90, `/version` 0.2.74/f3bdc1c9; backend logs 10 min after: 0 errors, `healthy`. Verified on prod after the deploy (owner relay): SaraLee, a web passcode user, sees the owner's messages and replies.
 
 ## Notes for next session
 - Sara RECOVERED on 0.2.73 (owner relay, 11-05 ~13:30Z): she sees bob208 (her only contact), can send messages and send invitations. Server agrees: her 12:02Z frames drained by ~13:25Z and three quiet frames (receipts) came back into her queue at 13:25:55Z.
-- Next action: tell web passcode users (via the owner) to reload once; then Phase 4 step 5 (PR #210, `fireplace-p4s5`) — merge master, bump to 0.2.76, CI, and the owner's go no sooner than 24 h after this release (decision 132).
+- Next action: Phase 4 step 5 (PR #210, `fireplace-p4s5`) — merge master, bump to 0.2.76, CI, and the owner's go no sooner than 24 h after this release (decision 132).
 - Cleanup done: dev stack `hotfix` down, worktrees `rb0273`/`b0274`/`d0275` removed, VM `~/frontend-build.0274` removed.
