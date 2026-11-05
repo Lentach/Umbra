@@ -248,6 +248,15 @@ class ConnectionProvider extends ChangeNotifier {
         // lists are re-applied as the freshest truth.
         _friendsProvider?.rewriteStore();
         _conversationsProvider?.rewriteStore();
+        // A session that BOOTED locked never hydrated (connect found the
+        // store closed): with the server lists silent only the store can name
+        // the chats, and a server list that did land kept no box-made chat,
+        // which only the store holds. Both are no-ops after a mid-session
+        // re-lock: the RAM lists are already full.
+        _friendsProvider?.hydrateFromStore();
+        _conversationsProvider?.hydrateFromStore();
+        _friendsProvider?.onBoxContactsChanged();
+        _conversationsProvider?.refreshLocalChats();
         // A vault that booted locked left the box without a request queue.
         _box?.storeOpened();
         _refreshBoxDeviceLists();

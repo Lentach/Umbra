@@ -10,6 +10,7 @@ import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/services/contacts/contact_store.dart';
 import 'package:fireplace/services/encryption/content_kv.dart';
 import 'package:fireplace/services/socket_service.dart';
+import 'package:fireplace/utils/message_ids.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -563,6 +564,90 @@ void main() {
       );
     },
   );
+
+  group('a session that booted locked', () {
+    /// Account 1 with the [seedOnlineSession] graph plus frank (6), a friend
+    /// made over the box, whose chat only the store can name. The contact
+    /// store is locked through `connect`; [whileLocked] runs before the unlock.
+    Future<(FriendsProvider, ConversationsProvider)> bootLockedThenUnlock({
+      void Function(FriendsProvider, ConversationsProvider)? whileLocked,
+    }) async {
+      await seedOnlineSession();
+      await store.update(
+        6,
+        (_) => ContactRecord(
+          userId: 6,
+          username: 'frank',
+          tag: '0006',
+          state: ContactState.friend,
+          boxOrigin: ContactBoxOrigin(at: DateTime.utc(2026, 10)),
+        ),
+      );
+      await _settle();
+      var locked = true;
+      final friends = FriendsProvider();
+      final convs = ConversationsProvider();
+      final encryption = EncryptionProvider();
+      final connection = ConnectionProvider(socketService: _SilentSocket())
+        ..setProviders(
+          encryption: encryption,
+          friends: friends,
+          conversations: convs,
+          messaging: MessagingProvider()..setConversationsProvider(convs),
+          contactStore: ContactStore(
+            open: () async {
+              if (locked) {
+                throw const ContentStoreUnavailable('locked', locked: true);
+              }
+              return kv;
+            },
+            lock: <T>(_, action) => action(),
+            accepts: (_) => true,
+          ),
+        );
+      addTearDown(connection.disconnect);
+
+      await connection.connect(1, 'token', 'http://localhost:3000');
+      expect(friends.friends, isEmpty);
+      expect(convs.conversations, isEmpty);
+      whileLocked?.call(friends, convs);
+
+      locked = false;
+      await encryption.onPasscodeLockRestore!();
+      return (friends, convs);
+    }
+
+    final frankChat = localConversationIdFor(6);
+
+    test('lists the stored contacts after the unlock when the server lists '
+        'are silent', () async {
+      final (friends, convs) = await bootLockedThenUnlock();
+
+      expect(
+        friends.friends.map((u) => u.username),
+        unorderedEquals(['bob', 'carol', 'frank']),
+      );
+      expect(
+        convs.conversations.map((c) => c.id),
+        unorderedEquals([10, frankChat]),
+      );
+    });
+
+    test('keeps a server list that landed while locked and adds the chats '
+        'made over the box', () async {
+      final (_, convs) = await bootLockedThenUnlock(
+        whileLocked: (friends, convs) {
+          friends.onFriendsList([_user(2, 'bob'), _user(3, 'carol')]);
+          convs.onConversationsList([_conv(10, 2, 'bob')]);
+        },
+      );
+
+      expect(
+        convs.conversations.map((c) => c.id),
+        unorderedEquals([10, frankChat]),
+      );
+    });
+  });
 
   test(
     'a store that cannot open is diagnosed and the session goes on',
