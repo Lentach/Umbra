@@ -1,6 +1,6 @@
 # 2026-11-05 — Chat list empty after a passcode unlock; SaraLee checked
 
-Branch `fix/passcode-chat-list` (off master `0f63fb75` = #211 merged). Ships with 0.2.75 (web not deployed: owner "Merge, but keep web on 0.2.73 for now").
+Branch `fix/passcode-chat-list` (off master `0f63fb75` = #211 merged). **Version:** 0.2.73 (web, rolled back) → 0.2.75 · **Tiers deployed:** web (owner: "Merge #212 and deploy web 0.2.75 now").
 
 ## What happened
 - A web session that BOOTS with the passcode vault locked finds the contact store locked at `connect` (`CONTACT_STORE_UNAVAILABLE {stage: locked}`), so the lists never hydrate. The unlock (`PasscodeProvider.unlock` → `E2eLockRevoker.restore` → `EncryptionProvider.restoreAfterPasscodeUnlock` → `onPasscodeLockRestore`) re-opened the store but only called `rewriteStore`, a no-op without a server snapshot. Prod's lists are silent, so the Czaty list read "Brak czatów" for every web passcode user (0.2.73 too). Kontakty still showed box friends, because its getters read the store.
@@ -23,7 +23,10 @@ Branch `fix/passcode-chat-list` (off master `0f63fb75` = #211 merged). Ships wit
 - Final fix, lists not silent: reload + unlock → Czaty lists pcc1747 and pcb664 with their last messages.
 - Prod flags (`LEGACY_WRITES_FROZEN=true`, `LEGACY_LISTS_SILENT=true` on the dev backend): reload + unlock → live log `CONTACT_STORE_UNAVAILABLE {locked}`, no `CONV_LIST`, `E2E_RESTORE_UNLOCK` → `SIG_SEAL_OPEN` → `E2E_INIT_DONE`; Czaty lists both chats.
 - Suites: `flutter test` 3346 passed / 14 skipped; `flutter analyze` 0 errors or warnings (3130 infos = baseline).
+- CI: 7/7 success on `6fab94b9` (PR #212); master merge `37187b90` 6/6 success (CodeQL not run on the merge commit).
+- Prod deploy: `deploy-web.ps1` from a throwaway worktree at `37187b90` → `PUBLISHED_OK`; `post-deploy-smoke.mjs --commit 37187b90` 8/8; `/version.json` 0.2.75/37187b90, `/version` 0.2.74/f3bdc1c9; backend logs 10 min after: 0 errors, `healthy`. NOT verified on prod: a real passcode user's unlock (owner to relay).
 
 ## Notes for next session
 - Sara RECOVERED on 0.2.73 (owner relay, 11-05 ~13:30Z): she sees bob208 (her only contact), can send messages and send invitations. Server agrees: her 12:02Z frames drained by ~13:25Z and three quiet frames (receipts) came back into her queue at 13:25:55Z.
-- Deploy web 0.2.75 (both fixes) only on the owner's OK; then tell passcode users to reload.
+- Next action: tell web passcode users (via the owner) to reload once; then Phase 4 step 5 (PR #210, `fireplace-p4s5`) — merge master, bump to 0.2.76, CI, and the owner's go no sooner than 24 h after this release (decision 132).
+- Cleanup done: dev stack `hotfix` down, worktrees `rb0273`/`b0274`/`d0275` removed, VM `~/frontend-build.0274` removed.
