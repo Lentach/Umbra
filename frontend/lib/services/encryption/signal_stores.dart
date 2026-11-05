@@ -107,6 +107,13 @@ class DualStorage {
   /// ops cannot race two stores; a failed open keeps rethrowing on every op —
   /// E2E down this session, retried next boot; a fallen-back session stays on
   /// the guarded plaintext store; never a mid-session backend flip).
+  ///
+  /// One exception: a `locked` open (passcode vault not yet unlocked) is NOT
+  /// kept, so the first op after the unlock re-opens under the same rules —
+  /// the re-open [revokeWebSession] already sanctions. While still locked it
+  /// throws `locked` again; it can never land on the plaintext fallback.
+  /// 0.2.74 read this store at first frame, before the passcode screen, and
+  /// a kept `locked` held E2E down for every passcode user on web.
   Future<SigWebKv> get _webKv => _webOpen ??= _openWeb();
 
   Future<SigWebKv> _openWeb() async {
@@ -133,8 +140,10 @@ class DualStorage {
         // Sealed rows exist (or their existence is unknowable): running a
         // plaintext store beside them is the rule-4 forbidden state, and an
         // absent-looking identity read could trigger regeneration. E2E stays
-        // DOWN this session (docs/design/web-sig-sealing.md §3.4).
+        // DOWN this session (docs/design/web-sig-sealing.md §3.4) — except
+        // for `locked`, which the unlock lifts (see [_webKv]).
         E2ePersistentDiag.record('SIG_KEY_UNAVAILABLE', {'stage': e.stage});
+        if (e.stage == 'locked') _webOpen = null;
         rethrow;
       }
       // Pre-first-seal world, proven by a successful zero-envelope probe:

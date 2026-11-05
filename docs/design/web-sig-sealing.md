@@ -307,7 +307,7 @@ mid-session; it only loses write permission.
 | `SIG_SEAL_OPEN {sealed, legacy, ms}` | ring | per-boot open outcome + counts |
 | `SIG_SEAL_DRAIN_DONE {sealed}` | durable, one-shot | migration finished |
 | `SIG_STORE_FALLBACK {stage}` | durable | pre-first-seal session running plaintext (legal, loud) |
-| `SIG_KEY_UNAVAILABLE {stage}` | durable | sealed rows exist, keys unreachable → E2E down this session |
+| `SIG_KEY_UNAVAILABLE {stage}` | durable | sealed rows exist, keys unreachable → E2E down this session; `locked` (passcode vault shut) is the exception: it is not memoized, so the first op after the unlock re-opens (0.2.75 fix: 0.2.74 read the store before the passcode screen and kept E2E down for every passcode user on web) |
 | `SIG_ROWS_UNREADABLE {stage}` | durable, deduped once per session | first unsealable value encountered (`parse` = malformed envelope, `kid` = key material unreachable for that kid, `unseal` = present-kid tamper/corruption) |
 | drain batches | ring | progress |
 
