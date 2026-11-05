@@ -69,6 +69,11 @@ class _QuietEncryption extends EncryptionProvider {
   Future<void> drainPurgeBacklog() async {}
   @override
   Future<void> sweepDestroyablePlaintext() async {}
+
+  /// What the served list says of the device the material is stamped for.
+  bool? stampRevoked = true;
+  @override
+  Future<bool?> stampedDeviceRevoked(int userId) async => stampRevoked;
 }
 
 void main() {
@@ -635,8 +640,8 @@ void main() {
     });
 
     // Issue #208. Mutation: drop `onPreviousDeviceLife`'s retire.
-    test("a previous device life deletes the old life's queues while still "
-        'on the gate, before any link, subscribing none', () async {
+    test("an unlinked device's previous life deletes the old life's queues "
+        'while still on the gate, before any link, subscribing none', () async {
       FlutterSecureStorage.setMockInitialValues({
         'e2e_1_material_device_v1': '2',
       });
@@ -652,6 +657,8 @@ void main() {
       storedDeviceId = 7;
       encryption.clearAll();
       await connection.connect(1, 'token', 'http://api.test', immediate: true);
+      account.serve('socketReady', {'deviceId': 7});
+      await pumpEventQueue();
       expect(sockets.sockets, hasLength(1), reason: 'the gate opens no box');
 
       await encryption.checkPreviousDeviceLife(1);
@@ -666,6 +673,49 @@ void main() {
       expect(box.disposed, isTrue);
     });
 
+    // Issue #208 (owner 11-04): a live secondary that signed out and back in
+    // was never unlinked; its phrase restore keeps its history, so its
+    // queues must outlive the gate. Mutation: drop the
+    // `stampedDeviceRevoked` check from `_retirePreviousLifeQueues`.
+    test(
+      'a live secondary signed back in keeps its queues on the gate',
+      () async {
+        FlutterSecureStorage.setMockInitialValues({
+          'e2e_1_material_device_v1': '2',
+        });
+        // A first life, as device 2, left its queues in the store.
+        await connection.connect(1, 'token', 'http://api.test');
+        encryption.onE2EReady!();
+        sockets.last.serverConnect('S1');
+        await pumpEventQueue();
+        expect(store.requestQueue, isNotNull);
+        connection.disconnect(isLogout: true);
+
+        // Signed in again with the password; the list still names device 2.
+        encryption
+          ..stampRevoked = false
+          ..clearAll();
+        storedDeviceId = 7;
+        await connection.connect(
+          1,
+          'token',
+          'http://api.test',
+          immediate: true,
+        );
+        await encryption.checkPreviousDeviceLife(1);
+        account.serve('socketReady', {'deviceId': 7});
+        await pumpEventQueue();
+        expect(encryption.previousDeviceLife, isTrue, reason: 'precondition');
+
+        expect(
+          sockets.sockets,
+          hasLength(1),
+          reason: 'no box opened to delete',
+        );
+        expect(store.requestQueue, isNotNull);
+      },
+    );
+
     // Issue #208, found driving: the link's reconnect still saw the gate's
     // cached verdict and retired the new life's box, so the re-linked phone
     // took nothing until the app was opened again. Mutation: drop the stamp
@@ -679,6 +729,8 @@ void main() {
       await encryption.checkPreviousDeviceLife(1);
       await pumpEventQueue();
       expect(encryption.previousDeviceLife, isTrue, reason: 'precondition');
+      account.serve('socketReady', {'deviceId': 7});
+      await pumpEventQueue();
       final retired = sockets.last..serverConnect('S1');
       await pumpEventQueue();
       expect(retired.disposed, isTrue, reason: 'precondition: gate retire');

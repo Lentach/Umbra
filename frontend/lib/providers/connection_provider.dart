@@ -596,10 +596,6 @@ class ConnectionProvider extends ChangeNotifier {
       } else {
         _box!.resume();
       }
-      // Issue #208: found a previous device life before this box existed.
-      if (_encryptionProvider?.previousDeviceLife == true) {
-        unawaited(_retirePreviousLifeQueues());
-      }
     }
 
     // 5. Set up emit callbacks so sub-providers can send socket events
@@ -705,6 +701,10 @@ class ConnectionProvider extends ChangeNotifier {
       _box?.accountReady(readyDeviceId is int ? readyDeviceId : null);
       _accountReady = true;
       _refreshBoxDeviceLists();
+      // Issue #208: the retire's revocation check needs the account socket.
+      if (_encryptionProvider?.previousDeviceLife == true) {
+        unawaited(_retirePreviousLifeQueues());
+      }
     });
 
     // 10. On 'disconnect': handle reconnect
@@ -1626,12 +1626,16 @@ class ConnectionProvider extends ChangeNotifier {
   }
 
   /// Issue #208: this install is a previous device life of the account (the
-  /// stale link gate): every way out of the gate — a link, a stale restore,
-  /// a reset — starts a new device life, so the old life's queues are
-  /// deleted NOW rather than at the link. While they exist a friend whose
-  /// list still names the old device fills them and wakes this device with
-  /// pushes nobody can read. The stamp is re-read BEFORE the box is taken:
-  /// the reconnect right after a link still sees the cached verdict, and
+  /// stale link gate) and the device it was is revoked: every way out of the
+  /// gate — a link, a stale restore, a reset — starts a new device life, so
+  /// the old life's queues are deleted NOW rather than at the link. While
+  /// they exist a friend whose list still names the old device fills them
+  /// and wakes this device with pushes nobody can read. A live secondary
+  /// that signed out and back in keeps them: its phrase restore keeps its
+  /// history, and a link retires them ([_startFreshDeviceLife]). The served
+  /// list is read once the account socket is ready; no answer keeps them
+  /// for the link. The stamp is re-read BEFORE the box is taken: the
+  /// reconnect right after a link still sees the cached verdict, and
   /// retiring on it would stop the new life's box. A delete the box does not
   /// confirm stays owed in `boxgone_v1`.
   Future<void> _retirePreviousLifeQueues() async {
@@ -1639,7 +1643,9 @@ class ConnectionProvider extends ChangeNotifier {
     final userId = _currentUserId;
     final box = _box;
     if (encryption == null || userId == null || box == null) return;
+    if (!_accountReady) return;
     if (!await encryption.stillPreviousDeviceLife(userId)) return;
+    if (await encryption.stampedDeviceRevoked(userId) != true) return;
     if (!identical(_box, box) || _currentUserId != userId) return;
     E2eDiagLog.add('BOX_PREVIOUS_LIFE_RETIRE', const {});
     _retireOwnQueues(encryption.stillPreviousDeviceLife(userId));

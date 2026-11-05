@@ -5,49 +5,37 @@
 ## What was done
 - Round 1 (`63764ec8`): a link adopt wipes the `e2e_<uid>_` namespace; a previous device life (stamp != stored session id) shows the gate from the first frame and E2E init refuses before any publish; a gated install never publishes the contact backup; the friend handoff uses the request queue; copy says a re-link starts fresh.
 - Review 1 (`c59e1a96`, `cad490a8`): proven wipe (stamp last, `localIdCounterKey` kept), `beforeWipe` after the blob parses, old queues deleted before the wipe, handoff keyed on `friendAnswered`, one-shot `openProvisioning` re-send.
-- Review 2 (owner: "fix everything, then drive"):
-  - `openProvisioning` is re-sent when owed: sent before `socketReady` or unanswered at a socket drop (`ProvisioningEventSink.onSessionLost`).
-  - Phrase restore wipes history only for a previous device life (`adoptRestoredIdentity(freshDeviceLife:)`, `restoreStartsFresh`); a lock-refused install keeps it (owner).
-  - A reset disposal whose teardown throws records `RESET_STALE_DISPOSAL_DEFERRED` and mints nothing.
-  - Queue deletes have a hard deadline (per-delete `.timeout`); names, typedefs, dead seams cleaned.
-- Gaps (owner: fix ASAP):
-  - New install: `AuthGate` holds the honeycomb while a keyless install awaits its verdict (`awaitingIdentityVerdict`, 20 s cap, ends at the first verdict).
-  - Unlinked phone woken by a friend: the gate deletes the old queues at once (`onPreviousDeviceLife` → `_retirePreviousLifeQueues`, stamp re-read BEFORE the box is taken); the server drops box notifiers on the revoked device's push tokens (decision 125); the client re-registers its push token when the device id moves (`PushService.registerAgain`).
-  - Unconfirmed deletes stay owed in the sealed `boxgone_v1` row (kept by the wipe) and the next ready box deletes them (`BOX_OWED_QUEUES_DELETED`).
-- Found driving: the link's reconnect still saw the cached gate verdict and retired the NEW box, so the re-linked phone took nothing until reopened; fixed with the pre-take re-read + regression test.
-- Out-of-repo: emulator has the debug APK; Docker Desktop was restarted (engine had stopped); planted/consumed `box_notifiers` test rows on dev only.
+- Review 2 + gaps (`80b98d53`): `openProvisioning` re-sent when owed (`ProvisioningEventSink.onSessionLost`); a lock-refused restore keeps history; a reset disposal whose teardown throws defers (`RESET_STALE_DISPOSAL_DEFERRED`); hard per-delete deadline; new install holds the honeycomb until its verdict (`awaitingIdentityVerdict`, 20 s); the gate deletes old queues at once (`_retirePreviousLifeQueues`, stamp re-read before the box is taken — found driving); server drops box notifiers on a revoked device's push tokens (decision 125) and the client re-registers its token when the device id moves; unconfirmed deletes stay owed in `boxgone_v1`.
+- Review 3 (this commit; owner: "fix it", ruling "Keep history"):
+  - A live secondary that signed out and back in keeps its history on a phrase restore: fresh start only when the served list names the stamped id revoked (`EncryptionProvider.stampedDeviceRevoked`; no answer fails the restore, `device_list`); `restoreStartsFresh` → `restoreMayStartFresh`.
+  - The gate retire waits for the account socket (`socketReady` trigger) and the same revoked check; a live secondary's queues stay for its restore or link.
+  - Web-push notifiers matched on the exact JSON endpoint, in `box/box-notifier-teardown.ts` (`deleteNotifiersOnPushTokens`, `CASE` guards the cast), int-tested on Postgres.
+  - Standards: `[rows, rowCount]` mock, push re-register test (`ConnectionProvider(pushService:)` seam), stale test title, `shellMayShow`, comment moved, traps split.
+- OTP fix (owner: "fix it now"): the restore's `restored` ack clears `_deviceMaterialMismatch` (`_restoreObserveUploadAck`) before the flush releases the stashed one-time pre-keys; before, a mismatch-flagged install dropped them (`OTP_UPLOAD_DROPPED {reason: device_material_mismatch}`) because the rebind reconnect keeps the flag.
 
 ## Key files
-- Frontend: `providers/{connection,encryption}_provider.dart`, `services/encryption_service.dart`, `services/box/{box_session,box_friend_handoff}.dart`, `services/contacts/{contact_store,contact_store_owed_deletes,contact_backup_service}.dart`, `services/encryption/sealed_web_content_kv.dart`, `services/device_link/link_ceremony_controller.dart`, `services/push_service.dart`, `main.dart`.
-- Backend: `chat-device-revocation.service.ts` (+ spec), `fcm-tokens.service.ts`, `web-push-subscriptions.service.ts`.
+- Frontend: `providers/{connection,encryption}_provider.dart`, `services/encryption_service.dart`, `services/box/{box_session,box_friend_handoff}.dart`, `services/contacts/{contact_store,contact_store_owed_deletes}.dart`, `services/push_service.dart`, `main.dart`.
+- Backend: `chat-device-revocation.service.ts` (+ spec), `box/box-notifier-teardown.ts` (+ `box.int-spec.ts`), `fcm-tokens.service.ts`, `web-push-subscriptions.service.ts`.
 - Docs: `e2e-invariants.md`, `multi-device.md` (xc), `wire.md`, `metadata-privacy-decisions.md` (125), `traps.md`, `CLAUDE.md` counts.
 
 ## Verification
-- Round 1: CI 6/6 `63764ec8`; 3315 tests; mutants killed: adopt Signal-only wipe; previous-life init gate removed; `_notePreviousDeviceLife` no-op; restart without `onSession`; handoff keeping the held address; handoff ignoring the session; `mayPublish` ignored. Prod read-only SQL (owner OK): bob208 devices 1/11/18, 18 reused 11's `requestSid`, no "karol" account (stale local residue). Drives: web revoke → gate → re-link 3 contacts, no history; emulator link → revoke → gate → re-link (device 27) both ways. fa21/fa23 never left F (tab backgrounded / no focus): `.planning/208-relink/findings.md`.
-- Review 1: CI 6/6 `c59e1a96`; drive B (device 37 → unlink → gate, no chat-list frame → device 39, `held: 6`).
-- CI: 6/6 success on `80b98d53` (review 2 + gaps: backend, Flutter, E2E wire, isolated probes, Web Lock probe, CodeQL).
-- Review 2: Flutter 3335 passed / 14 skipped, backend 1264, analyzer 0, Dart lint 3130, backend ratchet PASS. Mutants killed and reverted: socket-drop re-send; answered-before-drop not re-sent; stale restore Signal-only; lock-only restore wiping; reset `beforeWipe` failure; owed row wiped; keyless verdict wait; keyless wait removed from `AuthGate`; hard-deadline retire; owed delete not drained; gate-time delete dropped; pre-take stamp re-read dropped. Backend: notifier teardown has a failure-path test (no mutant run).
-- Drive (emulator debug APK + web, 11-04 15:45–16:14):
-  - fresh install, password login: 87/87 frames login → honeycomb → gate, no chat list (`u_login.mp4`);
-  - link → device 41; `fcm_token` row under 41 (old rows stayed under 7);
-  - planted 3 `box_notifiers` rows; unlink 41 while closed → its token's row gone, device 7's and the control row kept;
-  - F's next send `frames: 3` (41 dropped); relaunch → logged out → password login → stale gate, no chat list (`u_relog.mp4`); `BOX_PREVIOUS_LIFE_RETIRE` 15:52:32, `BOX_REVOKED_QUEUES_RETIRED {held: 5, owed: 0}` 15:52:35, link at 15:54;
-  - bug above, fixed, rebuilt: device 43 → 45, box up 4 s after the link, F's u4 `frames: 4` reached it; ap5 went after sibling 32 swapped (ghost 39 revoked first).
-- Drive 2 (web build of `80b98d53` + same APK, 11-04 16:40–17:10; throwaway dev account `r208a` id 283, phrase in `v_phrase.txt`):
-  - owed deletes: stale tab, backend `docker pause`d at boot → `BOX_REVOKED_QUEUES_RETIRED {held: 3, owed: 3}`, `boxgone_v1` row written; unpause → stale phrase restore → `E2E_FRESH_DEVICE_LIFE`, then `BOX_OWED_QUEUES_DELETED {deleted: 3, owed: 0}`, row gone;
-  - stale phrase restore (other tab): `RESTORE_STALE_MATERIAL_DISPOSED` + `E2E_FRESH_DEVICE_LIFE`; keyless restore (fresh origin): neither logged;
-  - reset on a stale tab (no phrase, `deadlineAt` aged by SQL): `IDENTITY_RESET_SPEND {shape: mismatch}` → `E2E_FRESH_DEVICE_LIFE` → `RESET_STALE_MATERIAL_DISPOSED` → device 11;
-  - voice note on the phone: `281474976710691.audio` cached → unlink, re-link → `audio_cache` gone → next note `…698.audio` (ids still rising);
-  - `openProvisioning`: stale gate booted with the backend paused shows no code; code appears 4 s after unpause.
-  - Web linking needs installed mode: CDP init script `navigator.standalone = true`.
-- Evidence: `%TEMP%/p4s4drive/evidence/w208r/` (`u_*`, `v_*`).
-- NOT verified on a device: lock-only restore (needs `identityUploadLocked`); a reset whose teardown throws (needs fault injection); `onSessionLost` with a provisioning open in flight while the socket drops (drive 2 covered only "sent before the socket was ready"); web-push endpoint teardown; a real FCM wake (dev has no service account); iOS PWA, prod, release APK.
-- Seen, not changed: the contact-backup prompt ("Chroń swoje kontakty") opens on top of the link gate on web.
+- CI 6/6 on `63764ec8`, `c59e1a96`, `80b98d53`, `a56e382d` (review 3), `54f3d1f8` (restore tests) `3ea4e176` (OTP fix) and `ef0aea65` (exact-once tests): backend, Flutter, E2E wire, isolated probes, Web Lock probe, CodeQL. #208 comments: review 3, follow-up, OTP fix, correction.
+- Review 3 gates: Flutter 3338 passed / 14 skipped, backend 1264 / 71, analyzer 0, Dart lint 3130, backend ratchet PASS, int test on dev Postgres. Mutants killed and reverted: retire without the revoked check; `stampedDeviceRevoked` ignoring `revokedAt`; no `registerAgain`; substring endpoint match. A dropped `CASE` survived (PG short-circuits here): kept as a guard, not claimed.
+- Follow-up (advisory: the fresh half of the restore was not driven): 3 `restoreFromPhrase` tests on a previous device life (list says revoked → fresh; live → kept; no answer → `device_list`, nothing adopted); mutants killed and reverted: `freshDeviceLife: restoreMayStartFresh`; unknown list treated as keep. Flutter 3341 passed / 14 skipped, Dart lint 3130.
+- Drive 3 (web, `r208a`; detail in `.planning/208-relink/findings.md`): only the exact-endpoint web-push notifier went; a revoked tab's gate deleted 2 `box_queues` rows (SQL); a live secondary's gate deleted none and its restore kept all 12 rows (rebound to 26); the unlinked tab's restore retired its queues, then started fresh (rebound to 28, `x3_t_restore_ram.txt`).
+- OTP drop, FIXED. Before the fix the restore-ack batch was dropped on both shapes, but only the kept-history shape ended with an empty pool. Backend log: the 11→26 keep restore (18:21 UTC) uploaded none; the 26→28 fresh restore (21:08) still got one batch from the reconnect init's re-upload.
+  - Tests: "a mismatch-flagged fresh / kept restore uploads its OTPs once, after the rebind" (real stale material minted as device 2, session 7; exactly one `uploadOneTimePreKeys`, after `RECONNECTED`). Red before the fix; with the clear removed both fail; mutant reverted. Flutter 3343 passed / 14 skipped, analyzer 0.
+  - Drive 4, fresh shape (web build with the fix): keyless tab U restored → device 30; tab T (material 28) password login → `E2E_DEVICE_MISMATCH {30, 28}` → restore → rebound to 32, no `OTP_UPLOAD_DROPPED`.
+  - Drive 5, keep shape: U linked from T (SAS 499 282) as live secondary 33; password login → `E2E_DEVICE_MISMATCH {32, 33}` → restore → no `E2E_FRESH_DEVICE_LIFE`, 12/12 `e2e_283_*` rows kept, rebound to 36; 20 `one_time_pre_keys` rows for 36 at the rebind second (`x5_u_keep_otp_ram.txt`).
+  - Both drives, backend: `from→to`, `Uploaded 20` (restore-ack flush, new id), bundle upsert, `Uploaded 20` (reconnect init `E2E_KEYS_UPLOADED`), all on the new id; the keyless restore shows the same pair.
+  - Two RAM `OTP_UPLOAD_AFTER_ACK` lines = two real flushes, not a duplicate print. Both carry the one adopt's `_keysForUpload` [INFERENCE from code: no `IDENTITY_MINTED` between], and the server upserts by `keyId`, so the second rewrites the same keys. This predates the fix; left as is.
 
 ## Notes for next session
-- Next action: owner OK for 0.2.74 — backend (decision 125) + web + APK; then `production-vm-deploy`.
+- Next action: the owner's 0.2.74 OK (backend decision 125 + web + APK), then `production-vm-deploy`.
+- NOT verified on a device: lock-only restore (needs `identityUploadLocked`); a reset whose teardown throws (fault injection); `onSessionLost` with an open in flight at a socket drop; a real FCM wake (no service account); iOS PWA, prod, release APK.
+- Seen, not changed: the contact-backup prompt opens on top of the link gate on web.
 - Owner-owed: the 0.2.74 OK; 0.2.73 on his phone; the step-4 both-ways test; copying `backup.pass` off the VM.
 - Still open: #206, #204, Phase 4 step 5. #208 stays open until it ships.
-- Residuals: a new device sends `own_uncovered` until every live sibling swapped with it (a ghost sibling blocks it for good: revoke it); a logged-out, unrevoked device is a silent sibling.
-- Recipes: re-link drives need PASSWORD logins; type the phone's code on the web primary; one `input keyevent` call per field, re-read the EditText bounds after the first (the keyboard moves the form); the hacker-mode live log is an inner list — swipe inside it; a snapshot emulator may hold an old RELEASE app (`dumpsys package` → `pkgFlags` lacks DEBUGGABLE, screencap empty).
-- Traps (in `traps.md`): new device cannot send until every sibling swapped; adb typing a long code ANRs; per-char adb typing scrambles; re-link drive needs password logins.
+- Residuals: a new device sends `own_uncovered` until every live sibling swapped with it (a ghost sibling blocks it: revoke it); a logged-out, unrevoked device is a silent sibling.
+- Recipes: re-link drives need PASSWORD logins; one `input keyevent` per field; the hacker-mode log is an inner list; the link flow is throttled (`openProvisioning` 10 / 15 min per account).
+- Traps (in `traps.md`): new device cannot send until every sibling swapped; adb typing a long code ANRs; per-char adb typing scrambles; re-link drive needs password logins; friend made while the contact backup is LOCKED; `Pixel_7` snapshot holds a release app; CDP `setBlockedURLs` misses WebSockets; web linking needs installed mode.

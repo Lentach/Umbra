@@ -3226,15 +3226,18 @@ that is the designed outcome).
     its box queues, sibling book and request queue, drained the old queues into unreadable rows, and
     its stale sibling ack kept the primary from ever learning its new self-queue, so every primary
     send was refused `own_uncovered` until the phone was unlinked. Clause 1: the §5.1 adopt, a
-    phrase restore on an install stamped for a revoked device id (owner 11-03: "fresh start too";
-    a keyless restore and a lock refusal alone keep their history, owner 11-04) and a stale gate's
-    §6.2 disposal wipe the account's whole `e2e_<uid>_` namespace,
+    phrase restore on an install stamped for a device id the account's served list names revoked
+    (owner 11-03: "fresh start too"; a keyless restore, a lock refusal alone and a live secondary
+    that signed out and back in keep their history, owner 11-04; no list answer fails the restore)
+    and a stale gate's §6.2 disposal wipe the account's whole `e2e_<uid>_` namespace,
     proven, once the input has parsed; first the old life's box deletes its queues (it alone holds
     their keys) and the app closes the contact store; contacts return from the contact backup. The
     local message-id counter survives (decision 14: never lowered). Clause 2: an install whose
     material stamp names another id than the STORED session is gated from the first frame and
     never reaches E2E-ready, even before `socketReady` confirms the id; that includes a live
-    secondary that signed out and back in (owner 11-03: it starts fresh too). Same direction as
+    secondary that signed out and back in (owner 11-03: its link starts fresh too). The gate
+    deletes the old life's queues once the account socket is ready and that list names the stamped
+    id revoked; a live secondary's stay for its restore or its link. Same direction as
     Signal Desktop (relink: "Transfer" or "Delete all data"), WhatsApp companions and Wire (a
     removed client clears its data). Copy: `devicesRevokeExplainer`, `siblingSilentBody`,
     `linkGateStaleBody` and `linkGateScanBody` say a linked device starts fresh. Detail and

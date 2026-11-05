@@ -87,6 +87,225 @@ void main() {
     ),
   );
 
+  // Issue #208 (owner 11-04): a phrase restore starts fresh only for a device
+  // the account unlinked; a live secondary that signed out and back in keeps
+  // its history. Mutation: drop the `revokedAtMs == null` test.
+  test('only a stamped device the served list revoked counts as unlinked',
+      () async {
+    FlutterSecureStorage.setMockInitialValues({
+      'e2e_${userId}_material_device_v1': '2',
+    });
+    SharedPreferences.setMockInitialValues({});
+    // Seeded as the gate seeds it: since Phase 4 step 5 `getDeviceList` is
+    // asked for the signed-in account's own id only.
+    final provider = await buildProvider();
+    Map<String, dynamic>? served;
+    provider.setEmitCallback((event, _) {
+      if (event != 'getDeviceList') return;
+      scheduleMicrotask(
+        () => provider.onDeviceList({
+          'userId': userId,
+          'authorization': served,
+        }),
+      );
+    });
+    String list({int? revokedAtMs}) => base64Encode(
+      encodeCanonicalDeviceList(
+        DeviceList(
+          userId: userId,
+          version: 3,
+          devices: [
+            const DeviceListEntry(deviceId: 1, platform: 'web', addedAtMs: 1),
+            DeviceListEntry(
+              deviceId: 2,
+              platform: 'android',
+              addedAtMs: 2,
+              revokedAtMs: revokedAtMs,
+            ),
+          ],
+        ),
+      ),
+    );
+
+    served = {'listCanonical': list()};
+    expect(await provider.stampedDeviceRevoked(userId), isFalse);
+    served = {'listCanonical': list(revokedAtMs: 3)};
+    expect(await provider.stampedDeviceRevoked(userId), isTrue);
+    served = null;
+    expect(
+      await provider.stampedDeviceRevoked(userId),
+      isTrue,
+      reason: 'a never-enrolled account has no live secondary',
+    );
+  });
+
+  // Issue #208 (owner 11-04): a restore on an install stamped for another
+  // device id starts fresh only when the served list names that id revoked,
+  // and fails, touching nothing, when the list does not answer. Mutations:
+  // pass `freshDeviceLife: restoreMayStartFresh`; drop the `device_list`
+  // failure.
+  group('a phrase restore on a previous device life', () {
+    Future<({EncryptionProvider provider, List<String> log, List<int> fresh})>
+    staleRestore({
+      required bool listAnswers,
+      int? revokedAtMs = 3,
+      bool mismatch = false,
+      bool rebinds = false,
+    }) async {
+      final sealed = await arrangeSealedBackup();
+      void answerKeyCheck(EncryptionProvider p) =>
+          p.setEmitCallback((event, _) {
+            if (event == 'checkOwnKeyBundle') {
+              p.onOwnKeyBundleStatus({'exists': false});
+            }
+          });
+      if (mismatch) {
+        // The drive-3 shape: a previous life minted material as device 2.
+        final life1 = EncryptionProvider(service: EncryptionService());
+        answerKeyCheck(life1);
+        life1.setOwnDeviceId(2);
+        await life1.initializeE2E(userId);
+        await pumpEventQueue(times: 200);
+      } else {
+        FlutterSecureStorage.setMockInitialValues({
+          'e2e_${userId}_material_device_v1': '2',
+        });
+      }
+      final provider = EncryptionProvider(
+        service: EncryptionService(),
+        backupCodec: codec(),
+      )..storedSessionDeviceId = (() async => 7);
+      if (mismatch) {
+        answerKeyCheck(provider);
+        provider.setOwnDeviceId(7);
+      }
+      await provider.initializeE2E(userId);
+      await provider.checkPreviousDeviceLife(userId);
+      if (mismatch) {
+        await pumpEventQueue(times: 200);
+        expect(provider.deviceMaterialMismatch, isTrue, reason: 'precondition');
+      }
+      final log = <String>[];
+      final fresh = <int>[];
+      provider.onFreshDeviceLife = () async => fresh.add(1);
+      final served = base64Encode(
+        encodeCanonicalDeviceList(
+          DeviceList(
+            userId: userId,
+            version: 3,
+            devices: [
+              const DeviceListEntry(deviceId: 1, platform: 'web', addedAtMs: 1),
+              DeviceListEntry(
+                deviceId: 2,
+                platform: 'web',
+                addedAtMs: 2,
+                revokedAtMs: revokedAtMs,
+              ),
+            ],
+          ),
+        ),
+      );
+      provider.setEmitCallback((event, data) {
+        log.add(event);
+        switch (event) {
+          case 'getIdentityBackup':
+            scheduleMicrotask(() => provider.onIdentityBackup({
+                  'exists': true,
+                  'blob': sealed.blob,
+                  'salt': sealed.salt,
+                  'iterations': sealed.iterations,
+                }));
+          case 'getDeviceList':
+            scheduleMicrotask(
+              listAnswers
+                  ? () => provider.onDeviceList({
+                        'userId': userId,
+                        'authorization': {'listCanonical': served},
+                      })
+                  // The socket drops: every pending fetch fails at once.
+                  : provider.onDisconnect,
+            );
+          case 'getRegistrationLockNonce':
+            scheduleMicrotask(() => provider
+                .onRegistrationLockNonce({'nonce': base64Encode([1, 2, 3])}));
+          case 'uploadKeyBundle':
+            scheduleMicrotask(() {
+              if (!rebinds) {
+                provider.onKeyBundleUploaded(
+                    {'success': false, 'error': 'restore_refused'});
+                return;
+              }
+              // The ConnectionProvider contract: adopt + reconnect FIRST.
+              log.add('RECONNECTED');
+              provider.onKeyBundleUploaded({
+                'success': true,
+                'identityChanged': false,
+                'restored': true,
+                'deviceId': 8,
+                'nextListVersion': 4,
+              });
+            });
+          case 'updateDeviceList':
+            scheduleMicrotask(() => provider
+                .onDeviceListUpdated({'success': true, 'listVersion': 4}));
+        }
+      });
+      expect(provider.restoreMayStartFresh, isTrue, reason: 'precondition');
+      await provider.restoreFromPhrase(phrase);
+      return (provider: provider, log: log, fresh: fresh);
+    }
+
+    test('starts fresh when the list names the stamped device revoked',
+        () async {
+      final r = await staleRestore(listAnswers: true);
+      expect(r.fresh, [1]);
+      expect(r.log, contains('uploadKeyBundle'));
+    });
+
+    test('keeps its history when the list names the stamped device live',
+        () async {
+      final r = await staleRestore(listAnswers: true, revokedAtMs: null);
+      expect(r.fresh, isEmpty);
+      expect(r.log, contains('uploadKeyBundle'));
+    });
+
+    test('fails before adopting anything when the list does not answer',
+        () async {
+      final r = await staleRestore(listAnswers: false);
+      expect(r.provider.restoreStage, IdentityRestoreStage.failed);
+      expect(r.provider.restoreFailure, IdentityRestoreFailure.failed);
+      expect(r.fresh, isEmpty);
+      expect(r.log, isNot(contains('uploadKeyBundle')));
+    });
+
+    // Issue #208 drive 3: the (lxiv) mismatch flag outlived the rebind (the
+    // restore's reconnect is a reconnect, so `onConnect` keeps it) and the
+    // restore ack dropped the stashed one-time pre-keys; a kept-history
+    // restore then had none at all. Mutation: drop the clear in
+    // `_restoreObserveUploadAck`.
+    for (final (shape, revokedAtMs) in [('fresh', 3), ('kept', null)]) {
+      test('a mismatch-flagged $shape restore uploads its OTPs once, '
+          'after the rebind', () async {
+        final r = await staleRestore(
+          listAnswers: true,
+          revokedAtMs: revokedAtMs,
+          mismatch: true,
+          rebinds: true,
+        );
+        expect(r.provider.restoreStage, IdentityRestoreStage.done);
+        expect(r.fresh, revokedAtMs == null ? isEmpty : [1]);
+        final uploads = r.log.where((e) => e == 'uploadOneTimePreKeys');
+        expect(uploads, hasLength(1));
+        expect(
+          r.log.indexOf('RECONNECTED'),
+          lessThan(r.log.indexOf('uploadOneTimePreKeys')),
+          reason: 'OTPs must ride the rebound device id',
+        );
+        expect(r.provider.deviceMaterialMismatch, isFalse);
+      });
+    }
+  });
+
   test('happy path: nonce → proof upload → rebind → OTPs → list → rebuilds',
       () async {
     final sealed = await arrangeSealedBackup();

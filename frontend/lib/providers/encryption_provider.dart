@@ -834,6 +834,32 @@ class EncryptionProvider extends ChangeNotifier {
   Future<bool> stillPreviousDeviceLife(int userId) async =>
       await _previousDeviceLifeIds(userId) != null;
 
+  /// Issue #208 (owner, 2026-11-04): whether the device id this install's
+  /// material is stamped for is revoked — what makes a previous device life
+  /// a NEW device. A live secondary that signed out and back in gates too
+  /// ([previousDeviceLife]) but was never unlinked: its phrase restore keeps
+  /// its history and its queues stay until it is linked. From the account's
+  /// SERVED list, unverified, as the restore's tombstone read takes it: it
+  /// only chooses whether this install keeps its own store. An account with
+  /// no list (never enrolled) has no live secondary. Null: no answer.
+  Future<bool?> stampedDeviceRevoked(int userId) async {
+    final stamped = await _encryptionService.materialDeviceStamp(userId);
+    if (stamped == null) return false;
+    try {
+      final answer = await _fetchDeviceListAnswer(
+        userId,
+        const Duration(seconds: 10),
+      );
+      final canonical = answer?['listCanonical'];
+      if (canonical is! String || canonical.isEmpty) return true;
+      return !parseCanonicalDeviceList(base64Decode(canonical)).devices.any(
+        (d) => d.deviceId == stamped && d.revokedAtMs == null,
+      );
+    } on Object {
+      return null;
+    }
+  }
+
   /// Logout: the next session may name another device.
   void forgetPreviousDeviceLife() {
     _previousLife = null;
@@ -2510,6 +2536,15 @@ class EncryptionProvider extends ChangeNotifier {
     } catch (_) {
       return _failRestore(IdentityRestoreFailure.failed, 'backup_corrupt');
     }
+    // Issue #208: only a device the account unlinked starts fresh.
+    var freshDeviceLife = false;
+    if (restoreMayStartFresh) {
+      final revoked = await stampedDeviceRevoked(userId);
+      if (revoked == null) {
+        return _failRestore(IdentityRestoreFailure.failed, 'device_list');
+      }
+      freshDeviceLife = revoked;
+    }
     _setRestoreStage(IdentityRestoreStage.adopting);
     try {
       await _encryptionService.adoptRestoredIdentity(
@@ -2519,10 +2554,10 @@ class EncryptionProvider extends ChangeNotifier {
         // is only disposed when the server already stated it will never serve
         // ((lxv)/(lxvii)); with no identity there is nothing to authorize.
         // Issue #208: an install stamped for a revoked device id becomes a
-        // new device, from an empty store; a lock refusal alone keeps its
-        // history ([restoreStartsFresh]).
+        // new device, from an empty store; a lock refusal alone, or a live
+        // secondary that signed out and back in, keeps its history.
         disposeStaleMaterial: linkDisposesStaleMaterial,
-        freshDeviceLife: restoreStartsFresh,
+        freshDeviceLife: freshDeviceLife,
         beforeWipe: prepareFreshDeviceLife,
       );
     } catch (e) {
@@ -2678,6 +2713,13 @@ class EncryptionProvider extends ChangeNotifier {
     if (pending == null || pending.isCompleted || data is! Map) return;
     if (data['success'] == true && data['restored'] != true) return;
     _pendingRestoreUploadAck = null;
+    if (data['success'] == true) {
+      // Issue #208: the adopt cleared the (lxiv) stamp and this ack is the
+      // rebind onto a fresh device id, so the mismatch is over. The restore's
+      // reconnect is a reconnect (`onConnect` keeps the flag), and left set
+      // it dropped the stashed OTPs this same ack is about to release.
+      _deviceMaterialMismatch = false;
+    }
     pending.complete(Map<String, dynamic>.from(data));
   }
 
@@ -2829,12 +2871,13 @@ class EncryptionProvider extends ChangeNotifier {
   bool get linkDisposesStaleMaterial =>
       deviceMaterialMismatch || identityUploadLocked || previousDeviceLife;
 
-  /// Issue #208 (owner, 2026-11-03/04): a phrase restore starts this install
-  /// fresh — the whole account namespace goes — only when it is a previous
-  /// device life of the account (stamped for a revoked device id). A lock
-  /// refusal alone keeps the install's history: only its Signal material is
-  /// disposed ([linkDisposesStaleMaterial]).
-  bool get restoreStartsFresh => deviceMaterialMismatch || previousDeviceLife;
+  /// Issue #208 (owner, 2026-11-03/04): a phrase restore MAY start this
+  /// install fresh — the whole account namespace goes — only when its
+  /// material is stamped for another device id; it does when that id is
+  /// revoked ([stampedDeviceRevoked]). A lock refusal alone, or a live
+  /// secondary that signed out and back in, keeps the install's history:
+  /// only its Signal material is disposed ([linkDisposesStaleMaterial]).
+  bool get restoreMayStartFresh => deviceMaterialMismatch || previousDeviceLife;
 
   /// True while a (lxxviii) phrase restore has ADOPTED the backup identity
   /// and not finished — including a FAILED one, which is exactly the state
