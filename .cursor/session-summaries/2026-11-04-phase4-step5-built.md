@@ -16,7 +16,8 @@
 - Docs: `docs/contracts/wire.md` (step 5, decision 130 bullets), `backend/CLAUDE.md`, `frontend/CLAUDE.md`, `frontend/docs/e2e-invariants.md`, gap-check doc step 5 line.
 
 ## Verification
-- CI: NOT RUN on `a745e4d9`: PR #210 conflicts with master again (#208 review 3, `a56e382d`); only CodeQL ran.
+- CI: 7/7 green on `e86da5f9` (merge of master `b5afc1e8`, #208 final code; PR #210 MERGEABLE). That merge removed #208 review 3's `box-notifier-teardown.ts` + its int test and `ConnectionProvider`'s `pushService` seam (served only the `registerAgain` test), kept the rest; one restore test now seeds the account first (step 5 asks `getDeviceList` for the own id only). Local: jest 785/47, int 58/2, flutter test 3001 (14 skipped), analyze 0 errors/warnings, lint 269/74.
+- Merged build drives (11-05, `e86da5f9`): web — an account with pre-merge data kept its chats across the bundle update; invite + accept, text both ways, block (device-only list), account delete; 0 backend ERROR. Merged release APK (runbook gate 2) — revoked + closed: one card, `stopped`, backend `device_revoked`, next send not delivered, notifier row gone; live + closed: `notRevoked`, notifier kept, app opened signed in with the message. Drive APK and throwaway key deleted from both output paths after.
 - Merge `a745e4d9`: backend build + jest 785/47; flutter analyze no errors/warnings (2494 infos, baseline); flutter test 2994, 14 skipped; backend lint ratchet at 269/74.
 - Prod read-only (decision 86), re-run 11-05: 23 accounts in 25 pairs; 2 without a contact backup (benz93, jarekk; waived, 119); `blocked_users` 0, `fcm_token` 2, `web_push_subscription` 30, `messages` 49 rows, 0 pending requests; `msgs/` 4.6 MB (2 files).
 - Dev web drive (`88d24ddd`, ports 3100/8320/8321): box invite/accept, text both ways, image, 1 h timer on both, reload keeps chat, block (device-only list), account delete; 0 ERROR/WARN.
@@ -27,7 +28,7 @@
 - NOT verified: iOS PWA, prod.
 
 ## Notes for next session
-- Next action: when #208 is closed (0.2.74 shipped), merge master into `feat/phase4-step5` again (review 3 adds `box-notifier-teardown.ts` to the teardown step 5 removes), rerun both suites, get CI green on PR #210.
+- Next action: once #208 ships 0.2.74 (its pubspec bump lands on master), merge master once more (expect only the version line + docs), bump `pubspec.yaml` to 0.2.75, CI green, then ask the owner for the go per the runbook. Gates 1 (code), 2 (Android) and 3 (count) are done.
 - Deploy runbook: `docs/runbooks/phase4-step5-deploy.md` (gates, archive commands, backup, order, `msgs/` removal, release notes EN/PL, rollback). Android gate (decision 130) PASSED 11-05.
 - Then the deploy (owner's go, decision 129), per the runbook.
 - Owner-owed: the step 5 go; whether unblock should re-invite (today it only clears the block, as for box friends).
