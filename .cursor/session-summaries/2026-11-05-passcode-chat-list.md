@@ -24,7 +24,7 @@ Branch `fix/passcode-chat-list` (off master `0f63fb75` = #211 merged). **Version
 - Prod flags (`LEGACY_WRITES_FROZEN=true`, `LEGACY_LISTS_SILENT=true` on the dev backend): reload + unlock → live log `CONTACT_STORE_UNAVAILABLE {locked}`, no `CONV_LIST`, `E2E_RESTORE_UNLOCK` → `SIG_SEAL_OPEN` → `E2E_INIT_DONE`; Czaty lists both chats.
 - Suites: `flutter test` 3346 passed / 14 skipped; `flutter analyze` 0 errors or warnings (3130 infos = baseline).
 - CI: 7/7 success on `6fab94b9` (PR #212); master merge `37187b90` 6/6 success (CodeQL not run on the merge commit).
-- Prod deploy: `deploy-web.ps1` from a throwaway worktree at `37187b90` → `PUBLISHED_OK`; `post-deploy-smoke.mjs --commit 37187b90` 8/8; `/version.json` 0.2.75/37187b90, `/version` 0.2.74/f3bdc1c9; backend logs 10 min after: 0 errors, `healthy`. Verified on prod after the deploy (owner relay): SaraLee, a web passcode user, sees the owner's messages and replies.
+- Prod deploy: `deploy-web.ps1` from a throwaway worktree at `37187b90` → `PUBLISHED_OK`; `post-deploy-smoke.mjs --commit 37187b90` 8/8; `/version.json` 0.2.75/37187b90, `/version` 0.2.74/f3bdc1c9; backend logs 10 min after: 0 errors, `healthy`. Verified on prod after the deploy (owner relay): SaraLee, a web passcode user, sees the owner's messages and replies; her Settings footer reads `0.2.75 · 37187b90`.
 
 ## Notes for next session
 - Sara RECOVERED on 0.2.73 (owner relay, 11-05 ~13:30Z): she sees bob208 (her only contact), can send messages and send invitations. Server agrees: her 12:02Z frames drained by ~13:25Z and three quiet frames (receipts) came back into her queue at 13:25:55Z.
