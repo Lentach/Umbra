@@ -25,5 +25,5 @@ Branch `fix/passcode-chat-list` (off master `0f63fb75` = #211 merged). Ships wit
 - Suites: `flutter test` 3346 passed / 14 skipped; `flutter analyze` 0 errors or warnings (3130 infos = baseline).
 
 ## Notes for next session
-- Sara: ask the owner whether she sees bob's 3 messages (02:50–03:00Z) in the chat; the server cannot tell decrypt from journal.
+- Sara RECOVERED on 0.2.73 (owner relay, 11-05 ~13:30Z): she sees bob208 (her only contact), can send messages and send invitations. Server agrees: her 12:02Z frames drained by ~13:25Z and three quiet frames (receipts) came back into her queue at 13:25:55Z.
 - Deploy web 0.2.75 (both fixes) only on the owner's OK; then tell passcode users to reload.
