@@ -27,6 +27,8 @@ SQL
 
 Version `0.2.76` (one past the 0.2.75 web hotfix; re-check `frontend/pubspec.yaml` on master), APK versionCode `20076`. Bump `pubspec.yaml` on the branch before the merge; CI must be green on the bumped sha.
 
+**EXECUTED 2026-11-06 (`8b240388`):** archive `step5-archive-20261106T153338Z` (copied to the owner's PC, hashes equal), backup `chatdb-20261106T154223Z.dump.gpg`, 0027 applied 15:45:07Z, web smoke 8/8, APK 20076 published. Account: `.cursor/session-summaries/2026-11-06-release-0276.md`.
+
 ### 1. Archive (VM, old backend still running; decision 128)
 
 Two passes, so the archive restores without the rest of the database: the DDL of the whole schema (no rows; it carries the three enums the tables need) and the ROWS of the nine tables only. Proven on a scratch Postgres 16 (11-04): schema, then data with `--disable-triggers`, restores the rows and their enum values.
@@ -41,6 +43,7 @@ $DC --data-only -t public.message_envelopes -t public.reaction_keys \
   -t public.friend_requests -t public.blocked_users -t public.web_push_subscription \
   -t public.fcm_token > "$A/old-tables-data.dump"
 docker run --rm -v fireplace_media_storage:/m:ro -v "$A":/out alpine tar czf /out/msgs.tar.gz -C /m msgs
+sudo chown "$(id -u):$(id -g)" "$A/msgs.tar.gz"   # the container writes it as root; shred below needs it ours
 for f in schema.dump old-tables-data.dump msgs.tar.gz; do
   gpg --batch --yes --pinentry-mode loopback --passphrase-file ~/.config/fireplace/backup.pass \
     --symmetric --cipher-algo AES256 -o "$A/$f.gpg" "$A/$f" && shred -u "$A/$f"
