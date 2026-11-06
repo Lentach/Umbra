@@ -394,3 +394,55 @@ describe('ChatGateway handleGetServerTime', () => {
     expect(Number.isNaN(Date.parse(String(payload?.serverTime)))).toBe(false);
   });
 });
+
+describe('ChatGateway handleGetMessages (pre-0.2.76 clients)', () => {
+  // The mock carries only what the handler reads (`data`, `emit`).
+  const asSocket = (client: object) => client as unknown as Socket;
+  const signedIn = () => {
+    const client = createMockClient();
+    client.data.user = { id: 7 };
+    return client;
+  };
+
+  it('answers a server conversation id with an empty history page', () => {
+    const gateway = createGateway();
+    const client = signedIn();
+
+    gateway.handleGetMessages(asSocket(client), {
+      conversationId: 10,
+      limit: 50,
+      offset: 0,
+    });
+
+    // A 0.2.75 client merges the chat's stored box messages only inside its
+    // `messageHistory` handler: no answer = the chat opens empty.
+    expect(client.emit).toHaveBeenCalledWith('messageHistory', {
+      conversationId: 10,
+      messages: [],
+    });
+  });
+
+  it.each([
+    ['a box chat local id', { conversationId: 2 ** 48 + 5 }],
+    ['a missing id', {}],
+    ['a string id', { conversationId: '10' }],
+    ['a non-positive id', { conversationId: 0 }],
+    ['no payload', null],
+  ])('stays silent for %s', (_label, payload) => {
+    const gateway = createGateway();
+    const client = signedIn();
+
+    gateway.handleGetMessages(asSocket(client), payload);
+
+    expect(client.emit).not.toHaveBeenCalled();
+  });
+
+  it('stays silent for an unauthenticated socket', () => {
+    const gateway = createGateway();
+    const client = createMockClient();
+
+    gateway.handleGetMessages(asSocket(client), { conversationId: 10 });
+
+    expect(client.emit).not.toHaveBeenCalled();
+  });
+});
