@@ -20,9 +20,10 @@
 - Owner's own PWA (footer 0.2.76, diag log without `HISTORY_REQ`) shows bob210's messages on re-open.
 - Prod: `/version` 0.2.77 / `e3a44237`, healthy, 0 error lines 17:19–17:24Z; backup `chatdb-20261106T171824Z.dump.gpg` before the deploy.
 - Ruled out on the way: record deletion (owner log `PLAINTEXT_SWEEP {expired: 0, retired: 0}`), store failures (no `DECRYPT_PERSIST_FAILED` / `BOX_SENT_STORE_UNPROVEN`), timers, `_cid` mismatch.
-- NOT verified: a real prod user on a 0.2.75 tab or the 0.2.74 APK after the shim (owner relay).
+- 0.2.74 APK: `git diff --stat f3bdc1c9 37187b90 -- frontend/lib/providers/messaging frontend/lib/providers/connection_provider.dart` → only `connection_provider.dart` +9 (#212's unlock hydration), so the APK runs the same `getMessages` → `messageHistory` → `_mergeLocalBoxRows` path. Owner relay after the shim: goonboytest (0.2.74 APK) sees his chats.
+- NOT verified: a real prod user on a 0.2.75 tab after the shim.
 
 ## Notes for next session
-- Next action: owner relays one user still on an old tab or the 0.2.74 APK (e.g. ol321654) opening an old-friendship chat.
+- Next action: owner relays one user still on an old web tab (e.g. ol321654) opening an old-friendship chat; the APK side is confirmed (goonboytest).
 - The shim stays until no pre-0.2.76 client remains; remove it then (and the wire.md line).
 - Traps: removing a server handler breaks every client still on an older bundle (`docs/agents/traps.md`, Deploy).
