@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:fireplace/config/app_config.dart';
 import 'package:fireplace/services/auth_token_store.dart';
 import 'package:fireplace/services/secure_kv.dart';
 import 'package:fireplace/utils/e2e_persistent_diag.dart';
@@ -271,6 +272,103 @@ void main() {
       expect(await store.readSessionDeviceId(), isNull);
       await store.write(access: 'h.%%%.s', refresh: 'r');
       expect(await store.readSessionDeviceId(), isNull);
+    });
+  });
+
+  // Decision 130 (E130a), web: the push worker cannot read localStorage, so
+  // the page leaves it the refresh token and the API origin it asks
+  // `/auth/refresh` with while the app is closed. Off web the writer is a
+  // no-op; here it is injected.
+  group("the push worker's copy of the session", () {
+    late List<({String refresh, String api})> written;
+    late int cleared;
+    var failing = false;
+
+    AuthTokenStore mirrored() => AuthTokenStore(
+      secure: secure,
+      useSecureStorage: false,
+      wakeSessionWriter: ({required refresh, required api}) async {
+        if (failing) throw StateError('IndexedDB refused');
+        written.add((refresh: refresh, api: api));
+      },
+      wakeSessionClearer: () async {
+        if (failing) throw StateError('IndexedDB refused');
+        cleared++;
+      },
+    );
+
+    setUp(() {
+      written = [];
+      cleared = 0;
+      failing = false;
+    });
+
+    test('every token write leaves the refresh token and the API origin; a clear removes them', () async {
+      final store = mirrored();
+
+      await store.write(access: 'a1', refresh: 'r1');
+      await store.write(access: 'a2', refresh: 'r2');
+      expect(written.map((w) => w.refresh), ['r1', 'r2']);
+      expect(written.first.api, AppConfig.baseUrl);
+
+      await store.clear();
+      expect(cleared, 1);
+    });
+
+    test('a session restored by a build that predates the copy gets one on its first read, once', () async {
+      SharedPreferences.setMockInitialValues({
+        'jwt_token': 'a',
+        'refresh_token': 'r-old',
+      });
+      final store = mirrored();
+
+      await store.read();
+      await store.read();
+      await pumpEventQueue();
+
+      expect(written.map((w) => w.refresh), ['r-old']);
+    });
+
+    test('a read that finds no session or cannot read writes nothing', () async {
+      await mirrored().read();
+      secure.throwOnRead = true;
+      await AuthTokenStore(
+        secure: secure,
+        useSecureStorage: true,
+        wakeSessionWriter: ({required refresh, required api}) async {
+          written.add((refresh: refresh, api: api));
+        },
+      ).read();
+      await pumpEventQueue();
+
+      expect(written, isEmpty);
+    });
+
+    test('a copy that cannot be written never fails the write, the read or the clear', () async {
+      failing = true;
+      final store = mirrored();
+
+      await store.write(access: 'a1', refresh: 'r1');
+      expect((await store.read()).refresh, 'r1');
+      await store.clear();
+
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getString('refresh_token'), isNull);
+      expect(written, isEmpty);
+    });
+
+    test('a refused token write leaves no copy of a token that was not stored', () async {
+      final store = AuthTokenStore(
+        secure: secure..throwOnWrite = true,
+        useSecureStorage: true,
+        wakeSessionWriter: ({required refresh, required api}) async {
+          written.add((refresh: refresh, api: api));
+        },
+      );
+
+      await store.write(access: 'a1', refresh: 'r1');
+
+      expect(written, isEmpty);
     });
   });
 }

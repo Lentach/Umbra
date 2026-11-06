@@ -1,12 +1,15 @@
 part of '../messaging_provider.dart';
 
+// Extension methods on MessagingProvider's own state: notifyListeners() is legitimate here.
+// ignore_for_file: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
+
 /// First contact over the request queues (metadata-privacy PR3.1 slice (f),
 /// owner decisions 52–55, engineering calls E15a–E15k in
 /// `docs/plans/2026-09-25-metadata-pr31-remainder.md` § Item 7): the Signal
 /// half. The records live in `BoxFirstContact`, the box half in `BoxSession`.
 ///
 /// * A request goes over the box only when every device on both sides is on
-///   it (E15a), else the old path as today — never split. It is one
+///   it (E15a), never split — else it fails. It is one
 ///   claim-bearing PreKey frame per target device (E15b), and our siblings
 ///   are told over the self-queues (E15e).
 /// * A stranger's request is KEPT undecrypted (E15c): a PreKey decrypt pins
@@ -45,11 +48,12 @@ extension MessagingFirstContact on MessagingProvider {
   // ---------- Send (E15a, E15b, E15e) ----------
 
   /// Sends a friend request to the account [entry] names — one raw
-  /// `searchUsersResult` entry — over the box. [FirstContactSend.oldPath]
-  /// when a device on either side is not on the box (E15a): the caller then
-  /// sends it the old way. [FirstContactSend.sent] once at least one target
-  /// device took its frame: the others learn of the friendship from the
-  /// accepting device's siblings copy (E15e) and the handoff pass.
+  /// `searchUsersResult` entry — over the box, the only way a request goes.
+  /// [FirstContactSend.failed] when a device on either side is not on the
+  /// box (E15a) or the request cannot be built. [FirstContactSend.sent] once
+  /// at least one target device took its frame: the others learn of the
+  /// friendship from the accepting device's siblings copy (E15e) and the
+  /// handoff pass.
   Future<FirstContactSend> sendBoxFriendRequest(
     Map<String, dynamic> entry,
   ) async {
@@ -66,11 +70,9 @@ extension MessagingFirstContact on MessagingProvider {
         own == null ||
         peer == null ||
         peer.userId == own) {
-      return FirstContactSend.oldPath;
+      return FirstContactSend.failed;
     }
-    if (!friends.onBox || !peer.allOnBox) return FirstContactSend.oldPath;
-    // Only a request the box would carry needs E2E: the old path above
-    // needs none, so it stays open while E2E starts or after its init fails.
+    if (!friends.onBox || !peer.allOnBox) return FirstContactSend.failed;
     if (!enc.isE2EReady) return FirstContactSend.failed;
     final userId = peer.userId;
     final record = friends.contactOf(userId);
@@ -84,9 +86,8 @@ extension MessagingFirstContact on MessagingProvider {
     }
     final fresh = record == null || record.state == ContactState.former;
     if (!fresh && !_boxPending(record, ContactState.pendingOut)) {
-      // A friend, a blocked account, a request the server carries: not a
-      // first contact, the old path decides as today.
-      return FirstContactSend.oldPath;
+      // A friend, a blocked account: not a first contact.
+      return FirstContactSend.failed;
     }
     final mine = await ownLiveDevices();
     if (mine == null) return FirstContactSend.failed;
@@ -96,7 +97,7 @@ extension MessagingFirstContact on MessagingProvider {
         if (d != mine.self) d,
     ];
     if (siblings.any((d) => !siblingAddresses.containsKey(d))) {
-      return FirstContactSend.oldPath;
+      return FirstContactSend.failed;
     }
     final identity = peer.identityKey;
     if (identity == null) {
@@ -123,10 +124,10 @@ extension MessagingFirstContact on MessagingProvider {
     final served = {for (final d in peer.devices) d.deviceId: d};
     final targets = list.liveDeviceIds;
     // Every device the verified list names live must be one the answer
-    // served with a request address; anything short of that is the old
-    // path's (decision 16's all-or-nothing).
+    // served with a request address (decision 16's all-or-nothing): there is
+    // no other way to ask.
     if (targets.isEmpty || targets.any((d) => served[d]?.request == null)) {
-      return FirstContactSend.oldPath;
+      return FirstContactSend.failed;
     }
     final me = link.firstContact.ownProfile;
     if (me == null) return FirstContactSend.failed;
@@ -748,7 +749,7 @@ extension MessagingFirstContact on MessagingProvider {
     _firstContactLog('BOX_FRIENDSHIP_MADE', userId, {'outgoing': outgoing});
     onBoxContactsChanged?.call();
     onBoxFriendshipMade?.call(userId, outgoing: outgoing);
-    _conversationsProvider?.refreshLocalChats();
+    _conversationsProvider?.refreshChats();
     refreshBoxDeviceLists();
     notifyListeners();
   }
@@ -910,7 +911,8 @@ extension MessagingFirstContact on MessagingProvider {
     final link = boxFirstContact;
     if (link == null) return false;
     if (!(link.firstContact.contactOf(userId)?.onBoxRoute ?? false)) {
-      // Nothing the box carries: the server's unfriend ends it.
+      // This device holds no route for that account: a goodbye cannot reach
+      // it without a queue, so one that did is not from a friend of ours.
       _firstContactLog('BOX_GOODBYE_IGNORED', userId);
       return true;
     }

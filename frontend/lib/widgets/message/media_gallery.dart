@@ -6,7 +6,6 @@ import 'package:provider/provider.dart';
 
 import '../../l10n/app_localizations.dart';
 import '../../models/message_model.dart';
-import '../../providers/auth_provider.dart';
 import '../../providers/messaging_provider.dart';
 import '../../theme/rpg_theme.dart';
 import '../../utils/download_utils_web.dart'
@@ -36,7 +35,6 @@ Future<Uint8List> loadMessageMediaBytes(
   final url = message.mediaUrl!;
   return loadDecryptedMediaBytes(
     url: url,
-    token: context.read<AuthProvider>().token ?? '',
     key: message.mediaKey,
     iv: message.mediaIv,
     box: boxMediaSourceFor(context, url),

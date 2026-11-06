@@ -1,5 +1,8 @@
 part of '../messaging_provider.dart';
 
+// Extension methods on MessagingProvider's own state: notifyListeners() is legitimate here.
+// ignore_for_file: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
+
 /// A sibling the primary asks to unlink (decision 101 B), named as the
 /// Devices screen names it.
 typedef SiblingToUnlink = ({int deviceId, String name});

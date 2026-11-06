@@ -13,7 +13,6 @@ import '../utils/web_file_input.dart';
 import '../utils/video_preview.dart' show kSendableVideoExtensions;
 import 'input/composer_keyboard_signals.dart';
 import '../models/conversation_model.dart';
-import '../providers/auth_provider.dart';
 import '../providers/conversations_provider.dart';
 import '../providers/messaging_provider.dart';
 import '../l10n/app_localizations.dart';
@@ -446,12 +445,11 @@ class ChatActionTiles extends StatelessWidget {
     if (result == null) return;
 
     final messaging = context.read<MessagingProvider>();
-    final auth = context.read<AuthProvider>();
 
     GifPickerSheet.show(
       context,
       onGifSelected: (gifUrl) {
-        messaging.sendGif(auth.token!, gifUrl, result.$2);
+        messaging.sendGif(gifUrl, result.$2);
       },
     );
   }

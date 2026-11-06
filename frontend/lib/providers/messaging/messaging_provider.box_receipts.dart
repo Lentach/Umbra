@@ -1,5 +1,8 @@
 part of '../messaging_provider.dart';
 
+// Extension methods on MessagingProvider's own state: notifyListeners() is legitimate here.
+// ignore_for_file: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
+
 /// How often typing `on` goes into one chat at most (E61e): a friend with
 /// three devices then costs ~540 sends per 15 min, under the box's 1 500
 /// per-IP `send` throttle.
@@ -72,7 +75,7 @@ extension MessagingBoxReceipts on MessagingProvider {
     if (own == null) return;
     final on = receiptsAndTyping();
     if (_conversationsProvider?.isClientVisible == false) return;
-    final viewing = _effectiveActiveConversationId ?? _paginationConversationId;
+    final viewing = _effectiveActiveConversationId ?? _openConversationId;
     if (conversationId != viewing) return;
     final conversation = _conversationsProvider?.getConversationById(
       conversationId,
@@ -106,7 +109,7 @@ extension MessagingBoxReceipts on MessagingProvider {
   /// ready this connect, or the app is visible again.
   void _reportShownBoxChatRead() {
     _sendBoxReadReceipt(
-      _effectiveActiveConversationId ?? _paginationConversationId,
+      _effectiveActiveConversationId ?? _openConversationId,
     );
   }
 

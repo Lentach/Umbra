@@ -13,6 +13,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
+import '../../support/chat_seed.dart';
+
 Widget _providerScope({
   required Widget child,
   ConversationsProvider? conversations,
@@ -143,7 +145,7 @@ Future<ChatInputBarState> _pumpWithPlainOutsideSurface(
 ConversationsProvider _activeConversationsProvider() {
   final convs = ConversationsProvider();
   convs.setCurrentUserId(1);
-  convs.onConversationsList(<Map<String, dynamic>>[
+  seedConversations(convs, <Map<String, dynamic>>[
     <String, dynamic>{
       'id': 42,
       'userOne': <String, dynamic>{'id': 1, 'username': 'me', 'tag': '0001'},

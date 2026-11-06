@@ -1,6 +1,5 @@
 import 'dart:convert';
 
-import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
@@ -13,6 +12,8 @@ import 'package:fireplace/utils/message_ids.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../support/chat_seed.dart';
 
 /// The real plaintext store; Signal is faked: an inbound frame decrypts to
 /// [inbound]. [recordReads] counts reads of every chat's box records.
@@ -170,7 +171,8 @@ void main() {
       accepts: (_) => true,
     );
     await store.open(_me);
-    conversations = newConversations()..onConversationsList(snapshot());
+    conversations = newConversations();
+    seedConversations(conversations, snapshot());
     await store.settled;
     provider = newProvider();
     await pump();
@@ -227,21 +229,12 @@ void main() {
     return id;
   }
 
-  /// A reconnect of the same account: the server's list again.
-  void reconnect({int bobUnread = 0, DateTime? bobLastAt}) {
-    conversations
-      ..onConnect(true)
-      ..onConversationsList(
-        snapshot(bobUnread: bobUnread, bobLastAt: bobLastAt),
-      );
-  }
-
   /// A fresh app on the same disk, E2E up after the server's list came.
   Future<void> coldStart({int bobUnread = 0}) async {
     provider.dispose();
     encryption = _Encryption(await openService());
-    conversations = newConversations()
-      ..onConversationsList(snapshot(bobUnread: bobUnread));
+    conversations = newConversations();
+    seedConversations(conversations, snapshot(bobUnread: bobUnread));
     await store.settled;
     provider = newProvider();
     await provider.applyStoredBoxLastMessages();
@@ -253,10 +246,7 @@ void main() {
   Future<void> show(int chat) async {
     conversations.openConversation(chat);
     provider.setActiveConversationIdForTest(chat);
-    await provider.onMessageHistory({
-      'conversationId': chat,
-      'messages': <Object>[],
-    });
+    provider.getMessages(chat);
     await pump();
   }
 
@@ -273,67 +263,6 @@ void main() {
     for (final c in conversations.sortedConversations) c.id,
   ];
 
-  group('reconnect', () {
-    test('a newer box message stays the last message and keeps its place '
-        'above a chat with an older real last message', () async {
-      final boxId = await fromBob('after the flip', wire: 'wire-1');
-      expect(conversations.lastMessages[_bobChat]?.id, boxId);
-
-      reconnect();
-
-      expect(conversations.lastMessages[_bobChat]?.id, boxId);
-      expect(listOrder(), [_bobChat, _carolChat]);
-    });
-
-    test('a server row newer than the held box message wins', () async {
-      await fromBob('before', wire: 'wire-1');
-
-      reconnect(bobLastAt: now);
-
-      expect(conversations.lastMessages[_bobChat]?.id, 900);
-    });
-
-    test('a held SERVER row the snapshot no longer names as last gives way '
-        '(deleted for everyone while this device was away)', () async {
-      conversations.updateLastMessage(
-        _bobChat,
-        MessageModel(
-          id: 950,
-          content: 'gone on the server',
-          senderId: _bobId,
-          senderUsername: 'bob',
-          conversationId: _bobChat,
-          createdAt: now.subtract(const Duration(minutes: 1)),
-        ),
-      );
-
-      reconnect();
-
-      expect(conversations.lastMessages[_bobChat]?.id, 900);
-    });
-
-    test("box messages still unread in a server chat survive the server's "
-        'count and are cleared by opening the chat', () async {
-      conversations.closeConversation();
-      await fromBob('one', wire: 'wire-1');
-      await fromBob('two', wire: 'wire-2');
-      expect(conversations.getUnreadCount(_bobChat), 2);
-
-      reconnect(bobUnread: 1);
-      expect(
-        conversations.getUnreadCount(_bobChat),
-        3,
-        reason: 'the server counts its own rows, never a box message',
-      );
-
-      conversations
-        ..openConversation(_bobChat)
-        ..closeConversation();
-      reconnect();
-      expect(conversations.getUnreadCount(_bobChat), 0);
-    });
-  });
-
   group('stored box messages at E2E ready (cold start)', () {
     test('the newest stored box message is the last message, shown from '
         'its plaintext, and orders the list', () async {
@@ -344,10 +273,7 @@ void main() {
 
       final last = conversations.lastMessages[_bobChat];
       expect(last?.id, newest);
-      expect(
-        provider.listPreviewFor(last!, unreadCount: 0)?.content,
-        'newest box',
-      );
+      expect(last!.content, 'newest box');
       expect(listOrder(), [_bobChat, _carolChat]);
     });
 
@@ -455,20 +381,6 @@ void main() {
 
       expect(conversations.lastMessages[_bobChat]?.id, live);
     });
-
-    test('the server list arriving after the stored box messages keeps the '
-        'newer box message', () async {
-      final newest = await fromBob('newest box', wire: 'wire-1');
-      provider.dispose();
-      encryption = _Encryption(await openService());
-      conversations = newConversations();
-      provider = newProvider();
-      await provider.applyStoredBoxLastMessages();
-
-      conversations.onConversationsList(snapshot());
-
-      expect(conversations.lastMessages[_bobChat]?.id, newest);
-    });
   });
 
   /// Decision 73 (E73a): a box message this device has not shown keeps its
@@ -482,30 +394,14 @@ void main() {
       now = DateTime.now().toUtc();
     });
 
-    test('an unopened peer box message in a server chat keeps its badge, '
-        "on top of the server's count", () async {
+    test('an unopened peer box message in a pre-box friend\'s chat keeps its '
+        'badge', () async {
       await fromBob('unread', wire: 'wire-1', ago: Duration.zero);
 
-      await coldStart(bobUnread: 2);
+      await coldStart();
 
-      expect(conversations.getUnreadCount(_bobChat), 3);
-      reconnect(bobUnread: 2);
-      expect(conversations.getUnreadCount(_bobChat), 3);
+      expect(conversations.getUnreadCount(_bobChat), 1);
       expect(conversations.getUnreadCount(_carolChat), 0);
-    });
-
-    test('the server list arriving after the stored rows adds its count to '
-        'theirs', () async {
-      await fromBob('unread', wire: 'wire-1', ago: Duration.zero);
-      provider.dispose();
-      encryption = _Encryption(await openService());
-      conversations = newConversations();
-      provider = newProvider();
-      await provider.applyStoredBoxLastMessages();
-
-      conversations.onConversationsList(snapshot(bobUnread: 2));
-
-      expect(conversations.getUnreadCount(_bobChat), 3);
     });
 
     test('an unopened box message in a chat made over the box keeps its '
@@ -636,9 +532,9 @@ void main() {
       await storedFromBob('unread', wire: 'wire-1', ago: Duration.zero);
       provider.dispose();
       encryption = _Encryption(await openService());
-      conversations = newConversations()
-        ..onConversationsList(snapshot())
-        ..openConversation(_bobChat);
+      conversations = newConversations();
+      seedConversations(conversations, snapshot());
+      conversations.openConversation(_bobChat);
       await store.settled;
       provider = newProvider();
 
@@ -653,7 +549,7 @@ void main() {
       expect(encryption.recordReads, 1);
       await fromBob('live', wire: 'wire-1', ago: Duration.zero);
 
-      reconnect();
+      conversations.onConnect(true);
       await provider.applyStoredBoxLastMessages();
 
       expect(encryption.recordReads, 1);
@@ -664,7 +560,8 @@ void main() {
         'once', () async {
       provider.dispose();
       encryption = _Encryption(await openService());
-      conversations = newConversations()..onConversationsList(snapshot());
+      conversations = newConversations();
+      seedConversations(conversations, snapshot());
       await store.settled;
       provider = newProvider();
       await fromBob('live', wire: 'wire-1', ago: Duration.zero);
@@ -673,21 +570,6 @@ void main() {
       await provider.applyStoredBoxLastMessages();
 
       expect(conversations.getUnreadCount(_bobChat), 1);
-    });
-
-    test('in a chat made over the box, a message counted live and then found '
-        'stored counts once, a snapshot in between', () {
-      final chat = localConversationIdFor(5);
-      const id = kFirstLocalMessageId + 99;
-
-      conversations
-        ..incrementUnreadCount(chat, boxId: id)
-        ..onConversationsList(snapshot())
-        ..seedBoxUnread({
-          chat: {id},
-        });
-
-      expect(conversations.getUnreadCount(chat), 1);
     });
 
     test('a message found stored and then shown live in the list counts '
@@ -712,17 +594,15 @@ void main() {
       conversations.clearAll();
       provider.clearAll();
       expect(conversations.getUnreadCount(_bobChat), 0);
-      conversations
-        ..setCurrentUserId(_me)
-        ..onConversationsList(snapshot());
+      conversations.setCurrentUserId(_me);
+      seedConversations(conversations, snapshot());
       provider.setCurrentUserId(_me);
       await provider.applyStoredBoxLastMessages();
       expect(encryption.recordReads, 2);
       expect(conversations.getUnreadCount(_bobChat), 1);
 
-      conversations
-        ..onConnect(false)
-        ..onConversationsList(snapshot());
+      conversations.onConnect(false);
+      seedConversations(conversations, snapshot());
       await provider.applyStoredBoxLastMessages();
       expect(encryption.recordReads, 3);
       expect(conversations.getUnreadCount(_bobChat), 1);

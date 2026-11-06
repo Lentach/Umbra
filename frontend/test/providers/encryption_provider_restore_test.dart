@@ -96,10 +96,9 @@ void main() {
       'e2e_${userId}_material_device_v1': '2',
     });
     SharedPreferences.setMockInitialValues({});
-    final provider = EncryptionProvider(
-      service: EncryptionService(),
-      backupCodec: codec(),
-    );
+    // Seeded as the gate seeds it: since Phase 4 step 5 `getDeviceList` is
+    // asked for the signed-in account's own id only.
+    final provider = await buildProvider();
     Map<String, dynamic>? served;
     provider.setEmitCallback((event, _) {
       if (event != 'getDeviceList') return;

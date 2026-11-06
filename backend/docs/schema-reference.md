@@ -1,6 +1,6 @@
-# Backend schema and messaging reference
+# Backend schema reference
 
-Detail relocated from `backend/CLAUDE.md` §4 (database, schema, migrations) and §7 (messages, edit, reactions). The one-line rules stay in `backend/CLAUDE.md`; each points here for the runner contract, per-table facts, incident history and wire detail.
+Detail relocated from `backend/CLAUDE.md` §4 (database, schema, migrations). The one-line rules stay in `backend/CLAUDE.md`; each points here for the runner contract, per-table facts, incident history and wire detail.
 
 ## Migration runner contract (§4)
 
@@ -9,11 +9,7 @@ Entities in `backend/src/**/*.entity.ts` define the dev schema (TypeORM `synchro
 - Files apply in lexical order, exactly once, tracked by filename in `schema_migrations`; each file runs in one transaction with `lock_timeout=10s` under an advisory lock. A failed migration aborts boot — the container never goes healthy and `deploy-backend.sh` fails loudly.
 - `0001_baseline.sql` is the full pre-migration schema. It EXECUTES only on an empty database; on any DB that already has tables (live prod, existing dev DBs) the runner STAMPS it as applied without executing. Only the baseline is ever stamped — every later file runs everywhere.
 - No `CREATE INDEX CONCURRENTLY` inside a migration (cannot run in a transaction); that stays manual DBA work.
-- Schema-qualify names (`public.messages`) because the baseline clears `search_path` when it executes first on a fresh DB.
-
-## Message index (§4)
-
-The message index exists in the entity as `@Index('idx_messages_conv_created', ['conversation', 'createdAt'])`. If prod needs a descending concurrent index, treat `CREATE INDEX CONCURRENTLY ... "createdAt" DESC` as manual DBA/perf work, not generated entity truth.
+- Schema-qualify names (`public.devices`) because the baseline clears `search_path` when it executes first on a fresh DB.
 
 ## Column casing incident (§4)
 
@@ -28,37 +24,14 @@ Column casing is PER ENTITY — `secret_notes` is camelCase but `refresh_tokens`
 
 ## Foreign keys and cascades (§4)
 
-- FKs to `users` with `ON DELETE CASCADE` exist on `key_bundles.userId`, `one_time_pre_keys.userId`, `fcm_token.userId`, `web_push_subscription.userId` (migration `0002_user_foreign_keys.sql`; entities carry matching `@ManyToOne` relations, scalar `userId` columns stay the API).
+- FKs to `users` with `ON DELETE CASCADE` exist on `key_bundles.userId` and `one_time_pre_keys.userId` (migration `0002_user_foreign_keys.sql`; entities carry matching `@ManyToOne` relations, scalar `userId` columns stay the API).
 - `secret_notes.creatorId` and its FK were dropped by `0020_drop_secret_notes_creator.sql` (metadata privacy step 0), reversing 0002's "a note must not outlive its creator" rationale: a note is token + ciphertext + expiry, owned by nobody the server knows, bounded by its ≤24h TTL instead.
-- Account-delete service cleanup remains for media files and non-cascading tables; the FKs are the backstop against orphan rows.
-- Cascades present: friend request sender/receiver FKs, blocked blocker/blocked FKs, refresh token `user_id`. Conversations/messages do not cascade from users in entities.
-
-## messages.reactions (§4)
-
-Nullable text containing JSON string `{ key: [userId] }`, not a JSON column. Since migration `0018_reaction_keys.sql` the KEY is a blinded 22-char token, not the emoji (`docs/design/reaction-privacy.md`); that migration also NULLed every pre-existing row, so old messages serve `reactions: {}`.
-
-## reaction_keys (§4)
-
-`reaction_keys(conversationId, userId, deviceId, epoch, senderUserId, senderDeviceId, ciphertext, createdAt)`, PK on the first four, FK to `conversations` `ON DELETE CASCADE`, plus `conversations.reactionKeyEpoch int NOT NULL DEFAULT 0`. One Signal-ciphertext copy of the conversation's reaction key per participant device per epoch; clients PULL their own row.
-
-The epoch is SERVER-assigned — `ReactionKeysService.upload` locks the conversation row and accepts only `reactionKeyEpoch + 1`, or the current epoch from the same uploader (top-up); anything else is `stale_epoch` and writes nothing. `senderUserId`/`senderDeviceId` are taken from the authenticated socket, never the payload.
+- `DELETE /users/account` (`UsersService.deleteAccount`) revokes refresh tokens first, removes the user row (the rest cascades by FK, e.g. refresh token `user_id`), then purges key bundles and unlinks avatar files; the FKs are the backstop against orphan rows.
 
 ## devices request queue (§4)
 
 `devices."requestSid"` / `"requestSealPub"` (migration `0023`, metadata-privacy PR3.2) hold a device's box REQUEST queue: written only by `setRequestQueue` on the session's own LIVE row, served by `searchUsers` beside one CLAIMED bundle per device (`ChatSearchService` → `ChatKeyExchangeService.claimBundle`, the one door that spends an OTP and fires `preKeysLow`). Contract: `docs/contracts/wire.md` "First contact".
 
-## messages.hiddenByUserIds (§4)
+## Phase 4 step 5 drop (migration 0027)
 
-Comma-separated text for delete-for-me. Since 2026-08-03 it is also a DESTRUCTION trigger: `hideMessageForUser` hard-deletes the row (media before row, replies detached first — the `reply_to_message_id` self-FK has no ON DELETE) once EVERY participant id from the conversation relation appears in it. The append is one atomic `UPDATE … RETURNING`; the guard fails closed (missing relation/empty set = never delete) and a one-participant hide must NEVER delete — falsified tests pin all of this in `messages.service.spec.ts`.
-
-## Edit refusal reasons (§7)
-
-`editMessageFailed` reasons: `not_sender`, `window_expired`, `not_text`, `not_found`, or an envelope/device-list refusal (`duplicate_envelope_device`, `self_envelope_for_origin_device`, `unknown_recipient_device`, owed-replacement bounce).
-
-## Reaction DTOs (§7)
-
-WS `addReaction` / `removeReaction` `{ messageId, emoji }`; DTOs accept EITHER one emoji grapheme (basic emoji, VS16, skin tones, ZWJ sequences, flags, keycaps; 32-code-unit cap) OR a 22-char blinded token `^[A-Za-z0-9_-]{22}$` — one explicit compat window, and removing the emoji branch is what closes D10. Participant-checked in `ChatReactionService`; `MessagesService` JSON-parse/stringifies the text column; emits `reactionUpdated` to both sides.
-
-## Reaction key events (§7)
-
-WS `uploadReactionKey` (30/15min) → `reactionKeyUploaded { success, epoch?, error? }`, `fetchReactionKey` (120/15min) → `reactionKeyResponse { conversationId, epoch, senderUserId, senderDeviceId, ciphertext }`, both in `ChatReactionKeyService`. Refusals are `success:false` + a stable code (`invalid_payload`, `unauthorized` — used for a non-participant AND a blocked pair so the block never leaks, `duplicate_envelope_device`, `foreign_recipient`, `stale_epoch`, `rate_limited`), never a bare `error`. Contract in `docs/contracts/wire.md`.
+`0027_phase4_step5_drop_old_tables.sql` drops, WITHOUT `CASCADE`: `message_envelopes`, `reaction_keys`, `conversation_notification_preferences`, `messages`, `conversations`, `friend_requests`, `blocked_users`, `web_push_subscription`, `fcm_token`, and the enum types `messages_messagetype_enum`, `messages_deliverystatus_enum`, `friend_requests_status_enum`. Nothing references them (no entity, no FK from a kept table); the entities and the code that used them went in the same release. It is NOT reversible by DDL: restore means loading rows from the offline gpg archive (decision 128), never an inverse `CREATE TABLE`.

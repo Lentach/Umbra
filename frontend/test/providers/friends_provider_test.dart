@@ -15,30 +15,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   group('FriendsProvider', () {
-    test('onConnect(false) clears all state and blockedByUserIds', () {
+    test('onConnect(false) clears the search and the accepted toast', () {
       final provider = FriendsProvider();
-      provider.onFriendsList([
-        {'id': 1, 'username': 'alice'},
-      ]);
-      provider.onFriendRequestsList([
-        {
-          'id': 5,
-          'sender': {'id': 2, 'username': 'bob'},
-          'receiver': {'id': 1, 'username': 'alice'},
-          'status': 'pending',
-          'createdAt': '2026-01-01T00:00:00.000Z',
-        },
-      ]);
-      provider.onPendingRequestsCount({'count': 1});
-      provider.onBlockedList([
-        {'id': 3, 'username': 'carol'},
-      ]);
-      provider.onYouWereBlocked({'userId': 42});
       provider.onSearchUsersResult([
         {'id': 4, 'username': 'dave'},
       ]);
-      expect(provider.friends, isNotEmpty);
-      expect(provider.blockedByUserIds, isNotEmpty);
+      expect(provider.searchResults, isNotEmpty);
 
       provider.onConnect(false);
 
@@ -46,202 +28,79 @@ void main() {
       expect(provider.friendRequests, isEmpty);
       expect(provider.pendingRequestsCount, 0);
       expect(provider.blockedUsers, isEmpty);
-      expect(provider.blockedByUserIds, isEmpty);
       expect(provider.searchResults, isNull);
       expect(provider.consumePendingFriendAccepted(), isNull);
     });
 
-    test(
-      'sentRequestsList populates sent requests and account resets clear them',
-      () {
-        final provider = FriendsProvider();
-        final sentRequest = [
-          {
-            'id': 6,
-            'sender': {'id': 1, 'username': 'alice'},
-            'receiver': {'id': 2, 'username': 'bob'},
-            'status': 'pending',
-            'createdAt': '2026-01-01T00:00:00.000Z',
-          },
-        ];
+    test('with no contact store every list is empty', () {
+      final provider = FriendsProvider()..setCurrentUserId(1);
 
-        provider.onSentRequestsList(sentRequest);
-
-        expect(provider.sentRequests, hasLength(1));
-        expect(provider.sentRequests.single.id, 6);
-        expect(provider.sentRequests.single.receiver.username, 'bob');
-
-        provider.onConnect(false);
-
-        expect(provider.sentRequests, isEmpty);
-
-        provider.onSentRequestsList(sentRequest);
-        expect(provider.sentRequests, hasLength(1));
-
-        provider.clearAll();
-
-        expect(provider.sentRequests, isEmpty);
-      },
-    );
-
-    test('onConnect(true) clears blockedByUserIds', () {
-      final provider = FriendsProvider();
-
-      // Use the proper API to add a blocked-by entry
-      provider.onYouWereBlocked({'userId': 42});
-      expect(provider.blockedByUserIds, contains(42));
-
-      provider.onConnect(true);
-
-      expect(provider.blockedByUserIds, isEmpty);
-      expect(provider.searchResults, isNull);
-      expect(provider.consumePendingFriendAccepted(), isNull);
-    });
-
-    test('onYouWereBlocked adds to blockedByUserIds and removes friend', () {
-      final provider = FriendsProvider();
-      provider.onConnect(false);
-
-      final user = UserModel(id: 5, username: 'bob', tag: '0005');
-      final friendJson = {
-        'id': user.id,
-        'username': user.username,
-        'tag': user.tag,
-      };
-
-      provider.onFriendsList([friendJson]);
-      expect(provider.friends.length, 1);
-
-      provider.onYouWereBlocked({'userId': user.id});
-
-      expect(provider.blockedByUserIds.contains(user.id), isTrue);
       expect(provider.friends, isEmpty);
+      expect(provider.blockedUsers, isEmpty);
+      expect(provider.friendRequests, isEmpty);
+      expect(provider.sentRequests, isEmpty);
+      expect(provider.pendingRequestsCount, 0);
+      expect(provider.isFriend(2), isFalse);
     });
 
-    test('onFriendsList ignores empty snapshot when local friends exist', () {
-      final provider = FriendsProvider();
-      final alice = UserModel(id: 1, username: 'alice', tag: '0001');
-
-      provider.onFriendsList([
-        {'id': alice.id, 'username': alice.username, 'tag': alice.tag},
-      ]);
-      expect(provider.friends.length, 1);
-
-      provider.onFriendsList([]);
-
-      expect(provider.friends.length, 1);
-      expect(provider.friends.first.id, alice.id);
-    });
-
-    test('onBlockedList removes blocked friends from friends list', () {
-      final provider = FriendsProvider();
-
-      final alice = UserModel(id: 1, username: 'alice', tag: '0001');
-      final bob = UserModel(id: 2, username: 'bob', tag: '0002');
-
-      provider.onFriendsList([
-        {'id': alice.id, 'username': alice.username, 'tag': alice.tag},
-        {'id': bob.id, 'username': bob.username, 'tag': bob.tag},
-      ]);
-      expect(provider.friends.length, 2);
-
-      provider.onBlockedList([
-        {'id': bob.id, 'username': bob.username, 'tag': bob.tag},
-      ]);
-
-      expect(provider.blockedUsers.length, 1);
-      expect(provider.blockedUsers.first.id, bob.id);
-      expect(provider.friends.length, 1);
-      expect(provider.friends.first.id, alice.id);
-    });
-
-    test('onUnfriended purges only the named peer', () {
-      final provider = FriendsProvider();
-      provider.setCurrentUserId(1);
-      provider.onFriendsList([
-        {'id': 2, 'username': 'bob', 'tag': '0002'},
-        {'id': 3, 'username': 'carol', 'tag': '0003'},
-      ]);
+    test('onBoxFriendshipEnded purges only the named peer', () {
+      final provider = FriendsProvider()..setCurrentUserId(1);
       final purged = <int>[];
       provider.onRemoveConversationsForUser = purged.add;
 
-      provider.onUnfriended({'userId': 2});
+      provider.onBoxFriendshipEnded(2);
 
       expect(purged, [2]);
-      expect(provider.friends.map((f) => f.id), [3]);
     });
 
-    test('onUnfriended ignores our OWN id — it would purge every chat', () {
+    test('onBoxFriendshipEnded ignores our OWN id — it would purge every chat',
+        () {
       // `removeConversationsForUser` matches `userOne.id == id || userTwo.id == id`
       // and we are a participant in EVERY one of our conversations, so acting on
       // our own id destroys the decrypted plaintext of the whole local history —
-      // irreversibly, because the ratchet consumed the message keys. Production
-      // echoed our own id back to us until 2026-08-05, so this stays pinned.
-      final provider = FriendsProvider();
-      provider.setCurrentUserId(1);
-      provider.onFriendsList([
-        {'id': 2, 'username': 'bob', 'tag': '0002'},
-      ]);
+      // irreversibly, because the ratchet consumed the message keys.
+      final provider = FriendsProvider()..setCurrentUserId(1);
       final purged = <int>[];
       provider.onRemoveConversationsForUser = purged.add;
 
-      provider.onUnfriended({'userId': 1});
+      provider.onBoxFriendshipEnded(1);
 
       expect(purged, isEmpty);
-      expect(provider.friends.map((f) => f.id), [2]);
     });
   });
 
   group('FriendsProvider invitation round trips', () {
-    Map<String, dynamic> request({int id = 10}) => {
-      'id': id,
-      'sender': {'id': 2, 'username': 'bob'},
-      'receiver': {'id': 1, 'username': 'alice'},
-      'status': 'pending',
-      'createdAt': '2026-01-01T00:00:00.000Z',
-    };
-
-    test('a re-emitted newFriendRequest does not duplicate the row', () {
-      final provider = FriendsProvider();
-      provider.onNewFriendRequest(request());
-      provider.onNewFriendRequest(request());
-
-      expect(provider.friendRequests, hasLength(1));
-      provider.dispose();
-    });
-
     test('a dropped accept ack releases the row and reports a failure', () {
       fakeAsync((async) {
-        final provider = FriendsProvider();
-        provider.onFriendRequestsList([request()]);
-        provider.acceptFriendRequest(10);
+        final provider = FriendsProvider()
+          ..boxAcceptRequest = ((_) => Completer<FirstContactAccept>().future);
+        provider.acceptFriendRequest(-8);
 
-        expect(provider.invitationActionFor(10), InvitationActionStatus.inFlight);
+        expect(provider.invitationActionFor(-8), InvitationActionStatus.inFlight);
 
-        // No ack ever arrives while the socket stays connected: nothing else in
-        // the app would ever clear this, so the row stayed spinning forever.
+        // No answer ever arrives: nothing else in the app would ever clear
+        // this, so the row stayed spinning forever.
         async.elapse(const Duration(seconds: 21));
 
-        expect(provider.invitationActionFor(10), isNull);
+        expect(provider.invitationActionFor(-8), isNull);
         final failure = provider.consumeInvitationFailure();
         expect(failure, isNotNull);
         expect(failure!.action, InvitationAction.accept);
-        expect(failure.requestId, 10);
+        expect(failure.requestId, -8);
         provider.dispose();
       });
     });
 
-    test('an ack inside the window cancels the timeout', () {
+    test('an answer inside the window cancels the timeout', () {
       fakeAsync((async) {
-        final provider = FriendsProvider();
-        final payload = request();
-        provider.onFriendRequestsList([payload]);
-        provider.rejectFriendRequest(10);
-        provider.onFriendRequestRejected(payload);
+        final provider = FriendsProvider()
+          ..boxDeclineRequest = ((_) async {});
+        provider.rejectFriendRequest(-8);
+        async.flushMicrotasks();
 
         async.elapse(const Duration(seconds: 21));
 
-        expect(provider.invitationActionFor(10), isNull);
+        expect(provider.invitationActionFor(-8), isNull);
         expect(provider.consumeInvitationFailure(), isNull);
         provider.dispose();
       });
@@ -310,72 +169,24 @@ void main() {
       'tag': id.toString().padLeft(4, '0'),
     };
 
-    Map<String, dynamic> serverRequest(int id, int from) => {
-      'id': id,
-      'sender': user(from),
-      'receiver': user(1),
-      'status': 'pending',
-      'createdAt': '2026-09-01T00:00:00.000Z',
-    };
-
-    group('server lists (E15g)', () {
-      test('a friendsList omitting a box friend leaves its record', () async {
-        await seed([
-          record(7, ContactState.friend),
-          record(3, ContactState.friend, box: false),
-        ]);
-
-        provider().onFriendsList([user(2)]);
-        await store.settled;
-
-        expect(
-          store.byUserId(7),
-          isA<ContactRecord>()
-              .having((r) => r.state, 'state', ContactState.friend)
-              .having((r) => r.boxOrigin, 'boxOrigin', isNotNull),
-        );
-        // A server friend the list omits is hidden, never deleted.
-        expect(store.byUserId(3)?.state, ContactState.former);
-      });
-
-      test(
-        'a friendRequestsList omitting a box request leaves its record',
-        () async {
-          await seed([
-            record(8, ContactState.pendingIn),
-            record(11, ContactState.pendingIn, box: false, requestId: 70),
-          ]);
-
-          provider().onFriendRequestsList([serverRequest(71, 4)]);
-          await store.settled;
-
-          expect(store.byUserId(8)?.state, ContactState.pendingIn);
-          expect(store.byUserId(11)?.state, ContactState.former);
-        },
-      );
-    });
-
-    group('unions', () {
-      test('box records join the server lists, requests as -userId', () async {
+    group('lists read the store', () {
+      test('box records show as friends, requests (-userId) and blocked',
+          () async {
         await seed([
           record(7, ContactState.friend),
           record(8, ContactState.pendingIn),
           record(9, ContactState.pendingOut),
           record(10, ContactState.blocked),
-          // Box-made but carrying a server request id: the server lists it.
-          record(12, ContactState.pendingIn, requestId: 80),
+          // A pending record with no box origin is no box request.
+          record(11, ContactState.pendingIn, box: false),
         ]);
-        final friends = provider()
-          ..onFriendsList([user(2), user(7)])
-          ..onFriendRequestsList([serverRequest(70, 4)])
-          ..onSentRequestsList([])
-          ..onPendingRequestsCount({'count': 1});
+        final friends = provider();
 
-        expect(friends.friends.map((u) => u.id), [2, 7]);
+        expect(friends.friends.map((u) => u.id), [7]);
         expect(friends.isFriend(7), isTrue);
-        expect(friends.friendRequests.map((r) => r.id), [70, -8]);
+        expect(friends.friendRequests.map((r) => r.id), [-8]);
         expect(
-          friends.friendRequests.last,
+          friends.friendRequests.single,
           isA<FriendRequestModel>()
               .having((r) => r.sender.id, 'sender', 8)
               .having((r) => r.receiver.id, 'receiver', 1),
@@ -383,17 +194,17 @@ void main() {
         expect(friends.sentRequests.single.id, -9);
         expect(friends.sentRequests.single.receiver.id, 9);
         expect(friends.blockedUsers.map((u) => u.id), [10]);
-        expect(friends.pendingRequestsCount, 2);
+        expect(friends.pendingRequestsCount, 1);
       });
 
-      test('a box record gone from the store leaves the lists', () async {
+      test('a record gone from the store leaves the lists', () async {
         await seed([record(7, ContactState.friend)]);
-        final friends = provider()..onFriendsList([user(2)]);
+        final friends = provider();
         expect(friends.isFriend(7), isTrue);
 
         await store.remove(7);
 
-        expect(friends.friends.map((u) => u.id), [2]);
+        expect(friends.friends, isEmpty);
         expect(friends.isFriend(7), isFalse);
       });
     });
@@ -485,13 +296,16 @@ void main() {
         expect(friends.consumeInvitationFailure(), isNull);
       });
 
-      test('oldPath sends the server event', () async {
-        final friends = searched(FirstContactSend.oldPath, [])
+      test('a send with no box wired fails and emits nothing', () async {
+        final friends = provider()
+          ..searchUsers('u2#0002')
+          ..onSearchUsersResult([bob])
           ..sendFriendRequest(2);
         await pumpEventQueue();
 
-        expect(sends().single.$2, {'recipientId': 2});
-        expect(friends.sendActionFor(2), InvitationActionStatus.inFlight);
+        expect(sends(), isEmpty);
+        expect(friends.sendActionFor(2), isNull);
+        expect(friends.consumeInvitationFailure()?.reason, 'send_failed');
       });
 
       test('failed releases the row and reports send_failed', () async {
@@ -510,13 +324,15 @@ void main() {
         );
       });
 
-      test('a user with no search entry takes the server path', () async {
+      test('a user with no search entry fails without asking the box', () async {
         final seen = <Object>[];
-        searched(FirstContactSend.sent, seen).sendFriendRequest(5);
+        final friends = searched(FirstContactSend.sent, seen)
+          ..sendFriendRequest(5);
         await pumpEventQueue();
 
         expect(seen, isEmpty);
-        expect(sends().single.$2, {'recipientId': 5});
+        expect(sends(), isEmpty);
+        expect(friends.consumeInvitationFailure()?.reason, 'send_failed');
       });
     });
 
@@ -627,8 +443,7 @@ void main() {
                 (o) => o.conversationId,
                 'conversationId',
                 localConversationIdFor(7),
-              )
-              .having((o) => o.chatReady, 'chatReady', isTrue),
+              ),
         );
         expect(friends.consumePendingFriendAccepted()?.peerUserId, 7);
       });
@@ -666,7 +481,7 @@ void main() {
         },
       );
 
-      group('a friend from before the box with a box route', () {
+      group('a friend from before the box', () {
         const queue = ContactQueue(
           rid: 'r',
           sid: 's',
@@ -675,16 +490,15 @@ void main() {
           sealPriv: 'sp',
           sealPub: 'p',
         );
-        ContactRecord preBox() => record(
-          7,
-          ContactState.friend,
-          box: false,
-        ).copyWith(queues: const [queue]);
+        ContactRecord preBox({bool route = true}) {
+          final r = record(7, ContactState.friend, box: false);
+          return route ? r.copyWith(queues: const [queue]) : r;
+        }
 
         for (final block in [false, true]) {
           test(
-            '${block ? 'a block' : 'an unfriend'} ends it on the box AND tells '
-            'the server, which still lists the pair',
+            '${block ? 'a block' : 'an unfriend'} of one with a box route ends '
+            'on the box only',
             () async {
               await seed([preBox()]);
               final ended = <(int, bool)>[];
@@ -698,29 +512,56 @@ void main() {
               );
 
               expect(ended, [(7, block)]);
-              final event = block ? 'blockUser' : 'unfriend';
-              expect(events(), [event]);
+              expect(events(), isEmpty);
             },
           );
         }
 
-        test('the friend leaves the list at once on either end, with no '
-            'server event', () async {
-          await seed([preBox()]);
-          final ending = provider()
-            ..onFriendsList([user(7)])
-            ..boxEndFriendship = ((userId, {required block}) async {});
-          await store.settled;
-          await ending.unfriend(7);
-          expect(ending.friends.map((u) => u.id), isNot(contains(7)));
+        test('a block of one with no route is local: the record turns '
+            'blocked, nothing is emitted', () async {
+          await seed([preBox(route: false)]);
+          var boxEnds = 0;
+          final purged = <int>[];
+          final friends = provider()
+            ..boxEndFriendship = ((userId, {required block}) async => boxEnds++)
+            ..onRemoveConversationsForUser = purged.add;
 
-          final told = provider()..onFriendsList([user(7)]);
-          await store.settled;
-          told.onBoxFriendshipEnded(7);
-          expect(told.friends.map((u) => u.id), isNot(contains(7)));
+          expect(await friends.blockUser(7), isTrue);
+
+          expect(boxEnds, 0);
+          expect(events(), isEmpty);
+          expect(purged, [7]);
+          expect(
+            store.byUserId(7),
+            isA<ContactRecord>()
+                .having((r) => r.state, 'state', ContactState.blocked)
+                .having((r) => r.username, 'username', 'u7')
+                .having((r) => r.queues, 'queues', isEmpty)
+                .having((r) => r.boxOrigin, 'boxOrigin', isNull),
+          );
+          expect(friends.blockedUsers.map((u) => u.id), [7]);
+          expect(friends.friends, isEmpty);
         });
 
-        test('a box end that failed tells the server nothing', () async {
+        test('an unfriend of one with no route removes the record, nothing '
+            'is emitted', () async {
+          await seed([preBox(route: false)]);
+          var boxEnds = 0;
+          final purged = <int>[];
+          final friends = provider()
+            ..boxEndFriendship = ((userId, {required block}) async => boxEnds++)
+            ..onRemoveConversationsForUser = purged.add;
+
+          expect(await friends.unfriend(7), isTrue);
+
+          expect(boxEnds, 0);
+          expect(events(), isEmpty);
+          expect(purged, [7]);
+          expect(store.byUserId(7), isNull);
+          expect(friends.friends, isEmpty);
+        });
+
+        test('a box end that failed leaves the record', () async {
           await seed([preBox()]);
           final friends = provider()
             ..boxEndFriendship = ((userId, {required block}) async =>
@@ -728,6 +569,7 @@ void main() {
 
           expect(await friends.unfriend(7), isFalse);
           expect(events(), isEmpty);
+          expect(store.byUserId(7)?.state, ContactState.friend);
         });
       });
 

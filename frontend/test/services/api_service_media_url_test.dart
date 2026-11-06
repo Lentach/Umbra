@@ -60,41 +60,36 @@ void main() {
   });
 
   group('ApiService.fetchMediaBytes applies the loopback rewrite', () {
-    test(
-      'fetches the rewritten LAN host and keeps the JWT for /media/msgs/',
-      () async {
-        late Uri requested;
-        String? authHeader;
-        final mock = MockClient((request) async {
-          requested = request.url;
-          authHeader = request.headers['Authorization'];
-          return http.Response.bytes([1, 2, 3], 200);
-        });
+    test('fetches the rewritten LAN host without credentials', () async {
+      late Uri requested;
+      String? authHeader;
+      final mock = MockClient((request) async {
+        requested = request.url;
+        authHeader = request.headers['Authorization'];
+        return http.Response.bytes([1, 2, 3], 200);
+      });
 
-        final api = ApiService(
-          baseUrl: 'http://192.168.1.50:3000',
-          httpClient: mock,
-        );
+      final api = ApiService(
+        baseUrl: 'http://192.168.1.50:3000',
+        httpClient: mock,
+      );
 
-        final bytes = await api.fetchMediaBytes(
-          'http://localhost:3000/media/msgs/voice.bin',
-          'jwt_token',
-        );
+      final bytes = await api.fetchMediaBytes(
+        'http://localhost:3000/media/avatars/u.jpg',
+      );
 
-        expect(requested.host, '192.168.1.50');
-        expect(requested.port, 3000);
-        expect(requested.path, '/media/msgs/voice.bin');
-        expect(authHeader, 'Bearer jwt_token');
-        expect(bytes, [1, 2, 3]);
-      },
-    );
+      expect(requested.host, '192.168.1.50');
+      expect(requested.port, 3000);
+      expect(requested.path, '/media/avatars/u.jpg');
+      expect(authHeader, isNull);
+      expect(bytes, [1, 2, 3]);
+    });
   });
 
-  // Regression for H-04: the access JWT must only ever be sent to the backend
-  // origin. The media `mediaUrl` comes from the (sender-controlled, never
-  // server-validated) E2E envelope, so a malicious peer could point it at an
-  // attacker host containing `/media/msgs/` and harvest the recipient's token.
-  group('ApiService.fetchMediaBytes restricts the JWT to the backend origin', () {
+  // Regression for H-04: the media `mediaUrl` comes from the
+  // (sender-controlled, never server-validated) E2E envelope, so a malicious
+  // peer must not be able to point the client at an attacker host.
+  group('ApiService.fetchMediaBytes only talks to trusted hosts', () {
     const prodBase = 'https://fireplace.example.com';
 
     test('refuses to fetch an untrusted host and makes no request', () async {
@@ -106,34 +101,13 @@ void main() {
       final api = ApiService(baseUrl: prodBase, httpClient: mock);
 
       await expectLater(
-        api.fetchMediaBytes(
-          'https://attacker.example/media/msgs/steal.bin',
-          'jwt_token',
-        ),
+        api.fetchMediaBytes('https://attacker.example/media/steal.bin'),
         throwsA(isA<Exception>()),
       );
-      // The whole point: the attacker host is never contacted, so the token
-      // cannot leak even in the Authorization header.
       expect(requestMade, isFalse);
     });
 
-    test('sends the JWT for a same-origin /media/msgs/ URL', () async {
-      String? authHeader;
-      final mock = MockClient((request) async {
-        authHeader = request.headers['Authorization'];
-        return http.Response.bytes([1], 200);
-      });
-      final api = ApiService(baseUrl: prodBase, httpClient: mock);
-
-      await api.fetchMediaBytes(
-        '$prodBase/media/msgs/voice.bin',
-        'jwt_token',
-      );
-
-      expect(authHeader, 'Bearer jwt_token');
-    });
-
-    test('fetches legacy Cloudinary media without attaching the JWT', () async {
+    test('fetches legacy Cloudinary media without credentials', () async {
       String? authHeader;
       Uri? requested;
       final mock = MockClient((request) async {
@@ -145,7 +119,6 @@ void main() {
 
       final bytes = await api.fetchMediaBytes(
         'https://res.cloudinary.com/demo/image/upload/v1/x.jpg',
-        'jwt_token',
       );
 
       expect(requested?.host, 'res.cloudinary.com');
@@ -153,12 +126,7 @@ void main() {
       expect(bytes, [9]);
     });
 
-    test('does NOT attach the JWT to a same-origin non-/media/msgs/ URL',
-        () async {
-      // Same-origin but under /media/avatars/, not /media/msgs/: the request
-      // proceeds (trusted host) but the token must NOT be attached. Guards the
-      // `/media/msgs/` path restriction — broadening it to all same-origin
-      // paths would leak the JWT to avatar/other endpoints.
+    test('fetches a same-origin avatar without credentials', () async {
       String? authHeader;
       Uri? requested;
       final mock = MockClient((request) async {
@@ -168,10 +136,7 @@ void main() {
       });
       final api = ApiService(baseUrl: prodBase, httpClient: mock);
 
-      final bytes = await api.fetchMediaBytes(
-        '$prodBase/media/avatars/u.jpg',
-        'jwt_token',
-      );
+      final bytes = await api.fetchMediaBytes('$prodBase/media/avatars/u.jpg');
 
       expect(requested?.host, 'fireplace.example.com');
       expect(authHeader, isNull);

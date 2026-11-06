@@ -18,7 +18,6 @@ import 'encryption/signal_stores.dart';
 import 'device_link/identity_backup.dart';
 import 'passcode_wrap_hook.dart';
 import 'encryption/session_cross_context_lock.dart';
-import 'reactions/reaction_key_lookup.dart';
 
 /// Thrown by [EncryptionService.initialize] when identity material is present
 /// but incomplete.
@@ -432,136 +431,6 @@ class EncryptionService {
     } catch (_) {}
   }
 
-  // --- Reaction keys (D10, docs/design/reaction-privacy.md) ---------------
-  //
-  // K_react is the per-conversation HMAC key that blinds reaction emoji from
-  // the server. It rides the SAME at-rest path as every other record here
-  // (the `ContentKv` seam: SQLCipher on Android, sealed store on web, prefs on
-  // desktop/test) rather than minting its own key family — same custody as the
-  // plaintext cache, one place to reason about.
-  //
-  // It MUST persist, and the reason is the same one that forces a local
-  // plaintext record store: the server's copy is a Signal-wrapped mailbox row,
-  // and Signal decryption CONSUMES the message key, so that row opens exactly
-  // once. A device that kept the key in RAM only would be unable to read its
-  // own conversation's chips after a relaunch (design §3, falsification R7).
-  String _reactionKeyPrefix(int userId) => 'e2e_${userId}_rkey_v1_';
-
-  String _reactionKeyRecordKey(int userId, int conversationId) =>
-      '${_reactionKeyPrefix(userId)}$conversationId';
-
-  /// Stores [keyB64] as this device's `K_react` for [conversationId].
-  ///
-  /// ARMED, like every other key in this app: the write is verified by a
-  /// read-back before the caller is told it succeeded, because a key the
-  /// sender believes is stored but is not would blind reactions this device can
-  /// never read again.
-  Future<bool> saveReactionKey({
-    required int conversationId,
-    required int epoch,
-    required String keyB64,
-    bool pending = false,
-  }) async {
-    final userId = _userId;
-    if (userId == null) return false;
-    try {
-      final prefs = await _sharedPrefs;
-      final key = _reactionKeyRecordKey(userId, conversationId);
-      await prefs.setString(
-        key,
-        jsonEncode({'e': epoch, 'k': keyB64, if (pending) 'p': true}),
-      );
-      // Read back through the AUTHORITATIVE snapshot, like every other
-      // durable record here. The per-engine cache can miss a write that
-      // landed, and a false "not stored" on this path is destructive: the
-      // caller treats it as a lost key while the server already serves the
-      // epoch (the 2026-07-29 incident, same mechanism).
-      final readBack = _rawRecord(await _authoritativeSnapshot(), prefs, key);
-      if (readBack == null) return false;
-      final decoded = jsonDecode(readBack);
-      return decoded is Map &&
-          decoded['e'] == epoch &&
-          decoded['k'] == keyB64 &&
-          (decoded['p'] == true) == pending;
-    } on Object catch (_) {
-      return false;
-    }
-  }
-
-  /// Forgets this device's `K_react` for [conversationId].
-  ///
-  /// Used when a key was stored optimistically and the server then refused to
-  /// publish it: keeping it would mint tokens no other device agrees with,
-  /// and — worse — make `loadReactionKey` answer `Found`, so the real key
-  /// would never be pulled.
-  Future<void> dropReactionKey(int conversationId) async {
-    final userId = _userId;
-    if (userId == null) return;
-    try {
-      final prefs = await _sharedPrefs;
-      await prefs.remove(_reactionKeyRecordKey(userId, conversationId));
-    } on Object catch (_) {
-      // Best effort: a surviving record is re-validated on the next read and
-      // a failed removal must not fail the caller's recovery path.
-    }
-  }
-
-  /// This device's `K_react` for [conversationId], as a THREE-state answer.
-  ///
-  /// The three states exist because the recovery they feed is destructive.
-  /// "I cannot open my mailbox row" is supposed to let a participant re-key at
-  /// `epoch + 1`, and that permanently orphans every existing chip for BOTH
-  /// participants' other devices — so it may fire ONLY on a proven absence.
-  /// A locked passcode vault makes the content store RETHROW
-  /// `ContentStoreUnavailable(locked: true)` rather than fall back
-  /// (`frontend/docs/e2e-invariants.md`, and the passcode-lock doc records that
-  /// locked deliberately outranks the "no keys" probe because conflating
-  /// absent-with-locked destroyed data once already). Collapsing that into
-  /// `null` would re-key a device whose key is sitting right there, unreadable
-  /// for the next few seconds.
-  Future<ReactionKeyLookup> loadReactionKey(int conversationId) async {
-    final userId = _userId;
-    if (userId == null) return const ReactionKeyUnavailable('unbound-user');
-    try {
-      final prefs = await _sharedPrefs;
-      // The AUTHORITATIVE snapshot, not the per-engine cache. This read
-      // decides ABSENCE, and absence is the one verdict that spends the
-      // Signal mailbox row (or, at epoch 0, mints a new key). A stale cache
-      // that has dropped a landed write would therefore destroy the key
-      // rather than merely miss it — the 2026-07-29 mechanism, with no
-      // second copy to recover from.
-      final raw = _rawRecord(
-        await _authoritativeSnapshot(),
-        prefs,
-        _reactionKeyRecordKey(userId, conversationId),
-      );
-      // `_rawRecord` returning null now means GENUINELY absent, which is the
-      // one state that may authorise a re-key.
-      if (raw == null) return const ReactionKeyAbsent();
-      final decoded = jsonDecode(raw);
-      if (decoded is! Map) return const ReactionKeyUnavailable('corrupt');
-      final epoch = decoded['e'];
-      final keyB64 = decoded['k'];
-      // A half record is corrupt storage, NOT an absence: re-keying over it
-      // would throw away a key that may still be recoverable.
-      if (epoch is! int || keyB64 is! String || keyB64.isEmpty) {
-        return const ReactionKeyUnavailable('corrupt');
-      }
-      return ReactionKeyFound(
-        epoch: epoch,
-        keyB64: keyB64,
-        // Absent marker = confirmed. Only a record written between "stored"
-        // and "server said yes" carries it.
-        pending: decoded['p'] == true,
-      );
-    } on ContentStoreUnavailable catch (e) {
-      return ReactionKeyUnavailable(e.locked ? 'locked' : e.stage);
-    } on Object catch (e) {
-      // Unknown failure is NOT absence. Fail toward "leave it alone".
-      return ReactionKeyUnavailable(e.runtimeType.toString());
-    }
-  }
-
   /// (lxxxiv): the timeline moved past [peerId]'s muted note recorded at
   /// [occurredAt]. Forget it durably, so a later open of that chat does not
   /// re-render the line while history is still loading (an empty timeline
@@ -701,18 +570,17 @@ class EncryptionService {
     return true;
   }
 
-  /// Server-corroborated peer identity change (Phase 0a `peerIdentityChanged`
-  /// WS event): the peer's key bundle was REPLACED server-side. Feeds the SAME
-  /// state and persistence as the local libsignal detection — one warning
-  /// surface, cleared only by [acknowledgePeerIdentity]. Usually a legitimate
-  /// new device/browser sign-in on the peer's side, so callers must not word
-  /// it as an attack.
+  /// A peer's device list failed the I7 chain against the anchor this device
+  /// holds ([EncryptionProvider]'s list adoption): the peer's identity changed
+  /// or its list was rolled back. Feeds the SAME state and persistence as the
+  /// local libsignal detection — one warning surface, cleared only by
+  /// [acknowledgePeerIdentity]. Usually a legitimate new device/browser
+  /// sign-in on the peer's side, so callers must not word it as an attack.
   Future<void> recordPeerIdentityChangedFromServer(
     int peerId, {
     String source = 'server_event',
   }) async {
-    // (xlviii) clause 2. The userId on this event is whatever the server says,
-    // and nothing here used to check it. A peer this device holds NO account
+    // (xlviii) clause 2. A peer this device holds NO account
     // anchor for has no identity to have CHANGED — there is nothing to compare
     // in the ceremony and nothing to repair — so recording one is pure noise
     // that competes for the capped persisted set. ~200 forged ids were enough
@@ -3363,7 +3231,7 @@ class EncryptionService {
   /// or via the history-pass self-heal. Until a REAL stamp lands the record is
   /// NOT locally destroyable (see [_recordExpiryDeadlineMs]): the old
   /// never-read fallback destroyed five still-served records on 2026-08-02
-  /// when the stamp event was lost. Unstamped residue is reconciliation's job.
+  /// when the stamp event was lost. Unstamped residue is the retention bound's job.
   Future<void> saveDecryptedContent(
     int id,
     Map<String, dynamic> data, {
@@ -3647,10 +3515,9 @@ class EncryptionService {
   /// identity, sessions and pre-keys are NOT touched: wiping those would brick
   /// the account rather than clear it.
   ///
-  /// Pending-send records go too. They exist for lost-ack reconciliation, but
-  /// they hold outgoing plaintext, and a wipe that leaves the user's own
-  /// messages readable is not a wipe. The cost of losing them is a send that
-  /// was in flight during the wipe reconciling as "[encrypted]".
+  /// Legacy pending-send records go too. An older build wrote them, and they
+  /// hold outgoing plaintext, so a wipe that leaves the user's own messages
+  /// readable is not a wipe.
   Future<LocalHistoryWipeResult> clearDecryptedContentCache() async {
     final userId = _userId;
     if (userId == null) {
@@ -3858,49 +3725,6 @@ class EncryptionService {
     return PlaintextPurgeResult(removed: removed, failedIds: failed);
   }
 
-  /// Update the stored expiry deadline for [messageId] without touching its
-  /// payload.
-  ///
-  /// A read-mode disappearing message is persisted at DECRYPT time with no
-  /// deadline — the server assigns one later, when the recipient reads, and
-  /// pushes it on `messageDelivered`. Without this the record would carry only
-  /// the never-read fallback and the sweep would hold that plaintext up to a
-  /// day past the real deadline.
-  ///
-  /// No-op when nothing is persisted yet — but LOUDLY: the record that misses
-  /// this stamp keeps no local deadline at all (see [_recordExpiryDeadlineMs]),
-  /// so the miss is recorded in the diag ring and the history pass re-stamps
-  /// from the served row (`EXPIRY_STAMP_MISS` / the self-heal in
-  /// `messaging_provider.decrypt.dart`). A lost stamp therefore degrades to
-  /// plaintext held until reconciliation — never to a wrong deletion.
-  Future<void> stampRecordExpiry(int messageId, DateTime expiresAt) async {
-    final userId = _userId;
-    if (userId == null) return;
-    try {
-      final prefs = await _sharedPrefs;
-      final key = _decryptedContentKey(userId, messageId);
-      // Authoritative: a false miss here silently drops the real deadline and
-      // leaves the record with no local deadline at all.
-      final raw = _rawRecord(await _authoritativeSnapshot(), prefs, key);
-      if (raw == null) {
-        // The record is not there yet (stamp raced the persist) or is gone.
-        // Ring, not durable: routine and self-healing, but it must be visible
-        // — this exact silence hid the 2026-08-02 destruction for a day.
-        E2eDiagLog.add('EXPIRY_STAMP_MISS', {'msgId': messageId});
-        return;
-      }
-      final decoded = jsonDecode(raw);
-      if (decoded is! Map<String, dynamic>) return;
-      final stampMs = expiresAt.toUtc().millisecondsSinceEpoch;
-      // Idempotent: the history-pass self-heal calls this for every served
-      // row that carries a deadline; rewriting an unchanged record every
-      // pass would be 50 pointless commits per page.
-      if (decoded[_metaExpiresAt] == stampMs) return;
-      decoded[_metaExpiresAt] = stampMs;
-      await prefs.setString(key, jsonEncode(decoded));
-    } catch (_) {}
-  }
-
   // ── Scan-based purges ────────────────────────────────────────────────────
 
   /// How long a plaintext record survives after it was first stored.
@@ -3992,10 +3816,9 @@ class EncryptionService {
   /// still readable, so both must be visible to whoever decides what dies.
   ///
   /// Unlike [messageIdsForConversations] and [destroyableMessageIds] this
-  /// reads no metadata at all, which is the entire point. Records written
-  /// before the `_cid` / `_savedAt` stamps existed are invisible to both of
-  /// those rules and would otherwise sit here until the LRU cap happened to
-  /// evict them; they are exactly what server reconciliation is for.
+  /// reads no metadata at all, so records written before the `_cid` /
+  /// `_savedAt` stamps existed are visible too. Diagnostics only
+  /// ([EncryptionProvider.diagStorageSets]).
   Future<Set<int>> storedMessageIds() async {
     final userId = _userId;
     if (userId == null) return <int>{};
@@ -4004,15 +3827,8 @@ class EncryptionService {
       _rawDecryptedContentPrefix(userId),
     ];
     try {
-      // DELIBERATELY the per-engine cache, not [_authoritativeSnapshot]. This is
-      // the SOLE input to server reconciliation, which destroys the plaintext of
-      // every id the server does not return — and expired rows ARE hard-deleted
-      // server-side by a per-minute cron, so orphans genuinely exist. A
-      // clobbered cache under-enumerates, which SUPPRESSES those purges; going
-      // authoritative would enumerate the full set and destroy every orphan at
-      // once on the first launch after this change. Over-retention is
-      // recoverable, over-destruction is not, and none of this is needed to fix
-      // the false-miss bug: only the record READS are.
+      // DELIBERATELY the per-engine cache, not [_authoritativeSnapshot]: a
+      // diagnostic count must not pay for the full authoritative enumeration.
       final prefs = await _sharedPrefs;
       await _reloadPrefsForCrossContext(prefs);
       final ids = <int>{};
@@ -4208,44 +4024,6 @@ class EncryptionService {
       return null;
     }
     return claims;
-  }
-
-  // ── Server reconciliation ────────────────────────────────────────────────
-
-  String _reconcileStampKey(int userId) => 'e2e_${userId}_reconcile_last_v1';
-
-  /// When the last COMPLETE reconciliation pass finished, in local-clock ms,
-  /// or null if none ever has.
-  ///
-  /// The local clock is deliberate here, and it is the one place in this file
-  /// where it is safe: this value only decides how OFTEN the device asks the
-  /// server, never what gets destroyed. A wrong clock either re-asks too often
-  /// (wasted round trips) or skips a pass (residue survives to the next one).
-  /// Both directions are harmless because nothing dies unless the server
-  /// itself named the survivors.
-  Future<int?> lastReconcileAtMs() async {
-    final userId = _userId;
-    if (userId == null) return null;
-    try {
-      final prefs = await _sharedPrefs;
-      await _reloadPrefsForCrossContext(prefs);
-      return prefs.getInt(_reconcileStampKey(userId));
-    } catch (_) {
-      // Unreadable stamp reads as "never reconciled": re-asking costs a few
-      // round trips, skipping would postpone the cleanup indefinitely.
-      return null;
-    }
-  }
-
-  /// Record that a pass completed at [atMs]. Only ever called when EVERY batch
-  /// was answered — a partial pass must be retried, not throttled away.
-  Future<void> markReconciledAt(int atMs) async {
-    final userId = _userId;
-    if (userId == null) return;
-    try {
-      final prefs = await _sharedPrefs;
-      await prefs.setInt(_reconcileStampKey(userId), atMs);
-    } catch (_) {}
   }
 
   // ── Box delete tombstones (metadata-privacy item 4, E19c/E19g) ───────────
@@ -4839,130 +4617,6 @@ class EncryptionService {
   }
 
   // ---------------------------------------------------------------------------
-  // Terminal-duplicate observation counter
-  // (docs/design/terminal-duplicate-retirement.md §3.3).
-  //
-  // Rows that fail `duplicate` with NO readable source and NO ledger entry
-  // re-attempt a futile ratchet decrypt every boot, forever. The counter
-  // records "observed terminal in N distinct process lifetimes"; the decrypt
-  // path retires the row at [terminalDuplicateRetireSessions]. Everything here
-  // fails toward the status quo: an unbound user, a refused write, a malformed
-  // record, or a dropped cap entry all mean "count less" — slower to retire,
-  // never faster.
-
-  /// Distinct-process-lifetimes threshold before a terminal-duplicate row is
-  /// retired (design §3.1).
-  static const int terminalDuplicateRetireSessions = 3;
-
-  static const int _dupTermCap = 64;
-
-  /// Process-wide boot nonce (R1, design review): a process-lifetime static
-  /// survives provider/service re-creation, so in-SPA logout→login and
-  /// account switch re-inits share ONE nonce and an id increments at most
-  /// once per process lifetime — "N sessions" means N distinct boots, not N
-  /// re-inits. Mutable ONLY through [debugDupTermBootNonce]; production code
-  /// never reassigns it.
-  static String _dupTermBootNonce =
-      '${DateTime.now().microsecondsSinceEpoch}-${identityHashCode(Object())}';
-
-  /// Simulates a process restart in tests — the only writer besides the
-  /// initializer.
-  @visibleForTesting
-  static set debugDupTermBootNonce(String value) => _dupTermBootNonce = value;
-
-  String _dupTermKey(int userId) => 'e2e_${userId}_dupterm_v1';
-
-  /// Record one terminal-duplicate observation for [id] and return the count
-  /// AFTER this call, or null when nothing could be recorded (unbound user or
-  /// storage failure — the caller must treat null as "no observation").
-  ///
-  /// Deliberately lockless: the key is last-write-wins across engines, so
-  /// concurrent increments CLOBBER rather than sum — an under-count, the safe
-  /// direction (design §3.3).
-  Future<int?> noteTerminalDuplicate(int id) async {
-    final userId = _userId;
-    if (userId == null) return null;
-    try {
-      final prefs = await _sharedPrefs;
-      await _reloadPrefsForCrossContext(prefs);
-      final map = _readDupTerm(prefs, userId);
-      final entry = map[id];
-      if (entry != null && entry.bootNonce == _dupTermBootNonce) {
-        // Already counted this boot — repeated chat entries in one process
-        // lifetime are ONE observation.
-        return entry.count;
-      }
-      final next = (entry?.count ?? 0) + 1;
-      map[id] = (count: next, bootNonce: _dupTermBootNonce);
-      if (!await _writeDupTerm(prefs, userId, map)) return null;
-      return next;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// Delete [id]'s counter entry — a readable source EXISTS, so any prior
-  /// observations were transient misses (design §3.3 reset). Undetermined
-  /// answers must never reach here; the caller resets only on a DEFINITE true.
-  Future<void> clearTerminalDuplicate(int id) async {
-    final userId = _userId;
-    if (userId == null) return;
-    try {
-      final prefs = await _sharedPrefs;
-      await _reloadPrefsForCrossContext(prefs);
-      final map = _readDupTerm(prefs, userId);
-      if (map.remove(id) == null) return;
-      await _writeDupTerm(prefs, userId, map);
-    } catch (_) {}
-  }
-
-  Map<int, ({int count, String bootNonce})> _readDupTerm(
-    ContentKv prefs,
-    int userId,
-  ) {
-    final out = <int, ({int count, String bootNonce})>{};
-    try {
-      final raw = prefs.getString(_dupTermKey(userId));
-      if (raw == null) return out;
-      final decoded = jsonDecode(raw);
-      if (decoded is! Map<String, dynamic>) return out;
-      for (final e in decoded.entries) {
-        final id = int.tryParse(e.key);
-        final v = e.value;
-        if (id == null || v is! Map) continue;
-        final n = v['n'];
-        final b = v['b'];
-        // A malformed entry is dropped, restarting its count from zero — the
-        // safe direction.
-        if (n is! int || n < 1 || b is! String) continue;
-        out[id] = (count: n, bootNonce: b);
-      }
-      return out;
-    } catch (_) {
-      return <int, ({int count, String bootNonce})>{};
-    }
-  }
-
-  Future<bool> _writeDupTerm(
-    ContentKv prefs,
-    int userId,
-    Map<int, ({int count, String bootNonce})> map,
-  ) {
-    // Bounded, keeping the HIGHEST ids — same convention as [markRetired]:
-    // ids ascend with age, and an evicted entry merely restores the status quo
-    // (retry forever) for that row, never a phantom count.
-    final ids = map.keys.toList()..sort();
-    final kept = ids.length > _dupTermCap
-        ? ids.sublist(ids.length - _dupTermCap)
-        : ids;
-    final encoded = <String, Object>{
-      for (final id in kept)
-        '$id': {'n': map[id]!.count, 'b': map[id]!.bootNonce},
-    };
-    return prefs.setString(_dupTermKey(userId), jsonEncode(encoded));
-  }
-
-  // ---------------------------------------------------------------------------
   // Decrypt ledger — "ids whose plaintext I have successfully persisted at
   // least once".
   //
@@ -5231,7 +4885,7 @@ class EncryptionService {
   /// Deadline that may AUTHORIZE DESTRUCTION for this record — nothing else.
   ///
   /// Only a REAL server-assigned stamp (`_metaExpiresAt`, written at save from
-  /// the row or upgraded by [stampRecordExpiry]) qualifies. The never-read
+  /// the row) qualifies. The never-read
   /// fallback (`createdAt + kNeverReadRetentionSeconds`) is deliberately NOT
   /// computed here anymore: a record exists only because this device decrypted
   /// the message, which on this client happens in the active conversation —
@@ -5241,8 +4895,8 @@ class EncryptionService {
   /// be lost (race with the persist, missed socket window), and on 2026-08-02
   /// the fallback destroyed five records the server was still serving —
   /// `LEDGER_RECORD_LOST` ×5, the ledger's first real catch. An unstamped
-  /// record now simply does not expire locally; residue is cleaned by server
-  /// reconciliation once the row is hard-deleted (≤ reconcile interval late).
+  /// record now simply does not expire locally; the 30-day retention bound
+  /// cleans the residue.
   /// Over-retention is recoverable, over-destruction is not.
   int? _recordExpiryDeadlineMs(Map<String, dynamic> record) {
     final expiresAt = record[_metaExpiresAt];
@@ -5511,9 +5165,8 @@ class EncryptionService {
   /// still-served record the fixed sweep now refuses to touch (review finding,
   /// 2026-08-03). Amnesty is exactly the ambiguous class: an id whose record
   /// STILL EXISTS and carries NO real stamp. A legitimate delete-flow
-  /// obligation caught by this filter degrades to over-retention only:
-  /// reconciliation purges it once the server confirms the row is gone, and
-  /// the 30-day retention bound covers the rest. Ciphertext obligations are
+  /// obligation caught by this filter degrades to over-retention only: the
+  /// 30-day retention bound covers it. Ciphertext obligations are
   /// untouched — the expiry sweep never enqueued any. Runs once per account.
   Future<void> amnestyUnstampedPurgeObligations() async {
     final userId = _userId;
@@ -5622,28 +5275,15 @@ class EncryptionService {
     }
   }
 
-  // ── Pending-send reconcile store (lost `messageSent` ack) ────────────────
+  // ── Legacy pending-send records (lost `messageSent` ack) ─────────────────
   //
-  // A socket drop inside the ack window orphans the sender's plaintext under
-  // a tempId: the server row later arrives as '[encrypted]' and a Signal
-  // sender CANNOT decrypt its own ciphertext (it is encrypted to the
-  // recipient's ratchet) — the 07-08 field case (msg 14667). At SEND_EMIT the
-  // emitted ciphertext + plaintext payload are recorded here; the ack
-  // consumes the entry; a history merge reconciles an own '[encrypted]' row
-  // by EXACT ciphertext equality (unique by ratchet construction). NEVER
-  // match heuristically — review rejected timestamp proximity because a
-  // wrong match persists the WRONG plaintext under a real id, permanently.
-  //
-  // Lifecycle: consumed on ack/reconcile, TTL-pruned, capped; wiped by
-  // clearAllKeys and clearDecryptedContentCache (plaintext at rest).
-  // Deliberately NOT cleared on reconnect — the lost-ack case IS a reconnect.
-  //
-  // ONE SharedPreferences key PER ciphertext — deliberately NOT a shared JSON
-  // map: concurrent burst sends doing read-modify-write on one blob is the
-  // same lost-update shape as the _sessionTails bug. Per-key setString/remove
-  // needs no serialization at all.
+  // An old-path send used to record its emitted ciphertext + plaintext here
+  // (`e2e_<uid>_pendsend_v1_<ct|token>`, one key per record) so a lost ack
+  // could be reconciled. Nothing writes or reads them any more; records an
+  // older build left hold outgoing plaintext, so they are TTL-pruned
+  // ([prunePendingSendRecords]) and wiped by clearAllKeys,
+  // clearDecryptedContentCache and a ciphertext purge obligation.
 
-  static const int _pendingSendCap = 40;
   static const Duration _pendingSendTtl = Duration(hours: 72);
 
   String _pendingSendPrefix(int userId) => 'e2e_${userId}_pendsend_v1_';
@@ -5651,95 +5291,29 @@ class EncryptionService {
   String _pendingSendRecordKey(int userId, String ciphertext) =>
       '${_pendingSendPrefix(userId)}$ciphertext';
 
-  /// Record an emitted send (ciphertext → plaintext payload) for lost-ack
-  /// reconciliation. Silent on failure (send must never be blocked by this).
-  Future<void> savePendingSendRecord(
-    String ciphertext,
-    Map<String, dynamic> data,
-  ) async {
+  /// Remove every legacy pending-send record older than the 72 h TTL (or with
+  /// no readable stamp). Concurrent sweeps may double-remove a key — harmless
+  /// (remove is idempotent). Silent on failure; the next drain retries.
+  Future<void> prunePendingSendRecords() async {
     final userId = _userId;
     if (userId == null) return;
     try {
       final prefs = await _sharedPrefs;
-      final now = DateTime.now().millisecondsSinceEpoch;
-      await prefs.setString(
-        _pendingSendRecordKey(userId, ciphertext),
-        jsonEncode(<String, dynamic>{'at': now, 'data': data}),
-      );
-      await _prunePendingSendRecords(prefs, userId, now);
+      final prefix = _pendingSendPrefix(userId);
+      final cutoff =
+          DateTime.now().millisecondsSinceEpoch -
+          _pendingSendTtl.inMilliseconds;
+      for (final key
+          in prefs.getKeys().where((k) => k.startsWith(prefix)).toList()) {
+        int? at;
+        try {
+          final entry = jsonDecode(prefs.getString(key) ?? '');
+          final v = entry is Map ? entry['at'] : null;
+          if (v is int) at = v;
+        } catch (_) {}
+        if (at == null || at < cutoff) await prefs.remove(key);
+      }
     } catch (_) {}
-  }
-
-  /// Read a pending-send record WITHOUT consuming it. The reconcile path
-  /// peeks, persists under the real id, VERIFIES the persist by read-back
-  /// (saveDecryptedContent swallows failures), and only then takes — so a
-  /// failed persist leaves the record for the next history pass instead of
-  /// destroying the only surviving plaintext copy.
-  Future<Map<String, dynamic>?> peekPendingSendRecord(String ciphertext) async {
-    final userId = _userId;
-    if (userId == null) return null;
-    try {
-      final prefs = await _sharedPrefs;
-      final raw = prefs.getString(_pendingSendRecordKey(userId, ciphertext));
-      if (raw == null) return null;
-      final entry = jsonDecode(raw);
-      final data = entry is Map ? entry['data'] : null;
-      return data is Map ? data.cast<String, dynamic>() : null;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// Consume the pending-send record whose ciphertext equals [ciphertext]
-  /// EXACTLY, or null. Removing on read keeps normal acks self-cleaning and
-  /// prevents a stale record from ever being applied twice.
-  Future<Map<String, dynamic>?> takePendingSendRecord(String ciphertext) async {
-    final userId = _userId;
-    if (userId == null) return null;
-    try {
-      final prefs = await _sharedPrefs;
-      final key = _pendingSendRecordKey(userId, ciphertext);
-      final raw = prefs.getString(key);
-      if (raw == null) return null;
-      await prefs.remove(key);
-      final entry = jsonDecode(raw);
-      final data = entry is Map ? entry['data'] : null;
-      return data is Map ? data.cast<String, dynamic>() : null;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// TTL + cap sweep. Concurrent sweeps may double-remove a key — harmless
-  /// (remove is idempotent); an entry is never modified in place.
-  Future<void> _prunePendingSendRecords(
-    ContentKv prefs,
-    int userId,
-    int now,
-  ) async {
-    final prefix = _pendingSendPrefix(userId);
-    final cutoff = now - _pendingSendTtl.inMilliseconds;
-    final live = <MapEntry<String, int>>[];
-    for (final key
-        in prefs.getKeys().where((k) => k.startsWith(prefix)).toList()) {
-      int? at;
-      try {
-        final entry = jsonDecode(prefs.getString(key) ?? '');
-        final v = entry is Map ? entry['at'] : null;
-        if (v is int) at = v;
-      } catch (_) {}
-      if (at == null || at < cutoff) {
-        await prefs.remove(key);
-      } else {
-        live.add(MapEntry(key, at));
-      }
-    }
-    if (live.length > _pendingSendCap) {
-      live.sort((a, b) => a.value.compareTo(b.value));
-      for (final e in live.take(live.length - _pendingSendCap)) {
-        await prefs.remove(e.key);
-      }
-    }
   }
 
   /// Clear all E2E encryption keys for this user from storage.

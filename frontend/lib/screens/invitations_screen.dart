@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:skeletonizer/skeletonizer.dart';
 
 import '../l10n/app_localizations.dart';
 import '../models/friend_request_model.dart';
@@ -33,14 +32,6 @@ class _InvitationsScreenState extends State<InvitationsScreen> {
   FriendsProvider? _friends;
   bool _searching = false;
   bool _handlingProviderChange = false;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) context.read<FriendsProvider>().loadFriendRequests();
-    });
-  }
 
   @override
   void didChangeDependencies() {
@@ -98,22 +89,10 @@ class _InvitationsScreenState extends State<InvitationsScreen> {
   }
 
   String _failureMessage(AppLocalizations l10n, InvitationFailure failure) {
-    return switch (failure.reason) {
-      'user_not_found' => l10n.invitationFailedUserNotFound,
-      'self_request' => l10n.invitationFailedSelf,
-      'blocked' => l10n.invitationFailedBlocked,
-      'already_friends' => l10n.invitationFailedAlreadyFriends,
-      'duplicate_request' => l10n.invitationFailedDuplicate,
-      'invalid_payload' => l10n.invitationFailedInvalidPayload,
-      'not_friends' => l10n.invitationFailedNotFriends,
-      'accept_failed' => l10n.invitationAcceptFailed,
-      'reject_failed' => l10n.invitationDeclineFailed,
-      _ => switch (failure.action) {
-        InvitationAction.send => l10n.invitationSendFailed,
-        InvitationAction.accept => l10n.invitationAcceptFailed,
-        InvitationAction.decline => l10n.invitationDeclineFailed,
-        InvitationAction.ensureChat => l10n.invitationChatSetupFailed,
-      },
+    return switch (failure.action) {
+      InvitationAction.send => l10n.invitationSendFailed,
+      InvitationAction.accept => l10n.invitationAcceptFailed,
+      InvitationAction.decline => l10n.invitationDeclineFailed,
     };
   }
 
@@ -138,7 +117,6 @@ class _InvitationsScreenState extends State<InvitationsScreen> {
         friends.rejectFriendRequest(request.id);
         break;
       case InvitationAction.send:
-      case InvitationAction.ensureChat:
         return;
     }
   }
@@ -182,20 +160,18 @@ class _InvitationsScreenState extends State<InvitationsScreen> {
               child: Center(
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 560),
-                  child: friends.hasLoadedInvitationsOnce
-                      ? _InvitationEntrance(
-                          child: _InvitationContent(
-                            handleController: _handleController,
-                            searching: _searching,
-                            actingRequestActions: _actingRequestActions,
-                            friends: friends,
-                            expandedRequestId: expandedRequestId,
-                            onToggleRequest: _toggleRequest,
-                            onSearch: _search,
-                            onActOnIncoming: _actOnIncoming,
-                          ),
-                        )
-                      : const _InvitationSkeleton(),
+                  child: _InvitationEntrance(
+                    child: _InvitationContent(
+                      handleController: _handleController,
+                      searching: _searching,
+                      actingRequestActions: _actingRequestActions,
+                      friends: friends,
+                      expandedRequestId: expandedRequestId,
+                      onToggleRequest: _toggleRequest,
+                      onSearch: _search,
+                      onActOnIncoming: _actOnIncoming,
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -435,13 +411,9 @@ class _InvitationContent extends StatelessWidget {
     return InvitationRow(
       key: ValueKey(outcome.peerUserId),
       peer: outcome.peer,
-      state: outcome.chatReady
-          ? InvitationRowState.acceptedReady
-          : InvitationRowState.acceptedNeedsChat,
-      retrying: outcome.retrying,
+      state: InvitationRowState.acceptedReady,
       onOpenChat: () => Navigator.of(context).pop(outcome.peerUserId),
       onDone: () => friends.clearAcceptedOutcome(outcome.peerUserId),
-      onCreateChat: () => friends.ensureInvitationChat(outcome.peerUserId),
     );
   }
 }
@@ -650,72 +622,9 @@ class _InvitationSection extends StatelessWidget {
   }
 }
 
-class _InvitationSkeleton extends StatelessWidget {
-  const _InvitationSkeleton();
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = RpgTheme.isDark(context);
-    final boneColor = Theme.of(
-      context,
-    ).colorScheme.onSurface.withValues(alpha: isDark ? 0.08 : 0.06);
-    final effect = MediaQuery.disableAnimationsOf(context)
-        ? SolidColorEffect(color: boneColor)
-        : ShimmerEffect(
-            baseColor: boneColor,
-            highlightColor: boneColor.withValues(alpha: boneColor.a + 0.04),
-            duration: const Duration(milliseconds: 1100),
-          );
-
-    return Skeletonizer(
-      enabled: true,
-      effect: effect,
-      child: Column(
-        children: [
-          const _InvitationSkeletonTile(tall: true),
-          const SizedBox(height: 28),
-          const _InvitationSkeletonTile(),
-          const SizedBox(height: 8),
-          const _InvitationSkeletonTile(),
-          const SizedBox(height: 28),
-          const _InvitationSkeletonTile(),
-          const SizedBox(height: 8),
-          const _InvitationSkeletonTile(),
-        ],
-      ),
-    );
-  }
-}
-
-class _InvitationSkeletonTile extends StatelessWidget {
-  final bool tall;
-
-  const _InvitationSkeletonTile({this.tall = false});
-
-  @override
-  Widget build(BuildContext context) {
-    return GlassSurface(
-      borderRadius: BorderRadius.circular(16),
-      forceOpaque: true,
-      shadow: false,
-      padding: const EdgeInsets.all(12),
-      child: SizedBox(
-        height: tall ? 132 : 52,
-        child: Row(
-          children: [
-            const Bone.circle(size: 44),
-            const SizedBox(width: 12),
-            const Expanded(child: Bone.text(width: 160, fontSize: 14)),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// One-shot entrance for the loaded inbox: a 240 ms fade + 12 px rise,
-/// played once when the skeleton hands over, never on provider rebuilds
-/// (the tween's end value is stable, so rebuilds don't replay it).
+/// One-shot entrance for the inbox: a 240 ms fade + 12 px rise, played once
+/// when the screen opens, never on provider rebuilds (the tween's end value is
+/// stable, so rebuilds don't replay it).
 class _InvitationEntrance extends StatelessWidget {
   final Widget child;
 

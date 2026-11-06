@@ -156,7 +156,6 @@ class _VideoFullscreenViewState extends State<_VideoFullscreenView>
   Future<void> _load() async {
     final session = VideoPlaybackSession(
       message: widget.message,
-      token: context.read<AuthProvider>().token ?? '',
       box: boxMediaSourceFor(context, widget.message.mediaUrl),
     );
     _session = session;

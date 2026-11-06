@@ -13,7 +13,6 @@ enum InvitationRowState {
   outbound,
   acting,
   acceptedReady,
-  acceptedNeedsChat,
 }
 
 /// One opaque relationship row for all invitation lifecycle states.
@@ -21,24 +20,20 @@ class InvitationRow extends StatelessWidget {
   final UserModel peer;
   final InvitationRowState state;
   final InvitationAction? actingAction;
-  final bool retrying;
   final VoidCallback? onAccept;
   final VoidCallback? onDecline;
   final VoidCallback? onOpenChat;
   final VoidCallback? onDone;
-  final VoidCallback? onCreateChat;
 
   const InvitationRow({
     super.key,
     required this.peer,
     required this.state,
     this.actingAction,
-    this.retrying = false,
     this.onAccept,
     this.onDecline,
     this.onOpenChat,
     this.onDone,
-    this.onCreateChat,
   });
 
   @override
@@ -125,8 +120,6 @@ class InvitationRow extends StatelessWidget {
     InvitationRowState.acceptedReady => l10n.invitationSemanticAcceptedReady(
       peer.displayHandle,
     ),
-    InvitationRowState.acceptedNeedsChat =>
-      l10n.invitationSemanticAcceptedNotReady(peer.displayHandle),
   };
 
   Widget _stateContent(
@@ -134,7 +127,6 @@ class InvitationRow extends StatelessWidget {
     AppLocalizations l10n,
     FireplaceColors colors,
   ) {
-    final colorScheme = Theme.of(context).colorScheme;
     return switch (state) {
       InvitationRowState.inbound || InvitationRowState.acting => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -185,26 +177,6 @@ class InvitationRow extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           _acceptedReadyActions(context, l10n),
-        ],
-      ),
-      InvitationRowState.acceptedNeedsChat => Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            l10n.invitationAccepted,
-            style: RpgTheme.bodyFont(fontSize: 12, color: colors.mutedText),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            l10n.invitationChatNeedsRetry,
-            style: RpgTheme.bodyFont(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: colorScheme.onSurface,
-            ),
-          ),
-          const SizedBox(height: 10),
-          _acceptedNeedsChatActions(context, l10n),
         ],
       ),
     };
@@ -271,34 +243,6 @@ class InvitationRow extends StatelessWidget {
     );
   }
 
-  Widget _acceptedNeedsChatActions(
-    BuildContext context,
-    AppLocalizations l10n,
-  ) {
-    return Row(
-      children: [
-        Expanded(
-          child: ElevatedButton(
-            onPressed: retrying ? null : onCreateChat,
-            style: _denseAction,
-            child: _buttonLabel(
-              l10n.invitationCreateChat,
-              showProgress: retrying,
-            ),
-          ),
-        ),
-        const SizedBox(width: 8),
-        TextButton(
-          onPressed: onDone,
-          style: TextButton.styleFrom(
-            foregroundColor: FireplaceColors.of(context).mutedText,
-          ),
-          child: Text(l10n.invitationDone),
-        ),
-      ],
-    );
-  }
-
   Widget _buttonLabel(String label, {required bool showProgress}) {
     if (!showProgress) return Text(label);
     return const SizedBox(
@@ -337,8 +281,7 @@ class _ForgeHexAvatarState extends State<_ForgeHexAvatar>
       state == InvitationRowState.inbound || state == InvitationRowState.acting;
 
   static bool _isAccepted(InvitationRowState state) =>
-      state == InvitationRowState.acceptedReady ||
-      state == InvitationRowState.acceptedNeedsChat;
+      state == InvitationRowState.acceptedReady;
 
   @override
   void didUpdateWidget(_ForgeHexAvatar oldWidget) {

@@ -2,10 +2,6 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { Server, Socket } from 'socket.io';
-import { RefreshTokensService } from '../../auth/refresh-tokens.service';
-import { deleteNotifiersOnPushTokens } from '../../box/box-notifier-teardown';
-import { FcmTokensService } from '../../fcm-tokens/fcm-tokens.service';
-import { WebPushSubscriptionsService } from '../../web-push-subscriptions/web-push-subscriptions.service';
 import {
   DeviceListRejectedError,
   DeviceListService,
@@ -72,14 +68,17 @@ type RevocationRefusal =
  * `revokeDevice`).
  *
  * ONE transaction does the durable half — the DAK-signed list mutation, the
- * `revokedAt` stamp, that device's refresh sessions, and that device's key
- * material — so there is no window where the list says revoked while the
- * device still holds a session, or vice versa. The list mutation reuses T2's
- * gate (`applySignedListUpdate`): the server never mints a list version, and a
- * revocation is just a mutation whose canonical bytes carry `revokedAt`.
+ * `revokedAt` stamp and that device's key material — so there is no window
+ * where the list says revoked while the device still holds a working session
+ * (every gate denies on the stamp: the socket, the guarded routes and
+ * `/auth/refresh`), or vice versa. Its refresh row is KEPT on purpose
+ * (decision 130, E130a): a closed device can only ask `/auth/refresh` "was I
+ * revoked?", and the row is what that answers from. The list mutation reuses
+ * T2's gate (`applySignedListUpdate`): the server never mints a list version,
+ * and a revocation is just a mutation whose canonical bytes carry `revokedAt`.
  *
- * Everything that CANNOT be transactional (push rows in other modules, the
- * in-memory provisioning stages, socket kicks) runs strictly AFTER the commit,
+ * Everything that CANNOT be transactional (the in-memory provisioning stages,
+ * socket kicks) runs strictly AFTER the commit,
  * because each is only safe once the durable decision is final: kicking before
  * the commit would drop a session for a revocation that then rolled back.
  *
@@ -97,10 +96,7 @@ export class ChatDeviceRevocationService {
     private readonly deviceListService: DeviceListService,
     private readonly devicesService: DevicesService,
     private readonly keyBundlesService: KeyBundlesService,
-    private readonly refreshTokensService: RefreshTokensService,
     private readonly stages: ProvisioningStagesService,
-    private readonly fcmTokensService: FcmTokensService,
-    private readonly webPushSubscriptionsService: WebPushSubscriptionsService,
   ) {}
 
   /**
@@ -210,11 +206,6 @@ export class ChatDeviceRevocationService {
             },
             manager,
           );
-          await this.refreshTokensService.revokeForDevice(
-            userId,
-            dto.deviceId,
-            manager,
-          );
           await this.keyBundlesService.purgeDeviceMaterial(
             userId,
             dto.deviceId,
@@ -243,48 +234,6 @@ export class ChatDeviceRevocationService {
 
       // ---- post-commit: the revocation is now durable ----
 
-      // Issue #208 (owner, 2026-11-04): the box wakes a device through the
-      // push token its notifiers were registered with, and a friend whose
-      // list still names the revoked device keeps filling that device's old
-      // queues until it next opens — each send a "new message" on a closed
-      // phone. The device's notifiers go with its tokens
-      // ([deleteNotifiersOnPushTokens]), read BEFORE the token rows below
-      // are deleted.
-      try {
-        const tokens = await this.fcmTokensService.tokensForDevice(
-          userId,
-          dto.deviceId,
-        );
-        const endpoints =
-          await this.webPushSubscriptionsService.endpointsForDevice(
-            userId,
-            dto.deviceId,
-          );
-        await deleteNotifiersOnPushTokens(this.dataSource, tokens, endpoints);
-      } catch (error) {
-        this.logger.error(
-          `[revoke] box notifier teardown FAILED deviceId=${dto.deviceId}: ${
-            error instanceof Error ? error.name : 'unknown'
-          }`,
-        );
-      }
-      // Push rows live in other modules and cannot join the transaction. A
-      // failure here means the revoked device keeps receiving notifications,
-      // so it is loud, but it must not turn a committed revocation into an
-      // error answer the client would retry.
-      try {
-        await this.fcmTokensService.removeForDevice(userId, dto.deviceId);
-        await this.webPushSubscriptionsService.removeForDevice(
-          userId,
-          dto.deviceId,
-        );
-      } catch (error) {
-        this.logger.error(
-          `[revoke] push teardown FAILED deviceId=${dto.deviceId}: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-      }
 
       // A security action never waits on a stuck link (§5.1 + amendment
       // (xxv)): every pending stage of the account is now stale by

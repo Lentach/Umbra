@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 
@@ -31,8 +30,8 @@ import '../utils/boot_markers.dart';
 
 /// E114m: the shortest gap between two lookups of one friend's list that a
 /// PEER-driven event buys (a rebuild request, a newer-list claim), per process.
-/// One minute is the cooldown amendment (xvi) already gives the in-band
-/// refetch (`SenderListInfoRefreshLimiter`). EVERY lookup sets the floor the
+/// One minute is the cooldown amendment (xvi) gave the in-band refetch.
+/// EVERY lookup sets the floor the
 /// next one meets, the first of the process and a carried one included
 /// (E114o). A person's act (the verify dialog, acknowledging a key) is paced
 /// by the person and meets neither floor nor cap.
@@ -151,12 +150,6 @@ class EncryptionProvider extends ChangeNotifier {
   /// Called after E2E init/re-upload completes so [MessagingProvider] can retry history decrypt.
   void Function()? onE2EReady;
 
-  /// Called when [ownIdentitySince] moves. Set by
-  /// `ConnectionProvider.setProviders`, which forwards it to the
-  /// `MessagingProvider` whose visible rows depend on it, so an open thread
-  /// re-filters when the audit row lands after its history (amendment (lxxxvi)).
-  void Function()? onOwnIdentitySinceChanged;
-
   /// Called whenever a verified device list is dropped
   /// ([invalidateDeviceList]: a rebuild request, an adopted identity, the
   /// own `deviceListChanged`, a restore, a decrypt-time recheck). Set by
@@ -165,7 +158,7 @@ class EncryptionProvider extends ChangeNotifier {
   void Function(int userId)? onDeviceListInvalidated;
 
   /// Called with the box attachment urls (`box:<id>`) of records a purge
-  /// destroyed — timer, delete-for-me, clear history, reconcile: every path
+  /// destroyed — timer, delete-for-me, clear history: every path
   /// ends in [purgeLocalPlaintext]. The record held the only key, so this
   /// device's copy goes too (item 3 / media wiring, decision 40). Set by
   /// `MessagingProvider`, which owns the copies.
@@ -260,11 +253,6 @@ class EncryptionProvider extends ChangeNotifier {
   /// account's key bundle by ANOTHER session (Phase 0a takeover alarm), or
   /// null. Drives the account-level notice; persisted until dismissed.
   String? get ownIdentityReplacedAt => _encryptionService.ownIdentityReplacedAt;
-
-  /// Server instant at which the key this install holds became the account's
-  /// identity, or null (amendment (lxxxvi)). Unreadable rows stamped before it
-  /// can never be read here; `MessagingProvider.messages` hides them.
-  DateTime? get ownIdentitySince => _encryptionService.ownIdentitySince;
 
   /// The pending pre-key fetch completers, keyed by (userId, deviceId).
   Map<(int, int), Completer<Map<String, dynamic>>> get pendingPreKeyFetches =>
@@ -651,19 +639,12 @@ class EncryptionProvider extends ChangeNotifier {
   /// Per-account verified device lists (I7-chain-checked, rollback-pinned).
   final DeviceListCache _deviceListCache = DeviceListCache();
 
-  /// Pending `getDeviceList` answers, keyed by userId. The completer carries
-  /// the raw `authorization` map (null = non-enrolled) — verification happens
-  /// in [DeviceListCache.adopt], never on the server's bare word.
+  /// Pending `getDeviceList` answers, keyed by userId — only the caller's own.
+  /// The completer carries the raw `authorization` map (null = non-enrolled) —
+  /// verification happens in [DeviceListCache.adopt], never on the server's
+  /// bare word.
   final Map<int, Completer<Map<String, dynamic>?>> _pendingDeviceListFetches =
       {};
-
-  /// Users whose BATCHED lookup has not gone out yet ([getVerifiedDeviceList]
-  /// `batched`): every one started in the same turn leaves as ONE
-  /// `getDeviceLists` frame (metadata-privacy item 5, E20a).
-  final List<int> _deviceListBatch = [];
-
-  /// The most users one `getDeviceLists` frame may name (the server's bound).
-  static const int deviceListBatchMax = 256;
 
   /// Which device THIS session is, as the server reported it on `socketReady`
   /// (spec §5.3). Defaults to 1 — a token predating the claim, and every
@@ -953,23 +934,19 @@ class EncryptionProvider extends ChangeNotifier {
     onDeviceListInvalidated?.call(userId);
   }
 
-  /// The verified device list for [userId] — cached, else fetched via
-  /// `getDeviceList`, I7-verified BEFORE anything is trusted, and cached.
+  /// The verified device list for [userId] — cached, else fetched
+  /// (`getDeviceList` for the caller's own id, one handle lookup for a peer,
+  /// [_fetchDeviceListAnswer]), I7-verified BEFORE anything is trusted, and
+  /// cached.
   ///
-  /// Fail-closed (falsification 9): a timeout, a missing TOFU identity, or a
-  /// failed chain THROWS. The caller must fail the send — an enrolled peer
-  /// must never silently degrade to device 1. The only single-device answer
-  /// is the server's explicit `authorization: null` (non-enrolled account).
-  ///
-  /// [batched]: the lookup waits for the end of this turn and leaves with
-  /// every other batched lookup started in it, as ONE `getDeviceLists`
-  /// frame. The box's connect-time lookups use it, so covering every friend
-  /// costs one throttled frame per connect, not one per friend (E20a). The
-  /// answer is the same `deviceList` event either way.
+  /// Fail-closed (falsification 9): a timeout, a missing TOFU identity, a peer
+  /// that cannot be looked up, or a failed chain THROWS. The caller must fail
+  /// the send — an enrolled peer must never silently degrade to device 1. The
+  /// only single-device answer is the server's explicit `authorization: null`
+  /// (non-enrolled account).
   Future<VerifiedDeviceList> getVerifiedDeviceList(
     int userId, {
     bool forceRefresh = false,
-    bool batched = false,
     Duration timeout = const Duration(seconds: 10),
   }) async {
     if (!_e2eInitialized || _currentUserId == null) {
@@ -979,22 +956,9 @@ class EncryptionProvider extends ChangeNotifier {
       final held = _deviceListCache.cached(userId);
       if (held != null) return held;
     }
-    final answer = await _fetchDeviceListAnswer(
-      userId,
-      timeout,
-      batched: batched,
-    );
+    final answer = await _fetchDeviceListAnswer(userId, timeout);
     return _adoptDeviceListAnswer(userId, answer);
   }
-
-  /// Verifies and adopts a list delivered OUT of the fetch round trip — the
-  /// `deviceListStale` refusal payload (spec §12 (vi)). Same chain, same
-  /// fail-closed contract: an invalid chain throws and caches nothing
-  /// (falsification 4 — never the server's bare word).
-  Future<VerifiedDeviceList> adoptDeliveredDeviceList(
-    int userId,
-    Map<String, dynamic>? authorization,
-  ) => _adoptDeviceListAnswer(userId, authorization);
 
   /// Accounts whose carried list could not be judged without the server and
   /// already cost this process its one lookup (E50a).
@@ -1385,9 +1349,8 @@ class EncryptionProvider extends ChangeNotifier {
       // OFFLINE during a §6.2 recovery ended up permanently and silently
       // locked out. Their list cannot verify against the anchor they still
       // hold, the accept gate withholds the recovering device's ciphertext
-      // before Signal can stage a candidate, and the live `peerIdentityChanged`
-      // never reached them — so the warning set that gates BOTH recovery doors
-      // stayed empty.
+      // before Signal can stage a candidate, so the warning set that gates
+      // BOTH recovery doors stayed empty.
       //
       // ALLOW-LIST of exactly two, never a deny-list: raising on every reason
       // would let a server flag every contact as identity-changed by answering
@@ -1420,23 +1383,24 @@ class EncryptionProvider extends ChangeNotifier {
     }
   }
 
-  /// One in-flight `getDeviceList` per userId; concurrent callers share it.
-  /// A friend ([listIsByHandle]) is never named to `getDeviceList`: its list
-  /// comes from one search of its handle ([lookupBoxPeerList]) — each spends a
-  /// one-time pre-key of every device of the peer and names the pair (E15h) —
-  /// so it is bounded: the first per process, then one per event that owes it,
-  /// floored and capped ([_takeLookup], E114m), and a lookup nobody answered is
-  /// asked again a few times in a row (E114p). Past that the fetch throws
-  /// `lookup spent` and the caller keeps what it holds.
+  /// One in-flight list answer per userId; concurrent callers share it. Only
+  /// the caller's OWN id is ever named to `getDeviceList`: the server answers
+  /// no other id. Any other account comes from one search of its handle
+  /// ([lookupBoxPeerList]) — each spends a one-time pre-key of every device of
+  /// the peer and names the pair (E15h) — so it is bounded: the first per
+  /// process, then one per event that owes it, floored and capped
+  /// ([_takeLookup], E114m), and a lookup nobody answered is asked again a few
+  /// times in a row (E114p). Past that the fetch throws `lookup spent` and the
+  /// caller keeps what it holds. A peer that cannot be looked up by handle
+  /// ([listIsByHandle] false, nothing wired) fails closed the same way.
   Future<Map<String, dynamic>?> _fetchDeviceListAnswer(
     int userId,
-    Duration timeout, {
-    bool batched = false,
-  }) {
-    if (listIsByHandle(userId)) {
+    Duration timeout,
+  ) {
+    if (userId != _currentUserId) {
       final lookup = lookupBoxPeerList;
-      if (lookup == null) {
-        return Future.error(StateError('box peer $userId: no lookup wired'));
+      if (lookup == null || !listIsByHandle(userId)) {
+        return Future.error(StateError('peer $userId: no handle lookup'));
       }
       final pending = _boxListLookups[userId];
       if (pending != null) {
@@ -1473,12 +1437,7 @@ class EncryptionProvider extends ChangeNotifier {
     final completer = Completer<Map<String, dynamic>?>();
     _pendingDeviceListFetches[userId] = completer;
     _e2eFlowLog('DEVICE_LIST_FETCH_EMIT', {'userId': userId});
-    if (batched) {
-      if (_deviceListBatch.isEmpty) scheduleMicrotask(_flushDeviceListBatch);
-      _deviceListBatch.add(userId);
-    } else {
-      _emit?.call('getDeviceList', {'userId': userId});
-    }
+    _emit?.call('getDeviceList', {'userId': userId});
     // Fail closed: an unanswered fetch means "cannot verify", never "no
     // devices" (I5). The caller surfaces a send failure — every caller,
     // including each that joined this fetch ([_expireShared]).
@@ -1498,29 +1457,6 @@ class EncryptionProvider extends ChangeNotifier {
 
   /// Box-only peers whose one lookup of this process is spent.
   final Set<int> _boxListLookupSpent = {};
-
-  /// Sends this turn's batched lookups: one user as the plain
-  /// `getDeviceList`, more as `getDeviceLists` frames of at most
-  /// [deviceListBatchMax]. The server answers each entitled user with its own
-  /// `deviceList` and stays silent on the rest, exactly as for one.
-  void _flushDeviceListBatch() {
-    final users = List.of(_deviceListBatch);
-    _deviceListBatch.clear();
-    final emit = _emit;
-    if (emit == null || users.isEmpty) return;
-    if (users.length == 1) {
-      emit('getDeviceList', {'userId': users.single});
-      return;
-    }
-    for (var i = 0; i < users.length; i += deviceListBatchMax) {
-      emit('getDeviceLists', {
-        'userIds': users.sublist(
-          i,
-          math.min(i + deviceListBatchMax, users.length),
-        ),
-      });
-    }
-  }
 
   /// Handler for the `deviceList` server event (answer to `getDeviceList`).
   /// Runs alongside the provisioning sink's copy of the same event; each
@@ -1566,19 +1502,6 @@ class EncryptionProvider extends ChangeNotifier {
     );
   }
 
-  /// Delete the local Signal session with [peerUserId] (sender or recipient).
-  ///
-  /// DANGER: this wipes the current AND archived ratchet states, making every
-  /// message the peer already encrypted with them permanently undecryptable.
-  /// The inbound decrypt-failure path must never call this (see
-  /// `_retryDecryptForPeers`); session replacement on send goes through
-  /// [ensureSession]'s atomic rebuild instead.
-  Future<void> deleteSessionWithPeer(int peerUserId) async {
-    if (!_e2eInitialized) return;
-    _e2eFlowLog('SESSION_DELETE', {'peerId': peerUserId});
-    await _encryptionService.deleteSession(peerUserId);
-  }
-
   /// Get a previously cached decrypted message by message ID.
   MessageModel? getCachedDecryption(int messageId) {
     return _decryptedContentCache[messageId];
@@ -1587,20 +1510,6 @@ class EncryptionProvider extends ChangeNotifier {
   /// Cache a decrypted message by its ID.
   void cacheDecryption(int messageId, MessageModel msg) {
     _decryptedContentCache[messageId] = msg;
-  }
-
-  /// Drop the in-RAM decrypted entry for [messageId] so the next decrypt pass
-  /// re-decrypts (used when a message is edited and its ciphertext changes).
-  ///
-  /// Also clears the decrypt-ledger entry, and that is load-bearing: an edit
-  /// puts NEW ciphertext under an id the ledger has already seen. Leaving the
-  /// entry would make [wasDecryptedBefore] veto the decrypt of a payload that
-  /// has genuinely never been decrypted, and the edit would render "no longer
-  /// stored" forever.
-  void invalidateDecryptionCache(int messageId) {
-    _decryptedContentCache.remove(messageId);
-    _decryptedLedger.remove(messageId);
-    _encryptionService.forgetDecrypted(messageId).ignore();
   }
 
   /// Persist decrypted message content to local cache.
@@ -1624,12 +1533,6 @@ class EncryptionProvider extends ChangeNotifier {
       disappearAfterSeconds: disappearAfterSeconds,
       wire: wire,
     );
-  }
-
-  /// Keep a stored record's expiry deadline authoritative after the server
-  /// assigns one. Delegates to [EncryptionService.stampRecordExpiry].
-  Future<void> stampRecordExpiry(int messageId, DateTime expiresAt) async {
-    await _encryptionService.stampRecordExpiry(messageId, expiresAt);
   }
 
   /// True when [messageId]'s plaintext was destroyed by RETENTION while the
@@ -1694,38 +1597,16 @@ class EncryptionProvider extends ChangeNotifier {
     );
   }
 
-  /// Record that [messageId] is known-lost so later passes short-circuit
-  /// without re-deriving it, and the state survives a restart.
-  Future<void> retireLostMessage(int messageId) async {
-    _retiredIds.add(messageId);
-    await _encryptionService.markRetired(<int>[messageId]);
-  }
-
-  /// Record one terminal-duplicate observation (design
-  /// `terminal-duplicate-retirement.md` §3.3). Returns the count after this
-  /// call, or null when nothing was recorded — callers treat null as "no
-  /// observation", never as progress.
-  Future<int?> noteTerminalDuplicate(int messageId) =>
-      _encryptionService.noteTerminalDuplicate(messageId);
-
-  /// Drop [messageId]'s terminal-duplicate counter — called only on a DEFINITE
-  /// readable source (never on an undetermined answer).
-  Future<void> clearTerminalDuplicate(int messageId) =>
-      _encryptionService.clearTerminalDuplicate(messageId);
-
   /// Destroy the local plaintext for every message stored under
   /// [conversationIds] — not only the rows currently loaded in memory.
   Future<PlaintextPurgeResult> purgeConversations(
-    Iterable<int> conversationIds, {
-    Iterable<String> ciphertexts = const <String>[],
-  }) async {
+    Iterable<int> conversationIds,
+  ) async {
     final ids = await _encryptionService.messageIdsForConversations(
       conversationIds,
     );
-    if (ids.isEmpty && ciphertexts.isEmpty) {
-      return const PlaintextPurgeResult.empty();
-    }
-    return purgeLocalPlaintext(ids, ciphertexts: ciphertexts);
+    if (ids.isEmpty) return const PlaintextPurgeResult.empty();
+    return purgeLocalPlaintext(ids);
   }
 
   /// True when the previous sweep found nothing to destroy. The sweep ticks
@@ -1792,140 +1673,6 @@ class EncryptionProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// How long a COMPLETED reconciliation pass suppresses the next one.
-  ///
-  /// Not a one-off migration: `messageDeleted` is a live socket event, so a
-  /// message the peer deletes while this device is offline leaves no trace to
-  /// react to — the row is simply absent from history afterwards. Asking the
-  /// server is the only thing that ever notices. It repeats for that reason,
-  /// but not on every `socketReady`: a flaky connection reconnects many times
-  /// a minute and this costs real round trips.
-  static const Duration reconcileInterval = Duration(hours: 6);
-
-  /// Ids per request. Matches the server's own per-batch cap.
-  static const int reconcileBatchSize = 500;
-
-  /// Destroy the local plaintext of every stored message the server no longer
-  /// serves this account.
-  ///
-  /// This is what makes "deleted messages are gone" true for messages that
-  /// were already deleted or expired when this feature shipped. Delete and
-  /// expiry purge as they happen, but only for events this device saw: a
-  /// record orphaned earlier carries none of the metadata
-  /// [destroyableMessageIds] matches on, and its server row is gone, so
-  /// nothing local would ever come back for it.
-  ///
-  /// [askServer] answers "of these ids, which do you still serve me". It MUST
-  /// return null for any failure — timeout, dropped socket, malformed reply.
-  /// Three properties make this safe to act on:
-  ///
-  ///  * A batch with no answer purges nothing. Silence must never read as
-  ///    "the server has none of these", because an empty answer is a real and
-  ///    destructive instruction (a fully cleared history).
-  ///  * The local id set is snapshotted BEFORE the first request, so a message
-  ///    that arrives mid-pass is not in any batch and cannot be mistaken for
-  ///    one the server dropped.
-  ///  * The answer is authoritative and global. Nothing is inferred from what
-  ///    a history PAGE contained, which would read "older than this page" as
-  ///    "deleted" and destroy the archive of every long conversation.
-  Future<void> reconcileStoredPlaintext(
-    Future<Set<int>?> Function(Set<int> batch) askServer, {
-    bool force = false,
-  }) async {
-    // The interval below cannot hold on its own: the stamp is written only
-    // after the LAST batch is answered, so a reconnect storm would start a
-    // second pass while the first is still waiting on the network and both
-    // would sail past the due check. Purging twice is harmless; paying for
-    // several concurrent passes is exactly what the interval exists to avoid.
-    if (_reconcileInFlight) return;
-    _reconcileInFlight = true;
-    try {
-      await _reconcileStoredPlaintext(askServer, force: force);
-    } finally {
-      _reconcileInFlight = false;
-    }
-  }
-
-  bool _reconcileInFlight = false;
-
-  Future<void> _reconcileStoredPlaintext(
-    Future<Set<int>?> Function(Set<int> batch) askServer, {
-    required bool force,
-  }) async {
-    final userId = _encryptionService.activeUserId;
-    if (userId == null) return;
-    final nowMs = DateTime.now().millisecondsSinceEpoch;
-    if (!force) {
-      final lastMs = await _encryptionService.lastReconcileAtMs();
-      final elapsed = lastMs == null ? null : nowMs - lastMs;
-      if (elapsed != null &&
-          elapsed >= 0 &&
-          elapsed < reconcileInterval.inMilliseconds) {
-        return;
-      }
-    }
-
-    // A box message (a LOCAL id, decision 14) has no server row: the server
-    // would answer "not served" for it, and that answer would destroy the
-    // only copy. Only server ids are the server's to rule on.
-    final stored = (await _encryptionService.storedMessageIds())
-        .where(isServerMessageId)
-        .toSet();
-    if (stored.isEmpty) {
-      await _encryptionService.markReconciledAt(nowMs);
-      return;
-    }
-
-    final batch = <int>{};
-    final orphans = <int>{};
-    var answeredAll = true;
-
-    Future<bool> ask() async {
-      final served = await askServer(Set<int>.unmodifiable(batch));
-      if (served == null) return false;
-      orphans.addAll(batch.difference(served));
-      batch.clear();
-      return true;
-    }
-
-    for (final id in stored) {
-      batch.add(id);
-      if (batch.length < reconcileBatchSize) continue;
-      if (!await ask()) {
-        answeredAll = false;
-        break;
-      }
-    }
-    if (answeredAll && batch.isNotEmpty && !await ask()) {
-      answeredAll = false;
-    }
-
-    // The account can change while the round trips are in flight (logout, then
-    // a login as the chat partner). Storage keys are namespaced per user, so
-    // purging ids collected under one account against another's namespace
-    // could destroy the partner's copy of a shared message id.
-    if (_encryptionService.activeUserId != userId) return;
-
-    if (orphans.isNotEmpty) {
-      await purgeLocalPlaintext(orphans);
-      // The stored copies are gone; a live session may still be HOLDING these
-      // rows in memory with content it decrypted earlier, because it missed
-      // the live `messageDeleted` while offline and the history merge never
-      // prunes. Hand the ids to the owner of the message list.
-      onStoredPlaintextOrphaned?.call(Set<int>.unmodifiable(orphans));
-      notifyListeners();
-    }
-    _e2eFlowLog('PLAINTEXT_RECONCILED', {
-      'stored': stored.length,
-      'orphaned': orphans.length,
-      'complete': answeredAll,
-    });
-
-    // Only a pass that heard back about EVERY batch may throttle the next one.
-    // A partial pass leaves residue it has not proven anything about.
-    if (answeredAll) await _encryptionService.markReconciledAt(nowMs);
-  }
-
   /// Retrieve persisted decrypted message content, or null if not cached.
   /// Delegates to [EncryptionService.getDecryptedContent].
   Future<Map<String, dynamic>?> getDecryptedContent(int messageId) async {
@@ -1943,16 +1690,6 @@ class EncryptionProvider extends ChangeNotifier {
   /// `_decrypted_` record is NOT proof of loss while this answers true.
   Future<bool?> rawReplayExists(int messageId) =>
       _encryptionService.rawReplayExists(messageId);
-
-  /// Batched persisted-plaintext lookup for a bounded id set (one cross-engine
-  /// reload for the whole set). Delegates to
-  /// [EncryptionService.getDecryptedContentMany] — see the safety note there
-  /// before using it anywhere other than a history pass.
-  Future<Map<int, Map<String, dynamic>>> getDecryptedContentMany(
-    Iterable<int> messageIds,
-  ) async {
-    return _encryptionService.getDecryptedContentMany(messageIds);
-  }
 
   /// Delegates to [EncryptionService.wireHeldByOther] (box dedup).
   Future<bool?> wireHeldByOther(WireKey wire, int messageId) =>
@@ -2037,28 +1774,6 @@ class EncryptionProvider extends ChangeNotifier {
   Future<void> removeRawReplay(int messageId) =>
       _encryptionService.removeRawReplay(messageId);
 
-  /// Record an emitted send for lost-ack reconciliation (keyed by the exact
-  /// emitted ciphertext). Delegates to [EncryptionService.savePendingSendRecord].
-  Future<void> savePendingSendRecord(
-    String ciphertext,
-    Map<String, dynamic> data,
-  ) async {
-    await _encryptionService.savePendingSendRecord(ciphertext, data);
-  }
-
-  /// Read a pending-send record without consuming it (reconcile uses
-  /// peek → persist → verify → take). Delegates to
-  /// [EncryptionService.peekPendingSendRecord].
-  Future<Map<String, dynamic>?> peekPendingSendRecord(String ciphertext) async {
-    return _encryptionService.peekPendingSendRecord(ciphertext);
-  }
-
-  /// Consume the pending-send record matching [ciphertext] exactly, or null.
-  /// Delegates to [EncryptionService.takePendingSendRecord].
-  Future<Map<String, dynamic>?> takePendingSendRecord(String ciphertext) async {
-    return _encryptionService.takePendingSendRecord(ciphertext);
-  }
-
   /// Destroy every locally persisted plaintext record for this account.
   ///
   /// IRREVERSIBLE — see [EncryptionService.clearDecryptedContentCache]. Signal
@@ -2089,28 +1804,21 @@ class EncryptionProvider extends ChangeNotifier {
     return result;
   }
 
-  /// Destroy the persisted plaintext for [messageIds] and the outgoing
-  /// pending-send records for [ciphertexts].
+  /// Destroy the persisted plaintext for [messageIds].
   ///
   /// IRREVERSIBLE — see [EncryptionService.removeDecryptedContent]. The RAM
   /// cache is dropped FIRST so no in-flight reader can re-persist a purged id
   /// from memory while the disk work is still running.
-  ///
-  /// [ciphertexts] exists because the sender's own outgoing plaintext is keyed
-  /// by ciphertext rather than by message id, so an id-only purge would leave
-  /// it readable. Callers should pass `MessageModel.encryptedContent` for
-  /// every row they purge, captured BEFORE the row leaves local state.
   Future<PlaintextPurgeResult> purgeLocalPlaintext(
-    Iterable<int> messageIds, {
-    Iterable<String> ciphertexts = const <String>[],
-  }) async {
+    Iterable<int> messageIds,
+  ) async {
     final ids = messageIds.toSet();
-    final cts = ciphertexts.toSet();
+    const cts = <String>{};
 
     // Write the obligation down FIRST. Everything below can be interrupted by
     // a tab close or a refused commit, and once the row is gone from memory
-    // and from the server nothing else would ever come looking for its
-    // residue. The backlog is what makes this at-least-once.
+    // nothing else would ever come looking for its residue. The backlog is
+    // what makes this at-least-once.
     final recorded = await _encryptionService.enqueuePurge(ids, cts);
 
     final result = await _runPurge(ids, cts);
@@ -2139,6 +1847,9 @@ class EncryptionProvider extends ChangeNotifier {
     // obligations enqueued by the pre-0.1.4 fallback-expiry sweep must not be
     // replayed against records the fixed sweep refuses to condemn.
     await _encryptionService.amnestyUnstampedPurgeObligations();
+    // Nothing writes pending-send records any more; the ones an older build
+    // left hold outgoing plaintext, so the old 72 h TTL still applies to them.
+    await _encryptionService.prunePendingSendRecords();
     final backlog = await _encryptionService.purgeBacklog();
     if (backlog.ids.isEmpty && backlog.ciphertexts.isEmpty) return;
     final result = await _runPurge(backlog.ids, backlog.ciphertexts);
@@ -2741,12 +2452,6 @@ class EncryptionProvider extends ChangeNotifier {
   /// sweep. Wired by ConnectionProvider (which holds ConversationsProvider);
   /// a provider must not read another provider directly.
   List<int> Function()? sessionRebuildPeers;
-
-  /// Called with the ids [reconcileStoredPlaintext] found the server no longer
-  /// serves, AFTER their stored plaintext is destroyed. Wired by
-  /// ConnectionProvider to MessagingProvider (which owns the message list);
-  /// a provider must not read another provider directly.
-  void Function(Set<int> messageIds)? onStoredPlaintextOrphaned;
 
   Completer<Map<String, dynamic>>? _pendingIdentityBackupAnswer;
   Completer<String>? _pendingLockNonce;
@@ -3476,17 +3181,6 @@ class EncryptionProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Handler for the `peerIdentityChanged` server event (Phase 0a): a peer's
-  /// key bundle was replaced server-side. Feeds the same warning state as the
-  /// local libsignal detection (in-conversation timeline row + verify door).
-  void onPeerIdentityChanged(dynamic data) {
-    final peerId = data is Map ? data['userId'] : null;
-    if (peerId is! int) return;
-    _e2eFlowLog('PEER_IDENTITY_CHANGED_EVENT', {'peerId': peerId});
-    _encryptionService.recordPeerIdentityChangedFromServer(peerId);
-    notifyListeners();
-  }
-
   /// Handler for `oneTimePreKeysUploaded` server event.
   void onOneTimePreKeysUploaded(dynamic data) {
     debugPrint('[E2E] One-time pre-keys uploaded to server');
@@ -3606,7 +3300,6 @@ class EncryptionProvider extends ChangeNotifier {
       // reported exactly as before.
       final replacedTo = data['identityReplacedTo'];
       if (replacedAt is String && replacedAt.isNotEmpty) {
-        final sinceBefore = ownIdentitySince;
         // Respects the user's dismissal watermark inside the service, and
         // ignores a row that merely ends at our OWN published identity.
         unawaited(
@@ -3617,12 +3310,7 @@ class EncryptionProvider extends ChangeNotifier {
                     ? replacedTo
                     : null,
               )
-              .then((_) {
-                if (ownIdentitySince != sinceBefore) {
-                  onOwnIdentitySinceChanged?.call();
-                }
-                notifyListeners();
-              }),
+              .then((_) => notifyListeners()),
         );
       }
     }
@@ -4330,7 +4018,6 @@ class EncryptionProvider extends ChangeNotifier {
       }
     }
     _pendingDeviceListFetches.clear();
-    _deviceListBatch.clear();
   }
 }
 

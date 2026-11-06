@@ -32,34 +32,4 @@ void main() {
       isNull,
     );
   });
-
-  test('loadListIndexForMessageId paginates until message found', () async {
-    var messages = List<MessageModel>.generate(50, (i) => _m(i + 1));
-    var hasMore = true;
-    var loadCount = 0;
-
-    final listIndex = await loadListIndexForMessageId(
-      messageId: 100,
-      getMessages: () => messages,
-      hasMoreMessages: () => hasMore,
-      loadOlderPage: () async {
-        loadCount++;
-        messages = [_m(100), ...messages];
-        hasMore = false;
-      },
-    );
-
-    expect(listIndex, messages.length - 1);
-    expect(loadCount, 1);
-  });
-
-  test('loadListIndexForMessageId returns null when not found', () async {
-    final listIndex = await loadListIndexForMessageId(
-      messageId: 999,
-      getMessages: () => [_m(1)],
-      hasMoreMessages: () => false,
-      loadOlderPage: () async {},
-    );
-    expect(listIndex, isNull);
-  });
 }

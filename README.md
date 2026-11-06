@@ -36,7 +36,7 @@ End-to-end encrypted messenger built with Flutter and NestJS.
 | Auth | JWT (HS256) |
 | Encryption | Signal Protocol (libsignal_protocol_dart 0.7.4) |
 | Media storage | Cloudinary |
-| Push | FCM (native) + Web Push VAPID (PWA) |
+| Push | FCM (native) + Web Push VAPID (PWA), content-free box wake-ups only |
 | Containerization | Docker + Docker Compose |
 | Production | OVH VPS (Ubuntu 24.04) + Nginx + Let's Encrypt |
 
@@ -89,8 +89,8 @@ Set in docker-compose.yml or a .env file:
     CLOUDINARY_API_SECRET=your-secret
 
     # Optional
-    FIREBASE_SERVICE_ACCOUNT=...             # Native push notifications (JSON string)
-    WEB_PUSH_VAPID_PUBLIC_KEY=...            # Web Push (PWA) public key
+    FIREBASE_SERVICE_ACCOUNT=...             # Box wake-up push, native (JSON string)
+    WEB_PUSH_VAPID_PUBLIC_KEY=...            # Box wake-up push, Web Push (PWA) public key
     WEB_PUSH_VAPID_PRIVATE_KEY=...           # Web Push private key (backend only)
     WEB_PUSH_VAPID_SUBJECT=mailto:admin@...  # VAPID subject
     ALLOWED_ORIGINS=https://your-domain.com  # CORS (comma-separated)
@@ -120,19 +120,16 @@ State management uses 7 ChangeNotifier providers, orchestrated by ConnectionProv
 
 ### Backend Services
 
-ChatGateway delegates to 9 focused domain services:
+ChatGateway delegates to 6 focused domain services:
 
 | Service | Responsibility |
 |---|---|
-| ChatMessageService | Send, get, delete, deliver, mark read |
-| ChatConversationService | Start, get, delete, disappearing timer |
-| ChatFriendRequestService | Send/accept/reject requests, unfriend |
 | ChatKeyExchangeService | Upload key bundles, fetch pre-keys |
 | ChatPresenceService | Typing indicators, voice recording relay |
-| ChatBlockService | Block, unblock, get blocked list |
 | ChatSearchService | User search |
-| ChatReactionService | Add/remove emoji reactions |
-| ChatLinkPreviewService | OG metadata fetch and emit |
+| ChatDeviceListService | Signed device lists |
+| ChatDeviceRevocationService | Device revocation |
+| ChatProvisioningService | Linking a new device |
 
 ### E2E Encryption
 
@@ -165,14 +162,13 @@ Frontend (61 widget tests):
     +-- backend/src/
     |   +-- auth/              # JWT auth, registration, login
     |   +-- users/             # User entity, profile, account management
-    |   +-- conversations/     # Conversation entity + service
-    |   +-- messages/          # Message entity, mapper, REST controller
-    |   +-- friends/           # Friend request entity + service
-    |   +-- key-bundles/       # Signal public key storage
+    |   +-- key-bundles/       # Signal public key storage, device lists, identity reset
+    |   +-- box/               # Sealed-sender message box (/box, /box/media, wake-up push)
+    |   +-- link-preview/      # POST /messages/link-preview (SSRF-guarded OG fetch)
     |   +-- secret-notes/      # Anti-Quantum one-time notes
     |   +-- chat/
     |       +-- chat.gateway.ts      # WebSocket entry point (thin delegation)
-    |       +-- services/            # 9 focused domain services
+    |       +-- services/            # 6 focused domain services
     |       +-- dto/                 # Validated request DTOs
     |       +-- mappers/             # Payload serialization
     +-- frontend/lib/

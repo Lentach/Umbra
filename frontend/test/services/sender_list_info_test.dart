@@ -184,46 +184,4 @@ void main() {
       );
     });
   });
-
-  group('SenderListInfoRefreshLimiter — one in flight, then a cooldown', () {
-    test('a second claim while a refresh is in flight is dropped', () {
-      final limiter = SenderListInfoRefreshLimiter();
-      expect(limiter.tryBegin(7), isTrue);
-      expect(limiter.tryBegin(7), isFalse, reason: 'one in flight per account');
-      limiter.end(7);
-    });
-
-    test('after the refresh ends, the cooldown still holds', () {
-      var now = DateTime(2026, 8, 21, 12);
-      final limiter = SenderListInfoRefreshLimiter(
-        cooldown: const Duration(minutes: 1),
-        clock: () => now,
-      );
-      expect(limiter.tryBegin(7), isTrue);
-      limiter.end(7);
-      expect(limiter.tryBegin(7), isFalse, reason: 'still inside the cooldown');
-      now = now.add(const Duration(minutes: 1, seconds: 1));
-      expect(limiter.tryBegin(7), isTrue);
-    });
-
-    test('accounts are limited independently', () {
-      final limiter = SenderListInfoRefreshLimiter();
-      expect(limiter.tryBegin(7), isTrue);
-      expect(limiter.tryBegin(8), isTrue);
-    });
-
-    test('falsification 22: a claim on EVERY message is still one refresh', () {
-      var now = DateTime(2026, 8, 21, 12);
-      final limiter = SenderListInfoRefreshLimiter(clock: () => now);
-      var granted = 0;
-      for (var i = 0; i < 50; i++) {
-        if (limiter.tryBegin(7)) {
-          granted++;
-          limiter.end(7);
-        }
-        now = now.add(const Duration(seconds: 1));
-      }
-      expect(granted, 1, reason: 'a bogus-claim storm must not fetch 50 times');
-    });
-  });
 }

@@ -23,6 +23,8 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../support/chat_seed.dart';
+
 /// The real plaintext store; Signal and the device lists are faked. An
 /// outbound "ciphertext" is `3:` + base64(plaintext), so every frame handed
 /// to the box can be read back; an inbound one decrypts to [inbound].
@@ -100,12 +102,6 @@ class _Encryption extends EncryptionProvider {
     int deviceId,
     String ciphertext,
   ) async => false;
-
-  @override
-  Future<void> savePendingSendRecord(
-    String key,
-    Map<String, dynamic> data,
-  ) async {}
 }
 
 class _Outbox implements BoxOutbox {
@@ -320,13 +316,13 @@ void main() {
     return p;
   }
 
-  ConversationsProvider newConversations({int? serverPin}) =>
-      ConversationsProvider()
-        ..contactStore = store
-        ..setCurrentUserId(1)
-        ..setEmitCallback((event, data) => emitted.add((event, data)))
-        ..onConversationsList([_conv(serverPin: serverPin), _carolConv])
-        ..openConversation(10);
+  ConversationsProvider newConversations({int? serverPin}) {
+    final convs = ConversationsProvider()
+      ..contactStore = store
+      ..setCurrentUserId(1);
+    seedConversations(convs, [_conv(serverPin: serverPin), _carolConv]);
+    return convs..openConversation(10);
+  }
 
   Future<void> pump([int turns = 60]) async {
     for (var i = 0; i < turns; i++) {
@@ -352,6 +348,8 @@ void main() {
       accepts: (_) => true,
     );
     await store.open(1);
+    // The chat's settings (its E2E pin) live on its friend's record.
+    await store.update(2, (_) => _bob);
     outbox = _Outbox()
       ..addresses[2] = {1: _address(1), 2: _address(2)}
       ..siblings[3] = _selfQueue(3);
@@ -510,10 +508,7 @@ void main() {
     conversations = newConversations();
     await store.settled;
     provider = newProvider()..refreshBoxDeviceLists();
-    await provider.onMessageHistory({
-      'conversationId': 10,
-      'messages': <Object>[],
-    });
+    provider.getMessages(10);
     await pump(120);
   }
 
@@ -1020,8 +1015,8 @@ void main() {
     );
 
     test(
-      'pinning a box message sends a pin frame, shows it, and clears an old '
-      'server pin with ONE unpinMessage (decision 45)',
+      'pinning a box message sends a pin frame and shows it; an unpin takes '
+      'it off (decision 45)',
       () async {
         await setUpWith(serverPin: 555);
         final msg = await fromBob('pin me', wire: 'wire-bob-0003');
@@ -1029,20 +1024,13 @@ void main() {
         provider.pinMessage(10, msg.id);
         await pump();
 
-        expect(events(), isNot(contains('pinMessage')));
-        expect(events().where((e) => e == 'unpinMessage'), hasLength(1));
+        expect(events(), isEmpty);
         final env = envelopeOf(outbox.delivered.first.$2);
         expect(env['t'], 'pin');
         expect(env['on'], isTrue);
         expect(env['tg'], {'s': 2, 'w': 'wire-bob-0003'});
         expect(conversations.getConversationById(10)!.pinnedMessageId, msg.id);
 
-        // The server's own answer to that unpin leaves the E2E pin alone.
-        conversations.onMessageUnpinned({'conversationId': 10});
-        expect(conversations.getConversationById(10)!.pinnedMessageId, msg.id);
-
-        // Pinning again: the server holds no pin any more, so no emit.
-        emitted.clear();
         provider.unpinMessage(10);
         await pump();
         expect(conversations.getConversationById(10)!.pinnedMessageId, isNull);
@@ -1098,12 +1086,13 @@ void main() {
     );
 
     test(
-      'an old-path row keeps its server events (decision 46)',
+      'a row with no local id cannot be acted on: no frame, nothing emitted',
       () async {
         provider
           ..pinMessage(10, 77)
           ..deleteMessage(77, forEveryone: true);
-        expect(events(), containsAllInOrder(['pinMessage', 'deleteMessage']));
+        await pump();
+        expect(events(), isEmpty);
         expect(outbox.delivered, isEmpty);
       },
     );
@@ -1354,52 +1343,6 @@ void main() {
         // A pin older than that unpin arrives late: stays unpinned.
         await bobDoes(action('pin', s: 1, w: ours.wireId!, on: true, at: t0.add(const Duration(seconds: 5))));
         expect(conversations.getConversationById(10)!.pinnedMessageId, isNull);
-      },
-    );
-
-    test(
-      'a server pin of an old-path row replaces the E2E pin; newest wins '
-      '(decision 45)',
-      () async {
-        final msg = await fromBob('box pin', wire: 'wire-bob-0060');
-        await bobDoes(action('pin', s: 2, w: 'wire-bob-0060', on: true));
-        expect(conversations.getConversationById(10)!.pinnedMessageId, msg.id);
-
-        conversations.onMessagePinned({
-          'conversationId': 10,
-          'pinnedMessageId': 900,
-        });
-        expect(conversations.getConversationById(10)!.pinnedMessageId, 900);
-        expect(conversations.boxPinOf(10)?.pinned ?? false, isFalse);
-
-        // A later E2E pin wins again, and a server snapshot keeps an E2E
-        // pin that is still in force.
-        await Future<void>.delayed(const Duration(milliseconds: 5));
-        await bobDoes(action('pin', s: 2, w: 'wire-bob-0060', on: true));
-        conversations.onConversationsList([_conv(), _carolConv]);
-        expect(conversations.getConversationById(10)!.pinnedMessageId, msg.id);
-      },
-    );
-
-    test(
-      "a server pin never stamps this device's clock into the register: a "
-      "peer's E2E pin sent after the E2E pin it replaced still wins (E19f)",
-      () async {
-        final msg = await fromBob('box pin', wire: 'wire-bob-0061');
-        final t0 = nowMs().subtract(const Duration(minutes: 2));
-        await bobDoes(action('pin', s: 2, w: 'wire-bob-0061', on: true, at: t0));
-
-        conversations.onMessagePinned({
-          'conversationId': 10,
-          'pinnedMessageId': 900,
-        });
-        expect(conversations.boxPinOf(10)!.at, t0);
-
-        // Newer than the register, older than this device's "now".
-        await bobDoes(
-          action('pin', s: 2, w: 'wire-bob-0061', on: true, at: t0.add(const Duration(minutes: 1))),
-        );
-        expect(conversations.getConversationById(10)!.pinnedMessageId, msg.id);
       },
     );
 

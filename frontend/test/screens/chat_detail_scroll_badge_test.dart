@@ -13,6 +13,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../support/chat_seed.dart';
+
 const _currentUserJwt =
     'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOjEsInVzZXJuYW1lIjoiYWxpY2UiLCJ0YWciOiIwMDAxIiwiZXhwIjo5OTk5OTk5OTl9.abc';
 
@@ -62,6 +64,13 @@ Finder _scrollArrowIconFinder() => find.byWidgetPredicate(
       widget.size == 28,
 );
 
+/// A live arrival in the open chat: the loaded rows plus [json]'s.
+void _arrive(MessagingProvider messaging, Map<String, dynamic> json) =>
+    messaging.seedMessagesForTest(10, [
+      ...messaging.messages,
+      MessageModel.fromJson(json),
+    ]);
+
 Finder _scrollButtonFinder() => find.ancestor(
   of: _scrollArrowIconFinder(),
   matching: find.byType(Material),
@@ -74,7 +83,7 @@ Future<MessagingProvider> _pumpChatDetail(WidgetTester tester) async {
   SharedPreferences.setMockInitialValues({});
 
   final conversations = ConversationsProvider()..setCurrentUserId(1);
-  conversations.onConversationsList([_conversationJson()]);
+  seedConversations(conversations, [_conversationJson()]);
   conversations.openConversation(10, notify: false);
 
   final messaging = MessagingProvider();
@@ -123,7 +132,8 @@ Future<MessagingProvider> _pumpChatDetail(WidgetTester tester) async {
   // Prime ChatDetailScreen's internal message-count baseline while still at the
   // bottom. This mirrors the first live update after opening the chat and keeps
   // this test about away-from-bottom appends, not initial-snapshot bookkeeping.
-  messaging.onNewMessage(
+  _arrive(
+    messaging,
     _messageJson(
       id: 4000,
       senderId: 2,
@@ -147,7 +157,8 @@ void main() {
     (tester) async {
       final messaging = await _pumpChatDetail(tester);
 
-      messaging.onMessageSent(
+      _arrive(
+        messaging,
         _messageJson(
           id: 5000,
           senderId: 1,
@@ -168,7 +179,8 @@ void main() {
     (tester) async {
       final messaging = await _pumpChatDetail(tester);
 
-      messaging.onNewMessage(
+      _arrive(
+        messaging,
         _messageJson(
           id: 5001,
           senderId: 2,

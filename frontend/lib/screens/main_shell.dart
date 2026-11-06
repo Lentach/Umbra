@@ -257,7 +257,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
 
           final l10n = AppLocalizations.of(context);
           final message = l10n.friendAcceptedYourRequest(accepted.name);
-          if (accepted.chatReady && accepted.conversationId != null) {
+          if (accepted.conversationId != null) {
             showTopSnackBar(
               context,
               message,
@@ -270,14 +270,14 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
         });
         // Notification deep-link — Option A: route through the SAME open path
         // the conversations list uses, and only for conversations that exist
-        // locally. Gated on the first server snapshot: consuming earlier would
+        // locally. Gated on the contact store's first read: consuming earlier would
         // either race an empty list (cold start) or mount a chat for a stale
         // id from an old notification (deleted conversation) — such a screen
         // renders empty and sendMessage finds no conversation, so typed text
         // vanished. Stale id ⇒ land on the conversations tab and stop.
         if (shouldConsumeNotificationNav(
           pendingConversationId: convs.pendingNotificationConversationId,
-          hasLoadedConversationsOnce: convs.hasLoadedConversationsOnce,
+          hasLoadedConversations: convs.hasLoadedConversations,
         )) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!mounted) return;

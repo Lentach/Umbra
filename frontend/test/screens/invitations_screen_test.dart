@@ -1,12 +1,19 @@
+import 'dart:async';
+
 import 'package:fireplace/l10n/app_localizations.dart';
 import 'package:fireplace/providers/connection_provider.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/friends_provider.dart';
 import 'package:fireplace/screens/invitations_screen.dart';
+import 'package:fireplace/services/box/box_first_contact.dart';
+import 'package:fireplace/services/contacts/contact_record.dart';
+import 'package:fireplace/services/contacts/contact_store.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
+
+import '../support/contact_seed.dart';
 
 Map<String, dynamic> _user(int id, String username) => {
   'id': id,
@@ -14,28 +21,29 @@ Map<String, dynamic> _user(int id, String username) => {
   'tag': id.toString().padLeft(4, '0'),
 };
 
-Map<String, dynamic> _request({
-  required int id,
-  required int senderId,
-  required String senderName,
-  required int receiverId,
-  required String receiverName,
-  int? conversationId,
-  bool? chatReady,
-}) => {
-  'id': id,
-  'sender': _user(senderId, senderName),
-  'receiver': _user(receiverId, receiverName),
-  'status': 'pending',
-  'createdAt': '2026-07-28T12:00:00.000Z',
-  'conversationId': ?conversationId,
-  'chatReady': ?chatReady,
-};
+/// A real contact store for account 1 holding [records]; the writes need real
+/// async, so they run outside the test's fake clock.
+Future<ContactStore> _store(
+  WidgetTester tester,
+  List<ContactRecord> records,
+) async => (await tester.runAsync(() => openContactStore(records)))!;
 
-void _seedLoadedEmpty(FriendsProvider friends) {
-  friends.onFriendRequestsList([]);
-  friends.onSentRequestsList([]);
+Future<void> _put(
+  WidgetTester tester,
+  ContactStore store,
+  List<ContactRecord> records,
+) async {
+  await tester.runAsync(() => putContacts(store, records));
 }
+
+ContactRecord _incoming(int id, String name) =>
+    contactRecord(id, name, ContactState.pendingIn, box: true);
+
+ContactRecord _sent(int id, String name) =>
+    contactRecord(id, name, ContactState.pendingOut, box: true);
+
+ContactRecord _friend(int id, String name) =>
+    contactRecord(id, name, ContactState.friend, box: true);
 
 Future<void> _pumpInvitations(
   WidgetTester tester,
@@ -111,7 +119,6 @@ class _InvitationRouteHost extends StatelessWidget {
 void main() {
   testWidgets('one exact search result does not auto-send', (tester) async {
     final friends = FriendsProvider();
-    _seedLoadedEmpty(friends);
     final emitted = <String>[];
     friends.setEmitCallback((event, _) => emitted.add(event));
 
@@ -131,10 +138,12 @@ void main() {
   });
 
   testWidgets(
-    'tapping Send invitation does not pop and friendRequestSent alone adds Sent without duplication',
+    'tapping Send invitation does not pop and the box send alone adds Sent without duplication',
     (tester) async {
-      final friends = FriendsProvider()..setCurrentUserId(1);
-      _seedLoadedEmpty(friends);
+      final store = await _store(tester, []);
+      final answer = Completer<FirstContactSend>();
+      final friends = friendsOver(store)
+        ..boxSendRequest = ((_) => answer.future);
       Object? popped;
       await _pumpInvitations(
         tester,
@@ -150,14 +159,10 @@ void main() {
       await tester.pump();
       expect(find.byKey(const Key('invitation-send-progress')), findsOneWidget);
 
-      final request = _request(
-        id: 10,
-        senderId: 1,
-        senderName: 'alice',
-        receiverId: 2,
-        receiverName: 'bob',
-      );
-      friends.onFriendRequestSent(request);
+      // The box wrote the pending record, then reported the send.
+      await _put(tester, store, [_sent(2, 'bob')]);
+      answer.complete(FirstContactSend.sent);
+      await tester.pump();
       await tester.pump();
       expect(popped, isNull);
       _expectExactlyOnePeerRow(tester, 2);
@@ -166,7 +171,7 @@ void main() {
         greaterThan(tester.getTopLeft(find.text('Sent')).dy),
       );
 
-      friends.onSentRequestsList([request]);
+      friends.onContactsChanged();
       await tester.pump();
       _expectExactlyOnePeerRow(tester, 2);
     },
@@ -174,17 +179,9 @@ void main() {
 
   testWidgets('Accept shows in-row progress without success before acceptance',
       (tester) async {
-    final friends = FriendsProvider();
-    friends.onFriendRequestsList([
-      _request(
-        id: 10,
-        senderId: 2,
-        senderName: 'bob',
-        receiverId: 1,
-        receiverName: 'alice',
-      ),
-    ]);
-    friends.onSentRequestsList([]);
+    final store = await _store(tester, [_incoming(2, 'bob')]);
+    final friends = friendsOver(store)
+      ..boxAcceptRequest = ((_) => Completer<FirstContactAccept>().future);
 
     await _pumpInvitations(tester, friends);
     await tester.tap(find.text('Accept'));
@@ -202,18 +199,12 @@ void main() {
   });
 
   testWidgets(
-    'Decline keeps the row mounted and disabled until friendRequestRejected',
+    'Decline keeps the row mounted and disabled until the box has declined',
     (tester) async {
-      final friends = FriendsProvider();
-      final request = _request(
-        id: 10,
-        senderId: 2,
-        senderName: 'bob',
-        receiverId: 1,
-        receiverName: 'alice',
-      );
-      friends.onFriendRequestsList([request]);
-      friends.onSentRequestsList([]);
+      final store = await _store(tester, [_incoming(2, 'bob')]);
+      final declined = Completer<void>();
+      final friends = friendsOver(store)
+        ..boxDeclineRequest = ((_) => declined.future);
 
       await _pumpInvitations(tester, friends);
       await tester.tap(find.text('Decline'));
@@ -236,37 +227,23 @@ void main() {
       );
       expect(find.byKey(const Key('invitation-action-progress')), findsOneWidget);
 
-      friends.onFriendRequestRejected(request);
+      // The box drops the record, then reports the decline.
+      await tester.runAsync(() => store.remove(2));
+      declined.complete();
+      await tester.pump();
       await tester.pump();
       expect(find.byKey(const ValueKey(2)), findsNothing);
     },
   );
 
-  testWidgets('friendRequestAccepted stays put and renders ready actions',
+  testWidgets('a friendship made stays put and renders ready actions',
       (tester) async {
-    final friends = FriendsProvider()..setCurrentUserId(1);
-    final request = _request(
-      id: 10,
-      senderId: 2,
-      senderName: 'bob',
-      receiverId: 1,
-      receiverName: 'alice',
-    );
-    friends.onFriendRequestsList([request]);
-    friends.onSentRequestsList([]);
+    final store = await _store(tester, [_incoming(2, 'bob')]);
+    final friends = friendsOver(store);
 
     await _pumpInvitations(tester, friends);
-    friends.onFriendRequestAccepted(
-      _request(
-        id: 10,
-        senderId: 2,
-        senderName: 'bob',
-        receiverId: 1,
-        receiverName: 'alice',
-        conversationId: 44,
-        chatReady: true,
-      ),
-    );
+    await _put(tester, store, [_friend(2, 'bob')]);
+    friends.onBoxFriendshipMade(2, outgoing: false);
     await tester.pump();
 
     _expectExactlyOnePeerRow(tester, 2);
@@ -279,61 +256,25 @@ void main() {
 
   testWidgets('accepter renders the accepted row under Waiting for you',
       (tester) async {
-    final friends = FriendsProvider()..setCurrentUserId(1);
-    friends.onFriendRequestsList([
-      _request(
-        id: 10,
-        senderId: 2,
-        senderName: 'bob',
-        receiverId: 1,
-        receiverName: 'alice',
-      ),
-    ]);
-    friends.onSentRequestsList([]);
+    final store = await _store(tester, [_incoming(2, 'bob')]);
+    final friends = friendsOver(store);
     await _pumpInvitations(tester, friends);
 
-    friends.onFriendRequestAccepted(
-      _request(
-        id: 10,
-        senderId: 2,
-        senderName: 'bob',
-        receiverId: 1,
-        receiverName: 'alice',
-        conversationId: 44,
-        chatReady: true,
-      ),
-    );
+    await _put(tester, store, [_friend(2, 'bob')]);
+    friends.onBoxFriendshipMade(2, outgoing: false);
     await tester.pump();
 
     _expectRowInSection(tester, 2, 'Waiting for you', 'Sent');
   });
 
-  testWidgets('sender renders the same accepted payload under Sent',
+  testWidgets('sender renders the accepted friendship under Sent',
       (tester) async {
-    final friends = FriendsProvider()..setCurrentUserId(1);
-    friends.onFriendRequestsList([]);
-    friends.onSentRequestsList([
-      _request(
-        id: 10,
-        senderId: 1,
-        senderName: 'alice',
-        receiverId: 2,
-        receiverName: 'bob',
-      ),
-    ]);
+    final store = await _store(tester, [_sent(2, 'bob')]);
+    final friends = friendsOver(store);
     await _pumpInvitations(tester, friends);
 
-    friends.onFriendRequestAccepted(
-      _request(
-        id: 10,
-        senderId: 1,
-        senderName: 'alice',
-        receiverId: 2,
-        receiverName: 'bob',
-        conversationId: 44,
-        chatReady: true,
-      ),
-    );
+    await _put(tester, store, [_friend(2, 'bob')]);
+    friends.onBoxFriendshipMade(2, outgoing: true);
     await tester.pump();
 
     _expectExactlyOnePeerRow(tester, 2);
@@ -344,50 +285,22 @@ void main() {
   });
 
   testWidgets(
-    'server order keeps exactly one accepted row in every frame for both sides',
+    'exactly one accepted row in every frame for both sides',
     (tester) async {
       Future<void> exercise({required bool sender}) async {
-        final friends = FriendsProvider()..setCurrentUserId(1);
-        final conversations = ConversationsProvider()..setCurrentUserId(1);
-        final pending = _request(
-          id: 10,
-          senderId: sender ? 1 : 2,
-          senderName: sender ? 'alice' : 'bob',
-          receiverId: sender ? 2 : 1,
-          receiverName: sender ? 'bob' : 'alice',
-        );
-        if (sender) {
-          friends.onFriendRequestsList([]);
-          friends.onSentRequestsList([pending]);
-        } else {
-          friends.onFriendRequestsList([pending]);
-          friends.onSentRequestsList([]);
-        }
-        await _pumpInvitations(tester, friends, conversations: conversations);
+        final store = await _store(tester, [
+          sender ? _sent(2, 'bob') : _incoming(2, 'bob'),
+        ]);
+        final friends = friendsOver(store);
+        await _pumpInvitations(tester, friends);
         _expectExactlyOnePeerRow(tester, 2);
 
-        conversations.onConversationsList([]);
+        await _put(tester, store, [_friend(2, 'bob')]);
+        friends.onBoxFriendshipMade(2, outgoing: sender);
         await tester.pump();
         _expectExactlyOnePeerRow(tester, 2);
 
-        friends.onFriendRequestAccepted(
-          _request(
-            id: 10,
-            senderId: sender ? 1 : 2,
-            senderName: sender ? 'alice' : 'bob',
-            receiverId: sender ? 2 : 1,
-            receiverName: sender ? 'bob' : 'alice',
-            conversationId: 44,
-            chatReady: true,
-          ),
-        );
-        await tester.pump();
-        _expectExactlyOnePeerRow(tester, 2);
-
-        friends.onFriendRequestsList([]);
-        await tester.pump();
-        _expectExactlyOnePeerRow(tester, 2);
-        friends.onSentRequestsList([]);
+        friends.onContactsChanged();
         await tester.pump();
         _expectExactlyOnePeerRow(tester, 2);
       }
@@ -399,8 +312,8 @@ void main() {
 
   testWidgets('only Open chat pops the peer id and Done only removes the row',
       (tester) async {
-    final friends = FriendsProvider()..setCurrentUserId(1);
-    _seedLoadedEmpty(friends);
+    final store = await _store(tester, [_friend(2, 'bob')]);
+    final friends = friendsOver(store);
     Object? popped;
     await _pumpInvitations(
       tester,
@@ -410,17 +323,7 @@ void main() {
     await tester.tap(find.byKey(const Key('open-invitations')));
     await tester.pumpAndSettle();
 
-    void deliverAccepted() => friends.onFriendRequestAccepted(
-      _request(
-        id: 10,
-        senderId: 2,
-        senderName: 'bob',
-        receiverId: 1,
-        receiverName: 'alice',
-        conversationId: 44,
-        chatReady: true,
-      ),
-    );
+    void deliverAccepted() => friends.onBoxFriendshipMade(2, outgoing: false);
 
     deliverAccepted();
     await tester.pump();
@@ -436,132 +339,10 @@ void main() {
     expect(popped, 2);
   });
 
-  testWidgets('chatReady false never renders Chat ready', (tester) async {
-    final friends = FriendsProvider()..setCurrentUserId(1);
-    friends.onFriendRequestsList([
-      _request(
-        id: 10,
-        senderId: 2,
-        senderName: 'bob',
-        receiverId: 1,
-        receiverName: 'alice',
-      ),
-    ]);
-    friends.onSentRequestsList([]);
-    await _pumpInvitations(tester, friends);
-
-    friends.onFriendRequestAccepted(
-      _request(
-        id: 10,
-        senderId: 2,
-        senderName: 'bob',
-        receiverId: 1,
-        receiverName: 'alice',
-        chatReady: false,
-      ),
-    );
-    await tester.pump();
-
-    expect(find.text('Chat setup needs retry'), findsOneWidget);
-    expect(find.text('Create chat'), findsOneWidget);
-    expect(find.text('Chat ready'), findsNothing);
-  });
-
-  testWidgets('Create chat retries in place and only matching peer flips ready',
-      (tester) async {
-    final friends = FriendsProvider()..setCurrentUserId(1);
-    final emitted = <Map<String, dynamic>>[];
-    friends.setEmitCallback(
-      (event, data) => emitted.add({'event': event, 'data': data}),
-    );
-    friends.onFriendRequestsList([
-      _request(
-        id: 10,
-        senderId: 2,
-        senderName: 'bob',
-        receiverId: 1,
-        receiverName: 'alice',
-      ),
-      _request(
-        id: 11,
-        senderId: 3,
-        senderName: 'mara',
-        receiverId: 1,
-        receiverName: 'alice',
-      ),
-    ]);
-    friends.onSentRequestsList([]);
-    friends.onFriendRequestAccepted(
-      _request(
-        id: 10,
-        senderId: 2,
-        senderName: 'bob',
-        receiverId: 1,
-        receiverName: 'alice',
-        chatReady: false,
-      ),
-    );
-    friends.onFriendRequestAccepted(
-      _request(
-        id: 11,
-        senderId: 3,
-        senderName: 'mara',
-        receiverId: 1,
-        receiverName: 'alice',
-        chatReady: false,
-      ),
-    );
-
-    await _pumpInvitations(tester, friends);
-    final bobRow = find.byKey(const ValueKey(2));
-    await tester.tap(
-      find.descendant(of: bobRow, matching: find.text('Create chat')),
-    );
-    await tester.pump();
-    expect(
-      emitted.where((entry) => entry['event'] == 'ensureInvitationChat'),
-      hasLength(1),
-    );
-    final data = emitted
-        .singleWhere((entry) => entry['event'] == 'ensureInvitationChat')['data']
-        as Map<String, dynamic>;
-    expect(data['peerUserId'], 2);
-    expect(find.byType(InvitationsScreen), findsOneWidget);
-
-    friends.onInvitationChatReady({
-      'peerUserId': 2,
-      'correlationId': data['correlationId'],
-      'conversationId': 44,
-      'chatReady': true,
-    });
-    await tester.pump();
-
-    expect(
-      find.descendant(of: bobRow, matching: find.text('Chat ready')),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(
-        of: find.byKey(const ValueKey(3)),
-        matching: find.text('Chat setup needs retry'),
-      ),
-      findsOneWidget,
-    );
-  });
-
   testWidgets('reduce motion makes invitation state transition instantaneous',
       (tester) async {
-    final friends = FriendsProvider();
-    friends.onFriendRequestsList([
-      _request(
-        id: 10,
-        senderId: 2,
-        senderName: 'bob',
-        receiverId: 1,
-        receiverName: 'alice',
-      ),
-    ]);
-    friends.onSentRequestsList([]);
+    final store = await _store(tester, [_incoming(2, 'bob')]);
+    final friends = friendsOver(store);
 
     await _pumpInvitations(tester, friends, disableAnimations: true);
     final switcher = tester.widget<AnimatedSwitcher>(
@@ -575,43 +356,12 @@ void main() {
 
   testWidgets('semantics distinguish incoming, outgoing, and accepted status',
       (tester) async {
-    final friends = FriendsProvider()..setCurrentUserId(1);
-    friends.onFriendRequestsList([
-      _request(
-        id: 10,
-        senderId: 2,
-        senderName: 'bob',
-        receiverId: 1,
-        receiverName: 'alice',
-      ),
-      _request(
-        id: 12,
-        senderId: 4,
-        senderName: 'nina',
-        receiverId: 1,
-        receiverName: 'alice',
-      ),
+    final store = await _store(tester, [
+      _incoming(2, 'bob'),
+      _sent(3, 'mara'),
+      _friend(4, 'nina'),
     ]);
-    friends.onSentRequestsList([
-      _request(
-        id: 11,
-        senderId: 1,
-        senderName: 'alice',
-        receiverId: 3,
-        receiverName: 'mara',
-      ),
-    ]);
-    friends.onFriendRequestAccepted(
-      _request(
-        id: 12,
-        senderId: 4,
-        senderName: 'nina',
-        receiverId: 1,
-        receiverName: 'alice',
-        conversationId: 44,
-        chatReady: true,
-      ),
-    );
+    final friends = friendsOver(store)..onBoxFriendshipMade(4, outgoing: false);
 
     final handle = tester.ensureSemantics();
     await _pumpInvitations(tester, friends);
@@ -637,29 +387,16 @@ void main() {
     handle.dispose();
   });
 
-  testWidgets('friendRequestFailed resets reject action and shows scoped copy',
+  testWidgets('a failed decline resets the action and shows scoped copy',
       (tester) async {
-    final friends = FriendsProvider();
-    final request = _request(
-      id: 10,
-      senderId: 2,
-      senderName: 'bob',
-      receiverId: 1,
-      receiverName: 'alice',
-    );
-    friends.onFriendRequestsList([request]);
-    friends.onSentRequestsList([]);
+    final store = await _store(tester, [_incoming(2, 'bob')]);
+    final friends = friendsOver(store)
+      ..boxDeclineRequest = ((_) async => throw StateError('no box'));
     await _pumpInvitations(tester, friends);
 
     await tester.tap(find.text('Decline'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 250));
-    friends.onFriendRequestFailed({
-      'action': 'reject',
-      'requestId': 10,
-      'recipientId': null,
-      'reason': 'reject_failed',
-    });
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 250));
     await tester.pump();
@@ -680,69 +417,48 @@ void main() {
 
   testWidgets('two inbound requests render as a comb and only the tapped hex '
       'expands its card', (tester) async {
-    final friends = FriendsProvider()..setCurrentUserId(1);
-    friends.onFriendRequestsList([
-      _request(
-        id: 10,
-        senderId: 2,
-        senderName: 'bob',
-        receiverId: 1,
-        receiverName: 'alice',
-      ),
-      _request(
-        id: 11,
-        senderId: 3,
-        senderName: 'mara',
-        receiverId: 1,
-        receiverName: 'alice',
-      ),
+    final store = await _store(tester, [
+      _incoming(2, 'bob'),
+      _incoming(3, 'mara'),
     ]);
-    friends.onSentRequestsList([]);
+    final friends = friendsOver(store);
     await _pumpInvitations(tester, friends);
 
+    // A box request has id `-userId`.
     expect(find.byKey(const Key('invitation-waiting-comb')), findsOneWidget);
-    expect(find.byKey(const Key('invitation-comb-10')), findsOneWidget);
-    expect(find.byKey(const Key('invitation-comb-11')), findsOneWidget);
+    expect(find.byKey(const Key('invitation-comb--2')), findsOneWidget);
+    expect(find.byKey(const Key('invitation-comb--3')), findsOneWidget);
     // With more than one request nothing auto-expands: no card, no Accept.
     expect(find.text('Accept'), findsNothing);
 
-    await tester.tap(find.byKey(const Key('invitation-comb-10')));
+    await tester.tap(find.byKey(const Key('invitation-comb--2')));
     await tester.pump();
     expect(find.byKey(const ValueKey(2)), findsOneWidget);
     expect(find.byKey(const ValueKey(3)), findsNothing);
     expect(find.text('Accept'), findsOneWidget);
 
     // Picking the other hex swaps the card rather than stacking a second one.
-    await tester.tap(find.byKey(const Key('invitation-comb-11')));
+    await tester.tap(find.byKey(const Key('invitation-comb--3')));
     await tester.pump();
     expect(find.byKey(const ValueKey(3)), findsOneWidget);
     expect(find.byKey(const ValueKey(2)), findsNothing);
 
     // Tapping the open hex again collapses it.
-    await tester.tap(find.byKey(const Key('invitation-comb-11')));
+    await tester.tap(find.byKey(const Key('invitation-comb--3')));
     await tester.pump();
     expect(find.text('Accept'), findsNothing);
   });
 
   testWidgets('a lone inbound request auto-expands and its hex can collapse '
       'it', (tester) async {
-    final friends = FriendsProvider()..setCurrentUserId(1);
-    friends.onFriendRequestsList([
-      _request(
-        id: 10,
-        senderId: 2,
-        senderName: 'bob',
-        receiverId: 1,
-        receiverName: 'alice',
-      ),
-    ]);
-    friends.onSentRequestsList([]);
+    final store = await _store(tester, [_incoming(2, 'bob')]);
+    final friends = friendsOver(store);
     await _pumpInvitations(tester, friends);
 
     // The common case pays zero extra taps: the only card is already open.
     expect(find.text('Accept'), findsOneWidget);
 
-    await tester.tap(find.byKey(const Key('invitation-comb-10')));
+    await tester.tap(find.byKey(const Key('invitation-comb--2')));
     await tester.pump();
     expect(find.text('Accept'), findsNothing);
   });
@@ -751,20 +467,12 @@ void main() {
     'search results offer add only to strangers: a friend, a requester and '
     'a blocked account get none',
     (tester) async {
-      final friends = FriendsProvider()
-        ..setCurrentUserId(1)
-        ..onFriendsList([_user(2, 'bob')])
-        ..onFriendRequestsList([
-          _request(
-            id: 31,
-            senderId: 3,
-            senderName: 'cat',
-            receiverId: 1,
-            receiverName: 'alice',
-          ),
-        ])
-        ..onSentRequestsList([])
-        ..onBlockedList([_user(4, 'dan')]);
+      final store = await _store(tester, [
+        _friend(2, 'bob'),
+        _incoming(3, 'cat'),
+        contactRecord(4, 'dan', ContactState.blocked),
+      ]);
+      final friends = friendsOver(store);
       await _pumpInvitations(tester, friends);
       friends.onSearchUsersResult([
         _user(2, 'bob'),
@@ -787,11 +495,8 @@ void main() {
   testWidgets(
     'a raw answer naming only a known contact is not "User not found"',
     (tester) async {
-      final friends = FriendsProvider()
-        ..setCurrentUserId(1)
-        ..onFriendsList([_user(2, 'bob')])
-        ..onFriendRequestsList([])
-        ..onSentRequestsList([]);
+      final store = await _store(tester, [_friend(2, 'bob')]);
+      final friends = friendsOver(store);
       await _pumpInvitations(tester, friends);
       friends.onSearchUsersResult([_user(2, 'bob')]);
       await tester.pump();

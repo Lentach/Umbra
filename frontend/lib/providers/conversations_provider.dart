@@ -6,10 +6,8 @@ import '../models/conversation_model.dart';
 import '../models/message_model.dart';
 import '../services/contacts/contact_record.dart';
 import '../services/contacts/contact_store.dart';
-import '../utils/e2e_diag_log.dart';
 import '../utils/message_expiry.dart';
 import '../utils/message_ids.dart';
-import '../utils/reply_preview_helper.dart';
 import 'conversation_helpers.dart' as conv_helpers;
 import '../models/user_model.dart';
 import '../services/notification_cleaner_stub.dart'
@@ -29,10 +27,9 @@ class ConversationsProvider extends ChangeNotifier {
 
   /// Unread box messages (local ids, decision 14) per chat, by id: counted
   /// live ([incrementUnreadCount]) or, once per session, from the stored
-  /// rows ([seedBoxUnread], decision 73). The server cannot count a message
-  /// it never held, so every snapshot adds a server chat's to its own count;
-  /// a local chat's count is this device's alone. Opening the chat clears
-  /// them. By id, so a row counted both ways counts once.
+  /// rows ([seedBoxUnread], decision 73). The count is this device's alone.
+  /// Opening the chat clears them. By id, so a row counted both ways counts
+  /// once.
   final Map<int, Set<int>> _boxUnread = {};
 
   /// The session's stored-row pass (`MessagingBox.applyStoredBoxLastMessages`)
@@ -45,25 +42,18 @@ class ConversationsProvider extends ChangeNotifier {
   /// Open this conversation from a notification tap (consumed by [MainShell], not socket flows).
   int? _pendingNotificationConversationId;
 
-  /// True when our active conversation was removed from list (e.g. other user deleted).
-  bool _activeConversationDeletedByOther = false;
   String? _errorMessage;
 
-  /// App/window foreground — server skips push when this chat is already open.
+  /// App/window foreground: gates the hidden-arrival card and tells the push
+  /// SW whether a chat is open.
   bool _clientVisible = true;
 
-  /// True once a server conversations snapshot has been processed this session.
-  /// [UnreadBadgeSync] gates on this: before the first snapshot the local
-  /// unread map is empty, and writing that "0" would wipe a legitimate badge
-  /// set by the push SW while the app was closed.
-  bool _conversationsListReceivedOnce = false;
-
-  /// The bounded wait for that first snapshot ran out (decision 121, E114k):
-  /// the server went silent, or is slow. A flag of its OWN, never the one a
-  /// real list sets: [hydrateFromStore], [rewriteStore] and the first-snapshot
-  /// branch of [onConversationsList] read [_conversationsListReceivedOnce],
-  /// and a list that arrives later must still be the first one.
-  bool _firstSnapshotWaitOver = false;
+  /// The contact store was read (or found closed) this session. The chat-list
+  /// skeleton, the notification-tap navigation and the unread badge flush wait
+  /// on it ([hasLoadedConversations]); before it the local unread map is empty
+  /// and writing that "0" would wipe a legitimate badge set by the push SW
+  /// while the app was closed.
+  bool _hydrated = false;
 
   int? _currentUserId;
 
@@ -80,34 +70,17 @@ class ConversationsProvider extends ChangeNotifier {
     return store;
   }
 
-  /// Rebuilds the conversation list from the contact store when no server
-  /// snapshot has arrived this session. One row per FRIEND record that still
-  /// carries a legacy `conversationId` — the id the rest of the app addresses
-  /// messages by until Phase 4 — or was made over the box (a local chat,
-  /// [_localChats]), with this account as `userOne`. Idempotent; a no-op
-  /// once [onConversationsList] ran or while the store is closed.
+  /// Reads the chat list from the contact store: one row per friend record
+  /// that has a chat id — a pre-box friend keeps the legacy conversation id
+  /// its history is filed under, a friend made over the box has the local id
+  /// — unless the chat was deleted on this device
+  /// ([ContactSettings.chatHidden]). Idempotent. A closed or absent store
+  /// leaves the list as it is; the session still counts as loaded
+  /// ([hasLoadedConversations]).
   void hydrateFromStore() {
-    final store = _store;
-    if (store == null) return;
-    if (_conversationsListReceivedOnce || _conversations.isNotEmpty) return;
-    final self = store.self;
-    if (self == null) return;
-    final rows = <ConversationModel>[
-      for (final r in store.all)
-        if (r.state == ContactState.friend &&
-            r.chatId != null &&
-            !(r.boxOrigin != null && r.settings.chatHidden))
-          _chatOf(r, self),
-    ];
-    if (rows.isEmpty) return;
-    _conversations = rows;
-    _serverPins
-      ..clear()
-      ..addAll({
-        for (final c in rows)
-          if (!isLocalConversationId(c.id)) c.id: ?c.pinnedMessageId,
-      });
-    notifyListeners();
+    final firstRead = !_hydrated;
+    _hydrated = true;
+    if (_rebuildChats() || firstRead) notifyListeners();
   }
 
   static ConversationModel _chatOf(ContactRecord r, UserModel self) =>
@@ -125,30 +98,13 @@ class ConversationsProvider extends ChangeNotifier {
         mutedUntil: r.settings.mutedUntil,
       );
 
-  /// Every chat made over the box, from the store: no server list names one,
-  /// so each snapshot keeps them beside the server's rows. One deleted on
-  /// this device stays out until it is revealed ([revealLocalChat]).
-  List<ConversationModel> _localChats() {
+  /// The chat [conversationId] shows again after a delete on this device: its
+  /// next message arrived, or the user opened it.
+  void revealChat(int conversationId) {
     final store = _store;
-    final self = store?.self;
-    if (store == null || self == null) return const [];
-    return [
-      for (final r in store.all)
-        if (r.state == ContactState.friend &&
-            r.boxOrigin != null &&
-            !r.settings.chatHidden)
-          _chatOf(r, self),
-    ];
-  }
-
-  /// The local chat [conversationId] (a friendship made over the box) shows
-  /// again after a delete on this device: its next message arrived, or the
-  /// user opened it.
-  void revealLocalChat(int conversationId) {
-    final store = _store;
-    if (store == null || !isLocalConversationId(conversationId)) return;
+    if (store == null) return;
     final peer = store.all
-        .where((r) => r.boxOrigin != null && r.chatId == conversationId)
+        .where((r) => r.chatId == conversationId)
         .firstOrNull;
     if (peer == null || !peer.settings.chatHidden) return;
     unawaited(
@@ -161,26 +117,57 @@ class ConversationsProvider extends ChangeNotifier {
                   )
                 : null,
           )
-          .then((_) => refreshLocalChats()),
+          .then((_) => refreshChats()),
     );
   }
 
-  /// A friendship made over the box began or ended (slice (f)): the chat
-  /// list takes the store's local chats again, keeping every server row.
-  void refreshLocalChats() {
-    final local = _localChats();
-    final ids = {for (final c in local) c.id};
-    final next = [
-      for (final c in _conversations)
-        if (!isLocalConversationId(c.id)) c,
-      for (final c in local) _withBoxPinShown(c),
+  /// A friendship began or ended, or a chat was revealed: the chat list takes
+  /// the store's chats again.
+  void refreshChats() {
+    if (_rebuildChats()) notifyListeners();
+  }
+
+  /// Replaces [_conversations] with the store's chats when the set of chats
+  /// differs; a chat already shown keeps its row (pin preview, a setting
+  /// whose store write is still queued). False when nothing changed or the
+  /// store is closed.
+  bool _rebuildChats() {
+    final store = _store;
+    final self = store?.self;
+    if (store == null || self == null) return false;
+    final records = [
+      for (final r in store.all)
+        if (r.state == ContactState.friend &&
+            r.chatId != null &&
+            !r.settings.chatHidden)
+          r,
     ];
-    final before = {
-      for (final c in _conversations)
-        if (isLocalConversationId(c.id)) c.id,
-    };
-    if (before.length == ids.length && before.containsAll(ids)) return;
-    _conversations = next;
+    final held = {for (final c in _conversations) c.id: c};
+    final ids = {for (final r in records) r.chatId!};
+    if (held.length == ids.length && ids.every(held.containsKey)) return false;
+    _conversations = [
+      for (final r in records)
+        held[r.chatId!] ?? _withBoxPinShown(_chatOf(r, self)),
+    ];
+    return true;
+  }
+
+  /// Installs [conversations] with their unread counts and last messages as
+  /// a store hydration would. Tests only.
+  @visibleForTesting
+  void debugSeed(
+    List<ConversationModel> conversations, {
+    Map<int, int> unread = const {},
+    Map<int, MessageModel> lastMessages = const {},
+  }) {
+    _hydrated = true;
+    _conversations = [for (final c in conversations) _withBoxPinShown(c)];
+    _unreadCounts
+      ..clear()
+      ..addAll(unread);
+    _lastMessages
+      ..clear()
+      ..addAll(lastMessages);
     notifyListeners();
   }
 
@@ -204,102 +191,6 @@ class ConversationsProvider extends ChangeNotifier {
     );
   }
 
-  /// Store write for a conversation the server dropped (delete, unfriend,
-  /// block): the legacy id and its settings go, the contact stays — whether
-  /// the RELATIONSHIP survives is the friends path's call. A peer with no
-  /// record (removed by a queued sweep meanwhile) is left alone.
-  void _storeConversationGone(Iterable<int> peers) {
-    final store = _store;
-    if (store == null) return;
-    unawaited(store.reconcile(peers, (_, record) => _withoutChat(record)));
-  }
-
-  /// A local chat (a friendship made over the box) has no server row to
-  /// lose: no server list or event may take its id away.
-  static ContactRecord? _withoutChat(ContactRecord? record) {
-    if (record == null ||
-        record.legacy.conversationId == null ||
-        record.boxOrigin != null) {
-      return null;
-    }
-    return record.copyWith(
-      settings: const ContactSettings(),
-      legacy: record.legacy.copyWith(clearConversation: true),
-    );
-  }
-
-  /// Store write for a server `conversationsList`: this account's own profile
-  /// (the list is the one place the server names us), then per row the
-  /// peer's settings + legacy id. A peer with no record yet is created as a
-  /// friend — the server serves a conversation only between friends who have
-  /// not blocked each other (`handleGetConversations` filters both
-  /// directions), and the friends list that follows corrects the state
-  /// either way. In the SAME lock, decided on disk state, every record whose
-  /// chat the NON-EMPTY list no longer carries loses its legacy id, exactly
-  /// as the RAM list drops it; an empty list changes the store not at all.
-  void _storeConversationsList(List<ConversationModel> convs) {
-    final store = _store;
-    if (store == null) return;
-    final byPeer = <int, ConversationModel>{};
-    UserModel? self;
-    for (final c in convs) {
-      self ??= c.userOne.id == _currentUserId ? c.userOne : c.userTwo;
-      // A local chat (decision 52) is no server row: its settings live on
-      // the record as the devices set them (E15k's `timerAt` included), and
-      // a rewrite of the RAM list must not replace them (review).
-      if (isLocalConversationId(c.id)) continue;
-      byPeer[getOtherUserId(c)] = c;
-    }
-    if (self != null) unawaited(store.setSelf(self));
-    unawaited(
-      store.reconcile(
-        byPeer.keys,
-        (peerId, record) {
-          final c = byPeer[peerId]!;
-          final peer = getOtherUser(c)!;
-          final base =
-              record ?? ContactRecord.fromUser(peer, ContactState.friend);
-          return base
-              .withProfile(peer)
-              .copyWith(
-                settings: ContactSettings(
-                  disappearingTimer: c.disappearingTimer,
-                  muted: c.muted,
-                  mutedUntil: c.mutedUntil,
-                  pinnedMessageId: c.pinnedMessageId,
-                  // The E2E pin is the devices' own (item 4): no server
-                  // list names it. Nor the time a box timer was set
-                  // (decision 107): kept, so a late older box timer cannot
-                  // undo a newer one.
-                  boxPin: base.settings.boxPin,
-                  timerAt: base.settings.timerAt,
-                ),
-                legacy: base.legacy.copyWith(
-                  conversationId: c.id,
-                  conversationCreatedAt: c.createdAt,
-                ),
-              );
-        },
-        // Gated on SERVER rows: a RAM list holding only local chats is an
-        // empty server list, which changes the store not at all. A friend on
-        // the box keeps its chat id: its box messages live under it.
-        sweep: byPeer.isEmpty
-            ? null
-            : (r) => r.onBoxRoute ? r : _withoutChat(r) ?? r,
-      ),
-    );
-  }
-
-  /// Re-applies the current server snapshot to a store that was closed and
-  /// re-opened underneath a live socket (passcode re-lock → unlock): events
-  /// that arrived while it was closed were not written through, so the RAM
-  /// list is the freshest truth. A no-op before the first snapshot — the RAM
-  /// list is then the store's own hydration.
-  void rewriteStore() {
-    if (!_conversationsListReceivedOnce) return;
-    _storeConversationsList(_conversations);
-  }
-
   final _notificationCleaner = createNotificationCleaner();
 
   /// Push-SW channel (web only; no-op elsewhere) for the focused-conversation
@@ -311,17 +202,6 @@ class ConversationsProvider extends ChangeNotifier {
   ConversationsProvider({PushSwChannel? pushSwChannel})
     : _pushSwChannel = pushSwChannel ?? createPushSwChannel();
 
-  // ---------- Emit Callback ----------
-
-  /// Callback to emit socket events. Set by [ConnectionProvider] via [setEmitCallback].
-  void Function(String event, dynamic data)? _emit;
-
-  /// Wire the socket emit callback so ConversationsProvider can send events
-  /// without depending on SocketService directly.
-  void setEmitCallback(void Function(String event, dynamic data) emit) {
-    _emit = emit;
-  }
-
   /// Foreground truth for gating client-side effects (e.g. read receipts).
   bool get isClientVisible => _clientVisible;
 
@@ -330,7 +210,7 @@ class ConversationsProvider extends ChangeNotifier {
     if (_clientVisible == visible) return;
     _clientVisible = visible;
     if (visible) _hiddenArrivals.clear();
-    reemitPushClientState();
+    _postActiveConversationToSw();
     if (visible) onClientVisible?.call();
   }
 
@@ -367,16 +247,10 @@ class ConversationsProvider extends ChangeNotifier {
   /// on screen owes its box read receipt, metadata-privacy slice (g)).
   void Function()? onClientVisible;
 
-  /// Re-sends the visibility (to the server) and the open chat (to the push
-  /// SW) without changing state.
-  ///
-  /// Socket.IO reconnects create a fresh server-side socket, so `client.data`
-  /// loses the previous `pushClientState`. Use this after socketReady/resume
-  /// even when nothing changed.
-  void reemitPushClientState() {
-    _emit?.call('pushClientState', {'clientVisible': _clientVisible});
-    _postActiveConversationToSw();
-  }
+  /// Re-posts the open chat to the push SW without changing state: a worker
+  /// the browser restarted holds none, so a resume or a reconnect says it
+  /// again.
+  void repostActiveConversationToSw() => _postActiveConversationToSw();
 
   /// Defense-in-depth for the PWA: tell the push SW which chat is open so it
   /// suppresses a banner for a conversation the user is already viewing, even
@@ -413,31 +287,11 @@ class ConversationsProvider extends ChangeNotifier {
   int? get pendingNotificationConversationId =>
       _pendingNotificationConversationId;
 
-  /// Whether the waits that hang on the first server snapshot may stop: a
-  /// list arrived, or the wait for one ran out ([releaseFirstSnapshotWait]).
-  /// The chat-list skeleton, the notification-tap navigation and the unread
-  /// badge flush read this; nothing that writes, prunes or reconciles does.
-  bool get hasLoadedConversationsOnce =>
-      _conversationsListReceivedOnce || _firstSnapshotWaitOver;
+  /// Whether the contact store was read this session (a closed or absent
+  /// store counts: there is nothing to wait for). The chat-list skeleton, the
+  /// notification-tap navigation and the unread badge flush read this.
+  bool get hasLoadedConversations => _hydrated;
 
-  /// True only once a real server `conversationsList` arrived. Unlike
-  /// [hasLoadedConversationsOnce] the bounded-wait release
-  /// ([releaseFirstSnapshotWait]) never sets it, so a decision that asks the
-  /// server again keys off this one.
-  bool get conversationsListReceived => _conversationsListReceivedOnce;
-
-  /// The bounded wait for `conversationsList` ran out (decision 121): releases
-  /// the three waits above and NOTHING else — no list handler runs, nothing
-  /// is pruned, swept or reconciled, and local contacts and chats stay as
-  /// held. A list that arrives later is applied like an on-time one.
-  void releaseFirstSnapshotWait() {
-    if (_conversationsListReceivedOnce || _firstSnapshotWaitOver) return;
-    _firstSnapshotWaitOver = true;
-    notifyListeners();
-  }
-
-  bool get activeConversationDeletedByOther =>
-      _activeConversationDeletedByOther;
   Map<int, int> get unreadCounts => _unreadCounts;
 
   int getUnreadCount(int conversationId) => _unreadCounts[conversationId] ?? 0;
@@ -477,16 +331,6 @@ class ConversationsProvider extends ChangeNotifier {
     return id;
   }
 
-  /// Call when user navigates back from a chat that was deleted by the other user.
-  void clearActiveIfDeletedByOther() {
-    if (_activeConversationDeletedByOther) {
-      _activeConversationDeletedByOther = false;
-      _activeConversationId = null;
-      notifyListeners();
-      _postActiveConversationToSw();
-    }
-  }
-
   // ---------- Conversation Helpers ----------
 
   String getOtherUserUsername(ConversationModel conv) =>
@@ -498,363 +342,20 @@ class ConversationsProvider extends ChangeNotifier {
   UserModel? getOtherUser(ConversationModel conv) =>
       conv_helpers.getOtherUser(conv, _currentUserId);
 
-  // ---------- Event Handlers (called by socket events) ----------
-
-  /// Handle 'conversationsList' event from backend.
-  void onConversationsList(dynamic data) {
-    final list = data as List<dynamic>;
-    final firstSnapshot = !_conversationsListReceivedOnce;
-    _conversationsListReceivedOnce = true;
-    final newConvs = list
-        .map((c) => ConversationModel.fromJson(c as Map<String, dynamic>))
-        .toList();
-
-    // Reconnect / network handoff: ignore empty snapshots that would wipe a populated
-    // local list (stale response, throttled handler, or race before auth was ready).
-    // The FIRST snapshot of a session is exempt: before it the list can only
-    // hold contact-store hydration, and an empty first answer is the server's
-    // truth (every conversation deleted from another device), not a hiccup.
-    if (newConvs.isEmpty && _conversations.isNotEmpty && !firstSnapshot) {
-      E2eDiagLog.add('CONV_LIST', {
-        'count': 0,
-        'ignoredEmpty': true,
-        'localCount': _conversations.length,
-      });
-      debugPrint(
-        '[ConversationsProvider] Ignoring empty conversationsList (${_conversations.length} local conversations preserved)',
-      );
-      return;
-    }
-    E2eDiagLog.add('CONV_LIST', {'count': newConvs.length});
-
-    // If our active conv is no longer in list (e.g. other user deleted), mark
-    // it. A local chat is never in a server list.
-    final active = _activeConversationId;
-    if (active != null &&
-        !isLocalConversationId(active) &&
-        !newConvs.any((c) => c.id == active)) {
-      _activeConversationDeletedByOther = true;
-    }
-
-    // The store keeps the SERVER's pin; what the chat shows keeps an E2E pin
-    // still in force (item 4, E19f) — no server list names one.
-    _storeConversationsList(newConvs);
-    _serverPins
-      ..clear()
-      ..addAll({for (final c in newConvs) c.id: ?c.pinnedMessageId});
-    final local = _localChats();
-    _conversations = [
-      for (final c in newConvs) _withBoxPinShown(c),
-      for (final c in local)
-        if (!newConvs.any((s) => s.id == c.id)) _withBoxPinShown(c),
-    ];
-    // A local chat's unread count is this device's own: no snapshot has one.
-    _unreadCounts.removeWhere((id, _) => !isLocalConversationId(id));
-    _boxUnread.removeWhere(
-      (id, _) => !isLocalConversationId(id) && !newConvs.any((c) => c.id == id),
-    );
-    // The server list is AUTHORITATIVE over any optimistic pin still waiting
-    // for its answer, so every pre-pin snapshot is now superseded. Keeping one
-    // is how a refusal much later reverts a conversation to state that predates
-    // this refresh — reachable when the settling event never arrives at all
-    // (a socket drop between the server's commit and its emit, or a non-throttle
-    // pin rejection, which rides the bare `error` event that no pin code reads).
-    _prePinState.clear();
-    _preDisappearingTimerState.clear();
-
-    for (final c in list) {
-      final m = c as Map<String, dynamic>;
-      final convId = m['id'] as int;
-      final serverUnread = (m['unreadCount'] as num?)?.toInt() ?? 0;
-      // The open conversation is fully read (0). For every other conversation
-      // trust the server snapshot so a read-driven decrease actually lowers the
-      // badge — replacing the old max() merge, which could only raise counts and
-      // left a badge permanently stuck after the conversation was read. Tradeoff:
-      // a stale snapshot can briefly reset a just-incremented local count, but the
-      // next snapshot restores it (and the message is already in the loaded list).
-      // The server cannot count a box message, so this device's are added.
-      if (convId == _activeConversationId) _boxUnread.remove(convId);
-      _unreadCounts[convId] = convId == _activeConversationId
-          ? 0
-          : serverUnread + (_boxUnread[convId]?.length ?? 0);
-
-      // Update last message from backend data. An E2E row keeps its
-      // `[encrypted]` sentinel: the list decides how to show it (amendment
-      // (lxxxviii) A1), and relabelling it here made a row this install can
-      // never read look readable to that decision. A box message held here
-      // that is newer stays: the server never names one (decision 14).
-      final lastMsgData = m['lastMessage'];
-      if (lastMsgData != null) {
-        try {
-          final server = MessageModel.fromJson(
-            lastMsgData as Map<String, dynamic>,
-          );
-          final held = _lastMessages[convId];
-          if (held == null ||
-              !isLocalMessageId(held.id) ||
-              !held.createdAt.isAfter(server.createdAt)) {
-            _lastMessages[convId] = server;
-          }
-        } catch (e) {
-          debugPrint(
-            '[ConversationsProvider] Failed to parse lastMessage for conversation $convId: $e',
-          );
-        }
-      }
-    }
-
-    // Sweep push notifications for conversations that are no longer unread.
-    final unreadConvIds = _unreadCounts.entries
-        .where((e) => e.value > 0)
-        .map((e) => e.key)
-        .toSet();
-    final totalUnread = _unreadCounts.values.fold(0, (sum, v) => sum + v);
-    _notificationCleaner.sweepNotificationsKeepUnread(
-      unreadConvIds,
-      totalUnread,
-    );
-
-    notifyListeners();
-  }
-
-  /// Handle 'openConversation' event — store pending ID for screen navigation.
-  void onOpenConversation(dynamic data) {
-    final convId = (data as Map<String, dynamic>)['conversationId'] as int;
-    _pendingOpenConversationId = convId;
-    notifyListeners();
-  }
-
-  /// Handle 'conversationDeleted' event — remove from list, handle active.
-  void onConversationDeleted(dynamic data) {
-    final convId = data['conversationId'] as int;
-    _storeConversationGone([
-      for (final c in _conversations)
-        if (c.id == convId) getOtherUserId(c),
-    ]);
-    _removeConversationById(convId);
-    notifyListeners();
-  }
-
-  /// Handle 'disappearingTimerUpdated' event — update conversation timer.
-  void onDisappearingTimerUpdated(dynamic data) {
-    final m = data as Map<String, dynamic>;
-    final conversationId = m['conversationId'] as int;
-    final seconds = m['seconds'] as int?;
-
-    final index = _conversations.indexWhere((c) => c.id == conversationId);
-    if (index != -1) {
-      final oldConv = _conversations[index];
-      _conversations[index] = oldConv.copyWith(
-        disappearingTimer: seconds,
-        clearDisappearingTimer: seconds == null,
-      );
-    }
-    // Settled authoritatively: nothing left to undo, and keeping the snapshot
-    // would let a LATER unrelated refusal revert to stale state.
-    _preDisappearingTimerState.remove(conversationId);
-    _storeSettings(
-      conversationId,
-      (s) => s.copyWith(
-        disappearingTimer: seconds,
-        clearDisappearingTimer: seconds == null,
-      ),
-    );
-
-    notifyListeners();
-  }
-
-  /// The timer each conversation showed BEFORE an optimistic change overwrote
-  /// it.
-  ///
-  /// Same shape and same reason as [_prePinState]: the throttle guard refuses
-  /// `setDisappearingTimer` BEFORE the handler runs, so the refusal knows only
-  /// what was asked for, never what it displaced. Without this the refused
-  /// device kept showing a timer the server and the peer never had — messages
-  /// this user believes will vanish, and which will not.
-  ///
-  /// `null` is a real entry meaning "no timer before", so the map is consulted
-  /// with `containsKey`, never with a null check.
-  final Map<int, int?> _preDisappearingTimerState = {};
-
-  /// Handle 'disappearingTimerFailed' — the change was refused, so restore what
-  /// the optimistic apply overwrote.
-  ///
-  /// With no snapshot there is nothing to undo: either this device never made
-  /// the change, or a previous answer already settled it. Guessing a value here
-  /// would destroy state the server still holds.
-  void onDisappearingTimerFailed(dynamic data) {
-    final conversationId =
-        (data as Map<String, dynamic>)['conversationId'] as int?;
-    if (conversationId == null) return;
-    if (!_preDisappearingTimerState.containsKey(conversationId)) return;
-    final restored = _preDisappearingTimerState.remove(conversationId);
-    final index = _conversations.indexWhere((c) => c.id == conversationId);
-    if (index != -1) {
-      final oldConv = _conversations[index];
-      _conversations[index] = oldConv.copyWith(
-        disappearingTimer: restored,
-        clearDisappearingTimer: restored == null,
-      );
-    }
-    notifyListeners();
-  }
-
-  /// The pin each conversation showed BEFORE an optimistic pin overwrote it.
-  ///
-  /// A refusal cannot carry the prior state — the server refuses a throttled
-  /// `pinMessage` before its handler ever runs, so it knows only what was
-  /// asked for (spec §12 (xxxvii)). Only the pinning device knows what it
-  /// overwrote, so it has to remember. `null` is a real entry, meaning "this
-  /// conversation was UNPINNED before" — which is why the map is consulted with
-  /// `containsKey` and never with a null check.
-  final Map<int, ({int? messageId, MessageModel? preview})> _prePinState = {};
-
-  /// Optimistic pin preview from the open chat row (keeps pinner plaintext for own E2E).
-  void setPinnedPreviewOptimistic(
-    int conversationId,
-    int messageId,
-    MessageModel localPreview,
-  ) {
-    final index = _conversations.indexWhere((c) => c.id == conversationId);
-    if (index == -1) return;
-    final oldConv = _conversations[index];
-    // Snapshot BEFORE the overwrite, and only for the first unsettled pin of a
-    // conversation: a second optimistic pin before the first settles must not
-    // replace the snapshot with the first pin's own (optimistic) state, or the
-    // revert would restore a pin the server never accepted either.
-    _prePinState.putIfAbsent(
-      conversationId,
-      () => (
-        messageId: oldConv.pinnedMessageId,
-        preview: oldConv.pinnedMessagePreview,
-      ),
-    );
-    _conversations[index] = oldConv.copyWith(
-      pinnedMessageId: messageId,
-      pinnedMessagePreview: localPreview,
-    );
-    notifyListeners();
-  }
-
-  /// Handle 'messagePinFailed' — the pin was refused, so restore what the
-  /// optimistic apply overwrote (spec §12 (xxxvii)).
-  ///
-  /// With no snapshot there is nothing to undo: either this device never
-  /// applied the pin optimistically (the message was not local), or an
-  /// authoritative event already settled it. Doing nothing is then correct —
-  /// clearing the pin here would destroy state the server still holds.
-  void onPinMessageFailed(dynamic data) {
-    final conversationId =
-        (data as Map<String, dynamic>)['conversationId'] as int?;
-    if (conversationId == null) return;
-    final restored = _prePinState.remove(conversationId);
-    if (restored == null) return;
-    final index = _conversations.indexWhere((c) => c.id == conversationId);
-    if (index != -1) {
-      _conversations[index] = _conversations[index].copyWith(
-        pinnedMessageId: restored.messageId,
-        clearPinnedMessageId: restored.messageId == null,
-        pinnedMessagePreview: restored.preview,
-        clearPinnedMessagePreview: restored.preview == null,
-      );
-    }
-    notifyListeners();
-  }
-
-  /// Handle 'messagePinned' event — update pin id and preview snapshot.
-  ///
-  /// A server pin names an OLD-path row (decision 46) and replaces an E2E
-  /// pin: the E2E register goes unpinned at its OWN last `ts` (decision 45,
-  /// E19f) — never this device's clock, which no other device shares.
-  void onMessagePinned(dynamic data, {MessageModel? localPinnedMessage}) {
-    final m = data as Map<String, dynamic>;
-    final conversationId = m['conversationId'] as int;
-    final pinnedMessageId = m['pinnedMessageId'] as int?;
-    if (pinnedMessageId == null) {
-      onMessageUnpinned(data);
-      return;
-    }
-    // No time of its own: this device's clock is not an action `ts` every
-    // device shares, and a fast clock here would drop newer E2E pins as
-    // stale (E19f). The register keeps its last `at`, unpinned — a tie goes
-    // to the unpin, so a re-delivered older pin cannot resurrect.
-    final replaced = BoxPin(
-      at:
-          boxPinOf(conversationId)?.at ??
-          DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
-    );
-    _serverPins[conversationId] = pinnedMessageId;
-    _boxPins[conversationId] = replaced;
-    _boxPinShown.remove(conversationId);
-    MessageModel? preview;
-    final previewData = m['pinnedMessage'];
-    if (previewData != null) {
-      final serverPreview = MessageModel.fromJson(
-        previewData as Map<String, dynamic>,
-      );
-      preview = resolvePinnedPreviewMessage(
-        serverPreview: serverPreview,
-        localMessage: localPinnedMessage,
-      );
-    } else if (localPinnedMessage != null) {
-      preview = localPinnedMessage;
-    }
-
-    final index = _conversations.indexWhere((c) => c.id == conversationId);
-    if (index != -1) {
-      final oldConv = _conversations[index];
-      _conversations[index] = oldConv.copyWith(
-        pinnedMessageId: pinnedMessageId,
-        pinnedMessagePreview: preview,
-        clearPinnedMessagePreview: preview == null,
-      );
-    }
-    // Settled authoritatively: the snapshot has nothing left to undo, and
-    // keeping it would let a LATER unrelated refusal revert to stale state.
-    _prePinState.remove(conversationId);
-    _storeSettings(
-      conversationId,
-      (s) => s.copyWith(pinnedMessageId: pinnedMessageId, boxPin: replaced),
-    );
-    notifyListeners();
-  }
-
-  /// Handle 'messageUnpinned' event — clear the SERVER pin. An E2E pin on
-  /// show stays (item 4): the server never held it, and this is often the
-  /// answer to the `unpinMessage` our own E2E pin sent (decision 45).
-  void onMessageUnpinned(dynamic data) {
-    final conversationId =
-        (data as Map<String, dynamic>)['conversationId'] as int;
-    _serverPins.remove(conversationId);
-    final index = _conversations.indexWhere((c) => c.id == conversationId);
-    final shown = index == -1 ? null : _conversations[index].pinnedMessageId;
-    if (shown == null || !isLocalMessageId(shown)) {
-      if (index != -1) {
-        _conversations[index] = _conversations[index].copyWith(
-          clearPinnedMessageId: true,
-          clearPinnedMessagePreview: true,
-        );
-      }
-      _prePinState.remove(conversationId);
-    }
-    _storeSettings(
-      conversationId,
-      (s) => s.copyWith(clearPinnedMessageId: true),
-    );
-    notifyListeners();
-  }
-
   /// The E2E pin register of each chat this session wrote or read (item 4,
   /// E19f); the contact record holds it across launches.
   final Map<int, BoxPin> _boxPins = {};
 
   /// The message each E2E pin shows — THIS device's copy, found by the
-  /// messaging side ([applyBoxPin]) — kept over every server snapshot.
+  /// messaging side ([applyBoxPin]) — kept over every rebuild of the list.
   final Map<int, MessageModel> _boxPinShown = {};
 
-  /// The pin the server holds in each chat, as its snapshots and events
-  /// said: what decision 45's one `unpinMessage` clears.
-  final Map<int, int> _serverPins = {};
+  /// The pin each chat showed BEFORE an optimistic pin or unpin overwrote it,
+  /// so a box action that did not go out ([revertOptimisticPin]) puts it back.
+  /// `null` is a real entry, meaning "this chat was UNPINNED before" — which
+  /// is why the map is consulted with `containsKey` and never with a null
+  /// check.
+  final Map<int, ({int? messageId, MessageModel? preview})> _prePinState = {};
 
   /// [conversationId]'s E2E pin register: this session's, else the one the
   /// peer's contact record kept. Null = never written.
@@ -899,8 +400,44 @@ class ConversationsProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  ConversationModel _withBoxPinShown(ConversationModel conv) {
+    final shown = _boxPinShown[conv.id];
+    if (shown == null || !(_boxPins[conv.id]?.pinned ?? false)) return conv;
+    return conv.copyWith(
+      pinnedMessageId: shown.id,
+      pinnedMessagePreview: shown,
+    );
+  }
+
+  /// Optimistic pin preview from the open chat row (keeps pinner plaintext for own E2E).
+  void setPinnedPreviewOptimistic(
+    int conversationId,
+    int messageId,
+    MessageModel localPreview,
+  ) {
+    final index = _conversations.indexWhere((c) => c.id == conversationId);
+    if (index == -1) return;
+    final oldConv = _conversations[index];
+    // Snapshot BEFORE the overwrite, and only for the first unsettled pin of a
+    // conversation: a second optimistic pin before the first settles must not
+    // replace the snapshot with the first pin's own (optimistic) state, or the
+    // revert would restore a pin that never went out either.
+    _prePinState.putIfAbsent(
+      conversationId,
+      () => (
+        messageId: oldConv.pinnedMessageId,
+        preview: oldConv.pinnedMessagePreview,
+      ),
+    );
+    _conversations[index] = oldConv.copyWith(
+      pinnedMessageId: messageId,
+      pinnedMessagePreview: localPreview,
+    );
+    notifyListeners();
+  }
+
   /// Takes an E2E pin off the banner before its unpin was sent, keeping
-  /// what it showed for [onPinMessageFailed].
+  /// what it showed for [revertOptimisticPin].
   void setUnpinnedOptimistic(int conversationId) {
     final index = _conversations.indexWhere((c) => c.id == conversationId);
     if (index == -1) return;
@@ -919,65 +456,57 @@ class ConversationsProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// The server pin of [conversationId] as the server last said, kept until
-  /// `messageUnpinned` answers decision 45's `unpinMessage`.
-  int? serverPinOf(int conversationId) => _serverPins[conversationId];
-
-  ConversationModel _withBoxPinShown(ConversationModel conv) {
-    final shown = _boxPinShown[conv.id];
-    if (shown == null || !(_boxPins[conv.id]?.pinned ?? false)) return conv;
-    return conv.copyWith(
-      pinnedMessageId: shown.id,
-      pinnedMessagePreview: shown,
-    );
+  /// The pin or unpin did not go out: restore what the optimistic apply
+  /// overwrote. With no snapshot there is nothing to undo — an authoritative
+  /// [applyBoxPin] already settled it.
+  void revertOptimisticPin(int conversationId) {
+    final restored = _prePinState.remove(conversationId);
+    if (restored == null) return;
+    final index = _conversations.indexWhere((c) => c.id == conversationId);
+    if (index != -1) {
+      _conversations[index] = _conversations[index].copyWith(
+        pinnedMessageId: restored.messageId,
+        clearPinnedMessageId: restored.messageId == null,
+        pinnedMessagePreview: restored.preview,
+        clearPinnedMessagePreview: restored.preview == null,
+      );
+    }
+    notifyListeners();
   }
 
   // ---------- Action Methods ----------
 
-  /// Emit getConversations socket event.
-  void getConversations() {
-    _emit?.call('getConversations', null);
-  }
-
-  /// Emit startConversation socket event. A friend made over the box (owner
-  /// decision 52) is never named to the server: its chat is its local id,
-  /// shown again if it was deleted here, and opened at once.
+  /// Opens the chat with friend [recipientId]: it shows again if it was
+  /// deleted on this device, and [consumePendingOpen] names it. A record that
+  /// is no friend, or has no chat, opens nothing.
   void startConversation(int recipientId) {
     final record = _store?.byUserId(recipientId);
-    if (record != null && record.boxOrigin != null) {
-      if (record.state != ContactState.friend) return;
-      final id = localConversationIdFor(recipientId);
-      revealLocalChat(id);
-      final self = _store?.self;
-      if (self != null && !_conversations.any((c) => c.id == id)) {
-        _conversations = [
-          ..._conversations,
-          _withBoxPinShown(_chatOf(record, self)),
-        ];
-      }
-      _pendingOpenConversationId = id;
-      notifyListeners();
-      return;
+    if (record == null || record.state != ContactState.friend) return;
+    final id = record.chatId;
+    if (id == null) return;
+    revealChat(id);
+    final self = _store?.self;
+    if (self != null && !_conversations.any((c) => c.id == id)) {
+      _conversations = [
+        ..._conversations,
+        _withBoxPinShown(_chatOf(record, self)),
+      ];
     }
-    _emit?.call('startConversation', {'recipientId': recipientId});
+    _pendingOpenConversationId = id;
+    notifyListeners();
   }
 
-  /// Removes the conversation locally immediately, then emits deleteConversationOnly.
+  /// Removes the chat locally immediately: this device's row and history go,
+  /// the friendship stays, and the row is kept out of the list
+  /// ([ContactSettings.chatHidden]) until it is revealed ([revealChat]).
   ///
   /// Swipe [Dismissible] must remove the row from the list in the same frame as
   /// [onDismissed]; otherwise the tile stays in the tree while the dismiss
   /// animation completes and the widget can rebuild with a stuck red background.
-  /// A local chat (owner decision 52) has no server row: this device's row
-  /// and history go, the friendship stays, and the row is kept out of the
-  /// list ([ContactSettings.chatHidden]) until it is revealed.
   void deleteConversation(int conversationId) {
-    if (isLocalConversationId(conversationId)) {
-      _storeSettings(conversationId, (s) => s.copyWith(chatHidden: true));
-    }
+    _storeSettings(conversationId, (s) => s.copyWith(chatHidden: true));
     _removeConversationById(conversationId);
     notifyListeners();
-    if (isLocalConversationId(conversationId)) return;
-    _emit?.call('deleteConversationOnly', {'conversationId': conversationId});
   }
 
   /// A local chat's timer was set here at `at` (slice (f), E15k): the
@@ -986,54 +515,32 @@ class ConversationsProvider extends ChangeNotifier {
   void Function(int peerUserId, int? seconds, DateTime at)?
   onLocalChatTimerChanged;
 
-  /// Emit setDisappearingTimer socket event (optimistic local update). A
-  /// local chat keeps its timer on the devices (owner decision 52): stored
-  /// here with the time it was set, sent over the box by
-  /// [onLocalChatTimerChanged], never emitted. A server chat whose friend
-  /// the box also carries goes both ways (decision 107): the box copy
-  /// survives the server going silent, the server copy keeps old builds.
+  /// Sets the chat's disappearing timer: shown at once, kept on the contact
+  /// record with the time it was set (E15k's `timerAt`), and — when the box
+  /// carries the friend (`ContactRecord.onBoxRoute`) — told to the friend's
+  /// devices and our siblings by [onLocalChatTimerChanged]. The server is never
+  /// told (decision 126's step 5 cutover).
   void setDisappearingTimer(int conversationId, int? timer) {
-    final local = isLocalConversationId(conversationId);
     final index = _conversations.indexWhere((c) => c.id == conversationId);
-    final peer = index == -1 ? null : getOtherUserId(_conversations[index]);
-    final onBox =
-        local ||
-        (peer != null && (_store?.byUserId(peer)?.onBoxRoute ?? false));
-    if (index != -1) {
-      final oldConv = _conversations[index];
-      // Remember what is being overwritten BEFORE overwriting it, so a refusal
-      // can put it back. putIfAbsent: with two changes in flight the FIRST
-      // snapshot is the last server-confirmed state, and a revert to the
-      // second would restore a timer the server never accepted either.
-      if (!local) {
-        _preDisappearingTimerState.putIfAbsent(
-          conversationId,
-          () => oldConv.disappearingTimer,
-        );
-      }
-      _conversations[index] = oldConv.copyWith(
+    if (index == -1) return;
+    final peer = getOtherUserId(_conversations[index]);
+    _conversations[index] = _conversations[index].copyWith(
+      disappearingTimer: timer,
+      clearDisappearingTimer: timer == null,
+    );
+    notifyListeners();
+    final at = DateTime.now().toUtc();
+    _storeSettings(
+      conversationId,
+      (s) => s.copyWith(
         disappearingTimer: timer,
         clearDisappearingTimer: timer == null,
-      );
-      notifyListeners();
+        timerAt: at,
+      ),
+    );
+    if (_store?.byUserId(peer)?.onBoxRoute ?? false) {
+      onLocalChatTimerChanged?.call(peer, timer, at);
     }
-    if (onBox) {
-      final at = DateTime.now().toUtc();
-      _storeSettings(
-        conversationId,
-        (s) => s.copyWith(
-          disappearingTimer: timer,
-          clearDisappearingTimer: timer == null,
-          timerAt: at,
-        ),
-      );
-      if (peer != null) onLocalChatTimerChanged?.call(peer, timer, at);
-    }
-    if (local) return;
-    _emit?.call('setDisappearingTimer', {
-      'conversationId': conversationId,
-      'seconds': timer,
-    });
   }
 
   /// The timer of the chat with [peerUserId] as another device set it at
@@ -1075,38 +582,20 @@ class ConversationsProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// A local chat mutes on this device only (owner decision 52, E15k), with
-  /// the server's own durations (`mutedUntilFor`).
+  /// A chat mutes on this device only (owner decision 52, E15k), for the
+  /// durations the sheet offers (`1h`, `8h`, `1w`, `off`; anything else is
+  /// until further notice).
   void setConversationMute(int conversationId, String duration) {
-    if (isLocalConversationId(conversationId)) {
-      final span = switch (duration) {
-        '1h' => const Duration(hours: 1),
-        '8h' => const Duration(hours: 8),
-        '1w' => const Duration(days: 7),
-        _ => null,
-      };
-      _applyMute(
-        conversationId,
-        muted: duration != 'off',
-        mutedUntil: span == null ? null : DateTime.now().add(span),
-      );
-      return;
-    }
-    _emit?.call('setConversationMute', {
-      'conversationId': conversationId,
-      'duration': duration,
-    });
-  }
-
-  void onConversationMuteUpdated(dynamic data) {
-    final payload = data as Map<String, dynamic>;
-    final mutedUntilRaw = payload['mutedUntil'] as String?;
+    final span = switch (duration) {
+      '1h' => const Duration(hours: 1),
+      '8h' => const Duration(hours: 8),
+      '1w' => const Duration(days: 7),
+      _ => null,
+    };
     _applyMute(
-      payload['conversationId'] as int,
-      muted: payload['muted'] as bool,
-      mutedUntil: mutedUntilRaw == null
-          ? null
-          : DateTime.tryParse(mutedUntilRaw),
+      conversationId,
+      muted: duration != 'off',
+      mutedUntil: span == null ? null : DateTime.now().add(span),
     );
   }
 
@@ -1142,7 +631,6 @@ class ConversationsProvider extends ChangeNotifier {
   /// [notifyListeners] during build throws and can race [messageHistory].
   void openConversation(int? conversationId, {bool notify = true}) {
     _activeConversationId = conversationId;
-    _activeConversationDeletedByOther = false;
     if (conversationId != null) {
       _unreadCounts[conversationId] = 0;
       _boxUnread.remove(conversationId);
@@ -1162,7 +650,6 @@ class ConversationsProvider extends ChangeNotifier {
   /// will call openConversation (avoids double getMessages on desktop).
   void setActiveConversation(int conversationId) {
     _activeConversationId = conversationId;
-    _activeConversationDeletedByOther = false;
     _unreadCounts[conversationId] = 0;
     _boxUnread.remove(conversationId);
     notifyListeners();
@@ -1194,28 +681,19 @@ class ConversationsProvider extends ChangeNotifier {
     _currentUserId = userId;
   }
 
-  /// Remove all conversations involving a user (called by FriendsProvider on unfriend/block).
-  /// Pass userId=-1 to remove conversations for a set of blocked users (caller provides IDs).
+  /// Remove the chat with a user (called by FriendsProvider on unfriend/block).
   ///
   /// Returns the ids of the conversations actually removed. This provider does
   /// not own message state, and the decrypted plaintext for those messages has
   /// to be destroyed by whoever does — so the caller needs to know which
   /// conversations went away, not just that some did.
-  Set<int> removeConversationsForUser(int userId, {Set<int>? blockedIds}) {
+  Set<int> removeConversationsForUser(int userId) {
     final removed = <int>{};
-    final gone = <ConversationModel>[];
     _conversations.removeWhere((c) {
-      final matches = userId == -1 && blockedIds != null
-          ? blockedIds.contains(c.userOne.id) ||
-                blockedIds.contains(c.userTwo.id)
-          : c.userOne.id == userId || c.userTwo.id == userId;
-      if (matches) {
-        removed.add(c.id);
-        gone.add(c);
-      }
+      final matches = c.userOne.id == userId || c.userTwo.id == userId;
+      if (matches) removed.add(c.id);
       return matches;
     });
-    _storeConversationGone(gone.map(getOtherUserId));
     _clearActiveIfRemoved();
     notifyListeners();
     _postActiveConversationToSw();
@@ -1288,14 +766,10 @@ class ConversationsProvider extends ChangeNotifier {
   }
 
   bool _hiddenLocalChat(int conversationId) =>
-      isLocalConversationId(conversationId) &&
-      (_store?.all.any(
-            (r) =>
-                r.boxOrigin != null &&
-                r.chatId == conversationId &&
-                r.settings.chatHidden,
-          ) ??
-          false);
+      _store?.all.any(
+        (r) => r.chatId == conversationId && r.settings.chatHidden,
+      ) ??
+      false;
 
   /// Remove expired messages from [lastMessages]. Does not notify listeners.
   void removeExpiredLastMessages() {
@@ -1324,22 +798,17 @@ class ConversationsProvider extends ChangeNotifier {
       _boxUnread.clear();
       _hiddenArrivals.clear();
       _storedBoxPassClaimed = false;
-      _prePinState.clear();
       _boxPins.clear();
       _boxPinShown.clear();
-      _serverPins.clear();
-      _preDisappearingTimerState.clear();
+      _prePinState.clear();
       _pendingOpenConversationId = null;
       _pendingNotificationConversationId = null;
-      _activeConversationDeletedByOther = false;
       _errorMessage = null;
       _clientVisible = true;
-      _conversationsListReceivedOnce = false;
-      _firstSnapshotWaitOver = false;
+      _hydrated = false;
     } else {
       // Reconnect (same user): keep conversations and active chat to avoid flicker.
       _pendingOpenConversationId = null;
-      _activeConversationDeletedByOther = false;
       _errorMessage = null;
     }
     notifyListeners();
@@ -1361,18 +830,14 @@ class ConversationsProvider extends ChangeNotifier {
     _boxUnread.clear();
     _hiddenArrivals.clear();
     _storedBoxPassClaimed = false;
-    _prePinState.clear();
     _boxPins.clear();
     _boxPinShown.clear();
-    _serverPins.clear();
-    _preDisappearingTimerState.clear();
+    _prePinState.clear();
     _pendingOpenConversationId = null;
     _pendingNotificationConversationId = null;
-    _activeConversationDeletedByOther = false;
     _errorMessage = null;
     _clientVisible = true;
-    _conversationsListReceivedOnce = false;
-    _firstSnapshotWaitOver = false;
+    _hydrated = false;
     // Clear all push notifications on logout.
     _notificationCleaner.sweepNotificationsKeepUnread(const {}, 0);
     notifyListeners();
@@ -1388,7 +853,6 @@ class ConversationsProvider extends ChangeNotifier {
     _boxUnread.remove(convId);
     if (_activeConversationId == convId) {
       _activeConversationId = null;
-      _activeConversationDeletedByOther = false;
     }
     _postActiveConversationToSw();
   }

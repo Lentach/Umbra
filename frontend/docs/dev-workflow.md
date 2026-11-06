@@ -8,7 +8,7 @@ Detail relocated from `frontend/CLAUDE.md` §1 (Commands) on 2026-09-24 to keep 
 cd frontend
 flutter test test/utils/instant_opaque_route_test.dart
 flutter test test/services/api_service_media_url_test.dart
-flutter test test/providers/message_editing_test.dart
+flutter test test/providers/messaging_provider_box_actions_test.dart
 ```
 
 ## Test-run cost curve
@@ -41,7 +41,7 @@ cd frontend
 flutter test test_e2e
 ```
 
-Two headless accounts run the REAL `ApiService`+`SocketService`+`EncryptionService` (real libsignal) against the local backend: register → WS key upload → friendship → conversation → PreKey(3:)/whisper(2:) round trips → mid-conversation session rebuild → edit → reactions, asserting decryption both ends. Fresh accounts every run BY DESIGN (server keeps old unused OTPs oldest-first; reuse ⇒ phantom bad-MAC). Register throttle 10/hr/IP is in-memory — `docker compose restart backend` resets it. The harness resets the flutter_test binding's HTTP-blocking `HttpOverrides` globally (`enableRealNetwork()`); found the burned-but-never-served OTP backend bug on its first run.
+Headless accounts run the REAL `ApiService`+`SocketService`+`EncryptionService` (real libsignal) against the local backend and check the wire contracts the server still owns: register → WS key upload → first contact (`setRequestQueue` + `searchUsers`) → a served bundle builds a PreKey(3:)/whisper(2:) session (the ciphertext is handed across in-process: the server has no message, friend or history handler since Phase 4 step 5, and transport is `box_roundtrip_test.dart`'s) → per-device key material → DAK enrollment + signed device list (a peer's list is read through `searchUsers`; `getDeviceList` answers only the caller's own id) → provisioning ceremony → device revocation, plus the registration lock, OTP epochs, identity reset/restore, takeover alarm, token fault injection and (opt-in) the box round trip and encryption proof. Fresh accounts every run BY DESIGN (server keeps old unused OTPs oldest-first; reuse ⇒ phantom bad-MAC). Register throttle 10/hr/IP is in-memory — `docker compose restart backend` resets it. The harness resets the flutter_test binding's HTTP-blocking `HttpOverrides` globally (`enableRealNetwork()`); found the burned-but-never-served OTP backend bug on its first run.
 
 ## On-device acceptance
 

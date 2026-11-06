@@ -6,7 +6,8 @@
  *            frontend/lib/services/box/box_push_nids_web.dart (writes `box-nids`)
  *
  * APP_BADGE_MAX must match kAppBadgeMaxDisplayCount in frontend/lib/utils/app_badge_math.dart
- * DEEPLINK_* and BOX_NIDS_KEY must match pending_deep_link_web.dart / box_push_nids_web.dart
+ * DEEPLINK_*, BOX_NIDS_KEY and WAKE_SESSION_KEY must match pending_deep_link_web.dart /
+ *   box_push_nids_web.dart / wake_session_web.dart (which writes `wake-session`)
  *
  * This SW is the single writer for the app icon badge and the notification tray.
  * The page never touches them directly — it posts messages here (see the
@@ -19,7 +20,7 @@
 // scope controls no page, so no navigation triggers an update check, and
 // WebKit does not soft-update after a push the way Chrome does — the page
 // calls `registration.update()` instead (web_push_bridge_web.dart).
-const SW_VERSION = 3;
+const SW_VERSION = 4;
 
 // A new copy takes over as soon as it is installed. This worker controls no
 // page (scope `/web-push-scope/`), so there is no page state to hand over.
@@ -485,6 +486,168 @@ function handleBoxWakeUp(payload) {
     });
 }
 
+// ---------- A revoked, closed device ends its own wake-ups (decision 130) ----------
+// The box ties no queue to a device or an account (decisions 81, 115), so a
+// friend whose list still names a device that was revoked while closed keeps
+// waking it. After a box wake-up this worker asks `POST /auth/refresh`, with
+// the refresh token and API origin the page leaves in `wake-session`
+// ({refresh, api}; `wake_session_web.dart`), whether the device was revoked;
+// on the explicit answer `401 {message: 'Device revoked'}` ONLY it
+// unsubscribes, the push service then answers 410 and the box drops the
+// notifier on its next send. A 200, any other 401 (a logout, a password
+// change), a 429, a 5xx, a timeout, a network error or an unreadable answer
+// does nothing. It acts only when no window of ours exists (an open page owns
+// its session) and is paced by `liveAt` / `attemptAt` in the same record: a
+// "not revoked" answer stands for WAKE_LIVE_MS, any attempt blocks the next
+// for WAKE_RETRY_MS. The page replaces the record at every login, which
+// starts the pacing afresh; this worker deletes its copy once it acted.
+const WAKE_SESSION_KEY = 'wake-session';
+const WAKE_LIVE_MS = 24 * 60 * 60 * 1000;
+const WAKE_RETRY_MS = 15 * 60 * 1000;
+const WAKE_PROBE_TIMEOUT_MS = 8000;
+var wakeCheckRunning = false;
+
+// One read-modify-write in ONE transaction: `change(current)` returns the new
+// value, null to delete the key, undefined to leave it. The page replaces the
+// record at every login; a read here and a write after the network call would
+// bring a dead session back.
+function kvUpdate(key, change) {
+  return openDeepLinkDb()
+    .then(function (db) {
+      return new Promise(function (resolve) {
+        try {
+          var tx = db.transaction(DEEPLINK_STORE, 'readwrite');
+          var store = tx.objectStore(DEEPLINK_STORE);
+          var req = store.get(key);
+          req.onsuccess = function () {
+            var next = change(req.result);
+            if (next === null) store.delete(key);
+            else if (next !== undefined) store.put(next, key);
+          };
+          tx.oncomplete = function () { db.close(); resolve(); };
+          tx.onabort = function () { db.close(); resolve(); };
+          tx.onerror = function () { db.close(); resolve(); };
+        } catch (_) { db.close(); resolve(); }
+      });
+    })
+    .catch(function () {});
+}
+
+// Merges [fields] into the record while it still holds [refresh]; resolves
+// whether it did (false: the page replaced or removed the session meanwhile).
+function stampWakeSession(refresh, fields) {
+  var applied = false;
+  return kvUpdate(WAKE_SESSION_KEY, function (cur) {
+    if (!cur || cur.refresh !== refresh) return undefined;
+    applied = true;
+    return Object.assign({}, cur, fields);
+  }).then(function () { return applied; });
+}
+
+function forgetWakeSession(refresh) {
+  return kvUpdate(WAKE_SESSION_KEY, function (cur) {
+    return cur && cur.refresh === refresh ? null : undefined;
+  });
+}
+
+// 'revoked' only for the explicit `401 Device revoked`. A 200 and any other
+// readable 401 are 'live' (not revoked, whatever became of the session);
+// everything else is 'unknown': no verdict, nothing changes.
+function wakeSessionStanding(session) {
+  var controller = typeof AbortController === 'function'
+    ? new AbortController()
+    : null;
+  var timer = controller
+    ? setTimeout(function () { controller.abort(); }, WAKE_PROBE_TIMEOUT_MS)
+    : null;
+  return fetch(session.api + '/auth/refresh', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refresh_token: session.refresh }),
+    credentials: 'omit',
+    cache: 'no-store',
+    signal: controller ? controller.signal : undefined,
+  })
+    .then(function (res) {
+      // 201 from a real server (a POST), 200 elsewhere: any 2xx is a refresh.
+      if (res.ok) return 'live';
+      if (res.status !== 401) return 'unknown';
+      return res.json().then(function (body) {
+        if (!body || typeof body !== 'object') return 'unknown';
+        return body.message === 'Device revoked' ? 'revoked' : 'live';
+      });
+    })
+    .catch(function () { return 'unknown'; })
+    .then(function (standing) {
+      clearTimeout(timer);
+      return standing;
+    });
+}
+
+function dropPushSubscription() {
+  return self.registration.pushManager.getSubscription().then(function (sub) {
+    return sub ? sub.unsubscribe() : true;
+  });
+}
+
+function isFreshStamp(at, now, span) {
+  return typeof at === 'number' && at <= now && now - at < span;
+}
+
+function checkWakeSession(record) {
+  var s = asRecord(record);
+  if (
+    typeof s.refresh !== 'string' || s.refresh === '' ||
+    typeof s.api !== 'string' || !/^https?:\/\//.test(s.api)
+  ) {
+    return undefined;
+  }
+  var now = Date.now();
+  if (
+    isFreshStamp(s.liveAt, now, WAKE_LIVE_MS) ||
+    isFreshStamp(s.attemptAt, now, WAKE_RETRY_MS)
+  ) {
+    return undefined;
+  }
+  var refresh = s.refresh;
+  // Stamped BEFORE the ask: a check cut short still paces the next one.
+  return stampWakeSession(refresh, { attemptAt: now }).then(function (ok) {
+    if (!ok) return undefined;
+    return wakeSessionStanding(s).then(function (standing) {
+      if (standing === 'revoked') {
+        // Still this session? A login that replaced it while the ask was out
+        // makes the verdict one about a dead session: nothing is dropped.
+        return stampWakeSession(refresh, { revokedAt: Date.now() }).then(
+          function (still) {
+            if (!still) return undefined;
+            return dropPushSubscription().then(function () {
+              return forgetWakeSession(refresh);
+            });
+          }
+        );
+      }
+      if (standing === 'live') {
+        return stampWakeSession(refresh, { liveAt: Date.now() });
+      }
+      return undefined;
+    });
+  });
+}
+
+// Never rejects: a wake-up is not failed by this. One check at a time.
+function endWakeUpsIfRevoked() {
+  if (wakeCheckRunning) return Promise.resolve();
+  wakeCheckRunning = true;
+  return clients
+    .matchAll({ type: 'window', includeUncontrolled: true })
+    .then(function (pages) {
+      if (pages.length > 0) return undefined;
+      return kvRead(WAKE_SESSION_KEY).then(checkWakeSession);
+    })
+    .catch(function () {})
+    .then(function () { wakeCheckRunning = false; });
+}
+
 // A push card (a box wake-up or the old path's) already stands for this chat
 // with at least [n] messages: a hidden page that was frozen and thaws re-reads
 // the blob it never acked, and would alert a second time for the same message.
@@ -543,7 +706,9 @@ self.addEventListener('push', function (event) {
 
   // Box wake-up with a queue id (decision 77): one card per chat.
   if (payload.type === 'new_message' && typeof payload.n === 'string') {
-    event.waitUntil(handleBoxWakeUp(payload));
+    // The card first; then, with no page of ours open, whether this device
+    // was revoked (decision 130). `finally` keeps the card's own outcome.
+    event.waitUntil(handleBoxWakeUp(payload).finally(endWakeUpsIfRevoked));
     return;
   }
 

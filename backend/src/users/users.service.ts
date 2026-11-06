@@ -13,14 +13,7 @@ import * as bcrypt from 'bcrypt';
 import { User } from './user.entity';
 import { ProfilePhoto } from './profile-photo.entity';
 import { LocalStorageService } from '../media/local-storage.service';
-import { Conversation } from '../conversations/conversation.entity';
-import { Message } from '../messages/message.entity';
-import { FriendRequest } from '../friends/friend-request.entity';
-import { FcmTokensService } from '../fcm-tokens/fcm-tokens.service';
 import { KeyBundlesService } from '../key-bundles/key-bundles.service';
-import { MessagesService } from '../messages/messages.service';
-import { MediaCleanupService } from '../media/media-cleanup.service';
-import { WebPushSubscriptionsService } from '../web-push-subscriptions/web-push-subscriptions.service';
 import { RefreshTokensService } from '../auth/refresh-tokens.service';
 
 @Injectable()
@@ -33,12 +26,8 @@ export class UsersService {
     @InjectRepository(ProfilePhoto)
     private profilePhotoRepo: Repository<ProfilePhoto>,
     private storageService: LocalStorageService,
-    private fcmTokensService: FcmTokensService,
-    private webPushSubscriptionsService: WebPushSubscriptionsService,
     private keyBundlesService: KeyBundlesService,
     private dataSource: DataSource,
-    private messagesService: MessagesService,
-    private mediaCleanup: MediaCleanupService,
     private refreshTokensService: RefreshTokensService,
   ) {}
 
@@ -370,11 +359,10 @@ export class UsersService {
     // loginable zombie.
     await this.refreshTokensService.revokeAllForUser(userId);
 
-    // Collect filesystem targets BEFORE the transaction (read-only queries).
-    // Message media URLs must be read while the rows still exist; the actual,
-    // irreversible unlinks are deferred until AFTER a successful commit so a
-    // rolled-back transaction never leaves a half-deleted, still-loginable
-    // account whose media/keys are already gone.
+    // Collect filesystem targets BEFORE the removal (read-only query). The
+    // actual, irreversible unlinks are deferred until AFTER a successful
+    // commit so a failed removal never leaves a half-deleted, still-loginable
+    // account whose avatars/keys are already gone.
     const profilePhotos = await this.getProfilePhotos(userId);
     const storageKeys = new Set(
       [
@@ -383,55 +371,20 @@ export class UsersService {
       ].filter((storageKey): storageKey is string => storageKey != null),
     );
 
-    const conversations = await this.usersRepo.manager.find(Conversation, {
-      where: [{ userOne: { id: userId } }, { userTwo: { id: userId } }],
-    });
-    const mediaUrls: string[] = [];
-    for (const conv of conversations) {
-      const urls = await this.messagesService.findMediaUrlsByConversation(
-        conv.id,
-      );
-      mediaUrls.push(...urls);
-    }
-
-    // All DB deletions in a single transaction to prevent partial deletion.
-    // Non-cascading tables (conversations, messages, friend requests) are
-    // removed explicitly; fcm tokens, web-push subscriptions and key bundles
-    // fall away by ON DELETE CASCADE when the user row is removed here.
-    await this.dataSource.transaction(async (manager) => {
-      const conversationsInTx = await manager.find(Conversation, {
-        where: [{ userOne: { id: userId } }, { userTwo: { id: userId } }],
-      });
-
-      for (const conv of conversationsInTx) {
-        await manager.delete(Message, { conversation: { id: conv.id } });
-        await manager.delete(Conversation, { id: conv.id });
-      }
-
-      // Use find-then-remove for friend requests (delete() can't use nested relation conditions)
-      const friendRequests = await manager.find(FriendRequest, {
-        where: [{ sender: { id: userId } }, { receiver: { id: userId } }],
-      });
-      if (friendRequests.length > 0) {
-        await manager.remove(friendRequests);
-      }
-
-      await manager.remove(User, user);
-    });
+    // Every table that points at the user (key bundles, one-time pre-keys,
+    // devices, profile photos, recovery/identity rows, contact backup) falls
+    // away by ON DELETE CASCADE when the user row is removed. The old chat
+    // tables are gone (Phase 4 step 5), so this is one statement.
+    await this.usersRepo.remove(user);
 
     // Only after the account is durably gone do we run the irreversible external
-    // cleanup: side-table purges (idempotent backstop to the FK cascade above)
-    // and filesystem unlinks. A failure here cannot resurrect the account.
-    await this.fcmTokensService.removeByUserId(userId);
-    await this.webPushSubscriptionsService.removeByUserId(userId);
+    // cleanup: the key-bundle purge (idempotent backstop to the FK cascade
+    // above) and avatar unlinks. A failure here cannot resurrect the account.
     await this.keyBundlesService.deleteByUserId(userId);
     await Promise.all(
       [...storageKeys].map((storageKey) =>
         this.storageService.deleteAvatar(storageKey),
       ),
-    );
-    await Promise.all(
-      mediaUrls.map((url) => this.mediaCleanup.deleteMediaFile(url)),
     );
 
     this.auditLogger.log(`deleteAccount success`);

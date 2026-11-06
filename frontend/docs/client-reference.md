@@ -28,7 +28,7 @@ Detail relocated from `frontend/CLAUDE.md` §2, §4, §6 and §9 on 2026-09-24 t
 
 ## Unread merge
 
-- `conversationsList` unread merge trusts the server count (open conversation forced to 0). It replaced an old `max(prev, server)` merge that could only raise counts and left a badge permanently stuck after the conversation was read. Tradeoff: a stale snapshot can briefly reset a just-incremented local count, but the next snapshot restores it (and the message is already in the loaded list). The server cannot count a box message (no server row), so the unread box messages this device counted in a server chat (`ConversationsProvider._boxUnread`, by local id) are added to the snapshot's count until the chat is opened; a local chat's count is never touched by a snapshot. They survive a restart (decision 73, E73a): the session's first E2E-ready seeds them once (`seedBoxUnread`) from the stored peer box rows sent after each chat's device-local seen mark (`EncryptionService.boxSeenMarks`), which `markConversationRead` and the box-row merge move when the chat is shown with the app visible.
+- Unread counts are this device's own: no server snapshot names one since Phase 4 step 5 (the old `conversationsList` merge — first `max(prev, server)`, then "trust the server count" — is gone with the server list). `ConversationsProvider._unreadCounts` counts live messages and `_boxUnread` (by local id) the unread box messages, so a row counted both ways counts once; opening a chat clears both. They survive a restart (decision 73, E73a): the session's first E2E-ready seeds them once (`seedBoxUnread`) from the stored peer box rows sent after each chat's device-local seen mark (`EncryptionService.boxSeenMarks`), which `markConversationRead` and the box-row merge move when the chat is shown with the app visible.
 
 ## Honeycomb captions
 
@@ -52,7 +52,7 @@ Detail relocated from `frontend/CLAUDE.md` §2, §4, §6 and §9 on 2026-09-24 t
 
 ## Chats plus badge
 
-- **The Chats `+` badge must have a door.** It counts `pendingRequestsCount` (server truth — the backend re-emits it after accept and decline, so it is never fixed up client-side), but the sheet behind it used to show friends only. `showChatHoneycombPicker` now returns `ChatPickerChoice` (`ChatPickerFriend` | `ChatPickerReviewInvitations` | `ChatPickerInviteNew`) and leads the comb with the senders of `friendRequests` as accent terminals (`HexAvatar(ember: 1)` + `invitationStatusPending`). Tapping one routes to `InvitationsScreen`; the picker NEVER accepts inline, because accept/decline own a scoped-failure and retry state machine that already lives there and a second copy would drift.
+- **The Chats `+` badge must have a door.** It counts `pendingRequestsCount` (the box requests pending in the contact store, `ContactState.pendingIn` — no server count exists), but the sheet behind it used to show friends only. `showChatHoneycombPicker` now returns `ChatPickerChoice` (`ChatPickerFriend` | `ChatPickerReviewInvitations` | `ChatPickerInviteNew`) and leads the comb with the senders of `friendRequests` as accent terminals (`HexAvatar(ember: 1)` + `invitationStatusPending`). Tapping one routes to `InvitationsScreen`; the picker NEVER accepts inline, because accept/decline own a scoped-failure and retry state machine that already lives there and a second copy would drift.
 
 ## UI verification loop and Dart MCP
 

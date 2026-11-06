@@ -24,6 +24,8 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../support/chat_seed.dart';
+
 /// The real plaintext store; Signal and the device lists are faked. An
 /// outbound "ciphertext" is `3:` + base64(plaintext), so every frame handed
 /// to the box can be read back; an inbound one decrypts to [inbound].
@@ -92,12 +94,6 @@ class _Encryption extends EncryptionProvider {
     int deviceId,
     String ciphertext,
   ) async => false;
-
-  @override
-  Future<void> savePendingSendRecord(
-    String key,
-    Map<String, dynamic> data,
-  ) async {}
 }
 
 /// One frame the box took: where, what, and how it is kept (E61a).
@@ -261,12 +257,13 @@ void main() {
     ..boxSiblings = link
     ..receiptsAndTyping = (() => switchOn);
 
-  ConversationsProvider newConversations() => ConversationsProvider()
-    ..contactStore = store
-    ..setCurrentUserId(1)
-    ..setEmitCallback((event, data) => emitted.add((event, data)))
-    ..onConversationsList([_bobConv, _carolConv])
-    ..openConversation(10);
+  ConversationsProvider newConversations() {
+    final convs = ConversationsProvider()
+      ..contactStore = store
+      ..setCurrentUserId(1);
+    seedConversations(convs, [_bobConv, _carolConv]);
+    return convs..openConversation(10);
+  }
 
   Future<void> pump([int turns = 60]) async {
     for (var i = 0; i < turns; i++) {
@@ -398,10 +395,7 @@ void main() {
     conversations = newConversations();
     await store.settled;
     provider = newProvider()..refreshBoxDeviceLists();
-    await provider.onMessageHistory({
-      'conversationId': 10,
-      'messages': <Object>[],
-    });
+    provider.getMessages(10);
     await pump(120);
   }
 
@@ -787,9 +781,9 @@ void main() {
     );
 
     test(
-      'a friend one of whose live devices handed us no queue is an old-path '
-      'chat: typing and the voice indicator go on the account socket, '
-      'nothing to the box, and the older-app notice shows (decision 48)',
+      'a friend one of whose live devices handed us no queue gets no typing '
+      'at all: nothing on the account socket, nothing to the box, and the '
+      'older-app notice shows (decision 48)',
       () {
         inFakeTime((clock) {
           outbox.addresses[2] = {1: _address(1)};
@@ -798,7 +792,10 @@ void main() {
             ..emitTyping()
             ..sendRecordingVoiceIndicator(2, 10, isRecording: true);
           clock.elapse(const Duration(milliseconds: 100));
-          expect(events(), containsAllInOrder(['typing', 'recordingVoice']));
+          expect(
+            events(),
+            isNot(anyOf(contains('typing'), contains('recordingVoice'))),
+          );
           expect(outbox.delivered, isEmpty);
           expect(provider.boxFriendPending(2), isTrue);
 

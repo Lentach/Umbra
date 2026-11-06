@@ -293,8 +293,8 @@ describe('WsThrottlerGuard — which requests share a bucket', () => {
  * `ThrottlerGuard` throws, Nest turns an unhandled WS exception into an
  * `exception` event, and this app's client listens to named events plus `error`
  * — never `exception`. Silence therefore strands any client state staked on the
- * answer: a throttled `editMessage` used to leave an optimistically applied
- * edit on that device forever while the server and the peer kept the old text.
+ * answer: a throttled `revokeDevice` used to leave the devices screen waiting
+ * forever for an acknowledgement that never came.
  */
 describe('WsThrottlerGuard — a throttled request answers in its own contract', () => {
   const detail = { timeToExpire: 42 } as ThrottlerLimitDetail;
@@ -349,79 +349,6 @@ describe('WsThrottlerGuard — a throttled request answers in its own contract',
     );
   }
 
-  it('answers a throttled editMessage on editMessageFailed so the optimistic edit reverts', async () => {
-    const { context, emit } = contextFor('editMessage', { messageId: 501 });
-
-    await guard().refuse(context);
-
-    // The client's existing onEditMessageFailed handler reverts on THIS shape —
-    // which is exactly why the refusal rides the request's own event instead of
-    // some new global one.
-    expect(emit).toHaveBeenCalledWith('editMessageFailed', {
-      messageId: 501,
-      reason: RATE_LIMITED,
-      retryAfterMs: 42_000,
-    });
-  });
-
-  it('answers a throttled pinMessage on messagePinFailed, carrying the conversation it was asked about', async () => {
-    const { context, emit } = contextFor('pinMessage', {
-      conversationId: 91,
-      messageId: 77,
-    });
-
-    await guard().refuse(context);
-
-    // The conversation id must come FROM THE REQUEST: the client keys its
-    // pre-pin snapshot by conversation, so a hardcoded or absent id reverts
-    // nothing. 91 is deliberately unlike the 7 the fixture uses for the user.
-    expect(emit).toHaveBeenCalledWith('messagePinFailed', {
-      conversationId: 91,
-      reason: RATE_LIMITED,
-      retryAfterMs: 42_000,
-    });
-  });
-
-  it('answers a throttled setDisappearingTimer on disappearingTimerFailed, carrying the conversation it was asked about', async () => {
-    const { context, emit } = contextFor('setDisappearingTimer', {
-      conversationId: 91,
-      seconds: 60,
-    });
-
-    await guard().refuse(context);
-
-    // Same contract as the pin, and the same reason it is a DEDICATED event:
-    // this guard refuses pre-handler, so it knows the requested `seconds` but
-    // not the timer being displaced. Echoing `disappearingTimerUpdated` would
-    // CONFIRM a change that never happened — and this value is a safety
-    // promise, so a device left showing a timer the server never accepted tells
-    // the user messages will vanish when they will not.
-    //
-    // The `seconds` must NOT appear: the client reverts from its own snapshot,
-    // and shipping the attempted value back invites a client to apply it.
-    expect(emit).toHaveBeenCalledWith('disappearingTimerFailed', {
-      conversationId: 91,
-      reason: RATE_LIMITED,
-      retryAfterMs: 42_000,
-    });
-  });
-
-  it('never answers a throttled unpinMessage in-contract — it stakes no optimistic state', async () => {
-    const { context, emit } = contextFor('unpinMessage', { conversationId: 91 });
-
-    await guard().refuse(context);
-
-    // An `unpinMessage` entry would be an answer no client code drives to a
-    // conclusion, which is the unreachable-code case the table forbids (it is
-    // why `uploadKeyBundle` was removed). The visible `error` fallback is the
-    // whole contract here.
-    expect(emit).toHaveBeenCalledWith('error', {
-      message: RATE_LIMITED,
-      event: 'unpinMessage',
-      retryAfterMs: 42_000,
-    });
-  });
-
   it.each([
     ['openProvisioning', 'provisioningOpened'],
     ['provisioningHello', 'provisioningHelloAck'],
@@ -469,7 +396,7 @@ describe('WsThrottlerGuard — a throttled request answers in its own contract',
   });
 
   it('STILL REFUSES after answering — the answer is a courtesy, not an escape', async () => {
-    const { context } = contextFor('editMessage', { messageId: 1 });
+    const { context } = contextFor('revokeDevice', { deviceId: 1 });
     const g = guard();
 
     await g.refuse(context);
@@ -481,7 +408,7 @@ describe('WsThrottlerGuard — a throttled request answers in its own contract',
 
   it('survives a client that cannot be emitted to, and still refuses', async () => {
     const handler = function handler() {};
-    Reflect.defineMetadata(MESSAGE_METADATA, 'editMessage', handler);
+    Reflect.defineMetadata(MESSAGE_METADATA, 'revokeDevice', handler);
     const context = {
       switchToWs: () => ({
         getClient: () => {

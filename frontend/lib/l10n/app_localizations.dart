@@ -794,23 +794,11 @@ abstract class AppLocalizations {
   /// **'Czat gotowy'**
   String get invitationChatReady;
 
-  /// No description provided for @invitationChatNeedsRetry.
-  ///
-  /// In pl, this message translates to:
-  /// **'Czat wymaga ponowienia'**
-  String get invitationChatNeedsRetry;
-
   /// No description provided for @invitationOpenChat.
   ///
   /// In pl, this message translates to:
   /// **'Otwórz czat'**
   String get invitationOpenChat;
-
-  /// No description provided for @invitationCreateChat.
-  ///
-  /// In pl, this message translates to:
-  /// **'Utwórz czat'**
-  String get invitationCreateChat;
 
   /// No description provided for @invitationDone.
   ///
@@ -854,54 +842,6 @@ abstract class AppLocalizations {
   /// **'Nie udało się odrzucić zaproszenia'**
   String get invitationDeclineFailed;
 
-  /// No description provided for @invitationChatSetupFailed.
-  ///
-  /// In pl, this message translates to:
-  /// **'Nie udało się utworzyć czatu'**
-  String get invitationChatSetupFailed;
-
-  /// No description provided for @invitationFailedUserNotFound.
-  ///
-  /// In pl, this message translates to:
-  /// **'Ten użytkownik już nie istnieje'**
-  String get invitationFailedUserNotFound;
-
-  /// No description provided for @invitationFailedSelf.
-  ///
-  /// In pl, this message translates to:
-  /// **'Nie możesz zaprosić samego siebie'**
-  String get invitationFailedSelf;
-
-  /// No description provided for @invitationFailedBlocked.
-  ///
-  /// In pl, this message translates to:
-  /// **'Nie możesz zaprosić tego użytkownika'**
-  String get invitationFailedBlocked;
-
-  /// No description provided for @invitationFailedAlreadyFriends.
-  ///
-  /// In pl, this message translates to:
-  /// **'Już jesteście połączeni'**
-  String get invitationFailedAlreadyFriends;
-
-  /// No description provided for @invitationFailedDuplicate.
-  ///
-  /// In pl, this message translates to:
-  /// **'Zaproszenie zostało już wysłane'**
-  String get invitationFailedDuplicate;
-
-  /// No description provided for @invitationFailedInvalidPayload.
-  ///
-  /// In pl, this message translates to:
-  /// **'Coś było nie tak z tym żądaniem'**
-  String get invitationFailedInvalidPayload;
-
-  /// No description provided for @invitationFailedNotFriends.
-  ///
-  /// In pl, this message translates to:
-  /// **'Nie jesteś połączony z tym użytkownikiem'**
-  String get invitationFailedNotFriends;
-
   /// No description provided for @invitationSemanticIncoming.
   ///
   /// In pl, this message translates to:
@@ -920,12 +860,6 @@ abstract class AppLocalizations {
   /// **'{name}, zaproszenie zaakceptowane, czat gotowy'**
   String invitationSemanticAcceptedReady(String name);
 
-  /// No description provided for @invitationSemanticAcceptedNotReady.
-  ///
-  /// In pl, this message translates to:
-  /// **'{name}, zaproszenie zaakceptowane, czat wymaga ponowienia'**
-  String invitationSemanticAcceptedNotReady(String name);
-
   /// No description provided for @encryptedMessage.
   ///
   /// In pl, this message translates to:
@@ -937,12 +871,6 @@ abstract class AppLocalizations {
   /// In pl, this message translates to:
   /// **'Nowa wiadomość'**
   String get newMessagePreview;
-
-  /// No description provided for @decryptingMessage.
-  ///
-  /// In pl, this message translates to:
-  /// **'Odszyfrowywanie…'**
-  String get decryptingMessage;
 
   /// No description provided for @messageNoLongerStoredOnThisDevice.
   ///
@@ -974,16 +902,10 @@ abstract class AppLocalizations {
   /// **'Wcześniejsze wiadomości nie są dostępne na tym urządzeniu'**
   String get historyNotOnThisDevice;
 
-  /// No description provided for @devicesSyncingNote.
+  /// One quiet line above the composer while this friend is not on the box yet (metadata-privacy owner decision 48). Since Phase 4 step 5 there is no old path: a send to them fails until their app updates. Shown only once this device itself is on the box.
   ///
   /// In pl, this message translates to:
-  /// **'Synchronizowanie urządzeń…'**
-  String get devicesSyncingNote;
-
-  /// One quiet line above the composer while this friend is not on the box yet (metadata-privacy owner decision 48): our messages to them still take the old path, which the server can see the timing of. Sending is never blocked. Shown only once this device itself is on the box.
-  ///
-  /// In pl, this message translates to:
-  /// **'{name} ma starszą wersję aplikacji. Wiadomości są szyfrowane, ale serwer widzi, kiedy piszecie.'**
+  /// **'{name} ma starszą wersję aplikacji i nie odbierze Twoich wiadomości, dopóki jej nie zaktualizuje.'**
   String boxFriendOlderAppNote(String name);
 
   /// No description provided for @encryptionNotInitialized.
@@ -1538,12 +1460,6 @@ abstract class AppLocalizations {
   /// **'Zablokuj użytkownika'**
   String get blockUser;
 
-  /// No description provided for @conversationDeletedByOther.
-  ///
-  /// In pl, this message translates to:
-  /// **'Rozmowa usunięta przez drugą osobę'**
-  String get conversationDeletedByOther;
-
   /// No description provided for @noMessagesYet.
   ///
   /// In pl, this message translates to:
@@ -1561,12 +1477,6 @@ abstract class AppLocalizations {
   /// In pl, this message translates to:
   /// **'Nie udało się połączyć z Twoimi innymi urządzeniami. Nic się nie zmieniło — spróbuj ponownie.'**
   String get boxEndNotSynced;
-
-  /// No description provided for @cantTypeToThisUser.
-  ///
-  /// In pl, this message translates to:
-  /// **'Nie możesz pisać do tego użytkownika'**
-  String get cantTypeToThisUser;
 
   /// No description provided for @recordingVoice.
   ///
@@ -1751,31 +1661,31 @@ abstract class AppLocalizations {
   /// No description provided for @actionTileClearChat.
   ///
   /// In pl, this message translates to:
-  /// **'Usuń czat u obu stron'**
+  /// **'Usuń czat na tym urządzeniu'**
   String get actionTileClearChat;
 
   /// No description provided for @clearChatHoldLabel.
   ///
   /// In pl, this message translates to:
-  /// **'Trzymaj — usuwa u obu stron'**
+  /// **'Trzymaj — usuwa tutaj'**
   String get clearChatHoldLabel;
 
   /// No description provided for @clearChatConfirmTitle.
   ///
   /// In pl, this message translates to:
-  /// **'Usunąć ten czat u obu stron?'**
+  /// **'Usunąć ten czat na tym urządzeniu?'**
   String get clearChatConfirmTitle;
 
   /// No description provided for @clearChatConfirmBody.
   ///
   /// In pl, this message translates to:
-  /// **'Wszystkie wiadomości, zdjęcia, filmy i wiadomości głosowe z tego czatu zostaną usunięte z serwera u Ciebie I u drugiej osoby. Tego nie można cofnąć — obejmuje to też wiadomości sprzed połączenia tego urządzenia.'**
+  /// **'Wszystkie wiadomości, zdjęcia, filmy i wiadomości głosowe z tego czatu zostaną usunięte z tego urządzenia. Druga osoba zachowa swoją kopię. Tego nie można cofnąć.'**
   String get clearChatConfirmBody;
 
   /// No description provided for @clearChatConfirmAction.
   ///
   /// In pl, this message translates to:
-  /// **'Usuń u obu stron'**
+  /// **'Usuń tutaj'**
   String get clearChatConfirmAction;
 
   /// No description provided for @disappearingTimerTitle.
@@ -2875,12 +2785,6 @@ abstract class AppLocalizations {
   /// In pl, this message translates to:
   /// **'Reakcja {emoji}, {state}'**
   String messageReactionSemantics(Object emoji, Object state);
-
-  /// No description provided for @messageReactionUnreadable.
-  ///
-  /// In pl, this message translates to:
-  /// **'Reakcja nieczytelna na tym urządzeniu ({count})'**
-  String messageReactionUnreadable(int count);
 
   /// No description provided for @snackbarReactionUnavailable.
   ///

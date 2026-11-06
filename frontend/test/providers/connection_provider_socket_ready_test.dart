@@ -1,18 +1,14 @@
 import 'dart:async';
 
 import 'package:fake_async/fake_async.dart';
-import 'package:fireplace/constants/app_constants.dart';
 import 'package:fireplace/providers/connection_provider.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/providers/friends_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
-import 'package:fireplace/services/api_service.dart';
 import 'package:fireplace/services/device_link/link_ceremony_controller.dart';
-import 'package:fireplace/services/push_service.dart';
 import 'package:fireplace/services/socket_service.dart';
 import 'package:fireplace/services/server_clock.dart';
-import 'package:fireplace/utils/message_ids.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Test double for [SocketService] — simulates connect / socketReady without I/O.
@@ -20,15 +16,6 @@ class FakeSocketService extends SocketService {
   final Map<String, List<void Function(dynamic)>> _handlers = {};
   void Function()? _onConnectCallback;
   void Function(dynamic)? _onDisconnectCallback;
-
-  int getConversationsCalls = 0;
-  int getFriendRequestsCalls = 0;
-  int getFriendsCalls = 0;
-  int getBlockedListCalls = 0;
-
-  /// `getServedMessageIds` emissions as (requestId, ids).
-  final servedIdRequests = <MapEntry<String, List<int>>>[];
-  final getMessagesConversationIds = <int>[];
   @override
   bool get isConnected => true;
 
@@ -38,11 +25,6 @@ class FakeSocketService extends SocketService {
   @override
   void disconnect() {}
 
-
-  @override
-  void getMessages(int conversationId, {int? limit, int? offset}) {
-    getMessagesConversationIds.add(conversationId);
-  }
   @override
   void on(String event, void Function(dynamic) callback) {
     _handlers.putIfAbsent(event, () => []).add(callback);
@@ -75,17 +57,6 @@ class FakeSocketService extends SocketService {
     }
   }
 
-  @override
-  void getServedMessageIds(String requestId, List<int> messageIds) {
-    servedIdRequests.add(MapEntry(requestId, messageIds));
-  }
-
-  void simulateServedMessageIds(Object? payload) {
-    for (final handler in _handlers['servedMessageIds'] ?? const []) {
-      handler(payload);
-    }
-  }
-
   int getServerTimeCalls = 0;
 
   @override
@@ -99,32 +70,12 @@ class FakeSocketService extends SocketService {
     }
   }
 
-  @override
-  void getConversations() {
-    getConversationsCalls++;
-  }
-
-  @override
-  void getFriendRequests() {
-    getFriendRequestsCalls++;
-  }
-
-  @override
-  void getFriends() {
-    getFriendsCalls++;
-  }
-
-  @override
-  void getBlockedList() {
-    getBlockedListCalls++;
-  }
+  Iterable<String> get listenedEvents => _handlers.keys;
 }
 
 class RecordingConnectionProvider extends ConnectionProvider {
-  RecordingConnectionProvider({
-    required SocketService socketService,
-    super.pushService,
-  }) : super(socketService: socketService);
+  RecordingConnectionProvider({required SocketService socketService})
+      : super(socketService: socketService);
 
   final emitted = <MapEntry<String, dynamic>>[];
 
@@ -132,24 +83,6 @@ class RecordingConnectionProvider extends ConnectionProvider {
   void emit(String event, dynamic data) {
     emitted.add(MapEntry(event, data));
   }
-}
-
-/// Records each push registration, touching no platform channel.
-class _RecordingPush extends PushService {
-  _RecordingPush() : super(ApiService(baseUrl: 'http://api.test'));
-
-  final registrations = <String>[];
-
-  @override
-  Future<void> initialize(
-    String jwtToken, {
-    String? Function()? currentJwtToken,
-    void Function(int conversationId)? onNavigateToConversation,
-  }) async => registrations.add('initialize');
-
-  @override
-  Future<void> registerAgain(String jwtToken) async =>
-      registrations.add('registerAgain');
 }
 
 /// Records the local-plaintext maintenance calls `_onSocketReady` fires.
@@ -165,47 +98,7 @@ class _RecordingEncryption extends EncryptionProvider {
   @override
   Future<void> sweepDestroyablePlaintext() async =>
       calls.add('sweepDestroyablePlaintext');
-
-  @override
-  Future<void> reconcileStoredPlaintext(
-    Future<Set<int>?> Function(Set<int> batch) askServer, {
-    bool force = false,
-  }) async =>
-      calls.add('reconcileStoredPlaintext');
 }
-
-/// Drives ONE real `getServedMessageIds` round trip through
-/// [ConnectionProvider]'s socket plumbing and records what came back.
-class _RoundTripEncryption extends EncryptionProvider {
-  Set<int>? answer;
-  bool answered = false;
-
-  @override
-  Future<void> loadRetiredIds() async {}
-
-  @override
-  Future<void> drainPurgeBacklog() async {}
-
-  @override
-  Future<void> sweepDestroyablePlaintext() async {}
-
-  @override
-  Future<void> reconcileStoredPlaintext(
-    Future<Set<int>?> Function(Set<int> batch) askServer, {
-    bool force = false,
-  }) async {
-    answer = await askServer({1, 2, 3});
-    answered = true;
-  }
-}
-
-Map<String, dynamic> _convJson(int id) => {
-      'id': id,
-      'userOne': {'id': 1, 'username': 'alice', 'tag': '0001'},
-      'userTwo': {'id': 2, 'username': 'bob', 'tag': '0002'},
-      'createdAt': DateTime(2026, 1, 1).toIso8601String(),
-      'unreadCount': 0,
-    };
 
 class _NoIdentity implements LinkIdentityGateway {
   @override
@@ -244,40 +137,47 @@ void main() {
       connection.disconnect();
     });
 
-    test('raw connect alone does not fetch conversations or friends', () async {
+    test('socketReady emits none of the removed old-path events', () async {
+      final conversations = ConversationsProvider();
+      connection.setProviders(
+        encryption: EncryptionProvider(),
+        friends: FriendsProvider(),
+        conversations: conversations,
+        messaging: MessagingProvider()..setConversationsProvider(conversations),
+      );
       await connection.connect(1, 'test-token', 'http://localhost:3000');
+      conversations.openConversation(10);
+      connection.emitted.clear();
 
       fakeSocket.simulateTransportConnect();
+      fakeSocket.simulateSocketReady();
+      await pumpEventQueue();
 
-      expect(fakeSocket.getConversationsCalls, 0);
-      expect(fakeSocket.getFriendRequestsCalls, 0);
-      expect(fakeSocket.getFriendsCalls, 0);
-      expect(fakeSocket.getBlockedListCalls, 0);
+      // No chat list, friend list, block list, push-state, history or
+      // served-ids request: the contact store is the only source (step 5).
+      // (Other emits are the E2E layer's own.)
+      for (final removed in const [
+        'getConversations',
+        'getFriends',
+        'getFriendRequests',
+        'getBlockedList',
+        'pushClientState',
+        'getMessages',
+        'getServedMessageIds',
+      ]) {
+        expect(connection.emitted.map((e) => e.key), isNot(contains(removed)));
+      }
+      for (final removed in const [
+        'friendsList',
+        'friendRequestsList',
+        'conversationsList',
+        'messageHistory',
+        'newMessage',
+        'servedMessageIds',
+      ]) {
+        expect(fakeSocket.listenedEvents, isNot(contains(removed)));
+      }
       expect(connection.isConnected, isTrue);
-    });
-
-    test('socketReady triggers initial authenticated fetches', () async {
-      await connection.connect(1, 'test-token', 'http://localhost:3000');
-
-      fakeSocket.simulateTransportConnect();
-      fakeSocket.simulateSocketReady();
-
-      expect(fakeSocket.getConversationsCalls, 1);
-      expect(fakeSocket.getFriendRequestsCalls, 1);
-      expect(fakeSocket.getFriendsCalls, 1);
-      expect(fakeSocket.getBlockedListCalls, 1);
-    });
-
-    test('socketReady before transport connect still fetches once on ready',
-        () async {
-      await connection.connect(1, 'test-token', 'http://localhost:3000');
-
-      fakeSocket.simulateSocketReady();
-
-      expect(fakeSocket.getConversationsCalls, 1);
-      expect(fakeSocket.getFriendRequestsCalls, 1);
-      expect(fakeSocket.getFriendsCalls, 1);
-      expect(fakeSocket.getBlockedListCalls, 1);
     });
 
     test('socketReady tells the provisioning sink the session is ready', () async {
@@ -302,151 +202,6 @@ void main() {
       fakeSocket.simulateSocketReady();
 
       expect(sinkEmits.where((e) => e == 'getDeviceList'), hasLength(1));
-    });
-
-    test('socketReady reasserts open chat state and refetches active messages',
-        () async {
-      final conversations = ConversationsProvider()
-        ..onConversationsList([_convJson(10)]);
-      final messaging = MessagingProvider()
-        ..setConversationsProvider(conversations);
-      connection.setProviders(
-        encryption: EncryptionProvider(),
-        friends: FriendsProvider(),
-        conversations: conversations,
-        messaging: messaging,
-      );
-      await connection.connect(1, 'test-token', 'http://localhost:3000');
-
-      conversations.openConversation(10);
-      connection.emitted.clear();
-
-      fakeSocket.simulateSocketReady();
-
-      expect(fakeSocket.getMessagesConversationIds, [10],
-          reason: 'socketReady must refetch the chat that is currently open');
-      final pushStates = connection.emitted
-          .where((entry) => entry.key == 'pushClientState')
-          .map((entry) => Map<String, dynamic>.from(entry.value as Map))
-          .toList();
-      expect(
-        pushStates,
-        contains(equals({'clientVisible': true})),
-        reason:
-            'socketReady must reassert foreground visibility after reconnect; states=$pushStates',
-      );
-    });
-
-    test('socketReady never names an open box chat to the server', () async {
-      // A box chat's id is 2^48 + the friend's user id (decision 52): sent as
-      // `getMessages`, it tells the server who this account talks to. Seen on
-      // prod 10-20 as `value "281474976710693" is out of range`.
-      final conversations = ConversationsProvider();
-      connection.setProviders(
-        encryption: EncryptionProvider(),
-        friends: FriendsProvider(),
-        conversations: conversations,
-        messaging: MessagingProvider()..setConversationsProvider(conversations),
-      );
-      await connection.connect(1, 'test-token', 'http://localhost:3000');
-
-      conversations.openConversation(localConversationIdFor(37));
-      fakeSocket.simulateSocketReady();
-
-      expect(fakeSocket.getMessagesConversationIds, isEmpty);
-    });
-
-    test('socketReady reasserts background active chat as not visible',
-        () async {
-      final conversations = ConversationsProvider()
-        ..onConversationsList([_convJson(10)]);
-      final messaging = MessagingProvider()
-        ..setConversationsProvider(conversations);
-      connection.setProviders(
-        encryption: EncryptionProvider(),
-        friends: FriendsProvider(),
-        conversations: conversations,
-        messaging: messaging,
-      );
-      await connection.connect(1, 'test-token', 'http://localhost:3000');
-
-      conversations.openConversation(10);
-      conversations.setClientVisible(false);
-      connection.emitted.clear();
-
-      fakeSocket.simulateSocketReady();
-
-      final pushStates = connection.emitted
-          .where((entry) => entry.key == 'pushClientState')
-          .map((entry) => Map<String, dynamic>.from(entry.value as Map))
-          .toList();
-      expect(
-        pushStates,
-        contains(equals({'clientVisible': false})),
-        reason:
-            'socketReady must preserve background visibility; states=$pushStates',
-      );
-    });
-
-    test(
-        'socketReady with no open conversation still re-sends visibility but '
-        'refetches no messages', () async {
-      final conversations = ConversationsProvider()
-        ..onConversationsList([_convJson(10)]);
-      final messaging = MessagingProvider()
-        ..setConversationsProvider(conversations);
-      connection.setProviders(
-        encryption: EncryptionProvider(),
-        friends: FriendsProvider(),
-        conversations: conversations,
-        messaging: messaging,
-      );
-      await connection.connect(1, 'test-token', 'http://localhost:3000');
-
-      // No conversation is opened: activeConversationId stays null.
-      connection.emitted.clear();
-
-      fakeSocket.simulateSocketReady();
-
-      // Baseline authenticated fetches still fire...
-      expect(fakeSocket.getConversationsCalls, 1);
-      // ...and no chat is refetched...
-      expect(fakeSocket.getMessagesConversationIds, isEmpty,
-          reason: 'socketReady must not refetch messages when no chat is open');
-      // ...but the fresh socket still needs to know the app is on screen: the
-      // server skips the push while it is, whatever it shows (PR0.2).
-      final pushStates = connection.emitted
-          .where((entry) => entry.key == 'pushClientState')
-          .map((entry) => Map<String, dynamic>.from(entry.value as Map))
-          .toList();
-      expect(pushStates, [
-        {'clientVisible': true},
-      ]);
-    });
-
-    // Issue #208: an unlink finds a device's push token, and the box
-    // notifiers on it, only under that device's id. Mutation: drop the
-    // `registerAgain` in the `socketReady` handler.
-    test('push registers again when a session names another device id',
-        () async {
-      final push = _RecordingPush();
-      final linked = RecordingConnectionProvider(
-        socketService: fakeSocket,
-        pushService: push,
-      );
-      addTearDown(linked.disconnect);
-      await linked.connect(1, 'test-token', 'http://localhost:3000');
-      fakeSocket
-        ..simulateTransportConnect()
-        ..simulateSocketReady(payload: {'deviceId': 1})
-        ..simulateSocketReady(payload: {'deviceId': 1});
-      await pumpEventQueue();
-      expect(push.registrations, ['initialize']);
-
-      // The link rebound this session to device 9.
-      fakeSocket.simulateSocketReady(payload: {'deviceId': 9});
-      await pumpEventQueue();
-      expect(push.registrations, ['initialize', 'registerAgain']);
     });
   });
 
@@ -492,15 +247,12 @@ void main() {
       expect(estimated!.isBefore(serverTime), isFalse);
 
       // Order is load-bearing: retired ids must be loaded before anything can
-      // try to decrypt a row whose plaintext was already destroyed, the
-      // backlog must drain before the sweep adds more work, and reconciliation
-      // goes last so it never asks the server about ids the three local rules
-      // were already destroying.
+      // try to decrypt a row whose plaintext was already destroyed, and the
+      // backlog must drain before the sweep adds more work.
       expect(encryption.calls, [
         'loadRetiredIds',
         'drainPurgeBacklog',
         'sweepDestroyablePlaintext',
-        'reconcileStoredPlaintext',
       ]);
     });
 
@@ -537,93 +289,6 @@ void main() {
       await failed;
       expect(encryption.pendingPreKeyFetches, isEmpty,
           reason: 'the next lookup must send a fresh request');
-    });
-  });
-
-  group('ConnectionProvider getServedMessageIds round trip', () {
-    late FakeSocketService fakeSocket;
-    late RecordingConnectionProvider connection;
-    late _RoundTripEncryption encryption;
-
-    setUp(() async {
-      ServerClock.instance.resetForTest();
-      fakeSocket = FakeSocketService();
-      connection = RecordingConnectionProvider(socketService: fakeSocket);
-      encryption = _RoundTripEncryption();
-      connection.setProviders(
-        encryption: encryption,
-        friends: FriendsProvider(),
-        conversations: ConversationsProvider(),
-        messaging: MessagingProvider(),
-      );
-      await connection.connect(1, 'test-token', 'http://localhost:3000');
-      fakeSocket.simulateSocketReady();
-      await pumpEventQueue();
-    });
-
-    tearDown(() {
-      // Also releases any round trip still waiting for an answer.
-      connection.disconnect();
-      ServerClock.instance.resetForTest();
-    });
-
-    String requestId() => fakeSocket.servedIdRequests.single.key;
-
-    test('asks about the batch and returns the ids the server still serves',
-        () async {
-      expect(fakeSocket.servedIdRequests.single.value, [1, 2, 3]);
-
-      fakeSocket.simulateServedMessageIds({
-        'requestId': requestId(),
-        'messageIds': [1, 3],
-      });
-      await pumpEventQueue();
-
-      expect(encryption.answer, {1, 3});
-    });
-
-    test('an empty answer is passed through, not swallowed', () async {
-      fakeSocket.simulateServedMessageIds({
-        'requestId': requestId(),
-        'messageIds': <int>[],
-      });
-      await pumpEventQueue();
-
-      expect(encryption.answered, isTrue);
-      expect(encryption.answer, isEmpty);
-    });
-
-    test('a malformed answer resolves to null, not to a partial set',
-        () async {
-      // Parsing what it can would mark the unparsed ids as "the server no
-      // longer has this" and destroy their only copy.
-      fakeSocket.simulateServedMessageIds({
-        'requestId': requestId(),
-        'messageIds': [1, 'two', 3],
-      });
-      await pumpEventQueue();
-
-      expect(encryption.answered, isTrue);
-      expect(encryption.answer, isNull);
-    });
-
-    test('an answer for a different request is ignored', () async {
-      fakeSocket.simulateServedMessageIds({
-        'requestId': 'someone-elses-batch',
-        'messageIds': <int>[],
-      });
-      await pumpEventQueue();
-
-      expect(encryption.answered, isFalse,
-          reason: 'an empty set destroys everything it is applied to');
-    });
-
-    test('disconnect releases the wait as "no answer"', () async {
-      connection.disconnect();
-      await pumpEventQueue();
-
-      expect(encryption.answered, isTrue);
-      expect(encryption.answer, isNull);
     });
   });
 
@@ -763,106 +428,6 @@ void main() {
 
         expect(encryption.calls, isEmpty);
         expect(fakeSocket.getServerTimeCalls, 0);
-      });
-    });
-  });
-
-  group('ConnectionProvider first conversations snapshot wait '
-      '(decision 121)', () {
-    late FakeSocketService fakeSocket;
-    late RecordingConnectionProvider connection;
-    late ConversationsProvider conversations;
-
-    setUp(() {
-      fakeSocket = FakeSocketService();
-      connection = RecordingConnectionProvider(socketService: fakeSocket);
-      conversations = ConversationsProvider();
-      connection.setProviders(
-        encryption: _RecordingEncryption(),
-        friends: FriendsProvider(),
-        conversations: conversations,
-        messaging: MessagingProvider(),
-      );
-    });
-
-    tearDown(() => connection.disconnect());
-
-    // Mutation: drop `_armFirstSnapshotWait()` from `_onSocketReady`.
-    test('a list the server never answers stops being waited for after 8 s',
-        () {
-      fakeAsync((fake) {
-        unawaited(connection.connect(1, 'test-token', 'http://localhost:3000'));
-        fake.flushMicrotasks();
-        fakeSocket.simulateSocketReady();
-        fake
-          ..flushMicrotasks()
-          ..elapse(const Duration(seconds: 7));
-        expect(conversations.hasLoadedConversationsOnce, isFalse);
-
-        fake.elapse(const Duration(seconds: 2));
-        expect(conversations.hasLoadedConversationsOnce, isTrue);
-      });
-    });
-
-    // Mutation: drop the `_firstSnapshotWaitTimer` cancel from the transient
-    // `onDisconnect` handler in `ConnectionProvider.connect`.
-    test('a socket that drops after socketReady cancels the 8 s release; the '
-        'next socketReady re-arms it', () {
-      fakeAsync((fake) {
-        unawaited(connection.connect(1, 'test-token', 'http://localhost:3000'));
-        fake.flushMicrotasks();
-        fakeSocket.simulateSocketReady();
-        fake
-          ..flushMicrotasks()
-          ..elapse(const Duration(seconds: 3));
-        fakeSocket.simulateDisconnect();
-        fake.elapse(const Duration(seconds: 6));
-        expect(conversations.hasLoadedConversationsOnce, isFalse,
-            reason: 'the dropped socket cancelled the wait: +9 s from the '
-                'first socketReady must not release it');
-
-        fakeSocket.simulateSocketReady();
-        fake
-          ..flushMicrotasks()
-          ..elapse(const Duration(seconds: 7));
-        expect(conversations.hasLoadedConversationsOnce, isFalse);
-
-        fake.elapse(const Duration(seconds: 2));
-        expect(conversations.hasLoadedConversationsOnce, isTrue);
-      });
-    });
-
-    // Mutation: the delayed re-ask in `_onSocketReady` reads
-    // `hasLoadedConversationsOnce` instead of the real-list flag.
-    test('after the 8 s release a later socketReady still re-asks for the '
-        'list; once a real list arrived it does not', () {
-      fakeAsync((fake) {
-        unawaited(connection.connect(1, 'test-token', 'http://localhost:3000'));
-        fake.flushMicrotasks();
-        fakeSocket.simulateSocketReady();
-        fake
-          ..flushMicrotasks()
-          ..elapse(const Duration(seconds: 9));
-        expect(conversations.hasLoadedConversationsOnce, isTrue,
-            reason: 'precondition: the release has happened');
-
-        var before = fakeSocket.getConversationsCalls;
-        fakeSocket.simulateSocketReady();
-        fake
-          ..flushMicrotasks()
-          ..elapse(AppConstants.conversationsRefreshDelay);
-        expect(fakeSocket.getConversationsCalls - before, 2,
-            reason: 'the immediate emit plus the re-ask: the release is not '
-                'a server answer');
-
-        // Control: a real list was received, so the re-ask stays quiet.
-        conversations.onConversationsList(const []);
-        before = fakeSocket.getConversationsCalls;
-        fakeSocket.simulateSocketReady();
-        fake
-          ..flushMicrotasks()
-          ..elapse(AppConstants.conversationsRefreshDelay);
-        expect(fakeSocket.getConversationsCalls - before, 1);
       });
     });
   });

@@ -281,7 +281,6 @@ class E2eClient {
     'preKeysLow',
     'sessionRebuildNeeded',
     'ownIdentityReplaced',
-    'peerIdentityChanged',
     // Phase 0b: registration lock + reset ceremony.
     'registrationLockNonce',
     'identityResetStatus',
@@ -310,34 +309,10 @@ class E2eClient {
     // without these two every revocation assert would pass vacuously.
     'deviceRevocationCompleted',
     'deviceRevoked',
-    'newFriendRequest',
-    'friendRequestSent',
-    'friendRequestFailed',
-    'invitationChatReady',
-    'friendRequestAccepted',
-    'friendsList',
-    'conversationsList',
-    'pendingRequestsCount',
-    'sentRequestsList',
-    'openConversation',
-    'messageSent',
-    'newMessage',
-    'messageHistory',
-    'messageEdited',
-    'editMessageFailed',
-    // T7 (§5.7): the delivery/read projection an edit must never regress.
-    // Both statuses ride this ONE event. Unlisted events are recorded NOWHERE,
-    // so without it the F8 stamp-preservation assert would pass vacuously.
-    'messageDelivered',
-    'reactionUpdated',
-    'messageDeleted',
-    'servedMessageIds',
-    // T4 (§5.2 layer 1 + §12 (vi)/(x)): the refused-send answer. EventLog
-    // records nothing that is not listed here, so a missing entry would make
-    // every refusal assert pass vacuously.
-    'deviceListStale',
     // Metadata-privacy PR3.2: first contact (a device publishes its request
     // queue; a stranger's search serves it with a bundle per device).
+    // Unlisted events are recorded NOWHERE, so a missing entry would make
+    // every assert on them pass vacuously.
     'requestQueueSet',
     'searchUsersResult',
   ];
@@ -595,9 +570,20 @@ class E2eClient {
     return (answer as Map).cast<String, dynamic>();
   }
 
-  /// Emits `getDeviceList` for [targetUserId] and returns the `deviceList`
+  /// Emits `getDeviceList` for THIS account and returns the `deviceList`
   /// answer: `{userId, authorization: {...} | null}`.
+  ///
+  /// The server answers only the caller's own id (Phase 4 step 5): any other
+  /// id gets silence, which would surface here as a bare timeout, so it is
+  /// refused up front. A peer's list is read through [searchPeer].
   Future<Map<String, dynamic>> fetchDeviceList(int targetUserId) async {
+    if (targetUserId != userId) {
+      throw ArgumentError.value(
+        targetUserId,
+        'targetUserId',
+        'the server answers getDeviceList for the caller only; use searchPeer',
+      );
+    }
     events.discard('deviceList');
     socketService.socket!.emit('getDeviceList', {'userId': targetUserId});
     final answer = await events.next(
@@ -606,6 +592,29 @@ class E2eClient {
       reason: '$label device list for user $targetUserId',
     );
     return (answer as Map).cast<String, dynamic>();
+  }
+
+  /// Looks [peer] up by handle with `searchUsers` — the one remaining way an
+  /// account learns another account's devices and signed list. Returns the
+  /// single result: `{id, username, tag, devices: [{deviceId, bundle,
+  /// requestSid, sealPub}], authorization}`. Each lookup CLAIMS one one-time
+  /// pre-key per served device of [peer].
+  Future<Map<String, dynamic>> searchPeer(E2eClient peer) async {
+    events.discard('searchUsersResult');
+    socketService.searchUsers('${peer.username}#${peer.tag}');
+    final result =
+        await events.next(
+              'searchUsersResult',
+              reason: '$label searches ${peer.label}',
+            )
+            as List;
+    if (result.length != 1) {
+      throw StateError(
+        '$label: searchUsers for ${peer.label} answered ${result.length} '
+        'results: $result',
+      );
+    }
+    return (result.single as Map).cast<String, dynamic>();
   }
 
   /// Emits `revokeDevice` (§5.5) and returns the `deviceRevocationCompleted`
@@ -973,180 +982,6 @@ class E2eClient {
   Future<String> decryptText(int peerUserId, String ciphertext) async {
     final envelopeJson = await encryption.decrypt(peerUserId, ciphertext);
     return E2eEnvelope.parse(envelopeJson).content;
-  }
-
-  /// Emits `sendMessage` with the app's real payload shape and returns the
-  /// server's `messageSent` confirmation for [tempId].
-  Future<Map<String, dynamic>> sendEncrypted(
-    int recipientId,
-    String ciphertext, {
-    required String tempId,
-  }) async {
-    socketService.sendMessage(
-      recipientId,
-      '[encrypted]',
-      tempId: tempId,
-      encryptedContent: ciphertext,
-    );
-    final payload =
-        await events.next(
-              'messageSent',
-              where: (p) => p is Map && p['tempId'] == tempId,
-              reason: '$label sendMessage tempId=$tempId',
-            )
-            as Map;
-    return payload.cast<String, dynamic>();
-  }
-
-  /// Emits `sendMessage` carrying a `sendToken` (Phase 1, spec §5.4) and
-  /// returns the server's `messageSent` confirmation for [tempId].
-  ///
-  /// Raw emit rather than `SocketService.sendMessage`: the token is a wire
-  /// field the app does not send yet, and the point is to exercise the
-  /// SERVER's idempotency, not the client's send path.
-  Future<Map<String, dynamic>> sendWithToken(
-    int recipientId,
-    String ciphertext, {
-    required String tempId,
-    required String sendToken,
-  }) async {
-    socketService.socket!.emit('sendMessage', <String, dynamic>{
-      'recipientId': recipientId,
-      'content': '[encrypted]',
-      'encryptedContent': ciphertext,
-      'tempId': tempId,
-      'sendToken': sendToken,
-    });
-    final payload =
-        await events.next(
-              'messageSent',
-              where: (p) => p is Map && p['tempId'] == tempId,
-              reason: '$label sendMessage tempId=$tempId token=$sendToken',
-            )
-            as Map;
-    return payload.cast<String, dynamic>();
-  }
-
-  /// Emits an ENVELOPE-shaped `sendMessage` (spec §5.2 + §12 amendment (v)):
-  /// one ciphertext per (recipient user, device), with the device-list stamps
-  /// the server cross-checks.
-  ///
-  /// Raw emit for the same reason as [sendWithToken]: this exercises the
-  /// SERVER's fan-out ingest, independent of the app's send path.
-  void emitEnvelopeSend(
-    int recipientId, {
-    required String tempId,
-    required List<Map<String, dynamic>> envelopes,
-    String? sendToken,
-    int? recipientListVersion,
-    int? senderListVersion,
-  }) {
-    socketService.socket!.emit('sendMessage', <String, dynamic>{
-      'recipientId': recipientId,
-      'content': '[encrypted]',
-      'envelopes': envelopes,
-      'tempId': tempId,
-      'sendToken': ?sendToken,
-      'recipientListVersion': ?recipientListVersion,
-      'senderListVersion': ?senderListVersion,
-    });
-  }
-
-  /// The `deviceListStale` refusal for [tempId] (spec §12 (vi)/(x)).
-  Future<Map<String, dynamic>> awaitDeviceListStale(String tempId) async {
-    final payload =
-        await events.next(
-              'deviceListStale',
-              where: (p) => p is Map && p['tempId'] == tempId,
-              reason: '$label deviceListStale tempId=$tempId',
-            )
-            as Map;
-    return payload.cast<String, dynamic>();
-  }
-
-  /// Waits for an inbound `newMessage` matching [tempId] (the mapper echoes
-  /// the sender's tempId to both sides).
-  Future<Map<String, dynamic>> awaitNewMessage(String tempId) async {
-    final payload =
-        await events.next(
-              'newMessage',
-              where: (p) => p is Map && p['tempId'] == tempId,
-              reason: '$label newMessage tempId=$tempId',
-            )
-            as Map;
-    return payload.cast<String, dynamic>();
-  }
-
-  /// Emits `editMessage`. There is deliberately no SocketService emitter for
-  /// this event — the app sends it through ConnectionProvider.emit's raw
-  /// socket path, which this mirrors.
-  void emitEditMessage(int messageId, String newCiphertext) {
-    socketService.socket!.emit('editMessage', {
-      'messageId': messageId,
-      'content': '[encrypted]',
-      'encryptedContent': newCiphertext,
-    });
-  }
-
-  /// Emits an ENVELOPE-shaped `editMessage` (spec §5.7 + §12 amendment (xxxi)):
-  /// one edited ciphertext per (user, device), with the device-list stamps the
-  /// server cross-checks. Raw emit for the same reason as [emitEditMessage].
-  void emitEnvelopeEdit(
-    int messageId, {
-    required List<Map<String, dynamic>> envelopes,
-    int? recipientListVersion,
-    int? senderListVersion,
-  }) {
-    socketService.socket!.emit('editMessage', <String, dynamic>{
-      'messageId': messageId,
-      'content': '[encrypted]',
-      'envelopes': envelopes,
-      'recipientListVersion': ?recipientListVersion,
-      'senderListVersion': ?senderListVersion,
-    });
-  }
-
-  /// Waits for a `messageEdited` for [messageId] on THIS device's socket.
-  Future<Map<String, dynamic>> awaitMessageEdited(int messageId) async {
-    final payload =
-        await events.next(
-              'messageEdited',
-              where: (p) => p is Map && p['messageId'] == messageId,
-              reason: '$label messageEdited messageId=$messageId',
-            )
-            as Map;
-    return payload.cast<String, dynamic>();
-  }
-
-  /// Emits `deleteMessage`. Like `editMessage`, the app sends this through
-  /// ConnectionProvider's raw socket path, which this mirrors.
-  ///
-  /// [forEveryone] false is delete-for-me (server keeps the row and adds the
-  /// caller to `hiddenByUserIds`); true hard-deletes it for both sides.
-  void emitDeleteMessage(int messageId, {required bool forEveryone}) {
-    socketService.socket!.emit('deleteMessage', {
-      'messageId': messageId,
-      'mode': forEveryone ? 'for_everyone' : 'for_me',
-    });
-  }
-
-  /// Emits `getServedMessageIds` and returns the ids the server says it still
-  /// serves this account. Mirrors what `ConnectionProvider` does during
-  /// local-plaintext reconciliation.
-  Future<Set<int>> servedMessageIds(List<int> messageIds) async {
-    final requestId = 'e2e-${_randomHex(6)}';
-    events.discard('servedMessageIds');
-    socketService.getServedMessageIds(requestId, messageIds);
-    final payload =
-        await events.next(
-              'servedMessageIds',
-              where: (p) => p is Map && p['requestId'] == requestId,
-              reason: '$label servedMessageIds',
-            )
-            as Map;
-    return {
-      for (final id in payload['messageIds'] as List) (id as num).toInt(),
-    };
   }
 
   void dispose() {

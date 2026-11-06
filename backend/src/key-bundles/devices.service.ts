@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, In, IsNull, Repository } from 'typeorm';
+import { EntityManager, IsNull, Repository } from 'typeorm';
 import { Device } from './device.entity';
 import { DEFAULT_DEVICE_ID } from './key-bundles.service';
 
@@ -230,13 +230,6 @@ export class DevicesService {
     return this.deviceRepo.find({
       where: { userId },
       order: { deviceId: 'ASC' },
-    });
-  }
-
-  /** The live devices of many accounts, in one query. */
-  async listLiveForUsers(userIds: number[]): Promise<Device[]> {
-    return this.deviceRepo.find({
-      where: { userId: In(userIds), revokedAt: IsNull() },
     });
   }
 

@@ -13,15 +13,9 @@ import { Logger, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { WsThrottlerGuard } from './guards/ws-throttler.guard';
 import { UsersService } from '../users/users.service';
-import { ChatMessageService } from './services/chat-message.service';
-import { ChatFriendRequestService } from './services/chat-friend-request.service';
-import { ChatConversationService } from './services/chat-conversation.service';
 import { ChatKeyExchangeService } from './services/chat-key-exchange.service';
 import { ChatPresenceService } from './services/chat-presence.service';
-import { ChatBlockService } from './services/chat-block.service';
 import { ChatSearchService } from './services/chat-search.service';
-import { ChatReactionService } from './services/chat-reaction.service';
-import { ChatReactionKeyService } from './services/chat-reaction-key.service';
 import { ChatDeviceListService } from './services/chat-device-list.service';
 import { ChatProvisioningService } from './services/chat-provisioning.service';
 import { ChatDeviceRevocationService } from './services/chat-device-revocation.service';
@@ -47,19 +41,13 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   constructor(
     private jwtService: JwtService,
     private usersService: UsersService,
-    private chatMessageService: ChatMessageService,
-    private chatFriendRequestService: ChatFriendRequestService,
-    private chatConversationService: ChatConversationService,
     private chatKeyExchangeService: ChatKeyExchangeService,
     private chatPresenceService: ChatPresenceService,
-    private chatBlockService: ChatBlockService,
     private chatSearchService: ChatSearchService,
-    private chatReactionService: ChatReactionService,
     private chatDeviceListService: ChatDeviceListService,
     private chatProvisioningService: ChatProvisioningService,
     private devicesService: DevicesService,
     private chatDeviceRevocationService: ChatDeviceRevocationService,
-    private chatReactionKeyService: ChatReactionKeyService,
   ) {}
 
   // On WebSocket connection — verify the JWT token.
@@ -212,44 +200,6 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.logger.debug(`User disconnected (socket: ${client.id})`);
   }
 
-  // ========== MESSAGE HANDLERS ==========
-
-  /** Per-user cap for outgoing messages; global ThrottlerModule default is 100/15min — too low for active chat. */
-  @UseGuards(WsThrottlerGuard)
-  @Throttle({ default: { limit: 300, ttl: 900000 } })
-  @SubscribeMessage('sendMessage')
-  async handleSendMessage(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: any,
-  ) {
-    return this.chatMessageService.handleSendMessage(client, data, this.server);
-  }
-
-  @UseGuards(WsThrottlerGuard)
-  @Throttle({ default: { limit: 300, ttl: 900000 } })
-  @SubscribeMessage('getMessages')
-  async handleGetMessages(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: any,
-  ) {
-    return this.chatMessageService.handleGetMessages(client, data);
-  }
-
-  /**
-   * Local-plaintext reconciliation. Cheap (PK lookup + two predicates), and the
-   * client throttles itself to a few passes a day, so the limit sits well under
-   * `getMessages`.
-   */
-  @UseGuards(WsThrottlerGuard)
-  @Throttle({ default: { limit: 60, ttl: 900000 } })
-  @SubscribeMessage('getServedMessageIds')
-  async handleGetServedMessageIds(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: unknown,
-  ) {
-    return this.chatMessageService.handleGetServedMessageIds(client, data);
-  }
-
   /**
    * Server-clock refresh for the client's in-session expiry sweep. The
    * `socketReady` observation ages out of client trust after ~30 minutes
@@ -265,68 +215,6 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     client.emit('serverTime', { serverTime: new Date().toISOString() });
   }
 
-  @SubscribeMessage('messageDelivered')
-  async handleMessageDelivered(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: any,
-  ) {
-    return this.chatMessageService.handleMessageDelivered(
-      client,
-      data,
-      this.server,
-    );
-  }
-
-  @SubscribeMessage('markConversationRead')
-  async handleMarkConversationRead(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: any,
-  ) {
-    return this.chatMessageService.handleMarkConversationRead(
-      client,
-      data,
-      this.server,
-    );
-  }
-
-  @UseGuards(WsThrottlerGuard)
-  @Throttle({ default: { limit: 60, ttl: 900000 } })
-  @SubscribeMessage('clearChatHistory')
-  handleClearChatHistory(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: any,
-  ) {
-    return this.chatMessageService.handleClearChatHistory(
-      client,
-      data,
-      this.server,
-    );
-  }
-
-  @UseGuards(WsThrottlerGuard)
-  @Throttle({ default: { limit: 60, ttl: 900000 } })
-  @SubscribeMessage('deleteMessage')
-  handleDeleteMessage(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: any,
-  ) {
-    return this.chatMessageService.handleDeleteMessage(
-      client,
-      data,
-      this.server,
-    );
-  }
-
-  @UseGuards(WsThrottlerGuard)
-  @Throttle({ default: { limit: 60, ttl: 900000 } })
-  @SubscribeMessage('editMessage')
-  handleEditMessage(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: any,
-  ) {
-    return this.chatMessageService.handleEditMessage(client, data, this.server);
-  }
-
   // ========== TYPING INDICATOR ==========
 
   @SubscribeMessage('typing')
@@ -335,59 +223,6 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() data: any,
   ): Promise<void> {
     return this.chatPresenceService.handleTyping(client, data, this.server);
-  }
-
-  @UseGuards(WsThrottlerGuard)
-  @Throttle({ default: { limit: 120, ttl: 900000 } })
-  @SubscribeMessage('addReaction')
-  async handleAddReaction(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: any,
-  ) {
-    return this.chatReactionService.handleAddReaction(
-      client,
-      data,
-      this.server,
-    );
-  }
-
-  @UseGuards(WsThrottlerGuard)
-  @Throttle({ default: { limit: 120, ttl: 900000 } })
-  @SubscribeMessage('removeReaction')
-  async handleRemoveReaction(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: any,
-  ) {
-    return this.chatReactionService.handleRemoveReaction(
-      client,
-      data,
-      this.server,
-    );
-  }
-
-  // Key distribution for blinded reaction tokens
-  // (docs/design/reaction-privacy.md §3.1). Publishing is rare — key creation,
-  // a rotation on revoke, a re-upload when a device is linked — so it is
-  // throttled well below the reaction rate; the PULL side shares the reaction
-  // limit because every device asks once per conversation it opens.
-  @UseGuards(WsThrottlerGuard)
-  @Throttle({ default: { limit: 30, ttl: 900000 } })
-  @SubscribeMessage('uploadReactionKey')
-  async handleUploadReactionKey(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: unknown,
-  ) {
-    return this.chatReactionKeyService.handleUploadReactionKey(client, data);
-  }
-
-  @UseGuards(WsThrottlerGuard)
-  @Throttle({ default: { limit: 120, ttl: 900000 } })
-  @SubscribeMessage('fetchReactionKey')
-  async handleFetchReactionKey(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: unknown,
-  ) {
-    return this.chatReactionKeyService.handleFetchReactionKey(client, data);
   }
 
   @SubscribeMessage('recordingVoice')
@@ -400,17 +235,6 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       data,
       this.server,
     );
-  }
-
-  /** Lets client suppress push when already viewing this conversation (foreground + active chat). */
-  @UseGuards(WsThrottlerGuard)
-  @Throttle({ default: { limit: 120, ttl: 900000 } })
-  @SubscribeMessage('pushClientState')
-  handlePushClientState(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: any,
-  ): void {
-    return this.chatPresenceService.handlePushClientState(client, data);
   }
 
   // ========== KEY EXCHANGE HANDLERS (E2E Encryption) ==========
@@ -716,100 +540,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     );
   }
 
-  // ========== CONVERSATION HANDLERS ==========
-
-  @UseGuards(WsThrottlerGuard)
-  @Throttle({ default: { limit: 60, ttl: 900000 } })
-  @SubscribeMessage('startConversation')
-  async handleStartConversation(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: any,
-  ) {
-    return this.chatConversationService.handleStartConversation(
-      client,
-      data,
-      this.server,
-    );
-  }
-
-  @UseGuards(WsThrottlerGuard)
-  @Throttle({ default: { limit: 300, ttl: 900000 } })
-  @SubscribeMessage('getConversations')
-  async handleGetConversations(@ConnectedSocket() client: Socket) {
-    return this.chatConversationService.handleGetConversations(client);
-  }
-
-  @UseGuards(WsThrottlerGuard)
-  @Throttle({ default: { limit: 60, ttl: 900000 } })
-  @SubscribeMessage('deleteConversationOnly')
-  async handleDeleteConversationOnly(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: any,
-  ) {
-    await this.chatConversationService.handleDeleteConversationOnly(
-      client,
-      data,
-      this.server,
-    );
-  }
-
-  @UseGuards(WsThrottlerGuard)
-  @Throttle({ default: { limit: 60, ttl: 900000 } })
-  @SubscribeMessage('setDisappearingTimer')
-  async handleSetDisappearingTimer(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: any,
-  ) {
-    return this.chatConversationService.handleSetDisappearingTimer(
-      client,
-      data,
-      this.server,
-    );
-  }
-
-  @UseGuards(WsThrottlerGuard)
-  @Throttle({ default: { limit: 60, ttl: 900000 } })
-  @SubscribeMessage('setConversationMute')
-  async handleSetConversationMute(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: unknown,
-  ) {
-    return this.chatConversationService.handleSetConversationMute(
-      client,
-      data,
-      this.server,
-    );
-  }
-
-  @UseGuards(WsThrottlerGuard)
-  @Throttle({ default: { limit: 60, ttl: 900000 } })
-  @SubscribeMessage('pinMessage')
-  async handlePinMessage(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: any,
-  ) {
-    return this.chatConversationService.handlePinMessage(
-      client,
-      data,
-      this.server,
-    );
-  }
-
-  @UseGuards(WsThrottlerGuard)
-  @Throttle({ default: { limit: 60, ttl: 900000 } })
-  @SubscribeMessage('unpinMessage')
-  async handleUnpinMessage(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: any,
-  ) {
-    return this.chatConversationService.handleUnpinMessage(
-      client,
-      data,
-      this.server,
-    );
-  }
-
-  // ========== FRIEND REQUEST HANDLERS ==========
+  // ========== FIRST CONTACT AND REQUEST QUEUES ==========
 
   // The fetch tier, not a lookup tier: since metadata-privacy PR3.2 every
   // stranger search CLAIMS one one-time pre-key per target device, so it may
@@ -850,110 +581,5 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @SubscribeMessage('getOwnRequestQueues')
   async handleGetOwnRequestQueues(@ConnectedSocket() client: Socket) {
     return this.chatSearchService.handleGetOwnRequestQueues(client);
-  }
-
-  @UseGuards(WsThrottlerGuard)
-  @Throttle({ default: { limit: 30, ttl: 900000 } })
-  @SubscribeMessage('sendFriendRequest')
-  async handleSendFriendRequest(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: any,
-  ) {
-    return this.chatFriendRequestService.handleSendFriendRequest(
-      client,
-      data,
-      this.server,
-    );
-  }
-
-  @SubscribeMessage('acceptFriendRequest')
-  async handleAcceptFriendRequest(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: any,
-  ) {
-    return this.chatFriendRequestService.handleAcceptFriendRequest(
-      client,
-      data,
-      this.server,
-    );
-  }
-
-  @SubscribeMessage('rejectFriendRequest')
-  async handleRejectFriendRequest(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: any,
-  ) {
-    return this.chatFriendRequestService.handleRejectFriendRequest(
-      client,
-      data,
-      this.server,
-    );
-  }
-
-  @UseGuards(WsThrottlerGuard)
-  @Throttle({ default: { limit: 30, ttl: 900000 } })
-  @SubscribeMessage('ensureInvitationChat')
-  async handleEnsureInvitationChat(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: unknown,
-  ) {
-    return this.chatFriendRequestService.handleEnsureInvitationChat(
-      client,
-      data,
-      this.server,
-    );
-  }
-
-  @UseGuards(WsThrottlerGuard)
-  @Throttle({ default: { limit: 300, ttl: 900000 } })
-  @SubscribeMessage('getFriendRequests')
-  async handleGetFriendRequests(@ConnectedSocket() client: Socket) {
-    return this.chatFriendRequestService.handleGetFriendRequests(client);
-  }
-
-  @UseGuards(WsThrottlerGuard)
-  @Throttle({ default: { limit: 300, ttl: 900000 } })
-  @SubscribeMessage('getFriends')
-  async handleGetFriends(@ConnectedSocket() client: Socket) {
-    return this.chatFriendRequestService.handleGetFriends(client);
-  }
-
-  @UseGuards(WsThrottlerGuard)
-  @Throttle({ default: { limit: 30, ttl: 900000 } })
-  @SubscribeMessage('unfriend')
-  async handleUnfriend(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: any,
-  ) {
-    return this.chatFriendRequestService.handleUnfriend(
-      client,
-      data,
-      this.server,
-    );
-  }
-
-  @UseGuards(WsThrottlerGuard)
-  @Throttle({ default: { limit: 30, ttl: 900000 } })
-  @SubscribeMessage('blockUser')
-  async handleBlockUser(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: any,
-  ) {
-    return this.chatBlockService.handleBlockUser(client, data, this.server);
-  }
-
-  @SubscribeMessage('unblockUser')
-  async handleUnblockUser(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: any,
-  ) {
-    return this.chatBlockService.handleUnblockUser(client, data);
-  }
-
-  @UseGuards(WsThrottlerGuard)
-  @Throttle({ default: { limit: 300, ttl: 900000 } })
-  @SubscribeMessage('getBlockedList')
-  async handleGetBlockedList(@ConnectedSocket() client: Socket) {
-    return this.chatBlockService.handleGetBlockedList(client);
   }
 }

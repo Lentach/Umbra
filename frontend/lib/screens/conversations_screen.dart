@@ -5,7 +5,6 @@ import 'package:provider/provider.dart';
 import '../constants/app_constants.dart';
 import '../config/app_config.dart';
 import '../l10n/app_localizations.dart';
-import '../models/message_model.dart';
 import '../providers/auth_provider.dart';
 import '../providers/connection_provider.dart';
 import '../providers/conversations_provider.dart';
@@ -14,7 +13,6 @@ import '../providers/friends_provider.dart';
 import '../providers/messaging_provider.dart';
 import '../providers/passcode_provider.dart';
 import '../providers/settings_provider.dart';
-import '../services/api_service.dart';
 import '../services/box/box_client.dart';
 import '../services/contacts/contact_store.dart';
 import '../services/push_service.dart';
@@ -172,11 +170,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   /// Decision 90, E90a: the line's tap is the user gesture iOS asks for
   /// before it makes a push subscription.
   Future<void> _enableWebPush() async {
-    final token = context.read<AuthProvider>().token;
-    if (token == null) return;
-    final result = await PushService(
-      ApiService(baseUrl: AppConfig.baseUrl),
-    ).requestWebPushFromUserGesture(token);
+    final result = await PushService().requestWebPushFromUserGesture();
     if (!mounted) return;
     showWebPushRequestFeedback(context, result);
   }
@@ -373,7 +367,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     final msg = context.read<MessagingProvider>();
     final convs = context.read<ConversationsProvider>();
     // Clear message state in sync with optimistic list removal (see deleteConversation).
-    msg.onConversationDeleted(conversationId);
+    msg.onConversationsRemovedForUser([conversationId]);
     convs.deleteConversation(conversationId);
   }
 
@@ -594,13 +588,12 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
           )
         : EdgeInsets.fromLTRB(8, 8, 8, media.bottom + 8);
 
-    // Show the loading skeleton only while the first fetch is plausibly in
-    // flight AND nothing local can be shown: contact-store hydration fills
-    // the list before the socket, and a cold start with no network must
-    // paint it, not shimmer through ~31 s of reconnect backoff. On a known
-    // connection error fall through to the empty state so it never shimmers
-    // forever.
-    if (!convs.hasLoadedConversationsOnce &&
+    // Show the loading skeleton only while the contact store has not been read
+    // yet AND nothing local can be shown: the read happens before the socket,
+    // and a cold start with no network must paint the list, not shimmer
+    // through ~31 s of reconnect backoff. On a known connection error fall
+    // through to the empty state so it never shimmers forever.
+    if (!convs.hasLoadedConversations &&
         conversations.isEmpty &&
         context.watch<ConnectionProvider>().errorMessage == null) {
       return ConversationListSkeleton(padding: listPadding);
@@ -653,22 +646,11 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
           final displayName = convs.getOtherUserUsername(conv);
           final lastMsg = convs.lastMessages[conv.id];
           final unreadCount = convs.getUnreadCount(conv.id);
-          // (lxxxviii) A1: messaging resolves what the preview line may say —
-          // the plaintext this install holds, "New message" for an unread
-          // peer row, or nothing — and re-notifies when a stored copy is
-          // read, the identity boundary moves, or a decrypt verdict lands.
-          return Selector<MessagingProvider, (bool, MessageModel?)>(
-            selector: (_, messaging) => (
-              messaging.isPartnerTyping(conv.id),
-              lastMsg == null
-                  ? null
-                  : messaging.listPreviewFor(
-                      lastMsg,
-                      unreadCount: unreadCount,
-                    ),
-            ),
-            builder: (context, state, _) {
-              final (isTyping, preview) = state;
+          // Every last message is a box message or a local row: its words are
+          // plaintext already.
+          return Selector<MessagingProvider, bool>(
+            selector: (_, messaging) => messaging.isPartnerTyping(conv.id),
+            builder: (context, isTyping, _) {
               return ConversationTile(
                 key: ValueKey<int>(conv.id),
                 conversationId: conv.id,
@@ -681,8 +663,6 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                 onDelete: () => _deleteConversation(conv.id),
                 otherUser: otherUser,
                 isTyping: isTyping,
-                previewMessage: preview,
-                hidePreview: lastMsg != null && preview == null,
               );
             },
           );

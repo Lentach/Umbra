@@ -25,11 +25,7 @@ describe('UsersService.addProfilePhoto', () => {
     profilePhotoRepo as any,
     {} as any,
     {} as any,
-    {} as any,
-    {} as any,
     dataSource as unknown as DataSource,
-    {} as any,
-    {} as any,
     {} as any,
   );
 
@@ -108,11 +104,7 @@ describe('UsersService.reorderProfilePhotos', () => {
     {} as any,
     {} as any,
     {} as any,
-    {} as any,
-    {} as any,
     dataSource as unknown as DataSource,
-    {} as any,
-    {} as any,
     {} as any,
   );
   const photos = [

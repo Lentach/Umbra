@@ -6,7 +6,6 @@ import 'package:provider/provider.dart';
 import '../l10n/app_localizations.dart';
 import '../providers/auth_provider.dart';
 import '../providers/conversations_provider.dart';
-import '../providers/friends_provider.dart';
 import '../providers/messaging_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/voice_audio_coordinator.dart';
@@ -24,7 +23,6 @@ import '../models/message_model.dart';
 import '../models/user_model.dart';
 import '../widgets/hex_avatar.dart';
 import '../widgets/chat_background_pattern.dart';
-import '../widgets/devices_syncing_note.dart';
 import '../widgets/ping_effect_overlay.dart';
 import '../widgets/top_snackbar.dart';
 import '../widgets/message/pinned_message_banner.dart';
@@ -83,9 +81,6 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   // Cached so dispose removes the listener from the SAME instance initState
   // added it to, even when a test overrides the shared source between mounts.
   late final KeyboardInsetSource _sharedInset;
-  bool _isLoadingMoreLocal = false;
-  double? _prePaginationScrollOffset;
-  double? _prePaginationScrollExtent;
   bool _wasNearBottom = true;
 
   /// After the user drags the list, do not auto-scroll to bottom until they scroll back
@@ -99,11 +94,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     final messaging = context.read<MessagingProvider>();
     final l10n = AppLocalizations.of(context);
 
-    final listIndex = await loadListIndexForMessageId(
+    final listIndex = listIndexForMessageId(
       messageId: messageId,
-      getMessages: () => messaging.messages,
-      hasMoreMessages: () => messaging.hasMoreMessages,
-      loadOlderPage: () => messaging.loadOlderMessages(widget.conversationId),
+      messages: messaging.messages,
     );
 
     if (listIndex == null) {
@@ -120,7 +113,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
 
     var revealed = false;
     const maxRevealAttempts = 12;
-    final itemCount = messaging.messages.length + (_isLoadingMoreLocal ? 1 : 0);
+    final itemCount = messaging.messages.length;
     for (var attempt = 0; attempt < maxRevealAttempts; attempt++) {
       if (attempt > 0 && _scrollController.hasClients && itemCount > 1) {
         final maxExtent = _scrollController.position.maxScrollExtent;
@@ -227,20 +220,6 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     if (_showScrollToBottomButton != !atBottom && mounted) {
       setState(() => _showScrollToBottomButton = !atBottom);
     }
-
-    // Near visual top (oldest messages) = pixels near maxScrollExtent → load older.
-    // Require maxScrollExtent > 0 so short non-scrollable threads do not satisfy
-    // pixels >= maxScrollExtent - 300 while sitting at the bottom.
-    final maxExtent = pos.maxScrollExtent;
-    if (maxExtent > 0 && pos.pixels >= maxExtent - 300) {
-      final messaging = context.read<MessagingProvider>();
-      if (!messaging.isLoadingMore && messaging.hasMoreMessages) {
-        _prePaginationScrollOffset = _scrollController.offset;
-        _prePaginationScrollExtent = _scrollController.position.maxScrollExtent;
-        setState(() => _isLoadingMoreLocal = true);
-        messaging.loadOlderMessages(widget.conversationId);
-      }
-    }
   }
 
   void _onNewMessages(int currentCount, int added) {
@@ -248,41 +227,6 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     final currentUserId = context.read<AuthProvider>().currentUser?.id;
     final currentMessages = messaging.messages;
     final currentMessageIds = currentMessages.map((m) => m.id).toSet();
-
-    if (_isLoadingMoreLocal) {
-      _knownMessageIds.addAll(currentMessageIds);
-      _lastMessageCount = currentCount;
-      _lastLinkPreviewCount = currentMessages
-          .where((m) => m.linkPreviewUrl != null)
-          .length;
-
-      if (!messaging.isLoadingMore) {
-        setState(() => _isLoadingMoreLocal = false);
-        final preOffset = _prePaginationScrollOffset;
-        final preExtent = _prePaginationScrollExtent;
-        _prePaginationScrollOffset = null;
-        _prePaginationScrollExtent = null;
-        SchedulerBinding.instance.addPostFrameCallback((_) {
-          if (preOffset == null || preExtent == null) return;
-          if (!_scrollController.hasClients) return;
-          final newExtent = _scrollController.position.maxScrollExtent;
-          _scrollController.jumpTo(preOffset + (newExtent - preExtent));
-        });
-        return;
-      }
-      final preOffset = _prePaginationScrollOffset;
-      final preExtent = _prePaginationScrollExtent;
-      SchedulerBinding.instance.addPostFrameCallback((_) {
-        if (preOffset == null || preExtent == null) return;
-        if (!_scrollController.hasClients) return;
-        final newExtent = _scrollController.position.maxScrollExtent;
-        final delta = newExtent - preExtent;
-        _prePaginationScrollOffset = preOffset + delta;
-        _prePaginationScrollExtent = newExtent;
-        _scrollController.jumpTo(preOffset + delta);
-      });
-      return;
-    }
 
     if (added <= 0) {
       _lastMessageCount = currentCount;
@@ -335,14 +279,10 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     }
   }
 
-  /// Clears server push-suppression when this route/widget is torn down without the
+  /// Closes the chat in the provider when this route/widget is torn down without the
   /// AppBar back handler (Android system back, block menu, auto-pop after conv removed).
   /// Skips when another conversation is already active (desktop list switch).
   void _clearActiveConversationIfThisChat() {
-    if (_conversations.activeConversationDeletedByOther) {
-      _conversations.clearActiveIfDeletedByOther();
-      return;
-    }
     if (_conversations.activeConversationId == widget.conversationId) {
       _conversations.closeConversation(notify: false);
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -419,9 +359,6 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
       _lastLinkPreviewCount = 0;
       _newMessagesCount = 0;
       _userHasScrolledChat = false;
-      _isLoadingMoreLocal = false;
-      _prePaginationScrollOffset = null;
-      _prePaginationScrollExtent = null;
       _dismissedNoteAt = null;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
@@ -648,14 +585,6 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     );
   }
 
-  /// (lxxxi): the ONE pill standing in for every pre-link `none_for_device`
-  /// row, rendered at the oldest end of the list and in the all-hidden empty
-  /// state — both sites, one builder, one key.
-  Widget _preLinkDivider(BuildContext context) => MessageDateSeparator.label(
-    AppLocalizations.of(context).historyNotOnThisDevice,
-    key: const Key('pre-link-history-divider'),
-  );
-
   String _getContactName() {
     final conv = _getActiveConversation();
     return conv != null
@@ -760,11 +689,6 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     final identityRowOffset = (peerIdentityChanged || peerKeyChangeNoted)
         ? 1
         : 0;
-    // Amendment (lxxxi): rows that predate this device's link are not in
-    // `messages`; one pill at the oldest end says why the thread starts here.
-    final preLinkDivider = context.read<MessagingProvider>().hiddenPreLinkCount > 0
-        ? 1
-        : 0;
     return ChatBackgroundPattern(
       backgroundColor: messagesAreaBg,
       layer: settings.resolvedChatBackground,
@@ -798,15 +722,13 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
                     ),
                   Expanded(
                     child: Center(
-                      child: preLinkDivider == 1
-                          ? _preLinkDivider(context)
-                          : Text(
-                              AppLocalizations.of(context).noMessagesYet,
-                              style: RpgTheme.bodyFont(
-                                fontSize: 14,
-                                color: mutedColor,
-                              ),
-                            ),
+                      child: Text(
+                        AppLocalizations.of(context).noMessagesYet,
+                        style: RpgTheme.bodyFont(
+                          fontSize: 14,
+                          color: mutedColor,
+                        ),
+                      ),
                     ),
                   ),
                 ],
@@ -846,11 +768,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
                       top: topClearance,
                       bottom: 8 + listBottomPadding,
                     ),
-                    itemCount:
-                        messages.length +
-                        (_isLoadingMoreLocal ? 1 : 0) +
-                        identityRowOffset +
-                        preLinkDivider,
+                    itemCount: messages.length + identityRowOffset,
                     itemBuilder: (context, index) {
                       if (peerIdentityChanged && index == 0) {
                         return PeerIdentityChangedRow(
@@ -867,17 +785,6 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
                         );
                       }
                       final effIndex = index - identityRowOffset;
-                      final loadingSlot = _isLoadingMoreLocal ? 1 : 0;
-                      if (preLinkDivider == 1 &&
-                          effIndex == messages.length + loadingSlot) {
-                        return _preLinkDivider(context);
-                      }
-                      if (_isLoadingMoreLocal && effIndex == messages.length) {
-                        return const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 8),
-                          child: Center(child: CircularProgressIndicator()),
-                        );
-                      }
                       final msgIndex = messages.length - 1 - effIndex;
                       final msg = messages[msgIndex];
                       final showDate =
@@ -927,36 +834,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     return !messages.last.createdAt.isAfter(at);
   }
 
-  Widget _buildComposerFooter({
-    required UserModel? otherUser,
-    required Color mutedColor,
-    required ColorScheme colorScheme,
-    required String? olderAppName,
-  }) {
-    if (otherUser != null &&
-        context.read<FriendsProvider>().blockedByUserIds.contains(
-          otherUser.id,
-        )) {
-      return SafeArea(
-        top: false,
-        left: true,
-        right: true,
-        child: Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(vertical: 16),
-          color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-          child: Center(
-            child: Text(
-              AppLocalizations.of(context).cantTypeToThisUser,
-              style: RpgTheme.bodyFont(
-                fontSize: 13,
-                color: mutedColor,
-              ).copyWith(fontStyle: FontStyle.italic),
-            ),
-          ),
-        ),
-      );
-    }
+  Widget _buildComposerFooter({required String? olderAppName}) {
     // Always a Column, so the composer keeps its place in the tree when the
     // decision-48 notice comes or goes; the notice mounts instantly (the
     // composer is a no-animation zone).
@@ -1106,12 +984,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     final pinnedBanner = activeConv != null
         ? _buildPinnedMessageBanner(context, activeConv, messaging, convs)
         : null;
-    final deletedByOther =
-        activeConv == null && convs.activeConversationDeletedByOther;
-    // Auto-pop only when conv gone and NOT deleted by other (e.g. unfriend/block)
-    if (activeConv == null &&
-        convs.conversations.isNotEmpty &&
-        !deletedByOther) {
+    // Auto-pop when the conversation is gone (unfriend/block)
+    if (activeConv == null && convs.conversations.isNotEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         if (Navigator.canPop(context)) {
@@ -1130,9 +1004,6 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
 
     final currentUserId = auth.currentUser!.id;
     final composerFooter = _buildComposerFooter(
-      otherUser: otherUser,
-      mutedColor: mutedColor,
-      colorScheme: colorScheme,
       // Owner decision 48: while this friend is not on the box yet.
       olderAppName:
           otherUser != null && messaging.boxFriendPending(otherUser.id)
@@ -1140,34 +1011,12 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
           : null,
     );
 
-    // When other user deleted the conversation, show message instead of auto-close
     final Widget body;
-    if (deletedByOther) {
-      body = SafeArea(
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.delete_outline, size: 48, color: mutedColor),
-                const SizedBox(height: 16),
-                Text(
-                  AppLocalizations.of(context).conversationDeletedByOther,
-                  textAlign: TextAlign.center,
-                  style: RpgTheme.bodyFont(fontSize: 14, color: mutedColor),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    } else if (widget.isEmbedded) {
+    if (widget.isEmbedded) {
       // Pinned banner is rendered by the embedded shell above this [body].
       // Embedded header/banner are in-flow — no floating chrome to clear.
       body = Column(
         children: [
-          if (messaging.devicesSyncing) const DevicesSyncingNote(),
           Expanded(
             child: _buildMessagesArea(
               listBottomPadding: 0,
@@ -1194,12 +1043,6 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
         children: [
           if (pinnedBanner != null)
             SafeArea(bottom: false, child: pinnedBanner),
-          if (messaging.devicesSyncing)
-            SafeArea(
-              bottom: false,
-              top: pinnedBanner == null,
-              child: const DevicesSyncingNote(),
-            ),
           Expanded(
             child: ChatComposerViewport(
               messageListBuilder: (listBottomPadding) => _buildMessagesArea(

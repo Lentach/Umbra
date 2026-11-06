@@ -4,6 +4,8 @@ import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import '../support/chat_seed.dart';
 import 'package:image_picker/image_picker.dart';
 
 void main() {
@@ -14,7 +16,7 @@ void main() {
     setUp(() {
       provider = MessagingProvider();
       conversations = ConversationsProvider();
-      conversations.onConversationsList([
+      seedConversations(conversations, [
         {
           'id': 10,
           'userOne': {'id': 1, 'username': 'alice', 'tag': '0001'},
@@ -43,7 +45,6 @@ void main() {
 
     test('sendImageMessage includes replyToMessageId in optimistic message', () async {
       await provider.sendImageMessage(
-        'tok',
         XFile.fromData(Uint8List.fromList([1, 2, 3]), name: 'test.jpg'),
         2,
       );

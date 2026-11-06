@@ -70,9 +70,18 @@ export class RefreshTokensService {
    * the server has already deleted the row, while the client can only retry the
    * old token. Sliding the existing row preserves sticky sessions without
    * weakening explicit revoke/password-change invalidation.
+   *
+   * A REVOKED device's row is kept, not deleted (decision 130, E130a): it is
+   * the only thing a device woken after its access JWT expired can ask "was I
+   * revoked?" with. It is refused HERE, before the slide, with its own answer
+   * (`Device revoked`) instead of the `Invalid refresh token` that logout, a
+   * password change and expiry give — a client reads nothing but the explicit
+   * answer as "revoked". [isRevoked] is the caller's, because the `devices`
+   * table is not this module's.
    */
   async consumeAndSlide(
     plain: string,
+    isRevoked: (userId: number, deviceId: number | null) => Promise<boolean>,
   ): Promise<{ userId: number; deviceId: number | null }> {
     const tokenHash = RefreshTokensService.hashToken(plain);
     const row = await this.refreshRepo.findOne({ where: { tokenHash } });
@@ -89,6 +98,12 @@ export class RefreshTokensService {
       await this.refreshRepo.remove(row);
       throw new UnauthorizedException('Refresh token expired');
     }
+    if (await isRevoked(row.userId, row.deviceId)) {
+      this.logger.warn(
+        '[auth-session-end] reason=device_revoked source=refresh_endpoint',
+      );
+      throw new UnauthorizedException('Device revoked');
+    }
 
     row.expiresAt = this.expiresAtFromNow();
     await this.refreshRepo.save(row);
@@ -104,9 +119,14 @@ export class RefreshTokensService {
   }
 
   /**
-   * Drops EVERY session of an account. `manager` makes it part of the caller's
+   * Drops the sessions of an account — EXCEPT those of a device the account's
+   * list already shows revoked (`devices."revokedAt"`): those rows are the
+   * proof of that revocation `consumeAndSlide` answers from, and they cannot
+   * mint anything (refused there). `manager` makes it part of the caller's
    * transaction — the §6.2 roster teardown needs the session wipe and the
-   * roster mutation to commit or roll back together (amendment (xxviii)).
+   * roster mutation to commit or roll back together (amendment (xxviii)), and
+   * its own revocations are visible to this statement. A session with no
+   * `device_id` (pre-Phase-1) belongs to no revoked device and is dropped.
    */
   async revokeAllForUser(
     userId: number,
@@ -115,28 +135,13 @@ export class RefreshTokensService {
     const repo = manager
       ? manager.getRepository(RefreshToken)
       : this.refreshRepo;
-    await repo.delete({ userId });
-  }
-
-  /**
-   * Deletes ONE device's refresh sessions (spec §5.5 revocation), inside the
-   * caller's transaction when given a manager.
-   *
-   * Scoped by `(userId, device_id)`, so every other device stays signed in —
-   * the whole point of the Phase 1 column. Rows with a NULL `device_id`
-   * (pre-Phase-1 sessions) are deliberately NOT matched: they cannot be
-   * attributed to a device, and deleting them would sign out the primary that
-   * is performing the revocation.
-   */
-  async revokeForDevice(
-    userId: number,
-    deviceId: number,
-    manager?: EntityManager,
-  ): Promise<number> {
-    const repo = manager
-      ? manager.getRepository(RefreshToken)
-      : this.refreshRepo;
-    const result = await repo.delete({ userId, deviceId });
-    return result.affected ?? 0;
+    await repo.query(
+      `DELETE FROM public.refresh_tokens
+        WHERE user_id = $1
+          AND (device_id IS NULL OR device_id NOT IN (
+            SELECT "deviceId" FROM public.devices
+             WHERE "userId" = $1 AND "revokedAt" IS NOT NULL))`,
+      [userId],
+    );
   }
 }

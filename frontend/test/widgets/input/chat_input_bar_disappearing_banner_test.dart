@@ -10,6 +10,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
+import '../../support/chat_seed.dart';
+
 ConversationsProvider _providerWithConversation({
   required int conversationId,
   int? disappearingTimer,
@@ -17,7 +19,7 @@ ConversationsProvider _providerWithConversation({
   final userA = UserModel(id: 1, username: 'alice', tag: '0001');
   final userB = UserModel(id: 2, username: 'bob', tag: '0002');
   final provider = ConversationsProvider();
-  provider.onConversationsList([
+  seedConversations(provider, [
     {
       'id': conversationId,
       'userOne': {

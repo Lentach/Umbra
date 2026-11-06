@@ -1,20 +1,24 @@
-import { Socket } from 'socket.io';
+import { Server, Socket } from 'socket.io';
 import { ChatPresenceService } from './chat-presence.service';
+
+/** Just the part of a socket the service reads. */
+const clientOf = (data: Record<string, unknown>) =>
+  ({ data }) as unknown as Socket;
 
 describe('ChatPresenceService', () => {
   let service: ChatPresenceService;
-  let mockBlockedService: any;
-  let mockServer: any;
-  let mockClient: any;
+  let to: jest.Mock;
+  let emit: jest.Mock;
+  let server: Server;
+  let client: Socket;
 
   beforeEach(() => {
-    mockBlockedService = {
-      isBlockedByEither: jest.fn().mockResolvedValue(false),
-    };
-    service = new ChatPresenceService(mockBlockedService);
-    mockServer = {
-      to: jest.fn().mockReturnThis(),
-      emit: jest.fn(),
+    service = new ChatPresenceService();
+    to = jest.fn().mockReturnThis();
+    emit = jest.fn();
+    server = {
+      to,
+      emit,
       // Room occupancy drives isUserOnline (see utils/user-room.ts): users 1 and 2
       // have a live socket; user 99 is absent, i.e. offline.
       sockets: {
@@ -25,23 +29,20 @@ describe('ChatPresenceService', () => {
           ]),
         },
       },
-    };
-    mockClient = { data: { user: { id: 1 } } };
+    } as unknown as Server;
+    client = clientOf({ user: { id: 1 } });
   });
 
   describe('handleTyping', () => {
     it('should emit partnerTyping to recipient', async () => {
       await service.handleTyping(
-        mockClient,
-        {
-          recipientId: 2,
-          conversationId: 10,
-        },
-        mockServer,
+        client,
+        { recipientId: 2, conversationId: 10 },
+        server,
       );
 
-      expect(mockServer.to).toHaveBeenCalledWith('user:2');
-      expect(mockServer.emit).toHaveBeenCalledWith('partnerTyping', {
+      expect(to).toHaveBeenCalledWith('user:2');
+      expect(emit).toHaveBeenCalledWith('partnerTyping', {
         senderId: 1,
         conversationId: 10,
       });
@@ -49,65 +50,39 @@ describe('ChatPresenceService', () => {
 
     it('should not emit if recipient offline', async () => {
       await service.handleTyping(
-        mockClient,
-        {
-          recipientId: 99,
-          conversationId: 10,
-        },
-        mockServer,
+        client,
+        { recipientId: 99, conversationId: 10 },
+        server,
       );
 
-      expect(mockServer.to).not.toHaveBeenCalled();
-      // Offline early-out fires before the block gate: the block check must be skipped
-      // entirely for offline peers (this is the high-frequency typing path).
-      expect(mockBlockedService.isBlockedByEither).not.toHaveBeenCalled();
+      expect(to).not.toHaveBeenCalled();
     });
 
     it('should not emit if no user on client', async () => {
       await service.handleTyping(
-        { data: {} } as any,
-        {
-          recipientId: 2,
-          conversationId: 10,
-        },
-        mockServer,
+        clientOf({}),
+        { recipientId: 2, conversationId: 10 },
+        server,
       );
 
-      expect(mockServer.to).not.toHaveBeenCalled();
+      expect(to).not.toHaveBeenCalled();
     });
 
-    it('should not emit partnerTyping when either user has blocked the other', async () => {
-      mockBlockedService.isBlockedByEither.mockResolvedValue(true);
+    it('should not emit for an invalid payload', async () => {
+      await service.handleTyping(client, { recipientId: 'x' }, server);
 
-      await service.handleTyping(
-        mockClient,
-        {
-          recipientId: 2,
-          conversationId: 10,
-        },
-        mockServer,
-      );
-
-      expect(mockBlockedService.isBlockedByEither).toHaveBeenCalledWith(1, 2);
-      expect(mockServer.to).not.toHaveBeenCalled();
-      expect(mockServer.emit).not.toHaveBeenCalled();
+      expect(to).not.toHaveBeenCalled();
     });
 
-    it('should emit partnerTyping for the reverse direction when not blocked', async () => {
-      const reverseClient = { data: { user: { id: 2 } } };
-
+    it('should emit partnerTyping for the reverse direction', async () => {
       await service.handleTyping(
-        reverseClient as any,
-        {
-          recipientId: 1,
-          conversationId: 10,
-        },
-        mockServer,
+        clientOf({ user: { id: 2 } }),
+        { recipientId: 1, conversationId: 10 },
+        server,
       );
 
-      expect(mockBlockedService.isBlockedByEither).toHaveBeenCalledWith(2, 1);
-      expect(mockServer.to).toHaveBeenCalledWith('user:1');
-      expect(mockServer.emit).toHaveBeenCalledWith('partnerTyping', {
+      expect(to).toHaveBeenCalledWith('user:1');
+      expect(emit).toHaveBeenCalledWith('partnerTyping', {
         senderId: 2,
         conversationId: 10,
       });
@@ -117,17 +92,13 @@ describe('ChatPresenceService', () => {
   describe('handleRecordingVoice', () => {
     it('should emit partnerRecordingVoice to recipient', async () => {
       await service.handleRecordingVoice(
-        mockClient,
-        {
-          recipientId: 2,
-          conversationId: 10,
-          isRecording: true,
-        },
-        mockServer,
+        client,
+        { recipientId: 2, conversationId: 10, isRecording: true },
+        server,
       );
 
-      expect(mockServer.to).toHaveBeenCalledWith('user:2');
-      expect(mockServer.emit).toHaveBeenCalledWith('partnerRecordingVoice', {
+      expect(to).toHaveBeenCalledWith('user:2');
+      expect(emit).toHaveBeenCalledWith('partnerRecordingVoice', {
         senderId: 1,
         conversationId: 10,
         isRecording: true,
@@ -136,86 +107,22 @@ describe('ChatPresenceService', () => {
 
     it('should not emit if recipient offline', async () => {
       await service.handleRecordingVoice(
-        mockClient,
-        {
-          recipientId: 99,
-          conversationId: 10,
-          isRecording: true,
-        },
-        mockServer,
+        client,
+        { recipientId: 99, conversationId: 10, isRecording: true },
+        server,
       );
 
-      expect(mockServer.to).not.toHaveBeenCalled();
-      // Offline early-out fires before the block gate: the block check must be skipped.
-      expect(mockBlockedService.isBlockedByEither).not.toHaveBeenCalled();
+      expect(to).not.toHaveBeenCalled();
     });
 
     it('should not emit if no user on client', async () => {
       await service.handleRecordingVoice(
-        { data: {} } as any,
-        {
-          recipientId: 2,
-          conversationId: 10,
-          isRecording: true,
-        },
-        mockServer,
+        clientOf({}),
+        { recipientId: 2, conversationId: 10, isRecording: true },
+        server,
       );
 
-      expect(mockServer.to).not.toHaveBeenCalled();
-    });
-
-    it('should not emit partnerRecordingVoice when either user has blocked the other', async () => {
-      mockBlockedService.isBlockedByEither.mockResolvedValue(true);
-
-      await service.handleRecordingVoice(
-        mockClient,
-        {
-          recipientId: 2,
-          conversationId: 10,
-          isRecording: true,
-        },
-        mockServer,
-      );
-
-      expect(mockBlockedService.isBlockedByEither).toHaveBeenCalledWith(1, 2);
-      expect(mockServer.to).not.toHaveBeenCalled();
-      expect(mockServer.emit).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('handlePushClientState', () => {
-    it('stores only the visibility on client.data', () => {
-      service.handlePushClientState(mockClient, { clientVisible: true });
-
-      expect(mockClient.data.pushClientState).toEqual({ clientVisible: true });
-    });
-
-    // Metadata privacy PR0.2: the server must never hold WHICH chat a user has
-    // open. A client that predates the change still sends the id; it is
-    // dropped here, never stored.
-    it("drops an older client's activeConversationId instead of storing it", () => {
-      service.handlePushClientState(mockClient, {
-        activeConversationId: 7,
-        clientVisible: false,
-      });
-
-      expect(mockClient.data.pushClientState).toEqual({ clientVisible: false });
-    });
-
-    it('no-op when payload invalid', () => {
-      service.handlePushClientState(mockClient, {});
-
-      expect(mockClient.data.pushClientState).toBeUndefined();
-    });
-
-    it('no-op when no user id', () => {
-      const bare: { data: { pushClientState?: unknown } } = { data: {} };
-      // A socket whose handshake never authenticated: no user on client.data.
-      service.handlePushClientState(bare as unknown as Socket, {
-        clientVisible: true,
-      });
-
-      expect(bare.data.pushClientState).toBeUndefined();
+      expect(to).not.toHaveBeenCalled();
     });
   });
 });

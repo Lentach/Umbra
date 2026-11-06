@@ -37,14 +37,6 @@ class _AccountSocket extends SocketService {
   @override
   void onDisconnect(void Function(dynamic) callback) =>
       _onDisconnect = callback;
-  @override
-  void getConversations() {}
-  @override
-  void getFriendRequests() {}
-  @override
-  void getFriends() {}
-  @override
-  void getBlockedList() {}
 
   void serve(String event, Object? payload) {
     for (final handler
@@ -77,11 +69,6 @@ class _QuietEncryption extends EncryptionProvider {
   Future<void> drainPurgeBacklog() async {}
   @override
   Future<void> sweepDestroyablePlaintext() async {}
-  @override
-  Future<void> reconcileStoredPlaintext(
-    Future<Set<int>?> Function(Set<int> batch) askServer, {
-    bool force = false,
-  }) async {}
 
   /// What the served list says of the device the material is stamped for.
   bool? stampRevoked = true;

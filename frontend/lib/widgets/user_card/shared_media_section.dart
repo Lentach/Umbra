@@ -1,10 +1,8 @@
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 
 import '../../models/message_model.dart';
-import '../../providers/auth_provider.dart';
 import '../../utils/encrypted_media_loader.dart';
 import '../message/box_media_source.dart';
 
@@ -82,12 +80,10 @@ class _SharedMediaThumbState extends State<_SharedMediaThumb> {
   Future<Uint8List?> _load() async {
     final url = widget.message.mediaUrl;
     if (url == null || url.isEmpty) return null;
-    final token = context.read<AuthProvider>().token ?? '';
     final box = boxMediaSourceFor(context, url);
     try {
       return await loadDecryptedMediaBytes(
         url: url,
-        token: token,
         key: widget.message.mediaKey,
         iv: widget.message.mediaIv,
         box: box,

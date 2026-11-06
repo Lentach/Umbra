@@ -246,11 +246,6 @@ void main() {
           'mediaKey': 'media-key',
           'mediaIv': 'media-iv',
         });
-        await bob.savePendingSendRecord('durable-ciphertext', {
-          'content': 'pending plaintext',
-          'mediaKey': 'pending-key',
-          'mediaIv': 'pending-iv',
-        });
 
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
             .setMockMethodCallHandler(
@@ -266,10 +261,6 @@ void main() {
         expect(saved?['editedAt'], '2026-07-12T00:00:00Z');
         expect(saved?['mediaKey'], 'media-key');
         expect(saved?['mediaIv'], 'media-iv');
-        expect(
-          await reloaded.peekPendingSendRecord('durable-ciphertext'),
-          isNotNull,
-        );
 
         final nextCiphertext = await alice.encrypt(
           92002,

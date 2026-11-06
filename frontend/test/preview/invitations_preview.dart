@@ -9,11 +9,14 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'package:fireplace/l10n/app_localizations.dart';
-import 'package:fireplace/providers/friends_provider.dart';
 import 'package:fireplace/screens/invitations_screen.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
 import 'package:fireplace/models/user_model.dart';
+import 'package:fireplace/services/box/box_first_contact.dart';
+import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/widgets/chat_honeycomb_picker.dart';
+
+import '../support/contact_seed.dart';
 import 'package:fireplace/widgets/glass/glass_top_bar.dart';
 import 'package:fireplace/widgets/hex_avatar.dart';
 import 'package:fireplace/widgets/ping_effect_overlay.dart';
@@ -39,12 +42,6 @@ const _names = [
   'Hubert',
 ];
 
-Map<String, Object?> _user(int id, String name) => {
-  'id': id,
-  'username': name,
-  'tag': id.toString().padLeft(4, '0'),
-  'profilePictureUrl': null,
-};
 
 class InvitationsPreviewApp extends StatelessWidget {
   const InvitationsPreviewApp({super.key});
@@ -102,82 +99,55 @@ class InvitationsPreviewApp extends StatelessWidget {
     required int sent,
     required bool accepted,
   }) {
-    final friends = FriendsProvider()
-      ..setCurrentUserId(1)
-      ..onFriendRequestsList([
+    return SeededStoreHost(
+      records: [
         for (var i = 0; i < incoming; i++)
-          {
-            'id': 10 + i,
-            'sender': _user(2 + i, _names[i % _names.length]),
-            'receiver': _user(1, 'Marta'),
-            'status': 'pending',
-            'createdAt': '2026-07-29T12:00:00.000Z',
-          },
-      ])
-      ..onSentRequestsList([
+          contactRecord(
+            2 + i,
+            _names[i % _names.length],
+            ContactState.pendingIn,
+            box: true,
+          ),
         for (var i = 0; i < sent; i++)
-          {
-            'id': 30 + i,
-            'sender': _user(1, 'Marta'),
-            'receiver': _user(20 + i, _names[(i + 3) % _names.length]),
-            'status': 'pending',
-            'createdAt': '2026-07-29T12:00:00.000Z',
-          },
-      ]);
-    if (accepted) {
-      friends.onFriendRequestAccepted({
-        'id': 40,
-        'sender': _user(60, 'Iwo'),
-        'receiver': _user(1, 'Marta'),
-        'status': 'accepted',
-        'createdAt': '2026-07-29T12:00:00.000Z',
-        'conversationId': 44,
-        'chatReady': true,
-      });
-    }
-    // Fake server echo: there is no socket here, and without one an Accept
-    // would lock the row into its in-flight spinner forever (the provider
-    // only emits; state advances when the SERVER answers). Answer accept /
-    // decline / chat-setup after a realistic beat so the accept flow — and
-    // the forge animation it triggers — is reviewable in the preview.
-    final requestsById = {
-      for (var i = 0; i < incoming; i++)
-        10 + i: {
-          'id': 10 + i,
-          'sender': _user(2 + i, _names[i % _names.length]),
-          'receiver': _user(1, 'Marta'),
-          'status': 'accepted',
-          'createdAt': '2026-07-29T12:00:00.000Z',
-          'conversationId': 100 + i,
-          'chatReady': true,
-        },
-    };
-    friends.setEmitCallback((event, data) {
-      Future<void>.delayed(const Duration(milliseconds: 400), () {
-        // NOT `as Map<String, dynamic>`: the provider emits inferred-type
-        // literals (e.g. Map<String, int>), and a failed cast inside this
-        // delayed future is swallowed silently — the row spins forever.
-        final payload = data as Map;
-        switch (event) {
-          case 'acceptFriendRequest':
-            final request = requestsById[payload['requestId']];
-            if (request != null) friends.onFriendRequestAccepted(request);
-          case 'rejectFriendRequest':
-            final request = requestsById[payload['requestId']];
-            if (request != null) friends.onFriendRequestRejected(request);
-          case 'ensureInvitationChat':
-            friends.onInvitationChatReady({
-              'peerUserId': payload['peerUserId'],
-              'correlationId': payload['correlationId'],
-              'conversationId': 200,
-              'chatReady': true,
-            });
-        }
-      });
-    });
-    return ChangeNotifierProvider.value(
-      value: friends,
-      child: const InvitationsScreen(),
+          contactRecord(
+            20 + i,
+            _names[(i + 3) % _names.length],
+            ContactState.pendingOut,
+            box: true,
+          ),
+        if (accepted)
+          contactRecord(60, 'Iwo', ContactState.friend, box: true),
+      ],
+      selfId: 1,
+      selfName: 'Marta',
+      builder: (context, store) {
+        final friends = friendsOver(store);
+        if (accepted) friends.onBoxFriendshipMade(60, outgoing: false);
+        // Fake box answer: there is no box here, and without one an Accept
+        // would lock the row into its in-flight spinner forever. Answer
+        // accept / decline after a realistic beat so the accept flow — and
+        // the forge animation it triggers — is reviewable in the preview.
+        friends
+          ..boxAcceptRequest = (userId) async {
+            await Future<void>.delayed(const Duration(milliseconds: 400));
+            final pending = store.byUserId(userId);
+            if (pending == null) return FirstContactAccept.failed;
+            await store.update(
+              userId,
+              (r) => r?.copyWith(state: ContactState.friend),
+            );
+            friends.onBoxFriendshipMade(userId, outgoing: false);
+            return FirstContactAccept.accepted;
+          }
+          ..boxDeclineRequest = (userId) async {
+            await Future<void>.delayed(const Duration(milliseconds: 400));
+            await store.remove(userId);
+          };
+        return ChangeNotifierProvider.value(
+          value: friends,
+          child: const InvitationsScreen(),
+        );
+      },
     );
   }
 }

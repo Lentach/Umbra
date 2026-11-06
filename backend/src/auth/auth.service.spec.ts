@@ -30,7 +30,9 @@ describe('AuthService', () => {
       'createToken' | 'consumeAndSlide' | 'revokeByPlain'
     >
   >;
-  let devicesService: jest.Mocked<Pick<DevicesService, 'resolveLoginDeviceId'>>;
+  let devicesService: jest.Mocked<
+    Pick<DevicesService, 'resolveLoginDeviceId' | 'isRevoked'>
+  >;
   let identityResetService: jest.Mocked<
     Pick<IdentityResetService, 'verifyRecoveryPhrase'>
   >;
@@ -77,6 +79,7 @@ describe('AuthService', () => {
           provide: DevicesService,
           useValue: {
             resolveLoginDeviceId: jest.fn(() => Promise.resolve(1)),
+            isRevoked: jest.fn(() => Promise.resolve(false)),
           },
         },
         {
@@ -380,6 +383,7 @@ describe('AuthService', () => {
 
       expect(refreshTokensService.consumeAndSlide).toHaveBeenCalledWith(
         'incoming_refresh',
+        expect.any(Function),
       );
       expect(usersService.findById).toHaveBeenCalledWith(1);
       expect(result).toEqual({
@@ -412,6 +416,38 @@ describe('AuthService', () => {
         deviceId?: number;
       };
       expect(signed.deviceId).toBe(1);
+    });
+
+    // Decision 130 (E130a): the revoked-device answer is the refresh token
+    // service's; what the AUTH service owes it is the predicate, reading a
+    // session with no device column as device 1 (§8), like every other gate.
+    it('hands the refresh token service a revoked-device predicate that reads a NULL device as device 1', async () => {
+      refreshTokensService.consumeAndSlide.mockResolvedValue({
+        userId: 1,
+        deviceId: 2,
+      });
+      usersService.findById.mockResolvedValue(mockUser as User);
+      devicesService.isRevoked.mockResolvedValueOnce(true);
+
+      await service.refreshWithToken('r');
+
+      const isRevoked = refreshTokensService.consumeAndSlide.mock.calls[0][1];
+      await expect(isRevoked(1, 2)).resolves.toBe(true);
+      // Read off the recorded calls, not the method: `unbound-method`.
+      expect(devicesService.isRevoked.mock.calls.at(-1)).toEqual([1, 2]);
+      await expect(isRevoked(1, null)).resolves.toBe(false);
+      expect(devicesService.isRevoked.mock.calls.at(-1)).toEqual([1, 1]);
+    });
+
+    it('does not issue a token when the refresh token service refuses the device', async () => {
+      refreshTokensService.consumeAndSlide.mockRejectedValue(
+        new UnauthorizedException('Device revoked'),
+      );
+
+      await expect(service.refreshWithToken('r')).rejects.toThrow(
+        new UnauthorizedException('Device revoked'),
+      );
+      expect((jwtService.sign as jest.Mock).mock.calls).toHaveLength(0);
     });
 
     it('throws when user row missing after sliding refresh', async () => {

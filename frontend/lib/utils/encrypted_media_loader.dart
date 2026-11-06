@@ -10,7 +10,7 @@ import '../services/media_crypto_service.dart';
 /// `MessagingProvider.boxMediaCiphertext`.
 typedef BoxCiphertextSource = Future<Uint8List?> Function(String url);
 
-/// Fetch [url] with [token], enforce the media size cap, and AES-GCM decrypt
+/// Fetch [url], enforce the media size cap, and AES-GCM decrypt
 /// when both [key] and [iv] are present.
 ///
 /// Extracted from the image / GIF / file message widgets, which each ran an
@@ -24,7 +24,6 @@ typedef BoxCiphertextSource = Future<Uint8List?> Function(String url);
 /// its UNFRAMED ciphertext, so a 17 MiB file on the 32 MiB rung shows.
 Future<Uint8List> loadDecryptedMediaBytes({
   required String url,
-  required String token,
   String? key,
   String? iv,
   String? baseUrl,
@@ -47,7 +46,7 @@ Future<Uint8List> loadDecryptedMediaBytes({
     return (crypto ?? MediaCryptoService()).decrypt(ciphertext, key, iv);
   }
   final service = api ?? ApiService(baseUrl: baseUrl ?? AppConfig.baseUrl);
-  final raw = await service.fetchMediaBytes(url, token);
+  final raw = await service.fetchMediaBytes(url);
   final encrypted = key != null && iv != null;
   final cap = encrypted
       ? MediaCryptoService.maxCiphertextBytes

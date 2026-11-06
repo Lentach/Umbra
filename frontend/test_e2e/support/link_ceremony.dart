@@ -7,9 +7,9 @@
 // than one `(identity, deviceId)` partition to reason about.
 //
 // Deliberately NOT retro-fitted onto the main suite in the same change. That
-// file's ceremony is load-bearing for falsifications 8/18/20 and the T4 group,
-// and swapping it out for this while proving something else would put a
-// refactor and a proof in one commit.
+// file's ceremony is load-bearing for falsifications 8/18/20 and the §5.5
+// revocation test, and swapping it out for this while proving something else
+// would put a refactor and a proof in one commit.
 
 import 'dart:convert';
 

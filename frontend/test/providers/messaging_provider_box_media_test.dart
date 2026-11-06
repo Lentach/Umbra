@@ -16,8 +16,9 @@ import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/services/contacts/contact_store.dart';
 import 'package:fireplace/services/device_list/device_list_cache.dart';
 import 'package:fireplace/services/device_list/device_list_canonical.dart';
-import 'package:fireplace/services/encrypted_media_upload_service.dart';
 import 'package:fireplace/services/encryption_service.dart';
+
+import '../support/chat_seed.dart';
 import 'package:fireplace/services/media_crypto_service.dart';
 import 'package:fireplace/utils/e2e_envelope.dart';
 import 'package:fireplace/utils/encrypted_media_loader.dart';
@@ -103,12 +104,6 @@ class _Encryption extends EncryptionProvider {
     int? messageId,
     int deviceId = 1,
   }) async => inbound;
-
-  @override
-  Future<void> savePendingSendRecord(
-    String key,
-    Map<String, dynamic> data,
-  ) async {}
 }
 
 class _Outbox implements BoxOutbox {
@@ -160,9 +155,7 @@ class _Outbox implements BoxOutbox {
 }
 
 /// A "ciphertext" is the plaintext reversed plus a 16-byte tag.
-class _MediaUpload extends EncryptedMediaUploadService {
-  _MediaUpload() : super(api: ApiService(baseUrl: 'http://test'));
-
+class _MediaCrypto extends MediaCryptoService {
   @override
   Future<EncryptedMedia> encrypt(Uint8List bytes) async => EncryptedMedia(
     ciphertext: Uint8List.fromList([...bytes.reversed, ...List.filled(16, 9)]),
@@ -210,7 +203,7 @@ class _NoMediaApi extends ApiService {
   _NoMediaApi() : super(baseUrl: 'http://test');
 
   @override
-  Future<Uint8List> fetchMediaBytes(String url, String token) =>
+  Future<Uint8List> fetchMediaBytes(String url) =>
       throw StateError('fetched $url from /media');
 }
 
@@ -255,7 +248,7 @@ void main() {
     ..onConnect(false)
     ..setActiveConversationIdForTest(10)
     ..setEmitCallback((_, _) {})
-    ..setMediaUploadServiceForTest(_MediaUpload())
+    ..setMediaCryptoForTest(_MediaCrypto())
     ..boxOutbox = outbox
     ..boxMedia = fetcher;
 
@@ -268,20 +261,19 @@ void main() {
       checkServerIdentity: () async => const ServerIdentityGuard(exists: false),
     );
     encryption = _Encryption(service);
-    conversations = ConversationsProvider()
-      ..setCurrentUserId(1)
-      ..onConversationsList([
-        {
-          'id': 10,
-          'userOne': {'id': 1, 'username': 'alice', 'tag': '0001'},
-          'userTwo': {'id': 2, 'username': 'bob', 'tag': '0002'},
-          'createdAt': '2026-01-01T00:00:00.000Z',
-          'disappearingTimer': null,
-          'unreadCount': 0,
-          'lastMessage': null,
-        },
-      ])
-      ..openConversation(10);
+    conversations = ConversationsProvider()..setCurrentUserId(1);
+    seedConversations(conversations, [
+      {
+        'id': 10,
+        'userOne': {'id': 1, 'username': 'alice', 'tag': '0001'},
+        'userTwo': {'id': 2, 'username': 'bob', 'tag': '0002'},
+        'createdAt': '2026-01-01T00:00:00.000Z',
+        'disappearingTimer': null,
+        'unreadCount': 0,
+        'lastMessage': null,
+      },
+    ]);
+    conversations.openConversation(10);
     outbox = _Outbox();
     store = MemoryBoxMediaStore();
     downloads = [];
@@ -307,10 +299,7 @@ void main() {
     downloads.clear();
     fetcher = newFetcher();
     provider = newProvider();
-    await provider.onMessageHistory({
-      'conversationId': 10,
-      'messages': <Object>[],
-    });
+    provider.getMessages(10);
     await pump(80);
   }
 
@@ -406,44 +395,6 @@ void main() {
   );
 
   test(
-    'an old-path message whose envelope names a box: url keeps no url — a '
-    "server row's attachment is never the box's, whose copy nothing would "
-    'ever forget',
-    () async {
-      final url = 'box:${boxB64(_id(8))}';
-      encryption.inbound = jsonEncode(
-        E2eEnvelope.build(
-          '',
-          messageType: 'IMAGE',
-          mediaUrl: url,
-          mediaKey: 'S0VZ',
-          mediaIv: 'SVY=',
-        ),
-      );
-      provider.onNewMessage({
-        'id': 700,
-        'senderId': 2,
-        'senderUsername': 'bob',
-        'content': '[encrypted]',
-        'encryptedContent': '2:AQID',
-        'originDeviceId': 1,
-        'conversationId': 10,
-        'deliveryStatus': 'DELIVERED',
-        'messageType': 'TEXT',
-        'createdAt': DateTime.now().toUtc().toIso8601String(),
-      });
-      await pump();
-
-      final shown = row(700);
-      expect(shown.messageType, MessageType.image);
-      expect(shown.mediaUrl, isNull);
-      final record = await encryption.store.getDecryptedContent(700);
-      expect(record, isNotNull);
-      expect(record?['mediaUrl'], isNull);
-    },
-  );
-
-  test(
     'an attachment whose record is not proven stored is not downloaded: the '
     'download starts only once a later offer proves the store (E17c)',
     () async {
@@ -472,53 +423,6 @@ void main() {
       await pump();
       expect(downloads, [_id(9)]);
       expect(await store.get(1, _id(9)), ct);
-    },
-  );
-
-  test(
-    "an old-path message's envelope never names a box attachment: its "
-    'boxMedia is ignored — the row keeps its own mediaUrl, or none (E17a)',
-    () async {
-      Map<String, dynamic> socketRow(int id) => {
-        'id': id,
-        'senderId': 2,
-        'senderUsername': 'bob',
-        'content': '[encrypted]',
-        'encryptedContent': '2:old-path-$id',
-        'originDeviceId': 1,
-        'conversationId': 10,
-        'deliveryStatus': 'DELIVERED',
-        'messageType': 'IMAGE',
-        'createdAt': DateTime.now().toUtc().toIso8601String(),
-      };
-      encryption.inbound = jsonEncode(
-        E2eEnvelope.build(
-          '',
-          messageType: 'IMAGE',
-          mediaUrl: 'http://test/media/msgs/x.bin',
-          boxMedia: boxB64(_id(10)),
-          mediaKey: 'S0VZ',
-          mediaIv: 'SVY=',
-        ),
-      );
-      provider.onNewMessage(socketRow(9001));
-      await pump();
-      expect(row(9001).mediaUrl, 'http://test/media/msgs/x.bin');
-
-      encryption.inbound = jsonEncode(
-        E2eEnvelope.build(
-          '',
-          messageType: 'IMAGE',
-          boxMedia: boxB64(_id(11)),
-          mediaKey: 'S0VZ',
-          mediaIv: 'SVY=',
-        ),
-      );
-      provider.onNewMessage(socketRow(9002));
-      await pump();
-      expect(row(9002).messageType, MessageType.image);
-      expect(row(9002).mediaUrl, isNull);
-      expect(downloads, isEmpty);
     },
   );
 
@@ -568,7 +472,6 @@ void main() {
       final shown = row(e.localId);
       final bytes = await loadDecryptedMediaBytes(
         url: shown.mediaUrl!,
-        token: 'tok',
         key: shown.mediaKey,
         iv: shown.mediaIv,
         api: _NoMediaApi(),
@@ -601,7 +504,6 @@ void main() {
       );
       provider.refreshBoxDeviceLists();
       final ok = await provider.sendImageMessage(
-        'tok',
         XFile.fromData(Uint8List.fromList([1, 2, 3]), name: 'a.jpg'),
         2,
       );

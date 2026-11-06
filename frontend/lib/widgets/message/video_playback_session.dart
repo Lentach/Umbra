@@ -45,7 +45,6 @@ enum VideoStageError {
 /// construct, [load], then [dispose] exactly once.
 class VideoPlaybackSession {
   final MessageModel message;
-  final String token;
 
   /// Where a box attachment's bytes come from (item 3 / media wiring).
   final BoxCiphertextSource? box;
@@ -60,7 +59,7 @@ class VideoPlaybackSession {
   /// the owner having to dig the durable log out of hacker mode.
   String? failureDetail;
 
-  VideoPlaybackSession({required this.message, required this.token, this.box});
+  VideoPlaybackSession({required this.message, this.box});
 
   VideoPlayerController? get controller => _controller;
 
@@ -88,7 +87,6 @@ class VideoPlaybackSession {
     try {
       final bytes = await loadDecryptedMediaBytes(
         url: url,
-        token: token,
         key: message.mediaKey,
         iv: message.mediaIv,
         box: box,

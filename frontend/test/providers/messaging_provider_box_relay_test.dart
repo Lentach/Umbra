@@ -23,6 +23,8 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../support/chat_seed.dart';
+
 /// Decision 101 A: a friend's box message needs an address for one live
 /// device of ours that relays; the devices it reached forward it to the
 /// siblings it could not address, and those read it as the friend's.
@@ -95,12 +97,6 @@ class _Encryption extends EncryptionProvider {
     int deviceId,
     String ciphertext,
   ) async => false;
-
-  @override
-  Future<void> savePendingSendRecord(
-    String key,
-    Map<String, dynamic> data,
-  ) async {}
 }
 
 class _Outbox implements BoxOutbox {
@@ -289,9 +285,9 @@ void main() {
     emitted = [];
     conversations = ConversationsProvider()
       ..contactStore = store
-      ..setCurrentUserId(1)
-      ..onConversationsList([_conv])
-      ..openConversation(10);
+      ..setCurrentUserId(1);
+    seedConversations(conversations, [_conv]);
+    conversations.openConversation(10);
     await store.settled;
     provider = MessagingProvider()
       ..setConversationsProvider(conversations)
@@ -446,7 +442,7 @@ void main() {
 
     test(
       'an unaddressed live device and no addressed one relaying keeps '
-      "today's rule: the whole message takes the old path",
+      "today's rule: the whole message FAILS, nothing is split",
       () async {
         await bobAddressed([1]);
 
@@ -454,8 +450,11 @@ void main() {
         await pump();
 
         expect(outbox.delivered, isEmpty);
-        expect(emitted, contains('sendMessage'));
-        expect(isLocalMessageId(provider.messages.last.id), isFalse);
+        expect(emitted, isNot(contains('sendMessage')));
+        expect(
+          provider.messages.last.deliveryStatus,
+          MessageDeliveryStatus.failed,
+        );
       },
     );
   });

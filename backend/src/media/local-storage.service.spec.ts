@@ -34,14 +34,6 @@ describe('LocalStorageService', () => {
     service = module.get(LocalStorageService);
   });
 
-  it('uploadImage returns secureUrl with /media/msgs/ path', async () => {
-    const result = await service.uploadImage(1, Buffer.from('data'), 'image/jpeg');
-    expect(result.secureUrl).toMatch(
-      /^https:\/\/example\.com\/media\/msgs\/.+\.bin$/,
-    );
-    expect(mockFs.writeFile).toHaveBeenCalled();
-  });
-
   it('uploadAvatar returns secureUrl with /media/avatars/ path and .jpg extension', async () => {
     const result = await service.uploadAvatar(1, Buffer.from('data'), 'image/jpeg');
     expect(result.secureUrl).toMatch(
@@ -57,41 +49,10 @@ describe('LocalStorageService', () => {
     expect(result.publicId).toMatch(/^avatars\/.+\.png$/);
   });
 
-  it('uploadVoiceMessage returns provided duration and .bin url', async () => {
-    const result = await service.uploadVoiceMessage(
-      1,
-      Buffer.from('data'),
-      'audio/m4a',
-      42,
-    );
-    expect(result.duration).toBe(42);
-    expect(result.secureUrl).toMatch(/\.bin$/);
-  });
-
-  it('uploadVoiceMessage defaults duration to 0 when omitted', async () => {
-    const result = await service.uploadVoiceMessage(
-      1,
-      Buffer.from('data'),
-      'audio/m4a',
-    );
-    expect(result.duration).toBe(0);
-    expect(result.secureUrl).toMatch(/\.bin$/);
-  });
-
-  it('uploadRawFile returns secureUrl with .bin extension', async () => {
-    const result = await service.uploadRawFile(
-      1,
-      Buffer.from('data'),
-      'application/pdf',
-      'doc.pdf',
-    );
-    expect(result.secureUrl).toMatch(/\.bin$/);
-  });
-
   it('deleteFile calls unlink with correct path', async () => {
-    await service.deleteFile('msgs/abc123.bin');
+    await service.deleteFile('avatars/abc123.jpg');
     expect(mockFs.unlink).toHaveBeenCalledWith(
-      path.join('/app/media', 'msgs/abc123.bin'),
+      path.join('/app/media', 'avatars/abc123.jpg'),
     );
   });
 
@@ -105,7 +66,7 @@ describe('LocalStorageService', () => {
   it('deleteFile does not throw if file not found', async () => {
     const err = Object.assign(new Error(), { code: 'ENOENT' });
     mockFs.unlink.mockRejectedValueOnce(err);
-    await expect(service.deleteFile('msgs/missing.bin')).resolves.not.toThrow();
+    await expect(service.deleteFile('avatars/missing.jpg')).resolves.not.toThrow();
   });
 
   // H-02: a crafted mediaUrl can yield a traversing publicId (e.g.
@@ -116,8 +77,8 @@ describe('LocalStorageService', () => {
     expect(mockFs.unlink).not.toHaveBeenCalled();
   });
 
-  it('deleteFile refuses a msgs/../ traversal and never unlinks', async () => {
-    await service.deleteFile('msgs/../../../etc/passwd');
+  it('deleteFile refuses an avatars/../ traversal and never unlinks', async () => {
+    await service.deleteFile('avatars/../../../etc/passwd');
     expect(mockFs.unlink).not.toHaveBeenCalled();
   });
 

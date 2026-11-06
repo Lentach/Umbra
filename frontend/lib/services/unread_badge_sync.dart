@@ -15,12 +15,13 @@ import 'push_sw_channel_stub.dart'
 /// the app's reads serialize in one worker instead of racing. The window-context
 /// Badging API is only a fallback when the push SW is not registered.
 ///
-/// Flushes are gated on [ConversationsProvider.hasLoadedConversationsOnce]:
-/// before the first server snapshot the local unread map is empty, and writing
-/// that "0" would wipe a legitimate badge the SW set while the app was closed.
-/// After the first snapshot a zero **is** written — clearing stale badges on
-/// read is the whole point (the old `_lastSentCapped != null` guard refused to
-/// clear badges the SW wrote, which is why stale counts stuck forever).
+/// Flushes are gated on [ConversationsProvider.hasLoadedConversations]:
+/// before the contact store is read the local unread map is empty, and
+/// writing that "0" would wipe a legitimate badge the SW set while the app
+/// was closed. After the first read a zero **is** written — clearing stale
+/// badges on read is the whole point (the old `_lastSentCapped != null` guard
+/// refused to clear badges the SW wrote, which is why stale counts stuck
+/// forever).
 class UnreadBadgeSync {
   UnreadBadgeSync(
     this._conversations, {
@@ -57,7 +58,7 @@ class UnreadBadgeSync {
 
   Future<void> _flush() async {
     _debounceTimer = null;
-    if (!_conversations.hasLoadedConversationsOnce) return;
+    if (!_conversations.hasLoadedConversations) return;
 
     // No value-dedupe: the SW may have written a different value in between
     // (push race), so an "unchanged" local value can still need re-asserting.

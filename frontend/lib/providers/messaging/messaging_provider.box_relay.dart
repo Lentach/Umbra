@@ -310,7 +310,7 @@ extension MessagingBoxRelay on MessagingProvider {
       deliveryStatus: MessageDeliveryStatus.delivered,
     );
     return _consumeBoxMessage(
-      await _withBoxExtras(_withEnvelope(row, parsed, box: true), parsed),
+      await _withBoxExtras(_withEnvelope(row, parsed), parsed),
       receivedAt: receivedAt,
     );
   }

@@ -15,6 +15,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../support/chat_seed.dart';
+
 /// Geometry proof for the Liquid Glass chat chrome (spec §5): with
 /// `extendBodyBehindAppBar`, the pinned banner and the newest message must
 /// clear the floating [GlassTopBar]; the wallpaper still runs behind it.
@@ -50,7 +52,7 @@ Future<void> _pumpChat(
   SharedPreferences.setMockInitialValues({});
 
   final conversations = ConversationsProvider()..setCurrentUserId(1);
-  conversations.onConversationsList([_conversationJson(pinned: pinned)]);
+  seedConversations(conversations, [_conversationJson(pinned: pinned)]);
   conversations.openConversation(10, notify: false);
 
   final messaging = MessagingProvider();

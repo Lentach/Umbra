@@ -5,7 +5,6 @@ import 'package:flutter/foundation.dart';
 
 import '../config/app_config.dart';
 import '../constants/app_constants.dart';
-import '../services/api_service.dart';
 import '../services/box/box_catch_up.dart';
 import '../services/box/box_client.dart';
 import '../services/box/box_media_fetcher.dart';
@@ -45,28 +44,19 @@ class ConnectionProvider extends ChangeNotifier {
   ConnectionProvider({
     SocketService? socketService,
     int? coldStartConversationId,
-    PushService? pushService,
   }) : _socketService = socketService ?? SocketService(),
-       _coldStartConversationId = coldStartConversationId,
-       _pushServiceOverride = pushService;
+       _coldStartConversationId = coldStartConversationId;
   final ChatReconnectManager _reconnectManager = ChatReconnectManager();
-  late final ApiService _api = ApiService(baseUrl: AppConfig.baseUrl);
-  final PushService? _pushServiceOverride;
-  late final PushService _pushService =
-      _pushServiceOverride ?? PushService(_api);
+  late final PushService _pushService = PushService();
   bool _pushInitialized = false;
 
-  /// The device id of the session push last registered under (issue #208).
-  int? _pushDeviceId;
   int? _coldStartConversationId;
   DateTime? _lastConnectStartedAt;
   Timer? _debouncedConnectTimer;
 
-  /// Bumped on every conversationsList, messageHistory and serverTime
-  /// response — liveness signal for the resume probe (zombie-socket
-  /// detection, see [ensureReconnectIfNeeded]). `serverTime` is the one the
-  /// probe itself asks for: the server will stop answering
-  /// `getConversations`, and no chat sends `getMessages` on the box.
+  /// Bumped on every `serverTime` response — liveness signal for the resume
+  /// probe (zombie-socket detection, see [ensureReconnectIfNeeded]): it is the
+  /// one answer the probe itself asks for.
   int _serverResponseCounter = 0;
   Timer? _resumeProbeTimer;
 
@@ -76,12 +66,6 @@ class ConnectionProvider extends ChangeNotifier {
   /// Result is an authenticated-looking empty shell until the user force-quits.
   static const Duration _kSocketReadyWindow = Duration(seconds: 10);
   Timer? _socketReadyWatchdog;
-
-  /// In-flight `getServedMessageIds` round trips, keyed by the id the server
-  /// echoes back. Completing with null means "no usable answer".
-  final Map<String, Completer<Set<int>?>> _servedIdRequests = {};
-  int _servedIdRequestSeq = 0;
-  static const Duration _servedIdRequestTimeout = Duration(seconds: 20);
 
   /// In-session expiry destruction cadence — see [_onPlaintextSweepTick].
   ///
@@ -216,18 +200,6 @@ class ConnectionProvider extends ChangeNotifier {
               c.userOne.id == uid ? c.userTwo.id : c.userOne.id,
         ];
       }
-      // The reconcile destroys stored plaintext the server no longer serves;
-      // the rows themselves belong to MessagingProvider, and a session that
-      // was offline during the delete is still holding them in memory.
-      ..onStoredPlaintextOrphaned = (ids) {
-        _messagingProvider?.onStoredPlaintextOrphaned(ids);
-      }
-      // (lxxxvi): the own-identity boundary can land after an open thread's
-      // history; the rows it hides belong to MessagingProvider, so it is told
-      // to re-filter.
-      ..onOwnIdentitySinceChanged = () {
-        _messagingProvider?.onOwnIdentitySinceChanged();
-      }
       // A mid-session passcode re-lock revokes the content store; the contact
       // store holds a reference to it plus a plaintext copy of the graph, so
       // it forgets both in the same teardown and re-opens after the unlock
@@ -243,20 +215,9 @@ class ConnectionProvider extends ChangeNotifier {
         // redundant re-read.
         if (uid == null || store == null || store.isOpen) return;
         await _openContactStore(uid);
-        // The socket stayed up across the re-lock: every event that landed
-        // while the store was closed was not written through, so the RAM
-        // lists are re-applied as the freshest truth.
-        _friendsProvider?.rewriteStore();
-        _conversationsProvider?.rewriteStore();
-        // A session that BOOTED locked never hydrated (connect found the
-        // store closed): with the server lists silent only the store can name
-        // the chats, and a server list that did land kept no box-made chat,
-        // which only the store holds. Both are no-ops after a mid-session
-        // re-lock: the RAM lists are already full.
-        _friendsProvider?.hydrateFromStore();
+        // The store re-opened under the live socket: the lists read it again.
+        _friendsProvider?.onContactsChanged();
         _conversationsProvider?.hydrateFromStore();
-        _friendsProvider?.onBoxContactsChanged();
-        _conversationsProvider?.refreshLocalChats();
         // A vault that booted locked left the box without a request queue.
         _box?.storeOpened();
         _refreshBoxDeviceLists();
@@ -451,7 +412,7 @@ class ConnectionProvider extends ChangeNotifier {
           unawaited(
             opened.then((_) {
               if (_connectGeneration != generation) return;
-              _friendsProvider?.hydrateFromStore();
+              _friendsProvider?.onContactsChanged();
               _conversationsProvider?.hydrateFromStore();
               _box?.storeOpened();
               _refreshBoxDeviceLists();
@@ -459,9 +420,9 @@ class ConnectionProvider extends ChangeNotifier {
           );
         }
       }
-      _friendsProvider?.hydrateFromStore();
-      _conversationsProvider?.hydrateFromStore();
     }
+    _friendsProvider?.onContactsChanged();
+    _conversationsProvider?.hydrateFromStore();
 
     // 4c. PR2.4: drain the server-held backup into the store. This runs on
     // EVERY session with an open store, not only an empty one — `_adopt`
@@ -480,11 +441,7 @@ class ConnectionProvider extends ChangeNotifier {
     //
     // `applyRestore` is upgrade-only (it writes only peers the store has no
     // record for) and this block still runs BEFORE the socket starts, so on a
-    // populated store it normally writes nothing at all. Residual, accepted:
-    // if the restore resolves after the first `friendsList` AND the blob is
-    // staler than that list, a swept peer can reappear until the next list
-    // event re-prunes it — a transient ghost card, against a permanent silent
-    // backup freeze.
+    // populated store it normally writes nothing at all.
     final backup = _contactBackup;
     final store = _contactStore;
     // Re-arm the store hook on EVERY session, not just at wire-up.
@@ -524,7 +481,7 @@ class ConnectionProvider extends ChangeNotifier {
           if (_connectGeneration != generation) return;
           if (await backup.applyRestore() > 0) {
             if (_connectGeneration != generation) return;
-            _friendsProvider?.hydrateFromStore();
+            _friendsProvider?.onContactsChanged();
             _conversationsProvider?.hydrateFromStore();
           }
           if (_connectGeneration != generation) return;
@@ -618,8 +575,8 @@ class ConnectionProvider extends ChangeNotifier {
             ..onReadsIdle = messaging.onBoxReadsIdle
             // Slice (f): a pending request that expired left the store.
             ..onFirstContactsChanged = () {
-              _friendsProvider?.onBoxContactsChanged();
-              _conversationsProvider?.refreshLocalChats();
+              _friendsProvider?.onContactsChanged();
+              _conversationsProvider?.refreshChats();
             };
           messaging
             ..boxOutbox = _box
@@ -644,10 +601,8 @@ class ConnectionProvider extends ChangeNotifier {
     // 5. Set up emit callbacks so sub-providers can send socket events
     _encryptionProvider?.setEmitCallback((event, data) => emit(event, data));
     _friendsProvider?.setEmitCallback((event, data) => emit(event, data));
-    _conversationsProvider?.setEmitCallback((event, data) => emit(event, data));
     _messagingProvider?.setEmitCallback((event, data) => emit(event, data));
     _encryptionProvider?.onE2EReady = () {
-      unawaited(_messagingProvider?.retryDecryptActiveConversation());
       // The chat list's last box message and box unread per chat: no server
       // list names one. Reads the records once per session, not per connect.
       unawaited(_messagingProvider?.applyStoredBoxLastMessages());
@@ -675,10 +630,6 @@ class ConnectionProvider extends ChangeNotifier {
         _box?.friendDevicesChanged(invalidated);
       }
     };
-    // The old path may hold the PreKey message that creates the session a
-    // waiting box message needs; its history pass is when that lands.
-    _messagingProvider?.onHistoryDecryptPassFinished = () => _box?.drainInbox();
-
     // 6. Wire cross-provider callbacks (friends -> conversations)
     // Slice (f): first contact over the box, between the friends lists,
     // the chats and the messaging side (which holds the box session).
@@ -692,21 +643,14 @@ class ConnectionProvider extends ChangeNotifier {
         ..boxEndFriendship = messaging.endBoxFriendship;
       messaging
         ..lookupHandle = friends.lookupHandle
-        ..onBoxContactsChanged = friends.onBoxContactsChanged
+        ..onBoxContactsChanged = friends.onContactsChanged
         ..onBoxFriendshipMade = friends.onBoxFriendshipMade
         ..onBoxFriendshipEnded = friends.onBoxFriendshipEnded;
       _conversationsProvider?.onLocalChatTimerChanged = (peer, seconds, at) =>
           unawaited(messaging.sendBoxChatTimer(peer, seconds, at));
     }
     _friendsProvider?.onRemoveConversationsForUser = (uid) {
-      final removed = uid == -1
-          ? _conversationsProvider?.removeConversationsForUser(
-              -1,
-              blockedIds: _friendsProvider!.blockedUsers
-                  .map((u) => u.id)
-                  .toSet(),
-            )
-          : _conversationsProvider?.removeConversationsForUser(uid);
+      final removed = _conversationsProvider?.removeConversationsForUser(uid);
       // Removing a contact must also destroy their decrypted history on this
       // device. Nothing did that before: the conversation vanished from the
       // list while every message stayed in memory and on disk, readable.
@@ -731,7 +675,7 @@ class ConnectionProvider extends ChangeNotifier {
     _registerEventListeners();
 
     // 9. Transport connect + socketReady (authenticated fetches only on ready)
-    _socketService.onConnect(() => _onSocketTransportConnect(userId, token));
+    _socketService.onConnect(() => _onSocketTransportConnect(userId));
     _socketService.on('socketReady', (data) {
       // The freshest server clock this app ever sees. Observed BEFORE the
       // ready work so anything downstream that gates on it — above all the
@@ -752,19 +696,6 @@ class ConnectionProvider extends ChangeNotifier {
       final readyDeviceId = data is Map ? data['deviceId'] : null;
       if (readyDeviceId is int) {
         _encryptionProvider?.setOwnDeviceId(readyDeviceId);
-        // Issue #208: the push token was registered under the device id of
-        // the session that started push; a link's rebind (or a restore, a
-        // reset) moves the session to another id, and an unlink finds a
-        // device's token — and the box notifiers on it — only under its own.
-        final pushedAs = _pushDeviceId;
-        _pushDeviceId = readyDeviceId;
-        if (_pushInitialized && pushedAs != null && pushedAs != readyDeviceId) {
-          unawaited(
-            _pushService.registerAgain(
-              _reconnectManager.tokenForReconnect ?? token,
-            ),
-          );
-        }
       }
       _onSocketReady();
       _box?.accountReady(readyDeviceId is int ? readyDeviceId : null);
@@ -795,11 +726,6 @@ class ConnectionProvider extends ChangeNotifier {
       }
       _socketReadyWatchdog?.cancel();
       _socketReadyWatchdog = null;
-      // Decision 121, E114k: a disconnect cancels the bounded wait. A dropped
-      // socket must not release the three waits 8 s later; the next
-      // socketReady re-arms it.
-      _firstSnapshotWaitTimer?.cancel();
-      _firstSnapshotWaitTimer = null;
     });
   }
 
@@ -816,7 +742,7 @@ class ConnectionProvider extends ChangeNotifier {
     connect(userId, token, AppConfig.baseUrl);
   }
 
-  void _onSocketTransportConnect(int userId, String token) {
+  void _onSocketTransportConnect(int userId) {
     E2eDiagLog.add('SOCKET_CONNECT', {'userId': userId});
     _intentionalDisconnect = false;
     _isConnected = true;
@@ -834,13 +760,7 @@ class ConnectionProvider extends ChangeNotifier {
       }
 
       _pushService
-          .initialize(
-            token,
-            // applyRefreshedAccessToken keeps this current across rotations;
-            // the FCM onTokenRefresh listener outlives many of them.
-            currentJwtToken: () => _reconnectManager.tokenForReconnect,
-            onNavigateToConversation: onNavigateToConversation,
-          )
+          .initialize(onNavigateToConversation: onNavigateToConversation)
           .catchError((_) {});
 
       // Seed cold-start id from URL param (set once; subsequent reconnects skip it).
@@ -893,11 +813,6 @@ class ConnectionProvider extends ChangeNotifier {
     // refuses to destroy anything without a fresh one.
     unawaited(_runLocalPlaintextMaintenance());
     _startPlaintextSweepTimer();
-    _socketService.getConversations();
-    _armFirstSnapshotWait();
-    _socketService.getFriendRequests();
-    _socketService.getFriends();
-    _socketService.getBlockedList();
 
     // Phase 0b: the ceremony countdown and its cancel button are in-memory
     // only, so every connect re-asks who is trying to replace this account's
@@ -909,75 +824,24 @@ class ConnectionProvider extends ChangeNotifier {
     // that can actually answer.
     _provisioningSink?.onSessionReady();
 
-    // A fresh server-side socket has no pushClientState; the server skips the
-    // push while the app is visible WHATEVER it shows (PR0.2), so re-send it
-    // with or without an open chat.
-    _conversationsProvider?.reemitPushClientState();
-    if (activeConvId != null) {
-      E2eDiagLog.add('ACTIVE_REASSERT', {
-        'source': 'socketReady',
-        'activeConvId': activeConvId,
-        'socketConnected': _socketService.isConnected,
-      });
-      _refetchActiveChat(activeConvId);
-    }
-
-    // "Still empty" used to mean "the first answer was lost"; the contact
-    // store fills both lists before the socket, so the retry asks the
-    // providers whether the SERVER has spoken instead.
-    Future.delayed(AppConstants.conversationsRefreshDelay, () {
-      // The REAL flag, not `hasLoadedConversationsOnce`: the 8 s release only
-      // frees the three waits, it is no server answer (decision 121).
-      if (_conversationsProvider?.conversationsListReceived == false) {
-        _socketService.getConversations();
-      }
-      if (_friendsProvider?.hasFriendsSnapshot == false) {
-        _socketService.getFriends();
-      }
-    });
-
-    // Morning PWA resume: messageHistory may finish before or after E2E init;
-    // re-run ordered decrypt for the open chat once the socket is authenticated.
-    Future.delayed(const Duration(milliseconds: 900), () {
-      _messagingProvider?.retryDecryptActiveConversation();
-    });
+    // A push worker the browser restarted holds no open chat: say it again.
+    _conversationsProvider?.repostActiveConversationToSw();
   }
 
-  /// Decision 121, E114k: how long the waits that hang on the first
-  /// `conversationsList` (the chat-list skeleton, the notification-tap
-  /// navigation, the unread badge flush) keep waiting for it. The server is
-  /// to stop answering `getConversations` at Phase 4 step 4 (silence, never
-  /// `[]`), and a wait with no end would hold all three for good.
-  static const Duration _kFirstSnapshotWait = Duration(seconds: 8);
-  Timer? _firstSnapshotWaitTimer;
-
-  void _armFirstSnapshotWait() {
-    _firstSnapshotWaitTimer?.cancel();
-    _firstSnapshotWaitTimer = Timer(_kFirstSnapshotWait, () {
-      _firstSnapshotWaitTimer = null;
-      _conversationsProvider?.releaseFirstSnapshotWait();
-    });
-  }
-
-  /// Refresh the retired ids, drain the purge backlog, sweep, then reconcile
-  /// what is left against the server.
+  /// Refresh the retired ids, drain the purge backlog, then sweep.
   ///
-  /// This runs UNAWAITED alongside the initial fetches, so it does NOT order
-  /// itself against the first history pass — do not read the sequence below as
-  /// that guarantee. The load that actually precedes every decrypt is the
-  /// awaited one in `EncryptionProvider.initializeE2E`, which completes before
-  /// the ready flag flips; decrypting requires E2E to be ready, so by then the
-  /// set is populated. The call here is a cross-tab REFRESH: another
-  /// same-origin engine may have retired ids since.
+  /// This runs UNAWAITED alongside the other connect work, so it orders
+  /// itself against nothing else. The load that actually precedes every
+  /// decrypt is the awaited one in `EncryptionProvider.initializeE2E`, which
+  /// completes before the ready flag flips; decrypting requires E2E to be
+  /// ready, so by then the set is populated. The call here is a cross-tab
+  /// REFRESH: another same-origin engine may have retired ids since.
   ///
   /// Order within this method still matters:
   ///   1. refresh retired ids before the sweep can add more of them;
   ///   2. the backlog next, so a delete interrupted by a tab close or a refused
   ///      write finishes now instead of leaving plaintext behind for good;
-  ///   3. the sweep, once the clock is known fresh;
-  ///   4. reconciliation last. It is the only step that talks to the server,
-  ///      and it should not ask about ids the three local rules above were
-  ///      already going to destroy.
+  ///   3. the sweep, once the clock is known fresh.
   Future<void> _runLocalPlaintextMaintenance() async {
     final encryption = _encryptionProvider;
     if (encryption == null) return;
@@ -985,7 +849,6 @@ class ConnectionProvider extends ChangeNotifier {
       await encryption.loadRetiredIds();
       await encryption.drainPurgeBacklog();
       await encryption.sweepDestroyablePlaintext();
-      await encryption.reconcileStoredPlaintext(_askServedMessageIds);
     } catch (_) {
       // Never let maintenance break connect. A failure means the residue
       // survives to the next socketReady, which is the safe direction.
@@ -1055,65 +918,6 @@ class ConnectionProvider extends ChangeNotifier {
     unawaited(encryption.sweepDestroyablePlaintext().catchError((Object _) {}));
   }
 
-  /// One `getServedMessageIds` round trip.
-  ///
-  /// Returns null for EVERY failure mode — no socket, no reply in time, a
-  /// malformed reply. Null means "no answer" and purges nothing; an empty set
-  /// means "the server serves none of these" and destroys all of them. Those
-  /// two must never be able to blur into each other, which is why nothing here
-  /// falls back to an empty set.
-  Future<Set<int>?> _askServedMessageIds(Set<int> batch) async {
-    if (batch.isEmpty) return const <int>{};
-    if (!_socketService.isConnected) return null;
-
-    final requestId =
-        's${++_servedIdRequestSeq}-${DateTime.now().microsecondsSinceEpoch}';
-    final completer = Completer<Set<int>?>();
-    _servedIdRequests[requestId] = completer;
-    try {
-      _socketService.getServedMessageIds(requestId, batch.toList());
-      return await completer.future.timeout(
-        _servedIdRequestTimeout,
-        onTimeout: () => null,
-      );
-    } catch (_) {
-      return null;
-    } finally {
-      _servedIdRequests.remove(requestId);
-    }
-  }
-
-  /// Resolve the round trip [_askServedMessageIds] is waiting on.
-  ///
-  /// Anything unreadable resolves to null rather than to the ids it managed to
-  /// parse. A partially-parsed answer would silently mark the unparsed ids as
-  /// "the server no longer has this" and destroy their plaintext.
-  void _onServedMessageIds(dynamic data) {
-    if (data is! Map) return;
-    final requestId = data['requestId'];
-    if (requestId is! String) return;
-    final completer = _servedIdRequests.remove(requestId);
-    if (completer == null || completer.isCompleted) return;
-
-    final raw = data['messageIds'];
-    if (raw is! List) {
-      completer.complete(null);
-      return;
-    }
-    final served = <int>{};
-    for (final entry in raw) {
-      if (entry is int) {
-        served.add(entry);
-      } else if (entry is num) {
-        served.add(entry.toInt());
-      } else {
-        completer.complete(null);
-        return;
-      }
-    }
-    completer.complete(served);
-  }
-
   /// Updates reconnect + messaging token after AuthProvider refreshes JWT (no socket reconnect).
   void applyRefreshedAccessToken(String newAccessToken) {
     _reconnectManager.tokenForReconnect = newAccessToken;
@@ -1126,8 +930,6 @@ class ConnectionProvider extends ChangeNotifier {
     _intentionalDisconnect = true;
     _debouncedConnectTimer?.cancel();
     _resumeProbeTimer?.cancel();
-    _firstSnapshotWaitTimer?.cancel();
-    _firstSnapshotWaitTimer = null;
     _socketReadyWatchdog?.cancel();
     _socketReadyWatchdog = null;
     _plaintextSweepTimer?.cancel();
@@ -1146,17 +948,8 @@ class ConnectionProvider extends ChangeNotifier {
     _isConnected = false;
     _errorMessage = null;
 
-    // Answer every in-flight reconcile round trip with "no answer" instead of
-    // making it wait out its timeout. Null purges nothing, so an interrupted
-    // pass simply leaves the residue for the next connect.
-    for (final completer in _servedIdRequests.values) {
-      if (!completer.isCompleted) completer.complete(null);
-    }
-    _servedIdRequests.clear();
-
     if (isLogout) {
       _pushInitialized = false;
-      _pushDeviceId = null;
       _currentUserId = null;
       _reconnectManager.tokenForReconnect = null;
       _encryptionProvider
@@ -1217,17 +1010,10 @@ class ConnectionProvider extends ChangeNotifier {
   void _resyncAfterResume() {
     final probeStart = _serverResponseCounter;
     final activeConvId = _conversationsProvider?.activeConversationId;
-    // `getConversations` stays until the silence; the time is the probe's
-    // own question. `conversationsList` is the server's to stop answering
-    // (Phase 4 step 4, silence never `[]`), so a resume must not depend on
-    // it: the time is read from nothing the old tables hold.
-    _socketService
-      ..getConversations()
-      ..getServerTime();
-    _conversationsProvider?.reemitPushClientState();
-    if (activeConvId != null) {
-      _refetchActiveChat(activeConvId);
-    }
+    // The probe's own question is the time: the server answers it from no
+    // table, and a reply is all the probe needs.
+    _socketService.getServerTime();
+    _conversationsProvider?.repostActiveConversationToSw();
     E2eDiagLog.add('RESUME_RESYNC', {
       'activeConvId': activeConvId ?? -1,
       'socketConnected': _socketService.isConnected,
@@ -1242,18 +1028,6 @@ class ConnectionProvider extends ChangeNotifier {
       if (userId == null || token == null) return;
       connect(userId, token, AppConfig.baseUrl);
     });
-  }
-
-  /// Re-reads the open chat's server history. A box chat (local id,
-  /// decision 52) has none, and its id is `2^48 + peer`: emitted, it would
-  /// name the friend to the server (wire.md "every chat-keyed emit is skipped
-  /// for a local id").
-  void _refetchActiveChat(int conversationId) {
-    if (isLocalConversationId(conversationId)) return;
-    _socketService.getMessages(
-      conversationId,
-      limit: AppConstants.messagePageSize,
-    );
   }
 
   // ---------- Event Routing ----------
@@ -1597,12 +1371,9 @@ class ConnectionProvider extends ChangeNotifier {
       _encryptionProvider?.onSessionRebuildNeeded(data);
     });
     // Phase 0a takeover alarm (multi-device spec §6.0): another sign-in
-    // replaced this account's key bundle / a peer's bundle was replaced.
+    // replaced this account's key bundle.
     _socketService.on('ownIdentityReplaced', (data) {
       _encryptionProvider?.onOwnIdentityReplaced(data);
-    });
-    _socketService.on('peerIdentityChanged', (data) {
-      _encryptionProvider?.onPeerIdentityChanged(data);
     });
     // Phase 0b reset ceremony (spec §6.2): every session of the account is
     // told, so any of them can cancel during the delay.
@@ -1699,159 +1470,18 @@ class ConnectionProvider extends ChangeNotifier {
       _onOwnDeviceRevoked(data);
     });
     // --- Friend events ---
-    _socketService.on('friendRequestsList', (data) {
-      _friendsProvider?.onFriendRequestsList(data);
-    });
-    _socketService.on('sentRequestsList', (data) {
-      _friendsProvider?.onSentRequestsList(data);
-    });
-    _socketService.on('newFriendRequest', (data) {
-      _friendsProvider?.onNewFriendRequest(data);
-    });
-    _socketService.on('friendRequestSent', (data) {
-      _friendsProvider?.onFriendRequestSent(data);
-    });
-    _socketService.on('friendRequestAccepted', (data) {
-      _friendsProvider?.onFriendRequestAccepted(data);
-    });
-    _socketService.on('friendRequestFailed', (data) {
-      _friendsProvider?.onFriendRequestFailed(data);
-    });
-    _socketService.on('friendRequestRejected', (data) {
-      _friendsProvider?.onFriendRequestRejected(data);
-    });
-    _socketService.on('invitationChatReady', (data) {
-      _friendsProvider?.onInvitationChatReady(data);
-    });
-    _socketService.on('pendingRequestsCount', (data) {
-      _friendsProvider?.onPendingRequestsCount(data);
-    });
-    _socketService.on('friendsList', (data) {
-      _friendsProvider?.onFriendsList(data);
-      // Item 5: a friend this list names for the first time is visited by
-      // the handoff pass. Its `devices` are not read (E114b).
-      _box?.onFriendsListed();
-    });
     _socketService.on('searchUsersResult', (data) {
       _friendsProvider?.onSearchUsersResult(data);
     });
-    _socketService.on('unfriended', (data) {
-      _friendsProvider?.onUnfriended(data);
-    });
-    _socketService.on('blockedList', (data) {
-      _friendsProvider?.onBlockedList(data);
-    });
-    _socketService.on('youWereBlocked', (data) {
-      _friendsProvider?.onYouWereBlocked(data);
-    });
 
-    // --- Conversation events ---
-    _socketService.on('conversationsList', (data) {
-      _serverResponseCounter++;
-      _conversationsProvider?.onConversationsList(data);
-      // A friend's box message held because this device had not linked its
-      // chat yet (item 5) is read once the list's write lands in the store.
-      final store = _contactStore;
-      if (store != null) {
-        unawaited(store.settled.then((_) => _box?.drainInbox()));
-      }
-    });
-    _socketService.on('openConversation', (data) {
-      _conversationsProvider?.onOpenConversation(data);
-    });
-    _socketService.on('conversationDeleted', (data) {
-      _conversationsProvider?.onConversationDeleted(data);
-      // Also clear messages from MessagingProvider
-      final convId = (data as Map<String, dynamic>)['conversationId'] as int;
-      _messagingProvider?.onConversationDeleted(convId);
-    });
-    _socketService.on('disappearingTimerUpdated', (data) {
-      _conversationsProvider?.onDisappearingTimerUpdated(data);
-    });
-    // The throttle refusal for the same request (spec §12 (xxxvii) class):
-    // without this the refused device keeps showing a timer the server never
-    // accepted.
-    _socketService.on('disappearingTimerFailed', (data) {
-      _conversationsProvider?.onDisappearingTimerFailed(data);
-    });
-    _socketService.on('conversationMuteUpdated', (data) {
-      _conversationsProvider?.onConversationMuteUpdated(data);
-    });
-    _socketService.on('messagePinned', (data) {
-      final m = data as Map<String, dynamic>;
-      final pinnedId = m['pinnedMessageId'] as int?;
-      final local = pinnedId != null
-          ? _messagingProvider?.messageById(pinnedId)
-          : null;
-      _conversationsProvider?.onMessagePinned(data, localPinnedMessage: local);
-    });
-    _socketService.on('messageUnpinned', (data) {
-      _conversationsProvider?.onMessageUnpinned(data);
-    });
-    // A refused pin (today: rate limited). The optimistic pin overwrote this
-    // device's pin state and nothing else will correct it until the next
-    // conversations snapshot, so the provider restores what it overwrote
-    // (spec §12 (xxxvii)).
-    _socketService.on('messagePinFailed', (data) {
-      _conversationsProvider?.onPinMessageFailed(data);
-    });
-    _socketService.on('chatHistoryCleared', (data) {
-      _messagingProvider?.onChatHistoryCleared(data);
-    });
-
-    // --- Message events ---
-    _socketService.on('newMessage', (data) {
-      _messagingProvider?.onNewMessage(data);
-    });
-    _socketService.on('messageSent', (data) {
-      _messagingProvider?.onMessageSent(data);
-    });
-    // A refused send: the device list this client used is stale, or it sent the
-    // legacy shape to a party that now has devices (spec §12 (vi)/(x)). The
-    // provider verifies the delivered lists itself — the server's word is never
-    // enough — and resends.
-    _socketService.on('deviceListStale', (data) {
-      _messagingProvider?.onDeviceListStale(data);
-    });
-    _socketService.on('messageHistory', (data) {
-      _serverResponseCounter++;
-      _messagingProvider?.onMessageHistory(data);
-    });
-    _socketService.on('messageDelivered', (data) {
-      _messagingProvider?.onMessageDelivered(data);
-    });
-    _socketService.on('messageDeleted', (data) {
-      _messagingProvider?.onMessageDeleted(data);
-    });
-    _socketService.on('messageEdited', (data) {
-      _messagingProvider?.onMessageEdited(data);
-    });
-    _socketService.on('editMessageFailed', (data) {
-      _messagingProvider?.onEditMessageFailed(data);
-    });
-    // `reactionUpdated` is the chip state; the two key events are the mailbox
-    // that makes those chips readable (docs/design/reaction-privacy.md).
-    // MessagingProvider holds the pending round trips because it issues them.
-    _socketService
-      ..on('reactionUpdated', (data) {
-        _messagingProvider?.onReactionUpdated(data);
-      })
-      ..on('reactionKeyUploaded', (data) {
-        _messagingProvider?.onReactionKeyUploaded(data);
-      })
-      ..on('reactionKeyResponse', (data) {
-        _messagingProvider?.onReactionKeyResponse(data);
-      });
-    _socketService.on('linkPreviewReady', (data) {
-      _messagingProvider?.onLinkPreviewReady(data);
-    });
+    // --- Typing events: inbound only, from a client that still relays them
+    // through the server (this build sends none on the account socket) ---
     _socketService.on('partnerTyping', (data) {
       _messagingProvider?.onPartnerTyping(data);
     });
     _socketService.on('partnerRecordingVoice', (data) {
       _messagingProvider?.onPartnerRecordingVoice(data);
     });
-    _socketService.on('servedMessageIds', _onServedMessageIds);
     _socketService
       ..on('serverTime', _onServerTime)
       // PR3.1: the answer to the box request-queue publish (`BoxSession`).
@@ -1865,7 +1495,6 @@ class ConnectionProvider extends ChangeNotifier {
           ? err['message'] as String
           : err.toString();
       _errorMessage = msg;
-      _messagingProvider?.markSendingMessagesFailed(msg);
       notifyListeners();
     });
   }
@@ -2040,7 +1669,6 @@ class ConnectionProvider extends ChangeNotifier {
     _debouncedConnectTimer?.cancel();
     _plaintextSweepTimer?.cancel();
     _resumeProbeTimer?.cancel();
-    _firstSnapshotWaitTimer?.cancel();
     _socketReadyWatchdog?.cancel();
     _reconnectManager.cancel();
     _socketService.disconnect();

@@ -401,13 +401,7 @@ class AppLocalizationsPl extends AppLocalizations {
   String get invitationChatReady => 'Czat gotowy';
 
   @override
-  String get invitationChatNeedsRetry => 'Czat wymaga ponowienia';
-
-  @override
   String get invitationOpenChat => 'Otwórz czat';
-
-  @override
-  String get invitationCreateChat => 'Utwórz czat';
 
   @override
   String get invitationDone => 'Gotowe';
@@ -431,32 +425,6 @@ class AppLocalizationsPl extends AppLocalizations {
   String get invitationDeclineFailed => 'Nie udało się odrzucić zaproszenia';
 
   @override
-  String get invitationChatSetupFailed => 'Nie udało się utworzyć czatu';
-
-  @override
-  String get invitationFailedUserNotFound => 'Ten użytkownik już nie istnieje';
-
-  @override
-  String get invitationFailedSelf => 'Nie możesz zaprosić samego siebie';
-
-  @override
-  String get invitationFailedBlocked => 'Nie możesz zaprosić tego użytkownika';
-
-  @override
-  String get invitationFailedAlreadyFriends => 'Już jesteście połączeni';
-
-  @override
-  String get invitationFailedDuplicate => 'Zaproszenie zostało już wysłane';
-
-  @override
-  String get invitationFailedInvalidPayload =>
-      'Coś było nie tak z tym żądaniem';
-
-  @override
-  String get invitationFailedNotFriends =>
-      'Nie jesteś połączony z tym użytkownikiem';
-
-  @override
   String invitationSemanticIncoming(String name) {
     return '$name, otrzymane zaproszenie, chce się połączyć';
   }
@@ -472,18 +440,10 @@ class AppLocalizationsPl extends AppLocalizations {
   }
 
   @override
-  String invitationSemanticAcceptedNotReady(String name) {
-    return '$name, zaproszenie zaakceptowane, czat wymaga ponowienia';
-  }
-
-  @override
   String get encryptedMessage => 'Wiadomość zaszyfrowana';
 
   @override
   String get newMessagePreview => 'Nowa wiadomość';
-
-  @override
-  String get decryptingMessage => 'Odszyfrowywanie…';
 
   @override
   String get messageNoLongerStoredOnThisDevice =>
@@ -506,11 +466,8 @@ class AppLocalizationsPl extends AppLocalizations {
       'Wcześniejsze wiadomości nie są dostępne na tym urządzeniu';
 
   @override
-  String get devicesSyncingNote => 'Synchronizowanie urządzeń…';
-
-  @override
   String boxFriendOlderAppNote(String name) {
-    return '$name ma starszą wersję aplikacji. Wiadomości są szyfrowane, ale serwer widzi, kiedy piszecie.';
+    return '$name ma starszą wersję aplikacji i nie odbierze Twoich wiadomości, dopóki jej nie zaktualizuje.';
   }
 
   @override
@@ -874,9 +831,6 @@ class AppLocalizationsPl extends AppLocalizations {
   String get blockUser => 'Zablokuj użytkownika';
 
   @override
-  String get conversationDeletedByOther => 'Rozmowa usunięta przez drugą osobę';
-
-  @override
   String get noMessagesYet => 'Brak wiadomości';
 
   @override
@@ -885,9 +839,6 @@ class AppLocalizationsPl extends AppLocalizations {
   @override
   String get boxEndNotSynced =>
       'Nie udało się połączyć z Twoimi innymi urządzeniami. Nic się nie zmieniło — spróbuj ponownie.';
-
-  @override
-  String get cantTypeToThisUser => 'Nie możesz pisać do tego użytkownika';
 
   @override
   String get recordingVoice => 'Nagrywanie głosu…';
@@ -983,20 +934,20 @@ class AppLocalizationsPl extends AppLocalizations {
   String get actionTileDisappearingMessages => 'Znikające wiadomości';
 
   @override
-  String get actionTileClearChat => 'Usuń czat u obu stron';
+  String get actionTileClearChat => 'Usuń czat na tym urządzeniu';
 
   @override
-  String get clearChatHoldLabel => 'Trzymaj — usuwa u obu stron';
+  String get clearChatHoldLabel => 'Trzymaj — usuwa tutaj';
 
   @override
-  String get clearChatConfirmTitle => 'Usunąć ten czat u obu stron?';
+  String get clearChatConfirmTitle => 'Usunąć ten czat na tym urządzeniu?';
 
   @override
   String get clearChatConfirmBody =>
-      'Wszystkie wiadomości, zdjęcia, filmy i wiadomości głosowe z tego czatu zostaną usunięte z serwera u Ciebie I u drugiej osoby. Tego nie można cofnąć — obejmuje to też wiadomości sprzed połączenia tego urządzenia.';
+      'Wszystkie wiadomości, zdjęcia, filmy i wiadomości głosowe z tego czatu zostaną usunięte z tego urządzenia. Druga osoba zachowa swoją kopię. Tego nie można cofnąć.';
 
   @override
-  String get clearChatConfirmAction => 'Usuń u obu stron';
+  String get clearChatConfirmAction => 'Usuń tutaj';
 
   @override
   String get disappearingTimerTitle => 'Znikające wiadomości';
@@ -1659,11 +1610,6 @@ class AppLocalizationsPl extends AppLocalizations {
   @override
   String messageReactionSemantics(Object emoji, Object state) {
     return 'Reakcja $emoji, $state';
-  }
-
-  @override
-  String messageReactionUnreadable(int count) {
-    return 'Reakcja nieczytelna na tym urządzeniu ($count)';
   }
 
   @override

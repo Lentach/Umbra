@@ -1,4 +1,6 @@
-// Full-stack two-account E2E Signal wire harness.
+// Full-stack two-account wire harness for the key, device-list and
+// provisioning contracts that survive the Phase 4 step 5 removal of the
+// server's message/friend path.
 //
 // NOT part of the default `flutter test` suite — this directory is a sibling
 // of `test/` precisely so `flutter test` (local + CI) never picks it up.
@@ -11,24 +13,24 @@
 // What it proves, over the REAL wire (REST auth -> Socket.IO -> ChatGateway ->
 // DTO validation -> Postgres -> broadcast) with REAL libsignal on both ends:
 //   1. register -> socketReady (parseable, plausible serverTime) -> WS key upload
-//   2. friend request/accept -> conversation open
-//   3. first message is PreKey (3:), server stores only '[encrypted]',
-//      recipient decrypts the exact plaintext
-//   4. replies ratchet to whisper (2:) in both directions, in order
-//   5. mid-conversation session rebuild (deleteSession -> fetch bundle ->
-//      PreKey again) — the shape of the 2026-07 field incidents
-//   6. editMessage swaps ciphertext (messageEdited both sides, re-decrypt);
-//      non-sender edit rejected with not_sender
-//   7. reactions round-trip (reactionUpdated both sides)
+//   2. first contact: `setRequestQueue` + `searchUsers` hand a stranger each
+//      device with a bundle and the published request queue (PR3.2)
+//   3. a SERVED bundle builds a real session: first ciphertext is PreKey (3:),
+//      replies ratchet to whisper (2:), a mid-conversation rebuild goes PreKey
+//      again (the shape of the 2026-07 field incidents). The ciphertext is
+//      handed across IN-PROCESS: no server handler relays messages any more,
+//      and `box_roundtrip_test.dart` owns transport.
+//   4. per-device key material, DAK enrollment + signed device list, the
+//      provisioning ceremony and device revocation
 //
 // Fresh accounts EVERY run, by design: the server never purges unused
 // one-time pre-keys and serves them oldest-first, so reusing accounts with
 // fresh client keys would deterministically produce phantom bad-MAC failures.
 // Register throttle is 10/hr per IP; `docker compose restart backend` resets
 // the in-memory counters when iterating.
-// Each run leaves 2 throwaway accounts (+1 conversation, ~11 messages, key
-// bundles/OTPs) in the TARGET dev DB — harmless local cruft; never point
-// E2E_BASE_URL at production.
+// Each run leaves 2 throwaway accounts (key bundles/OTPs, linked devices) in
+// the TARGET dev DB — harmless local cruft; never point E2E_BASE_URL at
+// production.
 
 import 'dart:convert';
 import 'dart:math';
@@ -37,7 +39,6 @@ import 'dart:typed_data';
 import 'package:fireplace/services/device_link/link_crypto.dart';
 import 'package:fireplace/services/device_list/device_authority_engine.dart';
 import 'package:fireplace/services/device_list/device_list_canonical.dart';
-import 'package:fireplace/utils/e2e_envelope.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:libsignal_protocol_dart/libsignal_protocol_dart.dart';
@@ -56,9 +57,7 @@ void main() {
 
   late E2eClient alice;
   late E2eClient bob;
-  late int conversationId;
-  // PR3.2 first contact, captured in setUpAll while alice and bob are still
-  // strangers (a friend's search answers empty) and asserted in the group.
+  // PR3.2 first contact, captured in setUpAll and asserted in the group.
   late List<dynamic> bobFirstContact;
   late String bobRequestSid;
   late String bobSealPub;
@@ -118,53 +117,23 @@ void main() {
     );
   }
 
-  /// Sends [content] from [sender] to [recipient] and asserts the full wire
-  /// round trip: messageSent shape on the sender, newMessage on the
-  /// recipient, exact plaintext after decrypt. Returns the server message id.
-  Future<int> roundTrip(
+  /// Encrypts [content] on [sender] and decrypts it on [recipient], handing
+  /// the ciphertext across in-process: the server relay that used to carry it
+  /// is gone (transport is `box_roundtrip_test.dart`'s). Asserts the wire type
+  /// and the exact plaintext.
+  Future<void> hop(
     E2eClient sender,
     E2eClient recipient,
     String content, {
-    required String tempId,
     required int expectedWireType,
   }) async {
     final ciphertext = await sender.encryptText(recipient.userId, content);
     expect(
       wireType(ciphertext),
       expectedWireType,
-      reason: 'unexpected ciphertext type for tempId=$tempId',
+      reason: 'unexpected ciphertext type for "$content"',
     );
-
-    final sent = await sender.sendEncrypted(
-      recipient.userId,
-      ciphertext,
-      tempId: tempId,
-    );
-    expect(
-      sent['content'],
-      '[encrypted]',
-      reason: 'server must never store plaintext',
-    );
-    expect(sent['encryptedContent'], ciphertext);
-    expect(sent['senderId'], sender.userId);
-    expect(sent['conversationId'], conversationId);
-    expect(sent['deliveryStatus'], 'SENT');
-    expect(sent['messageType'], 'TEXT');
-    expect(sent['editedAt'], isNull);
-    final messageId = sent['id'] as int;
-    expect(messageId, greaterThan(0));
-
-    final received = await recipient.awaitNewMessage(tempId);
-    expect(received['id'], messageId);
-    expect(received['content'], '[encrypted]');
-    expect(received['encryptedContent'], ciphertext);
-
-    final plaintext = await recipient.decryptText(
-      sender.userId,
-      received['encryptedContent'] as String,
-    );
-    expect(plaintext, content);
-    return messageId;
+    expect(await recipient.decryptText(sender.userId, ciphertext), content);
   }
 
   setUpAll(() async {
@@ -220,166 +189,6 @@ void main() {
               reason: 'alice searches bob',
             )
             as List<dynamic>;
-
-    // 4. Friendship: request over WS, accept on the receiving side.
-    //
-    // This also proves the GHOST INVITE contract across the tier boundary.
-    // The backend emits `sentRequestsList` and the client parses it, but each
-    // side is unit-tested against a mock, so only a live socket shows whether
-    // the SENDER's own list is the one being refreshed. That is the half that
-    // mocks cannot prove.
-    //
-    // Every wait below is preceded by a discard. Connecting already buffers an
-    // empty `sentRequestsList`, and `EventLog.next` matches the first buffered
-    // payload satisfying its predicate — so without discarding, a "must be
-    // empty" wait happily consumes the empty from CONNECT time and passes even
-    // if the action emitted nothing at all.
-    alice.events.discard('sentRequestsList');
-    alice.socketService.sendFriendRequest(bob.userId);
-
-    final aliceGhosts =
-        await alice.events.next(
-              'sentRequestsList',
-              where: (p) =>
-                  p is List &&
-                  p.any(
-                    (e) =>
-                        e is Map &&
-                        e['receiver'] is Map &&
-                        (e['receiver'] as Map)['id'] == bob.userId,
-                  ),
-              reason: 'sender must see their own outbound invite as a ghost',
-            )
-            as List;
-    expect(
-      aliceGhosts.length,
-      1,
-      reason: 'exactly the one invite alice just sent',
-    );
-
-    final rejected =
-        await bob.events.next(
-              'newFriendRequest',
-              where: (p) =>
-                  p is Map &&
-                  p['sender'] is Map &&
-                  (p['sender'] as Map)['id'] == alice.userId,
-              reason: 'bob receiving alice first friend request',
-            )
-            as Map;
-
-    // REJECT first. This is the riskier half of the lifecycle: the reject
-    // path had to have `server` + `onlineUsers` threaded into it to reach the
-    // ORIGINAL SENDER at all, and a mock cannot show which socket was hit.
-    alice.events.discard('sentRequestsList');
-    bob.socketService.rejectFriendRequest(rejected['id'] as int);
-    await alice.events.next(
-      'sentRequestsList',
-      where: (p) => p is List && p.isEmpty,
-      reason: 'rejecting must clear the sender ghost',
-    );
-
-    // Re-send, then accept, so the rest of the flow still has a friendship.
-    alice.events.discard('sentRequestsList');
-    alice.socketService.sendFriendRequest(bob.userId);
-    await alice.events.next(
-      'sentRequestsList',
-      where: (p) =>
-          p is List &&
-          p.any(
-            (e) =>
-                e is Map &&
-                e['receiver'] is Map &&
-                (e['receiver'] as Map)['id'] == bob.userId,
-          ),
-      reason: 'the re-sent invite is a ghost again',
-    );
-
-    final request =
-        await bob.events.next(
-              'newFriendRequest',
-              where: (p) =>
-                  p is Map &&
-                  p['sender'] is Map &&
-                  (p['sender'] as Map)['id'] == alice.userId &&
-                  p['id'] != rejected['id'],
-              reason: 'bob receiving the re-sent request',
-            )
-            as Map;
-    alice.events.discard('sentRequestsList');
-    bob.events.discard('friendRequestAccepted');
-    alice.events.discard('friendRequestAccepted');
-    bob.events.discard('openConversation');
-    alice.events.discard('openConversation');
-    bob.socketService.acceptFriendRequest(request['id'] as int);
-    final aliceAccepted =
-        await alice.events.next(
-              'friendRequestAccepted',
-              reason: 'alice accept confirmation',
-            )
-            as Map;
-    final bobAccepted =
-        await bob.events.next(
-              'friendRequestAccepted',
-              reason: 'bob accept confirmation',
-            )
-            as Map;
-    expect(
-      aliceAccepted['conversationId'],
-      isA<int>(),
-      reason: 'alice accepted payload must carry a conversation id',
-    );
-    expect(
-      bobAccepted['conversationId'],
-      isA<int>(),
-      reason: 'bob accepted payload must carry a conversation id',
-    );
-    expect(
-      aliceAccepted['chatReady'],
-      isTrue,
-      reason: 'alice accepted payload must report chat readiness',
-    );
-    expect(
-      bobAccepted['chatReady'],
-      isTrue,
-      reason: 'bob accepted payload must report chat readiness',
-    );
-    final aliceConversationId = aliceAccepted['conversationId'] as int;
-    final bobConversationId = bobAccepted['conversationId'] as int;
-    expect(
-      bobConversationId,
-      aliceConversationId,
-      reason: 'both accepted payloads must identify the same conversation',
-    );
-
-    // The ghost must CLEAR on the sender's side once the invite resolves —
-    // a ghost that outlives its invite is the whole failure mode here.
-    await alice.events.next(
-      'sentRequestsList',
-      where: (p) => p is List && p.isEmpty,
-      reason: 'accepting must clear the sender ghost',
-    );
-
-    // 5. Accepting reserves openConversation for explicit user intent only.
-    await bob.events.none(
-      'openConversation',
-      within: const Duration(seconds: 3),
-      reason: 'accepting an invitation must not auto-open chat',
-    );
-    alice.events.discard('openConversation');
-    alice.socketService.startConversation(bob.userId);
-    final aliceOpen =
-        await alice.events.next(
-              'openConversation',
-              reason: 'alice startConversation',
-            )
-            as Map;
-    conversationId = bobConversationId;
-    expect(
-      aliceOpen['conversationId'],
-      conversationId,
-      reason: 'startConversation must use the accepted conversation',
-    );
   });
 
   tearDownAll(() {
@@ -416,7 +225,8 @@ void main() {
     });
 
     test(
-      'first message travels as PreKey (3:), server blind, peer decrypts',
+      'a served bundle builds a real session: first ciphertext is PreKey (3:) '
+      'and the peer decrypts it',
       () async {
         final bundle = await alice.fetchBundleFor(bob.userId);
         expect(bundle['identityPublicKey'], isA<String>());
@@ -425,15 +235,13 @@ void main() {
           isNotNull,
           reason: 'fresh account must have unused one-time pre-keys',
         );
-        await alice.encryption.buildSession(bob.userId, bundle, expectedIdentityBase64: null);
-
-        await roundTrip(
-          alice,
-          bob,
-          'first-contact-$runTag',
-          tempId: 't1-$runTag',
-          expectedWireType: 3,
+        await alice.encryption.buildSession(
+          bob.userId,
+          bundle,
+          expectedIdentityBase64: null,
         );
+
+        await hop(alice, bob, 'first-contact-$runTag', expectedWireType: 3);
       },
       timeout: const Timeout(Duration(minutes: 1)),
     );
@@ -441,45 +249,17 @@ void main() {
     test(
       'replies ratchet to whisper (2:) in both directions, in order',
       () async {
-        await roundTrip(
-          bob,
-          alice,
-          'reply-1-$runTag',
-          tempId: 't2-$runTag',
-          expectedWireType: 2,
-        );
-        await roundTrip(
-          alice,
-          bob,
-          'msg-2-$runTag',
-          tempId: 't3-$runTag',
-          expectedWireType: 2,
-        );
-        await roundTrip(
-          bob,
-          alice,
-          'reply-2-$runTag',
-          tempId: 't4-$runTag',
-          expectedWireType: 2,
-        );
+        await hop(bob, alice, 'reply-1-$runTag', expectedWireType: 2);
+        await hop(alice, bob, 'msg-2-$runTag', expectedWireType: 2);
+        await hop(bob, alice, 'reply-2-$runTag', expectedWireType: 2);
 
         // Same plaintext twice must produce different ciphertexts (ratchet
         // advanced), and both must decrypt.
         final ct1 = await alice.encryptText(bob.userId, 'twin-$runTag');
         final ct2 = await alice.encryptText(bob.userId, 'twin-$runTag');
         expect(ct1, isNot(ct2), reason: 'ratchet must advance per message');
-        await alice.sendEncrypted(bob.userId, ct1, tempId: 't5-$runTag');
-        await alice.sendEncrypted(bob.userId, ct2, tempId: 't6-$runTag');
-        final r1 = await bob.awaitNewMessage('t5-$runTag');
-        final r2 = await bob.awaitNewMessage('t6-$runTag');
-        expect(
-          await bob.decryptText(alice.userId, r1['encryptedContent'] as String),
-          'twin-$runTag',
-        );
-        expect(
-          await bob.decryptText(alice.userId, r2['encryptedContent'] as String),
-          'twin-$runTag',
-        );
+        expect(await bob.decryptText(alice.userId, ct1), 'twin-$runTag');
+        expect(await bob.decryptText(alice.userId, ct2), 'twin-$runTag');
       },
       timeout: const Timeout(Duration(minutes: 1)),
     );
@@ -492,381 +272,19 @@ void main() {
         // process over its existing session state.
         await alice.encryption.deleteSession(bob.userId);
         final bundle = await alice.fetchBundleFor(bob.userId);
-        await alice.encryption.buildSession(bob.userId, bundle, expectedIdentityBase64: null);
-
-        await roundTrip(
-          alice,
-          bob,
-          'post-rebuild-$runTag',
-          tempId: 't7-$runTag',
-          expectedWireType: 3,
+        await alice.encryption.buildSession(
+          bob.userId,
+          bundle,
+          expectedIdentityBase64: null,
         );
+
+        await hop(alice, bob, 'post-rebuild-$runTag', expectedWireType: 3);
 
         // Bidirectional sanity after the rebuild.
-        await roundTrip(
-          bob,
-          alice,
-          'post-rebuild-reply-$runTag',
-          tempId: 't8-$runTag',
-          expectedWireType: 2,
-        );
+        await hop(bob, alice, 'post-rebuild-reply-$runTag', expectedWireType: 2);
       },
       timeout: const Timeout(Duration(minutes: 1)),
     );
-
-    test(
-      'edit swaps ciphertext; both sides get messageEdited; peer re-decrypts',
-      () async {
-        final messageId = await roundTrip(
-          alice,
-          bob,
-          'original-$runTag',
-          tempId: 't9-$runTag',
-          expectedWireType: 2,
-        );
-
-        final editedPlaintext = 'edited-$runTag';
-        final newCiphertext = await alice.encryptText(
-          bob.userId,
-          editedPlaintext,
-        );
-        expect(
-          wireType(newCiphertext),
-          2,
-          reason: 'edit rides the existing session',
-        );
-        alice.emitEditMessage(messageId, newCiphertext);
-
-        // The PEER gets the new ciphertext, normalized into its device-1
-        // envelope at ingest (§8 compat).
-        final peerEdit = await bob.awaitMessageEdited(messageId);
-        expect(peerEdit['conversationId'], conversationId);
-        expect(peerEdit['content'], '[encrypted]');
-        expect(peerEdit['encryptedContent'], newCiphertext);
-        expect(
-          DateTime.tryParse(peerEdit['editedAt'] as String),
-          isNotNull,
-          reason: 'editedAt must be an ISO timestamp',
-        );
-
-        // The EDITING device is the PRODUCER of that ciphertext (amendment
-        // (xxx)), so its echo carries none: it holds the plaintext already and
-        // must never be handed a ciphertext of its own to decrypt.
-        final ownEcho = await alice.awaitMessageEdited(messageId);
-        expect(ownEcho['encryptedContent'], isNull);
-        expect(ownEcho['originDeviceId'], 1);
-        expect(DateTime.tryParse(ownEcho['editedAt'] as String), isNotNull);
-
-        expect(
-          await bob.decryptText(alice.userId, newCiphertext),
-          editedPlaintext,
-        );
-      },
-      timeout: const Timeout(Duration(minutes: 1)),
-    );
-
-    test(
-      'edit by non-sender is rejected with not_sender',
-      () async {
-        final messageId = await roundTrip(
-          alice,
-          bob,
-          'no-touching-$runTag',
-          tempId: 't10-$runTag',
-          expectedWireType: 2,
-        );
-
-        // Rejected before any store/decrypt, so a placeholder string is fine
-        // (and never advances either ratchet).
-        bob.emitEditMessage(messageId, 'rejected-probe-$runTag');
-        final failed =
-            await bob.events.next(
-                  'editMessageFailed',
-                  where: (p) => p is Map && p['messageId'] == messageId,
-                  reason: 'bob edit rejection',
-                )
-                as Map;
-        expect(failed['reason'], 'not_sender');
-      },
-      timeout: const Timeout(Duration(minutes: 1)),
-    );
-
-    test(
-      'a plaintext emoji reaction is refused; a token round-trips and clears on removal',
-      () async {
-        // D10 closed 2026-09-19 (design §3.3): the compat window that let a
-        // not-yet-updated client react with a plain emoji is over, so the
-        // server must refuse the OLD shape and never store it in the clear.
-        // Driven on the RAW socket because the app's own provider only ever
-        // sends tokens — this case pins the server-side refusal, which no
-        // client path can exercise any more.
-        final messageId = await roundTrip(
-          alice,
-          bob,
-          'react-target-$runTag',
-          tempId: 't11-$runTag',
-          expectedWireType: 2,
-        );
-
-        bob.events.discard('reactionUpdated');
-        bob.socketService.socket!.emit('addReaction', {
-          'messageId': messageId,
-          'emoji': '🔥',
-        });
-        await bob.events.takeError(
-          'reaction token',
-          reason: 'plaintext emoji refused',
-        );
-        await alice.events.none(
-          'reactionUpdated',
-          within: const Duration(seconds: 2),
-          where: (p) => p is Map && p['messageId'] == messageId,
-          reason: 'a refused reaction must not fan out',
-        );
-
-        const token = 'AAAAAAAAAAAAAAAAAAAAAA';
-        bob.socketService.socket!.emit('addReaction', {
-          'messageId': messageId,
-          'emoji': token,
-        });
-        for (final client in [alice, bob]) {
-          final updated =
-              await client.events.next(
-                    'reactionUpdated',
-                    where: (p) => p is Map && p['messageId'] == messageId,
-                    reason: '${client.label} reaction add',
-                  )
-                  as Map;
-          expect(updated['conversationId'], conversationId);
-          expect((updated['reactions'] as Map)[token], [bob.userId]);
-        }
-
-        // Removal names a DIFFERENT token than the one stored: the server
-        // drops the user's single reaction regardless of the key, so a chip
-        // never stays lit because the remover's key differs.
-        bob.socketService.socket!.emit('removeReaction', {
-          'messageId': messageId,
-          'emoji': 'BBBBBBBBBBBBBBBBBBBBBB',
-        });
-        for (final client in [alice, bob]) {
-          final updated =
-              await client.events.next(
-                    'reactionUpdated',
-                    where: (p) => p is Map && p['messageId'] == messageId,
-                    reason: '${client.label} reaction remove',
-                  )
-                  as Map;
-          expect(updated['reactions'], isEmpty);
-        }
-      },
-      timeout: const Timeout(Duration(minutes: 1)),
-    );
-
-    test(
-      'delete destroys the local plaintext and leaves the Signal session alive',
-      () async {
-        final plaintext = 'purge-me-$runTag';
-        final messageId = await roundTrip(
-          alice,
-          bob,
-          plaintext,
-          tempId: 't12-$runTag',
-          expectedWireType: 2,
-        );
-
-        // Persist exactly as the app does at decrypt time, including the
-        // envelope metadata the sweeps select on.
-        await bob.encryption.saveDecryptedContent(
-          messageId,
-          {'content': plaintext},
-          conversationId: conversationId,
-          createdAt: DateTime.now().toUtc(),
-        );
-        expect(
-          (await bob.encryption.getDecryptedContent(messageId))?['content'],
-          plaintext,
-          reason:
-              'precondition: the only copy of the plaintext is on the device',
-        );
-
-        // Real server delete over the real wire, hard-deleting the row.
-        alice.emitDeleteMessage(messageId, forEveryone: true);
-        for (final client in [alice, bob]) {
-          await client.events.next(
-            'messageDeleted',
-            where: (p) => p is Map && p['messageId'] == messageId,
-            reason: '${client.label} messageDeleted',
-          );
-        }
-
-        // What the app's messageDeleted handler does. Asserted against a REAL
-        // store with real Signal state present, because the risk is not that
-        // the delete fails — it is that destroying plaintext also damages the
-        // session and bricks the conversation.
-        final purge = await bob.encryption.removeDecryptedContent([messageId]);
-        expect(purge.isComplete, isTrue);
-        expect(purge.removed, 1);
-        expect(
-          await bob.encryption.getDecryptedContent(messageId),
-          isNull,
-          reason: 'deleting a message must destroy its local plaintext',
-        );
-
-        // The session survived: new traffic still ratchets and decrypts. A
-        // purge that quietly broke this would trade one bug for a worse one.
-        await roundTrip(
-          alice,
-          bob,
-          'after-purge-$runTag',
-          tempId: 't13-$runTag',
-          expectedWireType: 2,
-        );
-      },
-      timeout: const Timeout(Duration(minutes: 1)),
-    );
-
-    test(
-      'getServedMessageIds answers from the real history rules',
-      () async {
-        // The reconcile pass destroys the local plaintext of every id MISSING
-        // from this answer, so a wrong "not served" is permanent data loss.
-        // Mocked unit tests cannot see the assembled SQL; this can.
-        final mine = await roundTrip(
-          alice,
-          bob,
-          'served-mine-$runTag',
-          tempId: 't14-$runTag',
-          expectedWireType: 2,
-        );
-        final theirs = await roundTrip(
-          bob,
-          alice,
-          'served-theirs-$runTag',
-          tempId: 't15-$runTag',
-          expectedWireType: 2,
-        );
-        final deleted = await roundTrip(
-          alice,
-          bob,
-          'served-deleted-$runTag',
-          tempId: 't16-$runTag',
-          expectedWireType: 2,
-        );
-        final hiddenForBob = await roundTrip(
-          alice,
-          bob,
-          'served-hidden-$runTag',
-          tempId: 't17-$runTag',
-          expectedWireType: 2,
-        );
-
-        alice.emitDeleteMessage(deleted, forEveryone: true);
-        for (final client in [alice, bob]) {
-          await client.events.next(
-            'messageDeleted',
-            where: (p) => p is Map && p['messageId'] == deleted,
-            reason: '${client.label} hard delete',
-          );
-        }
-
-        bob.emitDeleteMessage(hiddenForBob, forEveryone: false);
-        await bob.events.next(
-          'messageDeleted',
-          where: (p) => p is Map && p['messageId'] == hiddenForBob,
-          reason: 'bob delete-for-me',
-        );
-
-        const unknownId = 2147483000;
-        final forAlice = await alice.servedMessageIds([
-          mine,
-          theirs,
-          deleted,
-          hiddenForBob,
-          unknownId,
-        ]);
-
-        // THE trap: every unread-count query in MessagesService carries
-        // `sender != me`. Copying one into the existence check would report
-        // the user's entire outgoing history as gone and destroy it.
-        expect(
-          forAlice,
-          contains(mine),
-          reason: 'a message the caller SENT is still served',
-        );
-        expect(forAlice, contains(theirs));
-        expect(
-          forAlice,
-          contains(hiddenForBob),
-          reason: "bob's delete-for-me must not affect alice",
-        );
-        expect(forAlice, isNot(contains(deleted)));
-        expect(forAlice, isNot(contains(unknownId)));
-
-        final forBob = await bob.servedMessageIds([
-          mine,
-          theirs,
-          deleted,
-          hiddenForBob,
-        ]);
-        expect(forBob, contains(mine));
-        expect(forBob, contains(theirs));
-        expect(forBob, isNot(contains(deleted)));
-        expect(
-          forBob,
-          isNot(contains(hiddenForBob)),
-          reason: 'delete-for-me must read as gone for the user who did it',
-        );
-      },
-      timeout: const Timeout(Duration(minutes: 1)),
-    );
-
-    test('a retry carrying the same sendToken re-acks the committed row and '
-        'writes no second message (Phase 1 §5.4)', () async {
-      // A lost ack is the dangerous case: the sending device holds the ONLY
-      // plaintext copy until the ack lands, so a retry must recover the row
-      // the server already wrote instead of duplicating the message.
-      final token = 'tok-$runTag-${DateTime.now().microsecondsSinceEpoch}';
-      final ciphertext = await alice.encryptText(
-        bob.userId,
-        'idempotent-$runTag',
-      );
-
-      final first = await alice.sendWithToken(
-        bob.userId,
-        ciphertext,
-        tempId: 'tok-a-$runTag',
-        sendToken: token,
-      );
-      final messageId = (first['id'] as num).toInt();
-      expect(
-        first['originDeviceId'],
-        1,
-        reason: 'the server records which device produced the message',
-      );
-
-      // Same token, new tempId: this is the client retrying, not a new send.
-      final retry = await alice.sendWithToken(
-        bob.userId,
-        ciphertext,
-        tempId: 'tok-b-$runTag',
-        sendToken: token,
-      );
-
-      expect(
-        (retry['id'] as num).toInt(),
-        messageId,
-        reason: 'the retry must resolve to the committed row',
-      );
-      // And the recipient must not see it twice — Signal decryption is not
-      // idempotent, so a second delivery of the same ciphertext would fail
-      // into the session-destroying policy.
-      await bob.events.none(
-        'newMessage',
-        within: const Duration(seconds: 3),
-        where: (p) => p is Map && p['tempId'] == 'tok-b-$runTag',
-        reason: 'a retry must not deliver the message a second time',
-      );
-    }, timeout: const Timeout(Duration(minutes: 2)));
 
     // Phase 1 (spec §4 + §5.1 + §8): key material is namespaced by
     // (userId, deviceId), the device a bundle lands in comes from the
@@ -1007,7 +425,7 @@ void main() {
           'peer chain-verifies IK→E→DAK→list (I7, falsification 23)', () async {
         // An unenrolled account answers null — the fail-closed shape a
         // legacy-server probe also relies on (§8).
-        final before = await bob.fetchDeviceList(alice.userId);
+        final before = await bob.searchPeer(alice);
         expect(before['authorization'], isNull);
 
         alice.events.discard('deviceListChanged');
@@ -1047,11 +465,14 @@ void main() {
         );
         expect(auth['listVersion'], 1);
 
-        // Peer view: bob fetches the list and verifies the FULL chain
-        // against his TOFU'd view of alice's identity key (I7).
-        final tofu = await bob.fetchBundleFor(alice.userId);
-        final answer = await bob.fetchDeviceList(alice.userId);
-        enrolledAuthorization = (answer['authorization'] as Map)
+        // Peer view: bob looks alice up the way a stranger does (`searchUsers`
+        // serves the account's signed list beside each device's bundle — the
+        // server no longer answers a peer's `getDeviceList`) and verifies the
+        // FULL chain against his TOFU'd view of alice's identity key (I7).
+        final found = await bob.searchPeer(alice);
+        final tofuBundle =
+            ((found['devices'] as List).single as Map)['bundle'] as Map;
+        enrolledAuthorization = (found['authorization'] as Map)
             .cast<String, dynamic>();
         expect(
           enrolledAuthorization['listCanonical'],
@@ -1060,7 +481,7 @@ void main() {
         );
         final verdict = DeviceAuthorityEngine.verifyPeerDeviceList(
           authorization: enrolledAuthorization,
-          tofuIdentityKeyBase64: tofu['identityPublicKey'] as String,
+          tofuIdentityKeyBase64: tofuBundle['identityPublicKey'] as String,
           expectedUserId: alice.userId,
         );
         expect(verdict.ok, isTrue, reason: 'reason=${verdict.reason}');
@@ -1415,73 +836,6 @@ void main() {
             enrollmentCreatedAt: auth['enrollmentCreatedAt'] as int,
             enrollmentSig: auth['enrollmentSig'] as String,
           );
-
-      /// ONE extra device of alice, linked through the real ceremony and shared
-      /// by every contract that needs a non-primary own device.
-      ///
-      /// Deliberately memoized, and the reason is a hard budget: the server
-      /// throttles `provisioningComplete` to 10 per 15 minutes keyed by USER
-      /// (`WsThrottlerGuard.getTracker`), and every ceremony client here adopts
-      /// ALICE's account. This suite already spends exactly that budget on the
-      /// refusal contracts above, so one more full ceremony gets no answer at
-      /// all — the guard throws instead of emitting, so the 11th caller just
-      /// times out. Sharing the device keeps the suite inside the cap.
-      E2eClient? sharedDeviceClient;
-      int? sharedDeviceId;
-
-      Future<(E2eClient, int)> secondDeviceOfAlice() async {
-        final existing = sharedDeviceClient;
-        if (existing != null) return (existing, sharedDeviceId!);
-
-        final device = E2eClient('aliceSecondDevice', baseUrl)
-          ..adoptAccountFrom(alice);
-        await device.connectSocket();
-
-        final ephN = generateLinkEphemeral();
-        final opened = await device.openProvisioning();
-        final provisioningId = opened['provisioningId'] as String;
-        final ephP = generateLinkEphemeral();
-        final ack = await alice.provisioningHello(
-          provisioningId: provisioningId,
-          ephPubP: base64Encode(linkEphemeralPublicBytes(ephP)),
-        );
-        final assignedId = ack['deviceId'] as int;
-        final staged = await signAddedDevice(assignedId);
-        final auth = await currentAuth();
-        final transcript = linkTranscript(
-          provisioningId: provisioningId,
-          ephPubN: linkEphemeralPublicBytes(ephN),
-          ephPubP: linkEphemeralPublicBytes(ephP),
-        );
-        final sdh = linkSharedSecret(
-          theirEphPub: linkEphemeralPublicBytes(ephN),
-          ownEphPriv: ephP.privateKey,
-        );
-        final sealed = sealLinkBlob(
-          keys: deriveLinkBlobKeys(sharedSecret: sdh, transcript: transcript),
-          payload: blobPayloadFor(assignedId, auth),
-        );
-        final acked = await alice.provisionDevice({
-          'provisioningId': provisioningId,
-          'blob': base64Encode(sealed),
-          'listCanonical': staged['listCanonical'],
-          'listSignature': staged['listSignature'],
-        });
-        expect(acked['success'], isTrue, reason: '$acked');
-        final completed = await device.provisioningComplete(provisioningId);
-        expect(completed['success'], isTrue, reason: '$completed');
-
-        // Rebind: only now is this socket authenticated as the new device.
-        device.socketService.disconnect();
-        device.accessToken = completed['access_token'] as String;
-        await device.connectSocket();
-
-        sharedDeviceClient = device;
-        sharedDeviceId = assignedId;
-        return (device, assignedId);
-      }
-
-      tearDownAll(() => sharedDeviceClient?.dispose());
 
       test('full link: open → OOB code → hello → equal SAS → staged blob+list '
           '→ one-shot session-bound commit → rebind → keys land on the new '
@@ -1936,8 +1290,8 @@ void main() {
         );
 
         // Deliberately NOT completed: `provisioningComplete` is 10 per 15 min
-        // per USER and this group already spends that budget (see
-        // `secondDeviceOfAlice`). Cancel keeps the stage table clean.
+        // per USER and this group already spends most of that budget. Cancel
+        // keeps the stage table clean.
         await alice.cancelProvisioning(provisioningId);
       }, timeout: const Timeout(Duration(minutes: 3)));
 
@@ -2087,336 +1441,9 @@ void main() {
         expect(ids.contains(deviceB), isTrue);
       }, timeout: const Timeout(Duration(minutes: 3)));
 
-      // ---- T4: send fan-out + per-device delivery (§5.2/§5.3) ----
-      //
-      // These run LAST in the ceremony group on purpose: by now alice is
-      // enrolled and has real linked devices in her signed list, which is the
-      // substrate a fan-out send needs. Nested here to reuse `currentAuth`.
-
-      test('amendment (x): a LEGACY single-ciphertext send to an enrolled '
-          'account is refused with the signed list — never delivered to '
-          'device 1 alone (I5)', () async {
-        final auth = await currentAuth();
-        final tempId = 'legacy-refused-$runTag';
-        final ciphertext = await bob.encryptText(alice.userId, 'legacy shape');
-
-        alice.events.discard('newMessage');
-        bob.events.discard('deviceListStale');
-        bob.socketService.socket!.emit('sendMessage', <String, dynamic>{
-          'recipientId': alice.userId,
-          'content': '[encrypted]',
-          'encryptedContent': ciphertext,
-          'tempId': tempId,
-        });
-
-        // The refusal carries everything needed to repair in ONE round trip.
-        final refusal = await bob.awaitDeviceListStale(tempId);
-        expect(refusal['success'], isFalse);
-        expect(refusal['error'], 'device_list_stale');
-        final lists = (refusal['lists'] as List).cast<Map<dynamic, dynamic>>();
-        final aliceEntry = lists.firstWhere((e) => e['userId'] == alice.userId);
-        expect(aliceEntry['version'], auth['listVersion']);
-        expect(aliceEntry['listCanonical'], auth['listCanonical']);
-        expect(aliceEntry['listSignature'], auth['listSignature']);
-        final enrollment = aliceEntry['enrollment'] as Map;
-        expect(enrollment['dakPub'], auth['dakPub']);
-        expect(enrollment['enrollmentSig'], auth['enrollmentSig']);
-
-        // Refused ATOMICALLY: nothing was delivered anywhere.
-        await alice.events.none(
-          'newMessage',
-          within: const Duration(seconds: 2),
-          reason: 'a refused legacy send delivers nothing',
-        );
-      }, timeout: const Timeout(Duration(minutes: 2)));
-
-      test('falsification 5: a send addressed to a STALE list version is '
-          'rejected atomically — zero envelopes written, nothing '
-          'delivered', () async {
-        final auth = await currentAuth();
-        final staleVersion = (auth['listVersion'] as int) - 1;
-        final tempId = 'stale-version-$runTag';
-        final ciphertext = await bob.encryptText(alice.userId, 'stale send');
-
-        alice.events.discard('newMessage');
-        bob.events.discard('deviceListStale');
-        bob.emitEnvelopeSend(
-          alice.userId,
-          tempId: tempId,
-          envelopes: [
-            {'userId': alice.userId, 'deviceId': 1, 'ciphertext': ciphertext},
-          ],
-          recipientListVersion: staleVersion,
-        );
-
-        final refusal = await bob.awaitDeviceListStale(tempId);
-        expect(
-          (refusal['lists'] as List).cast<Map<dynamic, dynamic>>().firstWhere(
-            (e) => e['userId'] == alice.userId,
-          )['version'],
-          auth['listVersion'],
-          reason: 'the CURRENT version is handed back for the retry',
-        );
-        await alice.events.none(
-          'newMessage',
-          within: const Duration(seconds: 2),
-          reason: 'a stale send is refused before any write',
-        );
-      }, timeout: const Timeout(Duration(minutes: 2)));
-
-      test('a fan-out send with the CURRENT version is accepted and each '
-          'device is addressed exactly once (§5.3 device rooms)', () async {
-        final auth = await currentAuth();
-        final tempId = 'fanout-ok-$runTag';
-        final ciphertext = await bob.encryptText(alice.userId, 'fan-out hello');
-
-        alice.events.discard('newMessage');
-        bob.emitEnvelopeSend(
-          alice.userId,
-          tempId: tempId,
-          envelopes: [
-            {'userId': alice.userId, 'deviceId': 1, 'ciphertext': ciphertext},
-          ],
-          sendToken: 'tok-fanout-$runTag',
-          recipientListVersion: auth['listVersion'] as int,
-        );
-
-        // Device 1's socket receives ITS ciphertext, in its own device room.
-        final delivered = await alice.awaitNewMessage(tempId);
-        expect(delivered['encryptedContent'], ciphertext);
-        expect(delivered['originDeviceId'], 1);
-        // A recipient copy never carries the sender's private reconcile key,
-        // and never claims there is no envelope for it.
-        expect(delivered.containsKey('sendToken'), isFalse);
-        expect(delivered['envelopeStatus'], isNull);
-        // Exactly once — a duplicate would brick the session on decrypt.
-        await alice.events.none(
-          'newMessage',
-          within: const Duration(seconds: 2),
-          reason: 'one envelope per device, delivered once',
-        );
-      }, timeout: const Timeout(Duration(minutes: 2)));
-
-      test('falsification 13: a linked device reads history and gets the '
-          'none_for_device marker for rows that predate its link — never '
-          'the foreign-ratchet legacy ciphertext', () async {
-        // A fresh device of alice, linked AFTER every message above existed.
-        final late = E2eClient('lateDevice', baseUrl)..adoptAccountFrom(alice);
-        await late.connectSocket();
-        addTearDown(late.dispose);
-
-        final ephN = generateLinkEphemeral();
-        final opened = await late.openProvisioning();
-        final provisioningId = opened['provisioningId'] as String;
-        final ephP = generateLinkEphemeral();
-        final ack = await alice.provisioningHello(
-          provisioningId: provisioningId,
-          ephPubP: base64Encode(linkEphemeralPublicBytes(ephP)),
-        );
-        final assignedId = ack['deviceId'] as int;
-        final staged = await signAddedDevice(assignedId);
-        final auth = await currentAuth();
-        final transcript = linkTranscript(
-          provisioningId: provisioningId,
-          ephPubN: linkEphemeralPublicBytes(ephN),
-          ephPubP: linkEphemeralPublicBytes(ephP),
-        );
-        final sdh = linkSharedSecret(
-          theirEphPub: linkEphemeralPublicBytes(ephN),
-          ownEphPriv: ephP.privateKey,
-        );
-        final sealed = sealLinkBlob(
-          keys: deriveLinkBlobKeys(sharedSecret: sdh, transcript: transcript),
-          payload: blobPayloadFor(assignedId, auth),
-        );
-        final acked = await alice.provisionDevice({
-          'provisioningId': provisioningId,
-          'blob': base64Encode(sealed),
-          'listCanonical': staged['listCanonical'],
-          'listSignature': staged['listSignature'],
-        });
-        expect(acked['success'], isTrue, reason: '$acked');
-        final completed = await late.provisioningComplete(provisioningId);
-        expect(completed['success'], isTrue, reason: '$completed');
-
-        // Rebind: only now is this socket authenticated as the new device.
-        late.socketService.disconnect();
-        late.accessToken = completed['access_token'] as String;
-        await late.connectSocket();
-
-        late.events.discard('messageHistory');
-        late.socketService.socket!.emit('getMessages', {
-          'conversationId': conversationId,
-        });
-        final history =
-            await late.events.next(
-                  'messageHistory',
-                  where: (p) =>
-                      p is Map && p['conversationId'] == conversationId,
-                  reason: 'late device history',
-                )
-                as Map;
-        final rows = (history['messages'] as List).cast<Map<dynamic, dynamic>>();
-        expect(rows, isNotEmpty, reason: 'the conversation has history');
-
-        // Every E2E row predates this device's link, so every one of them is
-        // marked — and NONE of them carries a ciphertext this device would
-        // fail to decrypt across the whole pre-link history.
-        final e2eRows = rows.where((r) => r['content'] == '[encrypted]');
-        expect(e2eRows, isNotEmpty);
-        for (final row in e2eRows) {
-          expect(
-            row['envelopeStatus'],
-            'none_for_device',
-            reason: 'row ${row['id']} predates this device',
-          );
-          expect(
-            row['encryptedContent'],
-            isNull,
-            reason:
-                'serving device 1 ciphertext here is the foreign-ratchet '
-                'decrypt the §5.3 gate exists to prevent',
-          );
-        }
-      }, timeout: const Timeout(Duration(minutes: 3)));
-
-      test('falsification 6: a send fans a SELF-SYNC envelope to the sender\'s '
-          'own other device — its own ciphertext, no sendToken, no marker, and '
-          'the origin device is never sent its own copy', () async {
-        // A second device of ALICE, linked through the real ceremony. Alice is
-        // the enrolled account here (the harness holds her DAK), so she is the
-        // sender for this contract. Shared with falsification 24 because the
-        // ceremony's completion budget is capped per user — see
-        // [secondDeviceOfAlice].
-        final (aliceDevice2, assignedId) = await secondDeviceOfAlice();
-
-        // Alice's device 1 sends to bob AND to her own device 2. One ciphertext
-        // per address: sharing one would brick the second decrypt, because
-        // Signal consumes the message key. The self ciphertext is a synthetic
-        // marker — this contract is about ROUTING (which device is handed
-        // which bytes, and what metadata rides along), and the server treats
-        // every ciphertext as opaque.
-        final tempId = 'selfsync-$runTag';
-        final forBob = await alice.encryptText(bob.userId, 'self-sync hello');
-        final forOwnDevice = '3:selfsync-own-$runTag';
-        final senderAuth = await currentAuth();
-
-        bob.events.discard('newMessage');
-        aliceDevice2.events.discard('newMessage');
-        alice.events.discard('newMessage');
-        alice.emitEnvelopeSend(
-          bob.userId,
-          tempId: tempId,
-          envelopes: [
-            {'userId': bob.userId, 'deviceId': 1, 'ciphertext': forBob},
-            {
-              'userId': alice.userId,
-              'deviceId': assignedId,
-              'ciphertext': forOwnDevice,
-            },
-          ],
-          sendToken: 'tok-selfsync-$runTag',
-          senderListVersion: senderAuth['listVersion'] as int,
-        );
-
-        // The sender's own OTHER device receives a real, device-addressed
-        // ciphertext — this is the copy the receive-side law decrypts.
-        final selfCopy = await aliceDevice2.awaitNewMessage(tempId);
-        expect(selfCopy['encryptedContent'], forOwnDevice);
-        expect(selfCopy['senderId'], alice.userId);
-        expect(selfCopy['originDeviceId'], 1);
-        expect(
-          selfCopy.containsKey('sendToken'),
-          isFalse,
-          reason:
-              'the reconcile key reaches ONLY the origin device — a device '
-              'holding it could consume another device\'s pending record',
-        );
-        expect(
-          selfCopy['envelopeStatus'],
-          isNull,
-          reason:
-              'a self-sync row HAS an envelope; own_origin would tell this '
-              'device to reconcile instead of decrypt',
-        );
-        // The recipient still gets exactly its own ciphertext.
-        final peerCopy = await bob.awaitNewMessage(tempId);
-        expect(peerCopy['encryptedContent'], forBob);
-        // And the origin device is never handed its own copy: it could not
-        // decrypt it, and trying would burn its only plaintext.
-        await alice.events.none(
-          'newMessage',
-          within: const Duration(seconds: 2),
-          reason: 'the origin device is excluded from its own fan-out',
-        );
-      }, timeout: const Timeout(Duration(minutes: 3)));
-
-      test('falsification 14: reusing a sendToken re-acks the SAME row and '
-          'delivers nothing twice (spec §5.4 + amendment (ix))', () async {
-        // Envelope-shaped, because amendment (x) refuses a legacy ciphertext
-        // send whenever either party is enrolled — and alice is.
-        final senderAuth = await currentAuth();
-        final token = 'tok-lostack-$runTag';
-        final ciphertext = await alice.encryptText(bob.userId, 'ack me once');
-
-        Future<Map<String, dynamic>> sendWithSameToken(String tempId) async {
-          alice.events.discard('messageSent');
-          bob.events.discard('newMessage');
-          alice.emitEnvelopeSend(
-            bob.userId,
-            tempId: tempId,
-            envelopes: [
-              {'userId': bob.userId, 'deviceId': 1, 'ciphertext': ciphertext},
-            ],
-            sendToken: token,
-            senderListVersion: senderAuth['listVersion'] as int,
-          );
-          final ack =
-              await alice.events.next(
-                    'messageSent',
-                    where: (p) => p is Map && p['tempId'] == tempId,
-                    reason: 'ack for $tempId token=$token',
-                  )
-                  as Map;
-          return ack.cast<String, dynamic>();
-        }
-
-        final first = await sendWithSameToken('lostack-a-$runTag');
-        final rowId = first['id'] as int;
-        expect(
-          first['sendToken'],
-          token,
-          reason:
-              'the token is echoed to its origin device — that echo IS the '
-              'reconcile key for a row whose own copy carries no ciphertext',
-        );
-        expect(
-          first['envelopeStatus'],
-          'own_origin',
-          reason: 'the origin device has no envelope of its own by design',
-        );
-        await bob.awaitNewMessage('lostack-a-$runTag');
-
-        // The ack died on the way back, so the client retries with the SAME
-        // token. The server must re-ack the committed row rather than commit a
-        // second one: a duplicate row would be a second ciphertext for one
-        // logical message, and Signal decrypt is not idempotent.
-        final second = await sendWithSameToken('lostack-b-$runTag');
-        expect(
-          second['id'],
-          rowId,
-          reason: 'the same token must resolve to EXACTLY ONE row',
-        );
-        await bob.events.none(
-          'newMessage',
-          within: const Duration(seconds: 2),
-          reason: 're-ack without re-fan: the recipient already has this row',
-        );
-      }, timeout: const Timeout(Duration(minutes: 2)));
-
-      test('falsification 7 + §5.5: revoking a device kicks it, refuses its '
-          'reconnect and its uploads, and no later message is addressed to '
-          'it — while every other device keeps working', () async {
+      test('§5.5: revoking a device kicks it and refuses its reconnect, and '
+          'its key material is purged with it — while the primary keeps '
+          'working', () async {
         // A real second device of ALICE through the real ceremony (the harness
         // holds her DAK, so she is the only account that can sign a mutation).
         final doomed = E2eClient('revokeTarget', baseUrl)
@@ -2465,8 +1492,8 @@ void main() {
         doomed.accessToken = completed['access_token'] as String;
         await doomed.connectSocket();
 
-        // It is a fully working device first: key material of its own, so a
-        // fan-out to it is possible right up to the revocation.
+        // It is a fully working device first: key material of its own, right
+        // up to the revocation.
         final deviceOne = await bob.fetchBundleFor(alice.userId, deviceId: 1);
         final identityKey = deviceOne['identityPublicKey'] as String;
         final live = await doomed.uploadDeviceKeyBundle(
@@ -2595,64 +1622,6 @@ void main() {
         final refused = await doomed.connectExpectingRevoked();
         expect(refused['deviceId'], doomedId);
 
-        // ---- falsification 7: no envelope for a revoked device ----
-        // Addressing it is refused outright: the fan-out gate reads the same
-        // `devices` row the revocation just stamped.
-        alice.events.discard('error');
-        alice.emitEnvelopeSend(
-          bob.userId,
-          tempId: 'revoked-target-$runTag',
-          envelopes: [
-            {
-              'userId': bob.userId,
-              'deviceId': 1,
-              'ciphertext': await alice.encryptText(bob.userId, 'to bob'),
-            },
-            {
-              'userId': alice.userId,
-              'deviceId': doomedId,
-              'ciphertext': '3:for-a-revoked-device-$runTag',
-            },
-          ],
-          sendToken: 'tok-revoked-target-$runTag',
-          senderListVersion: versionBefore + 1,
-        );
-        // Drained off `errors` so the end-of-run "no unexpected errors" check
-        // stays meaningful (deliberate refusals must be claimed).
-        await alice.events.takeError(
-          'unknown_recipient_device',
-          reason: 'a revoked device may not be addressed',
-        );
-        await bob.events.none(
-          'newMessage',
-          within: const Duration(seconds: 2),
-          where: (p) => p is Map && p['tempId'] == 'revoked-target-$runTag',
-          reason: 'the refusal is atomic — no row, no envelope for anyone',
-        );
-
-        // And a send that simply omits it SUCCEEDS — revoking one device must
-        // never break the account's messaging.
-        final tempId = 'after-revoke-$runTag';
-        bob.events.discard('newMessage');
-        alice.emitEnvelopeSend(
-          bob.userId,
-          tempId: tempId,
-          envelopes: [
-            {
-              'userId': bob.userId,
-              'deviceId': 1,
-              'ciphertext': await alice.encryptText(
-                bob.userId,
-                'still working',
-              ),
-            },
-          ],
-          sendToken: 'tok-after-revoke-$runTag',
-          senderListVersion: versionBefore + 1,
-        );
-        final delivered = await bob.awaitNewMessage(tempId);
-        expect(delivered['senderId'], alice.userId);
-
         // ---- its key material is gone, and it cannot publish more ----
         // T3's `device_not_active` upload rejection: wire-unreachable until
         // revocation existed, reachable now. The upload rides a session the
@@ -2669,326 +1638,6 @@ void main() {
               'the revoked device\'s key bundle was purged with it: $gone',
         );
       }, timeout: const Timeout(Duration(minutes: 4)));
-
-      test('falsification 24: an edit from a NON-ORIGIN own device re-fans every '
-          'current device, INSERTS a row for one that had none, re-points '
-          'originDeviceId at the editor, preserves the delivery projection and '
-          'mints no sendToken (spec §5.7 + amendments (xxx)-(xxxiv))', () async {
-        // The EDITING device: a real, non-primary device of alice, linked through
-        // the ceremony and shared with falsification 6 (the ceremony's
-        // completion budget is capped per user — see [secondDeviceOfAlice]).
-        final (editor, editorDeviceId) = await secondDeviceOfAlice();
-
-        // 1. Alice's device 1 sends. Note what it does NOT address: its own
-        //    device 1 (it is the origin) — so device 1 has NO envelope for this
-        //    row, which is exactly the placeholder case the edit must INSERT.
-        final tempId = 'editrefan-$runTag';
-        final forBob = await alice.encryptText(bob.userId, 'before the edit');
-        final senderAuth = await currentAuth();
-        bob.events.discard('newMessage');
-        alice.emitEnvelopeSend(
-          bob.userId,
-          tempId: tempId,
-          envelopes: [
-            {'userId': bob.userId, 'deviceId': 1, 'ciphertext': forBob},
-            {
-              'userId': alice.userId,
-              'deviceId': editorDeviceId,
-              'ciphertext': '3:editrefan-self-$runTag',
-            },
-          ],
-          sendToken: 'tok-editrefan-$runTag',
-          senderListVersion: senderAuth['listVersion'] as int,
-        );
-        final delivered = await bob.awaitNewMessage(tempId);
-        final messageId = delivered['id'] as int;
-
-        // 2. Bob DELIVERS and READS it, which stamps his envelope and drives the
-        //    row-level projection to READ. This is the state an edit must not
-        //    destroy: an edit is not an un-delivery (durability finding F8).
-        alice.events.discard('messageDelivered');
-        bob.socketService.socket!.emit('messageDelivered', {
-          'messageId': messageId,
-        });
-        await alice.events.next(
-          'messageDelivered',
-          where: (p) => p is Map && p['messageId'] == messageId,
-          reason: 'delivery projection before the edit',
-        );
-        // The read projection rides the SAME `messageDelivered` event with a
-        // READ status — there is no separate read event.
-        alice.events.discard('messageDelivered');
-        bob.socketService.socket!.emit('markConversationRead', {
-          'conversationId': conversationId,
-        });
-        await alice.events.next(
-          'messageDelivered',
-          where: (p) =>
-              p is Map &&
-              p['messageId'] == messageId &&
-              p['deliveryStatus'] == 'READ',
-          reason: 'read projection before the edit',
-        );
-
-        // 3. The EDIT, issued from alice's device 2 — a device that did NOT send
-        //    the row. Its ciphertexts are bound to ITS ratchet, so the server
-        //    must re-point originDeviceId at it or every receiver would decrypt
-        //    against device 1 and fail with a Bad-MAC (amendment (xxx)).
-        // Synthetic ciphertexts, for the same reason falsification 6 uses them:
-        // this contract is about ROUTING, ATTRIBUTION and STAMP PRESERVATION —
-        // which device is handed which bytes, who the server says produced
-        // them, and what survives the UPSERT. The server treats every
-        // ciphertext as opaque, and the editing device holds no Signal state of
-        // its own here (it adopted the account, it did not install keys).
-        final editedForBob = '3:editrefan-bob-$runTag';
-        final editedForOwnDevice1 = '3:editrefan-upgrade-$runTag';
-        final editorAuth = await currentAuth();
-        bob.events.discard('messageEdited');
-        alice.events.discard('messageEdited');
-        editor.events.discard('messageEdited');
-        editor.emitEnvelopeEdit(
-          messageId,
-          envelopes: [
-            {'userId': bob.userId, 'deviceId': 1, 'ciphertext': editedForBob},
-            {
-              'userId': alice.userId,
-              'deviceId': 1,
-              'ciphertext': editedForOwnDevice1,
-            },
-          ],
-          recipientListVersion: null,
-          senderListVersion: editorAuth['listVersion'] as int,
-        );
-
-        // The peer's device gets its OWN edited ciphertext, attributed to the
-        // device that produced it.
-        final peerEdit = await bob.awaitMessageEdited(messageId);
-        expect(peerEdit['encryptedContent'], editedForBob);
-        expect(
-          peerEdit['originDeviceId'],
-          editorDeviceId,
-          reason:
-              'the receiver keys its Signal session off this field, so an edit '
-              'from a non-origin device MUST re-point it',
-        );
-        expect(
-          peerEdit.containsKey('sendToken'),
-          isFalse,
-          reason: 'an edit never mints or consumes a sendToken (§5.4)',
-        );
-
-        // The sender's device 1 had NO envelope for this row (it was the origin
-        // of the send). The edit INSERTS one: the placeholder upgrades, and the
-        // upgrade is one-way.
-        final upgraded = await alice.awaitMessageEdited(messageId);
-        expect(
-          upgraded['encryptedContent'],
-          editedForOwnDevice1,
-          reason:
-              'a device with no prior envelope is addressed by the re-fan and '
-              'upgrades its none_for_device placeholder',
-        );
-
-        // The EDITING device produced every ciphertext, so it holds the
-        // plaintext and is handed none of them back.
-        final echo = await editor.awaitMessageEdited(messageId);
-        expect(echo['encryptedContent'], isNull);
-        expect(echo['editedAt'], isNotNull);
-
-        // 4. THE F8 ASSERTION. Re-read history as bob: his envelope was
-        //    delivered AND read before the edit, and a content-only UPSERT must
-        //    leave both stamps intact — so the row-level projection may not
-        //    regress from READ. A full-row replace would zero them here.
-        bob.events.discard('messageHistory');
-        bob.socketService.socket!.emit('getMessages', {
-          'conversationId': conversationId,
-        });
-        final history =
-            await bob.events.next(
-                  'messageHistory',
-                  where: (p) =>
-                      p is Map && p['conversationId'] == conversationId,
-                  reason: 'bob re-reads history after the edit',
-                )
-                as Map;
-        final row = (history['messages'] as List)
-            .cast<Map<dynamic, dynamic>>()
-            .firstWhere((m) => m['id'] == messageId);
-        expect(
-          row['encryptedContent'],
-          editedForBob,
-          reason:
-              'the edit must be DURABLE: before T7 it lived only in the socket '
-              'emit while the envelope kept the ORIGINAL ciphertext',
-        );
-        expect(
-          row['deliveryStatus'],
-          'READ',
-          reason:
-              'an edit is not an un-delivery — the §4 ROW projection never '
-              'regresses on edit',
-        );
-        expect(row['editedAt'], isNotNull);
-        // NOTE ON WHAT THIS DOES *NOT* PROVE. `deliveryStatus` is a
-        // messages-ROW column, maintained by `updateDeliveryStatus`
-        // independently of the per-device envelope stamps that
-        // `stampEnvelope` writes — and `applyEdit` touches neither. So this
-        // assertion would still pass if the UPSERT zeroed
-        // `deliveredAt`/`readAt`. The wire has no read path for those columns,
-        // so the content-only conflict clause is pinned by
-        // `messages.service.spec.ts` ('UPSERTs the named envelopes
-        // CONTENT-ONLY') and by a direct SQL check recorded in the T7 session
-        // summary. Do not upgrade this comment into a claim.
-      }, timeout: const Timeout(Duration(minutes: 4)));
-
-      test('a REAL self-sync envelope DECRYPTS on the sender\'s own second '
-          'device — same account identity, its own per-device key material '
-          '(spec §12 (xxxv), the decryptability half falsification 6 leaves '
-          'open)', () async {
-        // Falsification 6 proves ROUTING with a synthetic ciphertext, because
-        // the server treats ciphertext as opaque. This proves the other half:
-        // that the bytes routed there are bytes that device can actually open.
-        final (device2, deviceTwoId) = await secondDeviceOfAlice();
-
-        // ---- keystore isolation, and why it is needed ----
-        // Both clients are the SAME account, and `EncryptionService` derives
-        // every Signal storage key from `e2e_<userId>_`. The mock secure
-        // storage is one process-wide map, so device 2 keying itself would
-        // overwrite device 1's signed pre-key and OTPs — and `adopt` refuses
-        // outright while device 1's identity record is present. So the two
-        // keystores are separated in TIME: each device acts with its own map
-        // installed, and the live map is re-snapshotted at every swap so no
-        // side loses ratchet progress made since the last one.
-        const storage = FlutterSecureStorage();
-        final alicePrefix = 'e2e_${alice.userId}_';
-        Future<Map<String, String>> snapshot() async =>
-            Map<String, String>.from(await storage.readAll());
-        void install(Map<String, String> world) {
-          // ignore: invalid_use_of_visible_for_testing_member
-          FlutterSecureStorage.setMockInitialValues(
-            Map<String, String>.from(world),
-          );
-        }
-
-        var deviceOneWorld = await snapshot();
-        // Device 2 starts from the same world MINUS alice's own key material:
-        // bob's rows stay so nothing else in the run is disturbed.
-        var deviceTwoWorld = Map<String, String>.from(deviceOneWorld)
-          ..removeWhere((key, _) => key.startsWith(alicePrefix));
-        addTearDown(() => install(deviceOneWorld));
-
-        // ---- device 2 becomes a real installation ----
-        install(deviceTwoWorld);
-        final auth = await currentAuth();
-        // The production path a linked device takes: it ADOPTS the account's
-        // shared identity key (§5.1 ships `ikPriv` in the sealed blob for
-        // exactly this) and mints its OWN signed pre-key and one-time pre-keys.
-        await device2.encryption.adoptProvisionedIdentity(
-          userId: alice.userId,
-          ikPubBase64: base64Encode(aliceIdentity.getPublicKey().serialize()),
-          ikPrivBase64: base64Encode(aliceIdentity.getPrivateKey().serialize()),
-          dakPubBase64: auth['dakPub'] as String,
-        );
-        final deviceTwoKeys = device2.encryption.getKeysForUpload();
-        expect(
-          deviceTwoKeys,
-          isNotNull,
-          reason: 'adopting must stage this device\'s own upload payload',
-        );
-        // Real material this time, not the opaque `dev<N>-spk-public`
-        // placeholders the other tests use: `processPreKeyBundle` verifies the
-        // signed pre-key signature, so a placeholder cannot build a session.
-        // The socket rebound to deviceId=N at the end of the ceremony and the
-        // server takes the device from the JWT, so these land on (alice, N).
-        await device2.uploadKeyBundle(deviceTwoKeys!);
-        await device2.uploadOneTimePreKeys(deviceTwoKeys, tagIdentityEpoch: true);
-        deviceTwoWorld = await snapshot();
-
-        // ---- device 1 sends a REAL self ciphertext ----
-        install(deviceOneWorld);
-        final bundle = await alice.fetchBundleFor(
-          alice.userId,
-          deviceId: deviceTwoId,
-        );
-        expect(
-          bundle['registrationId'],
-          deviceTwoKeys['keyBundle']['registrationId'],
-          reason: 'the served bundle must be the one device 2 just published',
-        );
-        await alice.encryption.buildSession(
-          alice.userId,
-          bundle,
-          deviceId: deviceTwoId,
-         expectedIdentityBase64: null,);
-        const plaintext = 'self-sync that really decrypts';
-        final selfCiphertext = await alice.encryption.encrypt(
-          alice.userId,
-          jsonEncode(E2eEnvelope.build(plaintext)),
-          deviceId: deviceTwoId,
-        );
-        expect(
-          wireType(selfCiphertext),
-          3,
-          reason: 'a first message to a new device address is a PreKey message',
-        );
-
-        final tempId = 'selfdecrypt-$runTag';
-        final forBob = await alice.encryptText(bob.userId, plaintext);
-        final senderAuth = await currentAuth();
-        // EventLog matches the first buffered payload satisfying its predicate,
-        // and falsification 6 left a SYNTHETIC self copy in this device's
-        // buffer. Without the discard this could "decrypt" those bytes instead.
-        device2.events.discard('newMessage');
-        bob.events.discard('newMessage');
-        alice.emitEnvelopeSend(
-          bob.userId,
-          tempId: tempId,
-          envelopes: [
-            {'userId': bob.userId, 'deviceId': 1, 'ciphertext': forBob},
-            {
-              'userId': alice.userId,
-              'deviceId': deviceTwoId,
-              'ciphertext': selfCiphertext,
-            },
-          ],
-          sendToken: 'tok-selfdecrypt-$runTag',
-          senderListVersion: senderAuth['listVersion'] as int,
-        );
-        final selfCopy = await device2.awaitNewMessage(tempId);
-        expect(selfCopy['encryptedContent'], selfCiphertext);
-        expect(selfCopy['originDeviceId'], 1);
-        deviceOneWorld = await snapshot();
-
-        // ---- device 2 opens it ----
-        install(deviceTwoWorld);
-        // Decrypted as ORDINARY INBOUND against the ORIGIN device's session
-        // (§12 (xi)/(xii)) — device 1 produced these bytes, so device 1 is the
-        // address. Signal decrypt is not idempotent: exactly one attempt.
-        final decrypted = await device2.encryption.decrypt(
-          alice.userId,
-          selfCopy['encryptedContent'] as String,
-          deviceId: 1,
-        );
-        expect(E2eEnvelope.parse(decrypted).content, plaintext);
-
-        // THE ANTI-VACUITY ASSERTION (§12 (xxxv)), and it is not decoration.
-        // A Signal session decrypts whether or not the two parties' identity
-        // keys are equal — libsignal_protocol_dart carries no self_session
-        // concept and X3DH has no identity-key-equality branch. So everything
-        // above would pass just as well for an unrelated account borrowing a
-        // device id, which would prove nothing about SELF-sync. This is what
-        // makes the device that decrypted genuinely alice's second device.
-        expect(
-          await device2.exportIdentityPair(),
-          base64Encode(aliceIdentity.serialize()),
-          reason:
-              'device 2 must hold the ACCOUNT identity — otherwise this is an '
-              'ordinary two-party decrypt wearing a self-sync label',
-        );
-        deviceTwoWorld = await snapshot();
-        install(deviceOneWorld);
-      }, timeout: const Timeout(Duration(minutes: 4)));
-
     });
 
     test('no unexpected socket errors surfaced during the run', () {

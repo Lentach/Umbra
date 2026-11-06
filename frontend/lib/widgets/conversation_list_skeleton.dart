@@ -3,12 +3,12 @@ import 'package:skeletonizer/skeletonizer.dart';
 
 import '../theme/rpg_theme.dart';
 
-/// Shimmer placeholder shown while the first conversation list is still in
-/// flight (`ConversationsProvider.hasLoadedConversationsOnce == false`).
+/// Shimmer placeholder shown while the chat list is still being read from the
+/// contact store (`ConversationsProvider.hasLoadedConversations == false`).
 ///
 /// A skeleton beats a bare spinner: it shows the SHAPE of what is loading, so
 /// the arrival of real rows feels like content filling in rather than a screen
-/// swap. Gate it on a real fetch signal only — never a timer — or it lies about
+/// swap. Gate it on a real load signal only — never a timer — or it lies about
 /// state (an empty account is not "loading").
 class ConversationListSkeleton extends StatelessWidget {
   final EdgeInsets padding;

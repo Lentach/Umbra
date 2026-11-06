@@ -58,12 +58,10 @@ abstract interface class BoxFirstContactLink {
   Future<void> retireAccountQueues();
 }
 
-/// How a friend request sent from a search answer went (E15a): over the box,
-/// or — some device on either side is not on the box — back to the old
-/// path, which the caller then takes as today; [failed]: the box could not
-/// take every frame, and nothing is sent the old way (a request never goes
-/// out on both paths).
-enum FirstContactSend { sent, oldPath, failed }
+/// How a friend request sent from a search answer went (E15a): [sent] over
+/// the box, or [failed] — the box could not take every frame, or some device
+/// on either side is not on the box. Nothing is sent any other way.
+enum FirstContactSend { sent, failed }
 
 /// How accepting a box request went (E15d, decision 53): [unverified] — the
 /// accept-time lookup did not vouch for the key the request carries, so it

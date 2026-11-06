@@ -16,9 +16,8 @@ export const RATE_LIMITED = 'rate_limited';
  * `exception` event, and this app's client listens to ~60 NAMED events plus
  * `error` — never `exception`. So before this table a throttled request was
  * answered by nothing at all, and any client state staked on the answer was
- * stranded: a throttled `editMessage` left an optimistically applied edit on
- * that device FOREVER while the server and the peer kept the old text, which is
- * the same divergence the `deviceListStale` edit path was fixed for.
+ * stranded: a throttled link-ceremony stage left the link UI waiting FOREVER,
+ * and a throttled `setRequestQueue` read as a publish that never answered.
  *
  * Answering in each request's OWN contract, rather than through one new global
  * "rate limited" event, is deliberate. Every refusal in this codebase is an
@@ -41,54 +40,6 @@ const THROTTLE_ANSWERS: Record<
   string,
   (data: unknown, retryAfterMs: number) => [string, Record<string, unknown>]
 > = {
-  // Reverts the optimistic edit through the existing `onEditMessageFailed`.
-  editMessage: (data, retryAfterMs) => [
-    'editMessageFailed',
-    {
-      messageId: (data as { messageId?: number } | null)?.messageId,
-      reason: RATE_LIMITED,
-      retryAfterMs,
-    },
-  ],
-  // Reverts the optimistic pin through `onPinMessageFailed` (spec §12 (xxxvii)).
-  //
-  // A DEDICATED event, deliberately not `messagePinned`. This guard refuses
-  // BEFORE the handler runs, so it holds only the inbound payload and cannot
-  // know what was pinned before: answering `messagePinned` with a null id would
-  // unpin a conversation that had a DIFFERENT message pinned, and echoing the
-  // attempted id would confirm a pin that never happened. Only the pinning
-  // device knows the state it overwrote, so only it can restore it — this
-  // refusal is the trigger, not the new state.
-  //
-  // `unpinMessage` is deliberately ABSENT: it writes no optimistic state, so an
-  // entry for it would be an answer no client code drives to a conclusion.
-  pinMessage: (data, retryAfterMs) => [
-    'messagePinFailed',
-    {
-      conversationId: (data as { conversationId?: number } | null)
-        ?.conversationId,
-      reason: RATE_LIMITED,
-      retryAfterMs,
-    },
-  ],
-  // Reverts the optimistic timer through `onDisappearingTimerFailed`.
-  //
-  // A DEDICATED event for the same reason as `messagePinFailed`: this guard
-  // refuses before the handler runs, so it holds only the requested `seconds`
-  // and cannot know the timer it displaced. Echoing `disappearingTimerUpdated`
-  // with the attempted value would CONFIRM a change that never happened — and
-  // this particular value is a safety promise, so a device left showing a timer
-  // the server never accepted tells the user messages will vanish when they
-  // will not.
-  setDisappearingTimer: (data, retryAfterMs) => [
-    'disappearingTimerFailed',
-    {
-      conversationId: (data as { conversationId?: number } | null)
-        ?.conversationId,
-      reason: RATE_LIMITED,
-      retryAfterMs,
-    },
-  ],
   // The link ceremony: each stage answers its own ack, so a throttled stage
   // surfaces in the link UI instead of hanging it.
   openProvisioning: (_data, retryAfterMs) => [
@@ -118,26 +69,6 @@ const THROTTLE_ANSWERS: Record<
   updateDeviceList: (_data, retryAfterMs) => [
     'deviceListUpdated',
     { success: false, error: RATE_LIMITED, retryAfterMs },
-  ],
-  // Reaction-key distribution answers on its own events: a throttled upload
-  // must not look like a successful publish (the peer would never get the
-  // key), and a throttled fetch must not look like "this conversation has no
-  // key" — the `error` field is what distinguishes a refusal from a null
-  // ciphertext, so the caller retries instead of rendering placeholder chips
-  // forever.
-  uploadReactionKey: (_data, retryAfterMs) => [
-    'reactionKeyUploaded',
-    { success: false, error: RATE_LIMITED, retryAfterMs },
-  ],
-  fetchReactionKey: (data, retryAfterMs) => [
-    'reactionKeyResponse',
-    {
-      conversationId: (data as { conversationId?: number } | null)
-        ?.conversationId,
-      success: false,
-      error: RATE_LIMITED,
-      retryAfterMs,
-    },
   ],
   // A throttled publish must not read as published: the device would believe
   // strangers can reach it through a queue identity never stored.

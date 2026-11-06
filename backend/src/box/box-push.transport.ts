@@ -20,9 +20,9 @@ export type BoxPush =
  * Sends one push to one raw token. A DI seam (`BOX_PUSH_TRANSPORT`): the
  * integration suite swaps in a recorder to read the challenge code.
  *
- * The box cannot reuse `PushNotificationsService`: it resolves tokens by user
- * id through `fcm-tokens/`, whose entity imports `users/` — I1 forbids that
- * import graph here.
+ * The box has a sender of its own because it never resolves a token by user
+ * id: tokens arrive as raw strings from the notifier registration, and I1
+ * forbids importing `users/`, `auth/` or `chat/` here.
  */
 export interface BoxPushTransport {
   send(
@@ -64,8 +64,9 @@ export class FirebaseWebPushTransport
   private webPushReady = false;
 
   onModuleInit(): void {
-    // Same guards as PushNotificationsService, which may have initialised the
-    // shared firebase-admin app / web-push VAPID details first.
+    // The box is the app's only push sender since Phase 4 step 5 (the account
+    // push service is gone). FCM stays off without FIREBASE_SERVICE_ACCOUNT,
+    // Web Push without both VAPID keys.
     const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT;
     if (serviceAccountJson) {
       try {

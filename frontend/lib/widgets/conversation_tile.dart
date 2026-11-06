@@ -26,17 +26,6 @@ class ConversationTile extends StatelessWidget {
   final UserModel? otherUser;
   final bool isTyping;
 
-  /// The row the preview line is drawn from when it is not [lastMessage]
-  /// itself: the plaintext this install holds for that message id (amendment
-  /// (lxxxviii) A1). [lastMessage] still supplies the time and the metadata.
-  final MessageModel? previewMessage;
-
-  /// No preview text at all (amendment (lxxxviii) A1): the row keeps its name
-  /// and time. Decided by the screen from `MessagingProvider.listPreviewFor` —
-  /// a row this install can never read, a read or own row it holds no
-  /// plaintext for, or a stored copy still being read.
-  final bool hidePreview;
-
   const ConversationTile({
     super.key,
     required this.conversationId,
@@ -49,8 +38,6 @@ class ConversationTile extends StatelessWidget {
     required this.onDelete,
     this.otherUser,
     this.isTyping = false,
-    this.previewMessage,
-    this.hidePreview = false,
   });
 
   String _formatTime(DateTime dt) {
@@ -64,9 +51,6 @@ class ConversationTile extends StatelessWidget {
   }
 
   String _lastMessagePreview(BuildContext context, MessageModel lastMessage) {
-    // FIRST, above the media labels: "Photo" for a photo that will never open
-    // is as misleading as a placeholder.
-    if (hidePreview) return '';
     final l10n = AppLocalizations.of(context);
     if (lastMessage.messageType == MessageType.ping) return 'PING!';
     if (lastMessage.messageType == MessageType.voice) return l10n.voiceMessage;
@@ -401,7 +385,7 @@ class ConversationTile extends StatelessWidget {
                               children: buildInlineEmojiSpans(
                                 _lastMessagePreview(
                                   context,
-                                  previewMessage ?? lastMessage!,
+                                  lastMessage!,
                                 ),
                                 textStyle: RpgTheme.bodyFont(
                                   fontSize: cold ? 12 : 13,

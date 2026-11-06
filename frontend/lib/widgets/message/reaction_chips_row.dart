@@ -1,17 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../l10n/app_localizations.dart';
-import '../../services/reactions/reaction_display.dart';
 import '../../utils/jumbo_emoji.dart';
-
-/// The glyph a chip shows when this device cannot name the reaction yet.
-///
-/// A reaction whose conversation key is missing, locked or not yet pulled
-/// arrives as a 22-character token. It is rendered as a neutral mark with its
-/// real COUNT, never hidden and never printed raw: hiding it would make the
-/// peer's reaction indistinguishable from no reaction at all (design
-/// falsification R4), and printing the token would put base64 in the bubble.
-/// The chip re-renders for real as soon as the key lands.
-const String kUnresolvedReactionGlyph = '•';
 
 /// Displays a row of emoji reaction chips with counts.
 class ReactionChipsRow extends StatelessWidget {
@@ -28,26 +16,16 @@ class ReactionChipsRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context);
     final chips = reactions.entries.where((e) => e.value.isNotEmpty).map((e) {
       final isMine = e.value.contains(currentUserId);
-      final unresolved = isUnresolvedReactionKey(e.key);
-      final shown = unresolved ? kUnresolvedReactionGlyph : e.key;
       return Semantics(
-        label: unresolved
-            // Never claims WHICH reaction it is, because this device does not
-            // know — a screen reader must not invent one.
-            ? l10n.messageReactionUnreadable(e.value.length)
-            : isMine
+        label: isMine
             ? 'Remove ${e.key} reaction (${e.value.length})'
             : 'React with ${e.key} (${e.value.length})',
         button: true,
         excludeSemantics: true,
         child: GestureDetector(
-          // Tapping an unnameable reaction cannot toggle it: this device cannot
-          // compute the token, so it would ask the server to add a reaction it
-          // cannot name. Inert until the key arrives.
-          onTap: unresolved ? null : () => onTap(e.key, isMine),
+          onTap: () => onTap(e.key, isMine),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
             decoration: BoxDecoration(
@@ -69,7 +47,7 @@ class ReactionChipsRow extends StatelessWidget {
               TextSpan(
                 children: [
                   TextSpan(
-                    text: shown,
+                    text: e.key,
                     style: const TextStyle(
                       fontFamily: kEmojiFontFamily,
                       fontFamilyFallback: kEmojiFontFamilyFallback,

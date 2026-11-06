@@ -51,114 +51,8 @@ class SocketService {
     _socket?.onDisconnect(callback);
   }
 
-  void getConversations() {
-    _socket?.emit('getConversations');
-  }
-
-  void sendMessage(
-    int recipientId,
-    String content, {
-    String? messageType,
-    String? mediaUrl,
-    int? mediaDuration,
-    int? expiresIn,
-    String? tempId,
-    int? replyToMessageId,
-    String? encryptedContent,
-  }) {
-    final payload = <String, dynamic>{
-      'recipientId': recipientId,
-      'content': content,
-    };
-    if (messageType != null) {
-      payload['messageType'] = messageType;
-    }
-    if (mediaUrl != null) {
-      payload['mediaUrl'] = mediaUrl;
-    }
-    if (mediaDuration != null) {
-      payload['mediaDuration'] = mediaDuration;
-    }
-    if (expiresIn != null) {
-      payload['expiresIn'] = expiresIn;
-    }
-    if (tempId != null) {
-      payload['tempId'] = tempId;
-    }
-    if (replyToMessageId != null) {
-      payload['replyToMessageId'] = replyToMessageId;
-    }
-    if (encryptedContent != null) {
-      payload['encryptedContent'] = encryptedContent;
-    }
-    _socket?.emit('sendMessage', payload);
-  }
-
-  void emitMessageDelivered(int messageId) {
-    _socket?.emit('messageDelivered', {'messageId': messageId});
-  }
-
-  void emitClearChatHistory(int conversationId) {
-    if (_socket == null) return;
-    _socket!.emit('clearChatHistory', {'conversationId': conversationId});
-  }
-
-  void emitDeleteMessage(int messageId, {required bool forEveryone}) {
-    if (_socket == null) return;
-    _socket!.emit('deleteMessage', {
-      'messageId': messageId,
-      'mode': forEveryone ? 'for_everyone' : 'for_me',
-    });
-  }
-
-  void emitDeleteConversationOnly(int conversationId) {
-    _socket?.emit('deleteConversationOnly', {'conversationId': conversationId});
-  }
-
-  void emitSetDisappearingTimer(int conversationId, int? seconds) {
-    if (_socket == null) return;
-    _socket!.emit('setDisappearingTimer', {
-      'conversationId': conversationId,
-      'seconds': seconds,
-    });
-  }
-
-  void emitTyping(int recipientId, int conversationId) {
-    _socket?.emit('typing', {
-      'recipientId': recipientId,
-      'conversationId': conversationId,
-    });
-  }
-
-  void emitMarkConversationRead(int conversationId) {
-    _socket?.emit('markConversationRead', {'conversationId': conversationId});
-  }
-
   void searchUsers(String handle) {
     _socket?.emit('searchUsers', {'handle': handle});
-  }
-
-  void startConversation(int recipientId) {
-    _socket?.emit('startConversation', {'recipientId': recipientId});
-  }
-
-  void getMessages(int conversationId, {int? limit, int? offset}) {
-    final payload = <String, dynamic>{'conversationId': conversationId};
-    if (limit != null) payload['limit'] = limit;
-    if (offset != null) payload['offset'] = offset;
-    _socket?.emit('getMessages', payload);
-  }
-
-  /// Ask which of [messageIds] the server still serves this account.
-  ///
-  /// [requestId] is echoed back on `servedMessageIds` so a late or foreign
-  /// answer cannot be applied to the wrong batch — the caller destroys the
-  /// local plaintext of every id missing from the reply.
-  void getServedMessageIds(String requestId, List<int> messageIds) {
-    _socket?.emit('getServedMessageIds', {
-      'requestId': requestId,
-      'messageIds': messageIds,
-    });
   }
 
   /// Ask for a fresh server-clock observation; the server answers on
@@ -172,42 +66,6 @@ class SocketService {
   /// the safe direction.
   void getServerTime() {
     _socket?.emit('getServerTime');
-  }
-
-  void sendFriendRequest(int recipientId) {
-    _socket?.emit('sendFriendRequest', {'recipientId': recipientId});
-  }
-
-  void acceptFriendRequest(int requestId) {
-    _socket?.emit('acceptFriendRequest', {'requestId': requestId});
-  }
-
-  void rejectFriendRequest(int requestId) {
-    _socket?.emit('rejectFriendRequest', {'requestId': requestId});
-  }
-
-  void getFriendRequests() {
-    _socket?.emit('getFriendRequests');
-  }
-
-  void getFriends() {
-    _socket?.emit('getFriends');
-  }
-
-  void unfriend(int userId) {
-    _socket?.emit('unfriend', {'userId': userId});
-  }
-
-  void emitBlockUser(int userId) {
-    _socket?.emit('blockUser', {'userId': userId});
-  }
-
-  void emitUnblockUser(int userId) {
-    _socket?.emit('unblockUser', {'userId': userId});
-  }
-
-  void getBlockedList() {
-    _socket?.emit('getBlockedList');
   }
 
   // ========== E2E Key Exchange ==========
@@ -237,10 +95,6 @@ class SocketService {
 
   void enrollDeviceAuthority(Map<String, dynamic> payload) {
     _socket?.emit('enrollDeviceAuthority', payload);
-  }
-
-  void getDeviceList(int userId) {
-    _socket?.emit('getDeviceList', {'userId': userId});
   }
 
   void openProvisioning() {

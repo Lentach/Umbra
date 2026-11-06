@@ -12,8 +12,6 @@ import {
 import { IdentityResetService } from '../../key-bundles/identity-reset.service';
 import { DevicesService } from '../../key-bundles/devices.service';
 import { DeviceListService } from '../../key-bundles/device-list.service';
-import { ConversationsService } from '../../conversations/conversations.service';
-import { PushNotificationsService } from '../../push-notifications/push-notifications.service';
 import { validateDto } from '../utils/dto.validator';
 import { UploadKeyBundleDto } from '../dto/upload-key-bundle.dto';
 import {
@@ -26,8 +24,6 @@ import { RequestSessionRebuildDto } from '../dto/request-session-rebuild.dto';
 import { deviceRoom, socketsForDevice, userRoom } from '../utils/user-room';
 import { JwtService } from '@nestjs/jwt';
 import { UsersService } from '../../users/users.service';
-import { FcmTokensService } from '../../fcm-tokens/fcm-tokens.service';
-import { WebPushSubscriptionsService } from '../../web-push-subscriptions/web-push-subscriptions.service';
 import {
   ResetRosterResult,
   ResetRosterService,
@@ -88,37 +84,13 @@ export class ChatKeyExchangeService {
 
   constructor(
     private readonly keyBundlesService: KeyBundlesService,
-    private readonly conversationsService: ConversationsService,
-    private readonly pushNotificationsService: PushNotificationsService,
     private readonly identityResetService: IdentityResetService,
     private readonly devicesService: DevicesService,
     private readonly resetRosterService: ResetRosterService,
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
-    private readonly fcmTokensService: FcmTokensService,
-    private readonly webPushSubscriptionsService: WebPushSubscriptionsService,
     private readonly deviceListService: DeviceListService,
   ) {}
-
-  /**
-   * Drops every push endpoint of an account after a §6.2 roster teardown.
-   *
-   * Every row belonged to a device the teardown just revoked, and a
-   * NULL-`deviceId` row cannot be attributed to any of them (amendment
-   * (xxiv)). Fire-and-forget: a failure must not fail the recovery, but it is
-   * loud, because the alternative is pushing an account's notifications to
-   * devices it no longer trusts.
-   */
-  private async dropAccountPushRows(userId: number): Promise<void> {
-    try {
-      await this.fcmTokensService.removeByUserId(userId);
-      await this.webPushSubscriptionsService.removeByUserId(userId);
-    } catch (error) {
-      this.logger.error(
-        `[reset-roster] push teardown FAILED: ${errorMessage(error)}`,
-      );
-    }
-  }
 
   /**
    * Tells every device the §6.2 teardown just revoked, then drops its sockets
@@ -126,10 +98,9 @@ export class ChatKeyExchangeService {
    *
    * The database half of the teardown is atomic; this is the half that makes
    * it take effect on a connection that is ALREADY open. Both §5.5 session
-   * gates run at connect time only, and `getServedMessageIds` is the sole
-   * per-event revocation re-check, so without this a superseded device that
+   * gates run at connect time only, so without this a superseded device that
    * never disconnects keeps the entire remaining gateway surface — reading
-   * and sending on the account whose takeover this ceremony just undid.
+   * and acting on the account whose takeover this ceremony just undid.
    *
    * Deliberately mirrors T6 `revokeDevice`: announce on the device room FIRST
    * so a live client can log itself out cleanly (amendment (xxvi)), then
@@ -390,29 +361,13 @@ export class ChatKeyExchangeService {
           : {}),
       });
       if (result.identityChanged) {
-        // Fire-and-forget: the alarm must never fail or delay the upload ack.
-        void this.notifyIdentityChanged(client, userId, server);
-      }
-      if (roster) {
-        // (lxxviii): a content-free "your identity was restored elsewhere"
-        // push to every endpoint — BEFORE the rows are dropped below, or there
-        // is nothing left to deliver it to. Awaited for exactly that ordering;
-        // failure is logged, never fatal (the recovery already committed).
-        if (restored) {
-          await this.pushNotificationsService
-            .notifyIdentityReset(userId, 'identity_restored')
-            .catch(() => this.logger.warn('identity-restored push failed'));
-        }
-        // Push endpoints belong to devices this teardown just revoked, and a
-        // NULL-deviceId row cannot be attributed (amendment (xxiv)). The
-        // recovering device re-registers on its next start.
-        void this.dropAccountPushRows(userId);
+        // The alarm must never fail or delay the upload ack.
+        this.notifyIdentityChanged(client, userId);
       }
       if (roster) {
         // Evict what the teardown revoked (amendment (xli)). The transaction
         // stamps `revokedAt` and drops every refresh token, but BOTH §5.5
-        // session gates are connect-time only and `getServedMessageIds` is the
-        // sole per-event revocation re-check — so a superseded device holding
+        // session gates are connect-time only — so a superseded device holding
         // ONE continuous socket would keep the whole remaining gateway surface
         // after the very ceremony meant to evict it.
         //
@@ -482,44 +437,26 @@ export class ChatKeyExchangeService {
 
   /**
    * Phase 0a takeover alarm (multi-device spec §6.0). After a key-bundle
-   * upload REPLACED the stored identity:
-   * 1. `ownIdentityReplaced` to the account's OTHER live sessions
-   *    (`client.to(room)` excludes the uploading socket — it caused the event).
-   * 2. Content-free push to every registered endpoint (offline sessions).
-   * 3. `peerIdentityChanged` to every conversation peer's room, feeding the
-   *    in-conversation timeline row (owner-ratified 2026-08-17).
+   * upload REPLACED the stored identity, `ownIdentityReplaced` goes to the
+   * account's OTHER live sessions (`client.to(room)` excludes the uploading
+   * socket — it caused the event). Nothing else is sent: no account push and
+   * no `peerIdentityChanged` to peers (decisions 115, 116). A device that was
+   * closed reads the audit row at its next open (`ownKeyBundleStatus
+   * .identityReplacedAt`).
    * Wording rule: clients render this as "new device/browser sign-in" — the
    * same branch fires on every legitimate reinstall/migration, not just
    * takeover. Same-identity re-uploads (the every-connect path) never reach
    * here: upsertKeyBundle only reports identityChanged on a differing key.
    */
-  private async notifyIdentityChanged(
-    client: Socket,
-    userId: number,
-    server: Server,
-  ): Promise<void> {
-    const occurredAt = new Date().toISOString();
+  private notifyIdentityChanged(client: Socket, userId: number): void {
     try {
-      client.to(userRoom(userId)).emit('ownIdentityReplaced', { occurredAt });
-      const pushPromise = this.pushNotificationsService
-        .notifyIdentityChanged(userId)
-        .catch(() => this.logger.warn('identity-changed push failed'));
-      const conversations = await this.conversationsService.findByUser(userId);
-      const peerIds = new Set<number>();
-      for (const conv of conversations) {
-        const peerId =
-          conv.userOne?.id === userId ? conv.userTwo?.id : conv.userOne?.id;
-        if (peerId != null && peerId !== userId) peerIds.add(peerId);
-      }
-      for (const peerId of peerIds) {
-        server
-          .to(userRoom(peerId))
-          .emit('peerIdentityChanged', { userId, occurredAt });
-      }
-      await pushPromise;
+      client
+        .to(userRoom(userId))
+        .emit('ownIdentityReplaced', { occurredAt: new Date().toISOString() });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(`identity-changed notify failed: ${message}`);
+      this.logger.error(
+        `identity-changed notify failed: ${errorMessage(error)}`,
+      );
     }
   }
 
@@ -668,8 +605,9 @@ export class ChatKeyExchangeService {
    *
    * Reachable with credentials alone, by design: this is the path for someone
    * who genuinely lost their device keys. The protection is not secrecy but
-   * TIME plus NOISE — every session and every push endpoint learns immediately,
-   * and any one of them can cancel with a single tap for the whole delay.
+   * TIME plus NOISE — every live session learns immediately (a closed app, at
+   * its next open), and any one of them can cancel with a single tap for the
+   * whole delay.
    */
   async handleResetIdentityRequest(
     client: Socket,
@@ -700,7 +638,7 @@ export class ChatKeyExchangeService {
       // Only a NEW ceremony rings the bells. Re-reporting an existing one to a
       // reconnecting client must not re-notify every device.
       if (result.status === 'pending' && result.deadlineAt) {
-        void this.notifyIdentityResetPending(
+        this.notifyIdentityResetPending(
           userId,
           result.deadlineAt,
           result.shortened,
@@ -736,9 +674,6 @@ export class ChatKeyExchangeService {
         server
           .to(userRoom(userId))
           .emit('identityResetCancelled', { occurredAt });
-        void this.pushNotificationsService
-          .notifyIdentityReset(userId, 'identity_reset_cancelled')
-          .catch(() => this.logger.warn('identity-reset cancel push failed'));
       }
     } catch (error) {
       this.logger.error(`resetIdentityCancel failed: ${errorMessage(error)}`);
@@ -749,16 +684,16 @@ export class ChatKeyExchangeService {
   }
 
   /**
-   * Announces a newly started ceremony to every session and every registered
-   * push endpoint (§6.2). Push is the only channel that reaches a device whose
-   * app is closed, which is what makes the delay meaningful.
+   * Announces a newly started ceremony to every live session (§6.2). A closed
+   * app learns at its next open (`ownKeyBundleStatus.identityReset`); there is
+   * no push (decision 115).
    */
-  private async notifyIdentityResetPending(
+  private notifyIdentityResetPending(
     userId: number,
     deadlineAt: Date,
     shortened: boolean,
     server: Server,
-  ): Promise<void> {
+  ): void {
     const occurredAt = new Date().toISOString();
     try {
       server.to(userRoom(userId)).emit('identityResetPending', {
@@ -766,13 +701,8 @@ export class ChatKeyExchangeService {
         shortened,
         occurredAt,
       });
-      await this.pushNotificationsService.notifyIdentityReset(
-        userId,
-        'identity_reset_pending',
-      );
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(`identity-reset notify failed: ${message}`);
+      this.logger.error(`identity-reset notify failed: ${errorMessage(error)}`);
     }
   }
 
@@ -808,7 +738,7 @@ export class ChatKeyExchangeService {
         dto.backup,
       );
       client.emit('recoveryKeySet', { success: true });
-      void this.notifyRecoveryKeyEnrolled(userId, replaced, server);
+      this.notifyRecoveryKeyEnrolled(userId, replaced, server);
     } catch (error) {
       this.logger.error(`setRecoveryKey failed: ${errorMessage(error)}`);
       client.emit('recoveryKeySet', { success: false });
@@ -848,30 +778,25 @@ export class ChatKeyExchangeService {
   }
 
   /**
-   * Tells every session and every push endpoint that the account's recovery
-   * phrase was set or replaced (amendment (xlii)).
+   * Tells every live session that the account's recovery phrase was set or
+   * replaced (amendment (xlii)).
    *
    * Goes to the whole user room INCLUDING the device that did it: that device
    * already knows, and suppressing it would mean the fan-out has to reason
    * about which socket originated the change — the kind of exception that
-   * later turns into a hole. Push reaches the devices whose app is closed,
-   * which is the only channel that catches a thief acting while the owner's
-   * phone is in a pocket.
+   * later turns into a hole. There is no push (decision 115): a closed app
+   * reads `hasRecoveryPhrase` at its next open.
    */
-  private async notifyRecoveryKeyEnrolled(
+  private notifyRecoveryKeyEnrolled(
     userId: number,
     replaced: boolean,
     server: Server,
-  ): Promise<void> {
+  ): void {
     try {
       server.to(userRoom(userId)).emit('recoveryKeyEnrolled', {
         replaced,
         occurredAt: new Date().toISOString(),
       });
-      await this.pushNotificationsService.notifyIdentityReset(
-        userId,
-        'recovery_key_enrolled',
-      );
     } catch (error) {
       this.logger.error(
         `recovery-key enrolment notify failed: ${errorMessage(error)}`,

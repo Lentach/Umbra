@@ -22,8 +22,6 @@ describe('UsersController', () => {
   const controller = new UsersController(
     usersService as any,
     storageService as any,
-    {} as any,
-    {} as any,
   );
 
   beforeEach(() => {
@@ -75,27 +73,6 @@ describe('UsersController', () => {
     // The pre-check must short-circuit before any asset is uploaded, so a
     // full gallery never orphans a freshly uploaded file.
     expect(storageService.uploadAvatar).not.toHaveBeenCalled();
-  });
-  it('throttles the fcm-token endpoints at the same 30/15min limit as the web-push siblings', () => {
-    // @Throttle metadata lives on the route handler under THROTTLER:<key><name>.
-    const limit = (fn: unknown) =>
-      Reflect.getMetadata('THROTTLER:LIMITdefault', fn as object);
-    const ttl = (fn: unknown) =>
-      Reflect.getMetadata('THROTTLER:TTLdefault', fn as object);
-
-    // Concrete sibling limit: 30 requests per 15 minutes.
-    expect(limit(controller.registerFcmToken)).toBe(30);
-    expect(ttl(controller.registerFcmToken)).toBe(900000);
-    expect(limit(controller.removeFcmToken)).toBe(30);
-    expect(ttl(controller.removeFcmToken)).toBe(900000);
-
-    // Parity with the web-push siblings (guards against future drift).
-    expect(limit(controller.registerFcmToken)).toBe(
-      limit(controller.registerWebPushSubscription),
-    );
-    expect(ttl(controller.removeFcmToken)).toBe(
-      ttl(controller.removeWebPushSubscription),
-    );
   });
 
   describe('POST /users/verify-password', () => {

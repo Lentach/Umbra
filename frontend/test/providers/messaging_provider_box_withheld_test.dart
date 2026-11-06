@@ -14,6 +14,8 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../support/chat_seed.dart';
+
 /// The real plaintext store; Signal and the peer's device list are faked.
 class _Encryption extends EncryptionProvider {
   _Encryption(this.store) : super(service: store);
@@ -98,19 +100,18 @@ void main() {
       checkServerIdentity: () async => const ServerIdentityGuard(exists: false),
     );
     encryption = _Encryption(service);
-    final conversations = ConversationsProvider()
-      ..setCurrentUserId(1)
-      ..onConversationsList([
-        {
-          'id': 10,
-          'userOne': {'id': 1, 'username': 'alice', 'tag': '0001'},
-          'userTwo': {'id': 2, 'username': 'bob', 'tag': '0002'},
-          'createdAt': '2026-01-01T00:00:00.000Z',
-          'unreadCount': 0,
-          'lastMessage': null,
-        },
-      ])
-      ..openConversation(10);
+    final conversations = ConversationsProvider()..setCurrentUserId(1);
+    seedConversations(conversations, [
+      {
+        'id': 10,
+        'userOne': {'id': 1, 'username': 'alice', 'tag': '0001'},
+        'userTwo': {'id': 2, 'username': 'bob', 'tag': '0002'},
+        'createdAt': '2026-01-01T00:00:00.000Z',
+        'unreadCount': 0,
+        'lastMessage': null,
+      },
+    ]);
+    conversations.openConversation(10);
     provider = MessagingProvider()
       ..setConversationsProvider(conversations)
       ..setEncryptionProvider(encryption)

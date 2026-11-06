@@ -140,6 +140,8 @@ Get-FileHash build/app/outputs/flutter-apk/app-release.apk -Algorithm SHA256
 
 ## Part 3 — REAL push verification (the actual FCM test)
 
+> Updated 2026-11-04 (Phase 4 step 5): the account FCM push no longer exists; the wake-up in this test now comes from the box (`box-push.transport.ts`), so the friend and the message below are box sends.
+
 1. On the phone: friend the test account with one of your existing accounts
    (from your iPhone PWA) and exchange one message each way — confirms E2E
    PreKey (`3:`) + whisper (`2:`) round trip on the APK.

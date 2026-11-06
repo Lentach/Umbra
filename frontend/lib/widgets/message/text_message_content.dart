@@ -22,11 +22,6 @@ class TextMessageContent extends StatefulWidget {
   final bool isDark;
   final double maxWidth;
 
-  /// True while a history decrypt pass is running. Turns the raw
-  /// "[encrypted]" sentinel into an honest "Decrypting…" for rows the pass has
-  /// not reached yet.
-  final bool decryptInProgress;
-
   /// Which palette the bubble is painted in, passed down ONLY so the
   /// unreadable-reason caption can use [RpgTheme.messageBubbleMetaColor] —
   /// the same token the timestamp uses, because it plays the same role.
@@ -44,7 +39,6 @@ class TextMessageContent extends StatefulWidget {
     required this.textColor,
     required this.isDark,
     required this.maxWidth,
-    this.decryptInProgress = false,
     this.themePreference = SettingsProvider.kDefaultThemePreference,
   });
 
@@ -80,12 +74,7 @@ class _TextMessageContentState extends State<TextMessageContent> {
   /// content stays empty here rather than becoming "unsupported message type",
   /// because a legitimately empty decrypted row renders through this path.
   String _displayBody(BuildContext context) =>
-      sentinelDisplayText(
-        context,
-        widget.message,
-        isMine: widget.isMine,
-        decryptInProgress: widget.decryptInProgress,
-      ) ??
+      sentinelDisplayText(context, widget.message, isMine: widget.isMine) ??
       widget.message.content;
 
   /// Builds the non-jumbo body spans: plain text + inline emoji + tappable URLs.
@@ -293,7 +282,6 @@ class _TextMessageContentState extends State<TextMessageContent> {
       context,
       message,
       isMine: widget.isMine,
-      decryptInProgress: widget.decryptInProgress,
     );
 
     return Column(

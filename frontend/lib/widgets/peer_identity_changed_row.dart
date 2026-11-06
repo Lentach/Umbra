@@ -79,7 +79,7 @@ class PeerIdentityChangedRow extends StatelessWidget {
 /// change is auto-acknowledged and the timeline gets this ONE muted system
 /// line instead of the [PeerIdentityChangedRow] pill.
 ///
-/// Styled after [DevicesSyncingNote] on purpose: muted body-small text, no
+/// Muted body-small text on purpose: no
 /// error palette, no security icon — a routine "new device" note, not an
 /// alarm. No tap is required, but tapping still opens the fingerprint dialog
 /// so a curious user can verify.

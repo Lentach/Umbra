@@ -1,22 +1,33 @@
+import 'dart:convert';
+
 import 'package:fireplace/l10n/app_localizations.dart';
 import 'package:fireplace/providers/auth_provider.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/providers/settings_provider.dart';
-import 'package:fireplace/services/api_service.dart';
-import 'package:fireplace/services/encrypted_media_upload_service.dart';
+import 'package:fireplace/services/box/box_frame.dart';
+import 'package:fireplace/services/box/box_outbox.dart';
+import 'package:fireplace/services/box/box_wire.dart';
+import 'package:fireplace/services/contacts/contact_record.dart';
+import 'package:fireplace/services/device_list/device_list_cache.dart';
+import 'package:fireplace/services/device_list/device_list_canonical.dart';
+import 'package:fireplace/services/encryption_service.dart';
 import 'package:fireplace/services/media_crypto_service.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
+import 'package:fireplace/utils/message_ids.dart';
 import 'package:fireplace/utils/video_preview.dart';
 import 'package:fireplace/widgets/input/chat_input_bar.dart';
 import 'package:fireplace/widgets/input/composer_attachment_controller.dart';
 import 'package:fireplace/widgets/input/picked_attachment.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../../support/chat_seed.dart';
 
 /// 1x1 transparent PNG so Image.memory decodes without errors.
 final kTinyPng = Uint8List.fromList(const [
@@ -28,34 +39,37 @@ final kTinyPng = Uint8List.fromList(const [
   0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
 ]);
 
-class _FakeMediaUpload extends EncryptedMediaUploadService {
-  _FakeMediaUpload({this.throwOnUpload})
-    : super(api: ApiService(baseUrl: 'http://test'));
+/// Media crypto with no real cipher: a "ciphertext" is the plaintext reversed
+/// plus a 16-byte tag. [fail] makes every encryption throw (an upload that
+/// cannot go out). The size guard is the real one's.
+class _FakeMediaCrypto extends MediaCryptoService {
+  _FakeMediaCrypto({this.fail = false});
 
-  final Object? throwOnUpload;
+  final bool fail;
 
   @override
-  Future<EncryptedMediaUpload> encryptAndUpload({
-    required Uint8List bytes,
-    required String token,
-    required String mediaType,
-    int? duration,
-    int? expiresIn,
-    String? fileName,
-    void Function(String keyBase64, String ivBase64)? onEncrypted,
-  }) async {
-    onEncrypted?.call('K', 'IV');
-    if (throwOnUpload != null) throw throwOnUpload!;
-    return EncryptedMediaUpload(
-      mediaUrl: 'http://test/media/msgs/x.bin',
-      keyBase64: 'K',
-      ivBase64: 'IV',
-      mediaDuration: duration,
+  Future<EncryptedMedia> encrypt(Uint8List bytes) async {
+    if (fail || bytes.length > MediaCryptoService.maxBytes) {
+      throw StateError('cannot encrypt');
+    }
+    return EncryptedMedia(
+      ciphertext: Uint8List.fromList([...bytes.reversed, ...List.filled(16, 9)]),
+      keyBase64: base64Encode(List.filled(32, 9)),
+      ivBase64: base64Encode(List.filled(12, 9)),
     );
   }
 }
 
-class _SendReadyEncryption extends EncryptionProvider {
+/// The real plaintext store; Signal and the device-list round trip are
+/// faked. A "ciphertext" is `3:` + base64(the plaintext), so a frame the box
+/// was handed can be read back.
+class _SendEncryption extends EncryptionProvider {
+  _SendEncryption(this.store) : super(service: store);
+
+  final EncryptionService store;
+  final Map<int, VerifiedDeviceList> lists = {};
+  final Set<(int, int)> sessions = {};
+
   @override
   bool get isE2EReady => true;
 
@@ -63,14 +77,124 @@ class _SendReadyEncryption extends EncryptionProvider {
   bool get hadIdentityReset => false;
 
   @override
-  Future<void> ensureSession(int recipientId, {int deviceId = 1}) async {}
+  int get ownDeviceId => 1;
 
   @override
-  Future<String> encrypt(int recipientId, String plaintext, {int deviceId = 1}) async => '1:abc';
+  VerifiedDeviceList? cachedDeviceList(int userId) => lists[userId];
 
   @override
-  Future<Map<String, dynamic>?> getDecryptedContent(int messageId) async =>
-      null;
+  Future<VerifiedDeviceList> getVerifiedDeviceList(
+    int userId, {
+    bool forceRefresh = false,
+    bool batched = false,
+    Duration timeout = const Duration(seconds: 10),
+  }) async => lists.putIfAbsent(
+    userId,
+    () => const VerifiedDeviceList.notEnrolled(),
+  );
+
+  @override
+  Future<bool> hasSessionWith(int peerUserId, {int deviceId = 1}) async =>
+      sessions.contains((peerUserId, deviceId));
+
+  @override
+  Future<void> ensureSession(int recipientId, {int deviceId = 1}) async {
+    sessions.add((recipientId, deviceId));
+  }
+
+  @override
+  Future<String> encrypt(
+    int recipientId,
+    String plaintext, {
+    int deviceId = 1,
+  }) async => '3:${base64Encode(utf8.encode(plaintext))}';
+
+  // The records a send keeps are not what these tests are about.
+  @override
+  Future<void> saveBoxUnsent(
+    int userId,
+    String tempId,
+    Map<String, Object?> entry,
+  ) async {}
+
+  @override
+  Future<void> dropBoxUnsent(int userId, String tempId) async {}
+
+  @override
+  Future<bool?> recordExists(int messageId) async => true;
+
+  @override
+  Future<void> saveDecryptedContent(
+    int messageId,
+    Map<String, dynamic> data, {
+    int? conversationId,
+    DateTime? createdAt,
+    DateTime? expiresAt,
+    int? disappearAfterSeconds,
+    WireKey? wire,
+  }) async {}
+}
+
+/// The send side of the box with one friend (Bob, device 2): hands every
+/// message frame's envelope to [onMessage] in send order.
+class _Outbox implements BoxOutbox {
+  _Outbox(this.onMessage);
+
+  final void Function(Map<String, dynamic> envelope) onMessage;
+  final address = const ContactOutbound(
+    peerDeviceId: 2,
+    sid: 'sid-2',
+    sealPub: 'seal-2',
+  );
+  final Map<String, Uint8List> media = {};
+  int _next = kFirstLocalMessageId + 40;
+
+  @override
+  Map<int, ContactOutbound> addressesFor(int peerUserId) =>
+      peerUserId == 2 ? {2: address} : const {};
+
+  @override
+  Map<int, ContactOutbound> siblingAddresses() => const {};
+
+  @override
+  Iterable<int> coveredPeers() => const [2];
+
+  @override
+  Future<BoxSendOutcome> deliver(
+    ContactOutbound to,
+    Uint8List body, {
+    BoxSendMode? mode,
+  }) async {
+    final frame = BoxFrame.decode(body)!;
+    final envelope =
+        jsonDecode(utf8.decode(frame.signal)) as Map<String, dynamic>;
+    // Typing and receipts carry a `type`; a message carries its wire id.
+    if (envelope.containsKey('msgId') && envelope['type'] == null) {
+      onMessage(envelope);
+    }
+    return BoxSendOutcome.taken;
+  }
+
+  @override
+  Future<int?> nextLocalId() async => _next++;
+
+  @override
+  Future<BoxResult<BoxMediaRef>> uploadMedia(
+    ContactOutbound to,
+    Uint8List framed,
+  ) async {
+    final id = Uint8List(kBoxMediaIdBytes)..[0] = media.length + 1;
+    media[boxB64(id)] = framed;
+    return BoxOk(
+      BoxMediaRef(id: id, bucket: 'd14', expiresAt: DateTime.utc(2026, 10, 10)),
+    );
+  }
+
+  @override
+  Future<BoxResult<Uint8List>> downloadMedia(Uint8List id) async {
+    final body = media[boxB64(id)];
+    return body == null ? const BoxRefused(BoxCode.notFound) : BoxOk(body);
+  }
 }
 
 Future<
@@ -83,11 +207,29 @@ Future<
 >
 pumpComposer(WidgetTester tester, {Object? throwOnUpload}) async {
   final key = GlobalKey<ChatInputBarState>();
+  // What the box was handed, in order: each message's kind, and its envelope.
   final emitted = <String>[];
   final emittedData = <Map<String, dynamic>>[];
 
-  final convs = ConversationsProvider();
-  convs.onConversationsList([
+  FlutterSecureStorage.setMockInitialValues({});
+  final service = EncryptionService();
+  await tester.runAsync(() async {
+    await service.initialize(
+      1,
+      checkServerIdentity: () async => const ServerIdentityGuard(exists: false),
+    );
+    // Box-ready a moment ago: a held peer list is kept.
+    await service.markBoxListsReady(DateTime.now().millisecondsSinceEpoch);
+  });
+  final encryption = _SendEncryption(service)
+    ..lists[2] = VerifiedDeviceList.enrolled(
+      version: 3,
+      listHash: 'H' * 44,
+      devices: [DeviceListEntry(deviceId: 2, platform: 'test', addedAtMs: 0)],
+    );
+
+  final convs = ConversationsProvider()..setCurrentUserId(1);
+  seedConversations(convs, [
     {
       'id': 10,
       'userOne': {'id': 1, 'username': 'alice', 'tag': '0001'},
@@ -103,17 +245,19 @@ pumpComposer(WidgetTester tester, {Object? throwOnUpload}) async {
   messaging.setConversationsProvider(convs);
   messaging.setCurrentUserId(1);
   messaging.setToken('tok');
+  messaging.setIncomingMessageSoundEnabledForTest(false);
   messaging.onConnect(false);
-  messaging.setMediaUploadServiceForTest(
-    _FakeMediaUpload(throwOnUpload: throwOnUpload),
-  );
-  messaging.setEncryptionProvider(_SendReadyEncryption());
-  messaging.setEmitCallback((event, data) {
-    if (event == 'sendMessage') {
-      final map = Map<String, dynamic>.from(data as Map);
-      emitted.add(map['messageType'] as String? ?? 'TEXT');
-      emittedData.add(map);
-    }
+  messaging.setMediaCryptoForTest(_FakeMediaCrypto(fail: throwOnUpload != null));
+  messaging.setEncryptionProvider(encryption);
+  messaging.boxOutbox = _Outbox((envelope) {
+    emitted.add(envelope['messageType'] as String? ?? 'TEXT');
+    emittedData.add(envelope);
+  });
+  // The connect's list refresh (its retry timer must live in the real zone,
+  // not the test's fake clock): both lists are verified before a send.
+  await tester.runAsync(() async {
+    messaging.refreshBoxDeviceLists();
+    await Future<void>.delayed(const Duration(milliseconds: 100));
   });
 
   final auth = AuthProvider()..setAccessTokenForTest('tok');
@@ -140,6 +284,14 @@ pumpComposer(WidgetTester tester, {Object? throwOnUpload}) async {
     ),
   );
   return (key: key, emitted: emitted, emittedData: emittedData, convs: convs);
+}
+
+/// A fire-and-forget text send (the caption after an image, a plain send)
+/// has reached the box.
+Future<void> _textSettled(WidgetTester tester) async {
+  await tester.runAsync(
+    () => Future<void>.delayed(const Duration(milliseconds: 100)),
+  );
 }
 
 void main() {
@@ -210,7 +362,7 @@ void main() {
     await tester.runAsync(() => h.key.currentState!.sendForTest());
     await tester.pumpAndSettle();
     await tester.pump(const Duration(milliseconds: 200));
-
+    await _textSettled(tester);
     expect(h.emitted, ['IMAGE', 'TEXT']); // ordering contract end-to-end
     expect(
       tester.widget<TextField>(find.byType(TextField)).controller!.text,
@@ -253,6 +405,7 @@ void main() {
     await tester.runAsync(() => h.key.currentState!.sendForTest());
     await tester.pumpAndSettle();
     await tester.pump(const Duration(milliseconds: 200));
+    await _textSettled(tester);
     expect(h.emitted, ['TEXT']);
   });
 
@@ -546,7 +699,7 @@ void main() {
         'unreadCount': 0,
         'lastMessage': null,
       };
-      convs.onConversationsList([conv(10, 2, 'bob'), conv(11, 3, 'carol')]);
+      seedConversations(convs, [conv(10, 2, 'bob'), conv(11, 3, 'carol')]);
     }
 
     // The duration probe answers VideoPreview.unknown under flutter_test (see

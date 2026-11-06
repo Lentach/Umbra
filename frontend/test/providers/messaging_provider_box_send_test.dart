@@ -8,7 +8,6 @@ import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
-import 'package:fireplace/services/api_service.dart';
 import 'package:fireplace/services/box/box_frame.dart';
 import 'package:fireplace/services/box/box_media_frame.dart';
 import 'package:fireplace/services/box/box_outbox.dart';
@@ -17,7 +16,7 @@ import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/services/contacts/contact_store.dart';
 import 'package:fireplace/services/device_list/device_list_cache.dart';
 import 'package:fireplace/services/device_list/device_list_canonical.dart';
-import 'package:fireplace/services/encrypted_media_upload_service.dart';
+import '../support/chat_seed.dart';
 import 'package:fireplace/services/encryption_service.dart';
 import 'package:fireplace/services/media_crypto_service.dart';
 import 'package:fireplace/utils/message_ids.dart';
@@ -177,12 +176,6 @@ class _SendEncryption extends EncryptionProvider {
       wire: wire,
     );
   }
-
-  @override
-  Future<void> savePendingSendRecord(
-    String key,
-    Map<String, dynamic> data,
-  ) async {}
 }
 
 class _Outbox implements BoxOutbox {
@@ -281,17 +274,12 @@ ContactOutbound _address(int device) => ContactOutbound(
   sealPub: 'seal-$device',
 );
 
-/// Media crypto and the old path's `/media/upload`, faked: a "ciphertext"
-/// is the plaintext reversed plus a 16-byte tag, under a fresh key and IV
-/// per encrypt, so a re-encryption shows; every old-path upload is kept.
-class _MediaUpload extends EncryptedMediaUploadService {
-  _MediaUpload() : super(api: ApiService(baseUrl: 'http://test'));
-
+/// Media crypto, faked: a "ciphertext" is the plaintext reversed plus a
+/// 16-byte tag, under a fresh key and IV per encrypt, so a re-encryption
+/// shows.
+class _MediaCrypto extends MediaCryptoService {
   /// Every plaintext encrypted for the box path.
   final List<Uint8List> encrypted = [];
-
-  /// Every `POST /media/upload`, by media type.
-  final List<String> oldPathUploads = [];
 
   @override
   Future<EncryptedMedia> encrypt(Uint8List bytes) async {
@@ -304,26 +292,6 @@ class _MediaUpload extends EncryptedMediaUploadService {
       ]),
       keyBase64: base64Encode(List.filled(32, n)),
       ivBase64: base64Encode(List.filled(12, n)),
-    );
-  }
-
-  @override
-  Future<EncryptedMediaUpload> encryptAndUpload({
-    required Uint8List bytes,
-    required String token,
-    required String mediaType,
-    int? duration,
-    int? expiresIn,
-    String? fileName,
-    void Function(String keyBase64, String ivBase64)? onEncrypted,
-  }) async {
-    oldPathUploads.add(mediaType);
-    onEncrypted?.call('OLDK', 'OLDIV');
-    return EncryptedMediaUpload(
-      mediaUrl: 'http://test/media/msgs/x.bin',
-      keyBase64: 'OLDK',
-      ivBase64: 'OLDIV',
-      mediaDuration: duration,
     );
   }
 }
@@ -361,10 +329,7 @@ void main() {
   late _SendEncryption encryption;
   late _Outbox outbox;
   late List<String> emitted;
-  late _MediaUpload mediaUpload;
-
-  /// Every old-path `sendMessage` payload.
-  late List<Map<String, dynamic>> oldPathSends;
+  late _MediaCrypto mediaUpload;
 
   MessagingProvider newProvider() => MessagingProvider()
     ..setConversationsProvider(conversations)
@@ -374,14 +339,9 @@ void main() {
     ..setIncomingMessageSoundEnabledForTest(false)
     ..onConnect(false)
     ..setActiveConversationIdForTest(10)
-    ..setEmitCallback((event, data) {
-      emitted.add(event);
-      if (event == 'sendMessage') {
-        oldPathSends.add(data as Map<String, dynamic>);
-      }
-    })
+    ..setEmitCallback((event, data) => emitted.add(event))
     ..boxOutbox = outbox
-    ..setMediaUploadServiceForTest(mediaUpload);
+    ..setMediaCryptoForTest(mediaUpload);
 
   Future<void> setUpWith({int? timer}) async {
     FlutterSecureStorage.setMockInitialValues({});
@@ -394,14 +354,12 @@ void main() {
     // Box-ready a moment ago: a held peer list is kept (decision 51).
     await service.markBoxListsReady(DateTime.now().millisecondsSinceEpoch);
     encryption = _SendEncryption(service);
-    conversations = ConversationsProvider()
-      ..setCurrentUserId(1)
-      ..onConversationsList([_conv(timer: timer)])
-      ..openConversation(10);
+    conversations = ConversationsProvider()..setCurrentUserId(1);
+    seedConversations(conversations, [_conv(timer: timer)]);
+    conversations.openConversation(10);
     outbox = _Outbox();
-    mediaUpload = _MediaUpload();
+    mediaUpload = _MediaCrypto();
     emitted = [];
-    oldPathSends = [];
     provider = newProvider();
   }
 
@@ -487,10 +445,7 @@ void main() {
 
       provider.dispose();
       provider = newProvider();
-      await provider.onMessageHistory({
-        'conversationId': 10,
-        'messages': <Object>[],
-      });
+      provider.getMessages(10);
       await pump(80);
 
       final back = provider.messages.singleWhere((m) => m.id == row.id);
@@ -502,14 +457,15 @@ void main() {
   );
 
   test(
-    'a live peer device WITHOUT an address sends the whole message over the '
-    'old path — never split across the two',
+    'a live peer device WITHOUT an address FAILS the whole message — never '
+    'split across the box and the server',
     () async {
       bob([1, 2], addressed: [1]);
       final row = await send('mixed');
 
       expect(outbox.delivered, isEmpty);
-      expect(emitted, contains('sendMessage'));
+      expect(emitted, isNot(contains('sendMessage')));
+      expect(row.deliveryStatus, MessageDeliveryStatus.failed);
       expect(isLocalMessageId(row.id), isFalse);
     },
   );
@@ -521,16 +477,17 @@ void main() {
   );
 
   test(
-    'a live device of OUR account with no self-queue address keeps the '
-    'whole message on the old path (decision 16)',
+    'a live device of OUR account with no self-queue address FAILS the '
+    'whole message (decision 16): nothing is split, nothing goes to the server',
     () async {
       bob([1]);
       encryption.lists[1] = _enrolled([1, 3, 4]);
       outbox.siblings[3] = selfQueueOf(3);
-      await send('siblings');
+      final row = await send('siblings');
 
       expect(outbox.delivered, isEmpty);
-      expect(emitted, contains('sendMessage'));
+      expect(emitted, isNot(contains('sendMessage')));
+      expect(row.deliveryStatus, MessageDeliveryStatus.failed);
     },
   );
 
@@ -849,10 +806,11 @@ void main() {
     'a peer list with no live device is never "sent" to nobody',
     () async {
       bob(const [], addressed: [2], revoked: [2]);
-      await send('to whom');
+      final row = await send('to whom');
 
       expect(outbox.delivered, isEmpty);
-      expect(emitted, contains('sendMessage'));
+      expect(emitted, isNot(contains('sendMessage')));
+      expect(row.deliveryStatus, MessageDeliveryStatus.failed);
     },
   );
 
@@ -992,10 +950,7 @@ void main() {
   Future<void> restart() async {
     provider.dispose();
     provider = newProvider();
-    await provider.onMessageHistory({
-      'conversationId': 10,
-      'messages': <Object>[],
-    });
+    provider.getMessages(10);
     await pump(80);
   }
 
@@ -1184,28 +1139,33 @@ void main() {
   );
 
   test(
-    'a reply to a peer the box does not cover keeps the old path: the '
-    'server row it quotes is named by replyToMessageId, as ever',
+    'a reply to a peer the box does not cover FAILS: no frame, nothing on '
+    'the socket',
     () async {
       bob([1, 2], addressed: [1]);
       provider.setReplyingTo(quotable(5, wireId: 'wire-00000005'));
-      await send('re: over the server');
+      final row = await send('re: no route');
 
       expect(outbox.delivered, isEmpty);
-      expect(oldPathSends.single, containsPair('replyToMessageId', 5));
+      expect(emitted, isNot(contains('sendMessage')));
+      expect(row.deliveryStatus, MessageDeliveryStatus.failed);
     },
   );
 
   test(
-    'a reply naming a message this device holds no preview of stays on the '
-    'old path: the box would have nothing to quote',
+    'a reply naming a message this device holds no preview of fails: the '
+    'box would have nothing to quote',
     () async {
       bob([1]);
       provider.sendMessage('re: that', replyToMessageId: 5);
       await pump();
 
       expect(outbox.delivered, isEmpty);
-      expect(oldPathSends.single, containsPair('replyToMessageId', 5));
+      expect(emitted, isNot(contains('sendMessage')));
+      expect(
+        provider.messages.last.deliveryStatus,
+        MessageDeliveryStatus.failed,
+      );
     },
   );
 
@@ -1374,37 +1334,8 @@ void main() {
   );
 
   test(
-    'an account-socket error while the box has not answered neither fails '
-    'the row nor lets a retry store a second copy',
-    () async {
-      bob([1]);
-      final hold = outbox.hold = Completer<void>();
-      provider.sendMessage('slow box');
-      await pump();
-      final tempId = provider.messages.last.tempId!;
-
-      provider.markSendingMessagesFailed('socket error');
-      expect(
-        provider.messages.last.deliveryStatus,
-        MessageDeliveryStatus.sending,
-      );
-      await provider.retryFailedMessage(tempId);
-      await pump();
-      expect(outbox.delivered, hasLength(1));
-
-      hold.complete();
-      await pump();
-      expect(
-        provider.messages.singleWhere((m) => m.tempId == tempId).deliveryStatus,
-        MessageDeliveryStatus.sent,
-      );
-      expect(await encryption.store.localMessageRecords(10), hasLength(1));
-    },
-  );
-
-  test(
-    'a send refused before any frame went out is not pinned to the box: '
-    'its retry may take the old path once the route is gone',
+    'a send refused before any frame went out whose route is gone at the '
+    'retry stays failed: nothing reaches the server',
     () async {
       bob([1, 2]);
       encryption.oversize.add(2);
@@ -1416,13 +1347,17 @@ void main() {
       await pump();
 
       expect(outbox.delivered, isEmpty);
-      expect(emitted, contains('sendMessage'));
+      expect(emitted, isNot(contains('sendMessage')));
+      expect(
+        provider.messages.last.deliveryStatus,
+        MessageDeliveryStatus.failed,
+      );
     },
   );
 
   test(
-    'a TEXT that carries a mediaUrl stays on the old path — the box '
-    'envelope would drop the media silently',
+    'a TEXT that carries a mediaUrl is not sent — the box envelope would '
+    'drop the media silently',
     () async {
       bob([1]);
       await provider.encryptAndSendForTest(
@@ -1434,11 +1369,11 @@ void main() {
       await pump();
 
       expect(outbox.delivered, isEmpty);
-      expect(emitted, contains('sendMessage'));
+      expect(emitted, isNot(contains('sendMessage')));
     },
   );
 
-  test('media stays on the old path', () async {
+  test('a media row whose attachment is not on the box is not sent', () async {
     bob([1]);
     await provider.encryptAndSendForTest(
       recipientId: 2,
@@ -1450,7 +1385,7 @@ void main() {
     await pump();
 
     expect(outbox.delivered, isEmpty);
-    expect(emitted, contains('sendMessage'));
+    expect(emitted, isNot(contains('sendMessage')));
   });
 
   test(
@@ -1502,10 +1437,7 @@ void main() {
         expect(row.deliveryStatus, MessageDeliveryStatus.failed);
       }
 
-      conversations.onDisappearingTimerUpdated({
-        'conversationId': 10,
-        'seconds': 3600,
-      });
+      seedConversations(conversations, [_conv(timer: 3600)]);
       outbox.refuse.clear();
       for (final row in [text, ping, reply]) {
         outbox.delivered.clear();
@@ -1671,7 +1603,6 @@ void main() {
       // Distinct tempIds (`temp_<ms>_<user>`) between sends.
       await Future<void>.delayed(const Duration(milliseconds: 2));
       final ok = await provider.sendImageMessage(
-        'tok',
         XFile.fromData(Uint8List.fromList(photo), name: 'a.jpg'),
         2,
       );
@@ -1689,7 +1620,6 @@ void main() {
         withSibling();
         expect(await sendImage(), isTrue);
 
-        expect(mediaUpload.oldPathUploads, isEmpty);
         expect(emitted, isNot(contains('sendMessage')));
         expect(mediaUpload.encrypted, hasLength(1));
         final (to, framed) = outbox.uploads.single;
@@ -1738,7 +1668,6 @@ void main() {
         );
         await pump();
         await provider.sendFileMessage(
-          'tok',
           [5, 6, 7],
           'plan.pdf',
           'application/pdf',
@@ -1746,7 +1675,6 @@ void main() {
         );
         await pump();
 
-        expect(mediaUpload.oldPathUploads, isEmpty);
         expect(emitted, isNot(contains('sendMessage')));
         expect(outbox.uploads.map((u) => u.$1.sid), ['sid-1', 'sid-1']);
         final [voice, file] = [
@@ -1789,29 +1717,29 @@ void main() {
         }
         expect(outbox.uploads, hasLength(3));
         expect(outbox.delivered, isEmpty);
-        expect(mediaUpload.oldPathUploads, isEmpty);
         expect(emitted, isNot(contains('sendMessage')));
       },
     );
 
     test(
-      'a peer the box does not cover — no address, or a live device without '
-      'one — still gets the image over /media/upload and the socket, as '
-      'before',
+      'an image to a peer the box does not cover — no address, or a live '
+      'device without one — FAILS before any upload: nothing on the socket, '
+      'nothing in /box/media, and the row waits for its retry',
       () async {
-        expect(await sendImage(), isTrue);
+        expect(await sendImage(), isFalse);
         bob([1, 2], addressed: [1]);
-        expect(await sendImage(), isTrue);
+        expect(await sendImage(), isFalse);
 
-        expect(mediaUpload.oldPathUploads, ['image', 'image']);
-        expect(mediaUpload.encrypted, isEmpty);
+        final images = provider.messages
+            .where((m) => m.messageType == MessageType.image)
+            .toList();
+        expect(images, hasLength(2));
+        for (final image in images) {
+          expect(image.deliveryStatus, MessageDeliveryStatus.failed);
+        }
         expect(outbox.uploads, isEmpty);
         expect(outbox.delivered, isEmpty);
-        expect(oldPathSends, hasLength(2));
-        for (final payload in oldPathSends) {
-          expect(payload['messageType'], 'IMAGE');
-          expect(payload['mediaUrl'], 'http://test/media/msgs/x.bin');
-        }
+        expect(emitted, isNot(contains('sendMessage')));
       },
     );
 
@@ -1829,10 +1757,7 @@ void main() {
         expect(failed.mediaUrl, startsWith('box:'));
         final first = envelopeOf(outbox.delivered.first.$2);
 
-        conversations.onDisappearingTimerUpdated({
-          'conversationId': 10,
-          'seconds': 3600,
-        });
+        seedConversations(conversations, [_conv(timer: 3600)]);
         outbox
           ..refuse.clear()
           ..delivered.clear();
@@ -1880,7 +1805,6 @@ void main() {
         final sent = rowOf(MessageType.image);
         expect(sent.deliveryStatus, MessageDeliveryStatus.sent);
         expect(sent.mediaUrl, 'box:${outbox.media.keys.single}');
-        expect(mediaUpload.oldPathUploads, isEmpty);
         expect(emitted, isNot(contains('sendMessage')));
       },
     );
@@ -1896,10 +1820,7 @@ void main() {
         final failed = rowOf(MessageType.image);
         expect(failed.disappearAfterSeconds, 30);
 
-        conversations.onDisappearingTimerUpdated({
-          'conversationId': 10,
-          'seconds': 3600,
-        });
+        seedConversations(conversations, [_conv(timer: 3600)]);
         outbox.uploadAnswer = null;
         final hold = outbox.uploadHold = Completer<void>();
         final retry = provider.retryFailedMessage(failed.tempId!);
@@ -1941,7 +1862,6 @@ void main() {
         );
         expect(outbox.uploads, hasLength(1));
         expect(outbox.delivered, isEmpty);
-        expect(mediaUpload.oldPathUploads, isEmpty);
         expect(emitted, isNot(contains('sendMessage')));
       },
     );
@@ -1956,7 +1876,6 @@ void main() {
         provider.setReplyingTo(quotable(5, wireId: 'wire-00000005'));
         outbox.uploadHold = Completer<void>();
         final sending = provider.sendImageMessage(
-          'tok',
           XFile.fromData(Uint8List.fromList(photo), name: 'a.jpg'),
           2,
         );
@@ -1986,7 +1905,6 @@ void main() {
         await pump();
         provider.setReplyingTo(quotable(5, wireId: 'wire-00000005'));
         final sending = provider.sendImageMessage(
-          'tok',
           XFile.fromData(Uint8List.fromList(photo), name: 'a.jpg'),
           2,
         );
@@ -1997,7 +1915,6 @@ void main() {
         expect(outbox.delivered, isEmpty, reason: 'never without its quote');
         expect(ok, isFalse);
         expect(outbox.uploads, isEmpty);
-        expect(mediaUpload.oldPathUploads, isEmpty);
         expect(emitted, isNot(contains('sendMessage')));
       },
     );
@@ -2046,7 +1963,6 @@ void main() {
           expect(sent.deliveryStatus, MessageDeliveryStatus.sent);
           expect(sent.mediaUrl, startsWith('box:'));
         }
-        expect(mediaUpload.oldPathUploads, isEmpty);
         expect(emitted, isNot(contains('sendMessage')));
       },
     );
@@ -2126,10 +2042,7 @@ void main() {
     /// provider, and the first (empty) server page brings them back.
     Future<void> reopenChat() async {
       provider.clearMessages();
-      await provider.onMessageHistory({
-        'conversationId': 10,
-        'messages': <Object>[],
-      });
+      provider.getMessages(10);
       await pump(80);
     }
 
@@ -2191,7 +2104,6 @@ void main() {
 
       expect(outbox.delivered, hasLength(1));
       expect(envelopeOf(outbox.delivered.single.$2)['msgId'], firstWire);
-      expect(oldPathSends, isEmpty);
       expect(
         provider.messages.singleWhere((m) => m.content == 'same wire')
             .deliveryStatus,
@@ -2211,7 +2123,6 @@ void main() {
       await provider.retryFailedMessage(failed.tempId!);
       await pump();
 
-      expect(oldPathSends, isEmpty);
       expect(rowOf(failed.tempId!).deliveryStatus,
           MessageDeliveryStatus.failed);
     });
@@ -2232,13 +2143,13 @@ void main() {
       expect(rows.single.deliveryStatus, MessageDeliveryStatus.sent);
     });
 
-    test('a send the route hands to the old path is not kept as unsent',
-        () async {
+    test('a send with no route is kept as unsent, shown red', () async {
       bob([1, 2], addressed: [1]);
-      await send('over the server');
+      final failed = await send('no route');
 
-      expect(oldPathSends, hasLength(1));
-      expect(await unsentKeys(), isEmpty);
+      expect(failed.deliveryStatus, MessageDeliveryStatus.failed);
+      expect(outbox.delivered, isEmpty);
+      expect(await unsentKeys(), hasLength(1));
     });
 
     test('one past its own timer is neither shown nor retryable after a '
@@ -2388,7 +2299,6 @@ void main() {
       bob([1]);
       outbox.refuse.add(1);
       await provider.sendVideoMessage(
-        'tok',
         List<int>.generate(3000, (i) => i % 251),
         2,
         duration: 4,
@@ -2426,7 +2336,6 @@ void main() {
         expect(first[key], isNotNull, reason: key);
         expect(again[key], first[key], reason: key);
       }
-      expect(oldPathSends, isEmpty);
       expect(
         provider.messages
             .singleWhere((m) => m.messageType == MessageType.video)

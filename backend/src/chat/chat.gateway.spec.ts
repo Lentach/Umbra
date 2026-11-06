@@ -29,18 +29,12 @@ function createGateway(): ChatGateway {
   return new ChatGateway(
     { verify: jest.fn() } as unknown as JwtService,
     { findById: jest.fn() } as unknown as UsersService,
-    noop,
-    noop,
-    noop,
     keyExchange,
     noop,
     noop,
     noop,
     noop,
-    noop,
-    noop,
     devices as DevicesService,
-    noop,
     noop,
   );
 }

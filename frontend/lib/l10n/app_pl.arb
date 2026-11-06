@@ -121,9 +121,7 @@
   "invitationWaitingForResponse": "Czeka na odpowiedź",
   "invitationAccepted": "Zaproszenie zaakceptowane",
   "invitationChatReady": "Czat gotowy",
-  "invitationChatNeedsRetry": "Czat wymaga ponowienia",
   "invitationOpenChat": "Otwórz czat",
-  "invitationCreateChat": "Utwórz czat",
   "invitationDone": "Gotowe",
   "invitationDecline": "Odrzuć",
   "accept": "Zaakceptuj",
@@ -131,14 +129,6 @@
   "invitationSendFailed": "Nie udało się wysłać zaproszenia",
   "invitationAcceptFailed": "Nie udało się zaakceptować zaproszenia",
   "invitationDeclineFailed": "Nie udało się odrzucić zaproszenia",
-  "invitationChatSetupFailed": "Nie udało się utworzyć czatu",
-  "invitationFailedUserNotFound": "Ten użytkownik już nie istnieje",
-  "invitationFailedSelf": "Nie możesz zaprosić samego siebie",
-  "invitationFailedBlocked": "Nie możesz zaprosić tego użytkownika",
-  "invitationFailedAlreadyFriends": "Już jesteście połączeni",
-  "invitationFailedDuplicate": "Zaproszenie zostało już wysłane",
-  "invitationFailedInvalidPayload": "Coś było nie tak z tym żądaniem",
-  "invitationFailedNotFriends": "Nie jesteś połączony z tym użytkownikiem",
   "invitationSemanticIncoming": "{name}, otrzymane zaproszenie, chce się połączyć",
   "@invitationSemanticIncoming": {
     "placeholders": {
@@ -157,17 +147,10 @@
       "name": { "type": "String" }
     }
   },
-  "invitationSemanticAcceptedNotReady": "{name}, zaproszenie zaakceptowane, czat wymaga ponowienia",
-  "@invitationSemanticAcceptedNotReady": {
-    "placeholders": {
-      "name": { "type": "String" }
-    }
-  },
 
   "encryptedMessage": "Wiadomość zaszyfrowana",
   "newMessagePreview": "Nowa wiadomość",
   "@newMessagePreview": {"description": "Chat-list preview ONLY, for a last message this install has not decrypted yet (it will resolve when the chat is opened). Every other surface (reply quotes, reply bar) keeps encryptedMessage."},
-  "decryptingMessage": "Odszyfrowywanie…",
   "messageNoLongerStoredOnThisDevice": "Ta wiadomość nie jest już przechowywana na tym urządzeniu.",
   "messageUnreadableOnThisDevice": "Nie można odczytać tej wiadomości na tym urządzeniu.",
   "@messageUnreadableOnThisDevice": {"description": "Replaces the raw '[encrypted]' / '[Decryption failed]' sentinels in a bubble. The row's keys are gone (this install was wiped/reinstalled, or the ratchet key was consumed), so it can never resolve — say that instead of leaking internal state the user reads as a crash."},
@@ -177,9 +160,8 @@
   "@messageUnreadableReasonOwnCopyGone": {"description": "Short second line under an unreadable OWN bubble. A sender never decrypts its own ciphertext, so its plaintext lived only in this install's local cache; once that is wiped nothing can restore it."},
   "historyNotOnThisDevice": "Wcześniejsze wiadomości nie są dostępne na tym urządzeniu",
   "@historyNotOnThisDevice": {"description": "One pill at the oldest end of a thread, standing in for every row this install can never read: rows that predate this device's link (multi-device spec amendment (lxxxi)), or rows sealed before a storage loss replaced or restored this install's keys (amendments (lxxxvi)/(lxxxviii)). One neutral sentence for both causes."},
-  "devicesSyncingNote": "Synchronizowanie urządzeń…",
-  "boxFriendOlderAppNote": "{name} ma starszą wersję aplikacji. Wiadomości są szyfrowane, ale serwer widzi, kiedy piszecie.",
-  "@boxFriendOlderAppNote": {"description": "One quiet line above the composer while this friend is not on the box yet (metadata-privacy owner decision 48): our messages to them still take the old path, which the server can see the timing of. Sending is never blocked. Shown only once this device itself is on the box.", "placeholders": {"name": {"type": "String"}}},
+  "boxFriendOlderAppNote": "{name} ma starszą wersję aplikacji i nie odbierze Twoich wiadomości, dopóki jej nie zaktualizuje.",
+  "@boxFriendOlderAppNote": {"description": "One quiet line above the composer while this friend is not on the box yet (metadata-privacy owner decision 48). Since Phase 4 step 5 there is no old path: a send to them fails until their app updates. Shown only once this device itself is on the box.", "placeholders": {"name": {"type": "String"}}},
   "encryptionNotInitialized": "Szyfrowanie niezainicjowane",
   "identityDamagedTitle": "Brak kluczy szyfrowania na tym urządzeniu",
 
@@ -337,12 +319,10 @@
   "identityResetNoAnswer": "Brak odpowiedzi. Nic nie rozpoczęto — spróbuj ponownie.",
   "identityFingerprintUnavailable": "Odcisk tożsamości jest niedostępny.",
   "blockUser": "Zablokuj użytkownika",
-  "conversationDeletedByOther": "Rozmowa usunięta przez drugą osobę",
   "noMessagesYet": "Brak wiadomości",
   "cantMessageThisUser": "Nie możesz pisać do tego użytkownika",
   "boxEndNotSynced": "Nie udało się połączyć z Twoimi innymi urządzeniami. Nic się nie zmieniło — spróbuj ponownie.",
   "@boxEndNotSynced": {"description": "Shown when removing or blocking a contact made over the box fails because this account's other devices could not be told (metadata-privacy E15j): nothing was ended, so the user retries."},
-  "cantTypeToThisUser": "Nie możesz pisać do tego użytkownika",
   "recordingVoice": "Nagrywanie głosu…",
   "typing": "pisze…",
   "chatMessageHint": "Napisz wiadomość…",
@@ -376,11 +356,11 @@
   "attachmentOptionRecordVideo": "Nagraj wideo",
   "attachmentOptionFile": "Plik",
   "actionTileDisappearingMessages": "Znikające wiadomości",
-  "actionTileClearChat": "Usuń czat u obu stron",
-  "clearChatHoldLabel": "Trzymaj — usuwa u obu stron",
-  "clearChatConfirmTitle": "Usunąć ten czat u obu stron?",
-  "clearChatConfirmBody": "Wszystkie wiadomości, zdjęcia, filmy i wiadomości głosowe z tego czatu zostaną usunięte z serwera u Ciebie I u drugiej osoby. Tego nie można cofnąć — obejmuje to też wiadomości sprzed połączenia tego urządzenia.",
-  "clearChatConfirmAction": "Usuń u obu stron",
+  "actionTileClearChat": "Usuń czat na tym urządzeniu",
+  "clearChatHoldLabel": "Trzymaj — usuwa tutaj",
+  "clearChatConfirmTitle": "Usunąć ten czat na tym urządzeniu?",
+  "clearChatConfirmBody": "Wszystkie wiadomości, zdjęcia, filmy i wiadomości głosowe z tego czatu zostaną usunięte z tego urządzenia. Druga osoba zachowa swoją kopię. Tego nie można cofnąć.",
+  "clearChatConfirmAction": "Usuń tutaj",
   "disappearingTimerTitle": "Znikające wiadomości",
   "disappearingTimerExplainerLine1": "Wiadomości znikają po odczytaniu.",
   "disappearingTimerExplainerLine2": "Odliczanie startuje, gdy ktoś otworzy czat.",
@@ -627,10 +607,6 @@
   "messageReactionSelected": "wybrana",
   "messageReactionNotSelected": "niewybrana",
   "messageReactionSemantics": "Reakcja {emoji}, {state}",
-  "messageReactionUnreadable": "Reakcja nieczytelna na tym urządzeniu ({count})",
-  "@messageReactionUnreadable": {
-    "placeholders": { "count": { "type": "int" } }
-  },
   "snackbarReactionUnavailable": "Reakcje nie są jeszcze gotowe na tym urządzeniu",
   "snackbarBoxReactionFailed": "Nie udało się wysłać reakcji. Spróbuj ponownie.",
   "snackbarBoxPinFailed": "Nie udało się zmienić przypięcia. Spróbuj ponownie.",

@@ -35,6 +35,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../support/chat_seed.dart';
+
 const _currentUserJwt =
     'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOjEsInVzZXJuYW1lIjoiYWxpY2UiLCJ0YWciOiIwMDAxIiwiZXhwIjo5OTk5OTk5OTl9.abc';
 
@@ -143,7 +145,7 @@ Future<_AlarmedEncryption> _pumpChat(
   });
 
   final conversations = ConversationsProvider()..setCurrentUserId(1);
-  conversations.onConversationsList([
+  seedConversations(conversations, [
     _conversationJson(lastMessageAt: listLastMessageAt),
   ]);
   conversations.openConversation(10, notify: false);

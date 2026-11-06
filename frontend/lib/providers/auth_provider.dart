@@ -153,7 +153,6 @@ class AuthProvider extends ChangeNotifier {
            tokenReadRetryDelays ??
            const [Duration(seconds: 2), Duration(seconds: 5)],
        _tokens = tokenStore ?? AuthTokenStore() {
-    _pushService = PushService(_api);
     _contactBackup =
         contactBackup ??
         ContactBackupService(api: _api, tokens: _tokens);
@@ -166,7 +165,7 @@ class AuthProvider extends ChangeNotifier {
 
   final ApiService _api;
   final AuthTokenStore _tokens;
-  late final PushService _pushService;
+  final PushService _pushService = PushService();
 
   /// The server-held contact backup (metadata-privacy PR2.4). It lives here
   /// and nowhere else because the account PASSWORD is its door, and the
@@ -871,7 +870,7 @@ class AuthProvider extends ChangeNotifier {
 
   Future<void> logout() async {
     if (_token != null) {
-      await _pushService.unregister(_token!);
+      await _pushService.unregister();
     }
 
     final rt = _refreshToken;

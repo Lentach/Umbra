@@ -18,6 +18,8 @@ import 'package:libsignal_protocol_dart/libsignal_protocol_dart.dart'
     show DuplicateMessageException, NoSessionException;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../support/chat_seed.dart';
+
 /// The real store behind [EncryptionProvider]; only Signal and the device
 /// list round trip are faked.
 class _BoxEncryption extends EncryptionProvider {
@@ -141,10 +143,12 @@ void main() {
       checkServerIdentity: () async => const ServerIdentityGuard(exists: false),
     );
     encryption = _BoxEncryption(service);
-    conversations = ConversationsProvider()
-      ..setCurrentUserId(1)
-      ..onConversationsList([_conv(10, 2, 'bob'), _conv(11, 3, 'carol')])
-      ..openConversation(10);
+    conversations = ConversationsProvider()..setCurrentUserId(1);
+    seedConversations(conversations, [
+      _conv(10, 2, 'bob'),
+      _conv(11, 3, 'carol'),
+    ]);
+    conversations.openConversation(10);
     emitted = [];
     provider = newProvider();
   });
@@ -267,25 +271,27 @@ void main() {
       expect(posts, 1);
     });
 
-    test('a muted chat stays silent, as its old-path push did', () async {
-      conversations.onConversationMuteUpdated({
-        'conversationId': 10,
-        'muted': true,
-        'mutedUntil': null,
-      });
+    test('a muted chat stays silent', () async {
+      seedConversations(conversations, [
+        {..._conv(10, 2, 'bob'), 'muted': true, 'mutedUntil': null},
+        _conv(11, 3, 'carol'),
+      ]);
       await deliverWhile(hidden: true);
       expect(posts, 0);
     });
 
     test('a mute that has run out no longer silences the chat', () async {
-      conversations.onConversationMuteUpdated({
-        'conversationId': 10,
-        'muted': true,
-        'mutedUntil': DateTime.now()
-            .subtract(const Duration(minutes: 1))
-            .toUtc()
-            .toIso8601String(),
-      });
+      seedConversations(conversations, [
+        {
+          ..._conv(10, 2, 'bob'),
+          'muted': true,
+          'mutedUntil': DateTime.now()
+              .subtract(const Duration(minutes: 1))
+              .toUtc()
+              .toIso8601String(),
+        },
+        _conv(11, 3, 'carol'),
+      ]);
       await deliverWhile(hidden: true);
       expect(posts, 1);
     });
@@ -444,10 +450,7 @@ void main() {
 
       provider.dispose();
       provider = newProvider();
-      await provider.onMessageHistory({
-        'conversationId': 10,
-        'messages': <Object>[],
-      });
+      provider.getMessages(10);
       await pump(80);
 
       final back = provider.messages.singleWhere((m) => m.id == e.localId);
@@ -573,12 +576,12 @@ void main() {
   });
 
   test(
-    'delete-for-me on an unsent row (a temp id) keeps its old path: the '
-    'send it belongs to is not touched here',
+    'delete-for-me on a row with no local id (a temp id) does nothing: the '
+    'send it belongs to is not touched here, and nothing reaches the server',
     () async {
       provider.deleteMessage(-3, forEveryone: false);
       await pump();
-      expect(emitted, ['deleteMessage']);
+      expect(emitted, isEmpty);
     },
   );
 
@@ -622,10 +625,7 @@ void main() {
     Future<void> restart() async {
       provider.dispose();
       provider = newProvider();
-      await provider.onMessageHistory({
-        'conversationId': 10,
-        'messages': <Object>[],
-      });
+      provider.getMessages(10);
       await pump(80);
     }
 

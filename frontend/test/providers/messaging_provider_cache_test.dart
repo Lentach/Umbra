@@ -1,26 +1,16 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/models/message_model.dart';
+import 'package:fireplace/utils/message_ids.dart';
 
-MessageModel _msg(int id, int convId) => MessageModel(
+MessageModel _msg(int id, int convId, {DateTime? at}) => MessageModel(
       id: id,
       content: 'hello',
       senderId: 1,
       senderUsername: 'alice',
       conversationId: convId,
-      createdAt: DateTime.utc(2026, 1, 1),
+      createdAt: at ?? DateTime.utc(2026, 1, 1),
     );
-
-Map<String, dynamic> _msgJson(int id, int convId) => {
-      'id': id,
-      'content': 'message $id',
-      'senderId': 1,
-      'senderUsername': 'alice',
-      'conversationId': convId,
-      'deliveryStatus': 'READ',
-      'messageType': 'TEXT',
-      'createdAt': '2026-01-01T00:00:0$id.000Z',
-    };
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -95,181 +85,72 @@ void main() {
       expect(provider.hasCachedMessages(10), isTrue);
     });
 
-    test('onMessageHistory populates cache for active conversation', () {
+    test('seeding a chat populates its cache and rows', () {
       provider.setActiveConversationIdForTest(10);
-      provider.getMessages(10);
+      provider.seedMessagesForTest(10, [_msg(1, 10)]);
 
-      provider.onMessageHistory({
-        'conversationId': 10,
-        'messages': [
-          {
-            'id': 1,
-            'content': 'hello',
-            'senderId': 1,
-            'senderUsername': 'alice',
-            'conversationId': 10,
-            'deliveryStatus': 'READ',
-            'messageType': 'TEXT',
-            'createdAt': '2026-01-01T00:00:00.000Z',
-          }
-        ],
-      });
-
-      // Cache populated synchronously (with encrypted placeholders; decrypted version follows async)
       expect(provider.hasCachedMessages(10), isTrue);
       expect(provider.messages.length, 1);
     });
 
-    test('history response deduplicates loaded row and appends missed row', () {
+    test('a chat shows its own rows only, oldest first', () {
       provider.setActiveConversationIdForTest(10);
-      provider.seedCacheForTest(10, [_msg(1, 10)]);
-      provider.loadCachedMessages(10);
-      provider.getMessages(10);
+      provider.seedMessagesForTest(10, [
+        _msg(2, 10, at: DateTime.utc(2026, 1, 1, 1)),
+        _msg(1, 10),
+        _msg(3, 99),
+      ]);
 
-      provider.onMessageHistory({
-        'conversationId': 10,
-        'messages': [
-          _msgJson(1, 10),
-          _msgJson(2, 10),
-        ],
-      });
-
-      expect(provider.messages.map((message) => message.id), [1, 2],
-          reason:
-              'resume history may include already-loaded and missed rows; each id must appear once in chronological order');
-    });
-
-    test('onMessageHistory for a different conversation is ignored', () {
-      provider.setActiveConversationIdForTest(10);
-
-      provider.onMessageHistory({
-        'conversationId': 99,
-        'messages': [],
-      });
-
+      expect(provider.messages.map((m) => m.id), [1, 2]);
       expect(provider.hasCachedMessages(99), isFalse);
-      expect(provider.hasCachedMessages(10), isFalse);
     });
 
-    test('chatHistoryCleared removes cache entry', () {
+    test('clearChatHistory removes cache entry', () {
       provider.seedCacheForTest(10, [_msg(1, 10)]);
-      provider.onChatHistoryCleared({'conversationId': 10});
+      provider.clearChatHistory(10);
       expect(provider.hasCachedMessages(10), isFalse);
     });
 
-    test('conversationDeleted removes cache entry', () {
+    test('a removed conversation loses its cache entry', () {
       provider.seedCacheForTest(10, [_msg(1, 10)]);
-      provider.onConversationDeleted(10);
+      provider.onConversationsRemovedForUser([10]);
       expect(provider.hasCachedMessages(10), isFalse);
     });
 
-    test('messageDeleted updates cache and reflects removal', () {
-      provider.seedCacheForTest(10, [_msg(1, 10), _msg(2, 10)]);
+    test('deleting a message here updates cache and reflects removal', () {
+      provider.seedCacheForTest(10, [
+        _msg(kFirstLocalMessageId + 1, 10),
+        _msg(kFirstLocalMessageId + 2, 10),
+      ]);
       provider.setActiveConversationIdForTest(10);
       provider.loadCachedMessages(10);
 
-      provider.onMessageDeleted({
-        'messageId': 1,
-        'conversationId': 10,
-        'forEveryone': true,
-      });
+      provider.deleteMessage(kFirstLocalMessageId + 1, forEveryone: false);
 
       expect(provider.hasCachedMessages(10), isTrue);
       expect(provider.messages.length, 1);
-      expect(provider.messages.first.id, 2);
+      expect(provider.messages.first.id, kFirstLocalMessageId + 2);
     });
 
-    test('messageDeleted removes cache entry when list becomes empty', () {
-      provider.seedCacheForTest(10, [_msg(1, 10)]);
+    test('deleting the last message removes the cache entry', () {
+      provider.seedCacheForTest(10, [_msg(kFirstLocalMessageId + 1, 10)]);
       provider.setActiveConversationIdForTest(10);
       provider.loadCachedMessages(10);
 
-      provider.onMessageDeleted({
-        'messageId': 1,
-        'conversationId': 10,
-        'forEveryone': true,
-      });
+      provider.deleteMessage(kFirstLocalMessageId + 1, forEveryone: false);
 
       // Empty list → cache entry removed so hasCachedMessages is false
       expect(provider.hasCachedMessages(10), isFalse);
     });
 
-    test('messageDelivered updates delivery status in cache', () {
-      final msg = MessageModel(
-        id: 1,
-        content: 'hello',
-        senderId: 2,
-        senderUsername: 'bob',
-        conversationId: 10,
-        deliveryStatus: MessageDeliveryStatus.sent,
-        createdAt: DateTime.utc(2026, 1, 1),
-      );
-      provider.seedCacheForTest(10, [msg]);
-      provider.setActiveConversationIdForTest(10);
-      provider.loadCachedMessages(10);
-
-      provider.onMessageDelivered({
-        'messageId': 1,
-        'conversationId': 10,
-        'deliveryStatus': 'READ',
-      });
-
-      // Cache entry should still exist and message status should be updated
-      expect(provider.hasCachedMessages(10), isTrue);
-      expect(provider.messages.first.deliveryStatus, MessageDeliveryStatus.read);
-    });
-
-    test('messageDelivered with a malformed expiresAt still applies', () {
-      final msg = MessageModel(
-        id: 1,
-        content: 'hello',
-        senderId: 2,
-        senderUsername: 'bob',
-        conversationId: 10,
-        deliveryStatus: MessageDeliveryStatus.sent,
-        createdAt: DateTime.utc(2026, 1, 1),
-      );
-      provider.seedCacheForTest(10, [msg]);
-      provider.setActiveConversationIdForTest(10);
-      provider.loadCachedMessages(10);
-
-      // An unguarded DateTime.parse threw inside this synchronous socket
-      // handler and aborted the delivery-status update, the cache patch and
-      // the conversation-list update for this message.
-      provider.onMessageDelivered({
-        'messageId': 1,
-        'conversationId': 10,
-        'deliveryStatus': 'READ',
-        'expiresAt': 'not-a-timestamp',
-      });
-
-      expect(provider.messages.first.deliveryStatus, MessageDeliveryStatus.read);
-      expect(provider.messages.first.expiresAt, isNull);
-    });
-
-    test('plain incoming message updates cache for active conversation', () {
+    test('a row with no local id cannot be deleted', () {
       provider.seedCacheForTest(10, [_msg(1, 10)]);
       provider.setActiveConversationIdForTest(10);
       provider.loadCachedMessages(10);
 
-      provider.onNewMessage({
-        'id': 2,
-        'content': 'world',
-        'senderId': 2,
-        'senderUsername': 'bob',
-        'conversationId': 10,
-        'deliveryStatus': 'SENT',
-        'messageType': 'TEXT',
-        'createdAt': '2026-01-01T01:00:00.000Z',
-      });
+      provider.deleteMessage(1, forEveryone: false);
 
-      // Cache reflects both messages — verify by loading cache in fresh provider
-      expect(provider.hasCachedMessages(10), isTrue);
-      expect(provider.messages.length, 2);
-      final p2 = MessagingProvider();
-      p2.seedCacheForTest(10, provider.messages);
-      p2.loadCachedMessages(10);
-      expect(p2.messages.length, 2);
+      expect(provider.messages.map((m) => m.id), [1]);
     });
   });
 }
