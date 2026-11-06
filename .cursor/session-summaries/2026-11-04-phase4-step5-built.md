@@ -28,8 +28,7 @@
 - NOT verified: iOS PWA, prod.
 
 ## Notes for next session
-- 0.2.74 went live 11-05 02:05Z (`f3bdc1c9`); merged as `42b45233` (docs + version line only, so no suite or Android rerun) with the bump to 0.2.75.
-- Next action: no sooner than 11-06 02:05Z (decision 132), re-run the decision 86 count read-only, show it to the owner and ask for the step 5 go; then follow `docs/runbooks/phase4-step5-deploy.md`.
+- 0.2.74 went live 11-05 02:05Z; step 5 became 0.2.76 after the 0.2.75 web hotfix (decision 136). Next action and the 11-06 merge: `2026-11-06-phase4-step5-0276.md`.
 - Deploy runbook: `docs/runbooks/phase4-step5-deploy.md` (gates, archive commands, backup, order, `msgs/` removal, release notes EN/PL, rollback). Android gate (decision 130) PASSED 11-05.
 - Then the deploy (owner's go, decision 129), per the runbook.
 - Owner 11-05 (decisions 132–135): ship 0.2.74 now; step 5 no sooner than 24 h after 0.2.74 is verified; release notes as written; archive to `Desktop\umbra-archive-step5`; unblock only lifts the block. Owner-owed: the step 5 go itself.

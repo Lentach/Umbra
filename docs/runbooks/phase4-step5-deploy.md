@@ -4,10 +4,11 @@ One-off runbook for the release that drops the old server path (migration `0027`
 
 ## Gates (all before the owner is asked for the go)
 
-1. #208 shipped (0.2.74), master merged into `feat/phase4-step5`, PR #210 mergeable, CI green on its head sha (`gh api repos/Lentach/Umbra/commits/<sha>/check-runs`). Code merged 11-05 (`e86da5f9`, CI 7/7); 0.2.74 (live 11-05 02:05Z) merged in `42b45233` — docs and version only — with the bump to 0.2.75.
+1. #208 shipped (0.2.74), master merged into `feat/phase4-step5`, PR #210 mergeable, CI green on its head sha (`gh api repos/Lentach/Umbra/commits/<sha>/check-runs`). Code merged 11-05 (`e86da5f9`, CI 7/7); 0.2.74 (live 11-05 02:05Z) merged in `42b45233` — docs and version only. The 0.2.75 web hotfix (#211, #212; live 11-05 ~14:55Z) merged 11-06 with the bump to 0.2.76: the restore hook keeps this branch's store re-read (#212's `rewriteStore`/`refreshLocalChats` do not exist here), #212's server-list test dropped (no server lists after step 5).
 2. The Android revoke path driven on a device (decision 130). PASSED 11-05 on `cfc968db` (evidence: decisions log E130a). Repeated on the merged release APK 11-05 (`e86da5f9`): PASSED both ways. Repeat it only if the merge brings code, not just the version bump: once on the merged release APK (the shipped binary is the merge with #208, which touches `main.dart`, where `onBackgroundMessage` is wired): revoked + closed → `[wake-up] revoked-device check: stopped` and the notifier gone on the next send; live + closed → `notRevoked`. Recipe in `.cursor/session-summaries/2026-11-04-phase4-step5-built.md` (Verification, Android drive). Delete the drive APK from BOTH `build/app/outputs/flutter-apk/` and `apk/release/` afterwards: it is throwaway-signed and points at `127.0.0.1:3100`.
+   11-06 merge (0.2.75 hotfix): its only code is web-only (`DualStorage._openWeb`, behind `kIsWeb`; the restore hook kept this branch's side), nothing on the Android wake path, so the Android drive was not repeated; the merged build was driven on web instead (passcode boot-locked → unlock → chats + both ways). The owner may still ask for the Android rerun before the go.
 3. The decision 86 count re-run read-only and shown to the owner (query below).
-4. The owner's explicit go (decision 129), no sooner than 24 h after 0.2.74 is verified on prod (decision 132). Not bundled with any other release.
+4. The owner's explicit go (decision 129), no sooner than 24 h after the 0.2.75 web hotfix is verified on prod (decisions 132, 136). Not bundled with any other release.
 
 ## Decision 86 count (read-only)
 
@@ -24,7 +25,7 @@ SQL
 
 ## Release
 
-Version `0.2.75` (one past #208's 0.2.74; re-check `frontend/pubspec.yaml` on master), APK versionCode `20075`. Bump `pubspec.yaml` on the branch before the merge; CI must be green on the bumped sha.
+Version `0.2.76` (one past the 0.2.75 web hotfix; re-check `frontend/pubspec.yaml` on master), APK versionCode `20076`. Bump `pubspec.yaml` on the branch before the merge; CI must be green on the bumped sha.
 
 ### 1. Archive (VM, old backend still running; decision 128)
 
@@ -56,15 +57,15 @@ cd ~/fireplace && ./backup-db.sh        # the rollback point; note the chatdb-<t
 ./deploy-backend.sh                     # git pull, build, 0027 at boot (lock_timeout 10 s)
 ```
 
-Not during the 04:00 backup cron or with a psql session open (0027 needs its locks). Expected: `/health` gap about 8 s, 0027 in ~0.2 s. Check `docker logs fireplace-backend-1` for `0027` applied and no ERROR, `/version` = `0.2.75 / <sha>`.
+Not during the 04:00 backup cron or with a psql session open (0027 needs its locks). Expected: `/health` gap about 8 s, 0027 in ~0.2 s. Check `docker logs fireplace-backend-1` for `0027` applied and no ERROR, `/version` = `0.2.76 / <sha>`.
 
 ### 3. Web (PC, main checkout after it pulls master), then smoke
 
-`.\deploy-web.ps1`, then `cd scripts/smoke && node post-deploy-smoke.mjs`. Old 0.2.74 pages keep working until they reload (rehearsed with 0.2.73).
+`.\deploy-web.ps1`, then `cd scripts/smoke && node post-deploy-smoke.mjs`. Old 0.2.75 pages keep working until they reload (rehearsed with 0.2.73).
 
 ### 4. APK
 
-Build per `android-release.md` (release keystore), publish `umbra-0.2.75.apk`, set `ANDROID_APK_*` in `~/fireplace/.env`, re-run `./deploy-backend.sh`, check `/version`'s `android` block.
+Build per `android-release.md` (release keystore), publish `umbra-0.2.76.apk`, set `ANDROID_APK_*` in `~/fireplace/.env`, re-run `./deploy-backend.sh`, check `/version`'s `android` block.
 
 ### 5. After 10 minutes with 0 backend ERROR lines
 

@@ -16,6 +16,8 @@ import 'package:fireplace/utils/e2e_diag_log.dart';
 import 'package:fireplace/utils/e2e_persistent_diag.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:shared_preferences_platform_interface/in_memory_shared_preferences_async.dart';
+import 'package:shared_preferences_platform_interface/shared_preferences_async_platform_interface.dart';
 
 import 'web_signal_kv_store_test.dart' show FakeAsyncKv, FakeLegacyKv;
 
@@ -306,6 +308,44 @@ void main() {
       final all = await kv.readAll();
       expect(all.containsKey(identityKey), isTrue);
       expect(all[identityKey], isNot('identity-bytes'));
+    });
+
+    // 0.2.74 prod (SaraLee, 2026-11-05): the boot read the Signal store
+    // before the passcode screen was passed. The open failed `locked`, and
+    // a memoized failure kept every later op throwing after the unlock:
+    // E2E down for the session, no send, no decrypt, no invite.
+    test('a store opened while the vault is locked opens after the unlock',
+        () async {
+      SharedPreferencesAsyncPlatform.instance =
+          InMemorySharedPreferencesAsync.empty();
+      final kek = Uint8List(32)..fillRange(0, 32, 7);
+      final vault = ContentKeyWrap(sealer: sealer)
+        ..unlock(kek: kek, kekId: 'kek1');
+      secure.store['${ContentKeyManager.sigKeyPrefix}k1'] =
+          (await vault.wrapKey(Uint8List(32)..fillRange(0, 32, 9)))!;
+      vault.lock();
+      final storage = DualStorage(
+        const FlutterSecureStorage(),
+        sigKeys: ContentKeyManager(
+          secure,
+          keyPrefix: ContentKeyManager.sigKeyPrefix,
+          wrap: vault,
+        ),
+        sigSealer: sealer,
+        sigLock: lock.run,
+        debugForceSealedWeb: true,
+      );
+
+      await expectLater(
+        storage.read(key: identityKey),
+        throwsA(
+          isA<SigSealOpenUnavailable>().having((e) => e.stage, 'stage', 'locked'),
+        ),
+      );
+
+      vault.unlock(kek: Uint8List(32)..fillRange(0, 32, 7), kekId: 'kek1');
+      await storage.write(key: identityKey, value: 'identity-bytes');
+      expect(await storage.read(key: identityKey), 'identity-bytes');
     });
   });
 

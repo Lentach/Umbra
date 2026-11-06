@@ -211,6 +211,7 @@ Asked after step B, against prod: only 2 of 117 accounts had a `contact_backups`
 | 133 | 11-05 | (Applies 127.) The step 5 release notes are the EN/PL text in `docs/runbooks/phase4-step5-deploy.md` as written: old-path attachments deleted, old texts gone within 30 days, blocks kept only on the device. Owner: "Use as written" | OWNER | ACTIVE |
 | 134 | 11-05 | (Applies 128.) The step 5 archive goes to the owner's PC at `Desktop\umbra-archive-step5`, with its sha256 file; `backup.pass` is not copied with it | OWNER | ACTIVE |
 | 135 | 11-05 | Unblock only lifts the block, for every friend: talking again takes a new invite from either side; unblock does not re-invite. Owner: "No, unblock only lifts the block" | OWNER | ACTIVE |
+| 136 | 11-06 | (Amends 132.) 0.2.74 broke web passcode users, so the 0.2.75 web hotfix (#211, #212) shipped 11-05 ~14:55Z and Phase 4 step 5 becomes 0.2.76; its 24 h gap counts from the 0.2.75 release. Owner: "so we wait now till 15" | OWNER | ACTIVE |
 
 ## Engineering calls made in the work so far (owner may overrule at the gate)
 
