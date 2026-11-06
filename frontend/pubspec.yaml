@@ -70,7 +70,7 @@ dependencies:
   # uses the JS/WebCrypto path, Android builds via Gradle/NDK. Unpin only if a
   # future version carries something needed AND VS Build Tools C++ is installed.
   webcrypto: 0.6.0
-  flutter_local_notifications: ^22.3.0
+  flutter_local_notifications: ^22.3.1
   flutter_web_plugins:
     sdk: flutter
   emoji_picker_flutter: ^4.5.4
