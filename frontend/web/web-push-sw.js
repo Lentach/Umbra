@@ -20,7 +20,7 @@
 // scope controls no page, so no navigation triggers an update check, and
 // WebKit does not soft-update after a push the way Chrome does — the page
 // calls `registration.update()` instead (web_push_bridge_web.dart).
-const SW_VERSION = 4;
+const SW_VERSION = 5;
 
 // A new copy takes over as soon as it is installed. This worker controls no
 // page (scope `/web-push-scope/`), so there is no page state to hand over.
@@ -331,31 +331,22 @@ function postAndClose(title, body, tag, data) {
 
 // Box push registration (metadata-privacy E9): a `notifier_challenge` code
 // proves this subscription reaches the page that holds the queue key. It is
-// handed to every open page — the one registering answers it — and is never
-// a "New message" card. But a push that posts NO notification is a broken
-// promise (`userVisibleOnly`): Safari REVOKES the subscription after three
-// (WebKit, WWDC22), and Chrome posts its own generic card when no page of
-// ours is visible. So one is posted and closed at once, unless a visible
-// page took the code on a non-Apple push service.
+// handed to every open page — the one registering answers it — and posts NO
+// notification (decision 137, overriding 96 by the owner's call): the
+// "Setting up notifications" flash showed on every launch. Known cost: a push
+// that posts nothing breaks the `userVisibleOnly` promise, so Safari may
+// revoke an iPhone's subscription after three, and Chrome may post its own
+// generic card when no page of ours is visible.
 function handleNotifierChallenge(code) {
-  function flash() {
-    return postAndClose('Umbra', 'Setting up notifications', 'box-notifier');
-  }
   return clients
     .matchAll({ type: 'window', includeUncontrolled: true })
     .then(function (all) {
-      var visible = false;
+      if (typeof code !== 'string') return;
       for (var i = 0; i < all.length; i++) {
-        if (typeof code === 'string') {
-          all[i].postMessage({ type: 'box-notifier-challenge', code: code });
-        }
-        if (all[i].visibilityState === 'visible') visible = true;
+        all[i].postMessage({ type: 'box-notifier-challenge', code: code });
       }
-      return isApplePushEndpoint().then(function (apple) {
-        return visible && !apple ? undefined : flash();
-      });
     })
-    .catch(flash);
+    .catch(function () {});
 }
 
 // Shows the "new message" card for [payload] — unless the user is looking at

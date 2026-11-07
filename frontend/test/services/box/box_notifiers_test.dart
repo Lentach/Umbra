@@ -550,7 +550,7 @@ void main() {
   );
 
   group('a live challenge code is reused for queues owed later '
-      '(decision 79: one "Setting up notifications" banner, not one per '
+      '(decision 79: one challenge push per session, not one per '
       'queue)', () {
     const reuse = Duration(minutes: 5);
 

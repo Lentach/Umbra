@@ -61,8 +61,8 @@ typedef _Owed = ({ContactQueue queue, BoxQueueAuth auth, Uint8List nid});
 /// The box keeps a code live 10 min and takes more queues under it, so the
 /// last code that activated is reused, in memory only, for queues owed
 /// within `codeReuse` (9 min) of its challenge on the same target (decision
-/// 79): every challenge is a push, and the web push SW may show it as a
-/// "Setting up notifications" banner. A reused code the box refuses whole
+/// 79): every challenge is a push, and a push the web SW answers with no
+/// card counts toward Safari's revocation (decision 137). A reused code the box refuses whole
 /// (expired, box restarted) is dropped, and the pass challenges as before.
 ///
 /// What was activated, and under which target, is kept in the store's
