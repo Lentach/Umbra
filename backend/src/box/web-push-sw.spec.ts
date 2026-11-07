@@ -25,7 +25,7 @@ interface Page {
   id: string;
   focused: boolean;
   visibilityState: 'visible' | 'hidden';
-  postMessage: () => void;
+  postMessage: (message: unknown) => void;
 }
 
 interface SwEvent {
@@ -335,13 +335,32 @@ describe('web-push-sw.js', () => {
       expect(sw.tray).toEqual([]);
     });
 
-    it('the setup challenge posts and closes a card on an Apple endpoint', async () => {
-      const sw = makeWorker({ endpoint: APPLE, pages: visiblePage() });
+    it('the setup challenge hands the code to every page and posts no card (decision 137)', async () => {
+      for (const endpoint of [APPLE, CHROME]) {
+        const got: unknown[] = [];
+        const pages = [...visiblePage(), ...hiddenPage()].map((p, i) => ({
+          ...p,
+          id: `c${i}`,
+          postMessage: (m: unknown) => got.push(m),
+        }));
+        const sw = makeWorker({ endpoint, pages });
+
+        await sw.push({ type: 'notifier_challenge', code: 'x' });
+
+        expect(sw.shown).toEqual([]);
+        expect(got).toEqual([
+          { type: 'box-notifier-challenge', code: 'x' },
+          { type: 'box-notifier-challenge', code: 'x' },
+        ]);
+      }
+    });
+
+    it('a challenge with no page open posts no card either', async () => {
+      const sw = makeWorker({ endpoint: APPLE, pages: [] });
 
       await sw.push({ type: 'notifier_challenge', code: 'x' });
 
-      expect(sw.shown).toHaveLength(1);
-      expect(sw.tray).toEqual([]);
+      expect(sw.shown).toEqual([]);
     });
   });
 
