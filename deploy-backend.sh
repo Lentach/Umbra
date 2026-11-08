@@ -76,4 +76,11 @@ if [[ "$status" != "healthy" ]]; then
   echo "WARNING: backend not healthy after wait — check: docker compose -f $COMPOSE_FILE logs --tail=80 backend" >&2
   exit 1
 fi
+
+# Build cache grows with every deploy and nothing else removes it (~10 GB in
+# five weeks, 2026-11-08). Only after a healthy deploy, and keep the last
+# 3 days so a quick redeploy still builds from cache. A prune failure never
+# fails the deploy.
+echo "==> pruning Docker build cache older than 72h"
+docker builder prune -f --filter until=72h | tail -n 1 || echo "WARNING: build cache prune failed (deploy itself is fine)" >&2
 echo "Done. Public check: curl https://fireplace.ignorelist.com/version  (expect version=${APP_VERSION} commit=${GIT_COMMIT})"
