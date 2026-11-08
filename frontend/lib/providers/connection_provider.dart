@@ -618,6 +618,10 @@ class ConnectionProvider extends ChangeNotifier {
       // The chat list's last box message and box unread per chat: no server
       // list names one. Reads the records once per session, not per connect.
       unawaited(_messagingProvider?.applyStoredBoxLastMessages());
+      // The chat on screen: a launch with no network opened it before this
+      // connect's initialize set the record store's user, so it read none;
+      // only a resume read it again.
+      unawaited(_messagingProvider?.rereadOpenChat());
       // A box delivery refused because E2E was not ready waits in the
       // journal; nothing else would offer it again before a reconnect.
       _box?.drainInbox();
