@@ -343,6 +343,7 @@ class _HoneycombGrid extends StatelessWidget {
                                         size: hexHeight,
                                         displayName: cell.user!.username,
                                         imageUrl: cell.user!.profilePictureUrl,
+                                        avatar: cell.user!.avatar,
                                         surface: colorScheme.surface,
                                         borderColor: cell.isInvitation
                                             ? colorScheme.primary

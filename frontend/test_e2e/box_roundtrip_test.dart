@@ -443,7 +443,7 @@ class _FirstContactSide {
   ContactRecord? get record => store.byUserId(peer.userId);
 
   E2eProfile get profile =>
-      (username: me.username, tag: me.tag, avatarUrl: null);
+      (username: me.username, tag: me.tag, avatarUrl: null, avatar: null);
 }
 
 void main() {

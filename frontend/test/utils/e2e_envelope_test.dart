@@ -1,5 +1,8 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
+import 'package:fireplace/models/profile_photo.dart';
+import 'package:fireplace/services/box/box_wire.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fireplace/utils/e2e_envelope.dart';
 
@@ -351,13 +354,22 @@ void main() {
       final sid = '${'A' * 42}E';
       final sealPub = '${'b' * 42}w';
 
-      String requestWith(String? avatar) => jsonEncode(
-        E2eEnvelope.buildFriendRequest(
+      /// A request as an OLDER build wrote it: this build never writes the
+      /// legacy `a`, so it is put in by hand.
+      String requestWith(String? avatar) {
+        final built = E2eEnvelope.buildFriendRequest(
           sid: sid,
           sealPub: sealPub,
-          profile: (username: 'ann', tag: '1412', avatarUrl: avatar),
-        ),
-      );
+          profile: (
+            username: 'ann',
+            tag: '1412',
+            avatarUrl: null,
+            avatar: null,
+          ),
+        );
+        if (avatar != null) (built['p'] as Map<String, dynamic>)['a'] = avatar;
+        return jsonEncode(built);
+      }
 
       test('a photo is kept as the path of a file on our avatar route, '
           'whatever host it names', () {
@@ -369,7 +381,7 @@ void main() {
         ]) {
           expect(
             E2eEnvelope.parseFriendRequest(requestWith(sent))?.profile,
-            (username: 'ann', tag: '1412', avatarUrl: kept),
+            (username: 'ann', tag: '1412', avatarUrl: kept, avatar: null),
             reason: sent,
           );
         }
@@ -384,7 +396,7 @@ void main() {
         ]) {
           expect(
             E2eEnvelope.parseFriendRequest(requestWith(sent))?.profile,
-            (username: 'ann', tag: '1412', avatarUrl: null),
+            (username: 'ann', tag: '1412', avatarUrl: null, avatar: null),
             reason: sent,
           );
         }
@@ -416,6 +428,333 @@ void main() {
           isNull,
           reason: 'no ttl key at all is not "off"',
         );
+      });
+    });
+
+    group('profile photo reference (decision 138)', () {
+      final sid = '${'A' * 42}E';
+      final sealPub = '${'b' * 42}w';
+      final mediaId = boxB64(
+        Uint8List.fromList([for (var i = 0; i < 32; i++) i + 1]),
+      );
+      final key = base64.encode(List.filled(32, 7));
+      final iv = base64.encode(List.filled(12, 9));
+
+      ProfilePhotoRef photo(int rev, {DateTime? at}) => ProfilePhotoRef(
+        rev: rev,
+        mediaId: mediaId,
+        key: key,
+        iv: iv,
+        uploadedAt: at,
+      );
+
+      Map<String, dynamic> wire(int rev) => {
+        'm': mediaId,
+        'k': key,
+        'i': iv,
+        'r': rev,
+      };
+
+      /// An envelope with `p` as the test spells it, hand-made so a hostile
+      /// or legacy shape this build never writes can be fed in.
+      String requestWithP(Map<String, dynamic> p) => jsonEncode({
+        't': 'friend_request',
+        'sid': sid,
+        'sealPub': sealPub,
+        'p': p,
+      });
+
+      group('the quiet profile envelope', () {
+        test('a photo round-trips with the time its file was made', () {
+          final at = DateTime.utc(2026, 11, 8, 9, 30);
+          final built = E2eEnvelope.buildProfile(photo(7, at: at));
+          expect(built, {
+            't': 'profile',
+            'av': wire(7),
+            'ts': at.millisecondsSinceEpoch,
+          });
+
+          final parsed = E2eEnvelope.parseProfile(jsonEncode(built));
+          expect(parsed, isNotNull);
+          expect(parsed!.avatar.toWire(), wire(7));
+          expect(parsed.avatar.hasPhoto, isTrue);
+          expect(parsed.madeAt, at);
+          expect(parsed.madeAt!.isUtc, isTrue);
+        });
+
+        test('the cleared state round-trips', () {
+          final built = E2eEnvelope.buildProfile(const ProfilePhotoRef.cleared(8));
+          expect(built, {
+            't': 'profile',
+            'av': {'r': 8, 'x': 1},
+          });
+          final parsed = E2eEnvelope.parseProfile(jsonEncode(built));
+          expect(parsed!.avatar.isCleared, isTrue);
+          expect(parsed.avatar.rev, 8);
+          expect(parsed.madeAt, isNull);
+        });
+
+        test('no time is written when none is known, and none is read', () {
+          final built = E2eEnvelope.buildProfile(photo(7));
+          expect(built.containsKey('ts'), isFalse);
+          expect(E2eEnvelope.parseProfile(jsonEncode(built))!.madeAt, isNull);
+        });
+
+        test('the device-local upload time is `ts`, never an `at` key', () {
+          final sent = jsonEncode(
+            E2eEnvelope.buildProfile(
+              photo(7, at: DateTime.utc(2026, 11, 8)),
+            ),
+          );
+          expect(sent, isNot(contains('"at"')));
+          expect(
+            (jsonDecode(sent) as Map<String, dynamic>)['av'],
+            wire(7),
+            reason: 'only the wire shape of the reference travels',
+          );
+        });
+
+        test('it is a type of its own, never read as a chat message', () {
+          final parsed = E2eEnvelope.parse(
+            jsonEncode(E2eEnvelope.buildProfile(photo(7))),
+          );
+          expect(parsed.type, E2eEnvelope.typeProfile);
+          expect(parsed.type, isNot(E2eEnvelope.typeMessage));
+        });
+
+        test('a `ts` that is no sound time keeps the photo, drops only the '
+            'time', () {
+          for (final ts in [
+            0,
+            -1,
+            8640000000000001,
+            1.5,
+            '1790000000000',
+            null,
+            true,
+          ]) {
+            final parsed = E2eEnvelope.parseProfile(
+              jsonEncode({'t': 'profile', 'av': wire(7), 'ts': ts}),
+            );
+            expect(parsed, isNotNull, reason: '$ts');
+            expect(parsed!.avatar.rev, 7, reason: '$ts');
+            expect(parsed.madeAt, isNull, reason: '$ts');
+          }
+        });
+
+        test('any other type is null, whatever it carries', () {
+          for (final type in ['timer', 'message', 'friend_request', '', null]) {
+            expect(
+              E2eEnvelope.parseProfile(
+                jsonEncode({if (type != null) 't': type, 'av': wire(7)}),
+              ),
+              isNull,
+              reason: '$type',
+            );
+          }
+          expect(
+            E2eEnvelope.parseProfile(jsonEncode({'content': 'hi', 'av': wire(7)})),
+            isNull,
+          );
+        });
+
+        test('a reference not spelled exactly is null — the frame carries '
+            'no photo, never half of one', () {
+          for (final av in <Object?>[
+            null,
+            'x',
+            5,
+            <Object?>[],
+            <String, dynamic>{},
+            {...wire(7), 'r': 0},
+            {...wire(7), 'r': 1.0},
+            {...wire(7), 'r': '7'},
+            {...wire(7), 'm': 'short'},
+            {...wire(7), 'm': '${mediaId.substring(0, 42)}B'},
+            {...wire(7), 'k': base64Url.encode(List.filled(32, 0xfb))},
+            {...wire(7), 'i': base64.encode(List.filled(16, 9))},
+            {...wire(7), 'x': 1},
+            {'r': 7, 'x': 2},
+            {'r': 7, 'x': 1, 'm': mediaId},
+          ]) {
+            expect(
+              E2eEnvelope.parseProfile(
+                jsonEncode({'t': 'profile', 'av': av, 'ts': 1790000000000}),
+              ),
+              isNull,
+              reason: '$av',
+            );
+          }
+          expect(E2eEnvelope.parseProfile(jsonEncode({'t': 'profile'})), isNull);
+        });
+
+        test('bytes that are no JSON object are null', () {
+          for (final raw in ['not json', '[]', '5', '"profile"', 'null', '']) {
+            expect(E2eEnvelope.parseProfile(raw), isNull, reason: raw);
+          }
+        });
+      });
+
+      group('the profile `p` of a first contact', () {
+        test('a request carries the reference as `av` and reads it back', () {
+          final built = E2eEnvelope.buildFriendRequest(
+            sid: sid,
+            sealPub: sealPub,
+            profile: (
+              username: 'ann',
+              tag: '1412',
+              avatarUrl: null,
+              avatar: photo(7, at: DateTime.utc(2026, 11, 8)),
+            ),
+          );
+          expect(built['p'], {'u': 'ann', 'g': '1412', 'av': wire(7)});
+
+          final profile = E2eEnvelope.parseFriendRequest(
+            jsonEncode(built),
+          )?.profile;
+          expect(profile?.username, 'ann');
+          expect(profile?.tag, '1412');
+          expect(profile?.avatarUrl, isNull);
+          expect(profile?.avatar?.toWire(), wire(7));
+          expect(profile?.avatar?.uploadedAt, isNull);
+        });
+
+        test('an accept carries it in its handoff too', () {
+          final built = E2eEnvelope.buildQueueHandoff(
+            sid: sid,
+            sealPub: sealPub,
+            profile: (
+              username: 'bob',
+              tag: '0002',
+              avatarUrl: null,
+              avatar: const ProfilePhotoRef.cleared(9),
+            ),
+          );
+          expect(built['p'], {
+            'u': 'bob',
+            'g': '0002',
+            'av': {'r': 9, 'x': 1},
+          });
+          final profile = E2eEnvelope.profileOf(jsonEncode(built));
+          expect(profile?.avatar?.isCleared, isTrue);
+          expect(profile?.avatar?.rev, 9);
+          expect(profile?.username, 'bob');
+        });
+
+        test('the legacy `a` is never written, whatever the profile holds', () {
+          final built = E2eEnvelope.buildFriendRequest(
+            sid: sid,
+            sealPub: sealPub,
+            profile: (
+              username: 'ann',
+              tag: '1412',
+              avatarUrl: '/media/avatars/a1b2.jpg',
+              avatar: photo(7),
+            ),
+          );
+          final p = built['p'] as Map<String, dynamic>;
+          expect(p.containsKey('a'), isFalse);
+          expect(p['av'], wire(7));
+          expect(jsonEncode(built), isNot(contains('avatars')));
+
+          final onlyLegacy = E2eEnvelope.buildQueueHandoff(
+            sid: sid,
+            sealPub: sealPub,
+            profile: (
+              username: 'ann',
+              tag: '1412',
+              avatarUrl: '/media/avatars/a1b2.jpg',
+              avatar: null,
+            ),
+          );
+          expect(onlyLegacy['p'], {'u': 'ann', 'g': '1412'});
+        });
+
+        test('no photo at all writes no photo key', () {
+          final built = E2eEnvelope.buildFriendRequest(
+            sid: sid,
+            sealPub: sealPub,
+            profile: (
+              username: 'ann',
+              tag: '1412',
+              avatarUrl: null,
+              avatar: null,
+            ),
+          );
+          expect(built['p'], {'u': 'ann', 'g': '1412'});
+        });
+
+        test('an older build\'s `a` is still read, into the legacy path', () {
+          final profile = E2eEnvelope.parseFriendRequest(
+            requestWithP({
+              'u': 'ann',
+              'g': '1412',
+              'a': 'https://fireplace.example/media/avatars/a1b2.jpg',
+            }),
+          )?.profile;
+          expect(profile?.avatarUrl, '/media/avatars/a1b2.jpg');
+          expect(profile?.avatar, isNull);
+        });
+
+        test('both may arrive: each is read on its own', () {
+          final profile = E2eEnvelope.profileOf(
+            requestWithP({
+              'u': 'ann',
+              'g': '1412',
+              'a': '/media/avatars/a1b2.jpg',
+              'av': wire(7),
+            }),
+          );
+          expect(profile?.avatarUrl, '/media/avatars/a1b2.jpg');
+          expect(profile?.avatar?.toWire(), wire(7));
+        });
+
+        test('a malformed `av` is no photo, the name and tag are kept', () {
+          for (final av in <Object?>[
+            'x',
+            7,
+            <Object?>[],
+            {...wire(7), 'r': -3},
+            {...wire(7), 'k': 'short'},
+            {...wire(7), 'm': 5},
+            {...wire(7), 'x': 1},
+            {'r': 7, 'x': 1, 'k': key},
+          ]) {
+            final profile = E2eEnvelope.parseFriendRequest(
+              requestWithP({'u': 'ann', 'g': '1412', 'av': av}),
+            )?.profile;
+            expect(profile, isNotNull, reason: '$av');
+            expect(profile!.username, 'ann', reason: '$av');
+            expect(profile.tag, '1412', reason: '$av');
+            expect(profile.avatar, isNull, reason: '$av');
+          }
+        });
+
+        test('a malformed `av` does not cost the legacy path beside it', () {
+          final profile = E2eEnvelope.profileOf(
+            requestWithP({
+              'u': 'ann',
+              'g': '1412',
+              'a': '/media/avatars/a1b2.jpg',
+              'av': {...wire(7), 'r': 0},
+            }),
+          );
+          expect(profile?.avatar, isNull);
+          expect(profile?.avatarUrl, '/media/avatars/a1b2.jpg');
+        });
+
+        test('a cleared `av` is a photo removed, read as such', () {
+          final profile = E2eEnvelope.profileOf(
+            requestWithP({
+              'u': 'ann',
+              'g': '1412',
+              'av': {'r': 7, 'x': 1},
+            }),
+          );
+          expect(profile?.avatar?.isCleared, isTrue);
+          expect(profile?.avatar?.rev, 7);
+          expect(profile?.avatarUrl, isNull);
+        });
       });
     });
 

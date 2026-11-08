@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import '../../models/profile_photo.dart';
 import '../../models/user_model.dart';
 import '../../utils/e2e_persistent_diag.dart';
 import '../../utils/message_ids.dart';
@@ -134,6 +135,8 @@ class ContactStore {
   ContentKv? _kv;
   final Map<int, ContactRecord> _records = <int, ContactRecord>{};
   UserModel? _self;
+  bool _selfPending = false;
+  bool _selfMigrated = false;
   ContactQueue? _requestQueue;
   bool _requestQueueUnsupported = false;
   _SiblingBook _siblingBook = _SiblingBook.empty;
@@ -239,7 +242,7 @@ class ContactStore {
     final aliveBook = _AliveBook.decode(rows.remove(siblingAliveKey(userId)));
     final lookupBook = _LookupBook.decode(rows.remove(friendLookupKey(userId)));
     final inbox = _takeInbox(rows, userId);
-    UserModel? selfUser;
+    _DecodedSelf? selfRow;
     for (final entry in rows.entries) {
       final key = entry.key;
       final value = entry.value;
@@ -248,8 +251,8 @@ class ContactStore {
         continue;
       }
       if (key == self) {
-        selfUser = _decodeUser(value);
-        if (selfUser == null) undetermined++;
+        selfRow = _decodeSelf(value);
+        if (selfRow == null) undetermined++;
         continue;
       }
       final peerId = int.tryParse(key.substring(prefix.length));
@@ -270,7 +273,9 @@ class ContactStore {
     _generation++;
     _userId = userId;
     _kv = kv;
-    _self = selfUser;
+    _self = selfRow?.user;
+    _selfPending = selfRow?.pending ?? false;
+    _selfMigrated = selfRow?.migrated ?? false;
     _requestQueue = request.queue;
     _requestQueueUnsupported = request.unsupported;
     _siblingBook = siblingBook ?? _SiblingBook.empty;
@@ -290,8 +295,26 @@ class ContactStore {
       ..addAll(loaded);
     final profile = _selfProfile?.call();
     if (profile != null && profile.id == userId) {
-      _self = profile;
-      unawaited(setSelf(profile));
+      // The auth profile never holds the end-to-end photo (the server does
+      // not know it): the stored reference stays unless the profile names a
+      // newer one.
+      final merged = _mergeSelf(profile, _self?.avatar);
+      _self = merged;
+      unawaited(setSelf(merged));
+    }
+    _tellSelfAvatar();
+  }
+
+  /// Told this account's own photo reference (a photo, the cleared state or
+  /// none) after the store opens and after every change of it: what the
+  /// screens that show "me" read. Never throws into a store write.
+  void Function(ProfilePhotoRef? avatar)? onSelfAvatarChanged;
+
+  void _tellSelfAvatar() {
+    try {
+      onSelfAvatarChanged?.call(_self?.avatar);
+    } on Object {
+      // A listener must never be able to fail the store.
     }
   }
 
@@ -301,6 +324,8 @@ class ContactStore {
     _userId = null;
     _kv = null;
     _self = null;
+    _selfPending = false;
+    _selfMigrated = false;
     _requestQueue = null;
     _requestQueueUnsupported = false;
     _siblingBook = _SiblingBook.empty;
@@ -437,15 +462,89 @@ class ContactStore {
       () => _lock(lockName(userId), () async {
         if (_generation != generation) return false;
         final key = selfKey(userId);
-        final encoded = jsonEncode(_userToJson(user));
+        // The photo state is the photo path's, never a profile refresh's:
+        // what is on disk wins unless the new profile names a newer one.
+        final onDisk = _decodeSelf(kv.getString(key));
+        final merged = _mergeSelf(user, onDisk?.user.avatar);
+        final pending = onDisk?.pending ?? false;
+        final migrated = onDisk?.migrated ?? false;
+        final encoded = jsonEncode(
+          _selfToJson(merged, pending: pending, migrated: migrated),
+        );
         if (kv.getString(key) != encoded) {
           if (!await kv.setString(key, encoded)) return false;
           _mutated = true;
         }
-        if (_generation == generation) _self = user;
+        if (_generation == generation) {
+          _self = merged;
+          _selfPending = pending;
+          _selfMigrated = migrated;
+          _tellSelfAvatar();
+        }
         return true;
       }),
     );
+  }
+
+  /// This account's own photo as the self row holds it: the reference (a
+  /// cleared one included), whether a frame to a friend or sibling is still
+  /// owed (`pending`), and whether the one-time move of the
+  /// server photo was made (`migrated`).
+  SelfPhotoState get selfPhoto =>
+      (avatar: _self?.avatar, pending: _selfPending, migrated: _selfMigrated);
+
+  /// Read-modify-write of [selfPhoto] on the self row, seen as it is ON
+  /// DISK. [mutate] returns the state to keep, or null to leave it. False
+  /// when there is no self row to hold it or the write did not commit.
+  Future<bool> updateSelfPhoto(
+    SelfPhotoState? Function(SelfPhotoState current) mutate,
+  ) {
+    final kv = _kv;
+    final userId = _userId;
+    if (kv == null || userId == null) return Future.value(false);
+    final generation = _generation;
+    return _serial(
+      () => _lock(lockName(userId), () async {
+        if (_generation != generation) return false;
+        final key = selfKey(userId);
+        final row = (await _readWhere(kv, (k) => k == key))[key];
+        final onDisk = row is String ? _decodeSelf(row) : null;
+        final base = onDisk?.user ?? _self;
+        if (base == null) return false;
+        final next = mutate((
+          avatar: base.avatar,
+          pending: onDisk?.pending ?? _selfPending,
+          migrated: onDisk?.migrated ?? _selfMigrated,
+        ));
+        if (next == null) return true;
+        final user = next.avatar == null
+            ? base.copyWith(clearAvatar: true)
+            : base.copyWith(avatar: next.avatar);
+        final encoded = jsonEncode(
+          _selfToJson(user, pending: next.pending, migrated: next.migrated),
+        );
+        if (row != encoded) {
+          if (!await kv.setString(key, encoded)) return false;
+          _mutated = true;
+        }
+        if (_generation == generation) {
+          _self = user;
+          _selfPending = next.pending;
+          _selfMigrated = next.migrated;
+          _tellSelfAvatar();
+        }
+        return true;
+      }),
+    );
+  }
+
+  /// [profile] with the photo reference that is newer: [held] (the one
+  /// already kept) unless the profile names a strictly higher counter.
+  static UserModel _mergeSelf(UserModel profile, ProfilePhotoRef? held) {
+    final named = profile.avatar;
+    if (named != null && named.supersedes(held)) return profile;
+    if (held == null) return profile;
+    return profile.copyWith(avatar: held);
   }
 
   /// Stores [candidate] as this device's request queue UNLESS a readable one
@@ -627,24 +726,47 @@ class ContactStore {
     }
   }
 
-  static UserModel? _decodeUser(String raw) {
+  static _DecodedSelf? _decodeSelf(String? raw) {
+    if (raw == null) return null;
     try {
       final decoded = jsonDecode(raw);
       if (decoded is! Map<String, dynamic>) return null;
-      return UserModel.fromJson(decoded);
+      return (
+        user: UserModel.fromJson(
+          decoded,
+        ).copyWith(avatar: ProfilePhotoRef.fromJson(decoded['avatar'])),
+        pending: decoded['avPending'] == true,
+        migrated: decoded['avMigrated'] == true,
+      );
     } on Object {
       return null;
     }
   }
 
-  static Map<String, dynamic> _userToJson(UserModel user) => {
+  static Map<String, dynamic> _selfToJson(
+    UserModel user, {
+    required bool pending,
+    required bool migrated,
+  }) => {
     'id': user.id,
     'username': user.username,
     'tag': user.tag,
     if (user.profilePictureUrl != null)
       'profilePictureUrl': user.profilePictureUrl,
+    if (user.avatar != null) 'avatar': user.avatar!.toJson(),
+    if (pending) 'avPending': true,
+    if (migrated) 'avMigrated': true,
   };
 }
+
+/// What this account's own photo is on this device ([ContactStore.selfPhoto]).
+typedef SelfPhotoState = ({
+  ProfilePhotoRef? avatar,
+  bool pending,
+  bool migrated,
+});
+
+typedef _DecodedSelf = ({UserModel user, bool pending, bool migrated});
 
 class _Decoded {
   const _Decoded(this.record, {this.unsupported = false});

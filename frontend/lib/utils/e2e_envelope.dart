@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import '../models/profile_photo.dart';
 import 'message_expiry.dart';
 
 /// One parsed [E2eEnvelope].
@@ -51,9 +52,16 @@ typedef E2eBoxAction = ({
 });
 
 /// A profile carried inside E2E (metadata-privacy slice (f), decision 55):
-/// the sender's name and tag and its photo's server path. Authenticated by
-/// the Signal session, still only the sender's own word.
-typedef E2eProfile = ({String username, String tag, String? avatarUrl});
+/// the sender's name and tag and its photo. Authenticated by the Signal
+/// session, still only the sender's own word. `avatar` is decision 138's
+/// end-to-end photo reference (`av`); `avatarUrl` is the legacy server path
+/// (`a`) an older build still sends — read for release A, never written.
+typedef E2eProfile = ({
+  String username,
+  String tag,
+  String? avatarUrl,
+  ProfilePhotoRef? avatar,
+});
 
 /// What a box receipt reports (metadata-privacy slice (g), E61b): the
 /// messages reached this device, or were shown on it.
@@ -158,6 +166,18 @@ class E2eEnvelope {
   static const String _keyProfileUsername = 'u';
   static const String _keyProfileTag = 'g';
   static const String _keyProfileAvatar = 'a';
+
+  /// A profile photo reference ([ProfilePhotoRef], decision 138): `av` in a
+  /// request's or an accept's `p` in place of the server path `a`, and the
+  /// whole payload of a [typeProfile] envelope.
+  static const String _keyProfileAvatarRef = 'av';
+
+  /// The quiet profile update (decision 138): `{t: 'profile', av, ts}` to
+  /// every live device of every friend this device holds an address for and
+  /// to every own sibling, on a photo change, on the first launch of the
+  /// migrating build, and when the last upload is 7 days old. `ts` is when
+  /// the file was made (the receiver clamps it to its own receive time).
+  static const String typeProfile = 'profile';
 
   /// A photo is only ever a file on OUR server's avatar path: the server
   /// serves `<its base>/media/avatars/<file>` (`LocalStorageService
@@ -579,8 +599,9 @@ class E2eEnvelope {
   }
 
   /// The profile `p` any envelope carries (a request, an accept's handoff);
-  /// null when absent or not sound. Its photo is the PATH of a file on our
-  /// server's avatar route (host and query dropped), or null.
+  /// null when absent or not sound. Its photo is the end-to-end reference
+  /// `av` and/or — from an older build — the PATH `a` of a file on our
+  /// server's avatar route (host and query dropped); either may be null.
   static E2eProfile? profileOf(String jsonStr) {
     final envelope = _object(jsonStr);
     return envelope == null ? null : _profileOf(envelope);
@@ -603,16 +624,47 @@ class E2eEnvelope {
         username: username,
         tag: tag,
         avatarUrl: path != null && _avatarPath.hasMatch(path) ? path : null,
+        avatar: ProfilePhotoRef.fromWire(raw[_keyProfileAvatarRef]),
       );
     }
     return null;
   }
 
+  /// Never writes the legacy `a`: only the end-to-end reference travels.
   static Map<String, dynamic> _profileJson(E2eProfile profile) => {
     _keyProfileUsername: profile.username,
     _keyProfileTag: profile.tag,
-    _keyProfileAvatar: ?profile.avatarUrl,
+    if (profile.avatar != null)
+      _keyProfileAvatarRef: profile.avatar!.toWire(),
   };
+
+  /// A [typeProfile] envelope carrying [avatar] (a photo or the cleared
+  /// state), made at its [ProfilePhotoRef.uploadedAt] when known.
+  static Map<String, dynamic> buildProfile(ProfilePhotoRef avatar) => {
+    _keyType: typeProfile,
+    _keyProfileAvatarRef: avatar.toWire(),
+    if (avatar.uploadedAt != null)
+      _keySentAt: avatar.uploadedAt!.millisecondsSinceEpoch,
+  };
+
+  /// The reference a [typeProfile] envelope carries and when its file was
+  /// made (null when `ts` is absent or unsound); null for any other type or
+  /// a reference not spelled exactly ([ProfilePhotoRef.fromWire]).
+  static ({ProfilePhotoRef avatar, DateTime? madeAt})? parseProfile(
+    String jsonStr,
+  ) {
+    final envelope = _object(jsonStr);
+    if (envelope == null || envelope[_keyType] != typeProfile) return null;
+    final avatar = ProfilePhotoRef.fromWire(envelope[_keyProfileAvatarRef]);
+    if (avatar == null) return null;
+    final ts = envelope[_keySentAt];
+    return (
+      avatar: avatar,
+      madeAt: ts is int && ts > 0 && ts <= _maxEpochMs
+          ? DateTime.fromMillisecondsSinceEpoch(ts, isUtc: true)
+          : null,
+    );
+  }
 
   /// A sibling copy of a first contact (E15e): [type] is
   /// [typeFriendRequestSent] or [typeFriendAccepted], [peer] the search

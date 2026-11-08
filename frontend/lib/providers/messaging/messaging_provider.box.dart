@@ -598,6 +598,9 @@ extension MessagingBox on MessagingProvider {
   void onBoxReady() {
     notifyListeners();
     unawaited(catchUpTick());
+    // Decision 138: the migration and the weekly upload need a box that
+    // takes an upload.
+    unawaited(syncOwnPhoto());
   }
 
   /// Reads a delivery from sibling [BoxInboxEntry.senderDeviceId] (its
@@ -817,6 +820,14 @@ extension MessagingBox on MessagingProvider {
         }
         _siblingReadsRelays(device);
         return _takeRelayed(link, msg, plaintext);
+      // A sibling's profile photo (decision 138): the account's own newest
+      // reference. Only through our self-queue, like every copy.
+      case E2eEnvelope.typeProfile:
+        if (!viaSelf) {
+          _e2eFlowLog('BOX_SIBLING_COPY_REFUSED', {'why': 'request_queue'});
+          return true;
+        }
+        return _takeOwnProfile(plaintext);
       // Receipts and typing go to the peer's devices only (E61b): a copy
       // on our own queues is not one we send, and is dropped.
       case E2eEnvelope.typeReceipt || E2eEnvelope.typeTyping:
@@ -1190,6 +1201,10 @@ extension MessagingBox on MessagingProvider {
         return _takeGoodbye(msg.senderId, block: false);
       case E2eEnvelope.typeTimer:
         return _takeBoxTimer(msg.senderId, plaintext, receivedAt);
+      // A friend's new photo (decision 138): its reference, taken only from
+      // a friend and only when newer than the one held. Needs no chat.
+      case E2eEnvelope.typeProfile:
+        return _takeFriendProfile(msg.senderId, plaintext);
       // The peer's receipt or typing (slice (g), E61b): shown in its chat,
       // never held for a chat this device has not linked yet.
       case E2eEnvelope.typeReceipt || E2eEnvelope.typeTyping:

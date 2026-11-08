@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:fireplace/models/profile_photo.dart';
 import 'package:fireplace/services/box/box_first_contact.dart';
 import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/services/contacts/contact_store.dart';
@@ -357,8 +358,13 @@ void main() {
               profile: (
                 username: 'ż' * 64,
                 tag: '9' * 16,
-                avatarUrl:
-                    'https://${'h' * 200}.example/media/avatars/${'a' * 128}',
+                avatarUrl: null,
+                avatar: ProfilePhotoRef(
+                  rev: ProfilePhotoRef.maxRev,
+                  mediaId: '${'A' * 42}E',
+                  key: base64Encode(List.filled(32, 7)),
+                  iv: base64Encode(List.filled(12, 7)),
+                ),
               ),
             ),
           ),
@@ -607,7 +613,6 @@ void main() {
       'id': 342,
       'username': 'ana',
       'tag': '0342',
-      'profilePictureUrl': 'https://h/media/avatars/a.jpg',
       'devices': devices,
       'authorization': {'listVersion': 2},
     };
@@ -634,7 +639,6 @@ void main() {
         )!;
         expect(peer.userId, 342);
         expect(peer.profile, (username: 'ana', tag: '0342'));
-        expect(peer.avatarUrl, 'https://h/media/avatars/a.jpg');
         expect(peer.identityKey, 'IK');
         expect(peer.allOnBox, isTrue);
         expect(peer.addresses.map((a) => a.peerDeviceId), [1, 2]);

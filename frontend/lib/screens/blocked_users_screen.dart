@@ -109,6 +109,7 @@ class _BlockedUserTile extends StatelessWidget {
             size: kConsoleHexHeight,
             displayName: user.username,
             imageUrl: user.profilePictureUrl,
+            avatar: user.avatar,
             surface: FireplaceColors.of(context).convItemBg,
             borderColor: FireplaceColors.of(context).convItemBorder,
             ember: 0,

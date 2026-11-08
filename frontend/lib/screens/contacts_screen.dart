@@ -326,6 +326,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
       pendingInviteSemanticLabel: l10n.invitationSemanticOutgoing,
       localNodeLabel: currentUser?.username ?? '',
       localNodeAvatarUrl: currentUser?.profilePictureUrl,
+      localNodeAvatar: currentUser?.avatar,
       localNodeCaption: l10n.contactNetworkLocalNode,
       emptyTitle: filtering ? l10n.contactsSearchNoResults : l10n.noContactsYet,
       emptyMessage: filtering ? '' : l10n.addFriendsToStart,
@@ -470,6 +471,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                   size: 44,
                   displayName: user.username,
                   imageUrl: user.profilePictureUrl,
+                  avatar: user.avatar,
                   surface: colors.convItemBg,
                   borderColor: colors.convItemBorder,
                   initialsStyle: RpgTheme.bodyFont(

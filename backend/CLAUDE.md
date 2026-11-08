@@ -79,7 +79,7 @@ Entities in `backend/src/**/*.entity.ts` define the dev schema (TypeORM `synchro
 
 ## 8. Media and cleanup
 
-- Avatars are the only account-keyed files: `POST /users/profile-picture` (magic-byte checked) writes `MEDIA_DIR/avatars/`, `GET /media/avatars/:filename` is public and takes a basename only (types and layout → sec "Media storage").
+- Avatars are the only account-keyed files, and nothing writes them any more (decision 138): `POST /users/profile-picture` and every `/users/profile-photos/*` route are gone (404), and `searchUsers` answers carry no photo field. `GET /media/avatars/:filename` (public, basename only; types and layout → sec "Media storage") and `GET /users/me` `profilePictureUrl` stay for the one-time client migration; account delete still unlinks the files. Release B deletes the rest.
 - There is no `POST /media/upload`, no `GET /media/msgs/*` and no media sweep. Old `msgs/` files that survive on a volume are read, served and swept by nothing; the deploy that applied `0027` archives and removes them.
 - Box media lives in `MEDIA_DIR/box/` (→ sec "Box media location").
 - `LocalStorageService.deleteFile()` has a resolved-path containment check against `MEDIA_DIR`. Keep it even if DTO validation looks strict.

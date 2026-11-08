@@ -1,72 +1,79 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:fireplace/models/profile_photo.dart';
 import 'package:fireplace/models/user_model.dart';
 import 'package:fireplace/screens/user_card_screen.dart';
 
 void main() {
-  UserCardVisualData cardFor(Map<String, dynamic> payload) {
+  // Parsed through the wire reader, so a malformed fixture fails loudly.
+  final photo = ProfilePhotoRef.fromWire({
+    'm': '${'A' * 42}E',
+    'k': base64.encode(List.filled(32, 1)),
+    'i': base64.encode(List.filled(12, 2)),
+    'r': 3,
+  })!;
+
+  UserCardVisualData cardFor(
+    Map<String, dynamic> payload, {
+    ProfilePhotoRef? avatar,
+  }) {
     return UserCardVisualData.fromUser(
-      UserModel.fromJson(payload),
+      UserModel.fromJson(payload).copyWith(avatar: avatar),
       isSelf: false,
       hasConversation: true,
     );
   }
 
+  Map<String, dynamic> alice({String? profilePictureUrl}) => {
+    'id': 1,
+    'username': 'alice',
+    'tag': '0042',
+    'profilePictureUrl': profilePictureUrl,
+  };
+
   test('uses compact no-avatar state when a profile has no photo', () {
-    final card = cardFor({
-      'id': 1,
-      'username': 'alice',
-      'tag': '0042',
-      'profilePictureUrl': null,
-      'profilePhotos': [],
-    });
+    final card = cardFor(alice());
 
     expect(card.handle, 'alice#0042');
-    expect(card.photos, isEmpty);
+    expect(card.avatar, isNull);
+    expect(card.legacyPhotoUrl, isNull);
+    expect(card.hasPhoto, isFalse);
   });
 
-  test('adapts legacy primary photo to a single stable card photo', () {
-    final card = cardFor({
-      'id': 1,
-      'username': 'alice',
-      'tag': '0042',
-      'profilePictureUrl': 'https://media.example/avatar.jpg',
-      'profilePhotos': [],
-    });
+  test('carries the end-to-end photo reference as the card photo', () {
+    final card = cardFor(alice(), avatar: photo);
 
-    expect(card.photos, hasLength(1));
-    expect(card.photos.single.url, 'https://media.example/avatar.jpg');
-    expect(card.photos.single.semanticLabel, 'alice#0042');
+    expect(card.avatar, photo);
+    expect(card.hasPhoto, isTrue);
   });
 
-  test('keeps normalized gallery order and immutable identity', () {
-    final card = cardFor({
-      'id': 1,
-      'username': 'alice',
-      'tag': '0042',
-      'profilePictureUrl': 'https://media.example/primary.jpg',
-      'profilePhotos': [
-        {
-          'id': 9,
-          'url': 'https://media.example/primary.jpg',
-          'isPrimary': true,
-          'createdAt': '2026-07-13T12:00:00.000Z',
-        },
-        {
-          'id': 10,
-          'url': 'https://media.example/second.jpg',
-          'isPrimary': false,
-          'createdAt': '2026-07-13T12:01:00.000Z',
-        },
-      ],
-    });
+  test('keeps the legacy server photo for an account without a reference', () {
+    final card = cardFor(
+      alice(profilePictureUrl: 'https://media.example/avatar.jpg'),
+    );
 
-    expect(card.handle, 'alice#0042');
-    expect(card.photos.map((photo) => photo.id), [9, 10]);
-    expect(card.photos.map((photo) => photo.url), [
-      'https://media.example/primary.jpg',
-      'https://media.example/second.jpg',
-    ]);
+    expect(card.avatar, isNull);
+    expect(card.legacyPhotoUrl, 'https://media.example/avatar.jpg');
+    expect(card.hasPhoto, isTrue);
+  });
+
+  test('a blank legacy photo path is no photo', () {
+    final card = cardFor(alice(profilePictureUrl: '  '));
+
+    expect(card.legacyPhotoUrl, isNull);
+    expect(card.hasPhoto, isFalse);
+  });
+
+  test('a removed photo is no photo even while the legacy path lingers', () {
+    final card = cardFor(
+      alice(profilePictureUrl: 'https://media.example/old.jpg'),
+      avatar: const ProfilePhotoRef.cleared(4),
+    );
+
+    expect(card.avatar?.isCleared, isTrue);
+    expect(card.hasPhoto, isFalse);
   });
 
   test('converts expired and timed mutes into the correct visual state', () {

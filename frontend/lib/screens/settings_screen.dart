@@ -369,6 +369,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 radius: 46,
                 displayName: name,
                 avatarUrl: user?.profilePictureUrl,
+                avatar: user?.avatar,
                 initialsFontSize: 24,
               ),
             ),

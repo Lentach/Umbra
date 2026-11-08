@@ -511,6 +511,7 @@ class _SearchIdentityRow extends StatelessWidget {
             size: 44,
             displayName: user.username,
             imageUrl: user.profilePictureUrl,
+            avatar: user.avatar,
             surface: colors.convItemBg,
             // mutedText, not convItemBorder — same 3:1 ring-boundary reason
             // as InvitationRow (design review 2026-08-03).
@@ -764,6 +765,7 @@ class _WaitingComb extends StatelessWidget {
                 size: hexHeight,
                 displayName: request.sender.username,
                 imageUrl: request.sender.profilePictureUrl,
+                avatar: request.sender.avatar,
                 surface: colors.convItemBg,
                 borderColor: expanded ? colorScheme.primary : colors.mutedText,
                 // Every terminal here wants an answer; the open one burns

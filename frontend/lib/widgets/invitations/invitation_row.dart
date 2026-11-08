@@ -66,6 +66,7 @@ class InvitationRow extends StatelessWidget {
                     size: 44,
                     displayName: peer.username,
                     imageUrl: peer.profilePictureUrl,
+                    avatar: peer.avatar,
                     surface: colors.convItemBg,
                     // mutedText, not convItemBorder: on blue that border token
                     // is 1.92:1 on this fill and the ring paints at 0.6 alpha —

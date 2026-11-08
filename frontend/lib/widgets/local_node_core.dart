@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../models/profile_photo.dart';
 import '../theme/rpg_theme.dart';
 import 'hex_avatar.dart';
 
@@ -16,6 +17,7 @@ class LocalNodeCore extends StatelessWidget {
     required this.radius,
     required this.displayName,
     this.avatarUrl,
+    this.avatar,
     this.focused = false,
     this.initialsFontSize = 16,
   });
@@ -23,6 +25,7 @@ class LocalNodeCore extends StatelessWidget {
   final double radius;
   final String displayName;
   final String? avatarUrl;
+  final ProfilePhotoRef? avatar;
 
   /// Draws the keyboard-focus ring just outside the rim.
   final bool focused;
@@ -46,6 +49,7 @@ class LocalNodeCore extends StatelessWidget {
         child: ClipOval(
           child: HexAvatarSurface(
             imageUrl: avatarUrl,
+            avatar: avatar,
             initials: hexInitials(displayName),
             surface: colors.convItemBg,
             initialsStyle: RpgTheme.bodyFont(

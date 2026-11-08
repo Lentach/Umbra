@@ -13,8 +13,10 @@ import '../providers/friends_provider.dart';
 import '../providers/messaging_provider.dart';
 import '../providers/passcode_provider.dart';
 import '../providers/settings_provider.dart';
+import '../services/api_service.dart';
 import '../services/box/box_client.dart';
 import '../services/contacts/contact_store.dart';
+import '../services/profile/legacy_photo.dart';
 import '../services/push_service.dart';
 import '../theme/rpg_theme.dart';
 import '../widgets/avatar_circle.dart';
@@ -103,7 +105,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         contactStore: ContactStore(
           open: () => enc.encryptionService.contentKv,
           selfProfile: () => auth.currentUser,
-        ),
+        )..onSelfAvatarChanged = auth.adoptOwnAvatar,
         // PR2.4: owned by AuthProvider (the password lives only there);
         // handed here so the connect path can restore before the socket.
         contactBackup: auth.contactBackup,
@@ -114,6 +116,14 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       // Wire MessagingProvider dependencies
       msg.setEncryptionProvider(enc);
       msg.setConversationsProvider(convs);
+      // Decision 138's one-time migration: the account's server photo, asked
+      // of `/users/me` itself (release A only).
+      msg.legacyOwnPhoto = () async {
+        await auth.ensureSessionReady();
+        final token = auth.token;
+        if (token == null) throw StateError('no session');
+        return fetchLegacyOwnPhoto(ApiService(baseUrl: AppConfig.baseUrl), token);
+      };
 
       // (lxxix): the encryption layer decides between the manual key-change
       // ceremony and the demoted auto-acknowledge off this live setting.
@@ -444,6 +454,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
             displayName: user?.username ?? '',
             radius: 22,
             profilePictureUrl: user?.profilePictureUrl,
+            avatar: user?.avatar,
           ),
         ),
       ),

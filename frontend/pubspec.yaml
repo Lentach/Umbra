@@ -6,7 +6,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 
 # App version: semver only (0.0.1, 0.0.2, 0.0.3, …). Bump PATCH by +1 on each release (see root CLAUDE.md §5).
 # Do not add a +suffix here — that is Flutter build metadata, not our user-visible version.
-version: 0.2.78
+version: 0.2.79
 
 environment:
   sdk: ^3.10.7
@@ -42,6 +42,9 @@ dependencies:
   shared_preferences_platform_interface: ^2.4.2
   package_info_plus: ^8.3.0
   image_picker: ^1.2.3
+  # Profile photo (decision 138): the ONLY JPEG encoder — dart:ui encodes
+  # PNG alone. Fed a ≤256×256 buffer the platform codec already scaled.
+  image: ^4.8.0
   file_picker: ^11.0.2
   cross_file: ^0.3.4
   # PR2.3 history backup: the ONLY way an exported file reaches the user on

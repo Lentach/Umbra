@@ -129,6 +129,9 @@ extension MessagingFirstContact on MessagingProvider {
     if (targets.isEmpty || targets.any((d) => served[d]?.request == null)) {
       return FirstContactSend.failed;
     }
+    // An upload older than a week is made again FIRST (decision 138): the
+    // `av` this request carries must name a file the box still holds.
+    await _refreshOwnPhotoIfStale();
     final me = link.firstContact.ownProfile;
     if (me == null) return FirstContactSend.failed;
     final asked = await link.firstContact.asked(
@@ -136,7 +139,6 @@ extension MessagingFirstContact on MessagingProvider {
       profile: peer.profile,
       addresses: [for (final d in targets) served[d]!.request!],
       bundles: peer.servedBundles,
-      avatarUrl: peer.avatarUrl,
     );
     if (!asked) return FirstContactSend.failed;
     // Our own devices first, all of them (E15e, decision 16): a sibling
@@ -339,7 +341,6 @@ extension MessagingFirstContact on MessagingProvider {
                 'id': userId,
                 'username': record.username,
                 'tag': record.tag,
-                'profilePictureUrl': ?record.avatarUrl,
                 'authorization': _encryptionProvider
                     ?.cachedDeviceList(userId)
                     ?.authorization,
@@ -478,17 +479,21 @@ extension MessagingFirstContact on MessagingProvider {
       return true;
     }
     final offered = E2eEnvelope.parseFriendRequest(plaintext);
+    await _refreshOwnPhotoIfStale();
     final me = link.firstContact.ownProfile;
     if (offered == null || me == null) {
       refused('not_a_request');
       return true;
     }
+    final theirs = offered.profile?.avatar;
     if (!await link.firstContact.befriend(
       user,
       avatarUrl: _ownServerAvatar(offered.profile?.avatarUrl),
+      avatar: theirs,
     )) {
       return false;
     }
+    if (theirs != null) profilePhotos?.fetch(theirs);
     await link.acceptFirstContact(
       user,
       device,
@@ -527,6 +532,7 @@ extension MessagingFirstContact on MessagingProvider {
     }
     // Our own profile rides the accept (decision 55): without it nothing is
     // decrypted, since a decrypt spends the frame's one-time pre-key.
+    await _refreshOwnPhotoIfStale();
     if (link.firstContact.ownProfile == null) return FirstContactAccept.failed;
     var peer = served;
     FirstContactClaim? asked;
@@ -689,21 +695,25 @@ extension MessagingFirstContact on MessagingProvider {
     FirstContactPeer peer,
     Map<int, ({String sid, String sealPub, E2eProfile? profile})> offered,
   ) async {
+    await _refreshOwnPhotoIfStale();
     final me = link.firstContact.ownProfile;
     if (me == null) return false;
     final stated = offered.values
         .map((o) => o.profile?.avatarUrl)
         .whereType<String>()
         .firstOrNull;
+    final theirs = _newestPhoto(offered.values.map((o) => o.profile?.avatar));
     if (!await link.firstContact.befriend(
       peer.userId,
       profile: peer.profile,
-      avatarUrl: _ownServerAvatar(stated) ?? peer.avatarUrl,
+      avatarUrl: _ownServerAvatar(stated),
+      avatar: theirs,
       addresses: peer.addresses,
       bundles: peer.servedBundles,
     )) {
       return false;
     }
+    if (theirs != null) profilePhotos?.fetch(theirs);
     for (final MapEntry(key: device, value: queue) in offered.entries) {
       await link.acceptFirstContact(
         peer.userId,
@@ -764,12 +774,16 @@ extension MessagingFirstContact on MessagingProvider {
     if (link == null || !_boxPending(record, ContactState.pendingOut)) {
       return true;
     }
+    final theirs = E2eEnvelope.profileOf(plaintext);
     if (!await link.firstContact.befriend(
       userId,
-      avatarUrl: _ownServerAvatar(E2eEnvelope.profileOf(plaintext)?.avatarUrl),
+      avatarUrl: _ownServerAvatar(theirs?.avatarUrl),
+      avatar: theirs?.avatar,
     )) {
       return false;
     }
+    final photo = theirs?.avatar;
+    if (photo != null) profilePhotos?.fetch(photo);
     link.firstContactFriend(userId);
     await _relayFriendship(userId);
     _afterBoxFriendship(userId, outgoing: true);
@@ -829,7 +843,6 @@ extension MessagingFirstContact on MessagingProvider {
         profile: peer.profile,
         addresses: peer.addresses,
         bundles: peer.servedBundles,
-        avatarUrl: peer.avatarUrl,
       )) {
         onBoxContactsChanged?.call();
       }
@@ -846,7 +859,6 @@ extension MessagingFirstContact on MessagingProvider {
           profile: peer.profile,
           addresses: peer.addresses,
           bundles: peer.servedBundles,
-          avatarUrl: peer.avatarUrl,
         )) {
       // A request the server carries, a blocked account: not ours to make.
       return true;

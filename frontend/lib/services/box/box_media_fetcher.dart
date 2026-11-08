@@ -46,11 +46,13 @@ class _Fetch {
 }
 
 class _Job {
-  _Job(this.userId, this.id, this.receivedAt);
+  _Job(this.userId, this.id, this.receivedAt, {this.maxBytes, this.onKept});
 
   final int userId;
   final Uint8List id;
   final DateTime receivedAt;
+  final int? maxBytes;
+  final void Function(Uint8List ciphertext)? onKept;
   int failures = 0;
 }
 
@@ -100,11 +102,28 @@ class BoxMediaFetcher {
   /// Keeps a copy of [id] in the background, one download at a time; never
   /// awaited. Given up once the box can no longer hold it: not_found, or
   /// [kBoxMediaLifetime] after [receivedAt].
-  void prefetch(int userId, Uint8List id, {required DateTime receivedAt}) {
+  ///
+  /// [maxBytes] (default: the 20 MiB attachment cap) refuses a larger file
+  /// unkept — a profile photo is a few KiB, and a friend's reference may
+  /// name any media id. [onKept] is told the unframed ciphertext once a copy
+  /// is kept (or was already): the download finished, whenever that is.
+  void prefetch(
+    int userId,
+    Uint8List id, {
+    required DateTime receivedAt,
+    int? maxBytes,
+    void Function(Uint8List ciphertext)? onKept,
+  }) {
     if (_disposed) return;
     final key = _key(userId, id);
     if (_pending.containsKey(key) || _forgotten.contains(key)) return;
-    final job = _Job(userId, Uint8List.fromList(id), receivedAt);
+    final job = _Job(
+      userId,
+      Uint8List.fromList(id),
+      receivedAt,
+      maxBytes: maxBytes,
+      onKept: onKept,
+    );
     _pending[key] = job;
     _queue.add(job);
     unawaited(_drain());
@@ -117,13 +136,21 @@ class BoxMediaFetcher {
     int userId,
     Uint8List id, {
     required DateTime receivedAt,
+    int? maxBytes,
+    void Function(Uint8List ciphertext)? onKept,
   }) async {
     try {
       if (await _store.has(userId, id)) return;
     } on Object {
       // Unknown: prefetch decides.
     }
-    prefetch(userId, id, receivedAt: receivedAt);
+    prefetch(
+      userId,
+      id,
+      receivedAt: receivedAt,
+      maxBytes: maxBytes,
+      onKept: onKept,
+    );
   }
 
   /// Keeps [ciphertext] (unframed) as this device's copy of [id]: the
@@ -166,8 +193,12 @@ class BoxMediaFetcher {
           _pending.remove(key);
           continue;
         }
-        final fetch = await _shared(job.userId, job.id);
+        final fetch = await _shared(job.userId, job.id, maxBytes: job.maxBytes);
         if (_disposed) return;
+        if (fetch.outcome == _Outcome.kept && !_forgotten.contains(key)) {
+          final ciphertext = fetch.ciphertext;
+          if (ciphertext != null) _told(job, ciphertext);
+        }
         if (fetch.outcome != _Outcome.retry || _forgotten.contains(key)) {
           _pending.remove(key);
           continue;
@@ -190,23 +221,37 @@ class BoxMediaFetcher {
     }
   }
 
-  Future<_Fetch> _shared(int userId, Uint8List id) {
+  /// [job]'s [_Job.onKept], whose own failure never stops the queue.
+  void _told(_Job job, Uint8List ciphertext) {
+    try {
+      job.onKept?.call(ciphertext);
+    } on Object {
+      // The caller's problem: the copy is kept either way.
+    }
+  }
+
+  Future<_Fetch> _shared(int userId, Uint8List id, {int? maxBytes}) {
     final key = _key(userId, id);
-    return _inFlight[key] ??= _loadOnce(key, userId, id);
+    return _inFlight[key] ??= _loadOnce(key, userId, id, maxBytes);
   }
 
   /// [_load] always suspends on the store first, so the `finally` runs only
   /// after [_shared] has filed this future under [key].
-  Future<_Fetch> _loadOnce(String key, int userId, Uint8List id) async {
+  Future<_Fetch> _loadOnce(
+    String key,
+    int userId,
+    Uint8List id,
+    int? maxBytes,
+  ) async {
     try {
-      return await _load(userId, id);
+      return await _load(userId, id, maxBytes);
     } finally {
       // The removed entry is this very future: never awaited here.
       unawaited(_inFlight.remove(key));
     }
   }
 
-  Future<_Fetch> _load(int userId, Uint8List id) async {
+  Future<_Fetch> _load(int userId, Uint8List id, int? maxBytes) async {
     final key = _key(userId, id);
     try {
       final kept = await _store.get(userId, id);
@@ -225,7 +270,8 @@ class BoxMediaFetcher {
         // Asking again fetches the same bytes, so these are given up.
         final ciphertext = unframeMedia(value);
         if (ciphertext == null ||
-            ciphertext.length > MediaCryptoService.maxCiphertextBytes) {
+            ciphertext.length >
+                (maxBytes ?? MediaCryptoService.maxCiphertextBytes)) {
           return const _Fetch(_Outcome.gone);
         }
         // Destroyed meanwhile: its copy must not come back.

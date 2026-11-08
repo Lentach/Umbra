@@ -31,6 +31,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
+import '../../models/profile_photo.dart';
 import '../../models/user_model.dart';
 import '../encryption/content_sealer.dart';
 import '../passcode_kdf.dart';
@@ -195,18 +196,26 @@ class ContactBackupPayload {
     ],
   };
 
+  /// The own profile as the backup keeps it. The photo is its REFERENCE only
+  /// (`{m,k,i,r}`, ~100 B, never the file, and not when it was made): a
+  /// restore after the box copy expired shows initials until the next
+  /// re-send (decision 138).
   static Map<String, dynamic> _userToJson(UserModel user) => {
     'id': user.id,
     'username': user.username,
     'tag': user.tag,
     if (user.profilePictureUrl != null)
       'profilePictureUrl': user.profilePictureUrl,
+    if (user.avatar != null) 'avatar': user.avatar!.toWire(),
   };
 
   static UserModel? _userFromJson(Object? raw) {
     if (raw is! Map) return null;
     try {
-      return UserModel.fromJson(Map<String, dynamic>.from(raw));
+      final json = Map<String, dynamic>.from(raw);
+      return UserModel.fromJson(
+        json,
+      ).copyWith(avatar: ProfilePhotoRef.fromWire(json['avatar']));
     } on Object {
       return null;
     }

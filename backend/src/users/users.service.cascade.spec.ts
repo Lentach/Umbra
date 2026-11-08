@@ -31,7 +31,6 @@ describe('UsersService.deleteAccount – cascade', () => {
   const mockRefreshTokens = {
     revokeAllForUser: jest.fn().mockResolvedValue(undefined),
   };
-  const mockDataSource = {};
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -43,7 +42,6 @@ describe('UsersService.deleteAccount – cascade', () => {
       mockProfilePhotoRepo as unknown as never,
       mockStorage as any,
       mockKeyBundles as any,
-      mockDataSource as any,
       mockRefreshTokens as any,
     );
   });

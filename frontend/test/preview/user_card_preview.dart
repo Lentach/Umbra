@@ -31,26 +31,9 @@ class UserCardPreviewApp extends StatelessWidget {
     final variant = params['variant'] ?? 'self';
     // ?style= removed: S2 "Frosted Backdrop" shipped; losing styles stripped.
 
-    // Deliberately mixed aspects: square, portrait, landscape — the round-3
-    // adaptive hero must size itself to each without bars or crop.
-    final photos = [
-      const UserCardPhoto(
-        id: 1,
-        url: 'https://picsum.photos/seed/fireplace1/900/900',
-        isPrimary: true,
-        semanticLabel: 'bob208#9939',
-      ),
-      const UserCardPhoto(
-        id: 2,
-        url: 'https://picsum.photos/seed/fireplace2/800/1200',
-        semanticLabel: 'bob208#9939',
-      ),
-      const UserCardPhoto(
-        id: 3,
-        url: 'https://picsum.photos/seed/fireplace3/1200/700',
-        semanticLabel: 'bob208#9939',
-      ),
-    ];
+    // The card shows ONE photo now (decision 138); the harness has no
+    // decrypted file, so it uses the legacy server photo path.
+    const photoUrl = 'https://picsum.photos/seed/fireplace2/800/1200';
 
     final data = switch (variant) {
       'other' => UserCardVisualData(
@@ -60,7 +43,7 @@ class UserCardPreviewApp extends StatelessWidget {
         about: 'see you by the fire',
         isSelf: false,
         hasConversation: true,
-        photos: photos,
+        legacyPhotoUrl: photoUrl,
       ),
       'noPhoto' => const UserCardVisualData(
         userId: 3,
@@ -76,7 +59,7 @@ class UserCardPreviewApp extends StatelessWidget {
         about: 'just a random bob',
         isSelf: true,
         hasConversation: false,
-        photos: photos,
+        legacyPhotoUrl: photoUrl,
       ),
     };
 

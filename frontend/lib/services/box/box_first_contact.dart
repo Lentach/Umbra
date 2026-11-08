@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import '../../models/profile_photo.dart';
 import '../../utils/e2e_envelope.dart';
 import '../../utils/message_ids.dart';
 import '../contacts/contact_record.dart';
@@ -92,7 +93,6 @@ class FirstContactPeer {
     required this.userId,
     required this.profile,
     required this.devices,
-    this.avatarUrl,
     this.authorization,
   });
 
@@ -136,12 +136,10 @@ class FirstContactPeer {
       if (devices.isEmpty) return null;
       final map = json as Map<String, dynamic>;
       final authorization = map['authorization'];
-      final avatar = map['profilePictureUrl'];
       return FirstContactPeer(
         userId: userId,
         profile: (username: username, tag: tag),
         devices: devices,
-        avatarUrl: avatar is String ? avatar : null,
         authorization: authorization is Map<String, dynamic>
             ? authorization
             : null,
@@ -152,7 +150,6 @@ class FirstContactPeer {
 
   final int userId;
   final FirstContactClaim profile;
-  final String? avatarUrl;
   final List<FirstContactDevice> devices;
 
   /// The byte-exact `deviceList` record; null for an account never enrolled.
@@ -197,7 +194,6 @@ class FirstContactPeer {
       'id': userId,
       'username': profile.username,
       'tag': profile.tag,
-      'profilePictureUrl': ?avatarUrl,
       'authorization': authorization,
       'devices': [
         for (final d in devices)
@@ -246,16 +242,19 @@ class BoxFirstContact {
 
   /// This account's own profile as a request and an accept carry it
   /// (decision 55): the store's self row, seeded from the auth profile.
-  /// Null before the store knows it.
+  /// Its photo is the end-to-end reference (decision 138) when there is a
+  /// photo — never a cleared one, never the legacy server path. Null before
+  /// the store knows it.
   E2eProfile? get ownProfile {
     final self = _store.self;
-    return self == null
-        ? null
-        : (
-            username: self.username,
-            tag: self.tag,
-            avatarUrl: self.profilePictureUrl,
-          );
+    if (self == null) return null;
+    final avatar = self.avatar;
+    return (
+      username: self.username,
+      tag: self.tag,
+      avatarUrl: null,
+      avatar: avatar != null && avatar.hasPhoto ? avatar : null,
+    );
   }
 
   /// A fresh search answer for [peer], a friendship or request made over
@@ -589,7 +588,6 @@ class BoxFirstContact {
     required FirstContactClaim profile,
     required List<ContactOutbound> addresses,
     Map<int, Map<String, dynamic>> bundles = const {},
-    String? avatarUrl,
   }) async {
     var asked = false;
     final ok = await _store.update(userId, (current) {
@@ -620,7 +618,6 @@ class BoxFirstContact {
         state: ContactState.pendingOut,
         username: profile.username,
         tag: profile.tag,
-        avatarUrl: avatarUrl,
         // A `former` record swept from a server request still names it: a
         // box request never does (every box rule reads `requestId == null`).
         legacy: base.legacy.copyWith(clearRequest: true),
@@ -636,7 +633,7 @@ class BoxFirstContact {
 
   /// [userId]'s pending box request — either way — became a friendship
   /// (E15d, E15e, E15f): `friend` under its local chat id (decision 52),
-  /// with the VERIFIED [profile] and [avatarUrl] when the accept looked it
+  /// with the VERIFIED [profile] when the accept looked it
   /// up, and the peer's request [addresses] and served [bundles] when
   /// known; the kept frames go. False for anything that is not a pending
   /// box request.
@@ -644,6 +641,7 @@ class BoxFirstContact {
     int userId, {
     FirstContactClaim? profile,
     String? avatarUrl,
+    ProfilePhotoRef? avatar,
     List<ContactOutbound>? addresses,
     Map<int, Map<String, dynamic>>? bundles,
   }) async {
@@ -659,6 +657,7 @@ class BoxFirstContact {
         username: profile?.username,
         tag: profile?.tag,
         avatarUrl: avatarUrl,
+        avatar: avatar,
         legacy: current.legacy.copyWith(
           conversationId: localConversationIdFor(userId),
           conversationCreatedAt: _now(),

@@ -3,12 +3,11 @@ import {
   ConflictException,
   UnauthorizedException,
   NotFoundException,
-  BadRequestException,
   ForbiddenException,
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { User } from './user.entity';
 import { ProfilePhoto } from './profile-photo.entity';
@@ -27,7 +26,6 @@ export class UsersService {
     private profilePhotoRepo: Repository<ProfilePhoto>,
     private storageService: LocalStorageService,
     private keyBundlesService: KeyBundlesService,
-    private dataSource: DataSource,
     private refreshTokensService: RefreshTokensService,
   ) {}
 
@@ -95,183 +93,6 @@ export class UsersService {
     return this.profilePhotoRepo.find({
       where: { userId },
       order: { position: 'ASC', id: 'ASC' },
-    });
-  }
-
-  async addProfilePhoto(
-    userId: number,
-    url: string,
-    storageKey: string,
-  ): Promise<ProfilePhoto[]> {
-    return this.dataSource.transaction(async (manager) => {
-      const user = await manager.findOne(User, {
-        where: { id: userId },
-        lock: { mode: 'pessimistic_write' },
-      });
-      if (!user) throw new NotFoundException('User not found');
-
-      const photosRepo = manager.getRepository(ProfilePhoto);
-      const photos = await photosRepo.find({
-        where: { userId },
-        order: { position: 'ASC', id: 'ASC' },
-      });
-      if (photos.length >= 3) {
-        throw new BadRequestException(
-          'A profile can have at most three photos',
-        );
-      }
-      const saved = await photosRepo.save(
-        photosRepo.create({
-          userId,
-          url,
-          storageKey,
-          isPrimary: photos.length === 0,
-          position: photos.length,
-        }),
-      );
-      if (saved.isPrimary) {
-        await manager.update(User, userId, {
-          profilePictureUrl: saved.url,
-          profilePicturePublicId: saved.storageKey,
-        });
-      }
-      return photosRepo.find({
-        where: { userId },
-        order: { position: 'ASC', id: 'ASC' },
-      });
-    });
-  }
-
-  async setPrimaryProfilePhoto(
-    userId: number,
-    photoId: number,
-  ): Promise<ProfilePhoto[]> {
-    return this.dataSource.transaction(async (manager) => {
-      const user = await manager.findOne(User, {
-        where: { id: userId },
-        lock: { mode: 'pessimistic_write' },
-      });
-      if (!user) throw new NotFoundException('User not found');
-
-      const photosRepo = manager.getRepository(ProfilePhoto);
-      const photos = await photosRepo.find({
-        where: { userId },
-        order: { position: 'ASC', id: 'ASC' },
-      });
-      const photo = photos.find(({ id }) => id === photoId);
-      if (!photo) throw new NotFoundException('Profile photo not found');
-
-      await this.persistProfilePhotoOrder(manager, userId, photos, [
-        photoId,
-        ...photos.filter(({ id }) => id !== photoId).map(({ id }) => id),
-      ]);
-      return photosRepo.find({
-        where: { userId },
-        order: { position: 'ASC', id: 'ASC' },
-      });
-    });
-  }
-
-  async reorderProfilePhotos(
-    userId: number,
-    orderedIds: number[],
-  ): Promise<ProfilePhoto[]> {
-    return this.dataSource.transaction(async (manager) => {
-      const user = await manager.findOne(User, {
-        where: { id: userId },
-        lock: { mode: 'pessimistic_write' },
-      });
-      if (!user) throw new NotFoundException('User not found');
-
-      const photosRepo = manager.getRepository(ProfilePhoto);
-      const photos = await photosRepo.find({
-        where: { userId },
-        order: { position: 'ASC', id: 'ASC' },
-      });
-      const photoIds = new Set(photos.map(({ id }) => id));
-      const orderedIdSet = new Set(orderedIds);
-      if (
-        orderedIds.length !== photos.length ||
-        orderedIdSet.size !== orderedIds.length ||
-        orderedIds.some((id) => !photoIds.has(id))
-      ) {
-        throw new BadRequestException(
-          'orderedIds must contain exactly the user profile photo ids',
-        );
-      }
-
-      await this.persistProfilePhotoOrder(manager, userId, photos, orderedIds);
-      return photosRepo.find({
-        where: { userId },
-        order: { position: 'ASC', id: 'ASC' },
-      });
-    });
-  }
-
-  private async persistProfilePhotoOrder(
-    manager: EntityManager,
-    userId: number,
-    photos: ProfilePhoto[],
-    orderedIds: number[],
-  ): Promise<void> {
-    const photoById = new Map(photos.map((photo) => [photo.id, photo]));
-
-    await manager.update(ProfilePhoto, { userId }, { isPrimary: false });
-    for (const [position, id] of orderedIds.entries()) {
-      await manager.update(
-        ProfilePhoto,
-        { id, userId },
-        { position, isPrimary: position === 0 },
-      );
-    }
-
-    const primaryPhoto = photoById.get(orderedIds[0]);
-    await manager.update(User, userId, {
-      profilePictureUrl: primaryPhoto?.url ?? null,
-      profilePicturePublicId: primaryPhoto?.storageKey ?? null,
-    });
-  }
-
-  async deleteProfilePhoto(
-    userId: number,
-    photoId: number,
-  ): Promise<ProfilePhoto[]> {
-    const photo = await this.profilePhotoRepo.findOne({
-      where: { id: photoId, userId },
-    });
-    if (!photo) throw new NotFoundException('Profile photo not found');
-    if (photo.storageKey)
-      await this.storageService.deleteAvatar(photo.storageKey);
-
-    return this.dataSource.transaction(async (manager) => {
-      const user = await manager.findOne(User, {
-        where: { id: userId },
-        lock: { mode: 'pessimistic_write' },
-      });
-      if (!user) throw new NotFoundException('User not found');
-
-      const photosRepo = manager.getRepository(ProfilePhoto);
-      const photos = await photosRepo.find({
-        where: { userId },
-        order: { position: 'ASC', id: 'ASC' },
-      });
-      if (!photos.some(({ id }) => id === photoId)) {
-        throw new NotFoundException('Profile photo not found');
-      }
-
-      await manager.delete(ProfilePhoto, { id: photoId, userId });
-      const remainingPhotos = photos.filter(({ id }) => id !== photoId);
-      await this.persistProfilePhotoOrder(
-        manager,
-        userId,
-        remainingPhotos,
-        remainingPhotos.map(({ id }) => id),
-      );
-
-      return photosRepo.find({
-        where: { userId },
-        order: { position: 'ASC', id: 'ASC' },
-      });
     });
   }
 

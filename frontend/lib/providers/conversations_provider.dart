@@ -129,7 +129,9 @@ class ConversationsProvider extends ChangeNotifier {
 
   /// Replaces [_conversations] with the store's chats when the set of chats
   /// differs; a chat already shown keeps its row (pin preview, a setting
-  /// whose store write is still queued). False when nothing changed or the
+  /// whose store write is still queued) — except that its peer takes the
+  /// photo the contact record holds now (decision 138: a friend's photo
+  /// moves without the chat set changing). False when nothing changed or the
   /// store is closed.
   bool _rebuildChats() {
     final store = _store;
@@ -144,11 +146,37 @@ class ConversationsProvider extends ChangeNotifier {
     ];
     final held = {for (final c in _conversations) c.id: c};
     final ids = {for (final r in records) r.chatId!};
-    if (held.length == ids.length && ids.every(held.containsKey)) return false;
-    _conversations = [
-      for (final r in records)
-        held[r.chatId!] ?? _withBoxPinShown(_chatOf(r, self)),
-    ];
+    var changed = !(held.length == ids.length && ids.every(held.containsKey));
+    final next = <ConversationModel>[];
+    for (final r in records) {
+      final shown = held[r.chatId!];
+      if (shown == null) {
+        next.add(_withBoxPinShown(_chatOf(r, self)));
+      } else if (shown.userTwo.id == r.userId &&
+          shown.userTwo.avatar != r.avatar) {
+        changed = true;
+        next.add(
+          ConversationModel(
+            id: shown.id,
+            userOne: shown.userOne,
+            userTwo: shown.userTwo.copyWith(
+              avatar: r.avatar,
+              clearAvatar: r.avatar == null,
+            ),
+            createdAt: shown.createdAt,
+            disappearingTimer: shown.disappearingTimer,
+            pinnedMessageId: shown.pinnedMessageId,
+            pinnedMessagePreview: shown.pinnedMessagePreview,
+            muted: shown.muted,
+            mutedUntil: shown.mutedUntil,
+          ),
+        );
+      } else {
+        next.add(shown);
+      }
+    }
+    if (!changed) return false;
+    _conversations = next;
     return true;
   }
 

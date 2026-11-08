@@ -325,6 +325,7 @@ class ConversationTile extends StatelessWidget {
                     size: hexSize,
                     displayName: displayName,
                     imageUrl: otherUser?.profilePictureUrl,
+                    avatar: otherUser?.avatar,
                     surface: colors.convItemBg,
                     borderColor: colors.convItemBorder,
                     ember: _ember,

@@ -2885,26 +2885,38 @@ abstract class AppLocalizations {
   /// No description provided for @userCardAddPhoto.
   ///
   /// In pl, this message translates to:
-  /// **'Dodaj zdjęcie'**
+  /// **'Ustaw zdjęcie'**
   String get userCardAddPhoto;
 
-  /// No description provided for @userCardPhotoLimitReached.
+  /// No description provided for @userCardChangePhoto.
   ///
   /// In pl, this message translates to:
-  /// **'Osiągnięto limit zdjęć'**
-  String get userCardPhotoLimitReached;
-
-  /// No description provided for @userCardSetMainPhoto.
-  ///
-  /// In pl, this message translates to:
-  /// **'Ustaw jako główne zdjęcie'**
-  String get userCardSetMainPhoto;
+  /// **'Zmień zdjęcie'**
+  String get userCardChangePhoto;
 
   /// No description provided for @userCardDeletePhoto.
   ///
   /// In pl, this message translates to:
-  /// **'Usuń to zdjęcie'**
+  /// **'Usuń zdjęcie'**
   String get userCardDeletePhoto;
+
+  /// No description provided for @userCardPhotoUnreadable.
+  ///
+  /// In pl, this message translates to:
+  /// **'Nie udało się odczytać tego zdjęcia. Wybierz inne.'**
+  String get userCardPhotoUnreadable;
+
+  /// No description provided for @userCardPhotoNoRoute.
+  ///
+  /// In pl, this message translates to:
+  /// **'Połączenie nie jest jeszcze gotowe. Spróbuj za chwilę.'**
+  String get userCardPhotoNoRoute;
+
+  /// No description provided for @userCardPhotoFailed.
+  ///
+  /// In pl, this message translates to:
+  /// **'Nie udało się zmienić zdjęcia. Spróbuj ponownie.'**
+  String get userCardPhotoFailed;
 
   /// No description provided for @userCardSave.
   ///
@@ -2978,24 +2990,6 @@ abstract class AppLocalizations {
   /// **'Kopiuj tag'**
   String get userCardCopyTag;
 
-  /// No description provided for @userCardManagePhotos.
-  ///
-  /// In pl, this message translates to:
-  /// **'Zarządzaj zdjęciami'**
-  String get userCardManagePhotos;
-
-  /// No description provided for @userCardPhotoOfCount.
-  ///
-  /// In pl, this message translates to:
-  /// **'Zdjęcie {index} z {count}'**
-  String userCardPhotoOfCount(Object index, Object count);
-
-  /// No description provided for @userCardMainPhotoHint.
-  ///
-  /// In pl, this message translates to:
-  /// **'To jest Twoje główne zdjęcie — kontakty widzą je na czatach.'**
-  String get userCardMainPhotoHint;
-
   /// No description provided for @userCardAboutHint.
   ///
   /// In pl, this message translates to:
@@ -3007,12 +3001,6 @@ abstract class AppLocalizations {
   /// In pl, this message translates to:
   /// **'Udostępnione multimedia'**
   String get userCardSharedMedia;
-
-  /// No description provided for @userCardDragReorderHint.
-  ///
-  /// In pl, this message translates to:
-  /// **'Przytrzymaj i przeciągnij, aby zmienić kolejność — pierwsze zdjęcie jest Twoim głównym.'**
-  String get userCardDragReorderHint;
 
   /// No description provided for @settingsChatBackground.
   ///

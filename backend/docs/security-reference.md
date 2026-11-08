@@ -4,7 +4,7 @@ Detail relocated from `backend/CLAUDE.md` §8 (media), §10 (link previews and S
 
 ## Media storage (§8)
 
-- Self-hosted storage is avatars only: `LocalStorageService` writes `avatars/<uuid>.(jpg|png)` under `MEDIA_DIR`; they arrive through `POST /users/profile-picture` (magic-byte validated) and are served by the public `GET /media/avatars/:filename`.
+- Self-hosted storage is avatars only and is read-only now (decision 138): `LocalStorageService` only deletes `avatars/<uuid>.(jpg|png)` under `MEDIA_DIR` (account delete); no route uploads one. The files that remain are served by the public `GET /media/avatars/:filename` for the one-time client migration, and release B removes them.
 - There is no `POST /media/upload` and no `msgs/` route, writer or sweep (removed in Phase 4 step 5): message attachments travel as E2E blobs through the box (`POST /box/media`). Old `msgs/` files stay on disk until the deploy's ops step archives and removes them; no code reads or serves them.
 
 ## Box media location (§8)
