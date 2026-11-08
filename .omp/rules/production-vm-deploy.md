@@ -45,7 +45,9 @@ cd ~/fireplace
 
 What it does: `git pull` → computes `APP_VERSION` (from `frontend/pubspec.yaml`), `GIT_COMMIT`,
 `BUILD_TIME` → `docker compose -f docker-compose.prod.yml build backend` → `up -d backend` →
-waits for `(healthy)` → curls `/version` + `/health`.
+waits for `(healthy)` → curls `/version` + `/health` → on a healthy deploy only, prunes Docker build
+cache older than 72h (it otherwise grows with every deploy: ~10 GB in five weeks by 2026-11-08; a prune
+failure never fails the deploy).
 
 Preflight aborts if `~/fireplace/.env` is missing any of: `ALLOWED_ORIGINS`, `MEDIA_BASE_URL`,
 `JWT_SECRET`, `WEB_PUSH_VAPID_PUBLIC_KEY`, `WEB_PUSH_VAPID_PRIVATE_KEY` (compose also fails fast
