@@ -10,7 +10,6 @@ import {
 } from '../../key-bundles/key-bundles.service';
 import { validateDto } from '../utils/dto.validator';
 import { SearchUsersDto, SetRequestQueueDto } from '../dto/chat.dto';
-import { UserMapper } from '../mappers/user.mapper';
 import { deviceAuthorizationPayload } from '../mappers/device-authorization.mapper';
 import { ChatKeyExchangeService } from './chat-key-exchange.service';
 
@@ -79,7 +78,12 @@ export class ChatSearchService {
       const boxOn = this.configService.get<string>('BOX_ENABLED') === 'true';
       client.emit('searchUsersResult', [
         {
-          ...UserMapper.toPayload(user),
+          // Decision 138: no photo field. A profile photo reaches a friend
+          // over the box; the server shows none to a searcher.
+          id: user.id,
+          username: user.username,
+          tag: user.tag,
+          about: user.about ?? null,
           ...(boxOn
             ? await this.reach(user.id, server)
             : { devices: [], authorization: null }),

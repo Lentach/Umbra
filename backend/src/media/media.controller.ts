@@ -16,8 +16,9 @@ const useXAccel = process.env.MEDIA_X_ACCEL_REDIRECT === 'true';
 const mediaDir = process.env.MEDIA_DIR ?? '/app/media';
 
 /**
- * Public avatar serving only. There is no upload route here (avatars come in
- * through `POST /users/profile-picture`) and no `msgs/` route: old-path message
+ * Public avatar serving only, for the one-time client migration (decision 138).
+ * There is no upload route (a profile photo travels over the box) and no
+ * `msgs/` route: old-path message
  * attachments were removed in Phase 4 step 5, and box media has its own
  * controller under `/box/media`.
  */

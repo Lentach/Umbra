@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/semantics.dart';
 
+import '../models/profile_photo.dart';
 import '../models/user_model.dart';
 import '../theme/rpg_theme.dart';
 import '../utils/caption_metrics.dart';
@@ -35,6 +36,7 @@ class ContactNetworkView extends StatefulWidget {
     this.pendingInviteSemanticLabel,
     required this.localNodeLabel,
     this.localNodeAvatarUrl,
+    this.localNodeAvatar,
     required this.localNodeCaption,
     required this.emptyTitle,
     required this.emptyMessage,
@@ -74,6 +76,7 @@ class ContactNetworkView extends StatefulWidget {
 
   /// The local user's avatar, shown inside the core reticle when set.
   final String? localNodeAvatarUrl;
+  final ProfilePhotoRef? localNodeAvatar;
   final String localNodeCaption;
   final String emptyTitle;
   final String emptyMessage;
@@ -645,6 +648,7 @@ class _ContactNetworkViewState extends State<ContactNetworkView>
                 radius: radius,
                 displayName: widget.localNodeLabel,
                 avatarUrl: widget.localNodeAvatarUrl,
+                avatar: widget.localNodeAvatar,
               ),
               const SizedBox(height: 6),
               Text(
@@ -858,18 +862,20 @@ class _ContactNetworkViewState extends State<ContactNetworkView>
                         clipper: const HexClipper(),
                         child: ValueListenableBuilder<int>(
                           valueListenable: _armedThroughRow,
-                          builder: (context, armed, _) => HexAvatarSurface(
-                            imageUrl: row <= math.max(armed, _armedFloor)
-                                ? contact.profilePictureUrl
-                                : null,
-                            initials: _initials(contact.username),
-                            surface: colors.convItemBg,
-                            initialsStyle: RpgTheme.bodyFont(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w800,
-                              color: colorScheme.onSurface,
-                            ),
-                          ),
+                          builder: (context, armed, _) {
+                            final shown = row <= math.max(armed, _armedFloor);
+                            return HexAvatarSurface(
+                              imageUrl: shown ? contact.profilePictureUrl : null,
+                              avatar: shown ? contact.avatar : null,
+                              initials: _initials(contact.username),
+                              surface: colors.convItemBg,
+                              initialsStyle: RpgTheme.bodyFont(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w800,
+                                color: colorScheme.onSurface,
+                              ),
+                            );
+                          },
                         ),
                       ),
                     ),

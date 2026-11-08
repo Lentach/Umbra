@@ -1,78 +1,72 @@
 import 'reflect-metadata';
 import {
+  ExecutionContext,
   BadRequestException,
   HttpStatus,
+  INestApplication,
   ValidationPipe,
 } from '@nestjs/common';
 import { GUARDS_METADATA, HTTP_CODE_METADATA } from '@nestjs/common/constants';
+import { Test } from '@nestjs/testing';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { VerifyPasswordDto } from './dto/user.dto';
 import { UsersController } from './users.controller';
+import { UsersService } from './users.service';
 
 describe('UsersController', () => {
-  const usersService = {
-    getProfilePhotos: jest.fn(),
-    addProfilePhoto: jest.fn(),
-    reorderProfilePhotos: jest.fn(),
-  };
-  const storageService = {
-    uploadAvatar: jest.fn(),
-    deleteAvatar: jest.fn(),
-  };
-  const controller = new UsersController(
-    usersService as any,
-    storageService as any,
-  );
+  describe('profile photo routes (decision 138: a photo travels over the box)', () => {
+    let app: INestApplication;
+    let base: string;
+    const usersService = { findProfileById: jest.fn() };
 
-  beforeEach(() => {
-    jest.clearAllMocks();
-  });
-
-  it('deletes a newly uploaded asset when profile-photo persistence fails', async () => {
-    usersService.getProfilePhotos.mockResolvedValue([]);
-    storageService.uploadAvatar.mockResolvedValue({
-      secureUrl: '/avatars/new-photo.jpg',
-      publicId: 'avatars/new-photo.jpg',
+    beforeAll(async () => {
+      const moduleRef = await Test.createTestingModule({
+        controllers: [UsersController],
+        providers: [{ provide: UsersService, useValue: usersService }],
+      })
+        .overrideGuard(JwtAuthGuard)
+        .useValue({
+          canActivate: (ctx: ExecutionContext) => {
+            ctx.switchToHttp().getRequest().user = { id: 7 };
+            return true;
+          },
+        })
+        .compile();
+      app = moduleRef.createNestApplication();
+      await app.listen(0, '127.0.0.1');
+      base = await app.getUrl();
     });
-    usersService.addProfilePhoto.mockRejectedValue(
-      new BadRequestException('A profile can have at most three photos'),
-    );
-    storageService.deleteAvatar.mockResolvedValue(undefined);
 
-    await expect(
-      controller.uploadProfilePicture(
-        {
-          buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-          mimetype: 'image/png',
-        } as Express.Multer.File,
-        { user: { id: 7 } },
-      ),
-    ).rejects.toThrow('A profile can have at most three photos');
+    afterAll(async () => {
+      await app.close();
+    });
 
-    expect(storageService.deleteAvatar).toHaveBeenCalledWith(
-      'avatars/new-photo.jpg',
-    );
-  });
-  it('rejects before uploading when the gallery already holds three photos', async () => {
-    usersService.getProfilePhotos.mockResolvedValue([
-      { id: 1 },
-      { id: 2 },
-      { id: 3 },
-    ]);
+    it.each([
+      ['POST', '/users/profile-picture'],
+      ['POST', '/users/profile-photos/3/main'],
+      ['POST', '/users/profile-photos/order'],
+      ['DELETE', '/users/profile-photos/3'],
+    ])('%s %s answers 404: an older build cannot change a photo', async (method, path) => {
+      const res = await fetch(`${base}${path}`, { method });
+      expect(res.status).toBe(404);
+    });
 
-    await expect(
-      controller.uploadProfilePicture(
-        {
-          buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-          mimetype: 'image/png',
-        } as Express.Multer.File,
-        { user: { id: 7 } },
-      ),
-    ).rejects.toThrow('A profile can have at most three photos');
-
-    // The pre-check must short-circuit before any asset is uploaded, so a
-    // full gallery never orphans a freshly uploaded file.
-    expect(storageService.uploadAvatar).not.toHaveBeenCalled();
+    it('GET /users/me still serves the legacy server photo the one-time migration reads', async () => {
+      usersService.findProfileById.mockResolvedValue({
+        id: 7,
+        username: 'alice',
+        tag: '1234',
+        about: null,
+        profilePictureUrl: '/avatars/alice.jpg',
+        profilePhotos: [],
+      });
+      const res = await fetch(`${base}/users/me`);
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({
+        id: 7,
+        profilePictureUrl: '/avatars/alice.jpg',
+      });
+    });
   });
 
   describe('POST /users/verify-password', () => {
@@ -111,48 +105,5 @@ describe('UsersController', () => {
         ).rejects.toThrow(BadRequestException);
       },
     );
-  });
-
-  it('forwards the requested photo order and returns the fresh primary-first list', async () => {
-    const createdAt = new Date('2026-07-16T00:00:00.000Z');
-    usersService.reorderProfilePhotos.mockResolvedValue([
-      {
-        id: 3,
-        url: '/avatars/three.jpg',
-        isPrimary: true,
-        position: 0,
-        createdAt,
-      },
-      {
-        id: 1,
-        url: '/avatars/one.jpg',
-        isPrimary: false,
-        position: 1,
-        createdAt,
-      },
-    ]);
-
-    await expect(
-      controller.reorderProfilePhotos(
-        { orderedIds: [3, 1] },
-        { user: { id: 7 } },
-      ),
-    ).resolves.toEqual({
-      profilePhotos: [
-        {
-          id: 3,
-          url: '/avatars/three.jpg',
-          isPrimary: true,
-          createdAt,
-        },
-        {
-          id: 1,
-          url: '/avatars/one.jpg',
-          isPrimary: false,
-          createdAt,
-        },
-      ],
-    });
-    expect(usersService.reorderProfilePhotos).toHaveBeenCalledWith(7, [3, 1]);
   });
 });

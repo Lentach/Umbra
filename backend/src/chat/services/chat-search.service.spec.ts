@@ -50,11 +50,21 @@ describe('ChatSearchService', () => {
   let client: FakeClient;
   const server = {} as Server;
 
+  // The account HAS a legacy server photo and a gallery: decision 138, the
+  // search answer must show neither (a photo reaches a friend over the box).
   const stranger = {
     id: 2,
     username: 'alice',
     tag: '1234',
-    profilePictureUrl: null,
+    profilePictureUrl: '/avatars/alice.jpg',
+    profilePhotos: [
+      {
+        id: 9,
+        url: '/avatars/alice.jpg',
+        isPrimary: true,
+        createdAt: new Date('2026-01-01'),
+      },
+    ],
   };
   const bundleFor = (deviceId: number): PreKeyBundleResponse => ({
     registrationId: 100 + deviceId,
@@ -144,8 +154,6 @@ describe('ChatSearchService', () => {
           username: 'alice',
           tag: '1234',
           about: null,
-          profilePictureUrl: null,
-          profilePhotos: [],
           devices: [
             { deviceId: 1, bundle: bundleFor(1), requestSid: sid, sealPub },
             {

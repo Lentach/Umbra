@@ -1668,16 +1668,25 @@ class AppLocalizationsPl extends AppLocalizations {
   String get userCardEditAbout => 'Edytuj opis';
 
   @override
-  String get userCardAddPhoto => 'Dodaj zdjęcie';
+  String get userCardAddPhoto => 'Ustaw zdjęcie';
 
   @override
-  String get userCardPhotoLimitReached => 'Osiągnięto limit zdjęć';
+  String get userCardChangePhoto => 'Zmień zdjęcie';
 
   @override
-  String get userCardSetMainPhoto => 'Ustaw jako główne zdjęcie';
+  String get userCardDeletePhoto => 'Usuń zdjęcie';
 
   @override
-  String get userCardDeletePhoto => 'Usuń to zdjęcie';
+  String get userCardPhotoUnreadable =>
+      'Nie udało się odczytać tego zdjęcia. Wybierz inne.';
+
+  @override
+  String get userCardPhotoNoRoute =>
+      'Połączenie nie jest jeszcze gotowe. Spróbuj za chwilę.';
+
+  @override
+  String get userCardPhotoFailed =>
+      'Nie udało się zmienić zdjęcia. Spróbuj ponownie.';
 
   @override
   String get userCardSave => 'Zapisz';
@@ -1716,26 +1725,10 @@ class AppLocalizationsPl extends AppLocalizations {
   String get userCardCopyTag => 'Kopiuj tag';
 
   @override
-  String get userCardManagePhotos => 'Zarządzaj zdjęciami';
-
-  @override
-  String userCardPhotoOfCount(Object index, Object count) {
-    return 'Zdjęcie $index z $count';
-  }
-
-  @override
-  String get userCardMainPhotoHint =>
-      'To jest Twoje główne zdjęcie — kontakty widzą je na czatach.';
-
-  @override
   String get userCardAboutHint => 'Kilka słów o Tobie';
 
   @override
   String get userCardSharedMedia => 'Udostępnione multimedia';
-
-  @override
-  String get userCardDragReorderHint =>
-      'Przytrzymaj i przeciągnij, aby zmienić kolejność — pierwsze zdjęcie jest Twoim głównym.';
 
   @override
   String get settingsChatBackground => 'Tło czatu';

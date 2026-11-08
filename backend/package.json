@@ -36,7 +36,6 @@
     "@nestjs/throttler": "^6.7.0",
     "@nestjs/typeorm": "^11.0.3",
     "@nestjs/websockets": "^11.1.28",
-    "@types/multer": "^2.2.0",
     "argon2": "^0.45.1",
     "bcrypt": "^6.0.0",
     "class-transformer": "^0.5.1",
@@ -46,7 +45,6 @@
     "express": "^5.2.1",
     "firebase-admin": "^13.6.1",
     "helmet": "^8.3.0",
-    "multer": "^2.3.0",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "pg": "^8.22.0",
@@ -87,7 +85,7 @@
     "firebase-admin": {
       "uuid": "^11.1.1"
     },
-    "multer": "$multer"
+    "multer": "^2.3.0"
   },
   "jest": {
     "moduleFileExtensions": [

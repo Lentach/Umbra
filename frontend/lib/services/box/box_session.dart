@@ -1069,6 +1069,7 @@ class BoxSession
         username: current.username,
         tag: current.tag,
         avatarUrl: current.avatarUrl,
+        avatar: current.avatar,
         state: block ? ContactState.blocked : ContactState.former,
         queues: current.queues,
         boxOrigin: origin == null ? null : ContactBoxOrigin(at: origin.at),

@@ -40,7 +40,6 @@ describe('UsersService.verifyPassword', () => {
       {},
       {},
       {},
-      {},
       mockRefreshTokens,
     ] as unknown as ConstructorParameters<typeof UsersService>;
     service = new UsersService(...deps);

@@ -76,34 +76,25 @@ void main() {
       expect(user.displayHandle, 'notag#0000');
     });
 
-    test('fromJson parses about and profilePhotos', () {
-      final user = UserModel.fromJson({
-        'id': 4,
-        'username': 'photos',
-        'tag': '9999',
-        'about': 'bio text',
-        'profilePhotos': [
-          {
-            'id': 11,
-            'url': 'https://example.com/p1.png',
-            'isPrimary': true,
-            'createdAt': '2026-03-01T10:30:00.000Z',
-          },
-          {
-            'id': 12,
-            'url': 'https://example.com/p2.png',
-            'isPrimary': false,
-            'createdAt': '2026-03-02T10:30:00.000Z',
-          },
-        ],
-      });
-      expect(user.about, 'bio text');
-      expect(user.profilePhotos, hasLength(2));
-      expect(user.profilePhotos[0].id, 11);
-      expect(user.profilePhotos[0].url, 'https://example.com/p1.png');
-      expect(user.profilePhotos[0].isPrimary, isTrue);
-      expect(user.profilePhotos[1].id, 12);
-      expect(user.profilePhotos[1].isPrimary, isFalse);
-    });
+    test(
+      'fromJson reads about and the legacy photo path, and never takes an '
+      'end-to-end avatar or a photo list from the server (decision 138)',
+      () {
+        final user = UserModel.fromJson({
+          'id': 4,
+          'username': 'photos',
+          'tag': '9999',
+          'about': 'bio text',
+          'profilePictureUrl': '/media/avatars/a.jpg',
+          'avatar': {'r': 1, 'x': 1},
+          'profilePhotos': [
+            {'id': 11, 'url': 'https://example.com/p1.png'},
+          ],
+        });
+        expect(user.about, 'bio text');
+        expect(user.profilePictureUrl, '/media/avatars/a.jpg');
+        expect(user.avatar, isNull);
+      },
+    );
   });
 }

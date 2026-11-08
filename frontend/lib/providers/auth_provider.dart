@@ -1,9 +1,9 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:jwt_decoder/jwt_decoder.dart';
 import 'package:http/http.dart' as http;
+import '../models/profile_photo.dart';
 import '../models/user_model.dart';
 import '../services/auth_token_store.dart';
 import '../services/api_service.dart';
@@ -199,6 +199,12 @@ class AuthProvider extends ChangeNotifier {
   String? _token;
   String? _refreshToken;
   UserModel? _currentUser;
+
+  /// This account's own end-to-end photo (decision 138). The server never
+  /// states it, so it is held here apart from [_currentUser]: every profile
+  /// re-fetch rebuilds that from `/users/me`, and the photo must survive it.
+  /// Told by the contact store that holds it ([adoptOwnAvatar]).
+  ProfilePhotoRef? _ownAvatar;
   String? _statusMessage;
   AuthStatusCode? _statusCode;
   bool _isError = false;
@@ -281,9 +287,9 @@ class AuthProvider extends ChangeNotifier {
       final existing = _currentUser;
       if (existing != null && existing.id == id) {
         // Same account (e.g. silent 15-min token refresh): keep the fully
-        // hydrated profile (profilePhotos, about, profilePictureUrl, ...) and
+        // hydrated profile (about, profilePictureUrl, the photo, ...) and
         // only refresh the identity fields the JWT actually carries. Rebuilding
-        // from claims alone would collapse profilePhotos to [] and drop about.
+        // from claims alone would drop about.
         _currentUser = existing.copyWith(id: id, username: username, tag: tag);
       } else {
         // Cold start or account switch: no fully-hydrated prior profile to
@@ -293,6 +299,7 @@ class AuthProvider extends ChangeNotifier {
           username: username,
           tag: tag,
           profilePictureUrl: existing?.profilePictureUrl,
+          avatar: _ownAvatar,
         );
       }
     } catch (_) {}
@@ -442,6 +449,7 @@ class AuthProvider extends ChangeNotifier {
     _token = null;
     _refreshToken = null;
     _currentUser = null;
+    _ownAvatar = null;
     _statusMessage = null;
     _statusCode = null;
     _isError = false;
@@ -645,7 +653,7 @@ class AuthProvider extends ChangeNotifier {
   Future<bool> _hydrateCurrentUserOnBoot() async {
     try {
       final userData = await _api.fetchMe(_token!);
-      _currentUser = UserModel.fromJson(userData);
+      _currentUser = _withOwnAvatar(UserModel.fromJson(userData));
     } on Exception catch (e) {
       if (e is ApiException && e.statusCode == 401) {
         if (_refreshToken != null) {
@@ -653,7 +661,7 @@ class AuthProvider extends ChangeNotifier {
             await _refreshSessionLocked();
             if (_token != null) {
               final userData = await _api.fetchMe(_token!);
-              _currentUser = UserModel.fromJson(userData);
+              _currentUser = _withOwnAvatar(UserModel.fromJson(userData));
             }
           } on SessionRefreshInvalidException catch (refreshError) {
             await _clearLocalAuthState(
@@ -840,7 +848,7 @@ class AuthProvider extends ChangeNotifier {
   }) async {
     await _persistTokens(body);
     final userData = await _api.fetchMe(_token!);
-    _currentUser = UserModel.fromJson(userData);
+    _currentUser = _withOwnAvatar(UserModel.fromJson(userData));
 
     _statusMessage = null;
     _statusCode = null;
@@ -892,63 +900,23 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> updateProfilePicture(XFile imageFile) async {
-    if (_token == null) {
-      throw Exception('Not authenticated');
+  /// The contact store told us this account's own photo reference (a photo,
+  /// the cleared state, or none): what every screen that shows "me" reads
+  /// from [currentUser]. A reference alone never leaves the device.
+  void adoptOwnAvatar(ProfilePhotoRef? avatar) {
+    if (_ownAvatar == avatar) return;
+    _ownAvatar = avatar;
+    final user = _currentUser;
+    if (user != null) {
+      _currentUser = avatar == null
+          ? user.copyWith(clearAvatar: true)
+          : user.copyWith(avatar: avatar);
     }
-
-    try {
-      await _api.uploadProfilePicture(_token!, imageFile);
-
-      final userData = await _api.fetchMe(_token!);
-      _currentUser = UserModel.fromJson(userData);
-      notifyListeners();
-    } catch (e) {
-      throw Exception(e.toString().replaceFirst('Exception: ', ''));
-    }
+    if (!_disposed) notifyListeners();
   }
 
-  Future<void> setPrimaryProfilePhoto(int photoId) async {
-    if (_token == null || _currentUser == null) {
-      throw Exception('Not authenticated');
-    }
-    final photos = await _api.setPrimaryProfilePhoto(_token!, photoId);
-    final primary = photos.firstWhere((photo) => photo.isPrimary);
-    _currentUser = _currentUser!.copyWith(
-      profilePhotos: photos,
-      profilePictureUrl: primary.url,
-    );
-    notifyListeners();
-  }
-
-  /// Persists an explicit photo order; the first id becomes the primary
-  /// photo (backend contract for POST /users/profile-photos/order).
-  Future<void> reorderProfilePhotos(List<int> orderedIds) async {
-    if (_token == null || _currentUser == null) {
-      throw Exception('Not authenticated');
-    }
-    final photos = await _api.reorderProfilePhotos(_token!, orderedIds);
-    final primary = photos.firstWhere((photo) => photo.isPrimary);
-    _currentUser = _currentUser!.copyWith(
-      profilePhotos: photos,
-      profilePictureUrl: primary.url,
-    );
-    notifyListeners();
-  }
-
-  Future<void> deleteProfilePhoto(int photoId) async {
-    if (_token == null || _currentUser == null) {
-      throw Exception('Not authenticated');
-    }
-    final photos = await _api.deleteProfilePhoto(_token!, photoId);
-    final primary = photos.where((photo) => photo.isPrimary).firstOrNull;
-    _currentUser = _currentUser!.copyWith(
-      profilePhotos: photos,
-      profilePictureUrl: primary?.url,
-      clearProfilePicture: primary == null,
-    );
-    notifyListeners();
-  }
+  UserModel _withOwnAvatar(UserModel user) =>
+      _ownAvatar == null ? user : user.copyWith(avatar: _ownAvatar);
 
   Future<void> updateProfileAbout(String? about) async {
     if (_token == null || _currentUser == null) {

@@ -22,6 +22,8 @@ import '../services/device_link/dak_store.dart';
 import '../services/device_link/link_ceremony_controller.dart'
     show ProvisioningEventSink, linkPlatformLabel;
 import '../services/device_list/device_authority_engine.dart';
+import '../services/profile/profile_photo_cache.dart';
+import '../services/profile/profile_photos.dart';
 import '../services/server_clock.dart';
 import '../services/socket_service.dart';
 import '../utils/e2e_diag_log.dart';
@@ -536,10 +538,14 @@ class ConnectionProvider extends ChangeNotifier {
           push: PushBoxSource(),
         );
         final session = _box!;
+        final mediaStore = BoxMediaStore.device();
         _boxMedia = BoxMediaFetcher(
-          store: BoxMediaStore.device(),
+          store: mediaStore,
           download: session.downloadMedia,
         );
+        // Decision 138: the profile photos read the same device copies the
+        // box attachments do, and show decrypted from memory.
+        ProfilePhotoCache.shared.bind(store: mediaStore, userId: userId);
         // Slice (b): every box delivery is read by the messaging provider,
         // which knows the peer only through the contact record. Slice (c):
         // it sends through the same session. Sibling queues: it encrypts
@@ -584,6 +590,12 @@ class ConnectionProvider extends ChangeNotifier {
             ..boxFriends = _box
             ..boxFirstContact = _box
             ..boxMedia = _boxMedia
+            // Decision 138: the own photo and the friends'.
+            ..profilePhotos = ProfilePhotos(
+              store: contacts,
+              outbox: session,
+              media: _boxMedia!,
+            )
             // Decisions 101 B / 103: siblings heard, `alive`, "Keep".
             ..boxAlive = BoxSiblingAlive(store: contacts);
           _encryptionProvider?.lookupBoxPeerList = messaging.lookupBoxPeerList;
@@ -1581,6 +1593,7 @@ class ConnectionProvider extends ChangeNotifier {
     unawaited(BoxPushNids.clear());
     _boxMedia?.dispose();
     _boxMedia = null;
+    ProfilePhotoCache.shared.unbind();
     _unwireBox();
     final store = _contactStore;
     final retiring = _boxRetiring;
@@ -1659,7 +1672,8 @@ class ConnectionProvider extends ChangeNotifier {
       ..boxSiblings = null
       ..boxFriends = null
       ..boxFirstContact = null
-      ..boxMedia = null;
+      ..boxMedia = null
+      ..profilePhotos = null;
   }
 
   // ---------- Dispose ----------

@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:fireplace/models/profile_photo.dart';
 import 'package:fireplace/providers/auth_provider.dart';
 import 'package:fireplace/services/api_service.dart';
 import 'package:fireplace/services/contacts/contact_backup_service.dart';
@@ -447,152 +448,104 @@ void main() {
       },
     );
 
+    MockClient meMock() => MockClient((request) async {
+      if (request.url.path == '/auth/refresh') {
+        return http.Response(
+          jsonEncode({
+            'access_token': _validAccessJwt,
+            'refresh_token': 'opaque_refresh',
+          }),
+          201,
+          headers: {'Content-Type': 'application/json'},
+        );
+      }
+      if (request.url.path == '/users/me') {
+        return http.Response(
+          jsonEncode({
+            'id': 1,
+            'username': 'test',
+            'tag': '0000',
+            'profilePictureUrl': 'https://cdn/p1.jpg',
+            'about': 'hello world',
+          }),
+          200,
+          headers: {'Content-Type': 'application/json'},
+        );
+      }
+      throw Exception('Unexpected ${request.url.path}');
+    });
+
+    final photo = ProfilePhotoRef(
+      rev: 5,
+      mediaId: '${'A' * 42}E',
+      key: base64Encode(List.filled(32, 1)),
+      iv: base64Encode(List.filled(12, 1)),
+    );
+
     test(
-      'same-user token restore preserves hydrated profilePhotos and about',
+      'same-user token restore preserves the hydrated about, the legacy photo '
+      'path and the own end-to-end avatar',
       () async {
         SharedPreferences.setMockInitialValues({
           'jwt_token': _validAccessJwt,
           'refresh_token': 'opaque_refresh',
         });
-
-        final mock = MockClient((request) async {
-          if (request.url.path == '/auth/refresh') {
-            return http.Response(
-              jsonEncode({
-                'access_token': _validAccessJwt,
-                'refresh_token': 'opaque_refresh',
-              }),
-              201,
-              headers: {'Content-Type': 'application/json'},
-            );
-          }
-          if (request.url.path == '/users/me') {
-            // Server hydrates the self profile with a full gallery + about.
-            return http.Response(
-              jsonEncode({
-                'id': 1,
-                'username': 'test',
-                'tag': '0000',
-                'profilePictureUrl': 'https://cdn/p1.jpg',
-                'about': 'hello world',
-                'profilePhotos': [
-                  {
-                    'id': 1,
-                    'url': 'https://cdn/p1.jpg',
-                    'isPrimary': true,
-                    'createdAt': '2026-01-01T00:00:00.000Z',
-                  },
-                  {
-                    'id': 2,
-                    'url': 'https://cdn/p2.jpg',
-                    'isPrimary': false,
-                    'createdAt': '2026-01-02T00:00:00.000Z',
-                  },
-                  {
-                    'id': 3,
-                    'url': 'https://cdn/p3.jpg',
-                    'isPrimary': false,
-                    'createdAt': '2026-01-03T00:00:00.000Z',
-                  },
-                ],
-              }),
-              200,
-              headers: {'Content-Type': 'application/json'},
-            );
-          }
-          throw Exception('Unexpected ${request.url.path}');
-        });
-
         final auth = AuthProvider(
-          api: ApiService(baseUrl: base, httpClient: mock),
+          api: ApiService(baseUrl: base, httpClient: meMock()),
         );
         await _waitForAuthSettled(auth, expectLoggedIn: true);
-        expect(auth.currentUser?.profilePhotos.length, 3,
-            reason: 'seed precondition: gallery must be hydrated from /users/me');
+        auth.adoptOwnAvatar(photo);
+        expect(auth.currentUser?.avatar, photo);
 
         // A silent 15-min token refresh re-runs _restoreUserFromAccessJwt for
-        // the SAME account; it must not collapse the gallery or drop about.
+        // the SAME account; it must not drop about or the photo.
         auth.setAccessTokenForTest(_validAccessJwt);
 
         expect(auth.currentUser?.id, 1);
-        expect(auth.currentUser?.profilePhotos.length, 3);
-        expect(
-          auth.currentUser?.profilePhotos.map((p) => p.id).toList(),
-          [1, 2, 3],
-        );
         expect(auth.currentUser?.about, 'hello world');
         expect(auth.currentUser?.profilePictureUrl, 'https://cdn/p1.jpg');
+        expect(auth.currentUser?.avatar, photo);
       },
     );
 
     test(
-      'different-user token restore does not carry over stale profilePhotos',
+      'a removed own avatar clears from the profile everything shows',
       () async {
         SharedPreferences.setMockInitialValues({
           'jwt_token': _validAccessJwt,
           'refresh_token': 'opaque_refresh',
         });
-
-        final mock = MockClient((request) async {
-          if (request.url.path == '/auth/refresh') {
-            return http.Response(
-              jsonEncode({
-                'access_token': _validAccessJwt,
-                'refresh_token': 'opaque_refresh',
-              }),
-              201,
-              headers: {'Content-Type': 'application/json'},
-            );
-          }
-          if (request.url.path == '/users/me') {
-            return http.Response(
-              jsonEncode({
-                'id': 1,
-                'username': 'test',
-                'tag': '0000',
-                'profilePictureUrl': 'https://cdn/p1.jpg',
-                'about': 'hello world',
-                'profilePhotos': [
-                  {
-                    'id': 1,
-                    'url': 'https://cdn/p1.jpg',
-                    'isPrimary': true,
-                    'createdAt': '2026-01-01T00:00:00.000Z',
-                  },
-                  {
-                    'id': 2,
-                    'url': 'https://cdn/p2.jpg',
-                    'isPrimary': false,
-                    'createdAt': '2026-01-02T00:00:00.000Z',
-                  },
-                  {
-                    'id': 3,
-                    'url': 'https://cdn/p3.jpg',
-                    'isPrimary': false,
-                    'createdAt': '2026-01-03T00:00:00.000Z',
-                  },
-                ],
-              }),
-              200,
-              headers: {'Content-Type': 'application/json'},
-            );
-          }
-          throw Exception('Unexpected ${request.url.path}');
-        });
-
         final auth = AuthProvider(
-          api: ApiService(baseUrl: base, httpClient: mock),
+          api: ApiService(baseUrl: base, httpClient: meMock()),
         );
         await _waitForAuthSettled(auth, expectLoggedIn: true);
-        expect(auth.currentUser?.profilePhotos.length, 3);
+        expect(auth.currentUser?.avatar, isNull);
+        auth.adoptOwnAvatar(photo);
+        auth.adoptOwnAvatar(null);
+        expect(auth.currentUser?.avatar, isNull);
+      },
+    );
+
+    test(
+      'different-user token restore does not carry over the previous '
+      "account's about",
+      () async {
+        SharedPreferences.setMockInitialValues({
+          'jwt_token': _validAccessJwt,
+          'refresh_token': 'opaque_refresh',
+        });
+        final auth = AuthProvider(
+          api: ApiService(baseUrl: base, httpClient: meMock()),
+        );
+        await _waitForAuthSettled(auth, expectLoggedIn: true);
+        auth.adoptOwnAvatar(photo);
 
         // Account switch: a JWT for a different user id must NOT inherit the
-        // previous account's gallery/about.
+        // previous account's about.
         auth.setAccessTokenForTest(_otherUserAccessJwt);
 
         expect(auth.currentUser?.id, 2);
         expect(auth.currentUser?.username, 'other');
-        expect(auth.currentUser?.profilePhotos, isEmpty);
         expect(auth.currentUser?.about, isNull);
       },
     );

@@ -3,6 +3,8 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../config/app_config.dart';
+import '../models/profile_photo.dart';
+import '../services/profile/profile_photo_cache.dart';
 
 /// Pointy-top hexagon geometry + avatar surface shared by the Contacts
 /// honeycomb (`contact_network_view.dart`) and the Chats list tile, so both
@@ -53,6 +55,12 @@ class HexClipper extends CustomClipper<Path> {
 /// The hex fill: the user's avatar covering the whole box, or the themed
 /// surface + initials when there is no (loadable) avatar. Unclipped — the
 /// caller owns the clip so it can also paint chrome over the result.
+///
+/// [avatar] (decision 138) — the end-to-end photo reference — decides when
+/// it is set: the decrypted file when this device holds it, else initials,
+/// and NEVER the legacy [imageUrl] behind it (a removed photo must not
+/// bring the server copy back). Without one, [imageUrl] is the legacy
+/// server photo of a friend on an older build.
 class HexAvatarSurface extends StatefulWidget {
   const HexAvatarSurface({
     super.key,
@@ -60,9 +68,11 @@ class HexAvatarSurface extends StatefulWidget {
     required this.initials,
     required this.surface,
     required this.initialsStyle,
+    this.avatar,
   });
 
   final String? imageUrl;
+  final ProfilePhotoRef? avatar;
   final String initials;
   final Color surface;
   final TextStyle initialsStyle;
@@ -99,6 +109,22 @@ class _HexAvatarSurfaceState extends State<HexAvatarSurface> {
 
   @override
   Widget build(BuildContext context) {
+    final avatar = widget.avatar;
+    if (avatar != null) {
+      return ListenableBuilder(
+        listenable: ProfilePhotoCache.shared,
+        builder: (context, _) {
+          final bytes = ProfilePhotoCache.shared.bytesFor(avatar);
+          if (bytes == null) return _fallback();
+          return Image.memory(
+            bytes,
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+            errorBuilder: (context, error, stackTrace) => _fallback(),
+          );
+        },
+      );
+    }
     final url = widget.imageUrl;
     if (url == null || url.trim().isEmpty || _imageLoadError) {
       return _fallback();
@@ -129,6 +155,7 @@ class HexAvatar extends StatelessWidget {
     required this.surface,
     required this.borderColor,
     required this.initialsStyle,
+    this.avatar,
     this.ember = 0,
     this.emberColor,
   });
@@ -137,6 +164,7 @@ class HexAvatar extends StatelessWidget {
   final double size;
   final String displayName;
   final String? imageUrl;
+  final ProfilePhotoRef? avatar;
   final Color surface;
   final Color borderColor;
   final TextStyle initialsStyle;
@@ -158,6 +186,7 @@ class HexAvatar extends StatelessWidget {
           clipper: const HexClipper(),
           child: HexAvatarSurface(
             imageUrl: imageUrl,
+            avatar: avatar,
             initials: hexInitials(displayName),
             surface: surface,
             initialsStyle: initialsStyle,

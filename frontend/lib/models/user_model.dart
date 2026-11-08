@@ -1,32 +1,20 @@
-class UserProfilePhoto {
-  final int id;
-  final String url;
-  final bool isPrimary;
-  final DateTime createdAt;
-
-  const UserProfilePhoto({
-    required this.id,
-    required this.url,
-    required this.isPrimary,
-    required this.createdAt,
-  });
-
-  factory UserProfilePhoto.fromJson(Map<String, dynamic> json) {
-    return UserProfilePhoto(
-      id: json['id'] as int,
-      url: json['url'] as String,
-      isPrimary: json['isPrimary'] as bool,
-      createdAt: DateTime.parse(json['createdAt'] as String),
-    );
-  }
-}
+import 'profile_photo.dart';
 
 class UserModel {
   final int id;
   final String username;
   final String tag;
+
+  /// The server photo path a pre-decision-138 account still has: read for
+  /// release A only (the own migration source, an older friend's `a`), shown
+  /// only while [avatar] names nothing. Removed in release B.
   final String? profilePictureUrl;
-  final List<UserProfilePhoto> profilePhotos;
+
+  /// The end-to-end photo reference (decision 138) — the photo this account
+  /// itself sent, never the server's word. When set it decides what shows,
+  /// a cleared one included: a removed photo is initials, never the legacy
+  /// URL behind it.
+  final ProfilePhotoRef? avatar;
   final String? about;
 
   UserModel({
@@ -34,7 +22,7 @@ class UserModel {
     required this.username,
     required this.tag,
     this.profilePictureUrl,
-    this.profilePhotos = const [],
+    this.avatar,
     this.about,
   });
 
@@ -47,11 +35,6 @@ class UserModel {
       tag: json['tag'] as String? ?? '0000',
       profilePictureUrl: json['profilePictureUrl'] as String?,
       about: json['about'] as String?,
-      profilePhotos: (json['profilePhotos'] as List<dynamic>? ?? const [])
-          .map((value) => UserProfilePhoto.fromJson(
-                value as Map<String, dynamic>,
-              ))
-          .toList(growable: false),
     );
   }
 
@@ -61,7 +44,8 @@ class UserModel {
     String? tag,
     String? profilePictureUrl,
     bool clearProfilePicture = false,
-    List<UserProfilePhoto>? profilePhotos,
+    ProfilePhotoRef? avatar,
+    bool clearAvatar = false,
     String? about,
     bool clearAbout = false,
   }) {
@@ -72,7 +56,7 @@ class UserModel {
       profilePictureUrl: clearProfilePicture
           ? null
           : profilePictureUrl ?? this.profilePictureUrl,
-      profilePhotos: profilePhotos ?? this.profilePhotos,
+      avatar: clearAvatar ? null : avatar ?? this.avatar,
       about: clearAbout ? null : about ?? this.about,
     );
   }

@@ -2,11 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
-import 'package:image_picker/image_picker.dart';
 
 import 'session_refresh_exception.dart';
 import 'api_exception.dart';
-import '../models/user_model.dart';
 
 class ApiService {
   final String baseUrl;
@@ -38,11 +36,8 @@ class ApiService {
   // becomes reachable.
   static const Duration _kAuthTimeout = Duration(seconds: 15);
 
-  /// Avatar upload: bounded server-side at 5 MB, so 60 s is generous.
-  static const Duration _kMediaTimeout = Duration(seconds: 60);
-
-  /// Media fetch. Deliberately far longer than [_kMediaTimeout]: payloads run
-  /// to [MediaCryptoService.maxBytes] and the deadline is a hard cap on the
+  /// Media fetch: payloads run to [MediaCryptoService.maxBytes] and the
+  /// deadline is a hard cap on the
   /// WHOLE request, not an idle timeout, so a slow-but-progressing transfer
   /// gets killed by a tight budget. At 20 MB a 60 s deadline needs ~2.8 Mbps
   /// sustained; 180 s tolerates ~0.9 Mbps.
@@ -81,18 +76,6 @@ class ApiService {
       message: _errorMessage(response, fallback),
       endpoint: endpoint,
     );
-  }
-
-  /// Multipart send under ONE deadline covering both the request and the body
-  /// drain — timing them separately would allow twice the intended budget.
-  Future<http.Response> _sendMultipart(
-    http.MultipartRequest request,
-    Duration timeout,
-  ) {
-    return Future(() async {
-      final streamedResponse = await _httpClient.send(request);
-      return http.Response.fromStream(streamedResponse);
-    }).timeout(timeout);
   }
 
   Future<Map<String, dynamic>> register(
@@ -232,95 +215,6 @@ class ApiService {
         throw Exception('Logout failed: ${response.statusCode}');
       }
     }
-  }
-
-  Future<String> uploadProfilePicture(String token, XFile imageFile) async {
-    var request = http.MultipartRequest(
-      'POST',
-      Uri.parse('$baseUrl/users/profile-picture'),
-    );
-
-    request.headers['Authorization'] = 'Bearer $token';
-
-    // Bytes on ALL platforms: the crop flow hands over XFile.fromData, which
-    // has no filesystem path on native — fromPath would throw there.
-    final bytes = await imageFile.readAsBytes();
-    final extension = imageFile.name.toLowerCase().split('.').last;
-    final mimeType = extension == 'png' ? 'image/png' : 'image/jpeg';
-
-    request.files.add(
-      http.MultipartFile.fromBytes(
-        'file',
-        bytes,
-        filename: imageFile.name,
-        contentType: http.MediaType.parse(mimeType),
-      ),
-    );
-
-    final response = await _sendMultipart(request, _kMediaTimeout);
-
-    if (response.statusCode != 201 && response.statusCode != 200) {
-      throw Exception(_errorMessage(response, 'Upload failed'));
-    }
-    final data = jsonDecode(response.body) as Map<String, dynamic>;
-    return data['profilePictureUrl'] as String;
-  }
-
-  Future<List<UserProfilePhoto>> setPrimaryProfilePhoto(
-    String token,
-    int photoId,
-  ) async {
-    final response = await _httpClient.post(
-      Uri.parse('$baseUrl/users/profile-photos/$photoId/main'),
-      headers: {'Authorization': 'Bearer $token'},
-    ).timeout(_kDefaultTimeout);
-    // Nest returns 201 for POST by default.
-    if (response.statusCode != 200 && response.statusCode != 201) {
-      throw Exception(_errorMessage(response, 'Unable to set primary photo'));
-    }
-    final data = jsonDecode(response.body) as Map<String, dynamic>;
-    return (data['profilePhotos'] as List<dynamic>)
-        .map((value) => UserProfilePhoto.fromJson(value as Map<String, dynamic>))
-        .toList(growable: false);
-  }
-
-  Future<List<UserProfilePhoto>> deleteProfilePhoto(
-    String token,
-    int photoId,
-  ) async {
-    final response = await _httpClient.delete(
-      Uri.parse('$baseUrl/users/profile-photos/$photoId'),
-      headers: {'Authorization': 'Bearer $token'},
-    ).timeout(_kDefaultTimeout);
-    if (response.statusCode != 200) {
-      throw Exception(_errorMessage(response, 'Unable to delete profile photo'));
-    }
-    final data = jsonDecode(response.body) as Map<String, dynamic>;
-    return (data['profilePhotos'] as List<dynamic>)
-        .map((value) => UserProfilePhoto.fromJson(value as Map<String, dynamic>))
-        .toList(growable: false);
-  }
-
-  Future<List<UserProfilePhoto>> reorderProfilePhotos(
-    String token,
-    List<int> orderedIds,
-  ) async {
-    final response = await _httpClient.post(
-      Uri.parse('$baseUrl/users/profile-photos/order'),
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer $token',
-      },
-      body: jsonEncode({'orderedIds': orderedIds}),
-    ).timeout(_kDefaultTimeout);
-    // Nest returns 201 for POST by default.
-    if (response.statusCode != 200 && response.statusCode != 201) {
-      throw Exception(_errorMessage(response, 'Unable to reorder photos'));
-    }
-    final data = jsonDecode(response.body) as Map<String, dynamic>;
-    return (data['profilePhotos'] as List<dynamic>)
-        .map((value) => UserProfilePhoto.fromJson(value as Map<String, dynamic>))
-        .toList(growable: false);
   }
 
   Future<String?> updateProfileAbout(String token, String? about) async {
@@ -477,6 +371,27 @@ class ApiService {
   String _effectiveMediaUrl(String url) => rewriteLoopbackMediaUrl(url, baseUrl);
 
   Future<Uint8List> fetchMediaBytes(String url) async {
+    final response = await _getMedia(url);
+    if (response.statusCode != 200) {
+      throw Exception('Media fetch failed: ${response.statusCode}');
+    }
+    return response.bodyBytes;
+  }
+
+  /// This account's own LEGACY server photo (decision 138's one-time
+  /// migration, release A only): the bytes, or null when the server no
+  /// longer holds the file (404 / 410). Any other failure throws — the
+  /// caller asks again later, since nothing was decided.
+  Future<Uint8List?> fetchLegacyAvatarBytes(String url) async {
+    final response = await _getMedia(url);
+    if (response.statusCode == 404 || response.statusCode == 410) return null;
+    if (response.statusCode != 200) {
+      throw Exception('Media fetch failed: ${response.statusCode}');
+    }
+    return response.bodyBytes;
+  }
+
+  Future<http.Response> _getMedia(String url) async {
     final resolved = _effectiveMediaUrl(url);
     final resolvedUri = Uri.tryParse(resolved);
     final baseUri = Uri.tryParse(baseUrl);
@@ -497,13 +412,7 @@ class ApiService {
         'Refusing to fetch media from untrusted host: ${resolvedUri?.host}',
       );
     }
-    final response = await _httpClient
-        .get(Uri.parse(resolved))
-        .timeout(_kLargeMediaTimeout);
-    if (response.statusCode != 200) {
-      throw Exception('Media fetch failed: ${response.statusCode}');
-    }
-    return response.bodyBytes;
+    return _httpClient.get(Uri.parse(resolved)).timeout(_kLargeMediaTimeout);
   }
 
   Future<Map<String, dynamic>> fetchMe(String token) async {

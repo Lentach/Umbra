@@ -23,7 +23,6 @@ describe('LocalStorageService', () => {
           provide: ConfigService,
           useValue: {
             get: (key: string) => {
-              if (key === 'MEDIA_BASE_URL') return 'https://example.com';
               if (key === 'MEDIA_DIR') return '/app/media';
             },
           },
@@ -32,21 +31,6 @@ describe('LocalStorageService', () => {
     }).compile();
 
     service = module.get(LocalStorageService);
-  });
-
-  it('uploadAvatar returns secureUrl with /media/avatars/ path and .jpg extension', async () => {
-    const result = await service.uploadAvatar(1, Buffer.from('data'), 'image/jpeg');
-    expect(result.secureUrl).toMatch(
-      /^https:\/\/example\.com\/media\/avatars\/.+\.jpg$/,
-    );
-  });
-
-  it('uploadAvatar returns secureUrl with /media/avatars/ path and .png extension for PNG', async () => {
-    const result = await service.uploadAvatar(1, Buffer.from('data'), 'image/png');
-    expect(result.secureUrl).toMatch(
-      /^https:\/\/example\.com\/media\/avatars\/.+\.png$/,
-    );
-    expect(result.publicId).toMatch(/^avatars\/.+\.png$/);
   });
 
   it('deleteFile calls unlink with correct path', async () => {

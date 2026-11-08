@@ -12,6 +12,7 @@ import '../utils/file_utils_stub.dart'
 import '../config/app_config.dart';
 import '../models/conversation_model.dart';
 import '../models/message_model.dart';
+import '../models/profile_photo.dart';
 import '../services/api_service.dart';
 import '../services/box/box_catch_up.dart';
 import '../services/box/box_device_list_refresh.dart';
@@ -39,6 +40,8 @@ import '../services/encryption_service.dart';
 import '../services/incoming_message_sound_service.dart';
 import '../services/link_preview_service.dart';
 import '../services/plaintext_record_codec.dart';
+import '../services/profile/profile_photo_codec.dart';
+import '../services/profile/profile_photos.dart';
 import '../utils/anti_quantum_note_link.dart';
 import '../utils/decryption_failure_policy.dart';
 import '../utils/e2e_diag_log.dart';
@@ -66,6 +69,7 @@ part 'messaging/messaging_provider.send.dart';
 part 'messaging/messaging_provider.decrypt.dart';
 part 'messaging/messaging_provider.actions.dart';
 part 'messaging/messaging_provider.first_contact.dart';
+part 'messaging/messaging_provider.profile.dart';
 
 // ---------- Library-private top-level helpers ----------
 // Hoisted from MessagingProvider statics so the part-file extensions can
@@ -263,8 +267,12 @@ class MessagingProvider extends ChangeNotifier {
     },
     prebuild: _prebuildBoxSessions,
     // A chat shown before this connect's lookups landed had no route for
-    // its read receipt (slice (g), E61d).
-    onReady: (_) => _reportShownBoxChatRead(),
+    // its read receipt (slice (g), E61d). The own photo's weekly upload and
+    // the frames it owes (decision 138) wait for the same sessions.
+    onReady: (_) {
+      _reportShownBoxChatRead();
+      unawaited(syncOwnPhoto());
+    },
   );
 
   /// E50c's "box-ready" stamp, written only while this device is on the box
@@ -412,6 +420,45 @@ class MessagingProvider extends ChangeNotifier {
   /// wires the one owned beside the account's box session; null = box
   /// attachments neither download nor show.
   BoxMediaFetcher? boxMedia;
+
+  /// This account's own profile photo and its friends' (decision 138): the
+  /// reference in the contact store, the file in the box media copies.
+  /// `ConnectionProvider` wires the one made with the box session; null = no
+  /// photo is sent, fetched or changed.
+  ProfilePhotos? profilePhotos;
+
+  /// The bytes of this account's own LEGACY server photo, or null when it
+  /// has none (or they cannot be fetched): the one-time migration's source
+  /// (`/users/me` `profilePictureUrl`, release A only). Wired by the screen
+  /// that knows the signed-in profile.
+  Future<Uint8List?> Function()? legacyOwnPhoto;
+
+  /// Makes a picked image the ≤256 px JPEG that is sent
+  /// ([ProfilePhotoCodec.scale]). A seam for tests only: the platform image
+  /// codec is the production one.
+  @visibleForTesting
+  Future<Uint8List?> Function(Uint8List picked) profilePhotoScaler =
+      ProfilePhotoCodec.scale;
+
+  /// One announcement of the own photo runs at a time ([_announceOwnPhoto]);
+  /// a change landing meanwhile asks for another pass.
+  bool _announcingProfile = false;
+  bool _profileAnnounceAgain = false;
+
+  /// A connect's weekly / migration / owed-frame pass runs ([syncOwnPhoto]).
+  bool _syncingProfile = false;
+  bool _profileSyncAgain = false;
+
+  /// The held references' missing files were looked for this process.
+  bool _profileFilesChecked = false;
+
+  /// When the server photo's download was last tried ([_migrateLegacyPhoto]).
+  DateTime? _profileMigrateTriedAt;
+
+  /// `user:device:rev` of every profile frame a device's box took in this
+  /// process: one that cannot be reached must not cost the others a frame
+  /// per retry (as `announceOwnList` keeps `_announced`).
+  final Set<String> _profileSent = {};
 
   /// Box attachments encrypted but not yet uploaded, by tempId (E17b): a
   /// retry uploads the SAME ciphertext, key and IV — `MediaCryptoService`
@@ -843,6 +890,9 @@ class MessagingProvider extends ChangeNotifier {
       // Local ids restart at the same base for every account: an unsaved
       // row of the previous session must never be stored into this one.
       _boxUnsaved.clear();
+      _profileSent.clear();
+      _profileFilesChecked = false;
+      _profileMigrateTriedAt = null;
       _cancelDelayedRetryIfAny();
     } else {
       // Reconnect (same user): keep messages to avoid flicker.
@@ -904,6 +954,9 @@ class MessagingProvider extends ChangeNotifier {
     _rebuildRequestedPeers.clear();
     _pingEffectFiredIds.clear();
     _boxUnsaved.clear();
+    _profileSent.clear();
+    _profileFilesChecked = false;
+    _profileMigrateTriedAt = null;
     _emittedSendTempIds.clear();
     _identityRefusedSendTempIds.clear();
     _sendTokenByTempId.clear();

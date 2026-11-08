@@ -1638,16 +1638,24 @@ class AppLocalizationsEn extends AppLocalizations {
   String get userCardEditAbout => 'Edit About';
 
   @override
-  String get userCardAddPhoto => 'Add photo';
+  String get userCardAddPhoto => 'Set photo';
 
   @override
-  String get userCardPhotoLimitReached => 'Photo limit reached';
+  String get userCardChangePhoto => 'Change photo';
 
   @override
-  String get userCardSetMainPhoto => 'Set as main photo';
+  String get userCardDeletePhoto => 'Remove photo';
 
   @override
-  String get userCardDeletePhoto => 'Delete this photo';
+  String get userCardPhotoUnreadable =>
+      'Couldn\'t read that photo. Pick another one.';
+
+  @override
+  String get userCardPhotoNoRoute =>
+      'The connection isn\'t ready yet. Try again in a moment.';
+
+  @override
+  String get userCardPhotoFailed => 'Couldn\'t update your photo. Try again.';
 
   @override
   String get userCardSave => 'Save';
@@ -1686,26 +1694,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get userCardCopyTag => 'Copy tag';
 
   @override
-  String get userCardManagePhotos => 'Manage photos';
-
-  @override
-  String userCardPhotoOfCount(Object index, Object count) {
-    return 'Photo $index of $count';
-  }
-
-  @override
-  String get userCardMainPhotoHint =>
-      'This is your main photo — contacts see it in chats.';
-
-  @override
   String get userCardAboutHint => 'A few words about you';
 
   @override
   String get userCardSharedMedia => 'Shared media';
-
-  @override
-  String get userCardDragReorderHint =>
-      'Hold and drag to reorder — the first photo is your main photo.';
 
   @override
   String get settingsChatBackground => 'Chat background';

@@ -1,3 +1,4 @@
+import '../../models/profile_photo.dart';
 import '../../models/user_model.dart';
 import '../../utils/message_ids.dart';
 
@@ -543,6 +544,7 @@ class ContactRecord {
     required this.tag,
     required this.state,
     this.avatarUrl,
+    this.avatar,
     this.devices = const [],
     this.outbound = const [],
     this.settings = const ContactSettings(),
@@ -557,6 +559,7 @@ class ContactRecord {
         username: user.username,
         tag: user.tag,
         avatarUrl: user.profilePictureUrl,
+        avatar: user.avatar,
         state: state,
       );
 
@@ -572,6 +575,7 @@ class ContactRecord {
       username: j['username'] as String,
       tag: j['tag'] as String,
       avatarUrl: j['avatarUrl'] as String?,
+      avatar: ProfilePhotoRef.fromWire(j['avatar']),
       state: ContactState.values.byName(j['state'] as String),
       devices: (j['devices'] as List<dynamic>? ?? const [])
           .map((d) => d as int)
@@ -598,6 +602,14 @@ class ContactRecord {
   final String username;
   final String tag;
   final String? avatarUrl;
+
+  /// The photo this contact sent end to end (decision 138), at the highest
+  /// counter seen; null until it sends one. Beside [avatarUrl], the server
+  /// path an older build's profile carried: read for release A only, shown
+  /// only while this is null, removed in release B. A restored backup keeps
+  /// the reference but not the file: initials until the contact's next
+  /// re-send.
+  final ProfilePhotoRef? avatar;
   final ContactState state;
 
   /// The peer's device ids as last learned (design §4.2 announcements will
@@ -634,6 +646,7 @@ class ContactRecord {
     'username': username,
     'tag': tag,
     if (avatarUrl != null) 'avatarUrl': avatarUrl,
+    if (avatar != null) 'avatar': avatar!.toWire(),
     'state': state.name,
     if (devices.isNotEmpty) 'devices': devices,
     if (outbound.isNotEmpty)
@@ -687,6 +700,7 @@ class ContactRecord {
     username: username,
     tag: tag,
     profilePictureUrl: avatarUrl,
+    avatar: avatar,
   );
 
   ContactRecord copyWith({
@@ -694,6 +708,8 @@ class ContactRecord {
     String? tag,
     String? avatarUrl,
     bool clearAvatarUrl = false,
+    ProfilePhotoRef? avatar,
+    bool clearAvatar = false,
     ContactState? state,
     List<int>? devices,
     List<ContactOutbound>? outbound,
@@ -707,6 +723,7 @@ class ContactRecord {
     username: username ?? this.username,
     tag: tag ?? this.tag,
     avatarUrl: clearAvatarUrl ? null : avatarUrl ?? this.avatarUrl,
+    avatar: clearAvatar ? null : avatar ?? this.avatar,
     state: state ?? this.state,
     devices: devices ?? this.devices,
     outbound: outbound ?? this.outbound,

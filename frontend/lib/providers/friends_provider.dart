@@ -169,6 +169,11 @@ class FriendsProvider extends ChangeNotifier {
   /// Each box request in [state] as id `-userId`, newest first — while it is
   /// still shown (decision 54: 30 d; a sent one's record outlives that,
   /// `BoxFirstContact.sentLifetime`).
+  ///
+  /// The peer of a request shows NO photo, whatever its record holds
+  /// (decision 53): the photo is taken from the verified profile at accept.
+  /// Stripped here, at the one place requests are built, so no screen can
+  /// show one by reading the record's fields.
   List<FriendRequestModel> _requests(ContactState state) {
     final store = _store;
     if (store == null) return const [];
@@ -184,12 +189,14 @@ class FriendsProvider extends ChangeNotifier {
     // self profile must not hide the request.
     final self =
         store.self ?? UserModel(id: store.userId!, username: '', tag: '0000');
+    UserModel peerOf(ContactRecord r) =>
+        r.toUser().copyWith(clearProfilePicture: true, clearAvatar: true);
     return List.unmodifiable([
       for (final r in box)
         FriendRequestModel(
           id: -r.userId,
-          sender: incoming ? r.toUser() : self,
-          receiver: incoming ? self : r.toUser(),
+          sender: incoming ? peerOf(r) : self,
+          receiver: incoming ? self : peerOf(r),
           status: 'pending',
           createdAt: r.boxOrigin!.at,
         ),
@@ -587,6 +594,7 @@ class FriendsProvider extends ChangeNotifier {
                 username: current.username,
                 tag: current.tag,
                 avatarUrl: current.avatarUrl,
+                avatar: current.avatar,
                 state: ContactState.blocked,
               ),
       );

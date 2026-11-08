@@ -39,7 +39,6 @@ describe('UsersService.resetPassword – refresh revocation ordering', () => {
       {} as any,
       {} as any,
       {} as any,
-      {} as any,
       mockRefreshTokens as any,
     );
   });

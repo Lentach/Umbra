@@ -1,11 +1,18 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:fireplace/l10n/app_localizations.dart';
+import 'package:fireplace/models/profile_photo.dart';
 import 'package:fireplace/models/user_model.dart';
 import 'package:fireplace/providers/auth_provider.dart';
 import 'package:fireplace/providers/friends_provider.dart';
 import 'package:fireplace/screens/edit_about_screen.dart';
+import 'package:fireplace/screens/user_card_photo_actions.dart';
 import 'package:fireplace/screens/user_card_screen.dart';
+import 'package:fireplace/services/profile/profile_photo_cache.dart';
+import 'package:fireplace/services/profile/profile_photos.dart'
+    show ProfilePhotoOutcome;
 import 'package:fireplace/theme/rpg_theme.dart';
-import 'package:flutter/gestures.dart' show kLongPressTimeout, kPressTimeout;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
@@ -29,62 +36,80 @@ class _FakeAuthProvider extends AuthProvider {
     notifyListeners();
   }
 
-  @override
-  Future<void> deleteProfilePhoto(int photoId) async {
-    final photos = _user!.profilePhotos
-        .where((photo) => photo.id != photoId)
-        .toList(growable: false);
-    final primary = photos.where((photo) => photo.isPrimary).firstOrNull;
-    _user = _user!.copyWith(
-      profilePhotos: photos,
-      profilePictureUrl: primary?.url,
-      clearProfilePicture: primary == null,
-    );
-    notifyListeners();
-  }
-
-  @override
-  Future<void> setPrimaryProfilePhoto(int photoId) async {
-    final photos = [
-      for (final photo in _user!.profilePhotos)
-        UserProfilePhoto(
-          id: photo.id,
-          url: photo.url,
-          isPrimary: photo.id == photoId,
-          createdAt: photo.createdAt,
-        ),
-    ]..sort((a, b) => a.isPrimary == b.isPrimary ? 0 : (a.isPrimary ? -1 : 1));
-    _user = _user!.copyWith(
-      profilePhotos: photos,
-      profilePictureUrl: photos.first.url,
-    );
-    notifyListeners();
-  }
-
-  List<int>? lastReorder;
-
-  @override
-  Future<void> reorderProfilePhotos(List<int> orderedIds) async {
-    lastReorder = orderedIds;
-    final byId = {for (final photo in _user!.profilePhotos) photo.id: photo};
-    final photos = [
-      for (var i = 0; i < orderedIds.length; i++)
-        UserProfilePhoto(
-          id: orderedIds[i],
-          url: byId[orderedIds[i]]!.url,
-          isPrimary: i == 0,
-          createdAt: byId[orderedIds[i]]!.createdAt,
-        ),
-    ];
-    _user = _user!.copyWith(
-      profilePhotos: photos,
-      profilePictureUrl: photos.first.url,
-    );
+  /// What the real flow does once a photo change is published: the own
+  /// reference moves on.
+  void setAvatar(ProfilePhotoRef ref) {
+    _user = _user!.copyWith(avatar: ref);
     notifyListeners();
   }
 }
 
-Widget _wrap(UserCardVisualData data, {AuthProvider? auth}) {
+/// The own-photo seam: records what the card asked for and answers with the
+/// configured outcome, moving the fake account's reference on `done` like
+/// the messaging provider does.
+class _FakePhotoActions implements ProfilePhotoActions {
+  _FakePhotoActions(this._auth);
+
+  final _FakeAuthProvider _auth;
+
+  /// What the picker returns; null is the user backing out.
+  Uint8List? picked = Uint8List.fromList(const [9, 8, 7, 6]);
+  ProfilePhotoOutcome setOutcome = ProfilePhotoOutcome.done;
+  ProfilePhotoOutcome removeOutcome = ProfilePhotoOutcome.done;
+  Error? setThrows;
+
+  final List<Uint8List> setCalls = [];
+  int removeCalls = 0;
+  int _rev = 10;
+
+  @override
+  Future<Uint8List?> pick() async => picked;
+
+  @override
+  Future<ProfilePhotoOutcome> set(Uint8List pickedImageBytes) async {
+    setCalls.add(pickedImageBytes);
+    final thrown = setThrows;
+    if (thrown != null) throw thrown;
+    if (setOutcome == ProfilePhotoOutcome.done) {
+      _auth.setAvatar(_photo(rev: ++_rev, lastChar: 'I'));
+    }
+    return setOutcome;
+  }
+
+  @override
+  Future<ProfilePhotoOutcome> remove() async {
+    removeCalls++;
+    if (removeOutcome == ProfilePhotoOutcome.done) {
+      _auth.setAvatar(ProfilePhotoRef.cleared(++_rev));
+    }
+    return removeOutcome;
+  }
+}
+
+/// A reference [ProfilePhotoRef.fromWire] accepts (parsed through it, so a
+/// malformed fixture fails loudly). [lastChar] tells two photos apart: one of
+/// the base64url characters a 32-byte id may end in.
+ProfilePhotoRef _photo({int rev = 1, String lastChar = 'A'}) =>
+    ProfilePhotoRef.fromWire({
+      'm': '${'A' * 42}$lastChar',
+      'k': base64.encode(List.filled(32, 1)),
+      'i': base64.encode(List.filled(12, 2)),
+      'r': rev,
+    })!;
+
+/// Stand-in for the decrypted photo the cache would hold: a real 1x1 image,
+/// so the hero shows it rather than falling back to initials (bytes that do
+/// not decode are, rightly, no photo). Decoding never finishes inside a
+/// widget test's fake clock, so the hero stays on its default height.
+final Uint8List _photoBytes = base64.decode(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+);
+
+Widget _wrap(
+  UserCardVisualData data, {
+  AuthProvider? auth,
+  ProfilePhotoActions? photoActions,
+}) {
   return MultiProvider(
     providers: [
       ChangeNotifierProvider<AuthProvider>(
@@ -96,32 +121,79 @@ Widget _wrap(UserCardVisualData data, {AuthProvider? auth}) {
       theme: RpgTheme.themeDataLight,
       localizationsDelegates: AppLocalizations.localizationsDelegates,
       supportedLocales: AppLocalizations.supportedLocales,
-      home: UserCardScreen(data: data, onMessage: () {}),
+      home: UserCardScreen(
+        data: data,
+        onMessage: () {},
+        photoActions: photoActions,
+      ),
     ),
   );
 }
 
-UserModel _selfUser({String? about, int photoCount = 3}) {
-  return UserModel.fromJson({
-    'id': 1,
-    'username': 'ember',
-    'tag': '7004',
-    'about': about,
-    'profilePhotos': [
-      for (var i = 0; i < photoCount; i++)
-        {
-          'id': i + 1,
-          'url': 'https://example.test/photo${i + 1}.jpg',
-          'isPrimary': i == 0,
-          'createdAt': '2026-07-0${i + 1}T00:00:00.000Z',
-        },
-    ],
-  });
+UserModel _selfUser({
+  String? about,
+  ProfilePhotoRef? avatar,
+  String? legacyUrl,
+}) {
+  return UserModel(
+    id: 1,
+    username: 'ember',
+    tag: '7004',
+    about: about,
+    avatar: avatar,
+    profilePictureUrl: legacyUrl,
+  );
 }
+
+UserCardVisualData _selfCard(_FakeAuthProvider auth) =>
+    UserCardVisualData.fromUser(
+      auth.currentUser!,
+      isSelf: true,
+      hasConversation: false,
+    );
+
+UserCardVisualData _otherCard({
+  ProfilePhotoRef? avatar,
+  String? legacyPhotoUrl,
+}) => UserCardVisualData(
+  userId: 2,
+  username: 'alice',
+  tag: '0042',
+  isSelf: false,
+  hasConversation: false,
+  avatar: avatar,
+  legacyPhotoUrl: legacyPhotoUrl,
+);
+
+/// The images inside the collapsing hero (the ambient backdrop is not).
+Finder _heroImages() => find.descendant(
+  of: find.byType(SliverPersistentHeader),
+  matching: find.byType(Image),
+);
+
+/// Every image of the card, hero and backdrop, whose source is a legacy
+/// server URL.
+Finder _networkImages() => find.byWidgetPredicate(
+  (widget) => widget is Image && widget.image is NetworkImage,
+);
+
+/// Scrolls the card's body (below the hero) into view.
+Future<void> _scrollToBody(WidgetTester tester) async {
+  await tester.dragFrom(
+    tester.getCenter(find.byType(CustomScrollView)),
+    const Offset(0, -400),
+  );
+  await tester.pumpAndSettle();
+}
+
+const _unreadableMessage = "Couldn't read that photo. Pick another one.";
+const _noRouteMessage = "The connection isn't ready yet. Try again in a moment.";
+const _failedMessage = "Couldn't update your photo. Try again.";
 
 void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+    ProfilePhotoCache.shared = ProfilePhotoCache();
   });
 
   const contact = UserCardVisualData(
@@ -160,57 +232,117 @@ void main() {
     );
   });
 
-  group('photo gallery pager', () {
+  group("the card shows the account's one profile photo", () {
+    testWidgets("a contact's decrypted photo fills the hero", (tester) async {
+      final photo = _photo();
+      ProfilePhotoCache.shared.putForTest(photo.mediaId!, _photoBytes);
+      await tester.pumpWidget(
+        _wrap(
+          _otherCard(
+            avatar: photo,
+            legacyPhotoUrl: 'https://example.test/old.jpg',
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final image = tester.widget<Image>(_heroImages());
+      expect(
+        image.image,
+        isA<MemoryImage>().having((m) => m.bytes, 'bytes', _photoBytes),
+      );
+      expect(image.fit, BoxFit.cover);
+      // The decrypted photo decides alone: the legacy URL is never fetched.
+      expect(_networkImages(), findsNothing);
+      expect(find.text('A'), findsNothing, reason: 'no initials placeholder');
+    });
+
+    testWidgets('the photo appears once its file lands on the device', (
+      tester,
+    ) async {
+      final photo = _photo();
+      await tester.pumpWidget(_wrap(_otherCard(avatar: photo)));
+      await tester.pump();
+      expect(_heroImages(), findsNothing);
+      expect(find.text('A'), findsOneWidget);
+
+      ProfilePhotoCache.shared.putForTest(photo.mediaId!, _photoBytes);
+      await tester.pump();
+
+      expect(
+        tester.widget<Image>(_heroImages()).image,
+        isA<MemoryImage>().having((m) => m.bytes, 'bytes', _photoBytes),
+      );
+    });
+
     testWidgets(
-      'tap zones page the gallery (right = next, left = prev, wraps); '
-      'swipe is disabled',
+      'a removed photo shows initials and never brings back the legacy photo',
       (tester) async {
-        final auth = _FakeAuthProvider(_selfUser());
         await tester.pumpWidget(
           _wrap(
-            UserCardVisualData.fromUser(
-              auth.currentUser!,
-              isSelf: true,
-              hasConversation: false,
+            _otherCard(
+              avatar: const ProfilePhotoRef.cleared(4),
+              legacyPhotoUrl: 'https://example.test/old.jpg',
             ),
-            auth: auth,
           ),
         );
         await tester.pump();
 
-        final pageView = find.byType(PageView);
-        expect(pageView, findsOneWidget);
-
-        PageController controllerOf(Finder finder) =>
-            (tester.widget<PageView>(finder)).controller!;
-        expect(controllerOf(pageView).page, 0);
-
-        // Right half advances (test viewport is 800 wide; avoid the back
-        // button top-left and the identity row at the hero's bottom).
-        await tester.tapAt(const Offset(600, 150));
-        await tester.pumpAndSettle();
-        expect(controllerOf(pageView).page, 1);
-
-        await tester.tapAt(const Offset(600, 150));
-        await tester.pumpAndSettle();
-        expect(controllerOf(pageView).page, 2);
-
-        // Wraps past the last photo.
-        await tester.tapAt(const Offset(600, 150));
-        await tester.pumpAndSettle();
-        expect(controllerOf(pageView).page, 0);
-
-        // Left half goes back, wrapping to the end.
-        await tester.tapAt(const Offset(300, 150));
-        await tester.pumpAndSettle();
-        expect(controllerOf(pageView).page, 2);
-
-        // Owner round-2 contract: swipe must NOT page.
-        await tester.drag(pageView, const Offset(-600, 0));
-        await tester.pumpAndSettle();
-        expect(controllerOf(pageView).page, 2);
+        expect(_heroImages(), findsNothing);
+        expect(_networkImages(), findsNothing);
+        expect(find.text('A'), findsOneWidget);
       },
     );
+
+    testWidgets(
+      'a photo whose file is not on this device shows initials, not the '
+      'legacy photo',
+      (tester) async {
+        await tester.pumpWidget(
+          _wrap(
+            _otherCard(
+              avatar: _photo(),
+              legacyPhotoUrl: 'https://example.test/old.jpg',
+            ),
+          ),
+        );
+        await tester.pump();
+
+        expect(_heroImages(), findsNothing);
+        expect(_networkImages(), findsNothing);
+        expect(find.text('A'), findsOneWidget);
+      },
+    );
+
+    testWidgets('an account without a reference shows its legacy photo', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _wrap(_otherCard(legacyPhotoUrl: 'https://example.test/old.jpg')),
+      );
+      await tester.pump();
+
+      final image = tester.widget<Image>(_heroImages());
+      expect(
+        image.image,
+        isA<NetworkImage>().having(
+          (n) => n.url,
+          'url',
+          'https://example.test/old.jpg',
+        ),
+      );
+      expect(image.fit, BoxFit.cover);
+    });
+
+    testWidgets('no photo anywhere shows the initials placeholder', (
+      tester,
+    ) async {
+      await tester.pumpWidget(_wrap(_otherCard()));
+      await tester.pump();
+
+      expect(_heroImages(), findsNothing);
+      expect(find.text('A'), findsOneWidget);
+    });
 
     testWidgets(
       'hero renders a single full-bleed cover image (round 3: no contain '
@@ -224,31 +356,18 @@ void main() {
         tester.view.physicalSize = const Size(800, 400);
         tester.view.devicePixelRatio = 1;
         addTearDown(tester.view.reset);
+        final photo = _photo();
+        ProfilePhotoCache.shared.putForTest(photo.mediaId!, _photoBytes);
         final auth = _FakeAuthProvider(
           // About adds body height so the sliver really reaches full
           // collapse in the shrunken viewport.
-          _selfUser(about: 'sits by the fire and keeps the embers warm'),
-        );
-        await tester.pumpWidget(
-          _wrap(
-            UserCardVisualData.fromUser(
-              auth.currentUser!,
-              isSelf: true,
-              hasConversation: false,
-            ),
-            auth: auth,
+          _selfUser(
+            about: 'sits by the fire and keeps the embers warm',
+            avatar: photo,
           ),
         );
+        await tester.pumpWidget(_wrap(_selfCard(auth), auth: auth));
         await tester.pump();
-
-        List<Image> pagerImages() => tester
-            .widgetList<Image>(
-              find.descendant(
-                of: find.byType(PageView),
-                matching: find.byType(Image),
-              ),
-            )
-            .toList();
 
         // The bar title is the fontSize-16 copy of the handle; the hero
         // identity block shows a 12.5px copy while expanded.
@@ -256,12 +375,11 @@ void main() {
             .widgetList<Text>(find.text('ember#7004'))
             .any((text) => text.style?.fontSize == 16);
 
-        // Expanded: ONE cover image per page (the hero box tracks the
-        // photo's aspect, so cover means full-bleed AND uncropped — the
-        // rejected round-2 contain/blur-backdrop pair must stay gone), no
-        // bar title yet.
-        expect(pagerImages().map((i) => i.fit), everyElement(BoxFit.cover));
-        expect(pagerImages().length, 1);
+        // Expanded: ONE cover image (the hero box tracks the photo's aspect,
+        // so cover means full-bleed AND uncropped — the rejected round-2
+        // contain/blur-backdrop pair must stay gone), no bar title yet.
+        expect(_heroImages(), findsOneWidget);
+        expect(tester.widget<Image>(_heroImages()).fit, BoxFit.cover);
         expect(barTitleShown(), isFalse);
 
         // Force full collapse (photoExtent 300 -> barHeight 68 = 232 plus
@@ -273,7 +391,8 @@ void main() {
         await tester.pumpAndSettle();
 
         // Collapsed: same single cover layer, bar title faded in.
-        expect(pagerImages().map((i) => i.fit), everyElement(BoxFit.cover));
+        expect(_heroImages(), findsOneWidget);
+        expect(tester.widget<Image>(_heroImages()).fit, BoxFit.cover);
         expect(barTitleShown(), isTrue);
       },
     );
@@ -314,167 +433,188 @@ void main() {
       expect(find.byType(UserCardScreen), findsOneWidget);
       expect(find.text('new about'), findsOneWidget);
     });
+  });
 
-    testWidgets(
-      'deleting the viewed photo keeps the card open and shows the next photo',
-      (tester) async {
-        final auth = _FakeAuthProvider(_selfUser(photoCount: 2));
-        await tester.pumpWidget(
-          _wrap(
-            UserCardVisualData.fromUser(
-              auth.currentUser!,
-              isSelf: true,
-              hasConversation: false,
-            ),
-            auth: auth,
-          ),
-        );
-        await tester.pump();
-
-        // View photo 2, then delete it through the manage sheet.
-        await tester.tapAt(const Offset(600, 150));
-        await tester.pumpAndSettle();
-
-        await tester.dragFrom(
-          tester.getCenter(find.byType(CustomScrollView)),
-          const Offset(0, -400),
-        );
-        await tester.pumpAndSettle();
-        await tester.tap(find.text('Manage photos'));
-        await tester.pumpAndSettle();
-        expect(find.text('PHOTO 2 OF 2'), findsOneWidget);
-
-        await tester.tap(find.text('Delete this photo'));
-        await tester.pumpAndSettle();
-        expect(find.text('Delete photo?'), findsOneWidget);
-        await tester.tap(find.text('Delete'));
-        await tester.pumpAndSettle();
-
-        // Card stays; pager clamps back to the surviving photo.
-        expect(find.byType(UserCardScreen), findsOneWidget);
-        final pageView = tester.widget<PageView>(find.byType(PageView));
-        expect(pageView.controller!.page, 0);
-        expect(find.text('1/3'), findsOneWidget); // add-photo counter updated
-      },
-    );
-
-    testWidgets('set as main keeps the card open and reorders to page 1', (
-      tester,
-    ) async {
-      final auth = _FakeAuthProvider(_selfUser(photoCount: 3));
+  group('own photo', () {
+    Future<(_FakeAuthProvider, _FakePhotoActions)> pumpSelf(
+      WidgetTester tester, {
+      ProfilePhotoRef? avatar,
+      String? legacyUrl,
+    }) async {
+      final auth = _FakeAuthProvider(
+        _selfUser(avatar: avatar, legacyUrl: legacyUrl),
+      );
+      final actions = _FakePhotoActions(auth);
       await tester.pumpWidget(
-        _wrap(
-          UserCardVisualData.fromUser(
-            auth.currentUser!,
-            isSelf: true,
-            hasConversation: false,
-          ),
-          auth: auth,
-        ),
+        _wrap(_selfCard(auth), auth: auth, photoActions: actions),
       );
       await tester.pump();
+      await _scrollToBody(tester);
+      return (auth, actions);
+    }
 
-      await tester.tapAt(const Offset(600, 150));
-      await tester.pumpAndSettle();
+    testWidgets('without a photo the card offers only to set one', (
+      tester,
+    ) async {
+      await pumpSelf(tester);
 
-      await tester.dragFrom(
-        tester.getCenter(find.byType(CustomScrollView)),
-        const Offset(0, -400),
+      expect(find.text('Set photo'), findsOneWidget);
+      expect(find.text('Change photo'), findsNothing);
+      expect(find.text('Remove photo'), findsNothing);
+    });
+
+    testWidgets('with a photo the card offers to change or remove it', (
+      tester,
+    ) async {
+      // The file itself is not on this device (not in the cache): the
+      // account still HAS a photo.
+      await pumpSelf(tester, avatar: _photo());
+
+      expect(find.text('Change photo'), findsOneWidget);
+      expect(find.text('Remove photo'), findsOneWidget);
+      expect(find.text('Set photo'), findsNothing);
+    });
+
+    testWidgets('a removed photo offers to set one again, not the legacy one', (
+      tester,
+    ) async {
+      await pumpSelf(
+        tester,
+        avatar: const ProfilePhotoRef.cleared(4),
+        legacyUrl: 'https://example.test/old.jpg',
       );
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Manage photos'));
-      await tester.pumpAndSettle();
 
-      await tester.tap(find.text('Set as main photo'));
-      await tester.pumpAndSettle();
+      expect(find.text('Set photo'), findsOneWidget);
+      expect(find.text('Remove photo'), findsNothing);
+    });
 
-      expect(find.byType(UserCardScreen), findsOneWidget);
-      final pageView = tester.widget<PageView>(find.byType(PageView));
-      expect(pageView.controller!.page, 0);
+    testWidgets('a legacy-photo account can change or remove its photo', (
+      tester,
+    ) async {
+      await pumpSelf(tester, legacyUrl: 'https://example.test/old.jpg');
+
+      expect(find.text('Change photo'), findsOneWidget);
+      expect(find.text('Remove photo'), findsOneWidget);
     });
 
     testWidgets(
-      'drag reorder in the manage sheet persists the exact id order '
-      '(first id becomes main)',
+      'a picked photo is handed over as picked and the card then offers to '
+      'change it',
       (tester) async {
-        final auth = _FakeAuthProvider(_selfUser(photoCount: 3));
-        await tester.pumpWidget(
-          _wrap(
-            UserCardVisualData.fromUser(
-              auth.currentUser!,
-              isSelf: true,
-              hasConversation: false,
-            ),
-            auth: auth,
-          ),
-        );
-        await tester.pump();
+        final (auth, actions) = await pumpSelf(tester);
 
-        await tester.dragFrom(
-          tester.getCenter(find.byType(CustomScrollView)),
-          const Offset(0, -400),
-        );
-        await tester.pumpAndSettle();
-        await tester.tap(find.text('Manage photos'));
+        await tester.tap(find.text('Set photo'));
         await tester.pumpAndSettle();
 
-        // Long-press-drag photo 1 one slot to the right (slot pitch = tile
-        // size + 12px gap; tiles are responsive since the round-3 sheet
-        // rework, so measure instead of hardcoding). Expected order:
-        // [2, 1, 3] — an unadjusted-newIndex regression would persist
-        // [2, 3, 1] instead.
-        final slot = find.byKey(const ValueKey<Object>(1));
-        expect(slot, findsOneWidget);
-        final pitch = tester.getSize(slot).width + 12;
-        final gesture = await tester.startGesture(tester.getCenter(slot));
-        await tester.pump(kLongPressTimeout + kPressTimeout);
-        await gesture.moveBy(Offset(pitch / 2 + 4, 0));
-        await tester.pump();
-        await gesture.moveBy(Offset(pitch / 2 + 4, 0));
-        await tester.pump();
-        await gesture.up();
-        await tester.pumpAndSettle();
-
-        expect(auth.lastReorder, [2, 1, 3]);
-        // Provider applied the order: photo 2 is now primary.
-        expect(auth.currentUser!.profilePhotos.first.id, 2);
-        expect(auth.currentUser!.profilePhotos.first.isPrimary, isTrue);
+        expect(actions.setCalls, hasLength(1));
+        expect(actions.setCalls.single, same(actions.picked));
+        expect(auth.currentUser!.avatar?.hasPhoto, isTrue);
+        // The card stays and re-derives from the account, silently.
         expect(find.byType(UserCardScreen), findsOneWidget);
+        expect(find.text('Change photo'), findsOneWidget);
+        expect(find.text('Set photo'), findsNothing);
+        expect(find.text(_failedMessage), findsNothing);
       },
     );
-  });
 
-  testWidgets('requires confirmation before deleting a profile photo', (
-    tester,
-  ) async {
-    final auth = _FakeAuthProvider(_selfUser(photoCount: 1));
-    await tester.pumpWidget(
-      _wrap(
-        UserCardVisualData.fromUser(
-          auth.currentUser!,
-          isSelf: true,
-          hasConversation: false,
-        ),
-        auth: auth,
+    testWidgets('backing out of the picker changes nothing', (tester) async {
+      final (_, actions) = await pumpSelf(tester);
+      actions.picked = null;
+
+      await tester.tap(find.text('Set photo'));
+      await tester.pumpAndSettle();
+
+      expect(actions.setCalls, isEmpty);
+      expect(find.text('Set photo'), findsOneWidget);
+    });
+
+    for (final (outcome, message) in [
+      (
+        ProfilePhotoOutcome.unreadable,
+        _unreadableMessage,
       ),
-    );
-    await tester.pump();
+      (
+        ProfilePhotoOutcome.noRoute,
+        _noRouteMessage,
+      ),
+      (ProfilePhotoOutcome.refused, _failedMessage),
+      (ProfilePhotoOutcome.failed, _failedMessage),
+    ]) {
+      testWidgets('a ${outcome.name} change says so and keeps the card as it '
+          'was', (tester) async {
+        final (_, actions) = await pumpSelf(tester);
+        actions.setOutcome = outcome;
 
-    await tester.dragFrom(
-      tester.getCenter(find.byType(CustomScrollView)),
-      const Offset(0, -400),
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Manage photos'));
-    await tester.pumpAndSettle();
+        await tester.tap(find.text('Set photo'));
+        await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Delete this photo'));
-    await tester.pumpAndSettle();
+        expect(find.text(message), findsOneWidget);
+        expect(find.text('Set photo'), findsOneWidget);
+        expect(find.byType(UserCardScreen), findsOneWidget);
+        // Let the toast's timer run out.
+        await tester.pump(const Duration(seconds: 3));
+      });
+    }
 
-    expect(find.text('Delete photo?'), findsOneWidget);
-    expect(
-      find.text('This permanently deletes this profile photo.'),
-      findsOneWidget,
-    );
+    testWidgets('an error thrown while changing the photo is reported', (
+      tester,
+    ) async {
+      final (_, actions) = await pumpSelf(tester);
+      actions.setThrows = StateError('boom');
+
+      await tester.tap(find.text('Set photo'));
+      await tester.pumpAndSettle();
+
+      expect(find.text(_failedMessage), findsOneWidget);
+      expect(find.byType(UserCardScreen), findsOneWidget);
+      await tester.pump(const Duration(seconds: 3));
+    });
+
+    testWidgets('removing the photo asks first, then removes it', (
+      tester,
+    ) async {
+      final (auth, actions) = await pumpSelf(tester, avatar: _photo());
+
+      await tester.tap(find.text('Remove photo'));
+      await tester.pumpAndSettle();
+      expect(find.text('Delete photo?'), findsOneWidget);
+      expect(
+        find.text('This permanently deletes this profile photo.'),
+        findsOneWidget,
+      );
+      expect(actions.removeCalls, 0);
+
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(actions.removeCalls, 0);
+      expect(find.text('Remove photo'), findsOneWidget);
+
+      await tester.tap(find.text('Remove photo'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Delete'));
+      await tester.pumpAndSettle();
+
+      expect(actions.removeCalls, 1);
+      expect(auth.currentUser!.avatar?.isCleared, isTrue);
+      expect(find.byType(UserCardScreen), findsOneWidget);
+      expect(find.text('Set photo'), findsOneWidget);
+      expect(find.text('Remove photo'), findsNothing);
+    });
+
+    testWidgets('a failed removal says so and keeps the photo', (
+      tester,
+    ) async {
+      final (_, actions) = await pumpSelf(tester, avatar: _photo());
+      actions.removeOutcome = ProfilePhotoOutcome.failed;
+
+      await tester.tap(find.text('Remove photo'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Delete'));
+      await tester.pumpAndSettle();
+
+      expect(find.text(_failedMessage), findsOneWidget);
+      expect(find.text('Change photo'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 3));
+    });
   });
 }

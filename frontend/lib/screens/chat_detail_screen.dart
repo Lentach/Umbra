@@ -1087,6 +1087,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
                       size: 36,
                       displayName: contactName,
                       imageUrl: otherUser?.profilePictureUrl,
+                      avatar: otherUser?.avatar,
                       surface: FireplaceColors.of(context).convItemBg,
                       // mutedText, not convItemBorder: the blue border token is
                       // 1.92:1 on this fill and the ring paints at 0.6 alpha —
@@ -1135,6 +1136,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
               size: GlassTopBar.capsuleHeight,
               displayName: contactName,
               imageUrl: otherUser?.profilePictureUrl,
+              avatar: otherUser?.avatar,
               surface: FireplaceColors.of(context).convItemBg,
               // mutedText for the same 3:1 boundary reason as the embedded
               // header's hex above.
