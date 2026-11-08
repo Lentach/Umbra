@@ -182,6 +182,7 @@ void main() {
       expect(downloads, 1);
       expect(outbox.uploads, hasLength(1));
       expect(photos.own!.hasPhoto, isTrue);
+      expect(photos.own!.rev, 1, reason: 'any real change outranks it');
       expect(photos.migrated, isTrue);
       expect(
         outbox.delivered.where((d) => _profileOf(d.$2) != null),
@@ -221,6 +222,44 @@ void main() {
       expect(photos.own, isNull);
       expect(outbox.uploads, isEmpty);
       expect(asked, 1);
+    });
+
+    test('removing the photo before the migration ran settles it: the '
+        'server photo is never published afterwards, and friends are told '
+        'the removal', () async {
+      var asked = 0;
+      h.provider.legacyOwnPhoto = () async {
+        asked++;
+        return fakeJpeg(8);
+      };
+
+      expect(await h.provider.removeOwnProfilePhoto(), ProfilePhotoOutcome.done);
+      await h.pump();
+      await h.provider.syncOwnPhoto();
+      await h.pump();
+
+      expect(asked, 0);
+      expect(outbox.uploads, isEmpty);
+      expect(photos.own!.isCleared, isTrue);
+      final told = {
+        for (final d in outbox.delivered)
+          if (_profileOf(d.$2)?.isCleared ?? false) d.$1.peerDeviceId,
+      };
+      expect(told, {1, 2});
+    });
+
+    test('a removal made while the server photo downloads is not undone by '
+        'the migration', () async {
+      h.provider.legacyOwnPhoto = () async {
+        await h.provider.removeOwnProfilePhoto();
+        return fakeJpeg(8);
+      };
+
+      await h.provider.syncOwnPhoto();
+      await h.pump();
+
+      expect(outbox.uploads, isEmpty);
+      expect(photos.own!.isCleared, isTrue);
     });
 
     test('an account that already has an end-to-end reference is never '

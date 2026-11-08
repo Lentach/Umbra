@@ -37,13 +37,18 @@ class ProfilePhotoCache extends ChangeNotifier {
   /// Decrypted files by media id, oldest first.
   final LinkedHashMap<String, Uint8List> _bytes = LinkedHashMap();
 
-  /// Media ids whose lookup in the store is running, or found nothing: not
-  /// asked again until a download lands ([ingest]).
+  /// References (media id, key and nonce) whose lookup in the store is
+  /// running, or found nothing: not asked again until a download lands
+  /// ([ingest]). Per REFERENCE, never per media id: a friend can name any
+  /// id, and a reference that does not open must not stop the reference
+  /// that really holds the file from reading it.
   final Set<String> _asked = {};
 
-  /// Media ids whose file decrypted to something that is no sound photo:
-  /// never shown, never asked again.
+  /// References whose file did not open or is no sound photo: never shown,
+  /// never asked again — and only themselves, for the same reason.
   final Set<String> _refused = {};
+
+  static String _refKey(String id, String key, String iv) => '$id|$key|$iv';
 
   /// Binds the cache to [userId]'s device store: where a photo not shown yet
   /// is read from. Called at every connect; a different account starts empty.
@@ -74,10 +79,13 @@ class ProfilePhotoCache extends ChangeNotifier {
   /// once it is in; nothing here ever touches the network.
   Uint8List? bytesFor(ProfilePhotoRef? ref) {
     final id = ref?.mediaId;
-    if (ref == null || id == null) return null;
+    final key = ref?.key;
+    final iv = ref?.iv;
+    if (ref == null || id == null || key == null || iv == null) return null;
     final held = _bytes[id];
     if (held != null) return held;
-    if (_refused.contains(id) || !_asked.add(id)) return null;
+    final known = _refKey(id, key, iv);
+    if (_refused.contains(known) || !_asked.add(known)) return null;
     unawaited(_readFromStore(ref));
     return null;
   }
@@ -107,19 +115,20 @@ class ProfilePhotoCache extends ChangeNotifier {
     final iv = ref.iv;
     if (id == null || key == null || iv == null) return false;
     if (_bytes.containsKey(id)) return true;
+    final known = _refKey(id, key, iv);
     if (ciphertext.length > ProfilePhotoCodec.kMaxCiphertextBytes) {
-      _refused.add(id);
+      _refused.add(known);
       return false;
     }
     final Uint8List plain;
     try {
       plain = await _crypto.decrypt(ciphertext, key, iv);
     } on Object {
-      _refused.add(id);
+      _refused.add(known);
       return false;
     }
     if (!ProfilePhotoCodec.isSound(plain)) {
-      _refused.add(id);
+      _refused.add(known);
       return false;
     }
     _put(id, plain);
@@ -148,8 +157,9 @@ class ProfilePhotoCache extends ChangeNotifier {
   /// Drops [mediaId]: the reference that named it was replaced or removed.
   void forget(String? mediaId) {
     if (mediaId == null) return;
-    _asked.remove(mediaId);
-    _refused.remove(mediaId);
+    final prefix = '$mediaId|';
+    _asked.removeWhere((k) => k.startsWith(prefix));
+    _refused.removeWhere((k) => k.startsWith(prefix));
     if (_bytes.remove(mediaId) != null) notifyListeners();
   }
 

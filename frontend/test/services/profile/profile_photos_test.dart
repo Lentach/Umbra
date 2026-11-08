@@ -24,6 +24,10 @@ import '../../support/profile_photo_fakes.dart';
 class _Outbox extends SendOutbox {
   final List<Uint8List> downloads = [];
   BoxResult<BoxMediaRef>? uploadAnswer;
+
+  /// Runs while an upload is in flight (after it left, before the box
+  /// answered): the moment a test stages a race in.
+  Future<void> Function()? duringUpload;
   bool uploadThrows = false;
 
   @override
@@ -32,6 +36,7 @@ class _Outbox extends SendOutbox {
     Uint8List framed,
   ) async {
     if (uploadThrows) throw StateError('network');
+    await duringUpload?.call();
     final answer = uploadAnswer;
     if (answer != null) {
       uploads.add((to, framed));
@@ -247,8 +252,21 @@ void main() {
 
     test('a device that lost its row still outruns what the account sent '
         'before: the counter starts at the clock', () async {
+      // The account's other device set a photo a minute ago; this device has
+      // no row and learns nothing of it.
+      final earlier = ProfilePhotoRef(
+        rev: clock.subtract(const Duration(minutes: 1)).millisecondsSinceEpoch,
+        mediaId: mediaIdOf(0x77),
+        key: (await sealPhoto(friendCrypto, plain)).ref.key!,
+        iv: (await sealPhoto(friendCrypto, plain)).ref.iv!,
+      );
+      expect(photos.own, isNull);
+
       await photos.setOwn(plain);
-      expect(photos.own!.rev, greaterThan(1700000000000));
+
+      expect(photos.own!.rev, clock.millisecondsSinceEpoch);
+      expect(photos.own!.supersedes(earlier), isTrue);
+      expect(earlier.supersedes(photos.own), isFalse);
     });
 
     test('bytes that are no sound JPEG are unreadable: nothing uploaded, '
@@ -359,18 +377,28 @@ void main() {
       expect(await photos.refreshIfDue(), isNull);
     });
 
-    test('clearing what is already clear, or never was, changes nothing',
-        () async {
-      expect(await photos.clearOwn(), ProfilePhotoOutcome.done);
-      expect(photos.own, isNull);
-      expect(photos.ownPending, isFalse);
-
+    test('clearing what is already clear changes nothing', () async {
       await photos.setOwn(plain);
       await photos.clearOwn();
       final cleared = photos.own;
       clock = clock.add(const Duration(minutes: 5));
-      await photos.clearOwn();
+      expect(await photos.clearOwn(), ProfilePhotoOutcome.done);
       expect(photos.own, cleared);
+    });
+
+    test('removing before any photo was made — the server photo of an '
+        'account not migrated yet — still writes a clear: owed to friends, '
+        'the migration settled (it would otherwise publish the photo the '
+        'user removed)', () async {
+      expect(photos.own, isNull);
+
+      expect(await photos.clearOwn(), ProfilePhotoOutcome.done);
+
+      final own = photos.own!;
+      expect(own.isCleared, isTrue);
+      expect(own.rev, clock.millisecondsSinceEpoch);
+      expect(photos.ownPending, isTrue);
+      expect(photos.migrated, isTrue);
     });
   });
 
@@ -626,8 +654,14 @@ void main() {
         key: (await sealPhoto(friendCrypto, plain, idFill: 3)).ref.key!,
         iv: real.iv!,
       );
-      await photos.takeFriend(2, lying);
+      expect(await photos.takeFriend(2, lying), isTrue);
       await settle();
+      expect(
+        outbox.downloads.map(boxB64),
+        contains(real.mediaId),
+        reason: 'the file WAS fetched',
+      );
+      expect(crypto.decrypts, 1, reason: 'and opened under the lying key');
       expect(cache.bytesFor(lying), isNull);
     });
 
@@ -640,8 +674,264 @@ void main() {
 
       expect(await photos.takeFriend(2, ref), isTrue);
       await settle();
+      expect(
+        outbox.downloads.map(boxB64),
+        contains(ref.mediaId),
+        reason: 'the file WAS fetched',
+      );
+      expect(crypto.decrypts, 0, reason: 'and refused before it was opened');
       expect(await files.has(1, ref.mediaIdBytes!), isFalse);
       expect(cache.bytesFor(ref), isNull);
+    });
+  });
+
+  group('the own counter: a refresh never outruns a real change', () {
+    Future<void> after(Duration d) async => clock = clock.add(d);
+
+    test('a refresh takes the counter one past the held one, never the '
+        "clock: a photo the account's other device set meanwhile still "
+        'outranks it, here and at a friend', () async {
+      await photos.setOwn(plain);
+      final first = photos.own!;
+      final phones = await onBox(
+        0x51,
+        rev: first.rev + const Duration(days: 3).inMilliseconds,
+      );
+      await after(const Duration(days: 8));
+
+      expect(await photos.refreshIfDue(), ProfilePhotoOutcome.done);
+      final refreshed = photos.own!;
+      expect(refreshed.rev, first.rev + 1);
+      expect(refreshed.mediaId, isNot(first.mediaId));
+
+      // The phone's photo — set before the refresh, read after it — wins.
+      expect(await photos.takeSibling(phones), isTrue);
+      expect(photos.own!.mediaId, phones.mediaId);
+      await befriend(2);
+      // The friend holds the phone's photo — its own file id — at that counter.
+      final seenByFriend = await onBox(0x53, rev: phones.rev);
+      expect(await photos.takeFriend(2, seenByFriend), isTrue);
+      expect(await photos.takeFriend(2, refreshed), isFalse);
+      await settle();
+    });
+
+    test("a sibling's photo applied while the refresh uploads wins: the "
+        'refresh is dropped and its file is not kept', () async {
+      await photos.setOwn(plain);
+      final first = photos.own!;
+      final theirs = await onBox(0x52, rev: first.rev + 1000);
+      await after(const Duration(days: 8));
+      outbox.duringUpload = () async {
+        outbox.duringUpload = null;
+        expect(await photos.takeSibling(theirs), isTrue);
+      };
+
+      expect(await photos.refreshIfDue(), isNull);
+      await settle();
+
+      expect(photos.own!.mediaId, theirs.mediaId);
+      expect(photos.own!.rev, theirs.rev);
+      expect(photos.ownPending, isFalse);
+      expect(outbox.uploads, hasLength(2), reason: 'the refresh did upload');
+      final dropped = outbox.media.keys.singleWhere(
+        (id) => id != first.mediaId && id != theirs.mediaId,
+      );
+      expect(await files.has(1, boxB64Decode(dropped, 32)!), isFalse);
+    });
+
+    test('refreshes asked together make ONE upload (the connect pass and a '
+        'first contact both ask)', () async {
+      await photos.setOwn(plain);
+      await after(const Duration(days: 8));
+
+      final results = await Future.wait([
+        photos.refreshIfDue(),
+        photos.refreshIfDue(),
+        photos.refreshIfDue(),
+      ]);
+
+      expect(results.whereType<ProfilePhotoOutcome>(), hasLength(1));
+      expect(outbox.uploads, hasLength(2));
+    });
+
+    test('a removal made while a refresh uploads is not undone by it',
+        () async {
+      await photos.setOwn(plain);
+      await after(const Duration(days: 8));
+      late Future<ProfilePhotoOutcome> clearing;
+      outbox.duringUpload = () async {
+        outbox.duringUpload = null;
+        clearing = photos.clearOwn();
+      };
+
+      await photos.refreshIfDue();
+      await clearing;
+      await settle();
+
+      expect(photos.own!.isCleared, isTrue);
+    });
+
+    test('a new photo set while a refresh uploads is not undone by it',
+        () async {
+      await photos.setOwn(plain);
+      await after(const Duration(days: 8));
+      late Future<ProfilePhotoOutcome> changing;
+      outbox.duringUpload = () async {
+        outbox.duringUpload = null;
+        changing = photos.setOwn(fakeJpeg(9));
+      };
+
+      await photos.refreshIfDue();
+      await changing;
+      await settle();
+
+      expect(crypto.encrypted.last, fakeJpeg(9));
+      expect(cache.bytesFor(photos.own!), fakeJpeg(9));
+    });
+  });
+
+  group('migration of the server photo', () {
+    test('is a photo with the counter 1 — owed to friends, the migration '
+        'made — and any real change outranks it', () async {
+      expect(await photos.migrateOwn(plain), ProfilePhotoOutcome.done);
+      final migrated = photos.own!;
+      expect(migrated.rev, 1);
+      expect(migrated.hasPhoto, isTrue);
+      expect(photos.ownPending, isTrue);
+      expect(photos.migrated, isTrue);
+
+      await photos.setOwn(fakeJpeg(2));
+      expect(photos.own!.rev, clock.millisecondsSinceEpoch);
+      expect(photos.own!.supersedes(migrated), isTrue);
+      expect(migrated.supersedes(photos.own), isFalse);
+    });
+
+    test('does nothing for an account that already has a reference — a '
+        "sibling's or a restore's — and uploads nothing", () async {
+      final theirs = await onBox(0x61, rev: 9000);
+      await photos.takeSibling(theirs);
+
+      expect(await photos.migrateOwn(plain), isNull);
+
+      expect(outbox.uploads, isEmpty);
+      expect(photos.own!.rev, 9000);
+      await settle();
+      expect(photos.own!.mediaId, theirs.mediaId);
+    });
+
+    test('does nothing for an account that removed its photo', () async {
+      await photos.clearOwn();
+      final cleared = photos.own;
+
+      expect(await photos.migrateOwn(plain), isNull);
+
+      expect(outbox.uploads, isEmpty);
+      expect(photos.own, cleared);
+    });
+
+    test("a sibling's photo that lands while the migration uploads wins",
+        () async {
+      final theirs = await onBox(0x62, rev: 9000);
+      outbox.duringUpload = () async {
+        outbox.duringUpload = null;
+        await photos.takeSibling(theirs);
+      };
+
+      expect(await photos.migrateOwn(plain), isNull);
+      await settle();
+
+      expect(photos.own!.mediaId, theirs.mediaId);
+      expect(photos.own!.rev, 9000);
+    });
+  });
+
+  group('a friend cannot name a file someone else holds', () {
+    Future<ProfilePhotoRef> naming(ProfilePhotoRef held, {required int rev}) async {
+      // Never the key the own photo got: the fake seals under a counter.
+      await friendCrypto.encrypt(plain);
+      await friendCrypto.encrypt(plain);
+      final other = (await sealPhoto(friendCrypto, plain, idFill: 3)).ref;
+      return ProfilePhotoRef(
+        rev: rev,
+        mediaId: held.mediaId!,
+        key: other.key!,
+        iv: other.iv!,
+      );
+    }
+
+    test('a reference naming the own file is refused, and the friend '
+        'replacing it later deletes nothing', () async {
+      await befriend(2);
+      await photos.setOwn(plain);
+      final mine = photos.own!;
+
+      expect(await photos.takeFriend(2, await naming(mine, rev: 5)), isFalse);
+      expect(store.byUserId(2)!.avatar, isNull);
+      expect(
+        await photos.takeFriend(2, const ProfilePhotoRef.cleared(6)),
+        isTrue,
+      );
+      await settle();
+
+      expect(await files.has(1, mine.mediaIdBytes!), isTrue);
+      expect(cache.bytesFor(mine), plain);
+    });
+
+    test("nor another friend's file", () async {
+      await befriend(2);
+      await befriend(3);
+      final theirs = await onBox(0x21, rev: 5);
+      expect(await photos.takeFriend(3, theirs), isTrue);
+      await settle();
+
+      expect(await photos.takeFriend(2, await naming(theirs, rev: 6)), isFalse);
+      expect(
+        await photos.takeFriend(2, const ProfilePhotoRef.cleared(7)),
+        isTrue,
+      );
+      await settle();
+
+      expect(store.byUserId(3)!.avatar, theirs);
+      expect(await files.has(1, theirs.mediaIdBytes!), isTrue);
+      expect(cache.bytesFor(theirs), fakeJpeg(0x21));
+    });
+
+    test('the file a replaced reference named stays while another held '
+        'reference names it', () async {
+      await photos.setOwn(plain);
+      final mine = photos.own!;
+      await befriend(2);
+      await store.update(
+        2,
+        (c) => c!.copyWith(
+          avatar: ProfilePhotoRef(
+            rev: 1,
+            mediaId: mine.mediaId!,
+            key: mine.key!,
+            iv: mine.iv!,
+          ),
+        ),
+      );
+
+      await photos.setOwn(fakeJpeg(2));
+
+      expect(await files.has(1, mine.mediaIdBytes!), isTrue);
+    });
+
+    test('a reference that fails to open does not poison the file for the '
+        'reference that really holds it', () async {
+      await photos.setOwn(plain);
+      final mine = photos.own!;
+      final ciphertext = (await files.get(1, mine.mediaIdBytes!))!;
+      final fresh = ProfilePhotoCache(crypto: crypto)
+        ..bind(store: files, userId: 1);
+      addTearDown(fresh.dispose);
+
+      expect(await fresh.ingest(await naming(mine, rev: 5), ciphertext), isFalse);
+      expect(fresh.bytesFor(mine), isNull, reason: 'read from the store');
+      await settle();
+
+      expect(fresh.bytesFor(mine), plain);
     });
   });
 

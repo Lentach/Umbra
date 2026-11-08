@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:fireplace/models/profile_photo.dart';
 import 'package:fireplace/models/user_model.dart';
 import 'package:fireplace/providers/connection_provider.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
@@ -157,6 +158,7 @@ void main() {
     required String password,
     String? phrase,
     List<ContactRecord> contacts = const [],
+    UserModel? self,
   }) async {
     final codec = ContactBackupCodec(kdf: kdf, sealer: FakeContentSealer());
     final (ck, ckId) = ContactBackupCodec.mintContentKey();
@@ -192,7 +194,7 @@ void main() {
         ck,
         ContactBackupPayload(
           userId: 7,
-          self: UserModel(id: 7, username: 'me', tag: '0007'),
+          self: self ?? UserModel(id: 7, username: 'me', tag: '0007'),
           contacts: contacts,
         ),
       ),
@@ -231,6 +233,96 @@ void main() {
       expect(store.self?.username, 'me');
     },
   );
+
+  group("the backup's own photo reference (decision 138)", () {
+    ProfilePhotoRef photo(int rev) => ProfilePhotoRef(
+      rev: rev,
+      mediaId: '${'A' * 42}E',
+      key: base64Encode(List.filled(32, 1)),
+      iv: base64Encode(List.filled(12, 1)),
+    );
+
+    /// A new device: the login already filled the self row from the server
+    /// profile (a legacy photo path, no end-to-end reference) before the
+    /// restore runs.
+    Future<ContactBackupService> loggedInThenRestored(UserModel inBackup) async {
+      await seedRow(password: 'pw', contacts: [_friend(41)], self: inBackup);
+      await store.setSelf(
+        UserModel(
+          id: 7,
+          username: 'me',
+          tag: '0007',
+          profilePictureUrl: '/media/avatars/old.jpg',
+        ),
+      );
+      final svc = await service();
+      svc.attach(store);
+      await svc.onSession(userId: 7, token: 'jwt', password: 'pw');
+      return svc;
+    }
+
+    test('a restore applies it although the login filled the self row first, '
+        'and marks the server photo as moved (it must never be migrated '
+        'back over a newer or removed one)', () async {
+      final backup = photo(500);
+      final svc = await loggedInThenRestored(
+        UserModel(id: 7, username: 'me', tag: '0007', avatar: backup),
+      );
+
+      await svc.applyRestore();
+
+      expect(store.selfPhoto.avatar, backup);
+      expect(store.selfPhoto.migrated, isTrue);
+      expect(store.selfPhoto.pending, isFalse);
+      expect(store.self?.avatar, backup);
+    });
+
+    test('a removal in the backup is applied too', () async {
+      final svc = await loggedInThenRestored(
+        UserModel(
+          id: 7,
+          username: 'me',
+          tag: '0007',
+          avatar: const ProfilePhotoRef.cleared(900),
+        ),
+      );
+
+      await svc.applyRestore();
+
+      expect(store.selfPhoto.avatar?.isCleared, isTrue);
+      expect(store.selfPhoto.migrated, isTrue);
+    });
+
+    test('a reference this device holds that is newer stays', () async {
+      final svc = await loggedInThenRestored(
+        UserModel(id: 7, username: 'me', tag: '0007', avatar: photo(500)),
+      );
+      final held = photo(900);
+      await store.updateSelfPhoto(
+        (_) => (avatar: held, pending: false, migrated: false),
+      );
+
+      await svc.applyRestore();
+
+      expect(store.selfPhoto.avatar, held);
+      expect(store.selfPhoto.migrated, isTrue);
+    });
+
+    test('a migration that already published a low reference is replaced, '
+        'and friends are owed the restored one', () async {
+      final svc = await loggedInThenRestored(
+        UserModel(id: 7, username: 'me', tag: '0007', avatar: photo(500)),
+      );
+      await store.updateSelfPhoto(
+        (_) => (avatar: photo(1), pending: false, migrated: true),
+      );
+
+      await svc.applyRestore();
+
+      expect(store.selfPhoto.avatar?.rev, 500);
+      expect(store.selfPhoto.pending, isTrue);
+    });
+  });
 
   // Issue #208: a link empties the store the restore was already applied to.
   test(

@@ -77,6 +77,14 @@ void main() {
         ...jpegHeader(5000, 5000).sublist(2),
       ]);
       expect(ProfilePhotoCodec.isSound(dhtFirst), isFalse);
+      // The same walk, a small frame behind the same table: sound — so the
+      // refusal above is the frame's size, not the table that precedes it.
+      final smallAfterDht = Uint8List.fromList([
+        0xFF, 0xD8, //
+        0xFF, 0xC4, 0x00, 0x05, 1, 2, 3,
+        ...jpegHeader(64, 64).sublist(2),
+      ]);
+      expect(ProfilePhotoCodec.isSound(smallAfterDht), isTrue);
     });
 
     test("a real encoder's JPEG is sound; the same one too wide is not", () {

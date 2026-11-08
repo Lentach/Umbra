@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import '../../models/profile_photo.dart';
+import '../../utils/e2e_diag_log.dart';
 import '../box/box_media_fetcher.dart';
 import '../box/box_media_frame.dart';
 import '../box/box_outbox.dart';
@@ -32,6 +33,21 @@ enum ProfilePhotoOutcome {
   failed,
 }
 
+/// Why an own photo is being made: the counter it takes depends on it.
+///
+///  * `user` — the user set a new photo: `max(last + 1, now in ms)`, so it
+///    outranks everything the account sent before, from any device, even
+///    one that lost its row.
+///  * `refresh` — the same photo, made again for a box that forgets after 14
+///    days: `held + 1`, NEVER the clock. A refresh is not news: a laptop
+///    that was offline for 8 days must not outrank the photo the phone set
+///    meanwhile. It commits only if the own reference is still the one it
+///    started from.
+///  * `migrate` — the server photo moved once: the counter `1`, so any real
+///    change, and a restore of a backup, outranks it. It commits only for an
+///    account that has no reference and never migrated.
+enum _Change { user, refresh, migrate }
+
 /// The profile photo of this account and of its friends (decision 138), as
 /// far as the DEVICE keeps it: encrypt, upload once, keep the ciphertext,
 /// hold the reference in the contact store, fetch a friend's file and drop
@@ -43,8 +59,11 @@ enum ProfilePhotoOutcome {
 ///   charged to this device's own self-queue, which names no friend.
 /// * The own reference — and when it was made, and whether a frame to the
 ///   friends is still owed — lives in the contact store's self row. Its
-///   counter `r` only grows: `max(last + 1, now in ms)`, so a device that
-///   lost its row still outruns every reference its account ever sent.
+///   counter `r` only grows, by who made the change: a user's takes
+///   `max(last + 1, now in ms)` (a device that lost its row still outruns
+///   every reference its account ever sent), a refresh `last + 1` — never the
+///   clock, so an old device's weekly pass never beats a newer photo — and
+///   the migrated server photo `1`, so every real change outranks it.
 /// * A friend's reference replaces the held one only with a strictly higher
 ///   counter; its file is downloaded at once ([BoxMediaFetcher], decision 40's
 ///   retries) and decrypted into the [ProfilePhotoCache] when it lands.
@@ -81,11 +100,29 @@ class ProfilePhotos {
   /// The one-time move of the server photo was made (or needs none).
   bool get migrated => store.selfPhoto.migrated;
 
-  /// [ProfilePhotoRef.rev] for the next reference after [held]: one past it,
-  /// and never behind the clock.
-  int _nextRev(ProfilePhotoRef? held) {
-    final next = math.max((held?.rev ?? 0) + 1, _now().millisecondsSinceEpoch);
-    return math.min(next, ProfilePhotoRef.maxRev);
+  /// The counter of a change the USER made (a new photo, a removal): one past
+  /// the held one and never behind the clock — see [_Change.user].
+  int _userRev(ProfilePhotoRef? held) => math.min(
+    math.max((held?.rev ?? 0) + 1, _now().millisecondsSinceEpoch),
+    ProfilePhotoRef.maxRev,
+  );
+
+  static bool _sameRef(ProfilePhotoRef? a, ProfilePhotoRef? b) =>
+      a != null && b != null && a.rev == b.rev && a.mediaId == b.mediaId;
+
+  static bool _migratable(SelfPhotoState s) => s.avatar == null && !s.migrated;
+
+  /// Every change of the own photo — a new one, a removal, the weekly
+  /// refresh, the migration, and the refresh a first contact asks for — runs
+  /// through this one queue, so two of them never interleave their upload and
+  /// their commit. A frame a sibling sent ([takeSibling]) does NOT wait here:
+  /// it lands at any time, and the compare-and-set at each commit lets it win.
+  Future<void> _tail = Future<void>.value();
+
+  Future<T> _exclusive<T>(Future<T> Function() action) {
+    final run = _tail.then((_) => action());
+    _tail = run.then<void>((_) {}, onError: (Object _) {});
+    return run;
   }
 
   // ---------- The own photo ----------
@@ -94,11 +131,28 @@ class ProfilePhotos {
   /// account's photo: encrypted, uploaded once, its ciphertext kept here as
   /// the sender's own copy, and a new reference (higher counter, pending
   /// delivery) written to the self row. The file the reference replaced goes.
-  Future<ProfilePhotoOutcome> setOwn(Uint8List jpeg) async {
+  Future<ProfilePhotoOutcome> setOwn(Uint8List jpeg) => _exclusive(
+    () async => (await _upload(jpeg, _Change.user))!,
+  );
+
+  /// The one-time move of the account's server photo ([jpeg], already
+  /// scaled): a photo with the counter 1. Null — nothing uploaded — when the
+  /// account already has a reference of any kind (a sibling's, a restore's, a
+  /// removal) or the move was made; also null when one lands during the
+  /// upload, which then wins.
+  Future<ProfilePhotoOutcome?> migrateOwn(Uint8List jpeg) =>
+      _exclusive(() => _upload(jpeg, _Change.migrate));
+
+  Future<ProfilePhotoOutcome?> _upload(
+    Uint8List jpeg,
+    _Change why, {
+    ProfilePhotoRef? from,
+  }) async {
     final userId = store.userId;
     final queue = store.selfQueue;
     if (userId == null || queue == null) return ProfilePhotoOutcome.noRoute;
     if (!ProfilePhotoCodec.isSound(jpeg)) return ProfilePhotoOutcome.unreadable;
+    if (why == _Change.migrate && !_migratable(store.selfPhoto)) return null;
     final EncryptedMedia sealed;
     final BoxResult<BoxMediaRef> answer;
     try {
@@ -130,20 +184,41 @@ class ProfilePhotos {
     ProfilePhotoRef? previous;
     ProfilePhotoRef? made;
     final committed = await store.updateSelfPhoto((current) {
+      final int rev;
+      switch (why) {
+        case _Change.user:
+          rev = _userRev(current.avatar);
+        case _Change.refresh:
+          // Something else changed the own photo while this one uploaded.
+          if (!_sameRef(current.avatar, from)) return null;
+          rev = math.min(from!.rev + 1, ProfilePhotoRef.maxRev);
+        case _Change.migrate:
+          if (!_migratable(current)) return null;
+          rev = 1;
+      }
       previous = current.avatar;
       made = ProfilePhotoRef(
-        rev: _nextRev(current.avatar),
+        rev: rev,
         mediaId: boxB64(uploaded.id),
         key: sealed.keyBase64,
         iv: sealed.ivBase64,
         uploadedAt: _now(),
       );
-      return (avatar: made, pending: true, migrated: current.migrated);
+      return (
+        avatar: made,
+        pending: true,
+        migrated: why == _Change.migrate || current.migrated,
+      );
     });
     final ref = made;
-    if (!committed || ref == null) {
+    if (!committed) {
       await _forgetFile(uploaded.id);
       return ProfilePhotoOutcome.failed;
+    }
+    if (ref == null) {
+      // Superseded: what landed meanwhile stands; this upload is dropped.
+      await _forgetFile(uploaded.id);
+      return null;
     }
     cache.remember(ref, jpeg);
     await _dropReplaced(previous, ref);
@@ -151,35 +226,41 @@ class ProfilePhotos {
   }
 
   /// Removes the account's photo: a cleared reference with the next counter,
-  /// pending delivery, and the file it replaced gone from this device.
-  Future<ProfilePhotoOutcome> clearOwn() async {
+  /// pending delivery, and the file it replaced gone from this device. An
+  /// account that never had an end-to-end photo — its server photo not moved
+  /// yet — gets the clear too: it settles the migration, which would
+  /// otherwise publish the very photo the user just removed.
+  Future<ProfilePhotoOutcome> clearOwn() => _exclusive(() async {
     if (store.userId == null) return ProfilePhotoOutcome.noRoute;
     ProfilePhotoRef? previous;
     ProfilePhotoRef? made;
     final committed = await store.updateSelfPhoto((current) {
       previous = current.avatar;
-      if (previous == null || previous!.isCleared) return null;
-      made = ProfilePhotoRef.cleared(_nextRev(previous), at: _now());
+      if (previous != null && previous!.isCleared) return null;
+      made = ProfilePhotoRef.cleared(_userRev(previous), at: _now());
       return (avatar: made, pending: true, migrated: true);
     });
     if (!committed) return ProfilePhotoOutcome.failed;
     final ref = made;
     if (ref != null) await _dropReplaced(previous, ref);
     return ProfilePhotoOutcome.done;
-  }
+  });
 
   /// The own photo made again when it is older than [kRefreshAfter]; null
   /// when it is not due (no photo, or no known age — a restored reference
-  /// says none and its file is not here to make again).
-  Future<ProfilePhotoOutcome?> refreshIfDue() async {
+  /// says none and its file is not here to make again) or when something
+  /// else changed the own photo meanwhile. Queued with every other change,
+  /// and judged due only when its turn comes, so the weekly pass and a first
+  /// contact asking together make one upload.
+  Future<ProfilePhotoOutcome?> refreshIfDue() => _exclusive(() async {
     final ref = own;
     final at = ref?.uploadedAt;
     if (ref == null || !ref.hasPhoto || at == null) return null;
     if (_now().difference(at) <= kRefreshAfter) return null;
     final plain = await _ownPlain(ref);
     if (plain == null) return ProfilePhotoOutcome.failed;
-    return setOwn(plain);
-  }
+    return _upload(plain, _Change.refresh, from: ref);
+  });
 
   /// The decrypted file the own [ref] names: this device's own copy, else the
   /// box's while it still holds it.
@@ -220,12 +301,25 @@ class ProfilePhotos {
   /// strictly higher counter than the one held (a late frame never brings
   /// back what a newer one replaced). A photo is then fetched at once and the
   /// replaced file goes. True when the record changed.
+  ///
+  /// A reference naming a file this device already holds for the own account
+  /// or another contact is refused: media ids are the box's random draw, so
+  /// no honest friend shares one, and accepting it would let a friend make
+  /// this device delete, or fail to open, a file that is not its.
   Future<bool> takeFriend(int friendId, ProfilePhotoRef ref) async {
     ProfilePhotoRef? previous;
     var changed = false;
     final committed = await store.update(friendId, (current) {
       if (current == null || current.state != ContactState.friend) return null;
       if (!ref.supersedes(current.avatar)) return null;
+      final id = ref.mediaId;
+      if (id != null && _holdsFile(id, exceptFriend: friendId)) {
+        E2eDiagLog.add('PROFILE_FRIEND_REF_REFUSED', {
+          'peer': friendId,
+          'why': 'media_id_held',
+        });
+        return null;
+      }
       previous = current.avatar;
       changed = true;
       return current.copyWith(avatar: ref);
@@ -302,9 +396,18 @@ class ProfilePhotos {
 
   // ---------- Housekeeping ----------
 
+  /// Whether a held reference — the own one, or a contact's other than
+  /// [exceptFriend] — names the file [id].
+  bool _holdsFile(String id, {int? exceptFriend}) =>
+      store.selfPhoto.avatar?.mediaId == id ||
+      store.all.any(
+        (r) => r.userId != exceptFriend && r.avatar?.mediaId == id,
+      );
+
   /// The file [previous] named is no longer anyone's current photo here:
-  /// its ciphertext and its decrypted bytes go. A reference is replaced only
-  /// by a newer one, so the id never comes back.
+  /// its ciphertext and its decrypted bytes go — unless another held
+  /// reference still names it. Read after the replacement is stored, so the
+  /// reference just replaced no longer counts.
   Future<void> _dropReplaced(
     ProfilePhotoRef? previous,
     ProfilePhotoRef replacement,
@@ -312,6 +415,7 @@ class ProfilePhotos {
     final id = previous?.mediaId;
     final bytes = previous?.mediaIdBytes;
     if (id == null || bytes == null || id == replacement.mediaId) return;
+    if (_holdsFile(id)) return;
     cache.forget(id);
     await _forgetFile(bytes);
   }

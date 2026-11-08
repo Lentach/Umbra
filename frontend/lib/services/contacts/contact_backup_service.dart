@@ -337,6 +337,32 @@ class ContactBackupService {
     if (store.self == null && payload.self != null) {
       await store.setSelf(payload.self!);
     }
+    // The login fills the self row from the server profile BEFORE this runs,
+    // so the photo is applied on its own (decision 138): the backup's
+    // reference — a removal included — when it outranks the one held, and
+    // the server photo marked as moved either way, so the one-time migration
+    // can never publish it over a newer or removed photo. Friends are owed
+    // the restored reference only when a lower one was published meanwhile
+    // (a migration that ran before this restore).
+    final restored = payload.self?.avatar;
+    if (restored != null) {
+      await store.updateSelfPhoto((current) {
+        if (restored.supersedes(current.avatar)) {
+          return (
+            avatar: restored,
+            pending: current.avatar != null,
+            migrated: true,
+          );
+        }
+        return current.migrated
+            ? null
+            : (
+                avatar: current.avatar,
+                pending: current.pending,
+                migrated: true,
+              );
+      });
+    }
     if (missing.isNotEmpty) {
       E2ePersistentDiag.record('CONTACT_BACKUP_RESTORED', {
         'count': missing.length,

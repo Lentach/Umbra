@@ -14,8 +14,17 @@ every avatar file about 30 days after the release.
   a fresh AES-GCM key (the existing `MediaCryptoService` path), pads to a box media rung
   (`frameMediaToRung`, 64 KiB expected) and uploads it ONCE via `POST /box/media`.
 - **Reference** `av = {m: <box media id b64>, k: <key b64>, i: <iv b64>, r: <rev int>}`.
-  `r` is a per-account counter that only grows; a receiver keeps the highest `r` it saw.
-  A cleared photo is `{r, x: 1}`.
+  `r` is a per-account counter that only grows; a receiver keeps the highest `r` it saw
+  and ignores a frame that does not exceed it. A cleared photo is `{r, x: 1}`. Who
+  mints `r` decides what outranks what:
+  - a change the user makes (a new photo, a removal): `max(last + 1, now in ms)`, so it
+    outranks everything the account sent before, from any device, even one that lost
+    its row;
+  - the weekly refresh (same photo, new file and key): `last + 1`, never the clock. A
+    refresh is not news: a laptop offline for 8 days must not outrank the photo the
+    phone set meanwhile. It commits only if the own reference is still the one it
+    started from, and changes of the own photo run one at a time;
+  - the migrated server photo: `1`, so every real change, and a restore, outranks it.
 - **New envelope type `profile`** `{t:'profile', av}`: sent `quiet` (no wake push) to
   every device of every friend with a box route and to every sibling, the same fan-out
   as `announceOwnList` (E50d). Sent on: a photo change; the first launch of this version
@@ -43,8 +52,18 @@ every avatar file about 30 days after the release.
 
 ### Migration (release A, client)
 - First launch with this version: if the account has a server photo
-  (`/users/me` `profilePictureUrl`) and no E2E reference yet, the device downloads it,
-  runs the photo-change path above, and stops. Siblings learn it by the same frame.
+  (`/users/me` `profilePictureUrl`) and NO reference of any kind (a removal counts) and
+  the move was not made, the device downloads it, uploads it with `r = 1`, and stops.
+  Siblings learn it by the same frame. The move commits only if nothing else landed
+  while it ran.
+- Removing the photo before the move writes a cleared reference (`{r, x: 1}`), owed to
+  friends, and settles the move: the server photo is never published afterwards.
+- A backup restore applies the backup's own reference when it outranks the one held
+  (the login fills the self row first, so "only when empty" is not enough) and marks
+  the move made; friends are owed it only when a lower one was published meanwhile.
+- A friend's reference naming a media id this device already holds for the own account
+  or another contact is refused, and a file a held reference still names is never
+  deleted.
 
 ### Server (release A)
 - `searchUsers` returns no `profilePictureUrl` / `profilePhotos`.

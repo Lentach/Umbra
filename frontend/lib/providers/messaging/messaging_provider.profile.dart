@@ -140,8 +140,8 @@ extension MessagingProfile on MessagingProvider {
       await photos.markMigrated();
       return;
     }
-    final outcome = await photos.setOwn(jpeg);
-    _e2eFlowLog('PROFILE_MIGRATED', {'outcome': outcome.name});
+    final outcome = await photos.migrateOwn(jpeg);
+    _e2eFlowLog('PROFILE_MIGRATED', {'outcome': outcome?.name ?? 'superseded'});
   }
 
   /// A request or an accept is about to carry the own profile: a photo whose
