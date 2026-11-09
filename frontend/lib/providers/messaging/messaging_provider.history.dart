@@ -74,6 +74,21 @@ extension MessagingHistory on MessagingProvider {
     unawaited(_mergeLocalBoxRows(conversationId));
   }
 
+  /// E2E is ready (every connect): the chat on screen reads its stored
+  /// messages again. A launch with no network opens its chat while the
+  /// record store has no signed-in user, which answers "none stored"
+  /// ([EncryptionService.localMessageRecords]); the first connect's
+  /// initialize sets the user, and without this only a resume read the chat
+  /// again. The narrow merge ([_mergeLocalBoxRows], as a history import
+  /// does): rows the chat holds stay, scroll and the open chat's state are
+  /// not reset, and the read receipt, seen mark and countdowns go once as on
+  /// entry. Nothing when no chat is open.
+  Future<void> rereadOpenChat() async {
+    final open = _effectiveActiveConversationId;
+    if (open == null) return;
+    await _mergeLocalBoxRows(open);
+  }
+
   /// Makes [rows] — those of [conversationId] — the open chat's rows, oldest
   /// first, without the ones deleted here or expired.
   void _installChat(int conversationId, Iterable<MessageModel> rows) {

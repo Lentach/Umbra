@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:fireplace/models/user_model.dart';
 import 'package:fireplace/providers/connection_provider.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
@@ -10,7 +11,9 @@ import 'package:fireplace/services/box/box_wire.dart';
 import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/services/contacts/contact_store.dart';
 import 'package:fireplace/services/encryption/content_kv.dart';
+import 'package:fireplace/services/encryption_service.dart';
 import 'package:fireplace/services/socket_service.dart';
+import 'package:fireplace/utils/message_ids.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -63,6 +66,8 @@ class _RecordingConnection extends ConnectionProvider {
 
 /// No local-plaintext maintenance: nothing here is about stored messages.
 class _QuietEncryption extends EncryptionProvider {
+  _QuietEncryption({super.service});
+
   @override
   Future<void> loadRetiredIds() async {}
   @override
@@ -751,5 +756,127 @@ void main() {
       expect(box.disposed, isFalse, reason: 'the new life must keep its box');
       expect(deletedOn(box), isEmpty);
     });
+  });
+
+  // 0.2.80, trap "A chat opened before the socket's first connect ...": a
+  // launch with no network opens its chat while `EncryptionService` holds no
+  // signed-in user, so the chat reads no stored message; the user is set by
+  // the first connect's `initialize`, and only a resume used to read the chat
+  // again. Mutation: drop `rereadOpenChat` from the `onE2EReady` hook.
+  group('the chat on screen when E2E becomes ready', () {
+    const bobChat = 10;
+    late EncryptionService service;
+    late ConversationsProvider conversations;
+    late MessagingProvider messaging;
+
+    Future<void> signIn(EncryptionService s) => s.initialize(
+      1,
+      checkServerIdentity: () async => const ServerIdentityGuard(exists: false),
+    );
+
+    Future<void> settle() => pumpEventQueue(times: 200);
+
+    setUp(() async {
+      FlutterSecureStorage.setMockInitialValues({});
+      // An earlier launch stored a message of Bob's in this chat.
+      final earlier = EncryptionService();
+      await signIn(earlier);
+      await earlier.saveDecryptedContent(
+        kFirstLocalMessageId,
+        {'content': 'stored hello', 'senderId': 2},
+        conversationId: bobChat,
+        createdAt: DateTime.now().toUtc().subtract(const Duration(minutes: 1)),
+        wire: (senderId: 2, wireId: 'wire-1'),
+      );
+
+      // This launch has no network: `service` is not signed in yet.
+      service = EncryptionService();
+      encryption = _QuietEncryption(service: service)
+        ..storedSessionDeviceId = (() async => storedDeviceId);
+      conversations = ConversationsProvider();
+      messaging = MessagingProvider()
+        ..setEncryptionProvider(encryption)
+        ..setConversationsProvider(conversations)
+        ..setIncomingMessageSoundEnabledForTest(false);
+      store = ContactStore(
+        open: () async => kv,
+        lock: <T>(_, action) => action(),
+        accepts: (_) => true,
+      );
+      await store.open(1);
+      await store.setSelf(UserModel(id: 1, username: 'alice', tag: '0001'));
+      await store.update(
+        2,
+        (_) => const ContactRecord(
+          userId: 2,
+          username: 'bob',
+          tag: '0002',
+          state: ContactState.friend,
+          legacy: ContactLegacy(conversationId: bobChat),
+        ),
+      );
+      connection = _RecordingConnection(socketService: account)
+        ..setProviders(
+          encryption: encryption,
+          friends: FriendsProvider(),
+          conversations: conversations,
+          messaging: messaging,
+          contactStore: store,
+          boxClient: (baseUrl) =>
+              BoxClient(baseUrl: baseUrl, socketFactory: sockets.call),
+        );
+      await connection.connect(1, 'token', 'http://api.test');
+      expect(conversations.getConversationById(bobChat), isNotNull);
+    });
+
+    /// The chat screen's open, before the first connect's `initialize`.
+    Future<void> openOffline() async {
+      conversations.openConversation(bobChat);
+      messaging.getMessages(bobChat);
+      await settle();
+      expect(messaging.messages, isEmpty, reason: 'precondition');
+    }
+
+    test(
+      'shows the stored messages it opened without, with no resume',
+      () async {
+        await openOffline();
+
+        await signIn(service);
+        encryption.onE2EReady!();
+        await settle();
+
+        expect(messaging.messages.map((m) => m.content), ['stored hello']);
+      },
+    );
+
+    test("the chat list's preview of it comes back with no resume", () async {
+      expect(
+        conversations.lastMessages[bobChat],
+        isNull,
+        reason: 'precondition',
+      );
+
+      await signIn(service);
+      encryption.onE2EReady!();
+      await settle();
+
+      expect(conversations.lastMessages[bobChat]?.content, 'stored hello');
+    });
+
+    test(
+      'the next connect reads the open chat again without doubling a row',
+      () async {
+        await openOffline();
+        await signIn(service);
+        encryption.onE2EReady!();
+        await settle();
+
+        encryption.onE2EReady!();
+        await settle();
+
+        expect(messaging.messages.map((m) => m.content), ['stored hello']);
+      },
+    );
   });
 }
