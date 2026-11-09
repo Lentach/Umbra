@@ -28,7 +28,7 @@ param(
   # VAPID public key - public by design (it is already inside the deployed bundle).
   [string]$VapidPublicKey = "BOyiyoPFLS19q4OUIHdhb97je8EOzxjRIzEafCH1nZqzyKGG6DfytNqFK6u3IaNrgwPSbHuj0Hra1IP-KWX7Prc",
   # Private Giphy key - set in gitignored deploy-web.config.ps1 or the GIPHY_API_KEY env var.
-  # NEVER hardcode here (public repo). Empty is allowed (GIF search disabled).
+  # NEVER hardcode here (public repo). Empty is allowed only for a build that is not published.
   [string]$GiphyApiKey    = "$env:GIPHY_API_KEY",
   [string]$RemoteDir      = "fireplace", # repo dir on the VM, relative to the SSH user's home
   # Publish target - set these in deploy-web.config.ps1 (gcloud is recommended for a GCP VM):
@@ -70,6 +70,19 @@ function Assert-BundleHasBackendVapidKey([string]$remoteKey) {
   Write-Host "Bundle carries the live backend's VAPID public key." -ForegroundColor Green
 }
 
+# An empty GIPHY_API_KEY builds fine and ships a GIF picker that silently shows
+# nothing (0.2.80 web first went out that way from a worktree without
+# deploy-web.config.ps1). Publish only a bundle that carries the key.
+function Assert-BundleHasGiphyKey {
+  if (-not $GiphyApiKey) {
+    throw "GIPHY_API_KEY not set - refusing to publish a bundle with GIF search disabled. Set it in deploy-web.config.ps1 (copy it from the main checkout) or the GIPHY_API_KEY env var."
+  }
+  if (-not (Select-String -Path "frontend/build/web/main.dart.js" -SimpleMatch $GiphyApiKey -Quiet)) {
+    throw "frontend/build/web/main.dart.js does not carry GIPHY_API_KEY - refusing to publish. Rebuild without -SkipBuild."
+  }
+  Write-Host "Bundle carries the Giphy key." -ForegroundColor Green
+}
+
 # ---------- repo state ----------
 Step "Repo state"
 $branch = (git rev-parse --abbrev-ref HEAD).Trim()
@@ -95,7 +108,10 @@ if (-not $SkipBuild) {
     "--dart-define=GIPHY_API_KEY=$GiphyApiKey"
   )
   if (-not $GiphyApiKey) {
-    Write-Warning "GIPHY_API_KEY not set - GIF search will be disabled in this build. Set it in deploy-web.config.ps1 or the GIPHY_API_KEY env var."
+    if (-not $SkipPublish) {
+      throw "GIPHY_API_KEY not set - refusing to build for publish (GIF search would be disabled). Set it in deploy-web.config.ps1 (copy it from the main checkout) or the GIPHY_API_KEY env var; build-only runs (-SkipPublish) may omit it."
+    }
+    Write-Warning "GIPHY_API_KEY not set - GIF search will be disabled in this build-only bundle."
   }
   Push-Location frontend
   flutter clean
@@ -142,6 +158,7 @@ if (-not $SkipPublish) {
   if (-not $useGcloud -and -not $VmSshTarget) {
     throw "No publish target. In deploy-web.config.ps1 set GcloudUser+GcloudInstance+GcloudZone (recommended), or VmSshTarget."
   }
+  Assert-BundleHasGiphyKey
 
   if ($useGcloud) {
     # gcloud on Windows uses PuTTY's pscp, which does NOT expand ~ and will not create
