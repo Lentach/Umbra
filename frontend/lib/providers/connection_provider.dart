@@ -118,11 +118,6 @@ class ConnectionProvider extends ChangeNotifier {
   BoxSession? _box;
   int? _boxUserId;
 
-  /// The box session E2E cleared to follow (issue #205): a device on the
-  /// link gate never clears one. Followed only while [_accountReady] too
-  /// (issue #206) — see [_followBox].
-  BoxSession? _boxCleared;
-
   /// That account's box attachment copies and downloads (item 3 / media
   /// wiring, decision 40): made with its session, gone with it.
   BoxMediaFetcher? _boxMedia;
@@ -532,10 +527,9 @@ class ConnectionProvider extends ChangeNotifier {
         // Another account's chats must not outlive it in the push worker.
         if (_box != null) unawaited(BoxPushNids.clear());
         _boxUserId = userId;
-        // Followed only once E2E is ready (issue #205): a device on the link
+        // Started only once E2E is ready (issue #205): a device on the link
         // gate holds no identity of its own, so whatever its queues take it
-        // can never show — and taking it is what empties them. And only once
-        // the account socket confirmed the session (issue #206).
+        // can never show — and taking it is what empties them.
         _box = BoxSession(
           box: boxClient(baseUrl),
           store: contacts,
@@ -543,7 +537,11 @@ class ConnectionProvider extends ChangeNotifier {
           // E9: box push registration on every contact queue.
           push: PushBoxSource(),
         );
-        final session = _box!;
+        // Issue #206: no queue is subscribed before this connect's account
+        // socket confirmed the session (`socketReady`); the connect gate
+        // answers a device revoked while it was away `deviceRevoked`
+        // instead. Released by `accountReady`, held again by `accountLost`.
+        final session = _box!..holdSubscribes();
         final mediaStore = BoxMediaStore.device();
         _boxMedia = BoxMediaFetcher(
           store: mediaStore,
@@ -607,14 +605,12 @@ class ConnectionProvider extends ChangeNotifier {
           _encryptionProvider?.lookupBoxPeerList = messaging.lookupBoxPeerList;
         }
         if (_encryptionProvider?.isE2EReady == true) {
-          _box!.e2eReady();
-          _boxCleared = _box;
+          _box!
+            ..start()
+            ..e2eReady();
         }
       } else {
-        // Issue #206: the session the box followed is being replaced; it
-        // waits for this connect's `socketReady`, which a revoked device
-        // never gets (the connect gate answers `deviceRevoked` instead).
-        _box!.close();
+        _box!.resume();
       }
     }
 
@@ -635,11 +631,10 @@ class ConnectionProvider extends ChangeNotifier {
       _box?.drainInbox();
       // Issue #205: the box is followed from the first E2E-ready on; a
       // device on the link gate never gets here. Sibling queues: a handoff
-      // can be encrypted now. Issue #206: once the account socket confirmed
-      // the session too, whichever comes last.
-      _box?.e2eReady();
-      _boxCleared = _box;
-      _followBox();
+      // can be encrypted now.
+      _box
+        ?..start()
+        ..e2eReady();
       // Decision 21: the device lists a box send reads are looked up here,
       // once per connect — never by a send.
       _refreshBoxDeviceLists();
@@ -725,7 +720,6 @@ class ConnectionProvider extends ChangeNotifier {
       _onSocketReady();
       _box?.accountReady(readyDeviceId is int ? readyDeviceId : null);
       _accountReady = true;
-      _followBox();
       _refreshBoxDeviceLists();
       // Issue #208: the retire's revocation check needs the account socket.
       if (_encryptionProvider?.previousDeviceLife == true) {
@@ -740,11 +734,7 @@ class ConnectionProvider extends ChangeNotifier {
       });
       _isConnected = false;
       _accountReady = false;
-      // Issue #206: no box reconnect re-signs the queues until the next
-      // connect gate confirmed the session; the subscribe set is kept for it.
-      _box
-        ?..accountLost()
-        ..close();
+      _box?.accountLost();
       _provisioningSink?.onSessionLost();
       notifyListeners();
 
@@ -763,20 +753,6 @@ class ConnectionProvider extends ChangeNotifier {
   /// socket are both ready this connect — whichever comes last triggers it.
   void _refreshBoxDeviceLists() {
     if (_accountReady) _messagingProvider?.refreshBoxDeviceLists();
-  }
-
-  /// Issue #206: the box is (re)connected only once THIS connect's account
-  /// socket confirmed the session (`socketReady`) and E2E cleared the box
-  /// ([_boxCleared], issue #205) — whichever comes last opens it. A device
-  /// revoked while it was away hears `deviceRevoked` from the connect gate
-  /// instead of `socketReady`, so it re-signs no queue before it deletes
-  /// them. A live device's box waits one account round trip.
-  void _followBox() {
-    final box = _box;
-    if (!_accountReady || box == null || !identical(box, _boxCleared)) return;
-    box
-      ..start()
-      ..resume();
   }
 
   void _scheduleReconnect() {

@@ -108,7 +108,8 @@ class IoBoxSocket implements BoxSocket {
   bool get connected => _socket.connected;
 
   @override
-  void onConnect(void Function() handler) => _socket.onConnect((_) => handler());
+  void onConnect(void Function() handler) =>
+      _socket.onConnect((_) => handler());
 
   @override
   void onDisconnect(void Function() handler) =>
@@ -225,6 +226,21 @@ class BoxClient {
   /// The pending [checkAlive] judgement, if any.
   Timer? _aliveCheck;
 
+  /// Issue #206: while held, no `subscribe` goes out — neither a fresh
+  /// connection's re-signing of the set nor a new [subscribe] — so a device
+  /// revoked while it was away takes nothing from its queues before the
+  /// account socket's connect gate tells it. The transport, its backoff and
+  /// every other call run as usual, and a connection that stayed up keeps
+  /// what it already subscribed. [releaseSubscribes] sends what waited.
+  bool _subscribesHeld = false;
+
+  /// A connection that came up while held: it re-signs the set, and turns
+  /// [BoxState.ready], at [releaseSubscribes].
+  BoxSocket? _heldConnection;
+
+  /// Queues [subscribe]d on a ready connection while held, sent at release.
+  final Map<String, BoxQueueAuth> _heldSubscribes = <String, BoxQueueAuth>{};
+
   Stream<BoxState> get states => _states.stream;
   BoxState get state => _state;
   Stream<BoxDelivery> get deliveries => _deliveries.stream;
@@ -295,6 +311,27 @@ class BoxClient {
     _drop();
   }
 
+  /// Holds every `subscribe` until [releaseSubscribes] (issue #206).
+  void holdSubscribes() => _subscribesHeld = true;
+
+  /// Ends the hold: a connection that came up meanwhile re-signs the whole
+  /// set; on one that stayed ready, the queues subscribed meanwhile go out.
+  void releaseSubscribes() {
+    if (!_subscribesHeld) return;
+    _subscribesHeld = false;
+    final waiting = _heldConnection;
+    _heldConnection = null;
+    final owed = _heldSubscribes.values.toList(growable: false);
+    _heldSubscribes.clear();
+    final socket = _socket;
+    if (socket == null) return;
+    if (identical(waiting, socket)) {
+      unawaited(_resubscribe(socket));
+    } else if (owed.isNotEmpty && _state == BoxState.ready) {
+      unawaited(_subscribeOwed(socket, owed));
+    }
+  }
+
   /// [close], then releases the streams and the HTTP client.
   void dispose() {
     close();
@@ -310,7 +347,12 @@ class BoxClient {
     _setState(BoxState.connecting);
     socket
       ..onConnect(() {
-        if (identical(_socket, socket)) unawaited(_resubscribe(socket));
+        if (!identical(_socket, socket)) return;
+        if (_subscribesHeld) {
+          _heldConnection = socket;
+          return;
+        }
+        unawaited(_resubscribe(socket));
       })
       ..onDisconnect(() {
         if (identical(_socket, socket)) _lostConnection();
@@ -333,6 +375,8 @@ class BoxClient {
     _aliveCheck = null;
     final socket = _socket;
     _socket = null;
+    _heldConnection = null;
+    _heldSubscribes.clear();
     for (final pending in _pending.toList()) {
       _settle(pending, const BoxUnknown(BoxUnknownReason.disconnected));
     }
@@ -383,6 +427,22 @@ class BoxClient {
     result.value.forEach(_lost.add);
     _reconnect.resetAttempts();
     _setState(BoxState.ready);
+  }
+
+  /// What [subscribe] held on a ready connection ([releaseSubscribes]). A
+  /// failure drops the connection, as for [_resubscribe]: the queues are in
+  /// the set the next connection re-signs.
+  Future<void> _subscribeOwed(
+    BoxSocket socket,
+    List<BoxQueueAuth> owed,
+  ) async {
+    final result = await _subscribeChunks(owed);
+    if (!identical(_socket, socket)) return;
+    if (result is! BoxOk<List<BoxRefusal>>) {
+      _lostConnection();
+      return;
+    }
+    result.value.forEach(_lost.add);
   }
 
   void _setState(BoxState next) {
@@ -529,7 +589,8 @@ class BoxClient {
   /// them now. The answer lists the rids the box refused; those are gone and
   /// leave the set — except `limit` (the per-socket cap), which is neither
   /// listed nor dropped. Offline, the set still keeps them for the next
-  /// connection.
+  /// connection; while subscribes are held ([holdSubscribes]) the answer is
+  /// offline too, and a ready connection subscribes them at the release.
   Future<BoxResult<List<BoxRefusal>>> subscribe(
     Iterable<BoxQueueAuth> queues,
   ) {
@@ -537,6 +598,14 @@ class BoxClient {
     for (final q in list) {
       _requireLength(q.rid, kBoxRidBytes, 'rid');
       _set[boxB64(q.rid)] = q;
+    }
+    if (_subscribesHeld) {
+      if (_state == BoxState.ready) {
+        for (final q in list) {
+          _heldSubscribes[boxB64(q.rid)] = q;
+        }
+      }
+      return Future.value(const BoxUnknown(BoxUnknownReason.offline));
     }
     return _subscribeChunks(list);
   }
@@ -578,7 +647,8 @@ class BoxClient {
             final rid = entry is Map
                 ? boxB64Decode(entry['rid'], kBoxRidBytes)
                 : null;
-            if (rid == null) return const BoxUnknown(BoxUnknownReason.malformed);
+            if (rid == null)
+              return const BoxUnknown(BoxUnknownReason.malformed);
             final code = BoxCode.parse((entry as Map)['code']);
             // Over the per-socket cap (E10) the queue is still ours: it stays
             // in the set for the next connection and is never reported, since
@@ -637,7 +707,12 @@ class BoxClient {
       (sockId) async => {
         'v': 1,
         'rid': boxB64(queue.rid),
-        'sig': await _sig(queue.key, BoxSignedVerb.deleteQueue, sockId, queue.rid),
+        'sig': await _sig(
+          queue.key,
+          BoxSignedVerb.deleteQueue,
+          sockId,
+          queue.rid,
+        ),
       },
     );
     if (result case BoxOk() || BoxRefused(code: BoxCode.authFailed)) {
