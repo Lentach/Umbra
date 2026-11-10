@@ -81,6 +81,21 @@ class _QuietEncryption extends EncryptionProvider {
   Future<bool?> stampedDeviceRevoked(int userId) async => stampRevoked;
 }
 
+/// The queue rids the `subscribe` frames sent on [on] named.
+Set<Object?> _ridsSubscribedOn(Iterable<FakeBoxSocket> on) => {
+  for (final socket in on)
+    for (final f in socket.emitted)
+      if (f.event == 'subscribe')
+        for (final sub in f.frame['subs']! as List<Object?>)
+          (sub! as Map<Object?, Object?>)['rid'],
+};
+
+/// The queue rids [socket] sent a `deleteQueue` for.
+Set<Object?> _deletedOn(FakeBoxSocket socket) => {
+  for (final f in socket.emitted)
+    if (f.event == 'deleteQueue') f.frame['rid'],
+};
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -217,43 +232,67 @@ void main() {
   group('a resume probes the box socket', () {
     const judged = Duration(milliseconds: 100);
 
-    Set<Object?> ridsSubscribedOn(FakeBoxSocket socket) => {
-      for (final f in socket.emitted)
-        if (f.event == 'subscribe')
-          for (final sub in f.frame['subs']! as List<Object?>)
-            (sub! as Map<Object?, Object?>)['rid'],
-    };
+    /// A confirmed session whose box connection died in a suspension the
+    /// account socket claims to have survived; the resume replaced it.
+    Future<({Set<Object?> followed, FakeBoxSocket fresh})> resumed() async {
+      await connection.connect(1, 'token', 'http://api.test');
+      account.serve('socketReady', {'deviceId': 2});
+      encryption.onE2EReady!();
+      final suspended = sockets.last..serverConnect('S1');
+      await pumpEventQueue();
+      final followed = _ridsSubscribedOn([suspended]);
+      expect(followed, isNotEmpty, reason: 'the session follows a queue');
 
+      // iOS suspended the page: the box transport died, but socket.io only
+      // notices at its ping timeout, so the socket still says connected.
+      suspended.lastHeardAt = DateTime.now().subtract(
+        const Duration(minutes: 2),
+      );
+      connection.ensureReconnectIfNeeded();
+      await Future<void>.delayed(kBoxResumeGrace + judged);
+      await pumpEventQueue();
+
+      expect(suspended.disposed, isTrue);
+      expect(sockets.sockets, hasLength(2));
+      final fresh = sockets.last;
+      expect(fresh.connectCalled, isTrue);
+      expect(boxUrls, hasLength(1), reason: 'the box session is kept');
+      fresh.serverConnect('S2');
+      await pumpEventQueue();
+      return (followed: followed, fresh: fresh);
+    }
+
+    // Issue #206: the account socket may be as dead as the box one. Mutation:
+    // drop the hold from `ensureReconnectIfNeeded`, or the release from
+    // `_onServerTime`.
     test(
       'and replaces one that still claims to be connected but has heard no '
-      'ping, even when the account socket survived; the new one resubscribes',
+      'ping; the new one re-signs the set once the account socket answers',
       () async {
-        await connection.connect(1, 'token', 'http://api.test');
-        account.serve('socketReady', {'deviceId': 2});
-        encryption.onE2EReady!();
-        final suspended = sockets.last..serverConnect('S1');
-        await pumpEventQueue();
-        final held = ridsSubscribedOn(suspended);
-        expect(held, isNotEmpty, reason: 'the session holds a queue');
+        final (:followed, :fresh) = await resumed();
+        expect(_ridsSubscribedOn([fresh]), isEmpty, reason: 'no answer yet');
 
-        // iOS suspended the page: the box transport died, but socket.io only
-        // notices at its ping timeout, so the socket still says connected.
-        suspended.lastHeardAt = DateTime.now().subtract(
-          const Duration(minutes: 2),
-        );
-        connection.ensureReconnectIfNeeded();
-        await Future<void>.delayed(kBoxResumeGrace + judged);
+        account.serve('serverTime', {
+          'serverTime': DateTime.now().toUtc().toIso8601String(),
+        });
+        await pumpEventQueue();
+        expect(_ridsSubscribedOn([fresh]), followed);
+      },
+    );
+
+    test(
+      'and a device revoked while suspended re-signs nothing on the new one '
+      'and deletes its queues',
+      () async {
+        final (followed: _, :fresh) = await resumed();
+
+        // The probe heard nothing; the reconnect it forced met the gate.
+        account.serve('deviceRevoked', {'deviceId': 2});
         await pumpEventQueue();
 
-        expect(suspended.disposed, isTrue);
-        expect(sockets.sockets, hasLength(2));
-        final fresh = sockets.last;
-        expect(fresh.connectCalled, isTrue);
-        expect(boxUrls, hasLength(1), reason: 'the box session is kept');
-
-        fresh.serverConnect('S2');
-        await pumpEventQueue();
-        expect(ridsSubscribedOn(fresh), held);
+        expect(_ridsSubscribedOn([fresh]), isEmpty);
+        expect(_deletedOn(fresh), contains(address['rid']));
+        expect(fresh.disposed, isTrue);
       },
     );
 
@@ -426,11 +465,6 @@ void main() {
     int framesOn(FakeBoxSocket socket, String event) =>
         socket.emitted.where((f) => f.event == event).length;
 
-    Set<Object?> deletedOn(FakeBoxSocket socket) => {
-      for (final f in socket.emitted)
-        if (f.event == 'deleteQueue') f.frame['rid'],
-    };
-
     // Mutation: start the box in `connect` regardless of E2E.
     test('opens no box while E2E is not ready (the link gate), and opens it '
         'once E2E is', () async {
@@ -469,7 +503,7 @@ void main() {
       account.serve('deviceRevoked', {'deviceId': 2});
       await pumpEventQueue();
 
-      expect(deletedOn(box), contains(address['rid']));
+      expect(_deletedOn(box), contains(address['rid']));
       expect(framesOn(box, 'subscribe'), subscribes);
       expect(box.disposed, isTrue);
     });
@@ -497,7 +531,7 @@ void main() {
           if (f.event == 'subscribe') ...f.frame['subs']! as List<Object?>,
       ];
       expect(resubscribed, isEmpty);
-      expect(deletedOn(box), contains(address['rid']));
+      expect(_deletedOn(box), contains(address['rid']));
       expect(box.disposed, isTrue);
     });
 
@@ -522,7 +556,7 @@ void main() {
       final box = sockets.last..serverConnect('S2');
       await pumpEventQueue();
 
-      expect(deletedOn(box), contains(address['rid']));
+      expect(_deletedOn(box), contains(address['rid']));
       expect(framesOn(box, 'subscribe'), 0);
       expect(box.disposed, isTrue);
     });
@@ -545,7 +579,7 @@ void main() {
         });
         await pumpEventQueue();
 
-        expect(deletedOn(box), isEmpty);
+        expect(_deletedOn(box), isEmpty);
       });
 
       // Mutation: gate the delete on `reason == null` again.
@@ -565,7 +599,7 @@ void main() {
           });
           await pumpEventQueue();
 
-          expect(deletedOn(box), contains(address['rid']));
+          expect(_deletedOn(box), contains(address['rid']));
         },
       );
     }
@@ -595,7 +629,7 @@ void main() {
       retiring.serverConnect('S2');
       await pumpEventQueue();
 
-      expect(deletedOn(retiring), isEmpty);
+      expect(_deletedOn(retiring), isEmpty);
       expect(store.requestQueue, isNotNull);
     });
 
@@ -615,7 +649,7 @@ void main() {
       account.serve('deviceRevoked', {'deviceId': 2});
       await pumpEventQueue();
 
-      expect(deletedOn(box), isEmpty);
+      expect(_deletedOn(box), isEmpty);
       expect(box.disposed, isTrue, reason: 'the box still closes');
     });
 
@@ -648,7 +682,7 @@ void main() {
       box.serverConnect('S2');
       await starting;
 
-      expect(deletedOn(box), contains(address['rid']));
+      expect(_deletedOn(box), contains(address['rid']));
       expect(framesOn(box, 'subscribe'), 0);
       expect(store.isOpen, isFalse);
       expect(prefs.containsKey('e2e_1_boxsync_v1'), isFalse);
@@ -684,7 +718,7 @@ void main() {
       final box = sockets.last..serverConnect('S2');
       await pumpEventQueue();
 
-      expect(deletedOn(box), contains(address['rid']));
+      expect(_deletedOn(box), contains(address['rid']));
       expect(framesOn(box, 'subscribe'), 0);
       expect(box.disposed, isTrue);
     });
@@ -767,7 +801,7 @@ void main() {
 
       expect(identical(box, retired), isFalse);
       expect(box.disposed, isFalse, reason: 'the new life must keep its box');
-      expect(deletedOn(box), isEmpty);
+      expect(_deletedOn(box), isEmpty);
     });
   });
 
@@ -780,19 +814,6 @@ void main() {
   // `retireRevokedDevice`; close the box on an account loss again.
   group('the box subscribes only under a session the account socket '
       'confirmed', () {
-    Set<Object?> ridsSubscribedOn(Iterable<FakeBoxSocket> on) => {
-      for (final socket in on)
-        for (final f in socket.emitted)
-          if (f.event == 'subscribe')
-            for (final sub in f.frame['subs']! as List<Object?>)
-              (sub! as Map<Object?, Object?>)['rid'],
-    };
-
-    Set<Object?> deletedOn(FakeBoxSocket socket) => {
-      for (final f in socket.emitted)
-        if (f.event == 'deleteQueue') f.frame['rid'],
-    };
-
     /// A first session: confirmed, E2E ready, its queues made.
     Future<FakeBoxSocket> firstSession() async {
       await connection.connect(1, 'token', 'http://api.test');
@@ -801,7 +822,7 @@ void main() {
       final box = sockets.last..serverConnect('S1');
       await pumpEventQueue();
       expect(
-        ridsSubscribedOn([box]),
+        _ridsSubscribedOn([box]),
         contains(address['rid']),
         reason: 'the session follows its request queue',
       );
@@ -823,7 +844,7 @@ void main() {
       }
       await pumpEventQueue();
       expect(
-        ridsSubscribedOn(sockets.sockets.skip(opened)),
+        _ridsSubscribedOn(sockets.sockets.skip(opened)),
         isEmpty,
         reason: "the box's own reconnect waits for the connect gate",
       );
@@ -835,7 +856,7 @@ void main() {
       }
       await pumpEventQueue();
       expect(
-        ridsSubscribedOn(sockets.sockets.skip(opened)),
+        _ridsSubscribedOn(sockets.sockets.skip(opened)),
         isEmpty,
         reason: 'the connect gate has not answered yet',
       );
@@ -846,8 +867,8 @@ void main() {
       final box = sockets.last..serverConnect('S4');
       await pumpEventQueue();
 
-      expect(ridsSubscribedOn(sockets.sockets.skip(opened)), isEmpty);
-      expect(deletedOn(box), contains(address['rid']));
+      expect(_ridsSubscribedOn(sockets.sockets.skip(opened)), isEmpty);
+      expect(_deletedOn(box), contains(address['rid']));
       expect(box.disposed, isTrue);
     });
 
@@ -868,13 +889,13 @@ void main() {
         encryption.onE2EReady!();
         final box = sockets.last..serverConnect('S2');
         await pumpEventQueue();
-        expect(ridsSubscribedOn([box]), isEmpty, reason: 'no gate answer yet');
+        expect(_ridsSubscribedOn([box]), isEmpty, reason: 'no gate answer yet');
 
         account.serve('deviceRevoked', {'deviceId': 2});
         await pumpEventQueue();
 
-        expect(ridsSubscribedOn([box]), isEmpty);
-        expect(deletedOn(box), contains(address['rid']));
+        expect(_ridsSubscribedOn([box]), isEmpty);
+        expect(_deletedOn(box), contains(address['rid']));
         expect(box.disposed, isTrue);
       },
     );
@@ -882,7 +903,7 @@ void main() {
     test("a live device's box subscribes once the account socket confirms "
         'the session, on a reconnect and on a cold start', () async {
       final first = await firstSession();
-      final held = ridsSubscribedOn([first]);
+      final followed = _ridsSubscribedOn([first]);
 
       account.drop();
       first.serverDrop();
@@ -890,20 +911,20 @@ void main() {
       final back = sockets.last..serverConnect('S2');
       await pumpEventQueue();
       expect(back, isNot(same(first)));
-      expect(ridsSubscribedOn([back]), isEmpty, reason: 'not confirmed yet');
+      expect(_ridsSubscribedOn([back]), isEmpty, reason: 'not confirmed yet');
       account.serve('socketReady', {'deviceId': 2});
       await pumpEventQueue();
-      expect(ridsSubscribedOn([back]), held);
+      expect(_ridsSubscribedOn([back]), followed);
 
       connection.disconnect(isLogout: true);
       await connection.connect(1, 'token', 'http://api.test', immediate: true);
       encryption.onE2EReady!();
       final cold = sockets.last..serverConnect('S3');
       await pumpEventQueue();
-      expect(ridsSubscribedOn([cold]), isEmpty, reason: 'not confirmed yet');
+      expect(_ridsSubscribedOn([cold]), isEmpty, reason: 'not confirmed yet');
       account.serve('socketReady', {'deviceId': 2});
       await pumpEventQueue();
-      expect(ridsSubscribedOn([cold]), held);
+      expect(_ridsSubscribedOn([cold]), followed);
     });
 
     // Decision 76: every reconnect of the box spends `subscribe` frames

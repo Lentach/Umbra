@@ -924,6 +924,9 @@ class ConnectionProvider extends ChangeNotifier {
   /// a usable answer so garbage cannot silence the re-request path.
   void _onServerTime(dynamic data) {
     _serverResponseCounter++;
+    // Issue #206: the resume probe's answer — the server still holds this
+    // session, so a box connection replaced meanwhile may re-sign the set.
+    if (_accountReady) _box?.accountAnswered();
     ServerClock.instance.observeIso(data is Map ? data['serverTime'] : null);
     if (ServerClock.instance.estimatedNow == null) return;
     _serverTimeRequestedAt = null;
@@ -1006,7 +1009,11 @@ class ConnectionProvider extends ChangeNotifier {
     // socket.io's ping timeout. Meanwhile every box send waits out its
     // timeout and fails, and the box hands every message stored for us to
     // that dead socket instead of pushing it. Probe it, whatever the account
-    // socket claims; only a dead one is replaced.
+    // socket claims; only a dead one is replaced. Issue #206: an account
+    // socket that claims connected may be as dead, with this device revoked
+    // meanwhile — a replaced box re-signs nothing until the probe below hears
+    // the server ([_onServerTime]) or the reconnect it forces is confirmed.
+    if (claimsConnected) _box?.holdSubscribes();
     _box?.checkAlive();
     if (!claimsConnected) {
       connect(

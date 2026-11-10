@@ -474,6 +474,29 @@ void main() {
     },
   );
 
+  // Issue #206, a revoked device's retire (`forgetAll`, then release).
+  // Mutation: leave `forgetAll` keeping what a hold kept for its release.
+  test(
+    'a queue subscribed while held and then forgotten is not subscribed at '
+    'the release',
+    () async {
+      sockets.respond = (_, f) => _subscribed();
+      final box = client()..connect();
+      final socket = sockets.last..serverConnect('S1');
+      await pumpEventQueue();
+      expect(box.state, BoxState.ready);
+
+      box.holdSubscribes();
+      await box.subscribe([_queue(3)]);
+      box
+        ..forgetAll()
+        ..releaseSubscribes();
+      await pumpEventQueue();
+
+      expect(socket.emitted.where((f) => f.event == 'subscribe'), isEmpty);
+    },
+  );
+
   test('close() stops reconnecting', () {
     fakeAsync((clock) {
       final box = client()..connect();

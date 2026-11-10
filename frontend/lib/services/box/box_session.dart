@@ -485,9 +485,15 @@ class BoxSession
   /// Drops the box connection; [resume] brings it back.
   void close() => _box.close();
 
-  /// Holds the box's subscribes until [accountReady] (issue #206): a session
-  /// made before its account socket confirmed it (`ConnectionProvider`).
+  /// Holds the box's subscribes until the account socket confirms the
+  /// session again (issue #206): a session made before its account socket
+  /// confirmed it, or a resume whose account socket may be dead
+  /// (`ConnectionProvider`). [accountReady] or [accountAnswered] releases.
   void holdSubscribes() => _box.holdSubscribes();
+
+  /// The account socket answered after a resume: the server still holds the
+  /// session (a revoke closes it there), so the held subscribes go out.
+  void accountAnswered() => _box.releaseSubscribes();
 
   /// The account socket is ready (`socketReady`) as [deviceId]: the server
   /// confirmed the session, so the queues may be subscribed (issue #206).

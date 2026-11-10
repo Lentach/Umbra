@@ -419,30 +419,35 @@ class BoxClient {
   /// to the 90-day reaper.
   Future<void> _resubscribe(BoxSocket socket) async {
     final result = await _subscribeChunks(_set.values.toList());
-    if (!identical(_socket, socket)) return;
-    if (result is! BoxOk<List<BoxRefusal>>) {
-      _lostConnection();
-      return;
-    }
-    result.value.forEach(_lost.add);
+    if (!_tookSubscribed(socket, result)) return;
     _reconnect.resetAttempts();
     _setState(BoxState.ready);
   }
 
-  /// What [subscribe] held on a ready connection ([releaseSubscribes]). A
-  /// failure drops the connection, as for [_resubscribe]: the queues are in
-  /// the set the next connection re-signs.
+  /// What [subscribe] held on a ready connection ([releaseSubscribes]),
+  /// answered as [_resubscribe] answers: the queues are in the set the next
+  /// connection re-signs.
   Future<void> _subscribeOwed(
     BoxSocket socket,
     List<BoxQueueAuth> owed,
   ) async {
-    final result = await _subscribeChunks(owed);
-    if (!identical(_socket, socket)) return;
+    _tookSubscribed(socket, await _subscribeChunks(owed));
+  }
+
+  /// A subscribe [socket] answered: false when that socket is gone, or when
+  /// a chunk did not answer [BoxOk] — which drops the connection, so the
+  /// backoff re-signs the whole set; refused rids are reported lost.
+  bool _tookSubscribed(
+    BoxSocket socket,
+    BoxResult<List<BoxRefusal>> result,
+  ) {
+    if (!identical(_socket, socket)) return false;
     if (result is! BoxOk<List<BoxRefusal>>) {
       _lostConnection();
-      return;
+      return false;
     }
     result.value.forEach(_lost.add);
+    return true;
   }
 
   void _setState(BoxState next) {
@@ -666,12 +671,21 @@ class BoxClient {
     return BoxOk(refused);
   }
 
-  /// Drops [rid] from the resubscribe set. Local only.
-  void forget(Uint8List rid) => _set.remove(boxB64(rid));
+  /// Drops [rid] from the resubscribe set (and from what a hold kept for
+  /// its release). Local only.
+  void forget(Uint8List rid) {
+    final key = boxB64(rid);
+    _set.remove(key);
+    _heldSubscribes.remove(key);
+  }
 
-  /// Empties the resubscribe set: the next connection subscribes no queue.
-  /// Local only — a live subscription stays until the queue is deleted.
-  void forgetAll() => _set.clear();
+  /// Empties the resubscribe set: the next connection subscribes no queue,
+  /// and neither does the release of a hold. Local only — a live
+  /// subscription stays until the queue is deleted.
+  void forgetAll() {
+    _set.clear();
+    _heldSubscribes.clear();
+  }
 
   /// How this client proves [rid] — held for every queue it subscribed —
   /// or null. Lets a reader ack a delivery on a queue its owner record no
