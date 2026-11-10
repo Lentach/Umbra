@@ -46,6 +46,6 @@
 - NOT verified: a passcode-locked web vault (expected: `BOX_REVOKED_RETIRE_SKIPPED`, queues left to #208), iOS PWA, prod.
 
 ## Notes for next session
-- Next action: merged with the 0.2.82 bump; the release itself is recorded in the 0.2.82 release summary.
+- Next action: released as 0.2.82; see `2026-11-10-release-0282.md`.
 - Owner-owed: the metadata close-out proposal above; release B ≥ 12-08; do83rman's iPhone log; throwaway prod accounts (list in `NEXT.md`).
 - Drive recipe: two web accounts in one managed Chromium need two origins (`localhost` vs `127.0.0.1`, or another port), both allowed by dev CORS. "Closed" = close the tab (`goto('about:blank')` keeps the page alive in bfcache with its sockets connected). Revoke = `update devices set "revokedAt"=now() where "userId"=N`; a revoked device cannot log in again on the same install. Box traffic shows only with `alter system set log_statement='all'`: read each statement through its `DETAIL` (`awk '/LOG:  execute/{p=1} p; /DETAIL/{p=0}'`). Queue delete = `WITH gone AS (`, subscribe = `markSubscribed` `UPDATE public.box_queues` + `touchedDay`, delivery = `SELECT rid, id FROM (`, detach = `SELECT q.nid`.
