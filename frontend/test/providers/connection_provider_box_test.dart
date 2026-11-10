@@ -566,6 +566,46 @@ void main() {
       expect(box.disposed, isTrue);
     });
 
+    // Issue #234: revoked while closed, the install starts again online and
+    // the boot's refresh answers `Device revoked` — no socket, no session,
+    // nothing wired yet. Mutation: drop the retire from
+    // `retireRevokedInstall`, or open no store there.
+    test('a revoked install that never got a session this launch deletes '
+        'its queues from the store, subscribing none', () async {
+      // A first launch left this device's queues in the store.
+      await connection.connect(1, 'token', 'http://api.test');
+      account.serve('socketReady', {'deviceId': 2});
+      encryption.onE2EReady!();
+      sockets.last.serverConnect('S1');
+      await pumpEventQueue();
+      expect(store.requestQueue, isNotNull);
+      connection.disconnect(isLogout: true);
+      await pumpEventQueue();
+
+      // The next launch: a provider nothing was wired into.
+      final cold = ConnectionProvider(socketService: _AccountSocket());
+      ContactStore? opened;
+      cold.retireRevokedInstall(
+        1,
+        baseUrl: 'http://api.test',
+        store: () => opened = ContactStore(
+          open: () async => kv,
+          lock: <T>(_, action) => action(),
+          accepts: (_) => true,
+        ),
+        box: (url) => BoxClient(baseUrl: url, socketFactory: sockets.call),
+      );
+      await pumpEventQueue();
+      final box = sockets.last..serverConnect('S2');
+      await pumpEventQueue();
+
+      expect(box.url, 'http://api.test/box');
+      expect(_deletedOn(box), contains(address['rid']));
+      expect(framesOn(box, 'subscribe'), 0);
+      expect(box.disposed, isTrue);
+      expect(opened!.isOpen, isFalse, reason: 'closed once done');
+    });
+
     // Mutation: drop the `rehomed` condition in `_onOwnDeviceRevoked`.
     for (final reason in ['reset', 'restored']) {
       test("a $reason eviction of the recovering install's own old id "

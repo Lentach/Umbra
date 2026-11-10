@@ -14,6 +14,7 @@ import 'utils/link_fragment_stub.dart'
 import 'services/device_link/pending_link_code.dart';
 import 'utils/pending_deep_link_stub.dart'
     if (dart.library.html) 'utils/pending_deep_link_web.dart';
+import 'config/app_config.dart';
 import 'l10n/app_localizations.dart';
 import 'providers/auth_provider.dart';
 import 'providers/connection_provider.dart';
@@ -26,6 +27,8 @@ import 'providers/settings_provider.dart';
 import 'screens/auth_screen.dart';
 import 'screens/device_link_gate_screen.dart';
 import 'screens/main_shell.dart';
+import 'services/box/box_client.dart';
+import 'services/contacts/contact_store.dart';
 import 'services/content_key_canary.dart';
 import 'services/portrait_lock_service.dart';
 import 'theme/app_scroll_behavior.dart';
@@ -252,6 +255,24 @@ class _AuthGateState extends State<AuthGate> {
     // token path would drift. Without this the recovering device publishes its
     // pre-keys under the device the teardown just revoked.
     conn.onSessionRebound = auth.adoptProvisionedSession;
+
+    // Issue #234: the session refresh answered `Device revoked` — the
+    // account socket never said so (a cold start opens none), so the
+    // install's queues are deleted here, before the logout below releases
+    // whatever box this launch had. The store is the encryption layer's
+    // content store, as `ConversationsScreen` wires it.
+    final revokedAccount = auth.takeRevokedDeviceAccount();
+    if (revokedAccount != null) {
+      final enc = context.read<EncryptionProvider>();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        conn.retireRevokedInstall(
+          revokedAccount,
+          baseUrl: AppConfig.baseUrl,
+          store: () => ContactStore(open: () => enc.encryptionService.contentKv),
+          box: (baseUrl) => BoxClient(baseUrl: baseUrl),
+        );
+      });
+    }
 
     // Detect logout transition (true → false) - ensure clean disconnect, and
     // pop every route pushed above this gate. Amendment (lxvi) clause 1: a

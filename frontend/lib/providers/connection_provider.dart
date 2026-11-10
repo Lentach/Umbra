@@ -398,6 +398,13 @@ class ConnectionProvider extends ChangeNotifier {
     // timeout of its own, and a store that hangs must not take the socket
     // down with it; a late open still hydrates if no server list beat it.
     // A reconnect finds the store already open and its lists populated.
+    // Issue #234: a revoked install's queue delete reads the same store
+    // through a store object of its own; one at a time.
+    final installRetiring = _installRetiring;
+    if (installRetiring != null) {
+      await installRetiring;
+      if (_connectGeneration != generation) return;
+    }
     if (_contactStore != null) {
       if (_contactStore!.userId != userId) {
         final opened = _openContactStore(userId);
@@ -1605,6 +1612,55 @@ class ConnectionProvider extends ChangeNotifier {
     unawaited(
       retiring.whenComplete(() {
         if (identical(_boxRetiring, retiring)) _boxRetiring = null;
+      }),
+    );
+  }
+
+  /// Issue #234's queue delete, still running, if any: [connect] waits for
+  /// it before opening the store it reads.
+  Future<void>? _installRetiring;
+
+  /// Issue #234: the server refused this install's session as `Device
+  /// revoked` over REST (the boot's refresh) — no account socket ever said
+  /// `deviceRevoked`, so nothing retired the queues (#205). With this
+  /// account's box in hand, they go the #205 way. Without one (a cold start
+  /// gets no session at all), the queues are deleted from the store alone:
+  /// it holds their keys, and the box needs no account. A store that cannot
+  /// open (a locked web vault) deletes nothing; a delete the box does not
+  /// confirm stays owed in `boxgone_v1`, as #205's.
+  void retireRevokedInstall(
+    int userId, {
+    required String baseUrl,
+    required ContactStore Function() store,
+    required BoxClient Function(String baseUrl) box,
+  }) {
+    if (_box != null && _boxUserId == userId) {
+      _retireOwnQueues(Future.value(true));
+      return;
+    }
+    if (_box != null || _installRetiring != null) return;
+    final contacts = store();
+    final session = BoxSession(
+      box: box(baseUrl),
+      store: contacts,
+      emit: (_, _) {},
+    );
+    Future<void> retire() async {
+      try {
+        await contacts.open(userId);
+      } on ContactStoreUnavailable catch (e) {
+        E2eDiagLog.add('BOX_REVOKED_RETIRE_SKIPPED', {'stage': e.stage});
+        session.dispose();
+        return;
+      }
+      await session.retireRevokedDevice(proceed: Future.value(true));
+    }
+
+    final retiring = retire().whenComplete(contacts.close);
+    _installRetiring = retiring;
+    unawaited(
+      retiring.whenComplete(() {
+        if (identical(_installRetiring, retiring)) _installRetiring = null;
       }),
     );
   }

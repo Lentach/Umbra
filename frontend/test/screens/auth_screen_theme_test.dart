@@ -178,6 +178,7 @@ void main() {
         AuthStatusCode.phraseRejected: en.authStatusPhraseRejected,
         AuthStatusCode.serverUnreachable: en.authStatusServerUnreachable,
         AuthStatusCode.unexpectedError: en.authStatusUnexpectedError,
+        AuthStatusCode.deviceRevoked: en.deviceRevokedNotice,
       };
       // A new code added without a mapping would render nothing at all, so the
       // enum and the switch are pinned to each other here.
