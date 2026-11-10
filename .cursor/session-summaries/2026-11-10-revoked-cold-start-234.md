@@ -30,8 +30,8 @@
 - Web drive (release build `fix234`, local stack, two origins `localhost:8080` / `127.0.0.1:8080`):
   - setup: A and B friends, one message each way; A's tab to `about:blank`; `devices."revokedAt"` stamped for A; B sent one more;
   - A reopened: login screen with "To urządzenie usunięto z konta. Zaloguj się i połącz je ponownie.", footer `wylogowano: device_revoked`;
-  - `box_queues` 6 → 3, `box_msgs` 1 → 0; Postgres statement log showed 3 `WITH gone` deletes and no subscribe.
-- Android drive (debug APK, Pixel_7, `10.0.2.2:3000`): C (app) and B (web) friends; C force-stopped, revoked; B sent one more; C started → same notice and footer; `box_queues` 7 → 4, `box_msgs` 1 → 0, 3 deletes, no subscribe.
+  - `box_queues` 6 → 3, `box_msgs` 1 → 0; Postgres statement log showed 3 `WITH gone` deletes. It also showed 2 `SELECT rid, id FROM (` (pendingHeads, run on a subscribe/delivery), whose rids were not checked before the stack was removed, so "A subscribed nothing" rests on the unit test (`subscribe` frames 0), not on this drive.
+- Android drive (debug APK, Pixel_7, `10.0.2.2:3000`): C (app) and B (web) friends; C force-stopped, revoked; B sent one more; C started → same notice and footer; `box_queues` 7 → 4, `box_msgs` 1 → 0, 3 deletes (the log filter used would not have shown a pendingHeads query, so subscribes are unchecked here too).
 - NOT verified: a passcode-locked web vault (expected: `BOX_REVOKED_RETIRE_SKIPPED`, queues left to #208), iOS PWA, prod.
 
 ## Notes for next session
