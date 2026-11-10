@@ -21,7 +21,7 @@
 - Docs: `docs/contracts/wire.md`, `docs/plans/metadata-privacy-decisions.md`, `CLAUDE.md`.
 
 ## Verification
-- CI: see PR #238 (`7f2503d3`).
+- CI: success 7/7 on `2fefa038` (PR #238 head; the code commit `7f2503d3`'s run was cancelled by that docs push).
 - Red first: both revoked-boot tests failed on `statusCode` null before the change. Mutants killed:
   - the retire dropped from `retireRevokedInstall`;
   - `_namesDeviceRevoked` → false;
