@@ -204,6 +204,7 @@ void main() {
 
   test('logout closes the box; the next account gets its own', () async {
     await connection.connect(1, 'token', 'http://api.test');
+    account.serve('socketReady', {'deviceId': 2});
     encryption.onE2EReady!();
     final first = sockets.last;
     connection.disconnect(isLogout: true);
@@ -228,6 +229,7 @@ void main() {
       'ping, even when the account socket survived; the new one resubscribes',
       () async {
         await connection.connect(1, 'token', 'http://api.test');
+        account.serve('socketReady', {'deviceId': 2});
         encryption.onE2EReady!();
         final suspended = sockets.last..serverConnect('S1');
         await pumpEventQueue();
@@ -257,6 +259,7 @@ void main() {
 
     test('and keeps one the server pings (decision 76)', () async {
       await connection.connect(1, 'token', 'http://api.test');
+      account.serve('socketReady', {'deviceId': 2});
       encryption.onE2EReady!();
       final live = sockets.last..serverConnect('S1');
       await pumpEventQueue();
@@ -291,12 +294,11 @@ void main() {
     "account's socket",
     () async {
       await connection.connect(1, 'token', 'http://api.test');
+      account.serve('socketReady', {'deviceId': 2});
       encryption.onE2EReady!();
       sockets.last.serverConnect('S1');
       await pumpEventQueue();
-      account.serve('socketReady', {'deviceId': 2});
-      encryption.onE2EReady!();
-      await pumpEventQueue();
+      expect(connection.published, hasLength(1), reason: 'precondition');
       account.serve('requestQueueSet', {
         'success': false,
         'error': 'rate_limited',
@@ -457,6 +459,7 @@ void main() {
     test('deviceRevoked deletes every queue this device holds, subscribes '
         'nothing more and closes the box', () async {
       await connection.connect(1, 'token', 'http://api.test');
+      account.serve('socketReady', {'deviceId': 2});
       encryption.onE2EReady!();
       final box = sockets.last..serverConnect('S1');
       await pumpEventQueue();
@@ -475,6 +478,7 @@ void main() {
     test('deviceRevoked while the box connection is down reconnects it '
         'subscribing no queue, and deletes them', () async {
       await connection.connect(1, 'token', 'http://api.test');
+      account.serve('socketReady', {'deviceId': 2});
       encryption.onE2EReady!();
       final first = sockets.last..serverConnect('S1');
       await pumpEventQueue();
@@ -501,6 +505,7 @@ void main() {
         'its queues, never to subscribe them', () async {
       // A first session left this device's queues in the store.
       await connection.connect(1, 'token', 'http://api.test');
+      account.serve('socketReady', {'deviceId': 2});
       encryption.onE2EReady!();
       sockets.last.serverConnect('S1');
       await pumpEventQueue();
@@ -528,6 +533,7 @@ void main() {
           '(rehomed) deletes nothing: another of its tabs holds the same '
           'queues', () async {
         await connection.connect(1, 'token', 'http://api.test');
+        account.serve('socketReady', {'deviceId': 2});
         encryption.onE2EReady!();
         final box = sockets.last..serverConnect('S1');
         await pumpEventQueue();
@@ -547,6 +553,7 @@ void main() {
         'a $reason eviction of any other device deletes its queues',
         () async {
           await connection.connect(1, 'token', 'http://api.test');
+          account.serve('socketReady', {'deviceId': 2});
           encryption.onE2EReady!();
           final box = sockets.last..serverConnect('S1');
           await pumpEventQueue();
@@ -568,6 +575,7 @@ void main() {
         'never loses its queues', () async {
       // Account 1's queues are in the store; account 2's too.
       await connection.connect(2, 'token', 'http://api.test');
+      account.serve('socketReady', {'deviceId': 2});
       encryption.onE2EReady!();
       sockets.last.serverConnect('S1');
       await pumpEventQueue();
@@ -595,6 +603,7 @@ void main() {
     test('a gate-shaped revoke (no reason) after a sibling tab adopted a '
         'reset session deletes nothing', () async {
       await connection.connect(1, 'token', 'http://api.test');
+      account.serve('socketReady', {'deviceId': 2});
       encryption.onE2EReady!();
       final box = sockets.last..serverConnect('S1');
       await pumpEventQueue();
@@ -617,6 +626,7 @@ void main() {
         'mark', () async {
       // A first life left this device's queues in the store.
       await connection.connect(1, 'token', 'http://api.test');
+      account.serve('socketReady', {'deviceId': 2});
       encryption.onE2EReady!();
       sockets.last.serverConnect('S1');
       await pumpEventQueue();
@@ -652,6 +662,7 @@ void main() {
       });
       // A first life, as device 2, left its queues in the store.
       await connection.connect(1, 'token', 'http://api.test');
+      account.serve('socketReady', {'deviceId': 2});
       encryption.onE2EReady!();
       sockets.last.serverConnect('S1');
       await pumpEventQueue();
@@ -690,6 +701,7 @@ void main() {
         });
         // A first life, as device 2, left its queues in the store.
         await connection.connect(1, 'token', 'http://api.test');
+        account.serve('socketReady', {'deviceId': 2});
         encryption.onE2EReady!();
         sockets.last.serverConnect('S1');
         await pumpEventQueue();
@@ -748,6 +760,7 @@ void main() {
       storedDeviceId = 9;
       await connection.connect(1, 'token', 'http://api.test', immediate: true);
       await pumpEventQueue();
+      account.serve('socketReady', {'deviceId': 9});
       encryption.onE2EReady!();
       final box = sockets.last..serverConnect('S2');
       await pumpEventQueue();
@@ -755,6 +768,134 @@ void main() {
       expect(identical(box, retired), isFalse);
       expect(box.disposed, isFalse, reason: 'the new life must keep its box');
       expect(deletedOn(box), isEmpty);
+    });
+  });
+
+  // Issue #206: a device revoked while it was away hears `deviceRevoked` from
+  // the account socket's connect gate, which answers INSTEAD of
+  // `socketReady`. Until then the box must re-sign no queue: what it took
+  // there would be read into a store that is about to log out, and the
+  // queues deleted after. Mutation: resume the box in `connect` again, open
+  // it from the E2E-ready hook without the account socket, or leave its own
+  // reconnect running after the account socket is lost.
+  group('the box follows only a session the account socket confirmed', () {
+    Set<Object?> ridsSubscribedOn(Iterable<FakeBoxSocket> on) => {
+      for (final socket in on)
+        for (final f in socket.emitted)
+          if (f.event == 'subscribe')
+            for (final sub in f.frame['subs']! as List<Object?>)
+              (sub! as Map<Object?, Object?>)['rid'],
+    };
+
+    Set<Object?> deletedOn(FakeBoxSocket socket) => {
+      for (final f in socket.emitted)
+        if (f.event == 'deleteQueue') f.frame['rid'],
+    };
+
+    /// A first session: confirmed, E2E ready, its queues made.
+    Future<FakeBoxSocket> firstSession() async {
+      await connection.connect(1, 'token', 'http://api.test');
+      account.serve('socketReady', {'deviceId': 2});
+      encryption.onE2EReady!();
+      final box = sockets.last..serverConnect('S1');
+      await pumpEventQueue();
+      expect(
+        ridsSubscribedOn([box]),
+        contains(address['rid']),
+        reason: 'the session follows its request queue',
+      );
+      return box;
+    }
+
+    test('a device revoked while it was away subscribes nothing on its way '
+        'back, and deletes its queues', () async {
+      final first = await firstSession();
+      final opened = sockets.sockets.length;
+
+      // Away: the network went, and both sockets with it.
+      account.drop();
+      first.serverDrop();
+      // Back: the box's own backoff (1 s) runs before any account reconnect.
+      await Future<void>.delayed(const Duration(milliseconds: 1500));
+      for (final socket in sockets.sockets.skip(opened)) {
+        socket.serverConnect('S2');
+      }
+      await pumpEventQueue();
+      expect(
+        ridsSubscribedOn(sockets.sockets.skip(opened)),
+        isEmpty,
+        reason: "the box's own reconnect waits for the connect gate",
+      );
+      // Then the account's reconnect.
+      final beforeConnect = sockets.sockets.length;
+      await connection.connect(1, 'token', 'http://api.test', immediate: true);
+      for (final socket in sockets.sockets.skip(beforeConnect)) {
+        socket.serverConnect('S3');
+      }
+      await pumpEventQueue();
+      expect(
+        ridsSubscribedOn(sockets.sockets.skip(opened)),
+        isEmpty,
+        reason: 'the connect gate has not answered yet',
+      );
+
+      // The gate answers: revoked.
+      account.serve('deviceRevoked', {'deviceId': 2});
+      await pumpEventQueue();
+      final box = sockets.last..serverConnect('S4');
+      await pumpEventQueue();
+
+      expect(ridsSubscribedOn(sockets.sockets.skip(opened)), isEmpty);
+      expect(deletedOn(box), contains(address['rid']));
+      expect(box.disposed, isTrue);
+    });
+
+    test('a cold start with E2E ready before the connect gate answers opens '
+        'no box; a revoked device then subscribes nothing and deletes its '
+        'queues', () async {
+      await firstSession();
+      connection.disconnect(isLogout: true);
+      final opened = sockets.sockets.length;
+
+      // The next launch: E2E is ready locally before the gate answers.
+      await connection.connect(1, 'token', 'http://api.test', immediate: true);
+      encryption.onE2EReady!();
+      await pumpEventQueue();
+      expect(sockets.sockets, hasLength(opened), reason: 'no box yet');
+
+      account.serve('deviceRevoked', {'deviceId': 2});
+      await pumpEventQueue();
+      final box = sockets.last..serverConnect('S2');
+      await pumpEventQueue();
+
+      expect(sockets.sockets, hasLength(opened + 1), reason: 'only to delete');
+      expect(ridsSubscribedOn([box]), isEmpty);
+      expect(deletedOn(box), contains(address['rid']));
+      expect(box.disposed, isTrue);
+    });
+
+    test("a live device's box comes back once the account socket confirms "
+        'the session, on a cold start and on a reconnect', () async {
+      final first = await firstSession();
+      final held = ridsSubscribedOn([first]);
+
+      account.drop();
+      first.serverDrop();
+      await connection.connect(1, 'token', 'http://api.test', immediate: true);
+      account.serve('socketReady', {'deviceId': 2});
+      final back = sockets.last..serverConnect('S2');
+      await pumpEventQueue();
+      expect(back, isNot(same(first)));
+      expect(ridsSubscribedOn([back]), held);
+
+      connection.disconnect(isLogout: true);
+      await connection.connect(1, 'token', 'http://api.test', immediate: true);
+      encryption.onE2EReady!();
+      account.serve('socketReady', {'deviceId': 2});
+      final cold = sockets.last..serverConnect('S3');
+      await pumpEventQueue();
+      expect(cold, isNot(same(back)));
+      expect(ridsSubscribedOn([cold]), held);
     });
   });
 

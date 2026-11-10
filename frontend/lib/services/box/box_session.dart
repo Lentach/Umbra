@@ -358,9 +358,12 @@ class BoxSession
       _disposed ? Future.value(false) : _friends.announceOwnList(auth);
 
   /// Connects the box and starts following it. Only for a device that does
-  /// E2E duty under its session (`ConnectionProvider` calls it once E2E is
-  /// ready): a device on the link gate would subscribe the queues it holds
-  /// and take messages it can never show (issue #205). Idempotent.
+  /// E2E duty under a session the server confirmed (`ConnectionProvider`
+  /// calls it once E2E is ready AND the account socket said `socketReady`):
+  /// a device on the link gate would subscribe the queues it holds and take
+  /// messages it can never show (issue #205), and a device revoked while it
+  /// was away would take them before it hears `deviceRevoked` (issue #206).
+  /// Idempotent.
   void start() {
     if (_started || _disposed || _revoked) return;
     _started = true;
