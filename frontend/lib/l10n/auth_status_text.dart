@@ -23,5 +23,6 @@ String authStatusText(AppLocalizations l10n, AuthStatusCode code) {
     AuthStatusCode.phraseRejected => l10n.authStatusPhraseRejected,
     AuthStatusCode.serverUnreachable => l10n.authStatusServerUnreachable,
     AuthStatusCode.unexpectedError => l10n.authStatusUnexpectedError,
+    AuthStatusCode.deviceRevoked => l10n.deviceRevokedNotice,
   };
 }

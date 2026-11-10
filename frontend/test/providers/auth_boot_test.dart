@@ -170,4 +170,80 @@ void main() {
       expect(auth.currentUser?.username, 'test');
     });
   });
+
+  // Issue #234: a device revoked while it was closed starts again online.
+  // Its first contact is the boot's REST refresh, which answers
+  // `401 {message: 'Device revoked'}` (decision 130's explicit answer): the
+  // user must be told why, and the install's queues must go (the widget
+  // layer takes the account and asks the connection to retire them).
+  group('a refresh answered Device revoked at boot (issue #234)', () {
+    http.Response revoked() => http.Response(
+      jsonEncode({'message': 'Device revoked', 'statusCode': 401}),
+      401,
+      headers: {'Content-Type': 'application/json'},
+    );
+
+    test('after a 401 on /users/me: signed out with the revoked notice, and '
+        'the account is handed over once for its queues', () async {
+      SharedPreferences.setMockInitialValues({
+        'jwt_token': _validAccessJwt,
+        'refresh_token': 'opaque_refresh',
+      });
+      final mock = MockClient((req) async {
+        if (req.url.path == '/users/me') {
+          return http.Response(jsonEncode({'message': 'unauthorized'}), 401,
+              headers: {'Content-Type': 'application/json'});
+        }
+        if (req.url.path == '/auth/refresh') return revoked();
+        throw Exception('Unexpected ${req.url.path}');
+      });
+
+      final auth = AuthProvider(api: ApiService(baseUrl: base, httpClient: mock));
+      await _settled(auth, expectLoggedIn: false);
+
+      expect(auth.statusCode, AuthStatusCode.deviceRevoked);
+      expect(auth.takeRevokedDeviceAccount(), 1);
+      expect(auth.takeRevokedDeviceAccount(), isNull, reason: 'taken once');
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getString('refresh_token'), isNull);
+    });
+
+    test('with an expired saved access: same notice and hand-over', () async {
+      SharedPreferences.setMockInitialValues({
+        'jwt_token': _expiredAccessJwt,
+        'refresh_token': 'opaque_refresh',
+      });
+      final mock = MockClient((req) async {
+        if (req.url.path == '/auth/refresh') return revoked();
+        throw Exception('Unexpected ${req.url.path}');
+      });
+
+      final auth = AuthProvider(api: ApiService(baseUrl: base, httpClient: mock));
+      await _settled(auth, expectLoggedIn: false);
+
+      expect(auth.statusCode, AuthStatusCode.deviceRevoked);
+      expect(auth.takeRevokedDeviceAccount(), 1);
+    });
+
+    test('any other refused refresh is a plain sign-out: no notice, no '
+        'queue retire', () async {
+      SharedPreferences.setMockInitialValues({
+        'jwt_token': _expiredAccessJwt,
+        'refresh_token': 'opaque_refresh',
+      });
+      final mock = MockClient((req) async {
+        if (req.url.path == '/auth/refresh') {
+          return http.Response(jsonEncode({'message': 'Invalid refresh token'}),
+              401, headers: {'Content-Type': 'application/json'});
+        }
+        throw Exception('Unexpected ${req.url.path}');
+      });
+
+      final auth = AuthProvider(api: ApiService(baseUrl: base, httpClient: mock));
+      await _settled(auth, expectLoggedIn: false);
+
+      expect(auth.statusCode, isNull);
+      expect(auth.takeRevokedDeviceAccount(), isNull);
+    });
+  });
 }

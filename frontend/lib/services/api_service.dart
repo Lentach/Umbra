@@ -156,7 +156,9 @@ class ApiService {
 
       final status = response.statusCode;
       if (status == 401 || status == 403) {
-        throw SessionRefreshInvalidException('Session refresh unauthorized');
+        throw status == 401 && _namesDeviceRevoked(response.body)
+            ? SessionRefreshInvalidException.revokedDevice()
+            : SessionRefreshInvalidException('Session refresh unauthorized');
       }
       if (status == 429 || status == 408) {
         throw SessionRefreshTransientException('Session refresh rate limited');
@@ -198,6 +200,18 @@ class ApiService {
       throw SessionRefreshTransientException('Session refresh timed out');
     } on http.ClientException catch (e) {
       throw SessionRefreshTransientException(e.message);
+    }
+  }
+
+  /// Whether a refused refresh's body is `{message: 'Device revoked'}`, the
+  /// one answer that means this device was revoked (decision 130). A body
+  /// that does not parse means nothing more than "refused".
+  static bool _namesDeviceRevoked(String body) {
+    try {
+      final data = jsonDecode(body);
+      return data is Map && data['message'] == 'Device revoked';
+    } on FormatException {
+      return false;
     }
   }
 

@@ -78,6 +78,11 @@ enum AuthStatusCode {
   /// exception text, which was untranslated and told the user nothing they
   /// could act on.
   unexpectedError,
+
+  /// The server answered the session refresh `Device revoked` (issue #234):
+  /// this device was removed from the account while the app was closed.
+  /// The same notice the account socket's `deviceRevoked` shows.
+  deviceRevoked,
 }
 
 /// Which credential call failed. The same HTTP status means different things
@@ -237,6 +242,20 @@ class AuthProvider extends ChangeNotifier {
   /// screenshot names the exact logout path; null on a clean cold start —
   /// which itself is a signal (wiped storage leaves nothing to clear).
   String? get lastSessionEndReason => _lastSessionEndReason;
+
+  /// Issue #234: the account whose session the server refused as
+  /// `Device revoked` on THIS install; set only while the install's stored
+  /// session was still the refused one. Its queues (keys in this install's
+  /// contact store) must go; only the widget layer can reach the connection
+  /// that deletes them, so it takes this once.
+  int? _revokedDeviceAccount;
+
+  /// Takes the account set by a `Device revoked` refresh answer, once.
+  int? takeRevokedDeviceAccount() {
+    final userId = _revokedDeviceAccount;
+    _revokedDeviceAccount = null;
+    return userId;
+  }
 
   /// The username a failed REGISTER should offer to sign in with, because the
   /// account may already exist under it ([AuthStatusCode.nicknameTaken]) or
@@ -487,6 +506,50 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// A refresh the server refused ends the session. Refused as `Device
+  /// revoked` (issue #234: a device revoked while it was closed meets that
+  /// answer before any socket), it ends with the same notice the account
+  /// socket's `deviceRevoked` gives, and hands the account over for its
+  /// queues ([takeRevokedDeviceAccount]) — only while the install's stored
+  /// session is still the refused one: another tab that signed in meanwhile
+  /// holds a newer session, and the queues are no longer this decision's.
+  /// [access] names the account when no user is held yet (an expired saved
+  /// access at boot).
+  Future<void> _endRefusedSession(
+    SessionRefreshInvalidException error, {
+    required String reason,
+    required String source,
+    String? access,
+  }) async {
+    if (!error.deviceRevoked) {
+      await _clearLocalAuthState(reason, source: source, error: error);
+      return;
+    }
+    final userId = _currentUser?.id ?? _accessUserId(access ?? _token);
+    final refused = _refreshToken;
+    final stored = await _tokens.read();
+    await _clearLocalAuthState('device_revoked', source: source, error: error);
+    // After the clear, which resets the status surface.
+    _statusCode = AuthStatusCode.deviceRevoked;
+    _isError = true;
+    if (userId != null && refused != null && stored.refresh == refused) {
+      _revokedDeviceAccount = userId;
+    }
+    notifyListeners();
+  }
+
+  /// The account an access JWT names (`sub`), expired or not; null when it
+  /// does not decode.
+  static int? _accessUserId(String? access) {
+    if (access == null) return null;
+    try {
+      final sub = JwtDecoder.decode(access)['sub'];
+      return sub is num ? sub.toInt() : null;
+    } on Object {
+      return null;
+    }
+  }
+
   /// Keeps access JWT valid using the opaque refresh token (messenger-style session).
   Future<void> ensureSessionReady() async {
     await _ensureSessionReadyBody();
@@ -508,10 +571,10 @@ class AuthProvider extends ChangeNotifier {
     try {
       await _refreshSessionLocked();
     } on SessionRefreshInvalidException catch (e) {
-      await _clearLocalAuthState(
-        'refresh_invalid',
+      await _endRefusedSession(
+        e,
+        reason: 'refresh_invalid',
         source: 'ensureSessionReady',
-        error: e,
       );
     } on SessionRefreshTransientException {
       if (_token != null) {
@@ -625,7 +688,12 @@ class AuthProvider extends ChangeNotifier {
       try {
         await _refreshSessionLocked();
       } on SessionRefreshInvalidException catch (e) {
-        await _clearLocalAuthState('refresh_invalid', source: 'boot', error: e);
+        await _endRefusedSession(
+          e,
+          reason: 'refresh_invalid',
+          source: 'boot',
+          access: savedToken,
+        );
         return true;
       } on SessionRefreshTransientException {
         if (savedToken != null) {
@@ -664,10 +732,10 @@ class AuthProvider extends ChangeNotifier {
               _currentUser = _withOwnAvatar(UserModel.fromJson(userData));
             }
           } on SessionRefreshInvalidException catch (refreshError) {
-            await _clearLocalAuthState(
-              'refresh_invalid_after_access_401',
+            await _endRefusedSession(
+              refreshError,
+              reason: 'refresh_invalid_after_access_401',
               source: 'boot_fetch_me',
-              error: refreshError,
             );
             return true;
           } on SessionRefreshTransientException {
