@@ -417,12 +417,13 @@ class BoxSession
     final deadline = _now().add(wait);
     // Nothing more is taken, and a (re)connection re-signs no queue: what
     // reaches them now goes with them. Issue #206: the subscribes are held
-    // until a `socketReady` this device will never get; with the set empty,
-    // releasing them subscribes nothing and lets a connection turn ready for
-    // the deletes.
+    // until a session confirmation this device will never get; with the set
+    // empty, releasing them (and no longer holding on a lost connection)
+    // subscribes nothing and lets a connection turn ready for the deletes.
     _inbox.dispose();
     _box
       ..forgetAll()
+      ..holdOnLoss = false
       ..releaseSubscribes();
     // The store this device's queue keys live in. The logout that follows
     // may let another account open the same store object before the delete
@@ -486,12 +487,23 @@ class BoxSession
   void close() => _box.close();
 
   /// Holds the box's subscribes until the account socket confirms the
-  /// session again (issue #206): a session made before its account socket
-  /// confirmed it, or a resume whose account socket may be dead
-  /// (`ConnectionProvider`). [accountReady] or [accountAnswered] releases.
+  /// session (issue #206): a session made before its account socket
+  /// confirmed it (`ConnectionProvider`). [accountReady] or
+  /// [accountAnswered] releases.
   void holdSubscribes() => _box.holdSubscribes();
 
-  /// The account socket answered after a resume: the server still holds the
+  /// Issue #206: makes every LOST box connection hold its subscribes too, and
+  /// asks [confirm] once the next one is up and waiting: the account socket
+  /// may claim connected while dead, this device revoked meanwhile. The owner
+  /// answers with [accountAnswered] or [accountReady] (`deviceRevoked`
+  /// retires the box instead).
+  void confirmSessionWith(void Function() confirm) {
+    _box
+      ..holdOnLoss = true
+      ..onHeldConnection = confirm;
+  }
+
+  /// The account socket answered (`serverTime`): the server still holds the
   /// session (a revoke closes it there), so the held subscribes go out.
   void accountAnswered() => _box.releaseSubscribes();
 

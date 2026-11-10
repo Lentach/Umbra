@@ -48,6 +48,11 @@ class _AccountSocket extends SocketService {
     }
   }
 
+  /// `getServerTime` emits: the liveness probe's question.
+  int timeAsks = 0;
+  @override
+  void getServerTime() => timeAsks++;
+
   void drop() => _onDisconnect?.call('transport close');
 }
 
@@ -946,6 +951,75 @@ void main() {
         first.emitted.where((f) => f.event == 'subscribe'),
         hasLength(frames),
       );
+    });
+
+    /// The box connection dropped while the account socket still claims the
+    /// session (it may be as dead), and the box's own backoff brought the
+    /// next one up.
+    Future<FakeBoxSocket> boxCameBack(FakeBoxSocket first) async {
+      final opened = sockets.sockets.length;
+      first.serverDrop();
+      await Future<void>.delayed(const Duration(milliseconds: 1500));
+      expect(sockets.sockets, hasLength(opened + 1), reason: 'the backoff');
+      final back = sockets.last..serverConnect('S2');
+      await pumpEventQueue();
+      return back;
+    }
+
+    // Found driving (Android, 11-10): the account socket was a silent dead
+    // connection and the box re-signed its set on its own backoff ~20 s
+    // before the gate. Mutation: drop `holdOnLoss` from `_lostConnection`,
+    // or the release from `_onServerTime`.
+    test('a box connection lost under a session that still claims ready '
+        're-signs nothing until the server answers on that session', () async {
+      final first = await firstSession();
+      final followed = _ridsSubscribedOn([first]);
+
+      final asked = account.timeAsks;
+      final back = await boxCameBack(first);
+      expect(_ridsSubscribedOn([back]), isEmpty, reason: 'not confirmed');
+      expect(account.timeAsks, asked + 1, reason: 'the server is asked');
+
+      account.serve('serverTime', {
+        'serverTime': DateTime.now().toUtc().toIso8601String(),
+      });
+      await pumpEventQueue();
+      expect(_ridsSubscribedOn([back]), followed);
+    });
+
+    test('a device revoked while its box connection was down and its account '
+        'socket silent re-signs nothing, and deletes its queues', () async {
+      final back = await boxCameBack(await firstSession());
+
+      // The probe heard nothing; the reconnect it forced met the gate.
+      account.serve('deviceRevoked', {'deviceId': 2});
+      await pumpEventQueue();
+
+      expect(_ridsSubscribedOn([back]), isEmpty);
+      expect(_deletedOn(back), contains(address['rid']));
+      expect(back.disposed, isTrue);
+    });
+
+    // Mutation: leave `holdOnLoss` on in `retireRevokedDevice`.
+    test('a revoked device whose box drops while it reconnects to delete '
+        'still deletes on the next connection', () async {
+      final first = await firstSession();
+      account.drop();
+      first.serverDrop();
+
+      account.serve('deviceRevoked', {'deviceId': 2});
+      await pumpEventQueue();
+      final failed = sockets.last;
+      expect(failed, isNot(same(first)), reason: 'opened to delete');
+      failed.serverDrop();
+      await Future<void>.delayed(const Duration(milliseconds: 1500));
+      final box = sockets.last;
+      expect(box, isNot(same(failed)), reason: 'the backoff');
+      box.serverConnect('S3');
+      await pumpEventQueue();
+
+      expect(_ridsSubscribedOn([box]), isEmpty);
+      expect(_deletedOn(box), contains(address['rid']));
     });
   });
 

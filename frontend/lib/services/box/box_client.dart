@@ -241,6 +241,16 @@ class BoxClient {
   /// Queues [subscribe]d on a ready connection while held, sent at release.
   final Map<String, BoxQueueAuth> _heldSubscribes = <String, BoxQueueAuth>{};
 
+  /// Issue #206: a LOST connection holds the subscribes too, so the next one
+  /// re-signs the set only once its owner confirmed the session again — the
+  /// account socket may still claim connected while dead, its device revoked
+  /// meanwhile. Off by default (a client that follows no account session).
+  bool holdOnLoss = false;
+
+  /// Called when a connection came up while the subscribes are held; the
+  /// owner answers with [releaseSubscribes] once the session is confirmed.
+  void Function()? onHeldConnection;
+
   Stream<BoxState> get states => _states.stream;
   BoxState get state => _state;
   Stream<BoxDelivery> get deliveries => _deliveries.stream;
@@ -294,6 +304,7 @@ class BoxClient {
       _reconnect
         ..resetAttempts()
         ..cancel();
+      if (holdOnLoss) _subscribesHeld = true;
       _drop();
       _open();
     }
@@ -350,6 +361,7 @@ class BoxClient {
         if (!identical(_socket, socket)) return;
         if (_subscribesHeld) {
           _heldConnection = socket;
+          onHeldConnection?.call();
           return;
         }
         unawaited(_resubscribe(socket));
@@ -393,6 +405,7 @@ class BoxClient {
   /// only open a WebSocket every few seconds for nothing; it is tried again
   /// after [kBoxAbsentRetryDelay] instead.
   void _lostConnection({bool boxAbsent = false}) {
+    if (holdOnLoss) _subscribesHeld = true;
     _drop();
     if (!_wanted) return;
     void reopen() {
