@@ -30,7 +30,8 @@ class _GatedSigner implements BoxSigner {
   }
 }
 
-Uint8List _bytes(int length, int fill) => Uint8List(length)..fillRange(0, length, fill);
+Uint8List _bytes(int length, int fill) =>
+    Uint8List(length)..fillRange(0, length, fill);
 
 /// A queue whose rid is [n] repeated (n < 256), with its own key.
 BoxQueueAuth _queue(int n) =>
@@ -114,7 +115,8 @@ void main() {
         'sid': boxB64(_bytes(32, 2)),
         'nid': boxB64(_bytes(16, 3)),
       };
-      sockets.respond = (_, f) => f.event == 'createQueue' ? _ok(address) : null;
+      sockets.respond = (_, f) =>
+          f.event == 'createQueue' ? _ok(address) : null;
 
       final created = await box.createQueue(QueueKind.request, key);
       final frame = first.emitted.single.frame;
@@ -320,7 +322,9 @@ void main() {
         expect(resent, hasLength(299));
         expect(resent.map((e) => e['rid']), isNot(contains(boxB64(gone))));
         final entry = resent.first;
-        final signedBy = queues.firstWhere((q) => boxB64(q.rid) == entry['rid']);
+        final signedBy = queues.firstWhere(
+          (q) => boxB64(q.rid) == entry['rid'],
+        );
         expect(
           _verifies(
             signedBy.key,
@@ -408,8 +412,11 @@ void main() {
       fakeAsync((clock) {
         final box = client();
         unawaited(box.subscribe([_queue(1)]));
-        sockets.respond = (_, f) =>
-            {'ok': false, 'code': 'rate_limited', 'retryAfterMs': 900};
+        sockets.respond = (_, f) => {
+          'ok': false,
+          'code': 'rate_limited',
+          'retryAfterMs': 900,
+        };
         box.connect();
         sockets.last.serverConnect('S1');
         clock.flushMicrotasks();
@@ -422,6 +429,71 @@ void main() {
         clock.flushMicrotasks();
         expect(box.state, BoxState.ready);
       });
+    },
+  );
+
+  // Issue #206. Mutations: re-sign a connection that came up while held;
+  // send a held subscribe at once; drop the held queues at the release.
+  test(
+    'while subscribes are held a fresh connection re-signs nothing and is not '
+    'ready, a subscribe on a ready one answers offline, and the release sends '
+    'each',
+    () async {
+      List<Object?> ridsIn(FakeBoxSocket socket) => [
+        for (final f in socket.emitted)
+          if (f.event == 'subscribe')
+            for (final sub in f.frame['subs']! as List<Object?>)
+              (sub! as Map<Object?, Object?>)['rid'],
+      ];
+      sockets.respond = (_, f) => _subscribed();
+      final first = _queue(1);
+      final later = _queue(2);
+      final box = client()..holdSubscribes();
+      unawaited(box.subscribe([first]));
+      box.connect();
+      final socket = sockets.last..serverConnect('S1');
+      await pumpEventQueue();
+      expect(ridsIn(socket), isEmpty);
+      expect(box.state, BoxState.connecting);
+
+      box.releaseSubscribes();
+      await pumpEventQueue();
+      expect(box.state, BoxState.ready);
+      expect(ridsIn(socket), [boxB64(first.rid)]);
+
+      box.holdSubscribes();
+      expect(
+        await box.subscribe([later]),
+        isA<BoxUnknown<List<BoxRefusal>>>(),
+      );
+      expect(ridsIn(socket), [boxB64(first.rid)]);
+      box.releaseSubscribes();
+      await pumpEventQueue();
+      expect(ridsIn(socket), [boxB64(first.rid), boxB64(later.rid)]);
+      expect(box.state, BoxState.ready);
+    },
+  );
+
+  // Issue #206, a revoked device's retire (`forgetAll`, then release).
+  // Mutation: leave `forgetAll` keeping what a hold kept for its release.
+  test(
+    'a queue subscribed while held and then forgotten is not subscribed at '
+    'the release',
+    () async {
+      sockets.respond = (_, f) => _subscribed();
+      final box = client()..connect();
+      final socket = sockets.last..serverConnect('S1');
+      await pumpEventQueue();
+      expect(box.state, BoxState.ready);
+
+      box.holdSubscribes();
+      await box.subscribe([_queue(3)]);
+      box
+        ..forgetAll()
+        ..releaseSubscribes();
+      await pumpEventQueue();
+
+      expect(socket.emitted.where((f) => f.event == 'subscribe'), isEmpty);
     },
   );
 
@@ -458,7 +530,11 @@ void main() {
 
         box.close();
         clock.elapse(const Duration(minutes: 5));
-        expect(sockets.sockets, hasLength(attempts), reason: 'close() stops it');
+        expect(
+          sockets.sockets,
+          hasLength(attempts),
+          reason: 'close() stops it',
+        );
       });
     },
   );
@@ -475,7 +551,11 @@ void main() {
           clock.elapse(kBoxAbsentRetryDelay - const Duration(seconds: 1));
           expect(sockets.sockets, hasLength(before), reason: 'no fast retry');
           clock.elapse(const Duration(seconds: 1));
-          expect(sockets.sockets, hasLength(before + 1), reason: 'still retried');
+          expect(
+            sockets.sockets,
+            hasLength(before + 1),
+            reason: 'still retried',
+          );
         }
 
         // Switched on: the next retry connects.

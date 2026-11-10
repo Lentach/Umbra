@@ -416,9 +416,15 @@ class BoxSession
     _retry?.cancel();
     final deadline = _now().add(wait);
     // Nothing more is taken, and a (re)connection re-signs no queue: what
-    // reaches them now goes with them.
+    // reaches them now goes with them. Issue #206: the subscribes are held
+    // until a session confirmation this device will never get; with the set
+    // empty, releasing them (and no longer holding on a lost connection)
+    // subscribes nothing and lets a connection turn ready for the deletes.
     _inbox.dispose();
-    _box.forgetAll();
+    _box
+      ..forgetAll()
+      ..holdOnLoss = false
+      ..releaseSubscribes();
     // The store this device's queue keys live in. The logout that follows
     // may let another account open the same store object before the delete
     // is done (a sign-in within [wait]): its queues are never touched.
@@ -480,8 +486,31 @@ class BoxSession
   /// Drops the box connection; [resume] brings it back.
   void close() => _box.close();
 
-  /// The account socket is ready (`socketReady`) as [deviceId].
+  /// Holds the box's subscribes until the account socket confirms the
+  /// session (issue #206): a session made before its account socket
+  /// confirmed it (`ConnectionProvider`). [accountReady] or
+  /// [accountAnswered] releases.
+  void holdSubscribes() => _box.holdSubscribes();
+
+  /// Issue #206: makes every LOST box connection hold its subscribes too, and
+  /// asks [confirm] once the next one is up and waiting: the account socket
+  /// may claim connected while dead, this device revoked meanwhile. The owner
+  /// answers with [accountAnswered] or [accountReady] (`deviceRevoked`
+  /// retires the box instead).
+  void confirmSessionWith(void Function() confirm) {
+    _box
+      ..holdOnLoss = true
+      ..onHeldConnection = confirm;
+  }
+
+  /// The account socket answered (`serverTime`): the server still holds the
+  /// session (a revoke closes it there), so the held subscribes go out.
+  void accountAnswered() => _box.releaseSubscribes();
+
+  /// The account socket is ready (`socketReady`) as [deviceId]: the server
+  /// confirmed the session, so the queues may be subscribed (issue #206).
   void accountReady(int? deviceId) {
+    _box.releaseSubscribes();
     _account = (deviceId: deviceId);
     _inFlight = null;
     if (_request == null) {
@@ -518,8 +547,12 @@ class BoxSession
     _notifiers?.run();
   }
 
-  /// The account socket dropped: an answer still owed will never come.
+  /// The account socket dropped: an answer still owed will never come, and
+  /// no queue is subscribed until the next connect gate confirmed the
+  /// session (issue #206) — a device revoked meanwhile hears
+  /// `deviceRevoked` instead of `socketReady`.
   void accountLost() {
+    _box.holdSubscribes();
     _account = null;
     _e2eReady = false;
     _inFlight = null;

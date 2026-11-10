@@ -537,7 +537,14 @@ class ConnectionProvider extends ChangeNotifier {
           // E9: box push registration on every contact queue.
           push: PushBoxSource(),
         );
-        final session = _box!;
+        // Issue #206: no queue is subscribed before this connect's account
+        // socket confirmed the session (`socketReady`); the connect gate
+        // answers a device revoked while it was away `deviceRevoked`
+        // instead. Released by `accountReady`, held again by `accountLost`,
+        // and by every lost box connection ([_confirmSessionForBox]).
+        final session = _box!
+          ..holdSubscribes()
+          ..confirmSessionWith(_confirmSessionForBox);
         final mediaStore = BoxMediaStore.device();
         _boxMedia = BoxMediaFetcher(
           store: mediaStore,
@@ -920,6 +927,10 @@ class ConnectionProvider extends ChangeNotifier {
   /// a usable answer so garbage cannot silence the re-request path.
   void _onServerTime(dynamic data) {
     _serverResponseCounter++;
+    // Issue #206: the server answered on this session, so it still holds it
+    // (a revoke closes it there): a box connection waiting since a loss may
+    // re-sign the set ([_confirmSessionForBox]).
+    if (_accountReady) _box?.accountAnswered();
     ServerClock.instance.observeIso(data is Map ? data['serverTime'] : null);
     if (ServerClock.instance.estimatedNow == null) return;
     _serverTimeRequestedAt = null;
@@ -1002,7 +1013,8 @@ class ConnectionProvider extends ChangeNotifier {
     // socket.io's ping timeout. Meanwhile every box send waits out its
     // timeout and fails, and the box hands every message stored for us to
     // that dead socket instead of pushing it. Probe it, whatever the account
-    // socket claims; only a dead one is replaced.
+    // socket claims; only a dead one is replaced (and the replacement waits
+    // for the session to be confirmed, issue #206).
     _box?.checkAlive();
     if (!claimsConnected) {
       connect(
@@ -1024,17 +1036,22 @@ class ConnectionProvider extends ChangeNotifier {
   static const _kResumeProbeWindow = Duration(seconds: 6);
 
   void _resyncAfterResume() {
-    final probeStart = _serverResponseCounter;
     final activeConvId = _conversationsProvider?.activeConversationId;
-    // The probe's own question is the time: the server answers it from no
-    // table, and a reply is all the probe needs.
-    _socketService.getServerTime();
+    _probeAccountLiveness();
     _conversationsProvider?.repostActiveConversationToSw();
     E2eDiagLog.add('RESUME_RESYNC', {
       'activeConvId': activeConvId ?? -1,
       'socketConnected': _socketService.isConnected,
     });
+  }
 
+  /// Asks the server for the time on the account socket and forces a fresh
+  /// connect if nothing answers within [_kResumeProbeWindow]: a socket that
+  /// claims connected may be dead. The probe's own question is the time: the
+  /// server answers it from no table, and a reply is all the probe needs.
+  void _probeAccountLiveness() {
+    final probeStart = _serverResponseCounter;
+    _socketService.getServerTime();
     _resumeProbeTimer?.cancel();
     _resumeProbeTimer = Timer(_kResumeProbeWindow, () {
       if (_serverResponseCounter != probeStart) return; // server replied: alive
@@ -1044,6 +1061,16 @@ class ConnectionProvider extends ChangeNotifier {
       if (userId == null || token == null) return;
       connect(userId, token, AppConfig.baseUrl);
     });
+  }
+
+  /// Issue #206: a box connection came back after a loss and waits for the
+  /// session to be confirmed before it re-signs the set. While the account
+  /// socket is not ready its `socketReady` (or `deviceRevoked`) answers;
+  /// while it claims ready it may be dead with this device revoked
+  /// meanwhile, so the server is asked: `serverTime` releases
+  /// ([_onServerTime]), silence forces a reconnect that meets the gate.
+  void _confirmSessionForBox() {
+    if (_accountReady) _probeAccountLiveness();
   }
 
   // ---------- Event Routing ----------
