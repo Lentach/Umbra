@@ -27,14 +27,25 @@
   - `_namesDeviceRevoked` → false;
   - the hand-over dropped.
 - flutter 3268 passed / 14 skipped (count gate OK); analyze 0 warnings/errors; dart ratchet at baseline 2494 (one new `directives_ordering` fixed).
-- Web drive (release build `fix234`, local stack, two origins `localhost:8080` / `127.0.0.1:8080`):
-  - setup: A and B friends, one message each way; A's tab to `about:blank`; `devices."revokedAt"` stamped for A; B sent one more;
-  - A reopened: login screen with "To urządzenie usunięto z konta. Zaloguj się i połącz je ponownie.", footer `wylogowano: device_revoked`;
-  - `box_queues` 6 → 3, `box_msgs` 1 → 0; Postgres statement log showed 3 `WITH gone` deletes. It also showed 2 `SELECT rid, id FROM (` (pendingHeads, run on a subscribe/delivery), whose rids were not checked before the stack was removed, so "A subscribed nothing" rests on the unit test (`subscribe` frames 0), not on this drive.
-- Android drive (debug APK, Pixel_7, `10.0.2.2:3000`): C (app) and B (web) friends; C force-stopped, revoked; B sent one more; C started → same notice and footer; `box_queues` 7 → 4, `box_msgs` 1 → 0, 3 deletes (the log filter used would not have shown a pendingHeads query, so subscribes are unchecked here too).
+- Re-drive with subscribe attribution (fresh local stack, Postgres `log_statement='all'`, every statement read through its `DETAIL` line). Signals:
+  - `markSubscribed` (`UPDATE public.box_queues` + `touchedDay`) = a subscribe;
+  - `SELECT rid, id FROM (` (pendingHeads) = a delivery pass for a live socket slot;
+  - `SELECT q.nid` = `handleDisconnect` detaching a slot.
+- Web (release build `fix234`):
+  - D on `localhost:8081`, B on `127.0.0.1:8080`, friends with one message each way;
+  - D's tab truly closed: `SELECT q.nid` on its 3 rids, so the slot detached; D revoked; B sent one more, with no pendingHeads (no owner);
+  - D reopened in a new tab: notice and `wylogowano: device_revoked`; 3 ownership checks plus 3 `WITH gone` on exactly D's 3 rids; **0 `markSubscribed`, 0 pendingHeads**; `box_queues` 7 → 4, `box_msgs` 1 → 0.
+- Android (debug APK, Pixel_7):
+  - C and B friends; C force-stopped: `SELECT q.nid`, the slot detached; C revoked; B sent one more, with no pendingHeads;
+  - C started: same notice and footer; 3 deletes; **0 `markSubscribed`, 0 pendingHeads**; `box_queues` 8 → 5, `box_msgs` 1 → 0.
+- The first drives' 2 pendingHeads are explained. "Closing" with `goto('about:blank')` left A's old page alive (bfcache), still connected:
+  - B's send handed it the message (pendingHeads at 23:01:15, before A reopened);
+  - the new boot's `deleteQueue` → `delivery.forget` → `release` → `pump` on that old slot ran the pendingHeads;
+  - the new boot itself sent no `markSubscribed`.
+  - So `about:blank` is not a closed device: close the tab.
 - NOT verified: a passcode-locked web vault (expected: `BOX_REVOKED_RETIRE_SKIPPED`, queues left to #208), iOS PWA, prod.
 
 ## Notes for next session
-- Next action: once CI on #238 is green, the owner decides whether to merge and ship it as 0.2.82 (web + APK; backend unchanged).
+- Next action: merged with the 0.2.82 bump; the release itself is recorded in the 0.2.82 release summary.
 - Owner-owed: the metadata close-out proposal above; release B ≥ 12-08; do83rman's iPhone log; throwaway prod accounts (list in `NEXT.md`).
-- Drive recipe: two web accounts in one managed Chromium need two origins (`localhost` vs `127.0.0.1`, both allowed by dev CORS); "closed" = `goto('about:blank')`; revoke = `update devices set "revokedAt"=now() where "userId"=N`; box traffic shows only with `alter system set log_statement='all'` — TypeORM statements are `execute <unnamed>:` lines, and a queue delete is `WITH gone AS (`.
+- Drive recipe: two web accounts in one managed Chromium need two origins (`localhost` vs `127.0.0.1`, or another port), both allowed by dev CORS. "Closed" = close the tab (`goto('about:blank')` keeps the page alive in bfcache with its sockets connected). Revoke = `update devices set "revokedAt"=now() where "userId"=N`; a revoked device cannot log in again on the same install. Box traffic shows only with `alter system set log_statement='all'`: read each statement through its `DETAIL` (`awk '/LOG:  execute/{p=1} p; /DETAIL/{p=0}'`). Queue delete = `WITH gone AS (`, subscribe = `markSubscribed` `UPDATE public.box_queues` + `touchedDay`, delivery = `SELECT rid, id FROM (`, detach = `SELECT q.nid`.
