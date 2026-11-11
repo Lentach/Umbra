@@ -1,57 +1,67 @@
 # Metadata Stored by Fireplace
 
-This document describes what metadata the Fireplace server stores and why. It is intended for transparency and user trust.
+This document describes what the Fireplace (Umbra) server stores and can observe, and why. It is meant for transparency and user trust. It reflects the code since 0.2.76, the release that removed the old message path (Phase 4 step 5). Every accepted residual is recorded in `docs/plans/metadata-privacy-decisions.md`, which is the authority.
 
-## What the Server CANNOT See
+## What the server cannot see
 
-- **Message content** — End-to-end encrypted (Signal Protocol). Server stores only ciphertext and `[encrypted]` placeholder.
-- **Reply-to content** — For encrypted messages, server stores `Encrypted message` placeholder only.
+- **Message content.** Messages, reactions, edits, deletes, pins, receipts, typing and profile updates are all end-to-end encrypted (Signal Protocol) inside fixed-size 16 KiB box blobs.
+- **Who sends to whom.** A message goes into an anonymous box queue. The queue row names no account, device, sender or peer (`box_queues`, invariant I2), and a `send` is unsigned and carries no sender key (`box_msgs` has no sender column).
+- **Your friends, chats and blocks.** These live only on your devices. The server keeps no friendship, request, conversation, message or block table: `friend_requests`, `conversations`, `messages`, `message_envelopes` and `blocked_users` were dropped in 0.2.76. A block is device-only (decision 126).
+- **Read and delivery state.** Receipts travel inside the encryption. The server only learns that a blob was taken (`ack` deletes it).
+- **Profile photos.** Since 0.2.79 a photo travels as encrypted box media, and search returns no photo (decision 138). Old server copies are deleted in release B (see below).
 
-## What the Server CAN See (Metadata)
-
-The server needs certain metadata to deliver messages and manage conversations.
+## What the server stores
 
 | Data | Stored in | Purpose | Retention / cleanup |
 |------|-----------|---------|---------------------|
-| User identity | `users` | Account (username, tag, profile picture) | Until account deletion |
-| Conversation membership | `conversations` | Who is in each chat (user_one_id, user_two_id) | Until conversation delete, unfriend, block, or account deletion |
-| Message routing | `messages` | sender_id, conversation_id — who sent what, to which conversation | Until message/conversation deletion, disappearing-message expiry, or account deletion |
-| Timestamps | `messages`, `conversations` | createdAt — when messages/conversations were created | Same lifecycle as the row that owns the timestamp |
-| Delivery status | `messages` | SENT, DELIVERED, READ — for read receipts and unread counts | Same lifecycle as message row |
-| Friend graph | `friend_requests` | Who is friends with whom | Until unfriend, account deletion, or request cleanup path |
-| Block graph | `blocked_users` | Who blocked whom | Until unblock or account deletion |
-| Key bundles | `key_bundles`, `one_time_pre_keys` | Public keys for E2E (no private keys) | Until account deletion; used pre-keys are kept for protocol bookkeeping |
-| Push tokens | `fcm_tokens` | Push delivery token and platform | Until logout/token removal, invalid token response, or account deletion |
-| Secret notes | `secret_notes` | Random token, ciphertext, expiry — no creator id (dropped 2026-09-20) | Deleted on reveal, on expired access, or by the per-minute expired-note cleanup |
-| Message media blobs | disk `msgs/*.bin` | Encrypted image/voice/GIF/file payloads | Deleted on destructive chat paths where possible; orphan/expired blobs are swept daily |
-| Contact backup | `contact_backups` | ONE opaque AES-256-GCM blob per account (metadata-privacy PR2.4), plus the salt, the wrapped content keys, a revision counter and `updatedAt`. The server cannot open it and never parses it; it exists so a browser that evicts its origin storage does not lose the contact graph the client now owns. | Until account deletion (FK `ON DELETE CASCADE`) |
+| Account | `users` | Username, tag, password hash, created and password-changed times | Until account deletion |
+| Devices | `devices` | Which devices an account has (added/revoked times) and each device's public request-queue address (`requestSid`) | Until account deletion |
+| Public keys | `key_bundles`, `one_time_pre_keys`, `account_authorizations` | Public E2E key material and the signed device list; no private keys | Until account deletion |
+| Sessions | `refresh_tokens` | Login sessions. `expires_at` slides on every refresh, so it shows last activity to about a day | Until logout, revoke, expiry or account deletion |
+| Recovery and identity resets | `recovery_keys`, `identity_reset_requests`, `identity_change_audit` | The recovery-phrase verifier and the reset ceremony | Until account deletion |
+| Box queues | `box_queues` | Random ids (`rid`, `sid`, `nid`) and the queue's auth key; no account. `touchedDay` is the UTC day of the last subscribe and feeds only the 90-day reaper | Deleted by the owner (unfriend, revoke, #234), or reaped after 90 idle days |
+| Undelivered blobs | `box_msgs` | 16 KiB ciphertext waiting for its recipient | Deleted on `ack`, else after 30 days |
+| Box media | `box_media` + disk | Encrypted attachments padded to a size rung (4 KiB … 32 MiB), linked to no queue | Until `expiresAt` |
+| Push notifiers | `box_notifiers` | One verified push endpoint (FCM token or Web Push subscription) per inbound queue | Deleted with its queue |
+| Contact backup | `contact_backups` | One opaque encrypted blob per account (see below) | Until account deletion |
+| Secret notes | `secret_notes` | Random token, ciphertext and expiry; no creator id | Deleted on reveal, on expired access, or by the per-minute cleanup |
+| Old profile photos | `user_profile_photos`, `users.profilePictureUrl` | Pre-0.2.79 server photos, kept only for migration | Deleted by release B, about 30 days after 0.2.79 (decision 138) |
 
-## Why This Metadata Is Needed
+`contact_messages` and `contact_push_subscriptions` (migrations 0009 and 0010) are tables from an old contact form. No backend code reads or writes them.
 
-- **Routing:** The server must know the recipient to deliver a message.
-- **Display:** The recipient needs to know who sent each message (sender_id).
-- **Access control:** Only conversation participants can read messages.
-- **Offline/history:** Messages are stored so users can fetch them when they reconnect.
+## What the server can still learn (accepted residuals)
 
-## Retention & Logging
+- **Internet addresses and timing.** Every connection shows an IP address and a time; box throttles are per IP. Someone running the server could try to correlate one person's send with another person's receive by time. Hiding that needs an anonymity network, which was dropped (decision R82).
+- **Handle lookups.** "A looked up B": at an invite accept (decisions 53, 56), and at most once per 24 h for a friend who has no delivery address yet (decision 120).
+- **A device's request queue is tied to its account.** `devices.requestSid` is the same bytes as that queue's `sid` (the I2b exception, decision 1). The address is public by design: anyone who searches the handle gets it.
+- **One device's queues can be grouped.** Each normal inbound queue on a device registers a notifier on that device's single push token (E9). The server can therefore group one device's queues, which shows how many contacts it has and when each one receives a message, though not whose device it is. Request queues get no notifier (decision 2).
+- **A shared attachment links its receivers.** An attachment is uploaded once and every addressed device downloads the same id, which links the queues that received it (decision 44).
+- **Revoked-device check.** A closed device's revoked check follows a push wake-up by about a second, so the server could link "queue X woke" with "this session refreshed", at most once per device per 24 h (decision 131).
+- **Push providers.** Google (FCM) and Apple/Mozilla/Microsoft (Web Push) see that a device was woken. FCM wake-ups carry only `{type:'new_message'}`; Web Push payloads are encrypted (RFC 8291).
 
-- **Disappearing messages:** Expired rows are checked every minute. If they reference self-hosted media, the media file is deleted before the message row is removed.
-- **Secret notes:** Notes are one-shot. Expired unread notes are also purged every minute so ciphertext is not retained indefinitely.
-- **Media cleanup:** Conversation deletion, clear history, unfriend, block, and account deletion delete known self-hosted message media where possible. A daily media cleanup removes orphaned or expired `msgs/*.bin` files that remain after crashes or legacy paths.
-- **Local plaintext cache:** The client may cache decrypted message fields locally for recovery/performance. The cache is capped per user and can be cleared from Privacy & Safety without deleting Signal keys or server history.
-- **Data retention:** General metadata is stored only while the account, relationship, conversation, or message exists. `METADATA_RETENTION_DAYS` is still reserved for a future global auto-purge policy and is not a broad server-side deletion switch today.
-- **Logging:** Production logs should avoid raw tokens, keys, ciphertext, message content, and unnecessary user/conversation/message identifiers. Use operational error messages and narrow identifiers only when needed for debugging or security investigation.
-- **Server-side activity records, status 2026-09-20 (metadata privacy step 0):** closed = the per-device `devices.lastSeenAt` connect clock, `secret_notes.creatorId`, every account id/username in backend log strings (CI-guarded by `scripts/verify-no-user-logs.mjs`), and the every-connect re-stamp of `key_bundles.updatedAt`. Still present and NOT presence-free: `refresh_tokens.expires_at` (slid on every refresh, so it encodes last-active to ~a day) and `created_at`, `one_time_pre_keys.createdAt/used`, `message_envelopes.deliveredAt/readAt`, `messages.createdAt/editedAt`, `identity_change_audit`, `identity_reset_requests` and `recovery_keys` timestamps, `devices.addedAt/revokedAt`, push-subscription rows, `users.createdAt/passwordChangedAt`, `conversations`/`friend_requests` timestamps. These fall with the transient-queue cutover (`.planning`), not with step 0.
-- **Contact backup, what it does and does not leak (PR2.4):** the row's `blob` is AES-256-GCM under a content key the server never receives; the content key is itself wrapped under PBKDF2-HMAC-SHA256(600 000) of the account password and, when the user has enrolled one, of the recovery phrase. The server therefore learns three things and no more: that an account has a backup, its size **rounded up to a 4 KiB bucket**, and when it last CHANGED. The bucketing is not cosmetic — AES-GCM is length-preserving, so an unpadded blob's byte length divided by the per-contact record size is a direct estimate of how many contacts the account has, readable from a `pg_dump` with no key at all; the plaintext is padded to `kContactBackupPadBlock` before sealing so one contact and ten are indistinguishable. `updatedAt` deliberately does NOT move for an unchanged graph — the client decides that on the PLAINTEXT before sealing, because a fresh GCM IV makes every re-seal different bytes and a server-side byte compare could never catch it — so an idle reconnect leaves no trace. That is the same rule that stopped `key_bundles.updatedAt` being a per-device presence clock. The blob excludes this device's queue private keys and the server-side conversation/request ids.
-  - **Web caveat, weaker than §10a elsewhere:** on web the cached content key sits in cleartext `localStorage` next to the session tokens. A browser profile plus a database dump therefore reads the contact graph. On Android it is Keystore-backed like the session. This is the accepted price of a PWA that survives its own eviction; the phrase and password wraps are what protect the server-side copy on its own.
-- **History backup (PR2.3) never reaches the server.** Decrypted message history has no server copy at all after a consumed ratchet, so its backup is a FILE the user holds, sealed under a passphrase only they choose (PBKDF2-HMAC-SHA256 600 000 + AES-256-GCM, parameters in a cleartext envelope). Export is available on every platform; import is Android-only. Signal key material is deliberately NOT in that file — the identity has its own phrase-sealed backup with its own ceremony.
-  - **Storage-loss notice, accepted residual on web (owner decision 2026-09-22):** the full-screen "this device lost its local store" notice fires only where destruction is PROVEN — the native opener recreating an unreadable SQLCipher file. On web an absent storage marker is indistinguishable from a fresh install, and an evicted origin takes the session tokens with it, so that user lands on the login screen and the contact restore runs at the next login. The residual: a PWA that loses IndexedDB while its tokens survive (partial eviction, a manual clear of storage only) has its contacts restored silently and loses decrypted history with no notice. Accepted rather than guessed at, because a loss screen shown to a fresh install teaches users to dismiss it; revisit when the local store becomes the only copy (metadata-privacy Phase 4).
+## Why this metadata is needed
 
-## Key Storage (E2E)
+- **Delivery:** a queue must exist and hold a blob until its recipient takes it.
+- **Wake-ups:** a closed phone can only be woken through its push token.
+- **Accounts and keys:** login, device linking and session setup need public keys and a device list.
+- **Abuse limits:** per-IP throttles and size rungs keep an unauthenticated box from filling the disk.
 
-- **Mobile:** Keys in Keychain (iOS) / Keystore (Android) — hardware-backed when available.
-- **Web:** Keys in browser storage, encrypted with WebCrypto. Uses app-specific db (`FireplaceE2E`). Someone with device access could potentially extract them. Privacy & Safety screen shows a web-specific warning; mobile app recommended for maximum security.
+## Retention and logging
 
-## Future Improvements
+- **Box:** a blob lives until it is acked or 30 days pass; a queue lives until its owner deletes it or 90 idle days pass; media lives until its `expiresAt`.
+- **Secret notes:** one-shot; expired unread notes are purged every minute.
+- **Logging:** backend log strings carry no account ids or usernames (CI-guarded by `scripts/verify-no-user-logs.mjs`); no raw tokens, keys, ciphertext or message content.
+- **Closed activity clocks (2026-09-20):** `devices.lastSeenAt`, `secret_notes.creatorId` and the every-connect re-stamp of `key_bundles.updatedAt` are gone. Still present and not presence-free: `refresh_tokens.expires_at`/`created_at`, `one_time_pre_keys.createdAt/used`, `devices.addedAt/revokedAt`, `users.createdAt/passwordChangedAt`, `box_notifiers.verifiedAt`, `box_queues.touchedDay` (day granularity), and the identity-reset and recovery timestamps.
+- **Contact backup, what it does and does not leak (PR2.4):** the row's `blob` is AES-256-GCM under a content key the server never receives. That key is wrapped under PBKDF2-HMAC-SHA256 (600 000) of the account password and, when the user has enrolled one, of the recovery phrase.
+  - The server learns three things and no more: that an account has a backup, its size **rounded up to a 4 KiB bucket**, and when it last CHANGED.
+  - The bucketing matters: AES-GCM is length-preserving, so an unpadded blob's length would estimate the contact count from a `pg_dump` with no key. The plaintext is padded to `kContactBackupPadBlock` before sealing, so one contact and ten look the same.
+  - `updatedAt` does NOT move for an unchanged graph. The client decides that on the PLAINTEXT before sealing, because a fresh GCM IV makes every re-seal different bytes. An idle reconnect therefore leaves no trace.
+  - The blob excludes this device's queue private keys.
+  - **Web caveat:** on web the cached content key sits in cleartext `localStorage` next to the session tokens, so a browser profile plus a database dump reads the contact graph. On Android it is Keystore-backed. This is the accepted price of a PWA that survives its own eviction.
+- **History backup (PR2.3) never reaches the server.** Decrypted history has no server copy, so its backup is a FILE the user holds, sealed under a passphrase only they choose (PBKDF2-HMAC-SHA256 600 000 + AES-256-GCM). Export works on every platform; import is Android-only. Signal key material is not in that file; the identity has its own phrase-sealed backup.
+  - **Storage-loss notice, accepted residual on web (owner decision 2026-09-22):** the "this device lost its local store" notice fires only where destruction is PROVEN (the native opener recreating an unreadable SQLCipher file). A PWA that loses IndexedDB while its tokens survive has its contacts restored silently and loses decrypted history with no notice.
 
-See `docs/plans/2026-03-11-metadata-privacy-design.md` for options to reduce metadata visibility (e.g. Sealed Sender).
+## Key storage (E2E)
+
+- **Mobile:** keys in Keychain (iOS) / Keystore (Android), hardware-backed when available.
+- **Web:** keys in browser storage, encrypted with WebCrypto, in the app-specific `FireplaceE2E` database. Someone with device access could potentially extract them. Privacy & Safety shows a web-specific warning; the mobile app is recommended for maximum security.
