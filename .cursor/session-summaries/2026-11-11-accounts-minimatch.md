@@ -20,9 +20,9 @@
 ## Key files
 - Edited: `backend/package.json`, `backend/package-lock.json`, `scripts/smoke/package.json`, `scripts/smoke/package-lock.json`.
 - Read only: `backend/src/users/users.service.ts` `deleteAccount`, `2026-10-08-account-cull.md` (recipe).
-- CI: success 7/7 on `2067d448` (PR #245 head), merged as `b88c3b8a`. Dependabot alerts 182/183 close once GitHub rescans master.
+
 ## Verification
-- CI: see PR #245 (`2067d448`); the result is recorded in the follow-up line below once known.
+- CI: success 7/7 on `2067d448` (PR #245 head), merged as `b88c3b8a`. Dependabot alerts 182/183 close once GitHub rescans master.
 - Account delete: `DELETE 16`, users 44 → 28; `devices`, `key_bundles`, `refresh_tokens` for ids 138–153 are all 0; `/health` ok.
 - minimatch:
   - `npm ci --dry-run` ok; `nest build` ok; backend unit tests 779/779.
