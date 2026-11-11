@@ -10,5 +10,8 @@
   "devDependencies": {
     "artillery": "2.0.34",
     "playwright": "^1.53.0"
+  },
+  "overrides": {
+    "minimatch@>=7.0.0 <11.0.1": "^11.0.7"
   }
 }
