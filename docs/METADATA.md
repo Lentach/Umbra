@@ -27,7 +27,7 @@ This document describes what the Fireplace (Umbra) server stores and can observe
 | Secret notes | `secret_notes` | Random token, ciphertext and expiry; no creator id | Deleted on reveal, on expired access, or by the per-minute cleanup |
 | Old profile photos | `user_profile_photos`, `users.profilePictureUrl` | Pre-0.2.79 server photos, kept only for migration | Deleted by release B, about 30 days after 0.2.79 (decision 138) |
 
-`contact_messages` and `contact_push_subscriptions` (migrations 0009 and 0010) are tables from an old contact form. No backend code reads or writes them.
+`contact_messages` and `contact_push_subscriptions` (migrations 0009 and 0010) are dormant tables from an old contact form: no backend code reads or writes them, and both held 0 rows on prod on 2026-11-11.
 
 ## What the server can still learn (accepted residuals)
 
