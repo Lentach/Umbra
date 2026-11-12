@@ -8,10 +8,10 @@ Headings are prefixed with the root section they belong to. Test/CI detail lives
 
 ## §1 Working copy and branch drift
 
-`Desktop/Fireplace` is on `feat/passcode-lock` by convention: on the old PC `master` was checked out in
-the `fireplace-0a` worktree, so it could not be checked out here — `git worktree list` shows today's layout. The branch is
-kept AT master's tip by convention, not by git: it drifts the moment anyone pushes to master from
-elsewhere (it did on 2026-09-10 while a concurrent session shipped 0.2.37/0.2.38). Hence the
+`Desktop/Fireplace` is on `master` (since 2026-11-12). Before that it sat on `feat/passcode-lock`: on the
+old PC `master` was checked out in the `fireplace-0a` worktree, and git lets a branch be checked out in only
+one worktree — `git worktree list` shows today's layout. A local `master` still drifts the moment anyone
+pushes to master from elsewhere (it did on 2026-09-10 while a concurrent session shipped 0.2.37/0.2.38). Hence the
 every-session `git fetch && git status -sb && git log --oneline HEAD..origin/master` and the
 `git merge --ff-only origin/master` when behind.
 
