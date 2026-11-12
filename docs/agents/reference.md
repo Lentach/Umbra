@@ -8,8 +8,8 @@ Headings are prefixed with the root section they belong to. Test/CI detail lives
 
 ## §1 Working copy and branch drift
 
-`C:/Users/Lentach/Desktop/Fireplace` is on `feat/passcode-lock` because `master` is checked out in
-the `fireplace-0a` worktree, so it cannot be checked out here — `git worktree list`. The branch is
+`Desktop/Fireplace` is on `feat/passcode-lock` by convention: on the old PC `master` was checked out in
+the `fireplace-0a` worktree, so it could not be checked out here — `git worktree list` shows today's layout. The branch is
 kept AT master's tip by convention, not by git: it drifts the moment anyone pushes to master from
 elsewhere (it did on 2026-09-10 while a concurrent session shipped 0.2.37/0.2.38). Hence the
 every-session `git fetch && git status -sb && git log --oneline HEAD..origin/master` and the
@@ -69,7 +69,7 @@ surroundings.
 
 The landing page was extracted from `landing/` into its own repo on 2026-07-22 with git history;
 the owner renamed that repo from `fireplace-landing` to `Lentach/fireplaceWebsite` the same day
-(local clone still `C:/Users/Lentach/Desktop/fireplace-landing`). It is an Astro static site with
+(local clone still `Desktop/fireplace-landing`). It is an Astro static site with
 its own `CLAUDE.md` and `deploy-landing.ps1`.
 
 ## §2 Why graphify was removed
