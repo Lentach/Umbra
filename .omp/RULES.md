@@ -1,4 +1,4 @@
-- Shared worktree on `feat/passcode-lock`: stage by explicit path only, never `git add -A`; push `git push origin HEAD:master` then the branch.
+- Shared main checkout on `master`: stage by explicit path only, never `git add -A`; push `git push origin HEAD:master`.
 - Never `git commit --no-verify`; never trim a fresh session summary to fit the gate — move detail out.
 - Never `gh run list`; CI = `gh api repos/Lentach/Umbra/commits/master/check-runs`.
 - Never `git revert 0cbf17b`; composer/attachment-picker changes ship only with a green repro AND the owner's explicit OK.
