@@ -5,12 +5,12 @@ dist/
 .env.staging
 *.log
 mcp.json
-# OMP agent state (sessions, logs, caches) is machine-local. Five things in .omp/ ARE
-# repo material: the project Dart MCP mount (secret-free — a local exe path plus
-# --disable flags; the path is THIS machine's, repoint it on another clone, see
-# docs/design/flutter-ui-playbook.md §0), the edit-time area rules, the sticky
-# RULES.md, the tool_call guard hook, and config.yml — which carries ONLY this
-# repo's skill gate (docs/agents/skills-and-mcp.md), so every worktree inherits the
+# OMP agent state (sessions, logs, caches) is machine-local. Seven things in .omp/ ARE
+# repo material: the project Dart MCP mount (secret-free — `dart mcp-server` from the
+# Dart SDK on PATH plus --disable flags, no per-machine path), the edit-time area rules,
+# the sticky RULES.md, the tool_call guard hook, the advisor's review rules
+# (WATCHDOG.md), the project task agents (agents/), and config.yml — which carries ONLY
+# this repo's skill gate (docs/agents/skills-and-mcp.md), so every worktree inherits the
 # same skill set. Keep secrets and model/provider keys OUT of it; those belong in
 # ~/.omp/agent/config.yml. Every OTHER mcp.json stays ignored — a user-level one may
 # carry keys. Project skills live in .claude/skills/ (OMP discovers that path too;
@@ -21,6 +21,8 @@ mcp.json
 !.omp/hooks/
 !.omp/RULES.md
 !.omp/config.yml
+!.omp/WATCHDOG.md
+!.omp/agents/
 
 # User uploads (profile pictures)
 backend/uploads/

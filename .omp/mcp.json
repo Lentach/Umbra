@@ -6,7 +6,8 @@
       "command": "cmd",
       "args": [
         "/c",
-        "C:\\Users\\Lentach\\AppData\\Local\\Pub\\Cache\\bin\\dart_mcp_server.bat",
+        "dart",
+        "mcp-server",
         "--disable",
         "pub_dev_search"
       ]

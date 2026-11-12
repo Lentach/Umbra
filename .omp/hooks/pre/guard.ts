@@ -12,7 +12,7 @@ const RULES: Array<{ re: RegExp; reason: string }> = [
   {
     re: /\bgh\s+run\s+list\b/,
     reason:
-      "gh run list is forbidden (CLAUDE.md §3): use `gh api repos/Lentach/Fireplace/commits/master/check-runs --jq '.check_runs[] | [.name, .status, .conclusion // \"-\", .id] | @tsv'`.",
+      "gh run list is forbidden (CLAUDE.md §3): use `gh api repos/Lentach/Umbra/commits/master/check-runs --jq '.check_runs[] | [.name, .status, .conclusion // \"-\", .id] | @tsv'`.",
   },
 ];
 
