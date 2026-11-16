@@ -142,7 +142,14 @@ extension MessagingSend on MessagingProvider {
         _markMessageFailed(tempId, 'Image too large (max 20 MB)');
         return false;
       }
-      final preview = await _extractMediaPreviewMetadata(rawBytes);
+      // Camera metadata (GPS, time, device, thumbnail) never leaves the
+      // device (plan A2); the orientation stays.
+      final image = scrubImageMetadata(rawBytes);
+      _e2eFlowLog('MEDIA_METADATA_SCRUBBED', {
+        'type': 'IMAGE',
+        'bytes': image.scrubbed,
+      });
+      final preview = await _extractMediaPreviewMetadata(image.bytes);
       if (preview != null) {
         _applyMediaPreview(tempId, preview);
       }
@@ -150,7 +157,7 @@ extension MessagingSend on MessagingProvider {
         recipientId: recipientId,
         tempId: tempId,
         messageType: 'IMAGE',
-        bytes: Uint8List.fromList(rawBytes),
+        bytes: image.bytes,
         effectiveExpiresIn: effectiveExpiresIn,
         effectiveReplyToId: effectiveReplyToId,
         mediaWidth: preview?.width,
@@ -319,11 +326,16 @@ extension MessagingSend on MessagingProvider {
         return false;
       }
 
+      final video = Uint8List.fromList(videoBytes);
+      _e2eFlowLog('MEDIA_METADATA_SCRUBBED', {
+        'type': 'VIDEO',
+        'bytes': scrubVideoMetadataInPlace(video),
+      });
       return await _sendMediaOverBox(
         recipientId: recipientId,
         tempId: tempId,
         messageType: 'VIDEO',
-        bytes: Uint8List.fromList(videoBytes),
+        bytes: video,
         effectiveExpiresIn: effectiveExpiresIn,
         effectiveReplyToId: effectiveReplyToId,
         mediaDuration: duration,

@@ -6,9 +6,11 @@ import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/services/box/box_frame.dart';
 import 'package:fireplace/services/media_crypto_service.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 
 import '../support/box_send_harness.dart';
+import '../support/media_metadata_fixtures.dart';
 
 Map<String, dynamic> _envelopeOf(BoxFrame frame) =>
     jsonDecode(utf8.decode(frame.signal)) as Map<String, dynamic>;
@@ -72,6 +74,33 @@ void main() {
         MessageDeliveryStatus.failed,
       );
       expect(h.outbox.delivered, isEmpty);
+    });
+  });
+
+  group('camera metadata never reaches the cipher (plan A2)', () {
+    test('a photo goes out without GPS, Exif or XMP, still turned', () async {
+      h.bob([1]);
+      final photo = XFile.fromData(jpegWithCameraMetadata(), name: 'p.jpg');
+
+      expect(await h.provider.sendImageMessage(photo, 2), isTrue);
+
+      final sealed = h.crypto.encrypted.single;
+      for (final secret in ['SECRET-GPS', 'SECRET-EXIF-MODEL', 'SECRET-XMP']) {
+        expect(containsAscii(sealed, secret), isFalse, reason: secret);
+      }
+      expect(img.decodeJpgExif(sealed)!.imageIfd.orientation, 6);
+    });
+
+    test('a video goes out without its location, at its exact size', () async {
+      h.bob([1]);
+      final clip = mp4WithLocation();
+
+      expect(await h.provider.sendVideoMessage(clip, 2), isTrue);
+
+      final sealed = h.crypto.encrypted.single;
+      expect(sealed.length, clip.length);
+      expect(containsAscii(sealed, 'SECRET+52.2297'), isFalse);
+      expect(containsAscii(clip, 'SECRET+52.2297'), isTrue);
     });
   });
 

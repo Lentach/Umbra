@@ -112,8 +112,8 @@ void main() {
     });
 
     test(
-      "a body longer than today's largest ciphertext (20 MiB + GCM tag) is "
-      'refused and not kept; exactly that size is kept',
+      'a body longer than the largest ciphertext (a 20 MiB file padded to '
+      'the top rung) is refused and not kept; exactly that size is kept',
       () async {
         final framed = Uint8List(kBoxMediaLadder.last);
         final length = framed.buffer.asByteData();

@@ -1,6 +1,6 @@
 # Security and privacy hardening plan — native first
 
-**Date:** 2026-11-16 · **Status:** open, nothing below is fixed yet · **Source:** read-only review of `master` (`a12f850e`), 2026-11-11 to 2026-11-16 (five scoped code reviews plus direct checks).
+**Date:** 2026-11-16 · **Status:** open; A1 and A2 done in `feat/media-a1-a2` (release 0.2.83) · **Source:** read-only review of `master` (`a12f850e`), 2026-11-11 to 2026-11-16 (five scoped code reviews plus direct checks).
 
 `✔` = confirmed in code or on prod by the lead reviewer. `review` = found by a scoped reviewer and not yet re-checked. Re-verify before fixing: code wins over this file.
 
@@ -12,8 +12,8 @@ Native apps (Android now, iOS next) become the product. The PWA, where nearly al
 
 | # | Problem | Evidence | Fix |
 |---|---|---|---|
-| A1 | The server reads every attachment's exact size: the 4-byte length prefix sits outside the encryption, so size rungs hide nothing | ✔ `frontend/lib/services/box/box_media_frame.dart:20`; callers `messaging_provider.box.dart:2288`, `box_sync.dart:206`, `profile_photos.dart:165` | Pad the plaintext before AES-GCM and put the length inside it. This is a wire change: receivers must read both forms for one release (shim window, see `2026-11-06-incident-0277-history-shim.md`) |
-| A2 | Chat photos are sent with EXIF and GPS intact | ✔ `messaging_provider.send.dart:140-153` sends the raw file bytes; no EXIF handling anywhere in `lib/` | Strip metadata before encryption (re-encode, as `profile_photos.dart` already does). Same check for videos |
+| A1 ✅ | The server reads every attachment's exact size: the 4-byte length prefix sits outside the encryption, so size rungs hide nothing | ✔ `frontend/lib/services/box/box_media_frame.dart:20`; callers `messaging_provider.box.dart:2288`, `box_sync.dart:206`, `profile_photos.dart:165` | Pad the plaintext before AES-GCM and put the length inside it. This is a wire change: receivers must read both forms for one release (shim window, see `2026-11-06-incident-0277-history-shim.md`) |
+| A2 ✅ | Chat photos are sent with EXIF and GPS intact | ✔ `messaging_provider.send.dart:140-153` sends the raw file bytes; no EXIF handling anywhere in `lib/` | Strip metadata before encryption (re-encode, as `profile_photos.dart` already does). Same check for videos |
 | A3 | Android writes message content to plaintext SharedPreferences when SQLCipher fails to open | ✔ `services/encryption/content_kv_opener_io.dart:95-100` (`CONTENT_STORE_FALLBACK`) | Fail closed: show an error and keep the content in memory only. Check the field rate of this diagnostic first |
 | A4 | Backups outlive the stated retention | ✔ prod `~/fireplace-backups`: 8 unencrypted `user*-hash-*.txt` files (old bcrypt hashes kept to undo temp-password writes, 10-08 to 10-21). `step5-archive-20261106T153338Z/` holds the dropped pre-box tables and messages (encrypted, local only, no end date). Offsite R2 holds 32 sets, the oldest from 2026-10-16; the pruning rule lives in Cloudflare, not in the repo | Owner OK, then delete the hash files. Set an end date for the step5 archive. Write the R2 lifecycle rule into `backup-db.sh` docs. `docs/METADATA.md` now states backup retention |
 | A5 | Some voice notes and video temp files are stored as plaintext | review: `playback_controller.dart:313-319` (fallback when the store is null), `video_temp_file_io.dart:9-16` (no startup sweep) | Remove the plaintext fallback; sweep the temp directory on start |
