@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:fireplace/l10n/app_localizations.dart';
 import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/providers/auth_provider.dart';
@@ -9,6 +11,7 @@ import 'package:fireplace/widgets/message/gif_message_content.dart';
 import 'package:fireplace/widgets/message/image_message_content.dart';
 import 'package:fireplace/widgets/message/text_message_content.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
@@ -270,19 +273,26 @@ void main() {
         final surfaceWidth = tester.getSize(surfaceFinder).width;
         // The text and its metadata share one Wrap: the time sits on the
         // text's line when it fits (it does in Inter), else on its own line.
-        final runFinder = find
-            .ancestor(of: textFinder, matching: find.byType(Wrap))
-            .first;
+        // Measure what the Wrap's children occupy, not the Wrap's own box: a
+        // bubble forced wide stretches the Wrap with it, but not its children
+        // (an incoming bubble aligns them at the start).
+        final run = tester.renderObject<RenderWrap>(
+          find.ancestor(of: textFinder, matching: find.byType(Wrap)).first,
+        );
+        var contentRight = 0.0;
+        for (var child = run.firstChild; child != null;) {
+          final data = child.parentData! as WrapParentData;
+          contentRight = math.max(
+            contentRight,
+            data.offset.dx + child.size.width,
+          );
+          child = data.nextSibling;
+        }
         expect(
           surfaceWidth,
-          closeTo(tester.getSize(runFinder).width + 32, 1),
+          closeTo(contentRight + 32, 1),
           reason:
               'The painted bubble should shrink-wrap the text run and its metadata plus padding.',
-        );
-        expect(
-          surfaceWidth,
-          lessThan(306),
-          reason: 'Painted bubble must not expand to the max bubble width.',
         );
       },
     );

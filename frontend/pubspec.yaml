@@ -163,7 +163,8 @@ flutter:
     # Plan C3: the only font faces the app uses (google_fonts finds them here
     # by file name, e.g. Inter-SemiBold.ttf), with their OFL licences. Runtime
     # fetching is off (main.dart), so a weight with no file here renders in
-    # the platform font: add its file before using a new weight.
+    # the platform font: add its file AND its weight to
+    # test/flutter_test_config.dart before using a new weight or family.
     - assets/google_fonts/
 
   # An image asset can refer to one or more resolution-specific "variants", see

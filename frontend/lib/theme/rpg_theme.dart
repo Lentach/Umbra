@@ -339,6 +339,9 @@ class RpgTheme {
     );
   }
 
+  /// Inter at [fontWeight]. Only w400–w800 are bundled (plan C3,
+  /// `assets/google_fonts/`); another weight renders in the platform font
+  /// until its file is added there and to `test/flutter_test_config.dart`.
   static TextStyle bodyFont({
     double fontSize = 14,
     Color color = textColor,
