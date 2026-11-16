@@ -1,6 +1,6 @@
 # Security and privacy hardening plan — native first
 
-**Date:** 2026-11-16 · **Status:** open; A1 and A2 done in `feat/media-a1-a2` (release 0.2.83) · **Source:** read-only review of `master` (`a12f850e`), 2026-11-11 to 2026-11-16 (five scoped code reviews plus direct checks).
+**Date:** 2026-11-16 · **Status:** open; A1 and A2 done (0.2.83, PR #249) · **Source:** read-only review of `master` (`a12f850e`), 2026-11-11 to 2026-11-16 (five scoped code reviews plus direct checks).
 
 `✔` = confirmed in code or on prod by the lead reviewer. `review` = found by a scoped reviewer and not yet re-checked. Re-verify before fixing: code wins over this file.
 
