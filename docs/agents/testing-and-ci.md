@@ -47,7 +47,12 @@ CI job).
 - `backend` — impact self-test, jest, backend count verifier, box import-graph checker
   `scripts/verify-box-imports.mjs` (I1), box integration suite against a Postgres service
   container, no-account-id log checker `scripts/verify-no-user-logs.mjs`, lint ratchet, knip.
-- `frontend` — analyze, flutter test, frontend count verifier.
+- `frontend` — analyze, Dart lint ratchet.
+- `frontend-tests` — `flutter test` split by DIRECTORY into 4 parallel legs (providers+root,
+  services, widgets+models+theme+web, screens+main+utils). Not `--total-shards`: it shards test
+  cases, so every leg still pays every file's compile/load. A new top-level `test/` dir must join
+  a leg or it never runs; `frontend-test-counts` then fails on the short sum.
+- `frontend-test-counts` — sums the 4 leg logs and checks them against root `CLAUDE.md`.
 - `session-lock` — Web Lock probe in headless Chrome.
 - `e2e-wire` — full-stack harness against a real backend + Postgres.
 - `e2e-isolated-probes` — the opt-in reset, enrolled-lock, encryption-proof and box round-trip

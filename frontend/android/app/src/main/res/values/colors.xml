@@ -7,6 +7,6 @@
     <!-- Hot Stone paper — the default theme scaffold (#F7F4F0). Pins the
          launch splash so it cannot follow OS dark mode (?android:colorBackground
          flashed dark before the light front door). Keep in sync with
-         RpgTheme.backgroundLight; guarded by test/utils/native_launch_background_test.dart. -->
+         RpgTheme.backgroundLight; guarded by test/utils/web_document_background_test.dart. -->
     <color name="hot_stone_paper">#F7F4F0</color>
 </resources>

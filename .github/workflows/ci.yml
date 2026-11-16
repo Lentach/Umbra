@@ -150,7 +150,7 @@ jobs:
         run: npm run knip -- --no-progress
 
   frontend:
-    name: Flutter analyze and tests
+    name: Flutter analyze
     runs-on: ubuntu-latest
 
     defaults:
@@ -181,17 +181,81 @@ jobs:
         working-directory: .
         run: node scripts/dart-lint-ratchet.mjs
 
-      # Single run, log captured by redirect rather than `| tee` so the step's exit
-      # status is Flutter's own and never depends on pipefail being set.
+  # WHY split: on 2026-11-16 the single `flutter test` step took 7m14s on a 4-core
+  # runner — the critical path of every run (backend finished in 2.5 min). ~60% of
+  # that is per-FILE compile/load (median file 2.5s regardless of its test count).
+  # Split by DIRECTORY, not `--total-shards`: that flag shards test CASES, so every
+  # leg still loads every file (measured: one of 4 shards took 165s locally vs 139s
+  # for the whole suite). Legs are balanced on per-file timings from 2026-11-16.
+  # A test file outside every leg never runs — but then the shard sum falls short of
+  # CLAUDE.md's count and `frontend-test-counts` goes red, so a new top-level test dir
+  # must be added to a leg here. Costs ~1 extra billable minute of Flutter setup per
+  # leg — watch the free-minute budget noted at the top of this file.
+  frontend-tests:
+    name: Flutter tests (${{ matrix.leg }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: providers
+            paths: test/providers test/*_test.dart
+          - leg: services
+            paths: test/services
+          - leg: widgets
+            paths: test/widgets test/models test/theme test/web
+          - leg: screens
+            paths: test/screens test/main test/utils
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version-file: frontend/pubspec.yaml
+          cache: true
+
+      - name: Install Flutter dependencies
+        run: flutter pub get
+
+      # Log captured by redirect rather than `| tee` so the step's exit status is
+      # Flutter's own and never depends on pipefail being set.
       - name: Run Flutter tests
-        run: flutter test > test-output.txt 2>&1 || { cat test-output.txt; exit 1; }
+        run: flutter test ${{ matrix.paths }} > test-output.txt 2>&1 || { cat test-output.txt; exit 1; }
 
       - name: Show Flutter test summary
         run: tail -1 test-output.txt
 
-      - name: Verify CLAUDE.md frontend test counts
-        working-directory: .
-        run: node scripts/verify-claude-frontend-test-counts.mjs --log frontend/test-output.txt
+      - name: Upload leg log
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-test-log-${{ matrix.leg }}
+          path: frontend/test-output.txt
+          retention-days: 1
+
+  frontend-test-counts:
+    name: Verify CLAUDE.md frontend test counts
+    needs: frontend-tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download shard logs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: flutter-test-log-*
+          path: logs
+
+      - name: Verify CLAUDE.md frontend test counts (sum of shards)
+        run: node scripts/verify-claude-frontend-test-counts.mjs $(for f in logs/*/test-output.txt; do printf -- '--log %s ' "$f"; done)
 
   # The ONLY automated check on the origin-wide Web Lock half of the E2E fix
   # (`fd89e7e`, 0.0.126). It has to be its own job because the guard lives in

@@ -1,3 +1,4 @@
+import 'package:fireplace/config/app_config.dart';
 import 'package:fireplace/l10n/app_localizations.dart';
 import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
@@ -149,5 +150,40 @@ void main() {
     await _pumpTile(tester, _row('see you tomorrow'));
 
     expect(find.text('see you tomorrow', findRichText: true), findsOneWidget);
+  });
+
+  testWidgets('tile shows note label instead of raw note URL', (tester) async {
+    // Own-origin note URL: whole trimmed content is one note link, so the tile
+    // preview must show the label, never the raw URL.
+    final noteUrl =
+        '${AppConfig.baseUrl}/note/0123456789abcdef0123456789abcdef#abcABC012_-';
+    await tester.pumpWidget(
+      _wrap(
+        ConversationTile(
+          conversationId: 10,
+          displayName: 'Alice',
+          lastMessage: MessageModel(
+            id: 1,
+            content: noteUrl,
+            senderId: 2,
+            senderUsername: 'alice',
+            conversationId: 10,
+            createdAt: DateTime.now(),
+          ),
+          onTap: () {},
+          onDelete: () {},
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      find.text('Anti-Quantum Note', findRichText: true),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('/note/', findRichText: true),
+      findsNothing,
+    );
   });
 }

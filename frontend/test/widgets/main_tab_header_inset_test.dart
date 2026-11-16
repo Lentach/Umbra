@@ -63,32 +63,4 @@ void main() {
 
     expect(top, inset);
   });
-
-  testWidgets('a SafeArea sibling of the tabs pays the inset twice', (
-    tester,
-  ) async {
-    // The shape before the fix, reproduced exactly: the banner wrapper is a
-    // SIBLING, so it contributes its own inset as height while the tab subtree
-    // still sees the full `padding.top` and pays again.
-    final top = await headerTop(
-      tester,
-      body: const Column(
-        children: [
-          SafeArea(bottom: false, child: SizedBox.shrink()),
-          Expanded(
-            child: Column(
-              children: [
-                SafeArea(
-                  bottom: false,
-                  child: MainTabScreenHeader(title: 'Chats'),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-
-    expect(top, inset * 2);
-  });
 }

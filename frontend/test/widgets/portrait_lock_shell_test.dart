@@ -94,4 +94,19 @@ void main() {
 
     expect(find.byType(PortraitRequiredOverlay), findsOneWidget);
   });
+
+  testWidgets('PortraitRequiredOverlay shows localized rotate message', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        locale: const Locale('pl'),
+        home: const PortraitRequiredOverlay(),
+      ),
+    );
+    expect(find.text('Obróć urządzenie'), findsOneWidget);
+    expect(find.textContaining('trybie pionowym'), findsOneWidget);
+  });
 }

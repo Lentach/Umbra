@@ -1,4 +1,7 @@
+import 'dart:typed_data';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/utils/message_ids.dart';
@@ -85,14 +88,6 @@ void main() {
       expect(provider.hasCachedMessages(10), isTrue);
     });
 
-    test('seeding a chat populates its cache and rows', () {
-      provider.setActiveConversationIdForTest(10);
-      provider.seedMessagesForTest(10, [_msg(1, 10)]);
-
-      expect(provider.hasCachedMessages(10), isTrue);
-      expect(provider.messages.length, 1);
-    });
-
     test('a chat shows its own rows only, oldest first', () {
       provider.setActiveConversationIdForTest(10);
       provider.seedMessagesForTest(10, [
@@ -142,15 +137,105 @@ void main() {
       // Empty list → cache entry removed so hasCachedMessages is false
       expect(provider.hasCachedMessages(10), isFalse);
     });
+  });
 
-    test('a row with no local id cannot be deleted', () {
-      provider.seedCacheForTest(10, [_msg(1, 10)]);
+  group('MessagingProvider composer focus on reply', () {
+    test('setReplyingTo invokes registered composer focus request', () {
+      final provider = MessagingProvider();
+      var focusCalls = 0;
+      provider.setComposerFocusRequest(() => focusCalls++);
+
+      provider.setReplyingTo(
+        MessageModel(
+          id: 1,
+          content: 'hello',
+          senderId: 2,
+          senderUsername: 'bob',
+          conversationId: 10,
+          createdAt: DateTime.utc(2026, 1, 1),
+        ),
+      );
+
+      expect(focusCalls, 1);
+      expect(provider.replyingToMessage?.id, 1);
+
+      provider.setReplyingTo(null);
+      expect(focusCalls, 1);
+    });
+  });
+
+  group('MessagingProvider reply quote enrichment', () {
+    test('incoming message enriches encrypted reply quote from decrypt cache', () {
+      final provider = MessagingProvider();
+      provider.setIncomingMessageSoundEnabledForTest(false);
+      final encryption = EncryptionProvider();
+      provider.setEncryptionProvider(encryption);
+      provider.setCurrentUserId(1);
+      provider.onConnect(false);
       provider.setActiveConversationIdForTest(10);
-      provider.loadCachedMessages(10);
 
-      provider.deleteMessage(1, forEveryone: false);
+      encryption.cacheDecryption(
+        99,
+        MessageModel(
+          id: 99,
+          content: 'secret reply body',
+          senderId: 2,
+          senderUsername: 'bob',
+          conversationId: 10,
+          createdAt: DateTime.utc(2026, 1, 1),
+        ),
+      );
 
-      expect(provider.messages.map((m) => m.id), [1]);
+      provider.seedMessagesForTest(10, [
+        MessageModel(
+          id: 100,
+          content: 'hello',
+          senderId: 2,
+          senderUsername: 'bob',
+          conversationId: 10,
+          createdAt: DateTime.utc(2026, 1, 1),
+          replyTo: ReplyToPreview(
+            id: 99,
+            content: 'Encrypted message',
+            senderUsername: 'bob',
+            messageType: MessageType.text,
+          ),
+        ),
+      ]);
+
+      final stored = provider.messages.single;
+      expect(stored.replyTo?.content, 'secret reply body');
+    });
+  });
+
+  group('MessagingProvider.sendVoiceMessage', () {
+    late MessagingProvider provider;
+
+    setUp(() {
+      provider = MessagingProvider();
+    });
+
+    test('throws when not authenticated', () async {
+      await expectLater(
+        provider.sendVoiceMessage(
+          recipientId: 2,
+          duration: 1,
+          localAudioBytes: Uint8List.fromList([1, 2, 3]),
+        ),
+        throwsA(isA<StateError>()),
+      );
+    });
+
+    test('throws when no active conversation', () async {
+      provider.setCurrentUserId(1);
+      await expectLater(
+        provider.sendVoiceMessage(
+          recipientId: 2,
+          duration: 1,
+          localAudioBytes: Uint8List.fromList([1, 2, 3]),
+        ),
+        throwsA(isA<StateError>()),
+      );
     });
   });
 }

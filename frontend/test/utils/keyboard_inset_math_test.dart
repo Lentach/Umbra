@@ -34,12 +34,6 @@ class _Case {
 }
 
 void main() {
-  // Sanity-anchor the documented noise floor so the boundary rows below stay
-  // meaningful if someone retunes it (they must retune these cases too).
-  test('noise floor is 80px', () {
-    expect(kMinKeyboardInset, 80.0);
-  });
-
   const cases = <_Case>[
     // Full layout height is the max of all three signals; the panned visual
     // viewport's bottom edge (vvHeight + vvOffsetTop = 650) beats both

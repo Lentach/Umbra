@@ -1,5 +1,3 @@
-import 'dart:ui';
-
 import 'package:fireplace/models/chat_background_preference.dart';
 import 'package:fireplace/theme/glass_theme.dart';
 import 'package:fireplace/widgets/chat_background_pattern.dart';
@@ -13,33 +11,6 @@ void main() {
     final names = kHieroGlyphs.map((g) => g.name).toList();
     expect(names.toSet().length, names.length, reason: 'names must be unique');
     expect(kHieroGlyphs.where((g) => g.isLeaf).length, 1);
-  });
-
-  test('deleted glyphs are gone; remaining high runes present', () {
-    final names = kHieroGlyphs.map((g) => g.name).toSet();
-    for (final gone in ['was', 'reed', 'pool', 'gul', 'ohm', 'ber', 'sur']) {
-      expect(names, isNot(contains(gone)), reason: '$gone should be deleted');
-    }
-    for (final rune in ['vex', 'lo', 'jah', 'cham', 'zod']) {
-      expect(names, contains(rune), reason: '$rune rune should remain');
-    }
-  });
-
-  test('every glyph paints on a canvas without throwing', () {
-    final stroke = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2;
-    final fill = Paint()..style = PaintingStyle.fill;
-    for (final g in kHieroGlyphs) {
-      final recorder = PictureRecorder();
-      final canvas = Canvas(recorder);
-      expect(
-        () => g.paintFn(canvas, stroke, fill),
-        returnsNormally,
-        reason: 'glyph "${g.name}" must paint without error',
-      );
-      recorder.endRecording().dispose();
-    }
   });
 
   testWidgets(

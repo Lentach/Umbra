@@ -1,8 +1,10 @@
 import 'package:fireplace/l10n/app_localizations.dart';
 import 'package:fireplace/screens/link_scan_screen.dart';
+import 'package:fireplace/widgets/link_qr_scanner.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 
 /// The full-screen scanner route has exactly four exits and pops exactly
 /// once. A ceremony screen acts on the popped value, so a route that pops
@@ -121,5 +123,40 @@ void main() {
     expect(results, hasLength(1), reason: 'a second pop would close the caller');
     expect(results.single, isA<LinkScanCode>());
     expect(tester.takeException(), isNull);
+  });
+
+  // The VM test host resolves the LinkQrScanner facade to the NATIVE impl
+  // (dart.library.io), where the host is neither Android nor iOS — i.e. the
+  // unsupported path, exactly what a desktop native build would hit.
+  // Falsification for the unsupported contract: an impl that mounted
+  // MobileScanner regardless, or never fired onUnsupported, fails below.
+  testWidgets('unsupported host renders nothing and reports it once', (
+    tester,
+  ) async {
+    final codes = <String>[];
+    var unsupportedCalls = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: LinkQrScanner(
+          onCode: codes.add,
+          onUnsupported: () => unsupportedCalls++,
+        ),
+      ),
+    );
+    // The widget mounts without throwing…
+    expect(find.byType(LinkQrScanner), findsOneWidget);
+    // …and after the first frame the unsupported callback has fired ONCE.
+    await tester.pump();
+    expect(unsupportedCalls, 1);
+    expect(codes, isEmpty);
+    // No camera pipeline was mounted.
+    expect(find.byType(MobileScanner), findsNothing);
+    // A rebuild does not re-report.
+    await tester.pump();
+    expect(unsupportedCalls, 1);
+  });
+
+  test('linkQrScanSupported answers false off Android/iOS', () async {
+    expect(await linkQrScanSupported(), isFalse);
   });
 }

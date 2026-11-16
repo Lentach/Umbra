@@ -2,14 +2,17 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:fireplace/models/message_model.dart';
+import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/services/box/box_frame.dart';
 import 'package:fireplace/services/media_crypto_service.dart';
+import 'package:fireplace/utils/message_ids.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 
 import '../support/box_send_harness.dart';
+import '../support/chat_seed.dart';
 import '../support/media_metadata_fixtures.dart';
 
 Map<String, dynamic> _envelopeOf(BoxFrame frame) =>
@@ -215,6 +218,80 @@ void main() {
       expect(file, containsPair('messageType', 'FILE'));
       expect(file, containsPair('content', 'plan.pdf'));
       expect(h.emitted, isEmpty);
+    });
+  });
+
+  // Opening a chat reads this device's records and nothing else (decision
+  // 99): a message of the old path is neither fetched nor shown, whatever
+  // plaintext of it is still on disk.
+  group('opening a chat (history)', () {
+    Future<void> store(int id, String text, {required String wire}) =>
+        h.encryption.store.saveDecryptedContent(
+          id,
+          {'content': text, 'senderId': 2},
+          conversationId: 10,
+          createdAt: DateTime.now().toUtc(),
+          wire: (senderId: 2, wireId: wire),
+        );
+
+    test('a chat shows its box messages and never a stored old-path record, '
+        'and asks the server for nothing', () async {
+      await store(77, 'old path', wire: 'wire-old');
+      await store(kFirstLocalMessageId + 1, 'over the box', wire: 'wire-box');
+
+      h.provider.getMessages(10);
+      await h.pump(80);
+
+      expect(h.provider.messages.map((m) => m.content), ['over the box']);
+      expect(h.emitted, isEmpty);
+    });
+  });
+
+  group('MessagingProvider media reply', () {
+    late MessagingProvider provider;
+    late ConversationsProvider conversations;
+
+    setUp(() {
+      provider = MessagingProvider();
+      conversations = ConversationsProvider();
+      seedConversations(conversations, [
+        {
+          'id': 10,
+          'userOne': {'id': 1, 'username': 'alice', 'tag': '0001'},
+          'userTwo': {'id': 2, 'username': 'bob', 'tag': '0002'},
+          'createdAt': '2026-01-01T00:00:00.000Z',
+          'unreadCount': 0,
+          'lastMessage': null,
+        },
+      ]);
+      provider.setConversationsProvider(conversations);
+      provider.setCurrentUserId(1);
+      provider.setToken('tok');
+      provider.onConnect(false);
+      conversations.openConversation(10);
+      provider.setReplyingTo(
+        MessageModel(
+          id: 42,
+          content: 'quoted text',
+          senderId: 2,
+          senderUsername: 'bob',
+          conversationId: 10,
+          createdAt: DateTime.utc(2026, 1, 1),
+        ),
+      );
+    });
+
+    test('sendImageMessage includes replyToMessageId in optimistic message', () async {
+      await provider.sendImageMessage(
+        XFile.fromData(Uint8List.fromList([1, 2, 3]), name: 'test.jpg'),
+        2,
+      );
+
+      final optimistic = provider.messages.last;
+      expect(optimistic.replyToMessageId, 42);
+      expect(optimistic.replyTo?.id, 42);
+      expect(optimistic.replyTo?.content, 'quoted text');
+      expect(provider.replyingToMessage, isNull);
     });
   });
 }

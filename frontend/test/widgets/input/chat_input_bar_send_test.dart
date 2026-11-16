@@ -9,6 +9,7 @@ import 'package:fireplace/widgets/emoji/fireplace_emoji_picker.dart';
 import 'package:fireplace/widgets/input/chat_input_bar.dart';
 import 'package:fireplace/widgets/input/composer_keyboard_signals.dart';
 import 'package:fireplace/utils/web_keyboard_inset.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
@@ -912,6 +913,55 @@ void main() {
     // Flush the picker's internal init timer; the assertions above already
     // proved the single-frame mount.
     await tester.pumpAndSettle();
+  });
+
+  // Owner ruling 2026-07-28 (bug 4): on mobile the virtual keyboard's action
+  // key inserts a NEWLINE — sending is the on-screen send button only.
+  // Desktop keeps TextInputAction.send + onSubmitted (plus the Ctrl/Cmd+Enter
+  // shortcuts). The platform branch keys off defaultTargetPlatform, which
+  // reflects the host OS on web too, so a phone PWA counts as mobile.
+  group('platform send key', () {
+    // NOTE: debugDefaultTargetPlatformOverride must be reset INSIDE each test
+    // body — the flutter_test binding verifies foundation debug variables
+    // before tearDown callbacks run, so a tearDown-only reset still fails with
+    // "value of a foundation debug variable was changed by the test".
+    // Leak insurance only: if a body throws before its own reset, this stops
+    // the override cascading into later tests (that test still fails).
+    tearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+    });
+
+    TextField field(WidgetTester tester) =>
+        tester.widget<TextField>(find.byType(TextField));
+
+    for (final platform in [TargetPlatform.android, TargetPlatform.iOS]) {
+      testWidgets('$platform: action key is newline and onSubmitted is absent',
+          (tester) async {
+        debugDefaultTargetPlatformOverride = platform;
+        await _pump(tester);
+
+        final f = field(tester);
+        expect(f.textInputAction, TextInputAction.newline);
+        expect(f.onSubmitted, isNull);
+        debugDefaultTargetPlatformOverride = null;
+      });
+    }
+
+    for (final platform in [
+      TargetPlatform.windows,
+      TargetPlatform.macOS,
+      TargetPlatform.linux,
+    ]) {
+      testWidgets('$platform: action key still sends', (tester) async {
+        debugDefaultTargetPlatformOverride = platform;
+        await _pump(tester);
+
+        final f = field(tester);
+        expect(f.textInputAction, TextInputAction.send);
+        expect(f.onSubmitted, isNotNull);
+        debugDefaultTargetPlatformOverride = null;
+      });
+    }
   });
 }
 

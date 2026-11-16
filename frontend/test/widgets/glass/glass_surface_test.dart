@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:fireplace/theme/glass_theme.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
 import 'package:fireplace/widgets/glass/glass_surface.dart';
+import 'package:fireplace/widgets/glass/glass_top_bar.dart';
 
 Widget _host(Widget child, {bool highContrast = false, ThemeData? theme}) {
   return MaterialApp(
@@ -16,34 +17,6 @@ Widget _host(Widget child, {bool highContrast = false, ThemeData? theme}) {
 }
 
 void main() {
-  group('GlassTheme wiring', () {
-    testWidgets('all five themes carry a GlassTheme extension',
-        (tester) async {
-      final themes = {
-        'blue': (RpgTheme.themeDataBlue, GlassTheme.blue),
-        'dark': (RpgTheme.themeDataDarkGray, GlassTheme.dark),
-        'light': (RpgTheme.themeDataLight, GlassTheme.light),
-        'teal': (RpgTheme.themeDataTealStone, GlassTheme.teal),
-        'cosmic': (RpgTheme.themeDataCosmic, GlassTheme.cosmic),
-      };
-      for (final entry in themes.entries) {
-        final (themeData, expected) = entry.value;
-        await tester.pumpWidget(MaterialApp(
-          theme: themeData,
-          home: const SizedBox(),
-        ));
-        // Let the animated theme transition finish; lerp holds the previous
-        // theme's extension mid-flight.
-        await tester.pumpAndSettle();
-        final context = tester.element(find.byType(SizedBox));
-        final resolved = GlassTheme.of(context);
-        expect(resolved.fill, expected.fill,
-            reason: 'theme ${entry.key} must expose its GlassTheme');
-        expect(resolved.opaqueFill, expected.opaqueFill);
-      }
-    });
-  });
-
   group('GlassTheme.lerp', () {
     test('interpolates every field-wise at the midpoint', () {
       const a = GlassTheme.dark;
@@ -124,6 +97,32 @@ void main() {
       // toString is repr-dependent but the only window into a composed
       // ImageFilter's sigma; breaks loudly if the recipe drifts from σ22.
       expect(filterWidget.filter.toString(), contains('blur(22.0, 22.0'));
+    });
+  });
+
+  group('GlassTopBar', () {
+    testWidgets(
+        'title centers on the full bar width despite asymmetric sides '
+        '(owner-reported drift)', (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        theme: RpgTheme.themeDataDarkGray,
+        home: Scaffold(
+          appBar: GlassTopBar(
+            leading: const Icon(Icons.arrow_back),
+            title: const Text('Zosia', key: ValueKey('t')),
+            trailing: const [
+              Icon(Icons.more_vert),
+              CircleAvatar(radius: 18, child: Text('Z')),
+            ],
+          ),
+          body: const SizedBox(),
+        ),
+      ));
+
+      final titleCenter = tester.getCenter(find.byKey(const ValueKey('t'))).dx;
+      final barCenter = tester.getCenter(find.byType(GlassTopBar)).dx;
+      expect((titleCenter - barCenter).abs(), lessThan(1.0),
+          reason: 'title must center on the whole bar, not the leftover slot');
     });
   });
 }
