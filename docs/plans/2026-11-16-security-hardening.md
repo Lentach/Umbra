@@ -44,7 +44,7 @@ Native apps (Android now, iOS next) become the product. **iOS is on hold (owner,
 - **D2:** an attacker with many IPs can fill the box's open band and request queues, which blocks new contacts (review: `box.constants.ts:85-110`, request queue 50 slots, drop-oldest).
 - **D3:** no route deletes a box attachment, so a "delete for everyone" attachment stays downloadable for 14 days (review: `box-media.controller.ts`).
 - **D4:** bcrypt cost 10 → Argon2id (already a dependency). Per-account login backoff.
-- **D5 ✅ (0.2.86):** gitleaks only in the local pre-commit hook; add it to CI. Done: `.github/workflows/secrets.yml` scans the whole history on every master push and PR (docs-only too, unlike `ci.yml`); the 27 historic findings, all dead or placeholders (the one real one, a contact-inbox key in a July summary, was rotated in 10f733d1; prod's key differs, checked 2026-11-16), are fingerprinted in `.gitleaksignore`.
+- **D5 ✅ (0.2.86):** gitleaks only in the local pre-commit hook; add it to CI. Done: `.github/workflows/secrets.yml` scans the whole history on every master push and PR (docs-only too, unlike `ci.yml`); the 20 historic findings over the full history, all dead or placeholders (the one real one, a contact-inbox key in a July summary, was rotated in 10f733d1; prod's key differs, checked 2026-11-16), are fingerprinted in `.gitleaksignore`.
 - **D6 ✅ (0.2.86):** dead plaintext `typing`/`recordingVoice` relay still in `chat-presence.service.ts` (review): delete it. Done: the service, its DTOs, `isUserOnline` and the client's `partnerTyping`/`partnerRecordingVoice` listeners are gone; no client since Phase 4 step 5 emitted either event.
 - **D7, web-only:** the CSP is report-only (✔ `infra/nginx/security-headers.conf:133`).
 
