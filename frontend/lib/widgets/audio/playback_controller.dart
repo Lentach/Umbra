@@ -260,7 +260,8 @@ class _PlaybackControllerState extends State<PlaybackController>
       await raf.close();
     }
     if (!SealedAudioCodec.hasMagic(head)) {
-      // Legacy plaintext cache file: exactly as before.
+      // Legacy plaintext cache file from an older build; the launch sweep
+      // (`sealPlainAudioCacheFiles`) seals it in place once the store opens.
       await _player.setFilePath(path);
       return true;
     }
@@ -272,10 +273,11 @@ class _PlaybackControllerState extends State<PlaybackController>
     return true;
   }
 
-  /// Downloads, decrypts, seals into the cache when the content store is
-  /// armed (plaintext fallback otherwise — same honest rule as the record
-  /// path), and starts playback from memory. Returns the cache path.
-  Future<String> _downloadCacheAndPlay(
+  /// Downloads, decrypts and starts playback from memory. The cache gets the
+  /// note only SEALED under the content store's key (hardening A5): with no
+  /// store to seal under nothing is written, and the next play downloads it
+  /// again. Returns the cache path, or null when nothing was cached.
+  Future<String?> _downloadCacheAndPlay(
     String url,
     BoxCiphertextSource? box,
   ) async {
@@ -310,16 +312,13 @@ class _PlaybackControllerState extends State<PlaybackController>
       }
     }
 
-    final store = NativeContentStore.instance;
-    final sealed = store == null ? null : await store.sealAudioBytes(plain);
-    await file.writeAsBytes(sealed ?? plain, flush: true);
-
-    if (sealed != null) {
-      await _player.setAudioBytes(plain);
-    } else {
-      await _player.setFilePath(file.path);
-    }
-    return file.path;
+    final cached = await AudioCacheStore.writeSealed(
+      file,
+      plain,
+      NativeContentStore.instance?.sealAudioBytes,
+    );
+    await _player.setAudioBytes(plain);
+    return cached ? file.path : null;
   }
 
   void _seekFromWaveformPosition(double localX, double width) {

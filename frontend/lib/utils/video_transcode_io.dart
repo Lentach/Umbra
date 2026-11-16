@@ -45,7 +45,9 @@ Future<Uint8List?> transcodeVideoToFit(Uint8List bytes) async {
       android: AndroidConfig(isSharedStorage: false),
       ios: IOSConfig(saveInGallery: false),
       video: Video(
-        videoName: 'umbra_tx_${DateTime.now().microsecondsSinceEpoch}.mp4',
+        videoName:
+            '${temp.transcodeOutputPrefix}'
+            '${DateTime.now().microsecondsSinceEpoch}.mp4',
         targetSizeMb: _kTargetSizeMb,
         // Re-encode a second time only when the first pass overshoots.
         twoPass: true,

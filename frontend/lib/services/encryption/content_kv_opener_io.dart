@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -112,6 +113,9 @@ Future<ContentKv> openEncryptedContentKv() async {
         audioResealer: resealAudioCacheFiles,
       );
       _unavailableRecorded = null;
+      // Once per launch (the open is memoized): voice notes an older build
+      // cached in the clear get sealed under the key just armed (A5).
+      unawaited(sealPlainAudioCacheFiles(store.sealAudioBytes));
       return store;
     } on ContentStoreUnavailable catch (e) {
       stage = e.stage;
