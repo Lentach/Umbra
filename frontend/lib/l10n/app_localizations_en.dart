@@ -2051,6 +2051,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get webPushOffLine => 'Notifications are off. Tap to turn them on.';
 
   @override
+  String get contentStoreFailedLine =>
+      'This device\'s encrypted storage could not be opened. Nothing was deleted or saved unencrypted. Tap to try again.';
+
+  @override
   String siblingSilentLine(String name) {
     return '“$name” has not been used for 30 days. Tap to decide.';
   }

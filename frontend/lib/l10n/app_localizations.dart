@@ -3608,6 +3608,12 @@ abstract class AppLocalizations {
   /// **'Powiadomienia są wyłączone. Dotknij, aby je włączyć.'**
   String get webPushOffLine;
 
+  /// No description provided for @contentStoreFailedLine.
+  ///
+  /// In pl, this message translates to:
+  /// **'Nie można otworzyć zaszyfrowanej pamięci tego urządzenia. Nic nie zostało usunięte ani zapisane bez szyfrowania. Dotknij, aby spróbować ponownie.'**
+  String get contentStoreFailedLine;
+
   /// No description provided for @siblingSilentLine.
   ///
   /// In pl, this message translates to:

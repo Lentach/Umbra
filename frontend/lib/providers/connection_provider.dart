@@ -128,7 +128,7 @@ class ConnectionProvider extends ChangeNotifier {
   bool _accountReady = false;
 
   /// Why the contact store could not open this session, or null when it did
-  /// (or none is wired). Surfaced by the loss screen (PR2.3).
+  /// (or none is wired). Read through [contactStoreFailed].
   String? _contactStoreUnavailable;
   String? get contactStoreUnavailableStage => _contactStoreUnavailable;
 
@@ -209,21 +209,7 @@ class ConnectionProvider extends ChangeNotifier {
       ..onPasscodeLockRevoke = () {
         _contactStore?.close();
       }
-      ..onPasscodeLockRestore = () async {
-        final uid = _currentUserId;
-        final store = _contactStore;
-        // Only a store the revoke closed is re-opened: Android never revokes
-        // (wrapping is web-only), so the restore finds it open and does no
-        // redundant re-read.
-        if (uid == null || store == null || store.isOpen) return;
-        await _openContactStore(uid);
-        // The store re-opened under the live socket: the lists read it again.
-        _friendsProvider?.onContactsChanged();
-        _conversationsProvider?.hydrateFromStore();
-        // A vault that booted locked left the box without a request queue.
-        _box?.storeOpened();
-        _refreshBoxDeviceLists();
-      }
+      ..onPasscodeLockRestore = _reopenContactStore
       // PR2.4: a phrase the user just enrolled gets a second wrap of the
       // contact-backup content key, so a device that lost its storage AND
       // its password can still open the backup. Fire-and-forget and
@@ -241,13 +227,15 @@ class ConnectionProvider extends ChangeNotifier {
   }
 
   /// Opens the contact store for [userId], diagnosing and surviving a
-  /// refusal: the server lists still fill the UI while the legacy path
-  /// exists. Retried on every connect (a locked web vault opens after the
-  /// unlock); the durable diag is written once per distinct stage so
-  /// reconnect churn cannot flood the 80-entry ring.
+  /// refusal: the session goes on with empty lists, and [contactStoreFailed]
+  /// puts the reason above the chat list. Retried on every connect (a locked
+  /// web vault opens after the unlock) and by [retryContactStore]; the
+  /// durable diag is written once per distinct stage so reconnect churn
+  /// cannot flood the 80-entry ring.
   Future<void> _openContactStore(int userId) async {
     final store = _contactStore;
     if (store == null) return;
+    final before = _contactStoreUnavailable;
     try {
       await store.open(userId);
       _contactStoreUnavailable = null;
@@ -259,6 +247,47 @@ class ConnectionProvider extends ChangeNotifier {
       }
       _contactStoreUnavailable = e.stage;
     }
+    if (_contactStoreUnavailable != before) notifyListeners();
+  }
+
+  /// Re-opens a contact store that is closed under a live session — a web
+  /// vault unlocked after a re-lock or a locked boot, or a store that would
+  /// not open ([retryContactStore]) — and lets everything that found it
+  /// closed read it again. An open store is left alone: Android never
+  /// revokes (wrapping is web-only), so an unlock there does no re-read.
+  Future<void> _reopenContactStore() async {
+    final uid = _currentUserId;
+    final store = _contactStore;
+    if (uid == null || store == null || store.isOpen) return;
+    await _openContactStore(uid);
+    if (!store.isOpen) return;
+    _friendsProvider?.onContactsChanged();
+    _conversationsProvider?.hydrateFromStore();
+    // A vault that booted locked left the box without a request queue.
+    _box?.storeOpened();
+    _refreshBoxDeviceLists();
+  }
+
+  /// The contact store would not open this session for a reason other than
+  /// a locked web vault (which the passcode gate already covers): on Android
+  /// that is the encrypted store failing closed (hardening plan A3), and the
+  /// lists are empty until it opens.
+  bool get contactStoreFailed =>
+      _contactStoreUnavailable != null && _contactStoreUnavailable != 'locked';
+
+  /// The chat list's "try again" for [contactStoreFailed]. The E2E init of
+  /// this connect read the same store, so it failed with it and is run again
+  /// once the store is open; before `socketReady` the connect runs it anyway.
+  Future<void> retryContactStore() async {
+    await _reopenContactStore();
+    final encryption = _encryptionProvider;
+    if (_contactStore?.isOpen != true ||
+        !_accountReady ||
+        encryption == null ||
+        encryption.isE2EReady) {
+      return;
+    }
+    await encryption.retryE2EInit();
   }
 
   /// True when [work] settles within [budget]; the timer is cancelled the
