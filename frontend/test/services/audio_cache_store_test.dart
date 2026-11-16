@@ -17,39 +17,37 @@ void main() {
 
   tearDown(() => dir.deleteSync(recursive: true));
 
-  group('writeSealed (hardening A5: no plaintext voice note on disk)', () {
-    test('with no content store, nothing is written', () async {
-      final written = await AudioCacheStore.writeSealed(target, plain, null);
+  test('with no content store, nothing is written (A5)', () async {
+    final written = await AudioCacheStore.writeSealed(target, plain, null);
 
-      expect(written, isFalse);
-      expect(dir.listSync(), isEmpty);
-    });
+    expect(written, isFalse);
+    expect(dir.listSync(), isEmpty);
+  });
 
-    test('a store that cannot seal leaves nothing on disk', () async {
-      final written = await AudioCacheStore.writeSealed(
-        target,
-        plain,
-        (_) async => null,
-      );
+  test('a store that cannot seal leaves nothing on disk', () async {
+    final written = await AudioCacheStore.writeSealed(
+      target,
+      plain,
+      (_) async => null,
+    );
 
-      expect(written, isFalse);
-      expect(dir.listSync(), isEmpty);
-    });
+    expect(written, isFalse);
+    expect(dir.listSync(), isEmpty);
+  });
 
-    test('a sealed note is written as the sealed bytes only', () async {
-      final written = await AudioCacheStore.writeSealed(
-        target,
-        plain,
-        (_) async => sealed,
-      );
+  test('a sealed note is written as the sealed bytes only', () async {
+    final written = await AudioCacheStore.writeSealed(
+      target,
+      plain,
+      (_) async => sealed,
+    );
 
-      expect(written, isTrue);
-      expect(target.readAsBytesSync(), sealed);
-      expect(
-        dir.listSync().map((e) => e.uri.pathSegments.last),
-        ['7.audio'],
-        reason: 'the temp file is renamed into place',
-      );
-    });
+    expect(written, isTrue);
+    expect(target.readAsBytesSync(), sealed);
+    expect(
+      dir.listSync().map((e) => e.uri.pathSegments.last),
+      ['7.audio'],
+      reason: 'the temp file is renamed into place',
+    );
   });
 }

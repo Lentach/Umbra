@@ -246,26 +246,18 @@ class _PlaybackControllerState extends State<PlaybackController>
     return file?.path;
   }
 
-  /// Plays a cached voice note, sealed or legacy-plain. False means the file
-  /// is unreadable (sealed, key gone) and the caller should re-download.
+  /// Plays a cached voice note, sealed or legacy-plain, always from memory:
+  /// the launch pass (`sealPlainAudioCacheFiles`) may rename a sealed copy
+  /// over a legacy file, and a player reading the path would then read
+  /// sealed bytes on its next seek. False means the file is unreadable
+  /// (sealed, key gone) and the caller should re-download.
   Future<bool> _playCachedFile(String path) async {
-    final file = File(path);
-    // Peek the header first: a legacy plaintext file plays via the zero-copy
-    // file path and must not be read into memory just to learn that.
-    final raf = await file.open();
-    Uint8List head;
-    try {
-      head = await raf.read(SealedAudioCodec.magicPeekLength);
-    } finally {
-      await raf.close();
-    }
-    if (!SealedAudioCodec.hasMagic(head)) {
-      // Legacy plaintext cache file from an older build; the launch sweep
-      // (`sealPlainAudioCacheFiles`) seals it in place once the store opens.
-      await _player.setFilePath(path);
+    final bytes = await File(path).readAsBytes();
+    if (!SealedAudioCodec.hasMagic(bytes)) {
+      // A plain note an older build cached, not sealed yet this launch.
+      await _player.setAudioBytes(bytes);
       return true;
     }
-    final bytes = await file.readAsBytes();
     final store = NativeContentStore.instance;
     final plain = store == null ? null : await store.unsealAudioBytes(bytes);
     if (plain == null) return false;

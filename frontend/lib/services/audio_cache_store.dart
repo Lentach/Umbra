@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:path_provider/path_provider.dart';
 
 /// Owns the on-disk cache of voice notes.
@@ -30,6 +30,45 @@ class AudioCacheStore {
     '$messageId.audio',
     '$messageId.m4a',
   ];
+
+  /// Suffix of the temp file every atomic replace writes first.
+  static const String _tmpSuffix = '.tmp';
+
+  /// Temp-file suffixes this cache leaves when a process dies between a
+  /// write and its rename: [_tmpSuffix], and `.reseal` from older builds'
+  /// rotation pass. Holds sealed bytes, but a purge must still take it.
+  static const List<String> _tempSuffixes = [_tmpSuffix, '.reseal'];
+
+  /// Whether [name] is a cached note (any id, current or legacy name).
+  static bool isNoteName(String name) =>
+      name.endsWith('.audio') || name.endsWith('.m4a');
+
+  /// Whether [name] is a temp file left by an interrupted [replaceAtomically].
+  static bool isTempName(String name) => _tempSuffixes.any(
+    (suffix) =>
+        name.endsWith(suffix) &&
+        isNoteName(name.substring(0, name.length - suffix.length)),
+  );
+
+  static Future<void> _tail = Future<void>.value();
+
+  /// Runs [action] alone against the cache. Purges, cache writes and both
+  /// seal passes (launch and rotation) read a file and then rename over it;
+  /// interleaved, a seal could rename a note back after a purge deleted it,
+  /// or seal it under a key a rotation had already passed over. Never nest.
+  static Future<T> exclusive<T>(Future<T> Function() action) {
+    final run = _tail.then((_) => action());
+    _tail = run.then<void>((_) {}, onError: (Object _) {});
+    return run;
+  }
+
+  /// Replaces [target] with [bytes] through a temp file and a rename, so a
+  /// reader never sees a half-written note. Call inside [exclusive].
+  static Future<void> replaceAtomically(File target, Uint8List bytes) async {
+    final tmp = File('${target.path}$_tmpSuffix');
+    await tmp.writeAsBytes(bytes, flush: true);
+    await tmp.rename(target.path);
+  }
 
   /// The cache directory, or null on web.
   static Future<Directory?> directory() async {
@@ -62,20 +101,21 @@ class AudioCacheStore {
   /// [seal] is the content store's `sealAudioBytes`, null when there is no
   /// store. No store, or a seal that answers null, writes nothing at all —
   /// the note plays from memory and the next play downloads it again.
-  /// Written to a `.part` file and renamed into place, so a reader (or the
-  /// startup sweep of legacy files) never sees a half-written note.
-  /// Returns whether [target] now holds the sealed note.
+  /// Sealed and written inside [exclusive], so the key it seals under is the
+  /// one a concurrent rotation will see. Returns whether [target] now holds
+  /// the sealed note.
   static Future<bool> writeSealed(
     File target,
     Uint8List plain,
     Future<Uint8List?> Function(Uint8List plain)? seal,
-  ) async {
-    final sealed = seal == null ? null : await seal(plain);
-    if (sealed == null) return false;
-    final part = File('${target.path}.part');
-    await part.writeAsBytes(sealed, flush: true);
-    await part.rename(target.path);
-    return true;
+  ) {
+    if (seal == null) return Future.value(false);
+    return exclusive(() async {
+      final sealed = await seal(plain);
+      if (sealed == null) return false;
+      await replaceAtomically(target, sealed);
+      return true;
+    });
   }
 
   /// Destroy the cached audio for [messageIds].
@@ -103,29 +143,44 @@ class AudioCacheStore {
       return ids;
     }
 
-    final failed = <int>{};
-    for (final id in ids) {
-      for (final name in fileNamesFor(id)) {
-        try {
-          final file = File('${dir.path}/$name');
-          if (file.existsSync()) await file.delete();
-        } catch (_) {
-          failed.add(id);
-        }
-      }
-    }
-    return failed;
+    return removeIn(dir, ids);
   }
+
+  /// [remove] against an explicit cache directory. Takes the notes' temp
+  /// files too, inside [exclusive] so no seal can rename a note back.
+  @visibleForTesting
+  static Future<Set<int>> removeIn(Directory dir, Iterable<int> ids) =>
+      exclusive(() async {
+        final failed = <int>{};
+        for (final id in ids) {
+          for (final note in fileNamesFor(id)) {
+            for (final name in [
+              note,
+              for (final suffix in _tempSuffixes) '$note$suffix',
+            ]) {
+              try {
+                final file = File('${dir.path}/$name');
+                if (file.existsSync()) await file.delete();
+              } on Object {
+                failed.add(id);
+              }
+            }
+          }
+        }
+        return failed;
+      });
 
   /// Destroy every cached voice note. Returns how many files were removed.
   static Future<int> clear() async {
     final dir = await directory();
     if (dir == null || !dir.existsSync()) return 0;
-    var deleted = 0;
-    await for (final entity in dir.list(recursive: true)) {
-      if (entity is File) deleted++;
-    }
-    await dir.delete(recursive: true);
-    return deleted;
+    return exclusive(() async {
+      var deleted = 0;
+      await for (final entity in dir.list(recursive: true)) {
+        if (entity is File) deleted++;
+      }
+      await dir.delete(recursive: true);
+      return deleted;
+    });
   }
 }
