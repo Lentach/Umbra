@@ -6,7 +6,5 @@ Future<String> writeVideoTempFile(Uint8List bytes, Object id) async => '';
 
 Future<void> deleteVideoTempFile(String? path) async {}
 
-Future<int> sweepStaleVideoTempFiles() async => 0;
-
 VideoPlayerController controllerForPath(String path) =>
     throw UnsupportedError('File-backed video playback is native-only');

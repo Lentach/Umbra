@@ -1895,9 +1895,10 @@ class EncryptionProvider extends ChangeNotifier {
 
     final disk = await _encryptionService.removeDecryptedContent(ids);
 
-    // Voice notes are cached DECRYPTED on native, keyed by the same message
-    // id. Purging them here rather than at the call sites means no caller can
-    // destroy a message's text and leave its audio readable — and that
+    // Voice notes are cached on native (sealed; older builds' plain copies
+    // until the launch pass seals them), keyed by the same message id.
+    // Purging them here rather than at the call sites means no caller can
+    // destroy a message's text and leave its audio behind — and that
     // directory is swept into iCloud / Android auto-backup.
     final failedAudio = await AudioCacheStore.remove(ids);
 
