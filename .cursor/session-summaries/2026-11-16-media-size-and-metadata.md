@@ -8,6 +8,10 @@
   - `decrypt` cuts the padding only at a well-formed trailer, so pre-A1 files read unchanged. No wire-shape change, so a 0.2.82 reader still decrypts.
   - Receiver cap: `maxCiphertextBytes` = `kBoxMediaTopRung − 4` (new const in `box_wire.dart`). The old `/media` path keeps `maxBytes + 16`.
   - `MediaCipher` seam added (webcrypto in the app, `PointyMediaCipher` in tests).
+- A1 follow-up, PR #250 (`BoxCatchUp.seal`, `MediaCryptoService.encryptFilled`, `filledPlaintextLength`):
+  - A1 had sealed sibling catch-up blobs with media padding. A 0.2.82 sibling `jsonDecode`s the decrypted blob as it is, so the zeros and the trailer made it return null.
+  - The result was `BOX_SYNC_UNREADABLE`, the catch-up marked done, and that history lost for good, whenever a 0.2.82 sibling returned from an absence of over 10 minutes and asked a 0.2.83 one.
+  - Catch-up blobs now fill their rung with JSON whitespace instead.
 - A2, new `utils/media_metadata.dart`:
   - `scrubImageMetadata`, lossless for JPEG/PNG/WebP. A JPEG keeps a one-entry Exif with its orientation; everything after EOI and MPF are dropped.
   - `scrubVideoMetadataInPlace` for MP4/MOV: `udta`, `meta` and XMP `uuid` boxes are zeroed and renamed `free`; the file keeps its exact size.
@@ -30,7 +34,7 @@
   - tests: `test/services/box/box_media_frame_test.dart`, `test/support/box_fakes.dart`, `test/providers/messaging_provider_media_send_test.dart`.
 
 ## Verification
-- CI: success 7/7 on `86168a18` (PR #249 head). The first run (`64f28f93`) failed only on the `CLAUDE.md` test-count gate.
+- CI: success 7/7 on `86168a18` (PR #249 head) and on `00623df9` (PR #250 head). The first run (`64f28f93`) failed only on the `CLAUDE.md` test-count gate. Master `a1392620`: 6/6 `ci.yml` + Analyze.
 - Local: full Flutter suite 3285 pass / 14 skip; Dart ratchet PASS (baseline 2494); `flutter analyze` clean on touched files.
 - Mutants: 10/10 killed. They removed the scrub on image or video, padding on encrypt, unpadding on decrypt, the zero check, the APP1 drop, the orientation segment, video zeroing, the post-EOI drop, and the MPF drop.
 - Device drive, local stack, web release build (Chrome) ↔ Android debug APK (Pixel_7):
@@ -38,13 +42,17 @@
   - **Android → web:** a gallery photo and video both show and play. The photo saved on web has no Exif or GPS and is pixel-identical.
   - **Server frames:** every new-build upload starts `rung − 4` (`0000fffc`, `00003ffc`) with no zero tail. A 0.2.82 sender's upload starts `0000670f`, the exact size, which is the leak A1 closes.
   - **Mixed versions:** a 0.2.82 web build (Chrome) shows the padded photo and plays the padded video; the new build shows the 0.2.82 sender's unpadded photo.
+- Catch-up fix:
+  - red-first test in `box_catch_up_test.dart`: the old reader's unchanged `decodeCatchUpPayload` returned null on the A1 blob and reads the fixed one; the size test holds;
+  - a probe in Chrome's real WebCrypto (throwaway Flutter web entrypoint, deleted): the blob fills its rung (prefix 4092 on 4 KiB), and a bare AES-GCM open plus a JSON parse (the 0.2.82 reader) succeeds.
+  - NOT driven between two linked devices: that needs an enrolled account, an old sibling and an absence of over 10 minutes, and the result shows only in the diagnostics.
 - NOT verified:
   - voice notes and documents sent to a pre-0.2.83 reader (it keeps the padding bytes on the end);
   - a padded file over 16 MiB to a pre-0.2.83 reader (refused: old cap 20 MiB + 16);
   - iOS; prod.
 
 ## Notes for next session
-- Next action: release 0.2.83 on the owner's go. Web via `deploy-web.ps1` from the main checkout; APK via `build-android.ps1`; set the VM `.env` `ANDROID_APK_*`, then `deploy-backend.sh`; take a backup first. Recipe: `2026-11-10-release-0282.md`.
+- Next action: release 0.2.83 on the owner's go, web and APK on the same day: a stale sibling build only ever gets padded media from the other build. Web via `deploy-web.ps1` from the main checkout; APK via `build-android.ps1`; set the VM `.env` `ANDROID_APK_*`, then `deploy-backend.sh`; take a backup first. Recipe: `2026-11-10-release-0282.md`.
 - Owner-owed:
   - the release go;
   - deleting the 8 plaintext hash files on the VM;
