@@ -1,0 +1,35 @@
+# gitleaks findings in HISTORY that are known and dead (plan D5, 2026-11-16).
+# Reviewed one by one: test JWTs and placeholder tokens, example JWT_SECRET
+# values in old deploy docs, the Firebase Android API key (public by design,
+# it ships in every APK), and CONTACT_INBOX_KEY in a July summary, rotated
+# and redacted in 10f733d1. A fingerprint names one commit, file, rule and
+# line, so a NEW finding is never covered by this file. Never add a live
+# secret here: rotate it, then add its fingerprint.
+
+0ae9e9956c9b19f60004eff0ee50832f8c302f16:.cursor/session-summaries/LATEST.md:generic-api-key:16
+250707332eec412d4e2b453c14f511738d1b2b7b:docs/futures/source-of-truth/2026-02-04-e2e-encryption-signal-protocol.md:generic-api-key:232
+250707332eec412d4e2b453c14f511738d1b2b7b:docs/plans/2026-02-04-chat-screen-redesign.md:curl-auth-header:2592
+250707332eec412d4e2b453c14f511738d1b2b7b:docs/plans/deployment-google-cloud.md:generic-api-key:177
+250707332eec412d4e2b453c14f511738d1b2b7b:docs/plans/deployment-oracle-cloud.md:generic-api-key:205
+250707332eec412d4e2b453c14f511738d1b2b7b:frontend/android/app/google-services.json:gcp-api-key:18
+250707332eec412d4e2b453c14f511738d1b2b7b:frontend/test/providers/auth_provider_session_test.dart:jwt:13
+2a70e3813e840a83f6fbf5927505af920345a577:.cursor/session-summaries/2026-07-22-session-inbox-extraction.md:generic-api-key:63
+2a70e3813e840a83f6fbf5927505af920345a577:.cursor/session-summaries/LATEST.md:generic-api-key:16
+5dde5614da995a614c6f8dc201c3ec937c21bf4e:frontend/test/providers/auth_boot_test.dart:jwt:13
+8d190f2ff890d967d3be82d390cf3c10622968e2:frontend/test/services/link_preview_service_test.dart:generic-api-key:136
+97212c1d198c9afd06f7fdcca68f7356c204b809:frontend/lib/utils/e2e_persistent_diag.dart:generic-api-key:22
+97212c1d198c9afd06f7fdcca68f7356c204b809:frontend/test/utils/e2e_persistent_diag_test.dart:generic-api-key:21
+97918a2cec41f68ef6256c5f56f222001396fee1:frontend/test/main/auth_gate_session_restore_test.dart:jwt:18
+9c7b67ad7efaa477da9fe3467fddc65748736b42:docs/futures/source-of-truth/2026-02-04-e2e-encryption-signal-protocol.md:generic-api-key:232
+9c7b67ad7efaa477da9fe3467fddc65748736b42:docs/plans/2026-02-04-chat-screen-redesign.md:curl-auth-header:2592
+9c7b67ad7efaa477da9fe3467fddc65748736b42:docs/plans/deployment-google-cloud.md:generic-api-key:177
+9c7b67ad7efaa477da9fe3467fddc65748736b42:docs/plans/deployment-oracle-cloud.md:generic-api-key:205
+9c7b67ad7efaa477da9fe3467fddc65748736b42:frontend/android/app/google-services.json:gcp-api-key:18
+9c7b67ad7efaa477da9fe3467fddc65748736b42:frontend/test/providers/auth_provider_session_test.dart:jwt:13
+fc6d408cf514f56ec2a7cc16f7f4000935b289dc:backend/src/secret-notes/secret-notes.controller.spec.ts:generic-api-key:16
+fdd3aa27c67c86ec62283b3d4d9c3691353c2118:docs/futures/source-of-truth/2026-02-04-e2e-encryption-signal-protocol.md:generic-api-key:232
+fdd3aa27c67c86ec62283b3d4d9c3691353c2118:docs/plans/2026-02-04-chat-screen-redesign.md:curl-auth-header:2592
+fdd3aa27c67c86ec62283b3d4d9c3691353c2118:docs/plans/deployment-google-cloud.md:generic-api-key:177
+fdd3aa27c67c86ec62283b3d4d9c3691353c2118:docs/plans/deployment-oracle-cloud.md:generic-api-key:205
+fdd3aa27c67c86ec62283b3d4d9c3691353c2118:frontend/android/app/google-services.json:gcp-api-key:18
+fdd3aa27c67c86ec62283b3d4d9c3691353c2118:frontend/test/providers/auth_provider_session_test.dart:jwt:13

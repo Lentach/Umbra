@@ -1,6 +1,6 @@
 # Security and privacy hardening plan — native first
 
-**Date:** 2026-11-16 · **Status:** open; A1 and A2 done (0.2.83, PRs #249/#250); A3 done (0.2.84); A5 done (0.2.85); A4 hash files and the step5 archive deleted; B1 and B2 dropped by the owner · **Source:** read-only review of `master` (`a12f850e`), 2026-11-11 to 2026-11-16 (five scoped code reviews plus direct checks).
+**Date:** 2026-11-16 · **Status:** open; A1 and A2 done (0.2.83, PRs #249/#250); A3 done (0.2.84); A5 done (0.2.85); C3, D1, D5, D6 done (0.2.86); A4 hash files and the step5 archive deleted; B1 and B2 dropped by the owner · **Source:** read-only review of `master` (`a12f850e`), 2026-11-11 to 2026-11-16 (five scoped code reviews plus direct checks).
 
 `✔` = confirmed in code or on prod by the lead reviewer. `review` = found by a scoped reviewer and not yet re-checked. Re-verify before fixing: code wins over this file.
 
@@ -35,17 +35,17 @@ Native apps (Android now, iOS next) become the product. **iOS is on hold (owner,
 |---|---|---|---|
 | C1 | The receiver loads a link preview's image straight from the sender's chosen host: a tracking pixel that reveals the receiver's IP and read time | ✔ `widgets/message/text_message_content.dart:191-202` | The sender fetches the image and sends it as encrypted media (what Signal does) |
 | C2 | The GIF picker sends search terms and IP to Giphy, on by default | ✔ `services/gif_service.dart:34`; `deploy-web.ps1` refuses builds without the key | Opt-in with a warning, or proxy through the backend |
-| C3 | Google Fonts are fetched at runtime on every platform | ✔ `theme/rpg_theme.dart:332,341`, `screens/auth_screen.dart:147`; no `allowRuntimeFetching` override | Bundle the font files and turn runtime fetching off |
+| C3 ✅ | Google Fonts are fetched at runtime on every platform | ✔ `theme/rpg_theme.dart:332,341`, `screens/auth_screen.dart:147`; no `allowRuntimeFetching` override | Done (0.2.86): the six faces the app draws (Inter 400–800, Archivo 900) ship in `frontend/assets/google_fonts/`, byte-identical to what google_fonts fetched (sha256 checked against the package), with their OFL licences; `main()` sets `allowRuntimeFetching = false`; the unused Press Start 2P style was deleted. A weight with no file renders in the platform font (`test/theme/bundled_fonts_test.dart`). Still open, web-only: the CanvasKit engine fetches its own fallback fonts (Noto, emoji) from fonts.gstatic.com |
 | C4 | **web-only:** link previews go through our server with the user's JWT, so the server sees the shared URLs | ✔ `messaging_provider.send.dart:756-761` | Retire with the PWA, or fetch through a non-authenticated path |
 
 ## 4. Tier D — server hardening
 
-- **D1, runtime dependencies (Dependabot, 2026-11-16):** `undici` (reachable via link previews) and `body-parser`/`qs` are in the production image. `proxy-addr` (critical on paper) does not apply because `trust proxy` is `1` (✔ `backend/src/main.ts:28`). `multer` is unused: remove it. The rest are dev or smoke tooling.
+- **D1 ✅ (0.2.86), runtime dependencies (Dependabot, 2026-11-16):** `undici` (reachable via link previews) and `body-parser`/`qs` are in the production image. `proxy-addr` (critical on paper) does not apply because `trust proxy` is `1` (✔ `backend/src/main.ts:28`). Done: undici 7.30.2 (direct, `^7.30.1`), body-parser 2.4.0, qs 6.17.1, @grpc/grpc-js 1.14.7, fast-xml-parser 5.12.1, proxy-addr 2.0.8, multer 2.5.0. multer cannot be removed: it is no direct dependency since 0.2.79 but `@nestjs/platform-express` requires it, so its `overrides` floor was raised to `^2.5.0`. In-range dev fixes went in too (handlebars, fast-uri, smol-toml, brace-expansion; smoke: undici, grpc-js, moment, fast-xml-parser). Left: deepmerge (no fix published), smoke's @azure/msal-node (fix is a major, pinned by artillery).
 - **D2:** an attacker with many IPs can fill the box's open band and request queues, which blocks new contacts (review: `box.constants.ts:85-110`, request queue 50 slots, drop-oldest).
 - **D3:** no route deletes a box attachment, so a "delete for everyone" attachment stays downloadable for 14 days (review: `box-media.controller.ts`).
 - **D4:** bcrypt cost 10 → Argon2id (already a dependency). Per-account login backoff.
-- **D5:** gitleaks only in the local pre-commit hook; add it to CI.
-- **D6:** dead plaintext `typing`/`recordingVoice` relay still in `chat-presence.service.ts` (review): delete it.
+- **D5 ✅ (0.2.86):** gitleaks only in the local pre-commit hook; add it to CI. Done: `.github/workflows/secrets.yml` scans the whole history on every master push and PR (docs-only too, unlike `ci.yml`); the 27 historic findings, all dead or placeholders (the one real one, a contact-inbox key in a July summary, was rotated in 10f733d1; prod's key differs, checked 2026-11-16), are fingerprinted in `.gitleaksignore`.
+- **D6 ✅ (0.2.86):** dead plaintext `typing`/`recordingVoice` relay still in `chat-presence.service.ts` (review): delete it. Done: the service, its DTOs, `isUserOnline` and the client's `partnerTyping`/`partnerRecordingVoice` listeners are gone; no client since Phase 4 step 5 emitted either event.
 - **D7, web-only:** the CSP is report-only (✔ `infra/nginx/security-headers.conf:133`).
 
 ## 5. Tier E — reliability before any public release

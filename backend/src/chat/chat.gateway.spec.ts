@@ -33,7 +33,6 @@ function createGateway(): ChatGateway {
     noop,
     noop,
     noop,
-    noop,
     devices as DevicesService,
     noop,
   );

@@ -6,17 +6,8 @@ part of '../messaging_provider.dart';
 // the call sits in a ChangeNotifier subclass body, not an extension) don't apply.
 // ignore_for_file: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
 
-/// Inbound indicators from stale clients' account sockets, and the local
-/// removal of messages and chats from this device.
+/// The local removal of messages and chats from this device.
 extension MessagingEvents on MessagingProvider {
-  void onPartnerTyping(dynamic data) {
-    _handlePartnerTyping(data);
-  }
-
-  void onPartnerRecordingVoice(dynamic data) {
-    _handlePartnerRecordingVoice(data);
-  }
-
   /// This device's copy of [conversationId] is gone: its stored plaintext,
   /// its rows and its last-message preview.
   void _clearChatLocally(int conversationId) {
@@ -137,30 +128,5 @@ extension MessagingEvents on MessagingProvider {
     if (lastMessages != null && lastMessages[conversationId]?.id == messageId) {
       _conversationsProvider?.updateLastMessage(conversationId, updated);
     }
-  }
-
-  void _handlePartnerTyping(dynamic data) {
-    final map = data as Map<String, dynamic>;
-    final conversationId = map['conversationId'] as int;
-    _typingStatus[conversationId] = true;
-    _typingTimers[conversationId]?.cancel();
-    _typingTimers[conversationId] = Timer(const Duration(seconds: 3), () {
-      _typingStatus[conversationId] = false;
-      _typingTimers.remove(conversationId);
-      notifyListeners();
-    });
-    notifyListeners();
-  }
-
-  void _handlePartnerRecordingVoice(dynamic data) {
-    final map = data as Map<String, dynamic>;
-    final conversationId = map['conversationId'] as int;
-    final isRecording = map['isRecording'] as bool? ?? false;
-    if (isRecording) {
-      _partnerRecordingVoice[conversationId] = true;
-    } else {
-      _partnerRecordingVoice.remove(conversationId);
-    }
-    notifyListeners();
   }
 }

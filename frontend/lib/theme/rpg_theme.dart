@@ -325,13 +325,6 @@ class RpgTheme {
   static Color surfaceColor(BuildContext context) =>
       isDark(context) ? boxBg : boxBgLight;
 
-  static TextStyle pressStart2P({
-    double fontSize = 10,
-    Color color = textColor,
-  }) {
-    return GoogleFonts.pressStart2p(fontSize: fontSize, color: color);
-  }
-
   /// App chrome (AppBar, main tab headers): matches `bodyFont` / list typography (Inter).
   static TextStyle screenHeaderTitle({
     required Color color,

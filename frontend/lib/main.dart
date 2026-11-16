@@ -3,6 +3,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'fcm_background_stub.dart'
     if (dart.library.io) 'services/android_fcm_local_notifications.dart'
@@ -45,6 +46,10 @@ import 'widgets/passcode_gate.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Plan C3: every font the app draws ships in `assets/google_fonts/`. A
+  // runtime fetch would ask fonts.gstatic.com for each face at first use,
+  // telling Google the device's IP and that it runs this app.
+  GoogleFonts.config.allowRuntimeFetching = false;
   await PortraitLockService.initialize();
   // Firebase + FCM background handler must be ready before [runApp] (native only).
   // Android auto-init from google-services can exist before Dart sees Firebase.apps.

@@ -1574,15 +1574,6 @@ class ConnectionProvider extends ChangeNotifier {
     _socketService.on('searchUsersResult', (data) {
       _friendsProvider?.onSearchUsersResult(data);
     });
-
-    // --- Typing events: inbound only, from a client that still relays them
-    // through the server (this build sends none on the account socket) ---
-    _socketService.on('partnerTyping', (data) {
-      _messagingProvider?.onPartnerTyping(data);
-    });
-    _socketService.on('partnerRecordingVoice', (data) {
-      _messagingProvider?.onPartnerRecordingVoice(data);
-    });
     _socketService
       ..on('serverTime', _onServerTime)
       // PR3.1: the answer to the box request-queue publish (`BoxSession`).

@@ -36,19 +36,6 @@ export function deviceRoom(userId: number, deviceId: number): string {
 }
 
 /**
- * Is this user connected on at least one socket?
- *
- * Replaces the old `onlineUsers.has(id)` presence check. Room occupancy is
- * multi-tab correct by construction: closing one of two tabs leaves the room
- * non-empty, whereas the old map could be cleared by whichever socket
- * happened to disconnect last.
- */
-export function isUserOnline(server: Server, userId: number): boolean {
-  const socketIds = server.sockets?.adapter?.rooms?.get(userRoom(userId));
-  return socketIds !== undefined && socketIds.size > 0;
-}
-
-/**
  * EVERY live socket of ONE device (spec §5.5 revocation kick): a kick must
  * reach every tab of the revoked device — leaving an older tab connected would
  * leave it able to send, which is exactly what revocation removes.

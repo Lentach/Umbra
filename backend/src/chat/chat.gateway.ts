@@ -14,7 +14,6 @@ import { Throttle } from '@nestjs/throttler';
 import { WsThrottlerGuard } from './guards/ws-throttler.guard';
 import { UsersService } from '../users/users.service';
 import { ChatKeyExchangeService } from './services/chat-key-exchange.service';
-import { ChatPresenceService } from './services/chat-presence.service';
 import { ChatSearchService } from './services/chat-search.service';
 import { ChatDeviceListService } from './services/chat-device-list.service';
 import { ChatProvisioningService } from './services/chat-provisioning.service';
@@ -42,7 +41,6 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private jwtService: JwtService,
     private usersService: UsersService,
     private chatKeyExchangeService: ChatKeyExchangeService,
-    private chatPresenceService: ChatPresenceService,
     private chatSearchService: ChatSearchService,
     private chatDeviceListService: ChatDeviceListService,
     private chatProvisioningService: ChatProvisioningService,
@@ -247,28 +245,6 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       return;
     }
     client.emit('messageHistory', { conversationId, messages: [] });
-  }
-
-  // ========== TYPING INDICATOR ==========
-
-  @SubscribeMessage('typing')
-  async handleTyping(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: any,
-  ): Promise<void> {
-    return this.chatPresenceService.handleTyping(client, data, this.server);
-  }
-
-  @SubscribeMessage('recordingVoice')
-  async handleRecordingVoice(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: any,
-  ): Promise<void> {
-    return this.chatPresenceService.handleRecordingVoice(
-      client,
-      data,
-      this.server,
-    );
   }
 
   // ========== KEY EXCHANGE HANDLERS (E2E Encryption) ==========
