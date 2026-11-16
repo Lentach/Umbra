@@ -11,7 +11,7 @@ End-to-end encrypted messenger built with Flutter and NestJS.
 
 - **End-to-end encryption** — Signal Protocol (X3DH + Double Ratchet) for all message types
 - **Real-time messaging** — Socket.IO with delivery receipts (SENDING -> SENT -> DELIVERED -> READ)
-- **Message types** — Text, Voice, Image, GIF (Giphy), File attachments, Ping
+- **Message types** — Text, Voice, Image, GIF (Giphy, opt-in), File attachments, Ping
 - **Disappearing messages** — configurable timer per conversation (default 24h)
 - **Friend system** — Discord-style username#tag, friend requests, block/unblock
 - **Reactions** — 6-emoji reaction picker, max one per user per message

@@ -2108,6 +2108,24 @@ abstract class AppLocalizations {
   /// **'Szukaj GIFów...'**
   String get gifSearchHint;
 
+  /// Plan C2: title of the question a GIF tap shows while GIF search is off. GIF search is off by default; nothing reaches Giphy before the user turns it on.
+  ///
+  /// In pl, this message translates to:
+  /// **'Włączyć GIF-y z Giphy?'**
+  String get gifConsentTitle;
+
+  /// Plan C2: what turning GIF search on reveals, and to whom. Must name Giphy, the search terms, the previews, the picked GIF and the IP address, and say where to turn it off.
+  ///
+  /// In pl, this message translates to:
+  /// **'Wyszukiwarka GIF-ów łączy się bezpośrednio z Giphy. Giphy zobaczy, czego szukasz, które GIF-y oglądasz i wybierasz oraz twój adres IP. Twoich wiadomości to nie dotyczy: wysłany GIF idzie zaszyfrowany jak zdjęcie, a odbiorca nie łączy się z Giphy. Wyłączysz to w Ustawienia → Prywatność i bezpieczeństwo.'**
+  String get gifConsentBody;
+
+  /// Plan C2: the button that turns GIF search on and opens the picker.
+  ///
+  /// In pl, this message translates to:
+  /// **'Włącz'**
+  String get gifConsentEnable;
+
   /// No description provided for @antiQuantumNoteTitle.
   ///
   /// In pl, this message translates to:
@@ -3739,6 +3757,18 @@ abstract class AppLocalizations {
   /// In pl, this message translates to:
   /// **'Działa tylko, gdy oboje je włączycie. Dotyczy czatów przeniesionych na nowe prywatne doręczanie.'**
   String get privacyReceiptsAndTypingSubtitle;
+
+  /// Privacy & Safety switch (plan C2): GIF search, which talks to Giphy directly. Device-local, default off.
+  ///
+  /// In pl, this message translates to:
+  /// **'Wyszukiwanie GIF-ów (Giphy)'**
+  String get privacyGifSearch;
+
+  /// One line under the switch: what Giphy sees while it is on; the GIF itself still goes end to end encrypted.
+  ///
+  /// In pl, this message translates to:
+  /// **'Giphy widzi, czego szukasz, i twój adres IP. Wysłany GIF jest szyfrowany jak zdjęcie.'**
+  String get privacyGifSearchSubtitle;
 
   /// Button/tooltip that opens the rename sheet for one device row ((lxxx) clause 1).
   ///

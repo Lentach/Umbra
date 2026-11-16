@@ -39,7 +39,7 @@ Lint conventions are recorded in `frontend/analysis_options.yaml` (relative impo
 ## 3. Dart defines and versioning
 
 - `BASE_URL`: `AppConfig.baseUrl`; dart-define wins, else `http://<browser-host>:3000`.
-- `GIPHY_API_KEY`: dart-define only — no embedded fallback; an empty key disables GIF search rather than shipping a committed key.
+- `GIPHY_API_KEY`: dart-define only — no embedded fallback; an empty key disables GIF search rather than shipping a committed key. GIF search is also opt-in per device (`SettingsProvider.gifSearch`, plan C2): `GifPickerSheet.show` asks before the picker opens, and every Giphy request starts in the picker (search, previews, `sendGif`'s download of the picked GIF) — never call `sendGif` with a Giphy URL from anywhere else.
 - `WEB_PUSH_VAPID_PUBLIC_KEY`: used by `PushService`; production build must pass the real public key. There is NO fallback — an empty define makes web-push subscribe fail loudly. The Docker web build (`frontend/Dockerfile`) does not pass it, so Docker-built web bundles have no web push at all.
 - `GIT_COMMIT`, `BUILD_TIME`: used by `AppVersionInfo`; local scripts load them via `scripts/version_dart_defines.ps1`.
 - App semver comes from `pubspec.yaml` through `package_info_plus`; it is not a dart-define.

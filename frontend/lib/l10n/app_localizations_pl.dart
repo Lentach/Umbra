@@ -1233,6 +1233,16 @@ class AppLocalizationsPl extends AppLocalizations {
   String get gifSearchHint => 'Szukaj GIFów...';
 
   @override
+  String get gifConsentTitle => 'Włączyć GIF-y z Giphy?';
+
+  @override
+  String get gifConsentBody =>
+      'Wyszukiwarka GIF-ów łączy się bezpośrednio z Giphy. Giphy zobaczy, czego szukasz, które GIF-y oglądasz i wybierasz oraz twój adres IP. Twoich wiadomości to nie dotyczy: wysłany GIF idzie zaszyfrowany jak zdjęcie, a odbiorca nie łączy się z Giphy. Wyłączysz to w Ustawienia → Prywatność i bezpieczeństwo.';
+
+  @override
+  String get gifConsentEnable => 'Włącz';
+
+  @override
   String get antiQuantumNoteTitle => 'Notatka antykwantowa';
 
   @override
@@ -2168,6 +2178,13 @@ class AppLocalizationsPl extends AppLocalizations {
   @override
   String get privacyReceiptsAndTypingSubtitle =>
       'Działa tylko, gdy oboje je włączycie. Dotyczy czatów przeniesionych na nowe prywatne doręczanie.';
+
+  @override
+  String get privacyGifSearch => 'Wyszukiwanie GIF-ów (Giphy)';
+
+  @override
+  String get privacyGifSearchSubtitle =>
+      'Giphy widzi, czego szukasz, i twój adres IP. Wysłany GIF jest szyfrowany jak zdjęcie.';
 
   @override
   String get devicesRenameAction => 'Zmień nazwę';

@@ -477,6 +477,9 @@
 
   "gifNoResults": "No GIFs found",
   "gifSearchHint": "Search GIFs...",
+  "gifConsentTitle": "Turn on GIFs from Giphy?",
+  "gifConsentBody": "GIF search connects straight to Giphy. Giphy will see what you search for, which GIFs you look at and pick, and your IP address. Your messages are not affected: a GIF you send goes encrypted like a photo, and the person who gets it never contacts Giphy. Turn it off in Settings → Privacy and Safety.",
+  "gifConsentEnable": "Turn on",
 
   "antiQuantumNoteTitle": "Anti-Quantum Note",
   "antiQuantumNoteHint": "Write your secret message...",
@@ -815,6 +818,8 @@
   "@privacyReceiptsAndTyping": {"description": "Privacy & Safety switch (metadata-privacy decision 62, E61c): read receipts, delivered ticks and typing on chats that moved to the box. Device-local, default off."},
   "privacyReceiptsAndTypingSubtitle": "Works only when you both turn it on. Applies to chats moved to the new private delivery.",
   "@privacyReceiptsAndTypingSubtitle": {"description": "One line under the switch: it is mutual (both sides must turn it on) and applies only to chats on the box (the new private delivery)."},
+  "privacyGifSearch": "GIF search (Giphy)",
+  "privacyGifSearchSubtitle": "Giphy sees what you search for and your IP address. A GIF you send is encrypted like a photo.",
   "devicesRenameAction": "Rename",
   "@devicesRenameAction": {
     "description": "Button/tooltip that opens the rename sheet for one device row ((lxxx) clause 1)."
