@@ -43,11 +43,17 @@ export class AuthController {
     );
   }
 
-  /** Exchange opaque refresh token for a fresh access JWT and renewed sliding session. */
+  /**
+   * Exchange an opaque refresh token for a fresh access JWT and the refresh
+   * token to keep: a new one when the body asks to `rotate` (plan B4).
+   */
   @Throttle({ default: { limit: 60, ttl: 60000 } })
   @Post('refresh')
   refresh(@Body() dto: RefreshBodyDto) {
-    return this.authService.refreshWithToken(dto.refresh_token);
+    return this.authService.refreshWithToken(
+      dto.refresh_token,
+      dto.rotate === true,
+    );
   }
 
   /** Revoke one refresh session (call on logout from this device). */

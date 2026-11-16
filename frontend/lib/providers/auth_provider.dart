@@ -153,11 +153,13 @@ class AuthProvider extends ChangeNotifier {
     AuthTokenStore? tokenStore,
     List<Duration>? tokenReadRetryDelays,
     ContactBackupService? contactBackup,
+    bool? rotateRefreshTokens,
   }) : _api = api ?? ApiService(baseUrl: AppConfig.baseUrl),
        _tokenReadRetryDelays =
            tokenReadRetryDelays ??
            const [Duration(seconds: 2), Duration(seconds: 5)],
-       _tokens = tokenStore ?? AuthTokenStore() {
+       _tokens = tokenStore ?? AuthTokenStore(),
+       _rotateRefreshTokens = rotateRefreshTokens ?? !kIsWeb {
     _contactBackup =
         contactBackup ??
         ContactBackupService(api: _api, tokens: _tokens);
@@ -171,6 +173,17 @@ class AuthProvider extends ChangeNotifier {
   final ApiService _api;
   final AuthTokenStore _tokens;
   final PushService _pushService = PushService();
+
+  /// Native asks every refresh to rotate the refresh token (plan B4). Web
+  /// does not: its tabs each hold the token in memory and would race each
+  /// other's rotations, and the PWA is frozen (plan section 0).
+  final bool _rotateRefreshTokens;
+
+  /// Whether the store holds [_refreshToken]. A refused write leaves the
+  /// previous token there, and the server ends a session whose token is two
+  /// rotations old: so until a write lands again, refreshes keep the token
+  /// they hold (no rotation) instead of moving further past the stored one.
+  bool _refreshPersisted = true;
 
   /// The server-held contact backup (metadata-privacy PR2.4). It lives here
   /// and nowhere else because the account PASSWORD is its door, and the
@@ -332,7 +345,7 @@ class AuthProvider extends ChangeNotifier {
     }
     _token = access;
     _refreshToken = refresh;
-    await _tokens.write(access: access, refresh: refresh);
+    _refreshPersisted = await _tokens.write(access: access, refresh: refresh);
     _restoreUserFromAccessJwt(access);
     onAccessTokenChanged?.call(access);
     // A fresher token for the SAME account: enough to flush an upload a 401
@@ -354,13 +367,16 @@ class AuthProvider extends ChangeNotifier {
       throw SessionRefreshInvalidException('No refresh token');
     }
 
+    // Decided once: every retry of [r] has to ask the same way, or a retry
+    // of a token the server already replaced reads as reuse.
+    final rotate = _rotateRefreshTokens && _refreshPersisted;
     Object? lastTransient;
     for (var attempt = 0; attempt < _refreshMaxAttempts; attempt++) {
       if (attempt > 0) {
         await Future<void>.delayed(_refreshRetryBaseDelay * attempt);
       }
       try {
-        final body = await _api.refreshSession(r);
+        final body = await _api.refreshSession(r, rotate: rotate);
         await _persistTokens(body);
         return;
       } on SessionRefreshInvalidException {
@@ -511,8 +527,9 @@ class AuthProvider extends ChangeNotifier {
   /// answer before any socket), it ends with the same notice the account
   /// socket's `deviceRevoked` gives, and hands the account over for its
   /// queues ([takeRevokedDeviceAccount]) — only while the install's stored
-  /// session is still the refused one: another tab that signed in meanwhile
-  /// holds a newer session, and the queues are no longer this decision's.
+  /// session is still the refused one (its stored token may be one rotation
+  /// behind, plan B4): another tab that signed in meanwhile holds a newer
+  /// session, and the queues are no longer this decision's.
   /// [access] names the account when no user is held yet (an expired saved
   /// access at boot).
   Future<void> _endRefusedSession(
@@ -532,7 +549,12 @@ class AuthProvider extends ChangeNotifier {
     // After the clear, which resets the status surface.
     _statusCode = AuthStatusCode.deviceRevoked;
     _isError = true;
-    if (userId != null && refused != null && stored.refresh == refused) {
+    final storedRefresh = stored.refresh;
+    if (userId != null &&
+        refused != null &&
+        storedRefresh != null &&
+        AuthTokenStore.refreshSessionOf(storedRefresh) ==
+            AuthTokenStore.refreshSessionOf(refused)) {
       _revokedDeviceAccount = userId;
     }
     notifyListeners();
@@ -656,7 +678,8 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
-  /// Proactively slides the sliding refresh session once per cold boot even
+  /// Proactively slides the sliding refresh session (on native it also
+  /// rotates its token, plan B4) once per cold boot even
   /// while the access JWT is still valid. Purpose: (1) the server-side
   /// `refresh_tokens.expires_at` becomes a daily per-device health signal
   /// (a device that stops sliding = storage loss/stale bundle candidate);

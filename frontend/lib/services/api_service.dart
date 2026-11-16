@@ -146,12 +146,23 @@ class ApiService {
     return data;
   }
 
-  Future<Map<String, dynamic>> refreshSession(String refreshToken) async {
+  /// [rotate]: the caller keeps the `refresh_token` that comes back, so the
+  /// server may replace the session's token with a new one (plan B4). The
+  /// caller must then send every retry of the same token with [rotate] too:
+  /// only a rotating client's retry of a replaced token is answered, any
+  /// other use of it ends the session.
+  Future<Map<String, dynamic>> refreshSession(
+    String refreshToken, {
+    bool rotate = false,
+  }) async {
     try {
       final response = await _httpClient.post(
         Uri.parse('$baseUrl/auth/refresh'),
         headers: _authJsonHeaders,
-        body: jsonEncode({'refresh_token': refreshToken}),
+        body: jsonEncode({
+          'refresh_token': refreshToken,
+          if (rotate) 'rotate': true,
+        }),
       ).timeout(_kAuthTimeout);
 
       final status = response.statusCode;

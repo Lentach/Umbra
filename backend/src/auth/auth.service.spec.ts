@@ -25,10 +25,7 @@ describe('AuthService', () => {
   let usersService: jest.Mocked<UsersService>;
   let jwtService: jest.Mocked<JwtService>;
   let refreshTokensService: jest.Mocked<
-    Pick<
-      RefreshTokensService,
-      'createToken' | 'consumeAndSlide' | 'revokeByPlain'
-    >
+    Pick<RefreshTokensService, 'createToken' | 'redeem' | 'revokeByPlain'>
   >;
   let devicesService: jest.Mocked<
     Pick<DevicesService, 'resolveLoginDeviceId' | 'isRevoked'>
@@ -68,7 +65,7 @@ describe('AuthService', () => {
           provide: RefreshTokensService,
           useValue: {
             createToken: jest.fn(() => Promise.resolve('mock_refresh_plain')),
-            consumeAndSlide: jest.fn(),
+            redeem: jest.fn(),
             revokeByPlain: jest.fn(() => Promise.resolve()),
           },
         },
@@ -372,23 +369,25 @@ describe('AuthService', () => {
   });
 
   describe('refreshWithToken', () => {
-    it('returns new access_token and slid refresh_token when refresh valid', async () => {
-      refreshTokensService.consumeAndSlide.mockResolvedValue({
+    it('returns a new access_token and the refresh token the session keeps', async () => {
+      refreshTokensService.redeem.mockResolvedValue({
         userId: 1,
         deviceId: 2,
+        refreshToken: 'rotated_refresh',
       });
       usersService.findById.mockResolvedValue(mockUser as User);
 
-      const result = await service.refreshWithToken('incoming_refresh');
+      const result = await service.refreshWithToken('incoming_refresh', true);
 
-      expect(refreshTokensService.consumeAndSlide).toHaveBeenCalledWith(
+      expect(refreshTokensService.redeem).toHaveBeenCalledWith(
         'incoming_refresh',
         expect.any(Function),
+        { rotate: true },
       );
       expect(usersService.findById).toHaveBeenCalledWith(1);
       expect(result).toEqual({
         access_token: 'mock_jwt_token',
-        refresh_token: 'incoming_refresh',
+        refresh_token: 'rotated_refresh',
       });
       // The reissued token keeps naming the SAME device: silently becoming
       // device 1 would hand this session another device's key namespace.
@@ -400,14 +399,19 @@ describe('AuthService', () => {
       });
     });
 
-    it('treats a session predating the device column as device 1', async () => {
-      refreshTokensService.consumeAndSlide.mockResolvedValue({
+    it('treats a session predating the device column as device 1, and rotates only when asked', async () => {
+      refreshTokensService.redeem.mockResolvedValue({
         userId: 1,
         deviceId: null,
+        refreshToken: 'legacy_refresh',
       });
       usersService.findById.mockResolvedValue(mockUser as User);
 
       await service.refreshWithToken('legacy_refresh');
+
+      expect(refreshTokensService.redeem.mock.calls[0][2]).toEqual({
+        rotate: false,
+      });
 
       // Read the recorded call rather than referencing the mocked method
       // again: an unbound method reference is the lint debt this file already
@@ -422,16 +426,17 @@ describe('AuthService', () => {
     // service's; what the AUTH service owes it is the predicate, reading a
     // session with no device column as device 1 (§8), like every other gate.
     it('hands the refresh token service a revoked-device predicate that reads a NULL device as device 1', async () => {
-      refreshTokensService.consumeAndSlide.mockResolvedValue({
+      refreshTokensService.redeem.mockResolvedValue({
         userId: 1,
         deviceId: 2,
+        refreshToken: 'r',
       });
       usersService.findById.mockResolvedValue(mockUser as User);
       devicesService.isRevoked.mockResolvedValueOnce(true);
 
       await service.refreshWithToken('r');
 
-      const isRevoked = refreshTokensService.consumeAndSlide.mock.calls[0][1];
+      const isRevoked = refreshTokensService.redeem.mock.calls[0][1];
       await expect(isRevoked(1, 2)).resolves.toBe(true);
       // Read off the recorded calls, not the method: `unbound-method`.
       expect(devicesService.isRevoked.mock.calls.at(-1)).toEqual([1, 2]);
@@ -440,7 +445,7 @@ describe('AuthService', () => {
     });
 
     it('does not issue a token when the refresh token service refuses the device', async () => {
-      refreshTokensService.consumeAndSlide.mockRejectedValue(
+      refreshTokensService.redeem.mockRejectedValue(
         new UnauthorizedException('Device revoked'),
       );
 
@@ -451,9 +456,10 @@ describe('AuthService', () => {
     });
 
     it('throws when user row missing after sliding refresh', async () => {
-      refreshTokensService.consumeAndSlide.mockResolvedValue({
+      refreshTokensService.redeem.mockResolvedValue({
         userId: 99,
         deviceId: 1,
+        refreshToken: 'r',
       });
       usersService.findById.mockResolvedValue(null);
 

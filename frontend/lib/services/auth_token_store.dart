@@ -92,6 +92,14 @@ class AuthTokenStore {
   static const String _accessKey = 'jwt_token';
   static const String _refreshKey = 'refresh_token';
 
+  /// The session a refresh token belongs to: its `<sessionId>.` prefix (plan
+  /// B4: a native session's token rotates on every refresh, its id stays),
+  /// or the whole token for one issued before 0.2.88.
+  static String refreshSessionOf(String refreshToken) {
+    final dot = refreshToken.indexOf('.');
+    return dot > 0 ? refreshToken.substring(0, dot) : refreshToken;
+  }
+
   /// The PR2.4 contact-backup content key, stored BESIDE the session and
   /// never in the `e2e_<uid>_` namespace.
   ///
@@ -194,12 +202,14 @@ class AuthTokenStore {
     }
   }
 
-  Future<void> write({required String access, required String refresh}) async {
+  /// False when storage refused the write, after a retry: the store then
+  /// holds the previous session, which a rotating caller must not move past.
+  Future<bool> write({required String access, required String refresh}) async {
     for (var attempt = 0; attempt < 2; attempt++) {
       try {
         await _writeOnce(access, refresh);
         await _leaveWakeSession(refresh);
-        return;
+        return true;
       } catch (_) {
         if (attempt == 0) {
           await Future<void>.delayed(const Duration(milliseconds: 150));
@@ -212,6 +222,7 @@ class AuthTokenStore {
     E2ePersistentDiag.record('AUTH_TOKEN_WRITE_FAILED', {
       'platform': _useSecure ? 'secure' : 'prefs',
     });
+    return false;
   }
 
   Future<void> _writeOnce(String access, String refresh) async {

@@ -33,7 +33,7 @@ The box has NO account on its path: it imports nothing from `auth/`, `users/`, `
 |---|---|
 | `NODE_ENV`, `PORT` | `production` changes logger, CORS, TypeORM sync. |
 | `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASS`, `DB_NAME` | Postgres; prod DB name is `chatdb`. |
-| `JWT_SECRET` | Required; validation requires at least 32 chars. Generate once, persist in the VM `.env` and encrypted backups, and copy the current valid value during host moves. Do not regenerate on normal deploy/recreate. If exposed, rotate after sticky-session refresh is deployed: `/auth/refresh` uses the opaque refresh-token hash, not the old access JWT signature, so valid sessions can silently obtain new access JWTs. |
+| `JWT_SECRET` | Required; validation requires at least 32 chars. Generate once, persist in the VM `.env` and encrypted backups, and copy the current valid value during host moves. Do not regenerate on normal deploy/recreate. If exposed, rotate after sticky-session refresh is deployed: `/auth/refresh` uses the opaque refresh-token hash, not the old access JWT signature, so valid sessions can silently obtain new access JWTs. It also keys refresh-token rotation (plan B4, `RefreshTokensService.successorOf`): after a change, a session caught between a rotation and its retry gets its successor derived again under the new value; every other session is unaffected, except a native install whose store refused its newest token (its next refresh presents a token the server no longer knows and it must sign in again). |
 | `ALLOWED_ORIGINS` | Required in prod. |
 | `MEDIA_BASE_URL`, `MEDIA_DIR` | Self-hosted media URLs and filesystem root. |
 | `MEDIA_X_ACCEL_REDIRECT` | Use only when nginx has matching internal media route. |

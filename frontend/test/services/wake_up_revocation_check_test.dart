@@ -157,6 +157,20 @@ void main() {
         expect(probed, ['RT-1', 'RT-2']);
       });
 
+      // Plan B4: a native session's token rotates on every refresh, up to
+      // several times a day. Keyed by the whole token, each rotation would
+      // reset the pacing and break decision 131's one check per day.
+      test('a rotation of the same session keeps its pacing', () async {
+        const session = '0b7e6c1a-5d0f-4c2e-9a51-3f6f2f1d9e10';
+        token = '$session.first-secret';
+        await check().run();
+
+        now = now.add(const Duration(hours: 3));
+        token = '$session.rotated-secret';
+        expect(await check().run(), WakeCheckOutcome.throttled);
+        expect(probed, hasLength(1));
+      });
+
       test('the stamp is written BEFORE the ask, so a check cut short still paces the next', () async {
         final release = Completer<SessionStanding>();
         final hung = RevokedWakeUpCheck(
@@ -241,6 +255,15 @@ void main() {
       expect(key, isNot(contains('RT-1')));
       expect(RevokedWakeUpCheck.sessionKey('RT-1'), key);
       expect(RevokedWakeUpCheck.sessionKey('RT-2'), isNot(key));
+
+      const session = '0b7e6c1a-5d0f-4c2e-9a51-3f6f2f1d9e10';
+      final rotating = RevokedWakeUpCheck.sessionKey('$session.a');
+      expect(RevokedWakeUpCheck.sessionKey('$session.b'), rotating);
+      expect(rotating, isNot(contains(session.substring(0, 8))));
+      expect(
+        RevokedWakeUpCheck.sessionKey('1f0e6c1a-5d0f-4c2e-9a51-3f6f2f1d9e10.a'),
+        isNot(rotating),
+      );
     });
 
     test('the state survives its own encoding, and anything else is nothing', () {
@@ -345,7 +368,7 @@ void main() {
       });
     });
 
-    test("it is the app's own refresh call: POST /auth/refresh with the refresh token and nothing else", () async {
+    test("it is the app's own refresh call: POST /auth/refresh with the refresh token, asking as a rotating client, and nothing else", () async {
       late http.Request seen;
       await ask((request) async {
         seen = request;
@@ -354,7 +377,10 @@ void main() {
 
       expect(seen.method, 'POST');
       expect(seen.url.toString(), 'https://umbra.test/auth/refresh');
-      expect(jsonDecode(seen.body), {'refresh_token': 'RT-1'});
+      // `rotate`: the stored token may be the one the app's refresh has just
+      // replaced; the server answers only a ROTATING client's use of it as a
+      // retry, and ends the session on any other (plan B4).
+      expect(jsonDecode(seen.body), {'refresh_token': 'RT-1', 'rotate': true});
       expect(seen.headers.keys.map((k) => k.toLowerCase()), ['content-type']);
     });
   });

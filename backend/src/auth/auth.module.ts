@@ -8,8 +8,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
 import { UsersModule } from '../users/users.module';
 import { RefreshTokensModule } from './refresh-tokens.module';
 import { KeyBundlesModule } from '../key-bundles/key-bundles.module';
-
-const DEV_JWT_SECRET = 'super-secret-dev-key';
+import { resolveJwtSecret } from './jwt-secret';
 
 @Module({
   imports: [
@@ -23,21 +22,11 @@ const DEV_JWT_SECRET = 'super-secret-dev-key';
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (configService: ConfigService) => {
-        const secret =
-          configService.get<string>('JWT_SECRET') || DEV_JWT_SECRET;
-        const isProd = configService.get('NODE_ENV') === 'production';
-        if (isProd && (!secret || secret === DEV_JWT_SECRET)) {
-          throw new Error(
-            'Production requires a strong JWT_SECRET. Do not use the dev fallback.',
-          );
-        }
-        return {
-          secret,
-          // Short-lived access JWT; long sessions use opaque refresh tokens (auth.service).
-          signOptions: { expiresIn: '24h' },
-        };
-      },
+      useFactory: (configService: ConfigService) => ({
+        secret: resolveJwtSecret(configService),
+        // Short-lived access JWT; long sessions use opaque refresh tokens (auth.service).
+        signOptions: { expiresIn: '24h' },
+      }),
     }),
   ],
   controllers: [AuthController],

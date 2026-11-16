@@ -113,6 +113,18 @@ void main() {
     expect(transientBoot.currentUser, isNotNull,
         reason: 'a transient storage fault must be invisible to the user');
     expect(transientBoot.currentUser!.username, username);
+    // Its boot slide rotates the refresh token (native, plan B4): the rotated
+    // one is what the outage below must leave untouched.
+    for (
+      var i = 0;
+      i < 200 && kv.data['refresh_token'] == persistedRefresh;
+      i++
+    ) {
+      await Future<void>.delayed(const Duration(milliseconds: 25));
+    }
+    final rotatedRefresh = kv.data['refresh_token'];
+    expect(rotatedRefresh, isNot(persistedRefresh),
+        reason: 'the boot slide rotates the token and stores the new one');
     transientBoot.dispose();
 
     // Reboot 2 — PERSISTENT storage fault: the boot concedes honestly,
@@ -129,7 +141,7 @@ void main() {
     expect(blindBoot.statusMessage, isNull);
     expect(blindBoot.lastSessionEndReason, isNull,
         reason: 'no session ended — nothing may claim one did');
-    expect(kv.data['refresh_token'], persistedRefresh,
+    expect(kv.data['refresh_token'], rotatedRefresh,
         reason: 'the stored refresh token survives the outage untouched');
     expect(
       E2ePersistentDiag.entries.any((e) => e.contains('AUTH_TOKENS_UNREADABLE')),

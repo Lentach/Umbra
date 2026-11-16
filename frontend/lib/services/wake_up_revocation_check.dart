@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
+import 'auth_token_store.dart';
+
 /// What `POST /auth/refresh` says about the session it was shown (decision
 /// 129, E130a).
 enum SessionStanding {
@@ -45,8 +47,9 @@ enum WakeCheckOutcome {
   stopFailed,
 }
 
-/// What a check remembers, per session. A new session (another refresh token)
-/// starts from nothing.
+/// What a check remembers, per session. A new session (another `<sessionId>.`
+/// prefix; for a token from before 0.2.88, another token) starts from
+/// nothing.
 class WakeCheckState {
   const WakeCheckState({required this.session, this.liveAtMs, this.attemptAtMs});
 
@@ -142,8 +145,12 @@ class RevokedWakeUpCheck {
   Future<WakeCheckOutcome>? _running;
 
   /// Names a session without being a credential: a prefix of its SHA-256.
+  /// A native session's token rotates on every refresh (plan B4) but keeps
+  /// its `<sessionId>.` prefix, so the key is taken over that prefix and the
+  /// pacing outlives a rotation. A token from before 0.2.88 has no prefix and
+  /// is keyed whole.
   static String sessionKey(String refreshToken) => sha256
-      .convert(utf8.encode(refreshToken))
+      .convert(utf8.encode(AuthTokenStore.refreshSessionOf(refreshToken)))
       .toString()
       .substring(0, 16);
 
@@ -222,6 +229,12 @@ class RevokedWakeUpCheck {
 /// reads only the status and, on a 401, the `message`; the tokens a 2xx
 /// carries are never read.
 ///
+/// It asks as a rotating client (`rotate: true`, plan B4), like the app does:
+/// the stored token may be the one the app's refresh has just replaced, and
+/// only a rotating client gets that answered as a retry. Shown the current
+/// token, the server rotates it, and the app's next refresh with the token it
+/// holds gets the same successor back.
+///
 /// `Device revoked` is the one answer that means revoked; any other 401 means
 /// the session is gone for another reason (not a revocation); every failure
 /// to get a clear answer is [SessionStanding.unknown].
@@ -236,7 +249,7 @@ Future<SessionStanding> probeSessionStanding({
         .post(
           Uri.parse('$baseUrl/auth/refresh'),
           headers: const {'Content-Type': 'application/json'},
-          body: jsonEncode({'refresh_token': refreshToken}),
+          body: jsonEncode({'refresh_token': refreshToken, 'rotate': true}),
         )
         .timeout(timeout);
     // A POST answers 201 Created (Nest's default), a 200 elsewhere: any 2xx is

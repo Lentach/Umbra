@@ -171,11 +171,16 @@ export class AuthService {
     };
   }
 
-  async refreshWithToken(refreshTokenPlain: string) {
-    const session = await this.refreshTokensService.consumeAndSlide(
+  /**
+   * [rotate]: the client keeps whatever `refresh_token` comes back, so the
+   * session's token can rotate (plan B4); without it the token stays.
+   */
+  async refreshWithToken(refreshTokenPlain: string, rotate = false) {
+    const session = await this.refreshTokensService.redeem(
       refreshTokenPlain,
       (userId, deviceId) =>
         this.devicesService.isRevoked(userId, deviceId ?? DEFAULT_DEVICE_ID),
+      { rotate },
     );
     const user = await this.usersService.findById(session.userId);
     if (!user) {
@@ -191,7 +196,7 @@ export class AuthService {
     };
     return {
       access_token: this.jwtService.sign(payload),
-      refresh_token: refreshTokenPlain,
+      refresh_token: session.refreshToken,
     };
   }
 
