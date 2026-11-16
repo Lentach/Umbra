@@ -20,8 +20,6 @@ void main() {
 
       final settings = SettingsProvider();
       // Constructor field default paints frame 1 before the async load lands.
-      // (No themeData assertion: building ThemeData pulls GoogleFonts, which
-      // fetches over the network under the test binding.)
       expect(settings.themePreference, 'light');
       expect(settings.themeMode, ThemeMode.light);
       // Let the async prefs load settle; still light.

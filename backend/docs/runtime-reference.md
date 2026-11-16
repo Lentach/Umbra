@@ -16,9 +16,9 @@ The box has NO account on its path: it imports nothing from `auth/`, `users/`, `
 
 ## Chat service map (§2)
 
-`chat-key-exchange`, `chat-presence`, `chat-search`, `chat-device-list`, `chat-device-revocation`, `chat-provisioning`. The old-path services (`chat-message`, `chat-friend-request`, `chat-conversation`, `chat-block`, `chat-reaction`, `chat-reaction-key`, `chat-validation`, `chat-link-preview`) were removed in Phase 4 step 5; `POST /messages/link-preview` lives in `src/link-preview/` (`LinkPreviewModule`).
+`chat-key-exchange`, `chat-search`, `chat-device-list`, `chat-device-revocation`, `chat-provisioning`. The old-path services (`chat-message`, `chat-friend-request`, `chat-conversation`, `chat-block`, `chat-reaction`, `chat-reaction-key`, `chat-validation`, `chat-link-preview`) were removed in Phase 4 step 5; `POST /messages/link-preview` lives in `src/link-preview/` (`LinkPreviewModule`).
 
-`ChatGateway` presence is room occupancy (`isUserOnline` in `chat/utils/user-room.ts`); the old `onlineUsers: Map<userId, socketId>` is retired.
+`ChatGateway` addresses users and devices by Socket.IO room (`chat/utils/user-room.ts`); the old `onlineUsers: Map<userId, socketId>` is retired. Since plan D6 (0.2.86) no handler asks whether a user is online: the plaintext `typing`/`recordingVoice` relay (`chat-presence`), its only caller, was deleted; typing travels inside E2E over the box.
 
 ## Docker (§3)
 
@@ -51,8 +51,8 @@ Disconnect needs no presence bookkeeping: Socket.IO drops the socket from `user:
 Source of truth is `chat.gateway.ts` (`@Throttle` per handler); this is an orientation summary of the handlers left after Phase 4 step 5.
 
 - Key-exchange, identity-reset/recovery, device-list/revocation and provisioning events carry explicit limits (10–60/15min; `getDeviceList` 300/15min; `searchUsers` 100/15min; `setRequestQueue` / `getOwnRequestQueues` 30/15min); `fetchPreKeyBundle` / `checkOwnKeyBundle` use the guard's global default (100/15min).
-- `typing`, `recordingVoice`, `uploadKeyBundle` have no `WsThrottlerGuard`.
-- The old chat events (`sendMessage`, `getMessages`, friends/blocks/reactions/…) have NO handler and no throttle row: an unknown event is unanswered silence. Their `WsThrottlerGuard` refusal-answer entries went with them.
+- `uploadKeyBundle` is the only handler without a `WsThrottlerGuard`.
+- `getMessages` stays only as a compatibility answer (an empty `messageHistory`, 300/15min). The other old chat events (`sendMessage`, friends/blocks/reactions/…) have NO handler and no throttle row: an unknown event is unanswered silence. Their `WsThrottlerGuard` refusal-answer entries went with them.
 
 ## WsThrottlerGuard tracker (§6)
 

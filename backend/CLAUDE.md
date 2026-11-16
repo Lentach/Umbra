@@ -28,7 +28,7 @@ Production backend deploy runs on the VM only: `cd ~/fireplace && ./deploy-backe
 - **The box is registered only when `BOX_ENABLED=true`** and imports nothing from `auth/`, `users/`, `chat/`, even transitively (I1, `scripts/verify-box-imports.mjs`, CI); contract `docs/contracts/wire.md` "Box"; suite `npm run test:int` (→ rt "Box module").
 - `main.ts` sets trust proxy, helmet, global `ValidationPipe({ whitelist:true })`, CORS, and listens on `PORT || 3000` at `0.0.0.0`.
 - Production logger omits debug/verbose. Production CORS is restricted to `ALLOWED_ORIGINS`; dev allows localhost/127.0.0.1/192.168/10.*.
-- `ChatGateway` authenticates Socket.IO with `handshake.auth.token`, rejects stale JWTs after password change, joins `user:<id>` AND `device:<userId>:<deviceId>` rooms, emits `socketReady`, and delegates event handlers. Presence is room occupancy; the `onlineUsers` map is retired. It handles ONLY key/device/identity/provisioning/revocation events, `searchUsers`, the request-queue events, `typing`/`recordingVoice`, `requestSessionRebuild` and `getServerTime`; an old-path event is simply unanswered.
+- `ChatGateway` authenticates Socket.IO with `handshake.auth.token`, rejects stale JWTs after password change, joins `user:<id>` AND `device:<userId>:<deviceId>` rooms, emits `socketReady`, and delegates event handlers. The `onlineUsers` map is retired. It handles ONLY key/device/identity/provisioning/revocation events, `searchUsers`, the request-queue events, `requestSessionRebuild`, `getServerTime` and the `getMessages` compatibility answer (an empty `messageHistory` for pre-0.2.76 clients); an old-path event (including `typing`/`recordingVoice`, removed by plan D6: typing travels inside E2E over the box) is simply unanswered.
 - Chat logic is split across `chat-*` services (full map → rt "Chat service map").
 - DTO validation uses `validateDto()` and class-validator decorators. Do not bypass it with ad hoc object checks. Exception: `src/box/` parses its frames with the strict exact-key parsers in `box-wire.ts` (`validateDto` keeps extras; I1).
 
@@ -65,10 +65,9 @@ Entities in `backend/src/**/*.entity.ts` define the dev schema (TypeORM `synchro
 ## 6. Socket.IO contracts and rate limits
 
 - Disconnect needs no presence bookkeeping: Socket.IO drops the socket from `user:<id>` itself, so the room empties only when the LAST tab goes (→ rt "Presence on disconnect").
-- `typing` / `recordingVoice` (`ChatPresenceService`) relay to a recipient that has a live socket after DTO validation, with no friend or block check and no database access (decision 126: a block is device-only).
 - `getDeviceList` / `getDeviceLists` answer ONLY the caller's own user id; any other id is silence (`[device-list] REFUSED reason=not_entitled`), with no friendship or conversation lookup.
 - `searchUsers` and `fetchPreKeyBundle` stay by-id/handle oracles for any authenticated caller (rate-limited); with `BOX_ENABLED` off `searchUsers` serves no device or list.
-- Gateway throttles are source-truth in `chat.gateway.ts` (summary → rt "Gateway throttles"). `typing`, `recordingVoice` and several others are not throttled.
+- Gateway throttles are source-truth in `chat.gateway.ts` (summary → rt "Gateway throttles"). `uploadKeyBundle` is the only handler with no throttle.
 - Throttle trackers: user id on an authenticated socket, else the nginx `X-Real-IP` (`common/client-ip.ts`), else `handshake.address` — never `handshake.address` first, never X-Forwarded-For. `/box` uses its own `BoxThrottlerGuard` (→ rt "WsThrottlerGuard tracker").
 - **`@nestjs/throttler` must stay ≥ 6.7.0**; pinned by `ws-throttler.guard.spec.ts` (→ rt "@nestjs/throttler version floor").
 

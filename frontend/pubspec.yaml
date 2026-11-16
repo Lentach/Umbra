@@ -6,7 +6,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 
 # App version: semver only (0.0.1, 0.0.2, 0.0.3, …). Bump PATCH by +1 on each release (see root CLAUDE.md §5).
 # Do not add a +suffix here — that is Flutter build metadata, not our user-visible version.
-version: 0.2.85
+version: 0.2.86
 
 environment:
   sdk: ^3.10.7
@@ -160,6 +160,11 @@ flutter:
     - assets/sounds/
     - assets/icon/
     - assets/giphy/
+    # Plan C3: the only font faces the app uses (google_fonts finds them here
+    # by file name, e.g. Inter-SemiBold.ttf), with their OFL licences. Runtime
+    # fetching is off (main.dart), so a weight with no file here renders in
+    # the platform font: add its file before using a new weight.
+    - assets/google_fonts/
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

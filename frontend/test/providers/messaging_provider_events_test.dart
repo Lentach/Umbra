@@ -1,4 +1,3 @@
-import 'package:fake_async/fake_async.dart';
 import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
@@ -131,41 +130,6 @@ void main() {
         {10},
       ]);
     });
-  });
-
-  group('typing indicators', () {
-    test(
-      'onPartnerTyping sets the flag and expires after the timer window',
-      () {
-        fakeAsync((async) {
-          provider.onPartnerTyping({'conversationId': 10});
-          expect(provider.isPartnerTyping(10), isTrue);
-
-          async.elapse(const Duration(seconds: 2, milliseconds: 900));
-          expect(
-            provider.isPartnerTyping(10),
-            isTrue,
-            reason: 'flag must survive until the 3s window elapses',
-          );
-
-          async.elapse(const Duration(milliseconds: 200));
-          expect(provider.isPartnerTyping(10), isFalse);
-        });
-      },
-    );
-
-    test(
-      'typing in another conversation does not leak into the active one',
-      () {
-        fakeAsync((async) {
-          provider.onPartnerTyping({'conversationId': 99});
-          expect(provider.isPartnerTyping(10), isFalse);
-          expect(provider.isPartnerTyping(99), isTrue);
-          async.elapse(const Duration(seconds: 4));
-          expect(provider.isPartnerTyping(99), isFalse);
-        });
-      },
-    );
   });
 
   group('no account-socket indicators', () {

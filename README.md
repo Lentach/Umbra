@@ -120,12 +120,11 @@ State management uses 7 ChangeNotifier providers, orchestrated by ConnectionProv
 
 ### Backend Services
 
-ChatGateway delegates to 6 focused domain services:
+ChatGateway delegates to 5 focused domain services:
 
 | Service | Responsibility |
 |---|---|
 | ChatKeyExchangeService | Upload key bundles, fetch pre-keys |
-| ChatPresenceService | Typing indicators, voice recording relay |
 | ChatSearchService | User search |
 | ChatDeviceListService | Signed device lists |
 | ChatDeviceRevocationService | Device revocation |
@@ -168,7 +167,7 @@ Frontend (61 widget tests):
     |   +-- secret-notes/      # Anti-Quantum one-time notes
     |   +-- chat/
     |       +-- chat.gateway.ts      # WebSocket entry point (thin delegation)
-    |       +-- services/            # 6 focused domain services
+    |       +-- services/            # 5 focused domain services
     |       +-- dto/                 # Validated request DTOs
     |       +-- mappers/             # Payload serialization
     +-- frontend/lib/
