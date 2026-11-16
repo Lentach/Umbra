@@ -32,7 +32,7 @@
 
 ## Verification
 - CI: success on `4e8f89df` (12/12) and on `18c2684a` (11/11 master, the deployed sha).
-- Red first: with the old purge and seal behaviour behind the new `removeIn` seam, the purge-race, temp-purge and stale-temp tests failed. The picker-copy test was not run against the old sweep.
+- Red first: with the old purge and seal behaviour behind the new `removeIn` seam, the purge-race, temp-purge and stale-temp tests failed. The picker-copy scenario, run afterwards against the old sweep (`db198a82`'s `sweepVideoTempDirs`, in a throwaway test since deleted), failed on behaviour: both copies were left.
 - Full suite 3292 pass / 14 skip after the rebase. Dart lint ratchet PASS, 2486 → 2481, floor lowered.
 - `integration_test/native_content_store_device_test.dart` on the emulator: 8/8 (it had not been run for A3 or A5 before).
 - Debug drive (local stack, web peer):
