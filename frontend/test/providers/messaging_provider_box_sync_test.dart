@@ -204,6 +204,9 @@ class _XorCrypto extends MediaCryptoService {
   }
 
   @override
+  Future<EncryptedMedia> encryptFilled(Uint8List filled) => encrypt(filled);
+
+  @override
   Future<Uint8List> decrypt(
     Uint8List ciphertext,
     String keyB64,

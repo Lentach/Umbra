@@ -197,7 +197,7 @@ extension MessagingBoxSync on MessagingProvider {
         _e2eFlowLog('BOX_SYNC_NOTHING', {'device': device});
         return;
       }
-      final sealed = await boxCatchUp.crypto.encrypt(
+      final sealed = await boxCatchUp.seal(
         encodeCatchUpPayload(user, records),
       );
       final Uint8List id;

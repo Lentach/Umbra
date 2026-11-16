@@ -1,11 +1,16 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:fireplace/services/backup/history_backup_service.dart';
 import 'package:fireplace/services/box/box_catch_up.dart';
+import 'package:fireplace/services/box/box_media_frame.dart';
+import 'package:fireplace/services/media_crypto_service.dart';
 import 'package:fireplace/services/plaintext_record_codec.dart';
 import 'package:fireplace/utils/e2e_envelope.dart';
 import 'package:fireplace/utils/message_ids.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import '../../support/box_fakes.dart';
 
 void main() {
   final now = DateTime.utc(2026, 10, 16, 12);
@@ -148,6 +153,57 @@ void main() {
           BoxCatchUpEnvelope.parseResponse(jsonEncode(broken)),
           isNull,
           reason: '$broken',
+        );
+      }
+    });
+  });
+
+  group('a catch-up blob sealed by this build (plan A1)', () {
+    final cipher = PointyMediaCipher();
+    final catchUp = BoxCatchUp(crypto: MediaCryptoService(cipher: cipher));
+
+    Uint8List payloadOf(int records) => encodeCatchUpPayload(1, {
+      for (var i = 1; i <= records; i++)
+        '${HistoryBackupService.recordPrefix(1)}${kFirstLocalMessageId + i}':
+            jsonEncode({
+              'content': 'x' * 40,
+              PlaintextRecordCodec.createdAtKey: 1000 + i,
+              PlaintextRecordCodec.wireIdKey: 'wire-$i',
+              PlaintextRecordCodec.wireSenderKey: 2,
+            }),
+    });
+
+    test(
+      'still reads on a 0.2.82 sibling, which parses the decrypted bytes as '
+      'they are; this build reads it too',
+      () async {
+        final sealed = await catchUp.seal(payloadOf(3));
+        final body = unframeMedia(frameMediaToRung(sealed.ciphertext))!;
+        final key = base64Decode(sealed.keyBase64);
+        final iv = base64Decode(sealed.ivBase64);
+
+        // 0.2.82 opens the blob with the bare cipher: it knows no padding.
+        final old = await cipher.open(key, iv, body);
+        expect(decodeCatchUpPayload(1, old), hasLength(3));
+
+        final current = await catchUp.crypto.decrypt(
+          body,
+          sealed.keyBase64,
+          sealed.ivBase64,
+        );
+        expect(decodeCatchUpPayload(1, current), hasLength(3));
+      },
+    );
+
+    test('the server sees its rung, never the history size', () async {
+      for (final records in [1, 40]) {
+        final framed = frameMediaToRung(
+          (await catchUp.seal(payloadOf(records))).ciphertext,
+        );
+        expect(
+          ByteData.sublistView(framed).getUint32(0),
+          framed.length - 4,
+          reason: '$records records',
         );
       }
     });

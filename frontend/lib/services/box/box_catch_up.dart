@@ -11,6 +11,7 @@ import '../backup/history_backup_service.dart';
 import '../encryption_service.dart' show WireKey;
 import '../media_crypto_service.dart';
 import '../plaintext_record_codec.dart';
+import 'box_media_frame.dart';
 import 'box_wire.dart';
 
 /// How often a device on the box stamps that it is (decision 102): the
@@ -316,6 +317,20 @@ class BoxCatchUp {
     : crypto = crypto ?? MediaCryptoService();
 
   final MediaCryptoService crypto;
+
+  /// [payload] ([encodeCatchUpPayload]) sealed for the box, padded with
+  /// JSON whitespace to fill its rung (plan A1): the server sees the rung,
+  /// never how much history went, and a 0.2.82 sibling, which parses the
+  /// decrypted bytes as they are and knows no media padding, still reads
+  /// it. Media padding's zeros would break that parse, and the history
+  /// would be lost.
+  Future<EncryptedMedia> seal(Uint8List payload) {
+    final filled = Uint8List(filledPlaintextLength(payload.length))
+      ..setRange(0, payload.length, payload);
+    return crypto.encryptFilled(
+      filled..fillRange(payload.length, filled.length, 0x20),
+    );
+  }
 
   Timer? _heartbeat;
   bool _ticking = false;

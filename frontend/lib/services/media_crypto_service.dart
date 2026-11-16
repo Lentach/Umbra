@@ -97,6 +97,26 @@ class MediaCryptoService {
     );
   }
 
+  /// [filled] sealed as it is: its caller already padded it to fill a rung
+  /// with bytes its own readers ignore ([filledPlaintextLength]), as a
+  /// catch-up blob does so a 0.2.82 sibling still reads it. Throws
+  /// [ArgumentError] unless it fills a rung exactly.
+  Future<EncryptedMedia> encryptFilled(Uint8List filled) async {
+    if (!kBoxMediaLadder.contains(filled.length + 4 + kMediaGcmTagBytes)) {
+      throw ArgumentError.value(
+        filled.length,
+        'filled',
+        'does not fill a media rung',
+      );
+    }
+    final sealed = await _cipher.sealFresh(filled);
+    return EncryptedMedia(
+      ciphertext: sealed.ciphertext,
+      keyBase64: base64.encode(sealed.key),
+      ivBase64: base64.encode(sealed.iv),
+    );
+  }
+
   /// The file [ciphertext] holds, its padding removed; a file sealed before
   /// A1 (no padding) comes back as it was.
   Future<Uint8List> decrypt(
