@@ -90,6 +90,7 @@ class SettingsProvider extends ChangeNotifier {
     _loadAutoplayVideos();
     _loadKeyChangeWarnings();
     unawaited(_loadReceiptsAndTyping());
+    unawaited(_loadGifSearch());
   }
 
   Future<void> _loadLocalePreference() async {
@@ -210,6 +211,32 @@ class SettingsProvider extends ChangeNotifier {
   }
 
   static const String _receiptsAndTypingKey = 'receipts_and_typing';
+
+  /// GIF search (plan C2): the picker talks to Giphy directly, so Giphy sees
+  /// the searches, the picked GIF and this device's IP. OFF by default; a GIF
+  /// tap while it is off asks ([GifPickerSheet.show]) and nothing reaches
+  /// Giphy before a yes. Device-local, like [receiptsAndTyping].
+  bool _gifSearch = false;
+
+  bool get gifSearch => _gifSearch;
+
+  Future<void> _loadGifSearch() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getBool(_gifSearchKey);
+    if (saved == null || saved == _gifSearch) return;
+    _gifSearch = saved;
+    notifyListeners();
+  }
+
+  Future<void> setGifSearch({required bool enabled}) async {
+    if (_gifSearch == enabled) return;
+    _gifSearch = enabled;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_gifSearchKey, enabled);
+  }
+
+  static const String _gifSearchKey = 'gif_search';
 
   Future<void> _loadThemePreference() async {
     final prefs = await SharedPreferences.getInstance();

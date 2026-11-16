@@ -226,6 +226,23 @@ class _PrivacySafetyScreenState extends State<PrivacySafetyScreen> {
                   ),
                 ),
               ),
+            // Plan C2: GIF search talks to Giphy directly, OFF by default; a
+            // GIF tap asks too while it is off (`GifPickerSheet.show`).
+            // Device-local.
+            Consumer<SettingsProvider>(
+              builder: (context, settings, _) => SettingsConsoleRow(
+                key: const ValueKey('privacy-gif-search-row'),
+                glyph: ConsoleGlyph.media,
+                title: l10n.privacyGifSearch,
+                subtitle: l10n.privacyGifSearchSubtitle,
+                trailing: Switch(
+                  value: settings.gifSearch,
+                  onChanged: (v) => settings.setGifSearch(enabled: v),
+                ),
+                onTap: () =>
+                    settings.setGifSearch(enabled: !settings.gifSearch),
+              ),
+            ),
             _buildAntiQuantumNoteExplainer(context),
             SettingsSectionCaption(label: l10n.settingsSectionPreferences),
             _buildDeleteAllLocalHistoryCard(context),

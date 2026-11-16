@@ -39,7 +39,9 @@ This document describes what the Fireplace (Umbra) server stores and can observe
 - **Revoked-device check.** A closed device's revoked check follows a push wake-up by about a second, so the server could link "queue X woke" with "this session refreshed", at most once per device per 24 h (decision 131).
 - **Push providers.** Google (FCM) and Apple/Mozilla/Microsoft (Web Push) see that a device was woken. FCM wake-ups carry only `{type:'new_message'}`; Web Push payloads are encrypted (RFC 8291).
 
-**Known gaps, not accepted, being fixed** (`docs/plans/2026-11-16-security-hardening.md`): on web, link-preview URLs reach the server with the user's session (C4); a receiver loads a link preview's image from the sender's chosen host (C1); the GIF picker contacts Giphy (C2). The app's own fonts are bundled since 0.2.86 (C3); on web only, Flutter's CanvasKit renderer still downloads its default font (Roboto) from Google's font server on every page load, and Noto/emoji fallback fonts when a glyph is missing.
+**Known gaps, not accepted, being fixed** (`docs/plans/2026-11-16-security-hardening.md`): on web, link-preview URLs reach the server with the user's session (C4); a receiver loads a link preview's image from the sender's chosen host (C1). The app's own fonts are bundled since 0.2.86 (C3); on web only, Flutter's CanvasKit renderer still downloads its default font (Roboto) from Google's font server on every page load, and Noto/emoji fallback fonts when a glyph is missing.
+
+**GIF search (Giphy)** is off by default since 0.2.87 (C2, decision 141): only a user who turns it on talks to Giphy, which then sees that user's searches, the previews they load, the GIF they pick and their IP address. A GIF they send travels as encrypted media; its receiver never contacts Giphy.
 
 **Camera metadata:** since 0.2.83 a photo (JPEG, PNG, WebP) or video (MP4/MOV) loses its GPS position, capture time, device model and embedded thumbnail on the sending device, before encryption (plan A2); a JPEG keeps only its orientation. A file sent as a document, a GIF, a HEIC photo or a WebM video goes as it is.
 

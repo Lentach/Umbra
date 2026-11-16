@@ -1,9 +1,12 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
-import 'glass/glass_sheet.dart';
-import '../services/gif_service.dart';
 import '../l10n/app_localizations.dart';
+import '../providers/settings_provider.dart';
+import '../services/gif_service.dart';
+import 'glass/glass_dialog.dart';
+import 'glass/glass_sheet.dart';
 
 class GifPickerSheet extends StatefulWidget {
   final void Function(String gifFullUrl) onGifSelected;
@@ -13,10 +16,20 @@ class GifPickerSheet extends StatefulWidget {
   @override
   State<GifPickerSheet> createState() => _GifPickerSheetState();
 
+  /// Every Giphy request starts inside this sheet, so it opens only once GIF
+  /// search is on ([SettingsProvider.gifSearch], plan C2). While it is off the
+  /// tap asks first; a yes turns it on for this device.
   static Future<void> show(
     BuildContext context, {
     required void Function(String) onGifSelected,
-  }) {
+  }) async {
+    final settings = context.read<SettingsProvider>();
+    if (!settings.gifSearch) {
+      final enabled = await _askToEnable(context);
+      if (!enabled || !context.mounted) return;
+      await settings.setGifSearch(enabled: true);
+      if (!context.mounted) return;
+    }
     // Media-dense grid: opaque sheet surface (spec §7 per-surface fallback);
     // a 60%-viewport backdrop blur would be pure cost under the grid.
     return showGlassSheet(
@@ -28,6 +41,28 @@ class GifPickerSheet extends StatefulWidget {
         child: GifPickerSheet(onGifSelected: onGifSelected),
       ),
     );
+  }
+
+  static Future<bool> _askToEnable(BuildContext context) async {
+    final l10n = AppLocalizations.of(context);
+    final enabled = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => GlassDialog(
+        title: Text(l10n.gifConsentTitle),
+        content: Text(l10n.gifConsentBody),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(l10n.cancel),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(l10n.gifConsentEnable),
+          ),
+        ],
+      ),
+    );
+    return enabled ?? false;
   }
 }
 

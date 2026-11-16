@@ -463,6 +463,12 @@
 
   "gifNoResults": "Nie znaleziono GIFów",
   "gifSearchHint": "Szukaj GIFów...",
+  "gifConsentTitle": "Włączyć GIF-y z Giphy?",
+  "@gifConsentTitle": {"description": "Plan C2: title of the question a GIF tap shows while GIF search is off. GIF search is off by default; nothing reaches Giphy before the user turns it on."},
+  "gifConsentBody": "Wyszukiwarka GIF-ów łączy się bezpośrednio z Giphy. Giphy zobaczy, czego szukasz, które GIF-y oglądasz i wybierasz oraz twój adres IP. Twoich wiadomości to nie dotyczy: wysłany GIF idzie zaszyfrowany jak zdjęcie, a odbiorca nie łączy się z Giphy. Wyłączysz to w Ustawienia → Prywatność i bezpieczeństwo.",
+  "@gifConsentBody": {"description": "Plan C2: what turning GIF search on reveals, and to whom. Must name Giphy, the search terms, the previews, the picked GIF and the IP address, and say where to turn it off."},
+  "gifConsentEnable": "Włącz",
+  "@gifConsentEnable": {"description": "Plan C2: the button that turns GIF search on and opens the picker."},
 
   "antiQuantumNoteTitle": "Notatka antykwantowa",
   "antiQuantumNoteHint": "Napisz swoją tajną wiadomość...",
@@ -804,6 +810,10 @@
   "@privacyReceiptsAndTyping": {"description": "Privacy & Safety switch (metadata-privacy decision 62, E61c): read receipts, delivered ticks and typing on chats that moved to the box. Device-local, default off."},
   "privacyReceiptsAndTypingSubtitle": "Działa tylko, gdy oboje je włączycie. Dotyczy czatów przeniesionych na nowe prywatne doręczanie.",
   "@privacyReceiptsAndTypingSubtitle": {"description": "One line under the switch: it is mutual (both sides must turn it on) and applies only to chats on the box (the new private delivery)."},
+  "privacyGifSearch": "Wyszukiwanie GIF-ów (Giphy)",
+  "@privacyGifSearch": {"description": "Privacy & Safety switch (plan C2): GIF search, which talks to Giphy directly. Device-local, default off."},
+  "privacyGifSearchSubtitle": "Giphy widzi, czego szukasz, i twój adres IP. Wysłany GIF jest szyfrowany jak zdjęcie.",
+  "@privacyGifSearchSubtitle": {"description": "One line under the switch: what Giphy sees while it is on; the GIF itself still goes end to end encrypted."},
   "devicesRenameAction": "Zmień nazwę",
   "@devicesRenameAction": {
     "description": "Button/tooltip that opens the rename sheet for one device row ((lxxx) clause 1)."
