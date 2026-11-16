@@ -39,6 +39,8 @@
   - The quote and timer come from the row as it was when the send started: the row may leave `_messages` during the upload. A reply whose quote cannot be named fails; it never goes out without it.
   - A voice note's plaintext recording is deleted once its upload succeeds, whichever attempt that is.
   - Widgets load a `box:` url through `boxMediaSourceFor(context, url)` → `MessagingProvider.boxMediaCiphertext` (the fetcher), with no Bearer token. The size cap applies to the UNFRAMED ciphertext, so a 16.1–20 MiB file on the 32 MiB rung displays.
+  - `MediaCryptoService.encrypt` pads every file to fill its rung and `decrypt` cuts the padding off (plan A1, `padMediaPlaintext`/`unpadMediaPlaintext`): the device's kept copy is the rung's size, and the cap is `kBoxMediaTopRung − 4`. Box media is never opened with a raw AES call.
+  - `sendImageMessage` and `sendVideoMessage` scrub camera metadata first (plan A2, `scrubImageMetadata`, `scrubVideoMetadataInPlace`, lossless); the diag line `MEDIA_METADATA_SCRUBBED {type, bytes}` says how much went. `sendFileMessage` sends a document as it is.
   - The video `_hasUploadedBlob` check, `VideoPlaybackSession`'s still-sending check and the voice retry all treat `box:` as uploaded.
 - `webcrypto` Android 16KB page-size patch: `patch_webcrypto_16k.ps1` edits the PUB CACHE (dropped by `pub cache repair`/SDK upgrade, PowerShell-only). `build-android.ps1` applies it best-effort; the HARD gate is the post-build ELF check `scripts/verify-apk-16k.mjs`. `flutter pub run webcrypto:setup` is for native test setup, not APK/AAB packaging.
 - `MainActivity` package declaration must be `com.fireplace.app` even though the file path is still old.

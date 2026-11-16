@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import '../config/app_config.dart';
 import '../services/api_service.dart';
+import '../services/box/box_media_frame.dart';
 import '../services/box/box_media_url.dart';
 import '../services/media_crypto_service.dart';
 
@@ -21,7 +22,8 @@ typedef BoxCiphertextSource = Future<Uint8List?> Function(String url);
 ///
 /// A box attachment (`box:` url, E17a) comes from [box] instead — never
 /// `/media`, never a Bearer token — and is always keyed; the cap applies to
-/// its UNFRAMED ciphertext, so a 17 MiB file on the 32 MiB rung shows.
+/// its UNFRAMED ciphertext, which a padded file (plan A1) fills to its rung
+/// minus the 4-byte prefix — so a 17 MiB file on the 32 MiB rung shows.
 Future<Uint8List> loadDecryptedMediaBytes({
   required String url,
   String? key,
@@ -47,9 +49,10 @@ Future<Uint8List> loadDecryptedMediaBytes({
   }
   final service = api ?? ApiService(baseUrl: baseUrl ?? AppConfig.baseUrl);
   final raw = await service.fetchMediaBytes(url);
+  // An old-path file was never padded: the plaintext cap plus the GCM tag.
   final encrypted = key != null && iv != null;
   final cap = encrypted
-      ? MediaCryptoService.maxCiphertextBytes
+      ? MediaCryptoService.maxBytes + kMediaGcmTagBytes
       : MediaCryptoService.maxBytes;
   if (raw.length > cap) {
     throw Exception('Media too large (${raw.length} > $cap)');

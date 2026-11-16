@@ -24,9 +24,11 @@ const int kBoxMediaIdBytes = 32;
 const int kBoxAuthPubBytes = 32;
 const int kBoxSigBytes = 64;
 
+/// The top of [kBoxMediaLadder]. It keeps today's 20 MiB plaintext file
+/// sendable once padded.
+const int kBoxMediaTopRung = 32 * 1024 * 1024;
+
 /// The only body sizes `POST /box/media` accepts (I5): pad to one of these.
-/// The 32 MiB top rung keeps today's 20 MiB plaintext file sendable once
-/// padded.
 const List<int> kBoxMediaLadder = [
   4 * 1024,
   16 * 1024,
@@ -35,7 +37,7 @@ const List<int> kBoxMediaLadder = [
   1024 * 1024,
   4 * 1024 * 1024,
   16 * 1024 * 1024,
-  32 * 1024 * 1024,
+  kBoxMediaTopRung,
 ];
 
 enum QueueKind { normal, request }

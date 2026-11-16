@@ -103,10 +103,11 @@ class BoxMediaFetcher {
   /// awaited. Given up once the box can no longer hold it: not_found, or
   /// [kBoxMediaLifetime] after [receivedAt].
   ///
-  /// [maxBytes] (default: the 20 MiB attachment cap) refuses a larger file
-  /// unkept — a profile photo is a few KiB, and a friend's reference may
-  /// name any media id. [onKept] is told the unframed ciphertext once a copy
-  /// is kept (or was already): the download finished, whenever that is.
+  /// [maxBytes] (default: a 20 MiB file padded to the top rung) refuses a
+  /// larger file unkept — a profile photo is a few KiB, and a friend's
+  /// reference may name any media id. [onKept] is told the unframed
+  /// ciphertext once a copy is kept (or was already): the download
+  /// finished, whenever that is.
   void prefetch(
     int userId,
     Uint8List id, {

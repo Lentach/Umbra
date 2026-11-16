@@ -3,6 +3,9 @@ import 'dart:typed_data';
 
 import 'package:webcrypto/webcrypto.dart';
 
+import 'box/box_media_frame.dart';
+import 'box/box_wire.dart';
+
 class EncryptedMedia {
   final Uint8List ciphertext;
   final String keyBase64;
@@ -15,15 +18,59 @@ class EncryptedMedia {
   });
 }
 
+/// The AES-256-GCM primitive under [MediaCryptoService]: webcrypto in the
+/// app. An interface so the padding around it runs under `flutter test` on
+/// hosts where webcrypto's native library is not set up (traps.md, Tests).
+abstract interface class MediaCipher {
+  /// [plaintext] sealed under a fresh random 32-byte key and 12-byte IV.
+  Future<({Uint8List key, Uint8List iv, Uint8List ciphertext})> sealFresh(
+    Uint8List plaintext,
+  );
+
+  /// Inverse of [sealFresh]; throws on a wrong key or tampered bytes.
+  Future<Uint8List> open(Uint8List key, Uint8List iv, Uint8List ciphertext);
+}
+
+class WebCryptoMediaCipher implements MediaCipher {
+  const WebCryptoMediaCipher();
+
+  @override
+  Future<({Uint8List key, Uint8List iv, Uint8List ciphertext})> sealFresh(
+    Uint8List plaintext,
+  ) async {
+    final keyBytes = Uint8List(32);
+    fillRandomBytes(keyBytes);
+    final iv = Uint8List(12);
+    fillRandomBytes(iv);
+    final key = await AesGcmSecretKey.importRawKey(keyBytes);
+    final ciphertext = await key.encryptBytes(plaintext, iv);
+    return (key: keyBytes, iv: iv, ciphertext: ciphertext);
+  }
+
+  @override
+  Future<Uint8List> open(
+    Uint8List key,
+    Uint8List iv,
+    Uint8List ciphertext,
+  ) async {
+    final imported = await AesGcmSecretKey.importRawKey(key);
+    return imported.decryptBytes(ciphertext, iv);
+  }
+}
+
 class MediaCryptoService {
+  MediaCryptoService({MediaCipher cipher = const WebCryptoMediaCipher()})
+    : _cipher = cipher;
+
+  final MediaCipher _cipher;
+
   static const int maxBytes = 20 * 1024 * 1024;
 
-  /// AES-GCM appends a 16-byte authentication tag, so a plaintext that just
-  /// passes [maxBytes] on the sender produces a ciphertext 16 bytes longer.
-  /// The RECEIVER's size guard must compare against this, not [maxBytes] —
-  /// otherwise a clip in the last 16 bytes under the cap sends fine and is
-  /// refused on every receiver with a silent poster + "failed to load".
-  static const int maxCiphertextBytes = maxBytes + 16;
+  /// The longest ciphertext a receiver accepts: a [maxBytes] file is padded
+  /// to the 32 MiB rung before sealing (plan A1), so its ciphertext is the
+  /// rung minus the frame's 4-byte prefix. A file sealed before A1 is its
+  /// plaintext + the 16-byte GCM tag, well under this.
+  static const int maxCiphertextBytes = kBoxMediaTopRung - 4;
 
   /// Client video-length policy, in seconds. Enforced by the composer with a
   /// toast and re-checked in `sendVideoMessage` as a backstop.
@@ -36,34 +83,32 @@ class MediaCryptoService {
   /// asymmetry only disappears with on-device transcoding.
   static const int maxVideoDurationSeconds = 180;
 
+  /// [bytes] padded to fill its box media rung ([padMediaPlaintext]), then
+  /// sealed: the ciphertext's length names the rung, never the file.
   Future<EncryptedMedia> encrypt(Uint8List bytes) async {
     if (bytes.length > maxBytes) {
       throw ArgumentError('File exceeds 20MB limit');
     }
-    final keyBytes = Uint8List(32);
-    fillRandomBytes(keyBytes);
-    final iv = Uint8List(12);
-    fillRandomBytes(iv);
-
-    final key = await AesGcmSecretKey.importRawKey(keyBytes);
-    final ciphertext = await key.encryptBytes(bytes, iv);
-
+    final sealed = await _cipher.sealFresh(padMediaPlaintext(bytes));
     return EncryptedMedia(
-      ciphertext: Uint8List.fromList(ciphertext),
-      keyBase64: base64.encode(keyBytes),
-      ivBase64: base64.encode(iv),
+      ciphertext: sealed.ciphertext,
+      keyBase64: base64.encode(sealed.key),
+      ivBase64: base64.encode(sealed.iv),
     );
   }
 
+  /// The file [ciphertext] holds, its padding removed; a file sealed before
+  /// A1 (no padding) comes back as it was.
   Future<Uint8List> decrypt(
     Uint8List ciphertext,
     String keyB64,
     String ivB64,
   ) async {
-    final keyBytes = Uint8List.fromList(base64.decode(keyB64));
-    final iv = Uint8List.fromList(base64.decode(ivB64));
-    final key = await AesGcmSecretKey.importRawKey(keyBytes);
-    final plaintext = await key.decryptBytes(ciphertext, iv);
-    return Uint8List.fromList(plaintext);
+    final plaintext = await _cipher.open(
+      Uint8List.fromList(base64.decode(keyB64)),
+      Uint8List.fromList(base64.decode(ivB64)),
+      ciphertext,
+    );
+    return unpadMediaPlaintext(plaintext);
   }
 }

@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:clock/clock.dart';
 import 'package:fireplace/services/box/box_client.dart';
 import 'package:fireplace/services/encryption/content_sealer.dart';
+import 'package:fireplace/services/media_crypto_service.dart';
 import 'package:pointycastle/export.dart' as pc;
 
 /// One emitted box command, with the ack the client is waiting on.
@@ -164,4 +165,35 @@ class PointyGcmSealer implements ContentSealer {
       return null;
     }
   }
+}
+
+/// Real AES-256-GCM for [MediaCryptoService] under `flutter test`, where
+/// webcrypto's native library is not set up on every host (traps.md, Tests).
+class PointyMediaCipher implements MediaCipher {
+  final Random _random = Random.secure();
+
+  Uint8List _bytes(int n) =>
+      Uint8List.fromList(List.generate(n, (_) => _random.nextInt(256)));
+
+  pc.GCMBlockCipher _gcm(bool encrypt, Uint8List key, Uint8List iv) =>
+      pc.GCMBlockCipher(pc.AESEngine())..init(
+        encrypt,
+        pc.AEADParameters(pc.KeyParameter(key), 128, iv, Uint8List(0)),
+      );
+
+  @override
+  Future<({Uint8List key, Uint8List iv, Uint8List ciphertext})> sealFresh(
+    Uint8List plaintext,
+  ) async {
+    final key = _bytes(32);
+    final iv = _bytes(12);
+    return (key: key, iv: iv, ciphertext: _gcm(true, key, iv).process(plaintext));
+  }
+
+  @override
+  Future<Uint8List> open(
+    Uint8List key,
+    Uint8List iv,
+    Uint8List ciphertext,
+  ) async => _gcm(false, key, iv).process(ciphertext);
 }

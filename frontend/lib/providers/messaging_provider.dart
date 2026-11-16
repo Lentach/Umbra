@@ -46,6 +46,7 @@ import '../utils/anti_quantum_note_link.dart';
 import '../utils/decryption_failure_policy.dart';
 import '../utils/e2e_diag_log.dart';
 import '../utils/e2e_envelope.dart';
+import '../utils/media_metadata.dart';
 import '../utils/media_preview_metadata.dart';
 import '../utils/e2e_persistent_diag.dart';
 import '../utils/message_edit_eligibility.dart';
