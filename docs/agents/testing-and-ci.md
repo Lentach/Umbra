@@ -49,9 +49,10 @@ CI job).
   container, no-account-id log checker `scripts/verify-no-user-logs.mjs`, lint ratchet, knip.
 - `frontend` — analyze, Dart lint ratchet.
 - `frontend-tests` — `flutter test` split by DIRECTORY into 4 parallel legs (providers+root,
-  services, widgets+models+theme+web, screens+main+utils). Not `--total-shards`: it shards test
+  services, widgets+models+theme, screens+main+utils). Not `--total-shards`: it shards test
   cases, so every leg still pays every file's compile/load. A new top-level `test/` dir must join
-  a leg or it never runs; `frontend-test-counts` then fails on the short sum.
+  a leg or it never runs; `frontend-test-counts` then fails on the short sum. Emptying a listed
+  dir fails its leg (`loading test/<dir> (failed)`: git drops empty dirs) — remove it from the leg.
 - `frontend-test-counts` — sums the 4 leg logs and checks them against root `CLAUDE.md`.
 - `session-lock` — Web Lock probe in headless Chrome.
 - `e2e-wire` — full-stack harness against a real backend + Postgres.

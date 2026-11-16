@@ -203,7 +203,7 @@ jobs:
           - leg: services
             paths: test/services
           - leg: widgets
-            paths: test/widgets test/models test/theme test/web
+            paths: test/widgets test/models test/theme
           - leg: screens
             paths: test/screens test/main test/utils
 
