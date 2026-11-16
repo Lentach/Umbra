@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:fireplace/models/user_model.dart';
 import 'package:fireplace/providers/connection_provider.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
@@ -25,6 +27,31 @@ class _SilentSocket extends SocketService {
   void onConnect(void Function() callback) {}
   @override
   void onDisconnect(void Function(dynamic) callback) {}
+}
+
+/// A transport that connects right after `connect` (as socket.io does, once
+/// the listeners are on) and never sends `socketReady`: the window between
+/// the connect's E2E init and the account socket.
+class _ConnectedNotReadySocket extends _SilentSocket {
+  void Function()? _onConnect;
+  @override
+  bool get isConnected => true;
+  @override
+  void connect({required String baseUrl, required String token}) =>
+      scheduleMicrotask(() => _onConnect?.call());
+  @override
+  void onConnect(void Function() callback) => _onConnect = callback;
+}
+
+/// E2E that never becomes ready; counts the retries it is asked for.
+class _UnreadyEncryption extends EncryptionProvider {
+  int retries = 0;
+  @override
+  bool get isE2EReady => false;
+  @override
+  Future<void> initializeE2E(int userId) async {}
+  @override
+  Future<void> retryE2EInit() async => retries++;
 }
 
 /// Every write queued on `s` (default: the shared store) has settled.
@@ -380,6 +407,48 @@ void main() {
         unorderedEquals(['bob', 'carol']),
       );
       expect(convs.conversations.single.id, 10);
+    },
+  );
+
+  test(
+    'a retry before socketReady still re-runs the E2E init it unblocked (A3)',
+    () async {
+      await seedSession();
+      var fails = true;
+      final encryption = _UnreadyEncryption();
+      final convs = ConversationsProvider();
+      final connection =
+          ConnectionProvider(socketService: _ConnectedNotReadySocket())
+            ..setProviders(
+              encryption: encryption,
+              friends: FriendsProvider(),
+              conversations: convs,
+              messaging: MessagingProvider()..setConversationsProvider(convs),
+              contactStore: ContactStore(
+                open: () async {
+                  if (fails) throw const ContentStoreUnavailable('db-open');
+                  return kv;
+                },
+                lock: <T>(_, action) => action(),
+                accepts: (_) => true,
+              ),
+            );
+      addTearDown(connection.disconnect);
+
+      await connection.connect(1, 'token', 'http://localhost:3000');
+      await pumpEventQueue();
+      expect(connection.isConnected, isTrue);
+
+      fails = false;
+      await connection.retryContactStore();
+
+      expect(connection.contactStoreFailed, isFalse);
+      expect(
+        encryption.retries,
+        1,
+        reason: "the connect's own init already failed on the closed store, "
+            'and socketReady does not run it again',
+      );
     },
   );
 }

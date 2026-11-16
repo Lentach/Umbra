@@ -1117,4 +1117,56 @@ void main() {
       reason: 'the republished blob carries the local mute',
     );
   });
+
+  // A3 review (2026-11-16). A store that would not open at connect skips
+  // 4c, so `_pendingRestore` stays latched and `uploadNow` refuses. The
+  // retry above the chat list opens the store later; it must run 4c's tail
+  // too, or every change after it parks in `_dirty` until a reconnect.
+  test('a store opened by the retry still publishes later changes (A3)',
+      () async {
+    await seedRow(password: 'pw', contacts: [_friend(41)]);
+    await store.update(41, (_) => _friend(41));
+    await store.settled;
+    var fails = true;
+    final flaky = ContactStore(
+      open: () async {
+        if (fails) throw const ContentStoreUnavailable('db-open');
+        return kv;
+      },
+      lock: <T>(_, action) => action(),
+      accepts: (_) => true,
+    );
+
+    final svc = await service();
+    final connection = ConnectionProvider(socketService: _MuteSocket())
+      ..setProviders(
+        encryption: EncryptionProvider(),
+        friends: FriendsProvider(),
+        conversations: ConversationsProvider(),
+        messaging: MessagingProvider(),
+        contactStore: flaky,
+        contactBackup: svc,
+      );
+    addTearDown(connection.disconnect);
+
+    await svc.onSession(userId: 7, token: 'jwt', password: 'pw');
+    await connection.connect(7, 'jwt', 'http://t', immediate: true);
+    await pumpEventQueue();
+    expect(connection.contactStoreFailed, isTrue);
+
+    fails = false;
+    await connection.retryContactStore();
+    await pumpEventQueue();
+    final before = backend.puts.length;
+
+    await flaky.update(42, (_) => _friend(42));
+    await flaky.settled;
+    await pumpEventQueue();
+
+    expect(
+      backend.puts.length,
+      greaterThan(before),
+      reason: 'a store opened by the retry must not freeze the backup',
+    );
+  });
 }

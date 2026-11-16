@@ -3611,7 +3611,7 @@ abstract class AppLocalizations {
   /// No description provided for @contentStoreFailedLine.
   ///
   /// In pl, this message translates to:
-  /// **'Nie można otworzyć zaszyfrowanej pamięci tego urządzenia. Nic nie zostało usunięte ani zapisane bez szyfrowania. Dotknij, aby spróbować ponownie.'**
+  /// **'Nie można otworzyć zaszyfrowanej pamięci tego urządzenia, więc czaty nie są widoczne. Dotknij, aby spróbować ponownie.'**
   String get contentStoreFailedLine;
 
   /// No description provided for @siblingSilentLine.

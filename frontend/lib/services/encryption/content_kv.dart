@@ -157,8 +157,9 @@ class PrefsContentKv implements ContentKv {
 
 /// Thrown by a sealed-store opener (`NativeContentStore.open` on Android,
 /// `SealedWebContentKv.open` on web) when the store cannot be safely armed.
-/// The stage names the first check that failed; the caller records it and
-/// falls back to the legacy prefs backend for the session. Lives here, not in
+/// The stage names the first check that failed; the caller records it. The
+/// web falls back to the legacy prefs backend for the session; Android fails
+/// closed (hardening A3). Lives here, not in
 /// the native store, so the web opener can use it without pulling the
 /// drift/SQLCipher backend into a web build.
 class ContentStoreUnavailable implements Exception {

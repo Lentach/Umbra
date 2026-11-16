@@ -784,7 +784,7 @@
   "contactBackupPromptFailed": "Could not save the copy right now. Try again later.",
   "contactBackupAlertLine": "Your contacts have no backup. Tap to protect them.",
   "webPushOffLine": "Notifications are off. Tap to turn them on.",
-  "contentStoreFailedLine": "This device's encrypted storage could not be opened. Nothing was deleted or saved unencrypted. Tap to try again.",
+  "contentStoreFailedLine": "This device's encrypted storage could not be opened, so your chats are not shown. Tap to try again.",
   "siblingSilentLine": "“{name}” has not been used for 30 days. Tap to decide.",
   "@siblingSilentLine": {
     "placeholders": { "name": { "type": "String" } }

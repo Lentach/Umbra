@@ -43,9 +43,9 @@ class ContactStoreUnavailable implements Exception {
 ///    memo, the rejected-open retry and the test seams in one place, and on
 ///    web it inherits the locked-passcode rethrow (a locked vault must not
 ///    write contacts in cleartext any more than messages).
-///  * On Android the store REFUSES anything but the SQLCipher backend
-///    ([contactStoreAccepts]): the prefs fallback the message cache tolerates
-///    for one session would put the contact graph in cleartext XML.
+///  * On a phone the store REFUSES anything but the SQLCipher backend
+///    ([contactStoreAccepts]): prefs is cleartext XML. The Android opener no
+///    longer falls back to prefs (hardening A3); this is the second lock.
 ///  * Keys `e2e_<uid>_contact_v1_<peerUserId>` (+ `…_self`) sit INSIDE the
 ///    `e2e_<uid>_` namespace so account deletion's `clearAllKeys` sweeps them;
 ///    no other clear/erase path touches that prefix.
