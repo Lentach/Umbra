@@ -272,9 +272,10 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     );
   }
 
-  /// The lines above the chat list: notifications off (E90a), decision
-  /// 94's contact-backup line and decision 101 B's silent device, all red,
-  /// then the phrase nudge; null when none is due.
+  /// The lines above the chat list: the encrypted store would not open
+  /// (hardening plan A3), notifications off (E90a), decision 94's
+  /// contact-backup line and decision 101 B's silent device, all red, then
+  /// the phrase nudge; null when none is due.
   Widget? _buildTopLines() {
     final l10n = AppLocalizations.of(context);
     final askBackup = shouldAskForContactBackup(
@@ -282,6 +283,14 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       laters: context.watch<SettingsProvider>().contactBackupLaters,
     );
     final lines = [
+      if (context.watch<ConnectionProvider>().contactStoreFailed)
+        AlertLine(
+          text: l10n.contentStoreFailedLine,
+          icon: Icons.sd_card_alert_outlined,
+          tapKey: const Key('content-store-failed-alert'),
+          onTap: () =>
+              context.read<ConnectionProvider>().retryContactStore().ignore(),
+        ),
       if (PushService.webPushNeedsTap.value)
         AlertLine(
           text: l10n.webPushOffLine,

@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -14,20 +15,43 @@ import 'native_content_store.dart';
 
 Future<ContentKv>? _memo;
 
+/// The stage [openEncryptedContentKv] last recorded as unavailable, cleared
+/// by a successful open. Every store touch retries the open, so without it
+/// one failing launch wrote ~7 durable entries into the 80-entry ring.
+String? _unavailableRecorded;
+
 /// Native build of the opener. Android gets the encrypted store; everything
 /// else (desktop dev hosts, the flutter_test VM — `Platform` here is the HOST
 /// OS, not `defaultTargetPlatform`) keeps the legacy prefs backend.
 ///
-/// ONLY the Android path is memoized (as a Future, so concurrent first calls
-/// cannot race two encrypted stores into existence; and a session that fell
-/// back to prefs stays on prefs — flip-flopping backends mid-session would
-/// split the read view). The prefs path deliberately returns a FRESH wrapper
-/// per call: that is the historical per-service-instance behavior, and the
-/// flutter_test VM depends on it — a process-wide memo would pin the first
-/// test's mock SharedPreferences under every later test.
+/// On Android it FAILS CLOSED (hardening plan A3): a store that will not open
+/// throws [ContentStoreUnavailable], never a plaintext SharedPreferences
+/// stand-in, so nothing this session reads or writes lands in cleartext XML.
+/// Callers surface it (`ConnectionProvider.contactStoreFailed`) and the next
+/// touch opens again.
+///
+/// The prefs path deliberately returns a FRESH wrapper per call: that is the
+/// historical per-service-instance behavior, and the flutter_test VM depends
+/// on it — a process-wide memo would pin the first test's mock
+/// SharedPreferences under every later test.
 Future<ContentKv> openPlatformContentKv() {
   if (!Platform.isAndroid) return PrefsContentKv.open();
-  return _memo ??= _open();
+  return openMemoized(openEncryptedContentKv);
+}
+
+/// [open], memoized as a Future so concurrent first calls cannot race two
+/// encrypted stores into existence. A FAILED open is dropped, so the next
+/// call opens again: kept, a Keystore hiccup at launch would refuse the store
+/// for the whole process.
+@visibleForTesting
+Future<ContentKv> openMemoized(Future<ContentKv> Function() open) async {
+  final opening = _memo ??= open();
+  try {
+    return await opening;
+  } on Object {
+    if (identical(_memo, opening)) _memo = null;
+    rethrow;
+  }
 }
 
 /// Native counterpart of the web revocation seam, required because both
@@ -45,9 +69,10 @@ Future<void> revokePlatformContentKv() async {
 }
 
 /// Whether `ContactStore` may keep the contact graph in [kv]. On a real
-/// PHONE only the SQLCipher store qualifies: the prefs fallback the message
-/// cache tolerates for one session is cleartext XML, and a contact list there
-/// is exactly the metadata this store exists to keep off disk in the clear.
+/// PHONE only the SQLCipher store qualifies: prefs is cleartext XML, and a
+/// contact list there is exactly the metadata this store exists to keep off
+/// disk in the clear. The Android opener never answers prefs any more (A3);
+/// this stays as the second lock on the same door.
 /// Off-device (desktop dev hosts, the flutter_test VM) prefs is the only
 /// backend and stays acceptable. Lives behind the conditional import because
 /// naming [NativeContentStore] from web code would pull drift into the build.
@@ -59,7 +84,10 @@ Future<void> revokePlatformContentKv() async {
 bool contactStoreAccepts(ContentKv kv) =>
     (!Platform.isAndroid && !Platform.isIOS) || kv is NativeContentStore;
 
-Future<ContentKv> _open() async {
+/// The Android open chain: DB key, SQLCipher file, armed store. Throws
+/// [ContentStoreUnavailable] naming the stage that failed.
+@visibleForTesting
+Future<ContentKv> openEncryptedContentKv() async {
   var stage = 'unknown';
   try {
     final legacy = await SharedPreferences.getInstance();
@@ -83,21 +111,26 @@ Future<ContentKv> _open() async {
         legacyPrefs: legacy,
         audioResealer: resealAudioCacheFiles,
       );
+      _unavailableRecorded = null;
       return store;
     } on ContentStoreUnavailable catch (e) {
       stage = e.stage;
       await db.close();
       rethrow;
-    } catch (_) {
+    } on Object {
       await db.close();
       rethrow;
     }
-  } catch (_) {
-    // Fallback = the pre-Phase-2 behavior, loudly diagnosed. Deliberately NOT
-    // an unencrypted database: prefs is the known status quo, and the diag
-    // rate is what tells us whether this path ever fires in the field.
-    E2ePersistentDiag.record('CONTENT_STORE_FALLBACK', {'stage': stage});
-    return PrefsContentKv.open();
+  } on Object {
+    // Deliberately NOT a plaintext fallback (the pre-A3 behavior) and never
+    // an unencrypted database: the session runs without its store until an
+    // open succeeds. The diag rate says how often this fires in the field;
+    // a stage is recorded once until an open succeeds.
+    if (stage != _unavailableRecorded) {
+      _unavailableRecorded = stage;
+      E2ePersistentDiag.record('CONTENT_STORE_UNAVAILABLE', {'stage': stage});
+    }
+    throw ContentStoreUnavailable(stage);
   }
 }
 
@@ -106,11 +139,10 @@ Future<ContentKv> _open() async {
 /// provably enumerated and genuinely held no DB key, so the surviving file is
 /// ciphertext nobody can ever read again (and the Signal identity in the same
 /// store is gone with it). Recreating trades an unreadable file for a working
-/// store; refusing would push every future session onto the plaintext prefs
-/// fallback forever.
+/// store; refusing would leave every future session without a store.
 ///
 /// With a PRE-EXISTING key the failure is NOT evidence of loss (corruption,
-/// transient I/O), so the file is left untouched and the session falls back.
+/// transient I/O), so the file is left untouched and the open fails.
 Future<DriftRecordDb> _openDb(DbKeyResult dbKey) async {
   try {
     return await DriftRecordDb.open(dbKeyHex: dbKey.hex);

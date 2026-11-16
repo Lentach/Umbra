@@ -342,4 +342,44 @@ void main() {
       expect(convs.hasLoadedConversations, isTrue);
     },
   );
+
+  test(
+    'a store that would not open is opened again by the retry (A3)',
+    () async {
+      await seedSession();
+      var fails = true;
+      final friends = FriendsProvider();
+      final convs = ConversationsProvider();
+      final connection = ConnectionProvider(socketService: _SilentSocket())
+        ..setProviders(
+          encryption: EncryptionProvider(),
+          friends: friends,
+          conversations: convs,
+          messaging: MessagingProvider()..setConversationsProvider(convs),
+          contactStore: ContactStore(
+            open: () async {
+              if (fails) throw const ContentStoreUnavailable('db-open');
+              return kv;
+            },
+            lock: <T>(_, action) => action(),
+            accepts: (_) => true,
+          ),
+        );
+      addTearDown(connection.disconnect);
+
+      await connection.connect(1, 'token', 'http://localhost:3000');
+      expect(connection.contactStoreFailed, isTrue);
+      expect(friends.friends, isEmpty);
+
+      fails = false;
+      await connection.retryContactStore();
+
+      expect(connection.contactStoreFailed, isFalse);
+      expect(
+        friends.friends.map((u) => u.username),
+        unorderedEquals(['bob', 'carol']),
+      );
+      expect(convs.conversations.single.id, 10);
+    },
+  );
 }

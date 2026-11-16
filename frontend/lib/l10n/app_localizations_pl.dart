@@ -2086,6 +2086,10 @@ class AppLocalizationsPl extends AppLocalizations {
       'Powiadomienia są wyłączone. Dotknij, aby je włączyć.';
 
   @override
+  String get contentStoreFailedLine =>
+      'Nie można otworzyć zaszyfrowanej pamięci tego urządzenia. Nic nie zostało usunięte ani zapisane bez szyfrowania. Dotknij, aby spróbować ponownie.';
+
+  @override
   String siblingSilentLine(String name) {
     return 'Urządzenie „$name” nie było używane od 30 dni. Dotknij, aby zdecydować.';
   }
