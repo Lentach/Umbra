@@ -6,7 +6,7 @@
 
 ## 0. Direction (owner, 2026-11-16)
 
-Native apps (Android now, iOS next) become the product. The PWA, where nearly all users are today, is frozen and retired step by step (§7). Items marked **web-only** disappear when the PWA does. Do them only if retirement slips.
+Native apps (Android now, iOS next) become the product. **iOS is on hold (owner, 2026-11-16): no Apple Developer enrolment for now**, so iPhone users stay on the PWA and §7 cannot retire it for them until that changes. The PWA, where nearly all users are today, is frozen and retired step by step (§7). Items marked **web-only** disappear when the PWA does. Do them only if retirement slips.
 
 ## 1. Tier A — small, high value, every platform
 
