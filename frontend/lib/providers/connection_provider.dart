@@ -266,6 +266,30 @@ class ConnectionProvider extends ChangeNotifier {
     // A vault that booted locked left the box without a request queue.
     _box?.storeOpened();
     _refreshBoxDeviceLists();
+    // The connect skipped 4c on the closed store: without this the backup's
+    // pending restore stays latched and nothing uploads until a reconnect.
+    _settleContactBackup(_connectGeneration);
+  }
+
+  /// 4c's tail, once the store is open: apply the backup's pending restore
+  /// (upgrade-only), then publish what the store holds. Until the restore is
+  /// applied the backup refuses every upload, so a store opened after the
+  /// connect (a retry, a web unlock) must run this too.
+  void _settleContactBackup(int generation) {
+    final backup = _contactBackup;
+    if (backup == null) return;
+    unawaited(
+      backup.ready.then((_) async {
+        if (_connectGeneration != generation) return;
+        if (await backup.applyRestore() > 0) {
+          if (_connectGeneration != generation) return;
+          _friendsProvider?.onContactsChanged();
+          _conversationsProvider?.hydrateFromStore();
+        }
+        if (_connectGeneration != generation) return;
+        await backup.flushPending();
+      }),
+    );
   }
 
   /// The contact store would not open this session for a reason other than
@@ -276,13 +300,22 @@ class ConnectionProvider extends ChangeNotifier {
       _contactStoreUnavailable != null && _contactStoreUnavailable != 'locked';
 
   /// The chat list's "try again" for [contactStoreFailed]. The E2E init of
-  /// this connect read the same store, so it failed with it and is run again
-  /// once the store is open; before `socketReady` the connect runs it anyway.
-  Future<void> retryContactStore() async {
+  /// this connect (run at transport connect) read the same store, so it
+  /// failed with it and is run again once the store is open. A tap while a
+  /// retry runs joins it: a second open overtaking the first would clear
+  /// the failure while the store is still closed.
+  Future<void> retryContactStore() =>
+      _contactStoreRetry ??= _retryContactStore().whenComplete(
+        () => _contactStoreRetry = null,
+      );
+
+  Future<void>? _contactStoreRetry;
+
+  Future<void> _retryContactStore() async {
     await _reopenContactStore();
     final encryption = _encryptionProvider;
     if (_contactStore?.isOpen != true ||
-        !_accountReady ||
+        !_isConnected ||
         encryption == null ||
         encryption.isE2EReady) {
       return;
@@ -514,18 +547,7 @@ class ConnectionProvider extends ChangeNotifier {
           });
         }
       }
-      unawaited(
-        backup.ready.then((_) async {
-          if (_connectGeneration != generation) return;
-          if (await backup.applyRestore() > 0) {
-            if (_connectGeneration != generation) return;
-            _friendsProvider?.onContactsChanged();
-            _conversationsProvider?.hydrateFromStore();
-          }
-          if (_connectGeneration != generation) return;
-          await backup.flushPending();
-        }),
-      );
+      _settleContactBackup(generation);
     }
 
     // 4d. The box (PR3.1): its own socket, no account on its path. One

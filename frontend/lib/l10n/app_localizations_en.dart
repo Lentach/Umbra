@@ -2052,7 +2052,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get contentStoreFailedLine =>
-      'This device\'s encrypted storage could not be opened. Nothing was deleted or saved unencrypted. Tap to try again.';
+      'This device\'s encrypted storage could not be opened, so your chats are not shown. Tap to try again.';
 
   @override
   String siblingSilentLine(String name) {

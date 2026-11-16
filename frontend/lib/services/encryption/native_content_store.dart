@@ -135,8 +135,8 @@ class NativeContentStore implements ContentKv {
   );
 
   /// Opens and ARMS the store, or throws [ContentStoreUnavailable] with the
-  /// failing stage — the caller falls back to the legacy prefs backend for
-  /// this session and records the stage in diagnostics.
+  /// failing stage — the opener records the stage in diagnostics and the
+  /// session runs without a store until an open succeeds (hardening A3).
   static Future<NativeContentStore> open({
     required RecordDb db,
     required ContentKeyManager keys,
@@ -288,7 +288,7 @@ class NativeContentStore implements ContentKv {
   /// Arming means the key was READ BACK out of secure storage by a fresh
   /// enumeration — never assumed from a write that reported success. Throws
   /// [ContentStoreUnavailable] naming the stage that failed; open turns that
-  /// into a prefs-fallback session, rotation turns it into a retry.
+  /// into a session without a store, rotation turns it into a retry.
   Future<({String kid, Uint8List raw})> _mintAndArm() async {
     final kid = await _keys.mintContentKey();
     if (kid == null) throw const ContentStoreUnavailable('mint');

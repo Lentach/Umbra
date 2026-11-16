@@ -27,7 +27,7 @@ SQL
 
 Version `0.2.76` (one past the 0.2.75 web hotfix; re-check `frontend/pubspec.yaml` on master), APK versionCode `20076`. Bump `pubspec.yaml` on the branch before the merge; CI must be green on the bumped sha.
 
-**EXECUTED 2026-11-06 (`8b240388`):** archive `step5-archive-20261106T153338Z` (copied to the owner's PC, hashes equal), backup `chatdb-20261106T154223Z.dump.gpg`, 0027 applied 15:45:07Z, web smoke 8/8, APK 20076 published. Account: `.cursor/session-summaries/2026-11-06-release-0276.md`.
+**EXECUTED 2026-11-06 (`8b240388`):** archive `step5-archive-20261106T153338Z` (copied to the owner's PC, hashes equal), backup `chatdb-20261106T154223Z.dump.gpg`, 0027 applied 15:45:07Z, web smoke 8/8, APK 20076 published. Account: `.cursor/session-summaries/2026-11-06-release-0276.md`. Both copies of the archive were deleted on 2026-11-16 (decision 140), so step 1's "restore later" no longer applies.
 
 ### 1. Archive (VM, old backend still running; decision 128)
 

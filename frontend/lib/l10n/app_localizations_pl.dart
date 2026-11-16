@@ -2087,7 +2087,7 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get contentStoreFailedLine =>
-      'Nie można otworzyć zaszyfrowanej pamięci tego urządzenia. Nic nie zostało usunięte ani zapisane bez szyfrowania. Dotknij, aby spróbować ponownie.';
+      'Nie można otworzyć zaszyfrowanej pamięci tego urządzenia, więc czaty nie są widoczne. Dotknij, aby spróbować ponownie.';
 
   @override
   String siblingSilentLine(String name) {
