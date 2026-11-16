@@ -52,20 +52,28 @@ const List<int> _kPadMagic = [0x55, 0x6d, 0x62, 0x72, 0x61, 0x50, 0x61, 0x64];
 /// size. The length sits INSIDE the encryption; [unpadMediaPlaintext] reads
 /// it back after the decrypt. Throws [ArgumentError] past the top rung.
 Uint8List padMediaPlaintext(Uint8List file) {
-  final needed = 4 + file.length + kMediaPadTrailerBytes + kMediaGcmTagBytes;
-  final rung = kBoxMediaLadder.firstWhere(
-    (size) => size >= needed,
-    orElse: () => throw ArgumentError.value(
-      file.length,
-      'file',
-      'too long for the top media rung once padded',
-    ),
-  );
-  final padded = Uint8List(rung - 4 - kMediaGcmTagBytes)
-    ..setRange(0, file.length, file);
+  final padded = Uint8List(
+    filledPlaintextLength(file.length + kMediaPadTrailerBytes),
+  )..setRange(0, file.length, file);
   final trailer = padded.length - kMediaPadTrailerBytes;
   ByteData.sublistView(padded).setUint32(trailer, file.length);
   return padded..setRange(trailer + 4, padded.length, _kPadMagic);
+}
+
+/// How long a plaintext must be for its sealed body to fill the smallest
+/// rung that holds [contentLength] bytes: that rung minus the frame prefix
+/// and the GCM tag. Throws [ArgumentError] past the top rung.
+int filledPlaintextLength(int contentLength) {
+  final needed = 4 + contentLength + kMediaGcmTagBytes;
+  final rung = kBoxMediaLadder.firstWhere(
+    (size) => size >= needed,
+    orElse: () => throw ArgumentError.value(
+      contentLength,
+      'contentLength',
+      'too long for the top media rung once sealed',
+    ),
+  );
+  return rung - 4 - kMediaGcmTagBytes;
 }
 
 /// Inverse of [padMediaPlaintext]. A plaintext without a well-formed trailer
