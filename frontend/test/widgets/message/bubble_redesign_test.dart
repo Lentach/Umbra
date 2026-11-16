@@ -268,11 +268,16 @@ void main() {
         );
         expect(surfaceFinder, findsOneWidget);
         final surfaceWidth = tester.getSize(surfaceFinder).width;
+        // The text and its metadata share one Wrap: the time sits on the
+        // text's line when it fits (it does in Inter), else on its own line.
+        final runFinder = find
+            .ancestor(of: textFinder, matching: find.byType(Wrap))
+            .first;
         expect(
           surfaceWidth,
-          closeTo(textWidth + 32, 1),
+          closeTo(tester.getSize(runFinder).width + 32, 1),
           reason:
-              'When metadata wraps, painted bubble should shrink-wrap the text run plus padding.',
+              'The painted bubble should shrink-wrap the text run and its metadata plus padding.',
         );
         expect(
           surfaceWidth,

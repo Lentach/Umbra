@@ -106,8 +106,8 @@ purpose — adding it at the server level would emit a second, conflicting `X-Fr
 top of helmet's on every API response. HSTS mirrors helmet's `max-age=31536000; includeSubDomains`
 (no `preload`: one-way door). `Permissions-Policy` keeps `camera=(self)` (QR link scanner) and
 `microphone=(self)` (voice messages) — denying them breaks both. COEP is deliberately absent: it
-would block `fonts.gstatic.com`, which `google_fonts` fetches at runtime because the fonts are not
-bundled.
+would block `fonts.gstatic.com`, where CanvasKit fetches its fallback fonts (Roboto, Noto, emoji) on web.
+The app's own faces are bundled since 0.2.86 (plan C3).
 
 **The CSP is REPORT-ONLY by design.** It is the exact intended enforcing policy, so the reports are
 the truth about what would break; flipping it needs (1) one logged-in pass in DESKTOP Chrome (chat,

@@ -52,7 +52,7 @@ Source of truth is `chat.gateway.ts` (`@Throttle` per handler); this is an orien
 
 - Key-exchange, identity-reset/recovery, device-list/revocation and provisioning events carry explicit limits (10–60/15min; `getDeviceList` 300/15min; `searchUsers` 100/15min; `setRequestQueue` / `getOwnRequestQueues` 30/15min); `fetchPreKeyBundle` / `checkOwnKeyBundle` use the guard's global default (100/15min).
 - `uploadKeyBundle` is the only handler without a `WsThrottlerGuard`.
-- The old chat events (`sendMessage`, `getMessages`, friends/blocks/reactions/…) have NO handler and no throttle row: an unknown event is unanswered silence. Their `WsThrottlerGuard` refusal-answer entries went with them.
+- `getMessages` stays only as a compatibility answer (an empty `messageHistory`, 300/15min). The other old chat events (`sendMessage`, friends/blocks/reactions/…) have NO handler and no throttle row: an unknown event is unanswered silence. Their `WsThrottlerGuard` refusal-answer entries went with them.
 
 ## WsThrottlerGuard tracker (§6)
 

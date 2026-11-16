@@ -39,7 +39,7 @@ This document describes what the Fireplace (Umbra) server stores and can observe
 - **Revoked-device check.** A closed device's revoked check follows a push wake-up by about a second, so the server could link "queue X woke" with "this session refreshed", at most once per device per 24 h (decision 131).
 - **Push providers.** Google (FCM) and Apple/Mozilla/Microsoft (Web Push) see that a device was woken. FCM wake-ups carry only `{type:'new_message'}`; Web Push payloads are encrypted (RFC 8291).
 
-**Known gaps, not accepted, being fixed** (`docs/plans/2026-11-16-security-hardening.md`): on web, link-preview URLs reach the server with the user's session (C4); a receiver loads a link preview's image from the sender's chosen host (C1); the GIF picker and Google Fonts contact third parties (C2, C3).
+**Known gaps, not accepted, being fixed** (`docs/plans/2026-11-16-security-hardening.md`): on web, link-preview URLs reach the server with the user's session (C4); a receiver loads a link preview's image from the sender's chosen host (C1); the GIF picker contacts Giphy (C2). The app's own fonts are bundled since 0.2.86 (C3); on web only, Flutter's CanvasKit renderer still fetches fallback fonts (Roboto, Noto, emoji) from Google's font server when a glyph is missing.
 
 **Camera metadata:** since 0.2.83 a photo (JPEG, PNG, WebP) or video (MP4/MOV) loses its GPS position, capture time, device model and embedded thumbnail on the sending device, before encryption (plan A2); a JPEG keeps only its orientation. A file sent as a document, a GIF, a HEIC photo or a WebM video goes as it is.
 
