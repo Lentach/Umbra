@@ -21,7 +21,7 @@ This document describes what the Fireplace (Umbra) server stores and can observe
 | Recovery and identity resets | `recovery_keys`, `identity_reset_requests`, `identity_change_audit` | The recovery-phrase verifier and the reset ceremony | Until account deletion |
 | Box queues | `box_queues` | Random ids (`rid`, `sid`, `nid`) and the queue's auth key; no account. `touchedDay` is the UTC day of the last subscribe and feeds only the 90-day reaper | Deleted by the owner (unfriend, revoke, #234), or reaped after 90 idle days |
 | Undelivered blobs | `box_msgs` | 16 KiB ciphertext waiting for its recipient | Deleted on `ack`, else after 30 days |
-| Box media | `box_media` + disk | Encrypted attachments padded to a size rung (4 KiB … 32 MiB), linked to no queue | Until `expiresAt` |
+| Box media | `box_media` + disk | Encrypted attachments padded to a size rung (4 KiB … 32 MiB), linked to no queue. **Known gap:** the 4-byte length prefix is not encrypted, so the server can read each file's exact size (plan A1, `docs/plans/2026-11-16-security-hardening.md`) | Until `expiresAt` (14 days) |
 | Push notifiers | `box_notifiers` | One verified push endpoint (FCM token or Web Push subscription) per inbound queue | Deleted with its queue |
 | Contact backup | `contact_backups` | One opaque encrypted blob per account (see below) | Until account deletion |
 | Secret notes | `secret_notes` | Random token, ciphertext and expiry; no creator id | Deleted on reveal, on expired access, or by the per-minute cleanup |
@@ -39,6 +39,8 @@ This document describes what the Fireplace (Umbra) server stores and can observe
 - **Revoked-device check.** A closed device's revoked check follows a push wake-up by about a second, so the server could link "queue X woke" with "this session refreshed", at most once per device per 24 h (decision 131).
 - **Push providers.** Google (FCM) and Apple/Mozilla/Microsoft (Web Push) see that a device was woken. FCM wake-ups carry only `{type:'new_message'}`; Web Push payloads are encrypted (RFC 8291).
 
+**Known gaps, not accepted, being fixed** (`docs/plans/2026-11-16-security-hardening.md`): exact attachment sizes (A1); on web, link-preview URLs reach the server with the user's session (C4); a receiver loads a link preview's image from the sender's chosen host (C1); the GIF picker and Google Fonts contact third parties (C2, C3).
+
 ## Why this metadata is needed
 
 - **Delivery:** a queue must exist and hold a blob until its recipient takes it.
@@ -50,9 +52,10 @@ This document describes what the Fireplace (Umbra) server stores and can observe
 
 - **Box:** a blob lives until it is acked or 30 days pass; a queue lives until its owner deletes it or 90 idle days pass; media lives until its `expiresAt`.
 - **Secret notes:** one-shot; expired unread notes are purged every minute.
+- **Backups:** a nightly `backup-db.sh` dump (database plus media volume, GPG-encrypted) is kept 14 days on the VM. A copy goes to Cloudflare R2, whose pruning rule lives in Cloudflare, not in this repo (oldest copy on 2026-11-16: 2026-10-16). Deleted data, undelivered blobs and deleted accounts therefore survive in backups for that long. The pre-box tables dropped in 0.2.76 survive in an encrypted, VM-only `step5-archive-20261106T153338Z` with no end date yet (plan A4).
 - **Logging:** backend log strings carry no account ids or usernames (CI-guarded by `scripts/verify-no-user-logs.mjs`); no raw tokens, keys, ciphertext or message content.
 - **Closed activity clocks (2026-09-20):** `devices.lastSeenAt`, `secret_notes.creatorId` and the every-connect re-stamp of `key_bundles.updatedAt` are gone. Still present and not presence-free: `refresh_tokens.expires_at`/`created_at`, `one_time_pre_keys.createdAt/used`, `devices.addedAt/revokedAt`, `users.createdAt/passwordChangedAt`, `box_notifiers.verifiedAt`, `box_queues.touchedDay` (day granularity), and the identity-reset and recovery timestamps.
-- **Contact backup, what it does and does not leak (PR2.4):** the row's `blob` is AES-256-GCM under a content key the server never receives. That key is wrapped under PBKDF2-HMAC-SHA256 (600 000) of the account password and, when the user has enrolled one, of the recovery phrase.
+- **Contact backup, what it does and does not leak (PR2.4):** the row's `blob` is AES-256-GCM under a content key the server never receives. That key is wrapped under PBKDF2-HMAC-SHA256 (600 000) of the account password and, when the user has enrolled one, of the recovery phrase. The login sends that same password to the server, so a malicious server operator could unwrap the backup (plan B3).
   - The server learns three things and no more: that an account has a backup, its size **rounded up to a 4 KiB bucket**, and when it last CHANGED.
   - The bucketing matters: AES-GCM is length-preserving, so an unpadded blob's length would estimate the contact count from a `pg_dump` with no key. The plaintext is padded to `kContactBackupPadBlock` before sealing, so one contact and ten look the same.
   - `updatedAt` does NOT move for an unchanged graph. The client decides that on the PLAINTEXT before sealing, because a fresh GCM IV makes every re-seal different bytes. An idle reconnect therefore leaves no trace.
@@ -63,5 +66,5 @@ This document describes what the Fireplace (Umbra) server stores and can observe
 
 ## Key storage (E2E)
 
-- **Mobile:** keys in Keychain (iOS) / Keystore (Android), hardware-backed when available.
-- **Web:** keys in browser storage, encrypted with WebCrypto, in the app-specific `FireplaceE2E` database. Someone with device access could potentially extract them. Privacy & Safety shows a web-specific warning; the mobile app is recommended for maximum security.
+- **Android:** keys in the Keystore (hardware-backed when available); messages in SQLCipher. If SQLCipher fails to open, content falls back to plaintext SharedPreferences for that session (plan A3). There is no native iOS app yet.
+- **Web:** Signal keys, sealing keys and session tokens sit in `localStorage`, together with the key that unwraps them (`signal_stores.dart:29-49`). That is obfuscation, not encryption: anyone who can read the browser profile, or a script injected into the page, can read them. Privacy & Safety shows a web-specific warning; the native app is recommended.
