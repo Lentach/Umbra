@@ -734,9 +734,8 @@ class NativeContentStore implements ContentKv {
   static NativeContentStore? instance;
 
   /// Seal decrypted voice-note bytes under the ACTIVE content key, or null
-  /// when sealing is unavailable (caller then writes plaintext — the same
-  /// honest fallback as the record path, and the file still dies with its
-  /// message purge; it just has no shred story until sealed).
+  /// when sealing is unavailable — the caller then caches nothing and plays
+  /// from memory (`AudioCacheStore.writeSealed`, hardening A5).
   Future<Uint8List?> sealAudioBytes(Uint8List plain) {
     final raw = _rawKeys[_activeKid];
     if (raw == null) return Future.value();

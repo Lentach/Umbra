@@ -34,6 +34,9 @@ import 'services/portrait_lock_service.dart';
 import 'theme/app_scroll_behavior.dart';
 import 'utils/storage_persist.dart';
 import 'utils/e2e_persistent_diag.dart';
+import 'utils/video_temp_file_stub.dart'
+    if (dart.library.io) 'utils/video_temp_file_io.dart'
+    as video_temp;
 import 'utils/web_document_background.dart';
 import 'utils/device_link_route_guard.dart';
 import 'widgets/boot_honeycomb.dart';
@@ -130,6 +133,9 @@ Future<void> main() async {
       initialThemePreference: initialTheme,
     ),
   );
+  // Plaintext video a killed process left in the temp/files directories
+  // (hardening A5). After runApp: it must never delay the first frame.
+  unawaited(video_temp.sweepStaleVideoTempFiles());
 }
 
 class FireplaceApp extends StatefulWidget {

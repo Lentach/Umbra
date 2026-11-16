@@ -1,15 +1,18 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path_provider/path_provider.dart';
 
-/// Owns the on-disk cache of DECRYPTED voice notes.
+/// Owns the on-disk cache of voice notes.
 ///
-/// Native only. A played voice note is written to
-/// `<app documents>/audio_cache/<messageId>.audio` in the clear, so a message
-/// purge that ignores this directory leaves readable audio behind — and the
-/// documents directory is swept into iCloud / Android auto-backup, which
-/// carries it off the device entirely. Web never writes here (audio stays in
+/// Native only. A played voice note is cached as
+/// `<app documents>/audio_cache/<messageId>.audio`, SEALED under the content
+/// store's active key ([writeSealed]; hardening A5). Older builds wrote it in
+/// the clear; those files are sealed in place once per launch
+/// (`sealPlainAudioCacheFiles`). A message purge that ignores this directory
+/// still leaves the note behind, and the documents directory is swept into
+/// iCloud / Android auto-backup. Web never writes here (audio stays in
 /// memory), so every entry point returns early under [kIsWeb].
 ///
 /// This is a service rather than state on the playback widget so the filename
@@ -53,6 +56,26 @@ class AudioCacheStore {
     if (dir == null) return null;
     await dir.create(recursive: true);
     return File('${dir.path}/$messageId.audio');
+  }
+
+  /// Caches a downloaded voice note in [target] ONLY sealed (hardening A5):
+  /// [seal] is the content store's `sealAudioBytes`, null when there is no
+  /// store. No store, or a seal that answers null, writes nothing at all —
+  /// the note plays from memory and the next play downloads it again.
+  /// Written to a `.part` file and renamed into place, so a reader (or the
+  /// startup sweep of legacy files) never sees a half-written note.
+  /// Returns whether [target] now holds the sealed note.
+  static Future<bool> writeSealed(
+    File target,
+    Uint8List plain,
+    Future<Uint8List?> Function(Uint8List plain)? seal,
+  ) async {
+    final sealed = seal == null ? null : await seal(plain);
+    if (sealed == null) return false;
+    final part = File('${target.path}.part');
+    await part.writeAsBytes(sealed, flush: true);
+    await part.rename(target.path);
+    return true;
   }
 
   /// Destroy the cached audio for [messageIds].

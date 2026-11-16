@@ -11,7 +11,7 @@ import 'sealed_audio_codec.dart';
 /// Returns whether the cache is provably clean of the retiring kids. Files
 /// that are NOT sealed (legacy plaintext `.audio`/`.m4a`) are left alone here
 /// — they hold no reference to any key, so key destruction cannot hurt them;
-/// they get sealed when the audio write path next touches them.
+/// [sealPlainAudioCacheFiles] seals them once per launch.
 ///
 /// Replacement is write-to-temp + atomic rename, so a kill mid-reseal leaves
 /// either the old file (still sealed under the retiring key — the rotation
@@ -68,4 +68,49 @@ Future<bool> resealAudioCacheFiles(
     return false;
   }
   return clean;
+}
+
+/// Launch pass over the voice-note cache (hardening A5): seals in place every
+/// legacy PLAINTEXT note an older build wrote (`<id>.audio` / `<id>.m4a`
+/// without the sealed header), using [seal] — the content store's
+/// `sealAudioBytes`, so the files land under the active key and rotation
+/// carries them from then on. Only files last modified before [before]
+/// (default: now) are touched: anything newer is a write that began after
+/// the sweep, and those are sealed by construction. Stops at the first
+/// refused seal (no armed key: nothing else would seal either). Same
+/// tmp + atomic rename as the rotation pass, so a kill leaves the old file
+/// or the sealed one, never a torn note. Never throws; returns how many
+/// files it sealed.
+Future<int> sealPlainAudioCacheFiles(
+  Future<Uint8List?> Function(Uint8List plain) seal, {
+  Directory? dir,
+  DateTime? before,
+}) async {
+  final cutoff = before ?? DateTime.now();
+  var sealed = 0;
+  try {
+    final cache = dir ?? await AudioCacheStore.directory();
+    if (cache == null || !cache.existsSync()) return 0;
+    await for (final entry in cache.list()) {
+      if (entry is! File) continue;
+      final name = entry.uri.pathSegments.last;
+      if (!name.endsWith('.audio') && !name.endsWith('.m4a')) continue;
+      try {
+        if (!entry.lastModifiedSync().isBefore(cutoff)) continue;
+        final bytes = await entry.readAsBytes();
+        if (SealedAudioCodec.hasMagic(bytes)) continue;
+        final sealedBytes = await seal(bytes);
+        if (sealedBytes == null) return sealed;
+        final tmp = File('${entry.path}.seal');
+        await tmp.writeAsBytes(sealedBytes, flush: true);
+        await tmp.rename(entry.path);
+        sealed++;
+      } on Object {
+        // This note stays as it was; the next launch tries again.
+      }
+    }
+  } on Object {
+    // No directory to read: nothing this pass can do.
+  }
+  return sealed;
 }
