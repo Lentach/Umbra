@@ -133,7 +133,7 @@ export class AuthService {
 
     const changedAt = await this.usersService.setPassword(user.id, newPassword);
     // The owner proved themselves by the phrase: forget every client's failures.
-    this.loginBackoff.clearAccount(`name:${user.username.toLowerCase()}`);
+    this.loginBackoff.clearAccount(`name:${user.username.toLowerCase()}`); // log-guard: key
     this.auditLogger.log(`recoverPassword success`);
     // `JwtStrategy` and the socket handshake reject `iat <= passwordChangedAt`
     // in WHOLE SECONDS, and a JWT's `iat` is floored — a token signed in the

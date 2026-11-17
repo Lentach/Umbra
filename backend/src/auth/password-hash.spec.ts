@@ -1,13 +1,19 @@
 import * as argon2 from 'argon2';
+import { HttpException } from '@nestjs/common';
 
 // Wrapped so the concurrency test can watch calls; real behaviour otherwise.
 jest.mock('bcrypt', () => {
-  const actual = jest.requireActual('bcrypt');
-  return { ...actual, compare: jest.fn(actual.compare) };
+  const actual = jest.requireActual<typeof import('bcrypt')>('bcrypt');
+  return {
+    ...actual,
+    compare: jest.fn(
+      actual.compare as (data: string, hash: string) => Promise<boolean>,
+    ),
+  };
 });
 
 jest.mock('argon2', () => {
-  const actual = jest.requireActual('argon2');
+  const actual = jest.requireActual<typeof import('argon2')>('argon2');
   return {
     ...actual,
     verify: jest.fn(actual.verify),
@@ -111,7 +117,8 @@ describe('password-hash', () => {
     let inFlight = 0;
     let peak = 0;
     const verifyMock = argon2.verify as jest.Mock;
-    const realVerify = jest.requireActual('argon2').verify;
+    const realVerify =
+      jest.requireActual<typeof import('argon2')>('argon2').verify;
     verifyMock.mockImplementation(async (h: string, p: string) => {
       inFlight++;
       peak = Math.max(peak, inFlight);
@@ -146,8 +153,10 @@ describe('password-hash', () => {
 
   describe('the hash gate', () => {
     const hashMock = argon2.hash as jest.Mock;
-    const realHash = jest.requireActual('argon2').hash;
-    afterEach(() => hashMock.mockImplementation(realHash));
+    const realHash = jest.requireActual<typeof import('argon2')>('argon2').hash;
+    afterEach(() => {
+      hashMock.mockImplementation(realHash);
+    });
 
     it('a rejecting operation frees its slot', async () => {
       hashMock.mockRejectedValue(new Error('argon2 blew up'));
@@ -167,9 +176,16 @@ describe('password-hash', () => {
         MAX_CONCURRENT_PASSWORD_HASHES + MAX_WAITING_PASSWORD_HASHES;
       const held = Array.from({ length: total }, () => hashPassword('x'));
 
-      const refused = await hashPassword('x').catch((e) => e);
-      expect(refused.getStatus()).toBe(503);
-      expect(refused.getResponse()).toEqual({ error: 'busy' });
+      let refused: unknown;
+      try {
+        await hashPassword('x');
+      } catch (e) {
+        refused = e;
+      }
+      expect(refused).toBeInstanceOf(HttpException);
+      const busy = refused as HttpException;
+      expect(busy.getStatus()).toBe(503);
+      expect(busy.getResponse()).toEqual({ error: 'busy' });
 
       // Drain: each completion starts the next waiter.
       while (releases.length) releases.shift()!();

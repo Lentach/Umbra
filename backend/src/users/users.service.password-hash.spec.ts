@@ -42,7 +42,10 @@ describe('UsersService passwords (plan D4: bcrypt → Argon2id)', () => {
       );
 
       expect(mockRepo.update).toHaveBeenCalledTimes(1);
-      const [where, set] = mockRepo.update.mock.calls[0];
+      const [where, set] = mockRepo.update.mock.calls[0] as [
+        unknown,
+        { password: string },
+      ];
       expect(where).toEqual({ id: 7, password: legacy });
       expect(Object.keys(set)).toEqual(['password']);
       expect(set.password).toMatch(/^\$argon2id\$/);

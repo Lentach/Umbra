@@ -25,7 +25,9 @@ describe('LoginBackoffService', () => {
       svc.reserve(acct, ip, at);
       return 0;
     } catch (e) {
-      return (e as LoginBackoffException).getResponse()['retryAfterMs'];
+      return (
+        (e as LoginBackoffException).getResponse() as { retryAfterMs: number }
+      ).retryAfterMs;
     }
   };
 
