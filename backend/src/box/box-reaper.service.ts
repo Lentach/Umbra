@@ -22,6 +22,7 @@ import { BoxService } from './box.service';
 export class BoxReaper {
   private readonly logger = new Logger(BoxReaper.name);
   private readonly ceiling = new BoxCeilingMonitor();
+  private totalsMissing = false;
 
   constructor(
     private readonly box: BoxService,
@@ -43,7 +44,18 @@ export class BoxReaper {
     this.logger.debug(
       `[box] sweep media=${expired.length} queues=${reaped.length}`,
     );
-    this.ceiling.check(await this.box.totals(), this.logger);
+    const totals = await this.box.totals();
+    if (totals === null) {
+      // No row: every store is refused. Log the transition once, not per sweep.
+      if (!this.totalsMissing) {
+        this.logger.error(
+          '[box] ceiling box_totals row missing (box refusing all stores)',
+        );
+      }
+    } else {
+      this.ceiling.check(totals, this.logger);
+    }
+    this.totalsMissing = totals === null;
     const refused = takeRefusalCounts();
     if (refused.size > 0) {
       const counts = [...refused].map(([event, n]) => `${event}=${n}`);
