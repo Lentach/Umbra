@@ -1,3 +1,8 @@
+// SERVICE-LAYER DEMONSTRATION. The fix lands in `_readBox`, so the test that
+// turns green with it is in test/providers/messaging_provider_box_test.dart
+// ('B3: a normal-queue PreKey frame ...'). This one shows what the Signal
+// layer does with such a frame and is not expected to flip.
+//
 // B3 (docs/plans/2026-11-17-b3-impersonation.md): a server that saw a
 // user's login password can speak AS that user to their friends.
 //
@@ -110,7 +115,7 @@ void main() {
       // and display it in the user's chat.
       await expectLater(
         victim.decrypt(userId, forged, messageId: 2),
-        throwsA(anything),
+        throwsA(isA<Exception>()),
       );
     },
     skip: _skip,

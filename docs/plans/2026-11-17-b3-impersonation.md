@@ -23,7 +23,7 @@ does NOT need to break any cipher.
 | 1 | Login sends the raw password | TRUE | `frontend/lib/services/api_service.dart:104-110` (`jsonEncode({'identifier', 'password'})` to `/auth/login`); backend hashes it only after receipt (`backend/src/auth/auth.service.ts:58`, `bcrypt.compare`). The server sees the plaintext on every login. |
 | 2 | The password unwraps the contact backup | TRUE | `contact_backup.dart:275-303` `deriveWrapKey`: `passcode: secret` for `ContactWrapKind.password`, PBKDF2-style KDF (`kContactBackupKdfIterations`) over the password and a per-account `salt` the server stores and serves. `contact_backup_service.dart:655-665` tries `(ContactWrapKind.password, password)` at login. The server holds the wrapped row AND the salt, so it can run the same KDF offline with the password it just saw. No second secret is involved (the phrase wrap is a *separate* door, not a requirement). |
 | 3 | The backup holds friends' queue addresses | TRUE, with a limit | `contact_record.dart:674-691` `toBackupJson` keeps `outbound` (`peerDeviceId`, `sid`, `sealPub`: `contact_record.dart:156-185`) and drops `queues` (own private halves) and `relays`. `outbound` is exactly what a sender needs to write into the friend's normal queue. |
-| 4 | Normal-queue frames skip the identity check | TRUE | `_readBox` (`messaging_provider.box.dart:1086-1111`) goes: live-device check (1066) → `preKeyFromNewIdentity` (only a *decision-88 handoff* trigger, for a not-enrolled friend; it does not refuse anything) → `enc.decrypt`. The request/sibling paths call `enc.carriesOwnIdentity(signal)` first (`messaging_provider.box.dart:633-640`, `prekey_identity.dart` `ciphertextMatchesIdentity`); the normal path has no equivalent against the pinned friend identity. |
+| 4 | Normal-queue frames skip the identity check | TRUE | `_readBox` (`messaging_provider.box.dart:1086-1111`) goes: live-device check (1066) → `preKeyFromNewIdentity` (only a *decision-88 handoff* trigger, for a not-enrolled friend; it does not refuse anything) → `enc.decrypt`. The request/sibling paths call `enc.carriesOwnIdentity(signal)` first (`carriesOwnIdentity` at `messaging_provider.box.dart:645`; the friend REQUEST-queue path uses `friendFrameIdentity` at `messaging_provider.box.dart:251` (`prekey_identity.dart:124-150`, via `friendFrameIdentityOf`, `encryption_service.dart:2991`) plus the `preKeyWouldReplaceSession` gate at `:265-283`); the normal path has no equivalent against the pinned friend identity. |
 | 5 | Signal's own store does not catch it | TRUE | `SecureIdentityKeyStore.isTrustedIdentity` (`signal_stores.dart:615-660`) returns `true` for ANY key ("TOFU always wins"), saves it, and for a changed key only stages a candidate + `onIdentityChanged`. It never refuses. |
 | 6 | The acknowledgement moves the pin | TRUE by default | `encryption_service.dart:372-393`: with key-change warnings off (the default since (lxxix), `settings_provider.dart:167` is `false`) `_demoteKeyChangeIfMuted` calls `acknowledgePeerIdentity` at once; the test log shows `PEER_IDENTITY_ACKNOWLEDGED anchorAdvanced: true source: pending_candidate`. The anchor is attacker-owned within the same decrypt. With warnings ON the text is still decrypted and returned; only the pin stays on the real key until a human acts. |
 
@@ -50,7 +50,7 @@ does NOT need to break any cipher.
    authentication exists in the outer layer. So **yes, it can seal**.
    `_ownerOf` (`box_inbox.dart:355-375`) then attributes the frame to the
    record's `userId`, and `frame.senderUserId != null` is refused only for
-   normal queues (`box_inbox.dart:171`), which the attacker avoids.
+   normal queues (`box_inbox.dart:177`), which the attacker avoids.
 6. **A PreKey message to an established session.** libsignal accepts a new
    PreKey message even when a session exists (it archives the old one); this is
    what lets the attacker supersede the real session rather than needing a
@@ -94,104 +94,140 @@ the backup unwrap are shown by code reading, not by execution; a full
 end-to-end run needs the box server. The test stands at the `EncryptionService`
 layer `_readBox` calls; the missing check lives at or above that layer.
 
+
+## Bigger finding (P1): the recovery phrase reaches the server in plaintext
+
+B3's chain starts from the login password. The recovery phrase is worse,
+because it is the secret that seals the **real identity key**:
+
+* Enrolment: `EncryptionProvider.setRecoveryKey` emits `setRecoveryKey` with
+  `'phrase': phrase` next to `backup` (`encryption_provider.dart:3035-3041`);
+  the gateway passes `dto.phrase` to `identityResetService.setRecoveryKey`
+  (`chat-key-exchange.service.ts:733-738`). The server stores a verifier and
+  the phrase-SEALED identity backup (`SealedIdentityBackup`), and sees the
+  phrase itself in that call.
+* Recovery: `ApiService.recoverPassword` posts `'phrase': phrase` to
+  `/auth/recover` (`api_service.dart:124-136`).
+
+An operator that logs either call holds the phrase and the sealed identity
+backup, so it can open the backup and rebuild the account's REAL identity key
+pair. The attacker then speaks as the user with the genuine identity:
+**Option A's identity check does not stop it** (the frame carries the pinned
+key). It also opens the contact-backup phrase wrap, so the backup is readable
+without the password. For phrase-enrolled users this is account takeover by
+the operator, not just B3. (Verified by reading the call sites above; not run.)
+
 ## Fix options
 
-### Option A: friend-identity check on normal queues (recommended first)
+A real fix needs two layers: (1) stop the operator forging with the
+addresses, (2) keep the secrets that unlock identity and backup away from the
+server. A alone does (1) for password-only attackers; only layer (2) covers
+the phrase.
 
-In `_readBox`, before `enc.decrypt`: for a PreKey frame, compare its identity
-key with the account anchor pinned for the friend (`getAccountIdentity`,
-`signal_stores.dart:~570`), exactly as `carriesOwnIdentity` does for
-siblings. A mismatch is not decrypted; the frame is held aside and the friend
-gets the actionable key-change pill.
+### Option A: friend-identity check on normal queues
 
-Legitimate identity changes this must keep working:
+Pair two gates in `_readBox`, exactly as the friend request-queue path does
+(`messaging_provider.box.dart:251-283`):
 
-* **Decision 88 re-mint** (friend lost storage, single-device): the new
-  identity arrives in a PreKey frame by design. Today's `preKeyFromNewIdentity`
-  path already detects it; for a not-enrolled friend we cannot tell a re-mint
-  from the attack by the frame alone: this is the honest residue. Required
-  change: do NOT auto-accept; stage the candidate, show the key-change
-  pill (safety-number change) and decrypt only after acknowledgement, OR
-  accept when the frame carries a proof from the old identity (new
-  versioned field in the handoff envelope: old-identity signature over the
-  new key + new queue).
-* **§6.2 reset ceremony / new enrolled device:** the account identity is
-  shared by linked devices (`signal_stores.dart:518-520`); a reset changes the
-  signed device list, so the verified list (not the frame) is the authority:
-  accept a new identity iff the verified, signature-chained list the client
-  already holds (I7) names it.
-* **Wire/migration:** none for the check itself (client-only). Old peers
-  (≤0.2.88) keep sending exactly as today; their legitimate frames carry the
-  pinned identity and pass. Old *receivers* remain vulnerable until they
-  update (the check is receiver-side), so the fix only protects updated
-  recipients. A signed re-mint proof would be a new optional envelope field,
-  ignorable by old clients, but then re-minting old senders cannot supply it:
-  they fall to "ask the human" (acknowledge), an acceptable degradation.
-* **Effort:** M (about 2-3 days): check, hold/ack flow for re-mint, tests for
-  reset/new-device/re-mint.
-* **Risk:** medium. A bug here locks friends out after a legitimate
-  reinstall; mitigated by the acknowledge path. Must run the wire/E2E
-  invariants (`frontend/docs/e2e-invariants.md`).
-* **Owner decisions (S8, OWNER-class):** what the user sees on a re-mint
-  (blocking pill vs. quiet note: changes "what users see") and whether the
-  muted-by-default setting (lxxix) may absorb a key change on a *PreKey frame
-  from a normal queue*. Conservative engineering default: never auto-absorb
-  on that path. Asked, not assumed.
+1. `friendFrameIdentity` against the pinned account anchor: `foreign` is
+   refused before Signal sees it. NOTE the `noAnchor` window: with no pin yet
+   nothing can be judged (the request path hands off and returns), so a friend
+   made over the box has a short unprotected window until its first frame
+   pins an identity.
+2. The `preKeyWouldReplaceSession` + re-key gate (`:265-283`): a REVOKED
+   device of the friend still holds the account identity and the queue sid
+   and passes check 1. Without this gate it replaces our session; with it the
+   frame is answered by our re-key built from the real bundle (decision 37).
 
-### Option B: stop deriving the backup wrap from the login password
+What it does not cover: an attacker holding the real identity (phrase leak
+above), and the `noAnchor` window.
 
-Keep the backup, but wrap the content key under a secret the server never
-sees, so the password stops being a key to the friends' queues.
+* **Wire/migration:** client-only. ≤0.2.88 senders' legitimate frames carry the
+  pinned identity and pass; old RECEIVERS stay exposed until they update.
+* **Legitimate identity change (decision 88 re-mint of a not-enrolled
+  friend):** indistinguishable from the attack by the frame alone. Hold the
+  frame and stage the candidate; the human acknowledges. A signed
+  old-identity proof in the handoff is an optional later addition; old
+  senders cannot supply it and fall back to acknowledge.
+* **Effort:** M. **Risk:** medium (a friend locked out after reinstall).
+* **OWNER-class (S8):** this partly REVERSES the owner's dropped plan row
+  B2 ("a new identity key arriving in a message is accepted silently by
+  default", dropped 2026-11-16) and amendment (lxxix) (default
+  `keyChangeWarnings=false`, auto-acknowledge): for a normal-queue PreKey
+  frame under a changed identity, the message would be held until a human
+  acts. Conservative default is to hold; the owner must approve overriding
+  the earlier drop (what users see). Also touches plan row B1 (dropped
+  blocking warning for verified contacts) in spirit.
 
-* **B1: recovery-phrase-only wrap** (drop `ContactWrapKind.password` at
-  `contact_backup.dart:298`, `contact_backup_service.dart:411,664`). The
-  phrase door already exists (`ContactWrapKind.phrase`). A normal login on a
-  new device would no longer restore contacts unless the user types the
-  phrase. Product regression for restore UX: OWNER decision.
-* **B2: separate backup secret** held in the device keystore plus the
-  phrase; a password-only login cannot open it.
-* **B3: password-blind login (OPAQUE / client-side stretching).** The server
-  never sees the plaintext; the wrap key comes from the OPAQUE export key.
-  Biggest change: new auth protocol, new backend endpoints, migration of
-  every account (needs the plaintext once, or a re-registration on next
-  login).
-* **Wire/migration (≤0.2.88):** the row format has a `wraps[]` list with a
-  `kind` (the password wrap is one entry), so adding a new kind is additive;
-  old clients ignore unknown kinds only if they tolerate them, which must be
-  verified in `contact_backup_service.dart` (`_tryWraps`) before shipping. Removing the
-  password wrap breaks ≤0.2.88 restore on a fresh login (they look for it).
-  Needs a dual-wrap period.
-* **Effort:** B1 S-M, B2 M, B3 L (a protocol change; weeks, plus a security review).
-* **Risk:** B1 high UX risk; B2 key-loss risk (lose keystore AND phrase →
-  contacts gone, which the product already accepts for a lost phone); B3
-  high.
-* **Owner decisions:** B1 and B2 change recovery UX; B3 changes the auth
-  design (the design approved 2026-09-20 §: "changes approved design").
-  All OWNER.
-* **Does not fix** a server that is *actively* malicious *and* already
-  holds a live session token: after login the server can still push a
-  bundle. It removes the cheap path (the plaintext password), not the lack
-  of sender authentication on the box. A is the only option that closes the
-  forging itself.
+### Option W1: phrase-only contact-backup wrap
 
-### Option C: both, staged (A now; B1/B2 as hardening)
+Drop the `password` wrap kind. **Not** server-blind today: the phrase reaches
+the server (finding above), so W1 only helps once Option V (below) lands.
+Migration: the server DTO is `@IsIn(['password','phrase'])`
+(`backend/src/backup/dto/contact-backup.dto.ts:28`) so a new kind needs a
+backend release first; and old clients re-upload ONLY the wraps they parsed
+(`contact_backup_service.dart` `_tryWraps`/`addWrap`), so an old client
+dropping or rewriting the row silently removes an unknown-kind wrap
+(dual-wrap rows get truncated by ≤0.2.88). Effort S-M; UX regression
+(restore needs the phrase): OWNER.
+
+### Option W2: separate backup secret (keystore + phrase)
+
+Same DTO/old-client-truncation constraints as W1; keystore-only restore is
+lost on a new device. Effort M. OWNER (recovery UX).
+
+### Option W3: password-blind login (OPAQUE)
+
+Server never sees the password; the wrap key derives from the export key.
+New endpoints, per-account migration, security review. Effort L. Changes the
+approved auth design: OWNER ("changes approved design").
+
+### Option V: client-side verifier for the phrase (needed for layer 2)
+
+Make the phrase never leave the device: derive a verifier/auth key from the
+phrase client-side (e.g. Argon2id then a domain-separated hash or a signing
+key), send only the verifier at enrolment and a proof (challenge-response,
+or the derived auth secret) at `/auth/recover`; the identity-backup seal key
+is derived from a DIFFERENT branch of the KDF so the verifier does not open
+the blob. Migration: the existing `phrase` verifier rows were computed from
+the plaintext phrase; ≤0.2.88 clients keep posting the plaintext, so the
+server must accept both until adoption is high, and every ALREADY-leaked
+phrase stays compromised: users must re-enrol (rotate the phrase). Effort
+M-L, security review required. OWNER (recovery flow, rotation prompt).
+
+### Option S: server-blind recovery (OPAQUE / SVR-style)
+
+Rate-limited secret recovery inside an enclave or an OPAQUE-style PAKE so
+even the verifier is not offline-guessable. The Signal-grade endpoint; L-XL.
+OWNER; likely a new infra dependency.
 
 ## Recommendation
 
-1. **Ship Option A**, with the conservative owner-default (re-mint never
-   auto-absorbed from a normal-queue PreKey). It is client-only, closes the
-   attack for every updated recipient regardless of how the attacker got the
-   addresses (password, backup leak, or a former friend's device), and the
-   red test flips green.
-2. **Then B2 (or B1)** as defence in depth, only after the owner decides the
-   recovery UX; B3/OPAQUE is a separate roadmap item.
-3. Until A ships, the exposure is: any server operator that sees the
-   plaintext password at login can speak as that user to friends on updated
-   and old clients alike.
+1. **Option V first** (phrase never reaches the server) together with
+   **Option A** (identity + re-key gate). V closes the larger finding; A
+   closes forging with leaked addresses and also protects against revoked
+   friend devices.
+2. W1/W2 (backup wrap off the password) only after V, since before it the
+   phrase wrap is not server-blind either.
+3. W3/S are the long-term roadmap.
+4. Until then the exposure is: an operator that logs `/auth/login`,
+   `setRecoveryKey` or `/auth/recover` can speak as the user, and for
+   phrase-enrolled users hold the real identity.
 
-Owner questions (not decided here): (1) is a PreKey frame under a changed
-identity from a normal queue blocked until acknowledged even with key-change
-warnings off? (2) should a not-enrolled friend's re-mint require a proof
-from the old identity, accepting that old senders then fall back to a human
-acknowledge? (3) B1/B2: is requiring the recovery phrase to restore contacts
-acceptable?
+## Red test placement
+
+The provider-level test is the one that turns green with Option A:
+`frontend/test/providers/messaging_provider_box_test.dart`, 'B3: a
+normal-queue PreKey frame under an identity other than the friend's pinned one
+is neither decrypted nor shown' (skipped, drives `consumeBoxEntry` through
+`_readBox` with the real identity store and a real attacker PreKey message;
+the Signal decrypt is the file's existing fake, so "not decrypted" is
+observable). Unskipped it fails today (the fake decrypt is reached and the
+message is shown). `test/security/b3_impersonation_test.dart` remains the
+service-layer demonstration (Signal accepts the frame and moves the pin) and
+is not expected to flip with the `_readBox` fix.
+
+Owner questions: (1) may a normal-queue PreKey frame under a changed identity
+be held even with key-change warnings off (reverses dropped row B2/(lxxix))?
+(2) approve Option V and a phrase re-enrolment prompt for existing users?
+(3) is requiring the phrase to restore contacts (W1/W2) acceptable?
