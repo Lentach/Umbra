@@ -25,7 +25,7 @@
 - Device drive, merged build `int-v2` (all seven code PRs), local stack, dedicated AVD `umbra_drive` (emulator-5560) + release web on :8091:
   - D4: 5 wrong passwords then "Zbyt wiele prób"; right password from another client IP 201 while the first IP gets 429; device login migrated `drvold` bcrypt → argon2id.
   - B5: 8 searches spent exactly 5 OTPs (9 → 14 used); the invite after the cap (no OTP) was accepted on web and the chat opened.
-  - C1: native → web and web → native previews show the thumbnail; the web peer requested nothing from github.com or flutter.dev; native keeps it after a force-stop; web shows the title card after reload (by design).
+  - C1: native → web and web → native previews show the thumbnail; the web peer requested nothing from github.com or flutter.dev (its request log); the native receiver neither (emulator `-tcpdump` with Wi-Fi and private DNS off: backend traffic present, every other connection a Google/Play service, no lookup of either site); native keeps it after a force-stop; web shows the title card after reload (by design).
   - D3: photo upload row has `deleteHash`; GET 200, wrong-secret DELETE 404; delete-for-everyone → GET 404, row and file gone, web bubble removed.
   - Voice: failed voice send left `cache/voice_*.m4a`; next launch removed it (and the file_picker copy).
   - Play manifest: a 20 MB video sent untouched; a 45 MB video transcoded by light_compressor while backgrounded (~45 s, no crash) and, in the foreground, transcoded and sent.
