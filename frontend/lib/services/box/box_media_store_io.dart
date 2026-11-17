@@ -78,10 +78,33 @@ class IoBoxMediaStore implements BoxMediaStore {
   @override
   Future<void> delete(int userId, Uint8List id) async {
     final file = await _file(userId, id);
+    for (final f in [file, File('${file.path}.del')]) {
+      try {
+        await f.delete();
+      } on PathNotFoundException {
+        // No copy or no secret: nothing to delete.
+      }
+    }
+  }
+
+  @override
+  Future<void> putDeleteSecret(
+    int userId,
+    Uint8List id,
+    Uint8List secret,
+  ) async {
+    final file = await _file(userId, id);
+    await file.parent.create(recursive: true);
+    await File('${file.path}.del').writeAsBytes(secret, flush: true);
+  }
+
+  @override
+  Future<Uint8List?> getDeleteSecret(int userId, Uint8List id) async {
+    final file = await _file(userId, id);
     try {
-      await file.delete();
+      return await File('${file.path}.del').readAsBytes();
     } on PathNotFoundException {
-      // No copy: nothing to delete.
+      return null;
     }
   }
 }

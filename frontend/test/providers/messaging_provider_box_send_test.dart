@@ -9,6 +9,8 @@ import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/services/box/box_frame.dart';
+import 'package:fireplace/services/box/box_media_fetcher.dart';
+import 'package:fireplace/services/box/box_media_store.dart';
 import 'package:fireplace/services/box/box_media_frame.dart';
 import 'package:fireplace/services/box/box_outbox.dart';
 import 'package:fireplace/services/box/box_wire.dart';
@@ -245,6 +247,15 @@ class _Outbox implements BoxOutbox {
   @override
   Future<int?> nextLocalId() async => noLocalId ? null : _next++;
 
+  /// Every `DELETE /box/media`, with the secret it presented.
+  final List<(Uint8List, Uint8List)> deletes = [];
+
+  @override
+  Future<BoxResult<void>> deleteMedia(Uint8List id, Uint8List secret) async {
+    deletes.add((id, secret));
+    return const BoxOk(null);
+  }
+
   @override
   Future<BoxResult<BoxMediaRef>> uploadMedia(
     ContactOutbound to,
@@ -257,7 +268,13 @@ class _Outbox implements BoxOutbox {
     final id = Uint8List(kBoxMediaIdBytes)..[0] = media.length + 1;
     media[boxB64(id)] = framed;
     return BoxOk(
-      BoxMediaRef(id: id, bucket: 'd14', expiresAt: DateTime.utc(2026, 10, 10)),
+      BoxMediaRef(
+        id: id,
+        bucket: 'd14',
+        expiresAt: DateTime.utc(2026, 10, 10),
+        deleteSecret: Uint8List(kBoxMediaDeleteSecretBytes)
+          ..fillRange(0, kBoxMediaDeleteSecretBytes, 0x5a + id[0]),
+      ),
     );
   }
 
@@ -330,6 +347,7 @@ void main() {
   late _Outbox outbox;
   late List<String> emitted;
   late _MediaCrypto mediaUpload;
+  final mediaStore = MemoryBoxMediaStore();
 
   MessagingProvider newProvider() => MessagingProvider()
     ..setConversationsProvider(conversations)
@@ -341,6 +359,10 @@ void main() {
     ..setActiveConversationIdForTest(10)
     ..setEmitCallback((event, data) => emitted.add(event))
     ..boxOutbox = outbox
+    ..boxMedia = BoxMediaFetcher(
+      store: mediaStore,
+      download: (id) async => const BoxRefused(BoxCode.notFound),
+    )
     ..setMediaCryptoForTest(mediaUpload);
 
   Future<void> setUpWith({int? timer}) async {
@@ -1609,6 +1631,69 @@ void main() {
       await pump();
       return ok;
     }
+
+    test(
+      'delete-for-everyone of our own attachment deletes its box file with '
+      'the secret the upload returned, and that secret is in no frame to a '
+      'peer or a sibling (plan D3)',
+      () async {
+        bob([1, 2]);
+        withSibling();
+        expect(await sendImage(), isTrue);
+        final row = rowOf(MessageType.image);
+        final secret = Uint8List(32)..fillRange(0, 32, 0x5a + 1);
+        expect(boxB64(secret), isNotEmpty);
+        outbox.delivered.clear();
+
+        provider.deleteMessage(row.id, forEveryone: true);
+        await pump();
+
+        expect(outbox.deletes, hasLength(1));
+        expect(boxB64(outbox.deletes.single.$1), outbox.media.keys.single);
+        expect(outbox.deletes.single.$2, secret);
+        // The upload's frames are gone from `delivered`; the delete frames
+        // (and every earlier frame, re-read below) never hold the secret.
+        for (final (_, frame) in outbox.delivered) {
+          expect(jsonEncode(envelopeOf(frame)), isNot(contains(boxB64(secret))));
+        }
+        expect(provider.messages.where((m) => m.id == row.id), isEmpty);
+      },
+    );
+
+    test(
+      'the delete secret is never part of the sent envelopes (plan D3)',
+      () async {
+        bob([1, 2]);
+        withSibling();
+        expect(await sendImage(), isTrue);
+        final secret = boxB64(Uint8List(32)..fillRange(0, 32, 0x5a + 1));
+
+        expect(outbox.delivered, isNotEmpty);
+        for (final (to, frame) in outbox.delivered) {
+          final text = jsonEncode(envelopeOf(frame));
+          expect(text, isNot(contains(secret)), reason: to.sid);
+          expect(text, isNot(contains('eleteSecret')), reason: to.sid);
+        }
+      },
+    );
+
+    test(
+      'a sent attachment whose delete secret this device does not hold is '
+      'deleted for everyone without a box delete (plan D3)',
+      () async {
+        bob([1]);
+        expect(await sendImage(), isTrue);
+        final row = rowOf(MessageType.image);
+        final id = Uint8List(kBoxMediaIdBytes)..[0] = 1;
+        await mediaStore.delete(1, id);
+
+        provider.deleteMessage(row.id, forEveryone: true);
+        await pump();
+
+        expect(outbox.deletes, isEmpty);
+        expect(provider.messages.where((m) => m.id == row.id), isEmpty);
+      },
+    );
 
     test(
       'an image to a covered peer is uploaded ONCE — framed to a ladder '

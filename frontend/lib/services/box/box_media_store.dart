@@ -26,7 +26,14 @@ abstract interface class BoxMediaStore {
   /// asks this for every attachment row it brings back.
   Future<bool> has(int userId, Uint8List id);
 
+  /// Drops the copy of [id] AND its delete secret.
   Future<void> delete(int userId, Uint8List id);
+
+  /// The delete secret (plan D3) of an attachment this device uploaded; it
+  /// lives beside the copy and goes with it, and no envelope ever carries it.
+  Future<void> putDeleteSecret(int userId, Uint8List id, Uint8List secret);
+
+  Future<Uint8List?> getDeleteSecret(int userId, Uint8List id);
 }
 
 /// The one spelling of a media id in a store key or file name: the box's own
@@ -64,5 +71,21 @@ class MemoryBoxMediaStore implements BoxMediaStore {
   @override
   Future<void> delete(int userId, Uint8List id) async {
     _copies.remove(_key(userId, id));
+    _secrets.remove(_key(userId, id));
   }
+
+  final Map<String, Uint8List> _secrets = {};
+
+  @override
+  Future<void> putDeleteSecret(
+    int userId,
+    Uint8List id,
+    Uint8List secret,
+  ) async {
+    _secrets[_key(userId, id)] = Uint8List.fromList(secret);
+  }
+
+  @override
+  Future<Uint8List?> getDeleteSecret(int userId, Uint8List id) async =>
+      _secrets[_key(userId, id)];
 }
