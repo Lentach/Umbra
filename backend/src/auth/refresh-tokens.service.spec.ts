@@ -2,6 +2,7 @@ import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UnauthorizedException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import {
   RefreshTokensService,
   REFRESH_TOKEN_TTL_DAYS,
@@ -20,6 +21,7 @@ describe('RefreshTokensService', () => {
       findOne: jest.fn(),
       remove: jest.fn(),
       delete: jest.fn(),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
       query: jest.fn(),
     };
 
@@ -30,6 +32,8 @@ describe('RefreshTokensService', () => {
           provide: getRepositoryToken(RefreshToken),
           useValue: mockRepo,
         },
+        // No JWT_SECRET: the dev fallback keys the rotation chain.
+        { provide: ConfigService, useValue: { get: () => undefined } },
       ],
     }).compile();
 
@@ -47,57 +51,81 @@ describe('RefreshTokensService', () => {
     expect(a.length).toBe(64);
   });
 
-  it('createToken persists hashed token with ~365d expiry', async () => {
+  it('createToken persists the hashed token, named by its session, with ~365d expiry', async () => {
     repo.save.mockImplementation(async (e: RefreshToken) => e);
 
     const plain = await service.createToken(42);
 
-    expect(plain.length).toBeGreaterThan(40);
     expect(repo.save).toHaveBeenCalled();
     const saved = repo.save.mock.calls[0][0] as RefreshToken;
     expect(saved.userId).toBe(42);
     expect(saved.tokenHash).toBe(RefreshTokensService.hashToken(plain));
+    expect(saved.prevTokenHash).toBeNull();
+    // `<sessionId>.<secret>`: reuse of an old token is told by its session.
+    expect(RefreshTokensService.familyOf(plain)).toBe(saved.id);
+    expect(plain.length).toBeGreaterThan(saved.id.length + 60);
     const msUntilExpiry = saved.expiresAt.getTime() - Date.now();
     expect(msUntilExpiry).toBeGreaterThan(
       (REFRESH_TOKEN_TTL_DAYS - 2) * 86400 * 1000,
     );
   });
 
-  it('consumeAndSlide throws when token unknown', async () => {
-    repo.findOne.mockResolvedValue(null);
-    await expect(service.consumeAndSlide('unknown', live)).rejects.toThrow(
-      new UnauthorizedException('Invalid refresh token'),
-    );
-    expect(live).not.toHaveBeenCalled();
+  it('familyOf reads only a uuid prefix; a token from before plan B4 names none', () => {
+    const id = '0b7e6c1a-5d0f-4c2e-9a51-3f6f2f1d9e10';
+    expect(RefreshTokensService.familyOf(`${id}.abc`)).toBe(id);
+    expect(RefreshTokensService.familyOf('Zm9vYmFy-legacy_token')).toBeNull();
+    expect(RefreshTokensService.familyOf('not-a-uuid.abc')).toBeNull();
+    expect(RefreshTokensService.familyOf('.abc')).toBeNull();
   });
 
-  it('consumeAndSlide extends the existing refresh token instead of invalidating a lost response retry', async () => {
-    const oldExpiry = new Date(Date.now() + 60_000);
-    const oldRow = {
-      id: 'old-token-id',
-      userId: 42,
-      tokenHash: RefreshTokensService.hashToken('old-plain'),
-      expiresAt: oldExpiry,
-    } as RefreshToken;
-    repo.findOne.mockResolvedValue(oldRow);
-    repo.save.mockImplementation(async (e: RefreshToken) => e);
+  it('redeem refuses an unknown token that names no session, asking nothing else', async () => {
+    repo.findOne.mockResolvedValue(null);
+    await expect(
+      service.redeem('unknown', live, { rotate: true }),
+    ).rejects.toThrow(new UnauthorizedException('Invalid refresh token'));
+    expect(repo.findOne).toHaveBeenCalledTimes(1);
+    expect(live).not.toHaveBeenCalled();
+    expect(repo.delete).not.toHaveBeenCalled();
+  });
 
-    const result = await service.consumeAndSlide('old-plain', live);
+  it('redeem without rotate keeps the token and slides only the expiry, by a write that cannot undo a rotation', async () => {
+    const row = {
+      id: 'session-id',
+      userId: 42,
+      deviceId: 3,
+      tokenHash: RefreshTokensService.hashToken('old-plain'),
+      prevTokenHash: null,
+      expiresAt: new Date(Date.now() + 60_000),
+    } as RefreshToken;
+    repo.findOne.mockResolvedValue(row);
+
+    const result = await service.redeem('old-plain', live, { rotate: false });
 
     expect(repo.findOne).toHaveBeenCalledWith({
-      where: { tokenHash: RefreshTokensService.hashToken('old-plain') },
+      where: [
+        { tokenHash: RefreshTokensService.hashToken('old-plain') },
+        { prevTokenHash: RefreshTokensService.hashToken('old-plain') },
+      ],
     });
-    expect(repo.remove).not.toHaveBeenCalled();
-    expect(repo.save).toHaveBeenCalledWith(oldRow);
     // The reissued access token has to keep naming the same device.
-    expect(result).toEqual({ userId: 42, deviceId: oldRow.deviceId });
-    expect(oldRow.expiresAt.getTime()).toBeGreaterThan(oldExpiry.getTime());
-    expect(oldRow.expiresAt.getTime()).toBeGreaterThan(
+    expect(result).toEqual({
+      userId: 42,
+      deviceId: 3,
+      refreshToken: 'old-plain',
+    });
+    const [criteria, values] = repo.update.mock.calls[0] as [
+      Record<string, unknown>,
+      { expiresAt: Date },
+    ];
+    expect(criteria).toEqual({ id: 'session-id', tokenHash: row.tokenHash });
+    expect(Object.keys(values)).toEqual(['expiresAt']);
+    expect(values.expiresAt.getTime()).toBeGreaterThan(
       Date.now() + (REFRESH_TOKEN_TTL_DAYS - 2) * 86400 * 1000,
     );
+    expect(repo.save).not.toHaveBeenCalled();
   });
 
-  it('consumeAndSlide removes expired tokens and rejects without issuing a replacement', async () => {
+  it('redeem removes an expired session and rejects without issuing a replacement', async () => {
     const expiredRow = {
       id: 'expired-token-id',
       userId: 42,
@@ -107,55 +135,79 @@ describe('RefreshTokensService', () => {
     repo.findOne.mockResolvedValue(expiredRow);
 
     await expect(
-      service.consumeAndSlide('expired-plain', live),
+      service.redeem('expired-plain', live, { rotate: true }),
     ).rejects.toThrow(new UnauthorizedException('Refresh token expired'));
 
     expect(repo.remove).toHaveBeenCalledWith(expiredRow);
-    expect(repo.save).not.toHaveBeenCalled();
+    expect(repo.update).not.toHaveBeenCalled();
   });
 
   // Decision 130 (E130a): a device closed past its access JWT's 24 h can only
   // ask /auth/refresh whether it was revoked, so the answer has to be its own
-  // — not the `Invalid refresh token` that logout, a password change and an
-  // expiry also give — and the refusal must not extend the row.
-  it("consumeAndSlide refuses a revoked device's row as 'Device revoked' — before the slide, keeping the row", async () => {
-    const oldExpiry = new Date(Date.now() + 60_000);
-    const row = {
-      id: 'revoked-token-id',
-      userId: 42,
-      deviceId: 2,
-      tokenHash: RefreshTokensService.hashToken('revoked-plain'),
-      expiresAt: oldExpiry,
-    } as RefreshToken;
-    repo.findOne.mockResolvedValue(row);
-    live.mockResolvedValue(true);
+  // — not the `Invalid refresh token` that logout, a password change, reuse
+  // and an expiry also give — and the refusal must neither extend, rotate nor
+  // delete the row (it is the proof of the revocation).
+  it.each([
+    ['current', true],
+    ['current', false],
+    ['older', true],
+  ])(
+    "redeem refuses a revoked device's %s token (rotate: %s) as 'Device revoked', keeping the row as it was",
+    async (which, rotate) => {
+      const familyId = '0b7e6c1a-5d0f-4c2e-9a51-3f6f2f1d9e10';
+      const presented = `${familyId}.revoked-plain`;
+      const oldExpiry = new Date(Date.now() + 60_000);
+      const row = {
+        id: familyId,
+        userId: 42,
+        deviceId: 2,
+        tokenHash:
+          which === 'current'
+            ? RefreshTokensService.hashToken(presented)
+            : 'f'.repeat(64),
+        expiresAt: oldExpiry,
+      } as RefreshToken;
+      if (which === 'current') {
+        repo.findOne.mockResolvedValue(row);
+      } else {
+        repo.findOne.mockResolvedValueOnce(null).mockResolvedValueOnce(row);
+      }
+      live.mockResolvedValue(true);
 
-    await expect(
-      service.consumeAndSlide('revoked-plain', live),
-    ).rejects.toThrow(new UnauthorizedException('Device revoked'));
+      await expect(service.redeem(presented, live, { rotate })).rejects.toThrow(
+        new UnauthorizedException('Device revoked'),
+      );
 
-    expect(live).toHaveBeenCalledWith(42, 2);
-    // Named once: reading these off the class-typed repo trips `unbound-method`.
-    const writes = repo as unknown as { save: jest.Mock; remove: jest.Mock };
-    expect(writes.save).not.toHaveBeenCalled();
-    expect(writes.remove).not.toHaveBeenCalled();
-    expect(row.expiresAt).toBe(oldExpiry);
-  });
+      expect(live).toHaveBeenCalledWith(42, 2);
+      // Named once: reading these off the class-typed repo trips `unbound-method`.
+      const writes = repo as unknown as {
+        save: jest.Mock;
+        remove: jest.Mock;
+        update: jest.Mock;
+        delete: jest.Mock;
+      };
+      expect(writes.save).not.toHaveBeenCalled();
+      expect(writes.remove).not.toHaveBeenCalled();
+      expect(writes.update).not.toHaveBeenCalled();
+      expect(writes.delete).not.toHaveBeenCalled();
+      expect(row.expiresAt).toBe(oldExpiry);
+    },
+  );
 
-  it('consumeAndSlide asks about the pre-Phase-1 (NULL device) row as it is stored; the caller reads it as device 1', async () => {
+  it('redeem asks about the pre-Phase-1 (NULL device) row as it is stored; the caller reads it as device 1', async () => {
     repo.findOne.mockResolvedValue({
       userId: 7,
       deviceId: null,
+      tokenHash: RefreshTokensService.hashToken('legacy-plain'),
       expiresAt: new Date(Date.now() + 60_000),
     } as RefreshToken);
-    repo.save.mockImplementation(async (e: RefreshToken) => e);
 
-    await service.consumeAndSlide('legacy-plain', live);
+    await service.redeem('legacy-plain', live, { rotate: false });
 
     expect(live).toHaveBeenCalledWith(7, null);
   });
 
-  it('revokeByPlain removes matching tokens and ignores unknown tokens', async () => {
+  it('revokeByPlain ends the session its current or just-replaced token names, and ignores unknown tokens', async () => {
     const row = {
       id: 'token-id',
       userId: 42,
@@ -167,11 +219,9 @@ describe('RefreshTokensService', () => {
     await service.revokeByPlain('plain-to-revoke');
     await service.revokeByPlain('unknown-plain');
 
+    const hash = RefreshTokensService.hashToken('plain-to-revoke');
     expect(repo.findOne).toHaveBeenNthCalledWith(1, {
-      where: { tokenHash: RefreshTokensService.hashToken('plain-to-revoke') },
-    });
-    expect(repo.findOne).toHaveBeenNthCalledWith(2, {
-      where: { tokenHash: RefreshTokensService.hashToken('unknown-plain') },
+      where: [{ tokenHash: hash }, { prevTokenHash: hash }],
     });
     expect(repo.remove).toHaveBeenCalledTimes(1);
     expect(repo.remove).toHaveBeenCalledWith(row);

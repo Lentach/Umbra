@@ -17,7 +17,7 @@ This document describes what the Fireplace (Umbra) server stores and can observe
 | Account | `users` | Username, tag, password hash, created and password-changed times | Until account deletion |
 | Devices | `devices` | Which devices an account has (added/revoked times) and each device's public request-queue address (`requestSid`) | Until account deletion |
 | Public keys | `key_bundles`, `one_time_pre_keys`, `account_authorizations` | Public E2E key material and the signed device list; no private keys | Until account deletion |
-| Sessions | `refresh_tokens` | Login sessions. `expires_at` slides on every refresh, so it shows last activity to about a day | Until logout, revoke, expiry or account deletion |
+| Sessions | `refresh_tokens` | Login sessions, one row each. `expires_at` slides on every refresh, so it shows last activity to about a day. A native session's token rotates on every refresh (plan B4); the row keeps only the hashes of the current token and the one it replaced, so no per-refresh history | Until logout, revoke, reuse of an old token, expiry or account deletion |
 | Recovery and identity resets | `recovery_keys`, `identity_reset_requests`, `identity_change_audit` | The recovery-phrase verifier and the reset ceremony | Until account deletion |
 | Box queues | `box_queues` | Random ids (`rid`, `sid`, `nid`) and the queue's auth key; no account. `touchedDay` is the UTC day of the last subscribe and feeds only the 90-day reaper | Deleted by the owner (unfriend, revoke, #234), or reaped after 90 idle days |
 | Undelivered blobs | `box_msgs` | 16 KiB ciphertext waiting for its recipient | Deleted on `ack`, else after 30 days |

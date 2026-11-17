@@ -72,8 +72,10 @@ void main() {
       );
     });
 
-    test('refreshSession returns rotated pair on success', () async {
+    test('refreshSession returns rotated pair on success, asking to rotate only when told', () async {
+      final bodies = <Object?>[];
       final mock = MockClient((request) async {
+        bodies.add(jsonDecode(request.body));
         return http.Response(
           jsonEncode({
             'access_token': 'new_access',
@@ -88,6 +90,11 @@ void main() {
       final data = await api.refreshSession('old_refresh');
       expect(data['access_token'], 'new_access');
       expect(data['refresh_token'], 'new_refresh_rotated');
+      await api.refreshSession('old_refresh', rotate: true);
+      expect(bodies, [
+        {'refresh_token': 'old_refresh'},
+        {'refresh_token': 'old_refresh', 'rotate': true},
+      ]);
     });
 
     test('refreshSession throws SessionRefreshInvalidException on 401', () async {

@@ -9,7 +9,7 @@ a VOLATILE claim: re-measure before quoting.
 
 `*.int-spec.ts`, each on a fresh Postgres DB migrated 0001…latest; they FAIL in CI without their DB,
 never skip. Run: `cd backend && BOX_IT_DATABASE_URL=postgres://postgres:postgres@localhost:5433/postgres npm run test:int`
-— 26 tests (box 23 over real sockets, first-contact device SQL 3).
+— 71 tests (box 55 over real sockets, first-contact device SQL 3, refresh-token rotation 13).
 
 ## Full-stack E2E wire harness (`test_e2e`)
 

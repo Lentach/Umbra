@@ -59,15 +59,19 @@ describe('AuthController', () => {
     });
   });
 
-  it('refresh forwards refresh_token to AuthService.refreshWithToken', async () => {
+  it('refresh forwards refresh_token to AuthService.refreshWithToken, rotating only when the body asks', async () => {
     authService.refreshWithToken.mockResolvedValue({
       access_token: 'na',
       refresh_token: 'nr',
     });
 
     const result = await controller.refresh({ refresh_token: 'old_refresh' });
+    await controller.refresh({ refresh_token: 'old_refresh', rotate: true });
 
-    expect(authService.refreshWithToken).toHaveBeenCalledWith('old_refresh');
+    expect(authService.refreshWithToken.mock.calls).toEqual([
+      ['old_refresh', false],
+      ['old_refresh', true],
+    ]);
     expect(result).toEqual({
       access_token: 'na',
       refresh_token: 'nr',
