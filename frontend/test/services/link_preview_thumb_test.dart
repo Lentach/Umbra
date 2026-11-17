@@ -161,8 +161,6 @@ void main() {
       senderUsername: 'alice',
       conversationId: 1,
       createdAt: DateTime(2026, 11, 17),
-      deliveryStatus: MessageDeliveryStatus.sent,
-      messageType: MessageType.text,
       linkPreviewUrl: 'https://a.example',
       linkPreviewTitle: 'Title',
       linkPreviewImage: image,

@@ -344,7 +344,8 @@ export class LinkPreviewService {
       if (total === 0) return null;
       return Buffer.concat(chunks).toString('base64');
     } catch (err) {
-      this.logger.debug(`Link preview image fetch failed: ${err.message}`);
+      const reason = err instanceof Error ? err.message : String(err);
+      this.logger.debug(`Link preview image fetch failed: ${reason}`);
       return null;
     } finally {
       clearTimeout(timeout);

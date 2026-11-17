@@ -68,11 +68,13 @@ const int kBoxEnvelopeMaxBytes =
   );
   // Whole preview first, then without its thumbnail, then none: a preview
   // never costs the message, and the thumbnail goes before the title.
-  final candidates = <Map<String, String?>?>[
-    if (linkPreview != null) linkPreview,
-    if (linkPreview != null && linkPreview['img'] != null)
-      {...linkPreview}..remove('img'),
-  ];
+  final candidates = <Map<String, String?>?>[];
+  if (linkPreview != null) {
+    candidates.add(linkPreview);
+    if (linkPreview['img'] != null) {
+      candidates.add({...linkPreview}..remove('img'));
+    }
+  }
   Map<String, String?>? preview;
   for (final candidate in candidates) {
     if (utf8.encode(build(candidate, to: sentTo)).length <=

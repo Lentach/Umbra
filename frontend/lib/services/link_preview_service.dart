@@ -114,7 +114,7 @@ class LinkPreviewService {
     Duration budget = kImageBudget,
   }) async {
     if (!isSafeImageUrl(rawImageUrl, pageUrl)) return null;
-    final http.Client c = client ?? http.Client();
+    final c = client ?? http.Client();
     var expired = false;
     try {
       return await _downloadThumbnail(
@@ -130,7 +130,7 @@ class LinkPreviewService {
           return null;
         },
       );
-    } catch (e) {
+    } on Object catch (e) {
       debugPrint('[LinkPreviewService] Thumbnail failed: $e');
       return null;
     } finally {

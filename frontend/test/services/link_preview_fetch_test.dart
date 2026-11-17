@@ -143,7 +143,7 @@ void main() {
       final out = await LinkPreviewThumb.fromBackend({
         'url': 'https://a.example',
         'title': 'T',
-        'imageData': (await LinkPreviewThumb.scale(bytes))!,
+        'imageData': await LinkPreviewThumb.scale(bytes),
       });
       expect(out!.keys, unorderedEquals(['url', 'title', 'img']));
       expect(LinkPreviewThumb.decode(out['img']), isNotNull);

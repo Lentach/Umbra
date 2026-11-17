@@ -219,7 +219,7 @@ describe('LinkPreviewService – og:image imageData', () => {
   beforeEach(() => {
     service = new LinkPreviewService();
     fetchImpl = jest.fn();
-    service.fetchImpl = fetchImpl as unknown as typeof fetch;
+    service.fetchImpl = fetchImpl as typeof fetch;
   });
 
   it('returns the image bytes as base64 and keeps imageUrl for old clients', async () => {
