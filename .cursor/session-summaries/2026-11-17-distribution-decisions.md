@@ -18,7 +18,7 @@
   - the Android key-storage line no longer claims a plaintext SharedPreferences fallback (A3 removed it in 0.2.84);
   - added the Docker log caps and the nginx access-log facts.
 - `docs/plans/2026-11-16-security-hardening.md` Tier F Android line and `docs/agents/traps.md` (Owner-owed Android line, PEPK line) updated.
-- Out-of-repo: none changed. Found, not touched: rotated nginx access logs from 6–19 Sep 2026 (IPs, paths) are still in `/var/log/nginx/` on the VM, because `notifempty` never rotates the empty live log.
+- Out-of-repo (VM, owner's OK): deleted the rotated nginx access logs from 6–19 Sep 2026 (IPs, paths); they never aged out because `notifempty` never rotated the empty live log. `/etc/logrotate.d/nginx` now says `ifempty` (backup `~/logrotate-nginx.bak.1794884265`; `logrotate -d` shows both logs rotating), so the old error logs with `client:` lines age out within 14 days. Seen, not touched: `/etc/nginx/sites-enabled/.fireplace.bak-1788229413` is not loaded (`nginx -T`; the glob skips dotfiles).
 
 ## Key files
 - New: `docs/legal/privacy-policy.en.md`, `privacy-policy.pl.md`, `terms.en.md`, `terms.pl.md`.
@@ -38,8 +38,9 @@
 ## Notes for next session
 - Next action: the owner reviews the four drafts and supplies the `[OWNER: …]` fields, then the agent publishes them as static pages (`/privacy`, `/terms`; today both paths serve the app shell). Before that, the owner decides on the name, then the domain.
 - Owner-owed:
-  - delete the September nginx access logs on the VM (asked; prod data, so his OK first);
-  - his address under UŚUDE art. 5 (home address, or a business address);
-  - a contact-form retention period.
+  - his home address (he chose to publish it; UŚUDE art. 5), given at publication. His name is kept OUT of the public repo until then.
+  - a contact email: he asked for a dedicated address with a good name, confirmed with him before he creates it.
+  - the app name (he is thinking it over); the domain follows it.
+- Contact-form retention is set to 12 months in both drafts (his choice).
 - Play checklist (not started): Play Console account; PEPK; `flutter build appbundle` gates; an in-app report flow (decide what a report sends); terms accepted at sign-up; a web account-deletion path; Data safety form; reviewer account; strip `light_compressor_v2`'s foreground service; closed test (12 × 14 days).
 - Traps: none new (the Owner-owed Android line was rewritten in place).

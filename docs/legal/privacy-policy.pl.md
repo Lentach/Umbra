@@ -49,7 +49,7 @@ Ta osoba jest administratorem danych osobowych opisanych poniżej w rozumieniu R
 | **Tokeny powiadomień:** token Firebase Cloud Messaging Twojego telefonu albo subskrypcja Web Push przeglądarki | Żeby obudzić urządzenie, gdy przychodzi wiadomość | lit. b (umowa) | Usuwane razem z kolejką, do której należą |
 | **Zaszyfrowana kopia kontaktów:** jeden zaszyfrowany plik na konto | Żeby lista kontaktów przetrwała utratę urządzenia | lit. b (umowa) | Do usunięcia konta |
 | **Jednorazowe sekretne notatki:** zaszyfrowany tekst z terminem ważności, bez powiązania z twórcą | Do przekazania notatki | lit. b (umowa) | Usuwane po odczytaniu lub wygaśnięciu |
-| **Wiadomości wysłane do nas formularzem kontaktowym:** treść i, jeśli go podasz, adres do odpowiedzi | Żeby Ci odpowiedzieć | lit. f (prawnie uzasadniony interes w udzieleniu odpowiedzi) | [WŁAŚCICIEL: np. do zakończenia sprawy, najdłużej 12 miesięcy] |
+| **Wiadomości wysłane do nas formularzem kontaktowym:** treść i, jeśli go podasz, adres do odpowiedzi | Żeby Ci odpowiedzieć | lit. f (prawnie uzasadniony interes w udzieleniu odpowiedzi) | Najdłużej 12 miesięcy |
 
 O **kopii kontaktów**: jej treść jest szyfrowana kluczem, którego serwer nigdy nie dostaje, i dopełniana tak, żeby rozmiar (zaokrąglony w górę do 4 KiB) nie zdradzał liczby kontaktów. Serwer wie tylko, że kopia istnieje, jaki ma zaokrąglony rozmiar i kiedy ostatnio się zmieniła. Jedno ograniczenie, o którym warto wiedzieć: klucz kopii jest chroniony Twoim hasłem, a hasło trafia na serwer przy logowaniu. Ktoś, kto uruchomiłby zmodyfikowany serwer, mógłby więc teoretycznie otworzyć tę kopię. Nie dotyczy to Twoich wiadomości.
 

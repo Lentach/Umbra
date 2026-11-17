@@ -69,7 +69,7 @@ That person is the data controller under the EU General Data Protection Regulati
 | **Push tokens:** your phone's Firebase Cloud Messaging token, or your browser's Web Push subscription | To wake your device when a message arrives | (b) contract | Deleted with the queue it belongs to |
 | **Encrypted contact backup:** one encrypted file per account | So your contact list survives losing a device | (b) contract | Until you delete the account |
 | **One-time secret notes:** encrypted text with an expiry, without any link to who created it | To deliver the note | (b) contract | Deleted when read or when it expires |
-| **Messages you send us through the contact form:** your message and, if you give one, a reply address | To answer you | (f) legitimate interest in answering | [OWNER: e.g. until the matter is closed, at most 12 months] |
+| **Messages you send us through the contact form:** your message and, if you give one, a reply address | To answer you | (f) legitimate interest in answering | At most 12 months |
 
 About the **contact backup**: its content is encrypted with a key the server never receives, and it is padded so that its size (rounded up to 4 KiB) does not reveal how many contacts you have. The server learns only that a backup exists, its rounded size and when it last changed. One limit you should know: the backup key is protected by your password, and your password is sent to the server when you sign in. Someone running a modified server could therefore, in principle, open the backup. Your messages are not affected by this.
 
