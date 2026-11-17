@@ -283,7 +283,7 @@ describe('ChatSearchService', () => {
         await search('alice#1234');
         // Every slot was given back: the next search still spends.
         const last = keyExchange.claimBundle.mock.calls.length;
-        keyExchange.claimBundle.mockImplementation((_u, d, _s, spend) =>
+        keyExchange.claimBundle.mockImplementation((_u, d) =>
           Promise.resolve(bundleFor(d)),
         );
         await search('alice#1234');

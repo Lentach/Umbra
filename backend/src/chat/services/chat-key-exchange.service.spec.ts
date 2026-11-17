@@ -1032,13 +1032,11 @@ describe('ChatKeyExchangeService', () => {
         false,
       );
 
-      expect(keyBundlesService.fetchPreKeyBundle).toHaveBeenCalledWith(
-        2,
-        1,
-        false,
-      );
+      expect(keyBundlesService.fetchPreKeyBundle.mock.calls).toEqual([
+        [2, 1, false],
+      ]);
       expect(bundle?.oneTimePreKeyPublic).toBeNull();
-      expect(keyBundlesService.countUnusedPreKeys).not.toHaveBeenCalled();
+      expect(keyBundlesService.countUnusedPreKeys.mock.calls).toHaveLength(0);
       expect(mockServer.emit).not.toHaveBeenCalledWith(
         'preKeysLow',
         expect.anything(),

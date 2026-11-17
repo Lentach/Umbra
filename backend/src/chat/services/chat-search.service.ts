@@ -180,7 +180,7 @@ export class ChatSearchService {
    */
   private takeSearchOtp(userId: number, deviceId: number): number | null {
     const now = Date.now();
-    const key = `${userId}:${deviceId}`;
+    const key = `${userId}:${deviceId}`; // log-guard: key
     const existing = this.searchOtpSpends.get(key);
     const recent = (existing ?? []).filter(
       (t) => now - t < SEARCH_OTP_WINDOW_MS,
@@ -204,7 +204,7 @@ export class ChatSearchService {
 
   /** Gives back a slot [takeSearchOtp] handed out that spent no pre-key. */
   private refundSearchOtp(userId: number, deviceId: number, slot: number) {
-    const key = `${userId}:${deviceId}`;
+    const key = `${userId}:${deviceId}`; // log-guard: key
     const times = this.searchOtpSpends.get(key);
     if (!times) return;
     const i = times.indexOf(slot);
