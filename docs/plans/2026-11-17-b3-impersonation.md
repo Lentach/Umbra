@@ -1,7 +1,7 @@
 # B3: can a malicious server impersonate a friend?
 
 Status: investigation + red test; no fix implemented. Date 2026-11-17.
-Red test: `frontend/test/security/b3_impersonation_test.dart` (skipped).
+Red test: `frontend/test/services/encryption_b3_impersonation_test.dart` (skipped).
 
 ## Verdict
 
@@ -81,7 +81,7 @@ does NOT need to break any cipher.
 
 ### Evidence run
 
-`flutter test test/security/b3_impersonation_test.dart` with the skip removed:
+`flutter test test/services/encryption_b3_impersonation_test.dart` with the skip removed:
 both tests fail today.
 
 * `victim.decrypt(user, forgedPreKey)` returns `'new number, send the code here'`.
@@ -223,7 +223,7 @@ is neither decrypted nor shown' (skipped, drives `consumeBoxEntry` through
 `_readBox` with the real identity store and a real attacker PreKey message;
 the Signal decrypt is the file's existing fake, so "not decrypted" is
 observable). Unskipped it fails today (the fake decrypt is reached and the
-message is shown). `test/security/b3_impersonation_test.dart` remains the
+message is shown). `test/services/encryption_b3_impersonation_test.dart` remains the
 service-layer demonstration (Signal accepts the frame and moves the pin) and
 is not expected to flip with the `_readBox` fix.
 
