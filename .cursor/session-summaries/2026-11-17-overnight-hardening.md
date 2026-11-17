@@ -29,8 +29,8 @@
   - D3: photo upload row has `deleteHash`; GET 200, wrong-secret DELETE 404; delete-for-everyone → GET 404, row and file gone, web bubble removed.
   - Voice: failed voice send left `cache/voice_*.m4a`; next launch removed it (and the file_picker copy).
   - Play manifest: a 20 MB video sent untouched; a 45 MB video transcoded by light_compressor while backgrounded (~45 s, no crash) and, in the foreground, transcoded and sent.
-  - E4 (local stack, server log): `msgCount=16000` gave one `[box] ceiling … (53%) ok->warn` per process, no repeats.
-- NOT verified: any real phone; the E4 recovery line (`warn->ok`) after the reset; the web leg of D3/B5 beyond the peer's view.
+  - E4 (local stack, server log): `msgCount=16000` gave one `[box] ceiling … (53%) ok->warn` per process, no repeats; reset to 0 gave one `warn->ok`.
+- NOT verified: any real phone; the web leg of D3/B5 beyond the peer's view.
 
 ## Notes for next session
 - **Owner-owed:** merge order and OK per PR; B5 budget 5/h; D3 delete on timer expiry / profile-photo replace / retry; D4 global per-account cap; B3/B7 (hold changed-identity frames with warnings off = partial B2 reversal; client-side phrase verifier with re-enrolment; phrase required to restore contacts); D2 six questions; Play policy ten questions; R2 bucket lock; app name → domain → contact email.
