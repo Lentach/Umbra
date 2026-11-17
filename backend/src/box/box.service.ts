@@ -631,6 +631,19 @@ export class BoxService {
     return rows.map((r) => r.rid);
   }
 
+  /** The running totals (one primary-key row) for the ceiling warning (#204). */
+  async totals(): Promise<{ msgCount: number; mediaBytes: number }> {
+    const rows: { msgCount: number; mediaBytes: string }[] =
+      await this.db.query(
+        `SELECT "msgCount", "mediaBytes" FROM public.box_totals WHERE id = 1`,
+      );
+    // pg returns bigint as a string; 2 GiB is far inside Number's exact range.
+    return {
+      msgCount: Number(rows[0]?.msgCount ?? 0),
+      mediaBytes: Number(rows[0]?.mediaBytes ?? 0),
+    };
+  }
+
   /** The daily media budget restarts at 00:00 UTC. */
   async resetMediaBudgets(): Promise<void> {
     await this.db.query(

@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { BoxCeilingMonitor } from './box-ceiling-monitor';
 import { BoxDelivery } from './box-delivery.service';
 import { BoxMediaStore } from './box-media.store';
 import { takeRefusalCounts } from './box-throttler.guard';
@@ -13,12 +14,14 @@ import { BoxService } from './box.service';
  * subscribed within 24 h of creation, and queues not subscribed for 90 days
  * (their messages and notifier go by FK cascade). The same pass logs how many
  * socket events were throttled and how many sends and uploads the quotas
- * refused since the last one (counts per event, never a client). At 00:00
+ * refused since the last one (counts per event, never a client), and checks
+ * `box_totals` against the OPEN band (WARN from 50 %, ERROR from 80 %, #204). At 00:00
  * UTC every queue's daily media budget restarts.
  */
 @Injectable()
 export class BoxReaper {
   private readonly logger = new Logger(BoxReaper.name);
+  private readonly ceiling = new BoxCeilingMonitor();
 
   constructor(
     private readonly box: BoxService,
@@ -40,6 +43,7 @@ export class BoxReaper {
     this.logger.debug(
       `[box] sweep media=${expired.length} queues=${reaped.length}`,
     );
+    this.ceiling.check(await this.box.totals(), this.logger);
     const refused = takeRefusalCounts();
     if (refused.size > 0) {
       const counts = [...refused].map(([event, n]) => `${event}=${n}`);
