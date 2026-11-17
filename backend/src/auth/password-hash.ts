@@ -1,5 +1,6 @@
 import * as argon2 from 'argon2';
 import * as bcrypt from 'bcrypt';
+import { HttpException, HttpStatus } from '@nestjs/common';
 
 /**
  * Account-password hashing (plan D4). New hashes are Argon2id; bcrypt hashes
@@ -28,6 +29,13 @@ export const PASSWORD_ARGON2_OPTIONS = {
 export const MAX_CONCURRENT_PASSWORD_HASHES = 2;
 
 /**
+ * Operations allowed to WAIT for a slot. Past it a call is refused at once with
+ * `503 { error: 'busy' }`: the queue (and every pending HTTP request behind it)
+ * stays bounded however fast requests arrive.
+ */
+export const MAX_WAITING_PASSWORD_HASHES = 64;
+
+/**
  * An Argon2id hash of a random string nobody knows, made with
  * {@link PASSWORD_ARGON2_OPTIONS}. Login verifies against it when the identifier
  * matches no account, so "no such user" takes as long as a wrong password.
@@ -40,6 +48,12 @@ const waiting: Array<() => void> = [];
 
 async function limited<T>(op: () => Promise<T>): Promise<T> {
   if (running >= MAX_CONCURRENT_PASSWORD_HASHES) {
+    if (waiting.length >= MAX_WAITING_PASSWORD_HASHES) {
+      throw new HttpException(
+        { error: 'busy' },
+        HttpStatus.SERVICE_UNAVAILABLE,
+      );
+    }
     // Executor form: the backend's tsconfig lib (ES2023) has no Promise.withResolvers.
     await new Promise<void>((resolve) => waiting.push(resolve));
   } else {
@@ -79,8 +93,10 @@ export async function verifyPassword(
     return { valid, needsRehash: valid };
   }
   if (stored.startsWith('$argon2id$')) {
-    const valid = await limited(() => argon2.verify(stored, plain)).catch(
-      () => false,
+    // The catch sits INSIDE the gate: a malformed hash is a wrong password,
+    // but a `busy` refusal must reach the caller.
+    const valid = await limited(() =>
+      argon2.verify(stored, plain).catch(() => false),
     );
     return {
       valid,
@@ -90,7 +106,34 @@ export async function verifyPassword(
   return { valid: false, needsRehash: false };
 }
 
-/** The timing twin of a real verify, for an identifier that matches nobody. */
-export async function verifyDummyPassword(plain: string): Promise<void> {
-  await verifyPassword(plain, TIMING_SAFE_DUMMY_PASSWORD_HASH);
+/** A cost-10 bcrypt hash of a random string nobody knows. */
+export const TIMING_SAFE_DUMMY_BCRYPT_HASH =
+  '$2b$10$pwiFDkB3zcAu0PKQqI13b.fGqVMlVlB8aCB22BL/qyvTghAEiP2N2';
+
+export type PasswordFormat = 'bcrypt' | 'argon2id';
+
+/**
+ * The cost of failing, for the formats a real verify did NOT pay. A bcrypt row
+ * answers a wrong password in ~43 ms and an Argon2id row in ~16 ms; an unknown
+ * name must not sit in either gap. So every failed login ends up paying BOTH
+ * formats: the real verify covers one, this covers the other(s), and an unknown
+ * name passes both.
+ */
+export async function verifyDummyPasswords(
+  plain: string,
+  formats: readonly PasswordFormat[],
+): Promise<void> {
+  for (const format of formats) {
+    await verifyPassword(
+      plain,
+      format === 'bcrypt'
+        ? TIMING_SAFE_DUMMY_BCRYPT_HASH
+        : TIMING_SAFE_DUMMY_PASSWORD_HASH,
+    );
+  }
+}
+
+/** The format a stored hash is verified under. */
+export function passwordFormatOf(stored: string): PasswordFormat {
+  return stored.startsWith('$2') ? 'bcrypt' : 'argon2id';
 }

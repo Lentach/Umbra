@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { UnauthorizedException } from '@nestjs/common';
+import { HttpException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
 import { AuthService } from './auth.service';
@@ -7,7 +7,7 @@ import {
   LoginBackoffService,
   BACKOFF_FREE_FAILURES,
 } from './login-backoff.service';
-import { verifyDummyPassword } from './password-hash';
+import { verifyDummyPasswords } from './password-hash';
 import { UsersService } from '../users/users.service';
 import { RefreshTokensService } from './refresh-tokens.service';
 import { User } from '../users/user.entity';
@@ -16,7 +16,9 @@ import { IdentityResetService } from '../key-bundles/identity-reset.service';
 
 // The login door's timing guard: a real verify would cost 19 MiB per test.
 jest.mock('./password-hash', () => ({
-  verifyDummyPassword: jest.fn(() => Promise.resolve()),
+  verifyDummyPasswords: jest.fn(() => Promise.resolve()),
+  passwordFormatOf: (stored: string) =>
+    stored.startsWith('$2') ? 'bcrypt' : 'argon2id',
 }));
 
 // The recover door's timing guard: a real verify would cost 19 MiB per test.
@@ -198,7 +200,7 @@ describe('AuthService', () => {
 
       expect(usersService.findByUsername).toHaveBeenCalledWith('testuser');
       expect(usersService.findByUsernameAndTag).not.toHaveBeenCalled();
-      expect(verifyDummyPassword).toHaveBeenCalledTimes(1);
+      expect(verifyDummyPasswords).toHaveBeenCalledTimes(1);
       expect(usersService.checkPassword).not.toHaveBeenCalled();
       expect(refreshTokensService.createToken).not.toHaveBeenCalled();
       expect(jwtService.sign).not.toHaveBeenCalled();
@@ -214,7 +216,7 @@ describe('AuthService', () => {
       );
       // Not-found path performs a constant-time dummy verify to defeat
       // timing-based user enumeration.
-      expect(verifyDummyPassword).toHaveBeenCalled();
+      expect(verifyDummyPasswords).toHaveBeenCalled();
     });
 
     it('should throw when password invalid', async () => {
@@ -239,23 +241,30 @@ describe('AuthService', () => {
       expect(usersService.findByUsernameAndTag).not.toHaveBeenCalled();
       expect(usersService.findByUsername).not.toHaveBeenCalled();
       // Constant-time guard still runs a real verify to defeat enumeration.
-      expect(verifyDummyPassword).toHaveBeenCalledTimes(1);
+      expect(verifyDummyPasswords).toHaveBeenCalledTimes(1);
     });
   });
 
   describe('login backoff (plan D4)', () => {
-    const fail = async (id: string) => {
-      await service.login(id, 'WrongPass1').catch(() => undefined);
+    const IP_A = '203.0.113.1';
+    const IP_B = '203.0.113.2';
+    const fail = async (id: string, ip = IP_A) => {
+      await service.login(id, 'WrongPass1', ip).catch(() => undefined);
+    };
+    const lockOut = async (id: string, ip = IP_A) => {
+      for (let i = 0; i < BACKOFF_FREE_FAILURES; i++) await fail(id, ip);
     };
 
     it('refuses the next attempt with 429 rate_limited once the free failures are spent, without checking the password', async () => {
       usersService.findByUsername.mockResolvedValue([mockUser as User]);
       usersService.checkPassword.mockResolvedValue(false);
-      for (let i = 0; i < BACKOFF_FREE_FAILURES; i++) await fail('testuser');
+      await lockOut('testuser');
       usersService.checkPassword.mockClear();
       usersService.checkPassword.mockResolvedValue(true); // even the RIGHT password waits
 
-      const err = await service.login('testuser', 'ValidPass1').catch((e) => e);
+      const err = await service
+        .login('testuser', 'ValidPass1', IP_A)
+        .catch((e) => e);
 
       expect(err.getStatus()).toBe(429);
       expect(err.getResponse()).toEqual({
@@ -266,14 +275,65 @@ describe('AuthService', () => {
       expect(jwtService.sign).not.toHaveBeenCalled();
     });
 
+    it("an attacker's lock does not lock the owner out: another address with the right password gets in", async () => {
+      usersService.findByUsername.mockResolvedValue([mockUser as User]);
+      usersService.checkPassword.mockResolvedValue(false);
+      await lockOut('testuser', IP_A);
+      expect(
+        (
+          await service.login('testuser', 'x', IP_A).catch((e) => e)
+        ).getStatus(),
+      ).toBe(429);
+
+      usersService.checkPassword.mockResolvedValue(true);
+      await expect(
+        service.login('testuser', 'ValidPass1', IP_B),
+      ).resolves.toEqual(
+        expect.objectContaining({ access_token: 'mock_jwt_token' }),
+      );
+    });
+
+    it('10 parallel wrong logins from one address verify at most 5 times', async () => {
+      usersService.findByUsername.mockResolvedValue([mockUser as User]);
+      usersService.checkPassword.mockImplementation(async () => {
+        await new Promise((r) => setTimeout(r, 5));
+        return false;
+      });
+
+      const results = await Promise.allSettled(
+        Array.from({ length: 10 }, () =>
+          service.login('testuser', 'WrongPass1', IP_A),
+        ),
+      );
+
+      expect(usersService.checkPassword).toHaveBeenCalledTimes(
+        BACKOFF_FREE_FAILURES,
+      );
+      const refused = results.filter(
+        (r) => r.status === 'rejected' && r.reason.getStatus?.() === 429,
+      );
+      expect(refused).toHaveLength(10 - BACKOFF_FREE_FAILURES);
+    });
+
     it('an unknown identifier backs off the same way as a real account', async () => {
       usersService.findByUsername.mockResolvedValue([]);
-      for (let i = 0; i < BACKOFF_FREE_FAILURES; i++) await fail('ghost');
+      await lockOut('ghost');
 
-      const err = await service.login('ghost', 'ValidPass1').catch((e) => e);
+      const err = await service
+        .login('ghost', 'ValidPass1', IP_A)
+        .catch((e) => e);
 
       expect(err.getStatus()).toBe(429);
-      expect(verifyDummyPassword).toHaveBeenCalledTimes(BACKOFF_FREE_FAILURES);
+      expect(verifyDummyPasswords).toHaveBeenCalledTimes(BACKOFF_FREE_FAILURES);
+    });
+
+    it('spellings of one unknown name share a key (parsed and trimmed like the lookup)', async () => {
+      usersService.findByUsername.mockResolvedValue([]);
+      for (let i = 0; i < BACKOFF_FREE_FAILURES; i++) {
+        await fail(i % 2 ? '  GHOST ' : 'ghost');
+      }
+      const err = await service.login('Ghost', 'x', IP_A).catch((e) => e);
+      expect(err.getStatus()).toBe(429);
     });
 
     it('a success before the limit resets the count', async () => {
@@ -282,14 +342,27 @@ describe('AuthService', () => {
       for (let i = 0; i < BACKOFF_FREE_FAILURES - 1; i++)
         await fail('testuser');
       usersService.checkPassword.mockResolvedValue(true);
-      await service.login('testuser', 'ValidPass1');
+      await service.login('testuser', 'ValidPass1', IP_A);
       usersService.checkPassword.mockResolvedValue(false);
       for (let i = 0; i < BACKOFF_FREE_FAILURES - 1; i++)
         await fail('testuser');
 
       usersService.checkPassword.mockResolvedValue(true);
       await expect(
-        service.login('testuser', 'ValidPass1'),
+        service.login('testuser', 'ValidPass1', IP_A),
+      ).resolves.toBeDefined();
+    });
+
+    it('a full hash gate (503) is not counted against the caller', async () => {
+      usersService.findByUsername.mockResolvedValue([mockUser as User]);
+      usersService.checkPassword.mockRejectedValue(
+        new HttpException({ error: 'busy' }, 503),
+      );
+      for (let i = 0; i < BACKOFF_FREE_FAILURES * 2; i++)
+        await fail('testuser');
+      usersService.checkPassword.mockResolvedValue(true);
+      await expect(
+        service.login('testuser', 'ValidPass1', IP_A),
       ).resolves.toBeDefined();
     });
 
@@ -301,7 +374,7 @@ describe('AuthService', () => {
         await fail('testuser');
       await fail('testuser#0427');
 
-      const err = await service.login('testuser', 'x').catch((e) => e);
+      const err = await service.login('testuser', 'x', IP_A).catch((e) => e);
       expect(err.getStatus()).toBe(429);
 
       usersService.findByUsernameAndTag.mockResolvedValue({
@@ -310,8 +383,66 @@ describe('AuthService', () => {
       } as User);
       usersService.checkPassword.mockResolvedValue(true);
       await expect(
-        service.login('other#0001', 'ValidPass1'),
+        service.login('other#0001', 'ValidPass1', IP_A),
       ).resolves.toBeDefined();
+    });
+
+    it("a successful recovery clears the account's backoff for every client", async () => {
+      usersService.findByUsername.mockResolvedValue([mockUser as User]);
+      usersService.findByUsernameAndTag.mockResolvedValue(mockUser as User);
+      usersService.checkPassword.mockResolvedValue(false);
+      await lockOut('testuser', IP_A);
+      identityResetService.verifyRecoveryPhrase.mockResolvedValue('accepted');
+      await service.recoverPassword('testuser#0427', 'a b c', 'NewPass1x');
+
+      usersService.checkPassword.mockResolvedValue(true);
+      await expect(
+        service.login('testuser', 'NewPass1x', IP_A),
+      ).resolves.toBeDefined();
+    });
+  });
+
+  // Every failed login must cost one bcrypt AND one Argon2 verify (~43 + ~16 ms),
+  // or the faster branch tells an attacker which names exist.
+  describe('login timing parity', () => {
+    it('an unknown name pays both dummies', async () => {
+      usersService.findByUsername.mockResolvedValue([]);
+      await service.login('ghost', 'x', '203.0.113.1').catch(() => undefined);
+      expect(verifyDummyPasswords).toHaveBeenCalledWith('x', [
+        'bcrypt',
+        'argon2id',
+      ]);
+    });
+
+    it('a wrong password on a bcrypt row pays the Argon2 dummy on top of the real bcrypt verify', async () => {
+      usersService.findByUsername.mockResolvedValue([
+        { ...mockUser, password: '$2b$10$legacy' } as User,
+      ]);
+      usersService.checkPassword.mockResolvedValue(false);
+      await service
+        .login('testuser', 'x', '203.0.113.1')
+        .catch(() => undefined);
+      expect(verifyDummyPasswords).toHaveBeenCalledTimes(1);
+      expect(verifyDummyPasswords).toHaveBeenCalledWith('x', ['argon2id']);
+    });
+
+    it('a wrong password on an Argon2id row pays the bcrypt dummy', async () => {
+      usersService.findByUsername.mockResolvedValue([
+        { ...mockUser, password: '$argon2id$v=19$m=19456,p=1,t=2$x$y' } as User,
+      ]);
+      usersService.checkPassword.mockResolvedValue(false);
+      await service
+        .login('testuser', 'x', '203.0.113.1')
+        .catch(() => undefined);
+      expect(verifyDummyPasswords).toHaveBeenCalledTimes(1);
+      expect(verifyDummyPasswords).toHaveBeenCalledWith('x', ['bcrypt']);
+    });
+
+    it('a correct password pays no dummy', async () => {
+      usersService.findByUsername.mockResolvedValue([mockUser as User]);
+      usersService.checkPassword.mockResolvedValue(true);
+      await service.login('testuser', 'ValidPass1', '203.0.113.1');
+      expect(verifyDummyPasswords).not.toHaveBeenCalled();
     });
   });
 

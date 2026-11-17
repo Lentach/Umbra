@@ -1,9 +1,18 @@
 import * as argon2 from 'argon2';
 
 // Wrapped so the concurrency test can watch calls; real behaviour otherwise.
+jest.mock('bcrypt', () => {
+  const actual = jest.requireActual('bcrypt');
+  return { ...actual, compare: jest.fn(actual.compare) };
+});
+
 jest.mock('argon2', () => {
   const actual = jest.requireActual('argon2');
-  return { ...actual, verify: jest.fn(actual.verify) };
+  return {
+    ...actual,
+    verify: jest.fn(actual.verify),
+    hash: jest.fn(actual.hash),
+  };
 });
 import * as bcrypt from 'bcrypt';
 import {
@@ -11,7 +20,9 @@ import {
   PASSWORD_ARGON2_OPTIONS,
   TIMING_SAFE_DUMMY_PASSWORD_HASH,
   hashPassword,
-  verifyDummyPassword,
+  verifyDummyPasswords,
+  TIMING_SAFE_DUMMY_BCRYPT_HASH,
+  MAX_WAITING_PASSWORD_HASHES,
   verifyPassword,
 } from './password-hash';
 
@@ -90,7 +101,9 @@ describe('password-hash', () => {
         PASSWORD_ARGON2_OPTIONS,
       ),
     ).toBe(false);
-    await expect(verifyDummyPassword('anything')).resolves.toBeUndefined();
+    await expect(
+      verifyDummyPasswords('anything', ['argon2id']),
+    ).resolves.toBeUndefined();
   });
 
   it('runs at most MAX_CONCURRENT_PASSWORD_HASHES Argon2 operations at once, and finishes them all', async () => {
@@ -115,5 +128,59 @@ describe('password-hash', () => {
     } finally {
       verifyMock.mockImplementation(realVerify);
     }
+  });
+
+  it('the bcrypt dummy is a cost-10 bcrypt hash, and each requested format runs exactly its own dummy', async () => {
+    expect(TIMING_SAFE_DUMMY_BCRYPT_HASH).toMatch(/^\$2b\$10\$/);
+    const compare = bcrypt.compare as jest.Mock;
+    const verify = argon2.verify as jest.Mock;
+    compare.mockClear();
+    verify.mockClear();
+    await verifyDummyPasswords('x', ['bcrypt']);
+    expect(compare).toHaveBeenCalledTimes(1);
+    expect(verify).not.toHaveBeenCalled();
+    await verifyDummyPasswords('x', ['bcrypt', 'argon2id']);
+    expect(compare).toHaveBeenCalledTimes(2);
+    expect(verify).toHaveBeenCalledTimes(1);
+  });
+
+  describe('the hash gate', () => {
+    const hashMock = argon2.hash as jest.Mock;
+    const realHash = jest.requireActual('argon2').hash;
+    afterEach(() => hashMock.mockImplementation(realHash));
+
+    it('a rejecting operation frees its slot', async () => {
+      hashMock.mockRejectedValue(new Error('argon2 blew up'));
+      for (let i = 0; i < MAX_CONCURRENT_PASSWORD_HASHES + 3; i++) {
+        await expect(hashPassword('x')).rejects.toThrow('blew up');
+      }
+      hashMock.mockImplementation(realHash);
+      await expect(hashPassword('x')).resolves.toMatch(/^\$argon2id\$/);
+    });
+
+    it('past the waiting cap a call is refused 503 { error: busy } at once; the queued ones still finish', async () => {
+      const releases: Array<() => void> = [];
+      hashMock.mockImplementation(
+        () => new Promise<string>((r) => releases.push(() => r('ok'))),
+      );
+      const total =
+        MAX_CONCURRENT_PASSWORD_HASHES + MAX_WAITING_PASSWORD_HASHES;
+      const held = Array.from({ length: total }, () => hashPassword('x'));
+
+      const refused = await hashPassword('x').catch((e) => e);
+      expect(refused.getStatus()).toBe(503);
+      expect(refused.getResponse()).toEqual({ error: 'busy' });
+
+      // Drain: each completion starts the next waiter.
+      while (releases.length) releases.shift()!();
+      await new Promise((r) => setImmediate(r));
+      while (releases.length) releases.shift()!();
+      await new Promise((r) => setImmediate(r));
+      while (releases.length) {
+        releases.shift()!();
+        await new Promise((r) => setImmediate(r));
+      }
+      await expect(Promise.all(held)).resolves.toHaveLength(total);
+    });
   });
 });

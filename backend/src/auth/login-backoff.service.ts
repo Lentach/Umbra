@@ -1,14 +1,14 @@
 import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 
-/** Failures an account takes before its first wait. */
+/** Failures a (account, client) pair takes before its first wait. */
 export const BACKOFF_FREE_FAILURES = 5;
 /** The first wait; it doubles with every further failure. */
 export const BACKOFF_BASE_MS = 15_000;
-/** No wait is longer than this, so an attacker can never lock the owner out for longer. */
+/** No wait is longer than this. */
 export const BACKOFF_MAX_MS = 15 * 60_000;
-/** A quiet account forgets its failures after this long. */
+/** A quiet pair forgets its failures after this long. */
 export const BACKOFF_FORGET_MS = 60 * 60_000;
-/** Tracked accounts at most; the oldest entry goes first. Bounds memory under a spray. */
+/** Tracked pairs at most; the oldest entry goes first. Bounds memory under a spray. */
 export const BACKOFF_MAX_ENTRIES = 20_000;
 
 interface Entry {
@@ -28,46 +28,108 @@ export class LoginBackoffException extends HttpException {
 }
 
 /**
- * Per-ACCOUNT login backoff (plan D4). The IP throttle on `/auth/login` stops
- * one address; this slows guessing spread over many. After
- * {@link BACKOFF_FREE_FAILURES} consecutive failures an account waits 15 s,
- * then 30 s, 1 min … up to 15 min before its next attempt is even CHECKED (no
- * hash is computed, so a refused attempt costs the server nothing). A success
- * resets it. A refused attempt is not a failure and does not lengthen the wait:
- * an attacker can hold the owner out for at most 15 min at a time, never longer.
+ * The part of a client address that identifies one client for backoff: an IPv4
+ * address as is (an IPv4-mapped IPv6 one unwrapped), an IPv6 address as its
+ * /64 (one subscriber owns a whole /64, so per-address keys would be free to
+ * rotate). No address at all shares one `unknown` bucket.
+ */
+export function clientBucket(ip: string | undefined): string {
+  const addr = (ip ?? '').trim().toLowerCase();
+  if (!addr) return 'unknown';
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(addr);
+  if (mapped) return mapped[1];
+  if (!addr.includes(':')) return addr;
+  const [head, tail = ''] = addr.split('::');
+  const headGroups = head ? head.split(':') : [];
+  const tailGroups = addr.includes('::') && tail ? tail.split(':') : [];
+  const missing = 8 - headGroups.length - tailGroups.length;
+  const groups = addr.includes('::')
+    ? [
+        ...headGroups,
+        ...Array<string>(Math.max(missing, 0)).fill('0'),
+        ...tailGroups,
+      ]
+    : headGroups;
+  return `${groups
+    .slice(0, 4)
+    .map((g) => (g || '0').replace(/^0+(?=.)/, ''))
+    .join(':')}::/64`;
+}
+
+/**
+ * Login backoff (plan D4), keyed on (ACCOUNT, CLIENT), never on the account
+ * alone. A per-account lock would let anyone who knows a name keep its owner out
+ * with 5 requests per 15 min; keyed on the pair, an attacker's lock stops only
+ * the attacker, and the owner on another address logs in untouched. No
+ * account→address memory is kept beyond these counters (they expire after
+ * {@link BACKOFF_FORGET_MS}, and a success erases the pair), as the privacy
+ * decisions want.
  *
- * In memory: the backend is ONE instance, and a restart forgetting the counters
- * only gives an attacker a fresh set of free tries. The key is chosen by the
- * caller; unknown identifiers use the same counters as real accounts, so the
- * answer never tells them apart.
+ * After {@link BACKOFF_FREE_FAILURES} failures the pair waits 15 s, 30 s, 1 min
+ * … up to 15 min before the next attempt is even CHECKED (no hash runs). Residual:
+ * guessing spread over many addresses gets about 5 tries per address per hour
+ * per account (each address then waits up to 15 min), on top of the per-IP
+ * throttle; a global per-account cap would close that and reopen the lockout.
+ *
+ * In memory: the backend is ONE instance, and a restart only hands an attacker
+ * a fresh set of free tries. Unknown identifiers use the same counters as real
+ * accounts, so the answer never tells them apart.
  */
 @Injectable()
 export class LoginBackoffService {
   private readonly entries = new Map<string, Entry>();
 
-  /** Throws {@link LoginBackoffException} while `key` is waiting. */
-  assertAllowed(key: string, now = Date.now()): void {
+  /**
+   * Admits one attempt or throws {@link LoginBackoffException}. The attempt is
+   * counted as a failure RIGHT HERE, in the same synchronous step as the check,
+   * so parallel requests cannot all pass before the first one's verdict. Call
+   * {@link succeed} when the password was right, {@link refund} when the attempt
+   * failed for a reason that is not the caller's fault. Returns the key to pass.
+   */
+  reserve(account: string, ip: string | undefined, now = Date.now()): string {
+    const key = `${account}|${clientBucket(ip)}`;
+    const entry = this.entries.get(key);
+    if (entry && now - entry.lastFailureAt > BACKOFF_FORGET_MS) {
+      this.entries.delete(key);
+    } else if (entry && entry.lockedUntil > now) {
+      throw new LoginBackoffException(entry.lockedUntil - now);
+    }
+    this.count(key, now);
+    return key;
+  }
+
+  /** The password was right: the pair starts clean. */
+  succeed(key: string): void {
+    this.entries.delete(key);
+  }
+
+  /** Takes back one reserved attempt (the server, not the caller, failed). */
+  refund(key: string): void {
     const entry = this.entries.get(key);
     if (!entry) return;
-    if (now - entry.lastFailureAt > BACKOFF_FORGET_MS) {
+    if (entry.failures <= 1) {
       this.entries.delete(key);
       return;
     }
-    if (entry.lockedUntil > now) {
-      throw new LoginBackoffException(entry.lockedUntil - now);
+    entry.failures -= 1;
+    entry.lockedUntil = entry.lastFailureAt + waitFor(entry.failures);
+  }
+
+  /** The owner proved themselves another way (a recovery phrase): forget every client's count. */
+  clearAccount(account: string): void {
+    const prefix = `${account}|`;
+    for (const key of [...this.entries.keys()]) {
+      if (key.startsWith(prefix)) this.entries.delete(key);
     }
   }
 
-  recordFailure(key: string, now = Date.now()): void {
+  private count(key: string, now: number): void {
     const failures = (this.entries.get(key)?.failures ?? 0) + 1;
-    const over = failures - BACKOFF_FREE_FAILURES;
-    const wait =
-      over < 0 ? 0 : Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** over);
     // Re-insert so Map order stays oldest-failure-first for eviction.
     this.entries.delete(key);
     this.entries.set(key, {
       failures,
-      lockedUntil: now + wait,
+      lockedUntil: now + waitFor(failures),
       lastFailureAt: now,
     });
     if (this.entries.size > BACKOFF_MAX_ENTRIES) {
@@ -77,8 +139,9 @@ export class LoginBackoffService {
       }
     }
   }
+}
 
-  recordSuccess(key: string): void {
-    this.entries.delete(key);
-  }
+function waitFor(failures: number): number {
+  const over = failures - BACKOFF_FREE_FAILURES;
+  return over < 0 ? 0 : Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** over);
 }

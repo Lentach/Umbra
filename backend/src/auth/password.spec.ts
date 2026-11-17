@@ -2,23 +2,26 @@ import { BadRequestException } from '@nestjs/common';
 import { validateDto } from '../chat/utils/dto.validator';
 import { RegisterDto } from './dto/register.dto';
 import { ResetPasswordDto } from '../users/dto/user.dto';
-import { PASSWORD_MIN_LENGTH, PASSWORD_REGEX_MESSAGE } from './password.constants';
+import {
+  PASSWORD_MIN_LENGTH,
+  PASSWORD_REGEX_MESSAGE,
+} from './password.constants';
 
 // Shared cases run against both DTOs that enforce the password policy
 const VALID_PASSWORDS = [
   'ValidPass1',
   'A1bbbbbbb',
-  `${'x'.repeat(PASSWORD_MIN_LENGTH - 2)}A1`,   // exactly min length
-  'Hello1!@#$%^&*()',                             // special chars allowed
-  'CorrectHorse1Battery',                         // long passphrase
+  `${'x'.repeat(PASSWORD_MIN_LENGTH - 2)}A1`, // exactly min length
+  'Hello1!@#$%^&*()', // special chars allowed
+  'CorrectHorse1Battery', // long passphrase
 ];
 
 const INVALID_PASSWORDS: Array<[string, string]> = [
-  ['Short1',          `at least ${PASSWORD_MIN_LENGTH} characters`],
-  ['alllowercase1',   PASSWORD_REGEX_MESSAGE],
-  ['ALLUPPERCASE1',   PASSWORD_REGEX_MESSAGE],
-  ['NoNumbersHere',   PASSWORD_REGEX_MESSAGE],
-  ['',                `at least ${PASSWORD_MIN_LENGTH} characters`],
+  ['Short1', `at least ${PASSWORD_MIN_LENGTH} characters`],
+  ['alllowercase1', PASSWORD_REGEX_MESSAGE],
+  ['ALLUPPERCASE1', PASSWORD_REGEX_MESSAGE],
+  ['NoNumbersHere', PASSWORD_REGEX_MESSAGE],
+  ['', `at least ${PASSWORD_MIN_LENGTH} characters`],
 ];
 
 // Toggling exactly one character class must flip validity. Unlike the shared
@@ -27,9 +30,9 @@ const INVALID_PASSWORDS: Array<[string, string]> = [
 // dropped from PASSWORD_REGEX, the missing-digit password would be accepted and
 // the toThrow below would fail.
 const CLASS_TOGGLE_CASES: Array<[string, string, string]> = [
-  ['digit',     'NoNumbersHere',  'NoNumbersHere1'],
-  ['uppercase', 'alllowercase1',  'Alllowercase1'],
-  ['lowercase', 'ALLUPPERCASE1',  'ALLUPPERCASe1'],
+  ['digit', 'NoNumbersHere', 'NoNumbersHere1'],
+  ['uppercase', 'alllowercase1', 'Alllowercase1'],
+  ['lowercase', 'ALLUPPERCASE1', 'ALLUPPERCASe1'],
 ];
 
 // Helper: build a valid RegisterDto payload
@@ -85,12 +88,9 @@ describe('RegisterDto — password validation', () => {
 // --- ResetPasswordDto ---
 
 describe('ResetPasswordDto — newPassword validation', () => {
-  it.each(VALID_PASSWORDS)(
-    'should accept valid newPassword: %s',
-    (pw) => {
-      expect(() => validateDto(ResetPasswordDto, resetPayload(pw))).not.toThrow();
-    },
-  );
+  it.each(VALID_PASSWORDS)('should accept valid newPassword: %s', (pw) => {
+    expect(() => validateDto(ResetPasswordDto, resetPayload(pw))).not.toThrow();
+  });
 
   it.each(INVALID_PASSWORDS)(
     'should reject newPassword "%s" (%s)',
@@ -116,7 +116,10 @@ describe('ResetPasswordDto — newPassword validation', () => {
 
   it('should reject empty oldPassword', () => {
     expect(() =>
-      validateDto(ResetPasswordDto, { oldPassword: '', newPassword: 'StrongNew1' }),
+      validateDto(ResetPasswordDto, {
+        oldPassword: '',
+        newPassword: 'StrongNew1',
+      }),
     ).toThrow(BadRequestException);
   });
 });
@@ -132,7 +135,11 @@ describe('Password policy consistency — RegisterDto vs ResetPasswordDto', () =
 
   it('a password rejected by RegisterDto should also be rejected by ResetPasswordDto', () => {
     const pw = 'alllowercase1';
-    expect(() => validateDto(RegisterDto, registerPayload(pw))).toThrow(BadRequestException);
-    expect(() => validateDto(ResetPasswordDto, resetPayload(pw))).toThrow(BadRequestException);
+    expect(() => validateDto(RegisterDto, registerPayload(pw))).toThrow(
+      BadRequestException,
+    );
+    expect(() => validateDto(ResetPasswordDto, resetPayload(pw))).toThrow(
+      BadRequestException,
+    );
   });
 });
