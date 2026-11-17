@@ -39,7 +39,7 @@
 - Next action: the owner reviews the four drafts and supplies the `[OWNER: …]` fields, then the agent publishes them as static pages (`/privacy`, `/terms`; today both paths serve the app shell). Before that, the owner decides on the name, then the domain.
 - Owner-owed:
   - his home address (he chose to publish it; UŚUDE art. 5), given at publication. His name is kept OUT of the public repo until then.
-  - a contact email: he asked for a dedicated address with a good name, confirmed with him before he creates it.
+  - the contact email: he chose `umbra.kontakt@proton.me` and creates it himself (now in all four drafts); confirm the mailbox exists before publishing.
   - the app name (he is thinking it over); the domain follows it.
 - Contact-form retention is set to 12 months in both drafts (his choice).
 - Play checklist (not started): Play Console account; PEPK; `flutter build appbundle` gates; an in-app report flow (decide what a report sends); terms accepted at sign-up; a web account-deletion path; Data safety form; reviewer account; strip `light_compressor_v2`'s foreground service; closed test (12 × 14 days).

@@ -34,7 +34,7 @@ Umbra is a messenger built so that the people who run it cannot read your messag
 Umbra is run by a private individual, not a company:
 
 - **[OWNER: full name]**, [OWNER: address]
-- Email: **[OWNER: contact email]**
+- Email: **umbra.kontakt@proton.me**
 
 That person is the data controller under the EU General Data Protection Regulation (GDPR) for the personal data described below.
 
@@ -114,7 +114,7 @@ If you lose all your devices and your recovery phrase, nobody, including us, can
 
 ## 10. Your rights
 
-Under the GDPR you have the right to access your data, to have it corrected or deleted, to restrict or object to its processing, to receive it in a portable form, and to withdraw any consent you gave (for example, by switching GIF search off). Write to **[OWNER: contact email]**; we answer within one month.
+Under the GDPR you have the right to access your data, to have it corrected or deleted, to restrict or object to its processing, to receive it in a portable form, and to withdraw any consent you gave (for example, by switching GIF search off). Write to **umbra.kontakt@proton.me**; we answer within one month.
 
 Please note that we cannot give you your messages, because we never have them in readable form. The app can export your chat history to a file that you control.
 
@@ -134,4 +134,4 @@ If we change this policy, we will publish the new version here and tell you in t
 
 ## 14. Contact
 
-**[OWNER: full name]**, [OWNER: address], **[OWNER: contact email]**
+**[OWNER: full name]**, [OWNER: address], **umbra.kontakt@proton.me**

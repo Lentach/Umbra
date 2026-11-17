@@ -15,7 +15,7 @@ Ten regulamin określa zasady korzystania z Umbry (regulamin świadczenia usług
 ## 1. Usługodawca
 
 Umbrę udostępnia bezpłatnie osoba prywatna:
-**[WŁAŚCICIEL: imię i nazwisko]**, [WŁAŚCICIEL: miejsce zamieszkania i adres], e-mail: **[WŁAŚCICIEL: adres e-mail]** („my”).
+**[WŁAŚCICIEL: imię i nazwisko]**, [WŁAŚCICIEL: miejsce zamieszkania i adres], e-mail: **umbra.kontakt@proton.me** („my”).
 
 ## 2. Rodzaje i zakres usług
 
@@ -59,7 +59,7 @@ Zakazane jest dostarczanie, przechowywanie i udostępnianie przez Umbrę **treś
 
 ## 6. Egzekwowanie zasad
 
-Wiadomości są szyfrowane end-to-end, więc nie możemy ich czytać i ich nie monitorujemy. W aplikacji możesz **zablokować** każdego użytkownika. Możesz też **zgłosić** użytkownika [WŁAŚCICIEL/DO ZROBIENIA: w aplikacji (gdy powstanie ta funkcja) lub] e-mailem na **[WŁAŚCICIEL: adres e-mail]**; zgłoszenie może zawierać wiadomości, które sam zdecydujesz się nam przekazać.
+Wiadomości są szyfrowane end-to-end, więc nie możemy ich czytać i ich nie monitorujemy. W aplikacji możesz **zablokować** każdego użytkownika. Możesz też **zgłosić** użytkownika [WŁAŚCICIEL/DO ZROBIENIA: w aplikacji (gdy powstanie ta funkcja) lub] e-mailem na **umbra.kontakt@proton.me**; zgłoszenie może zawierać wiadomości, które sam zdecydujesz się nam przekazać.
 
 Jeśli naruszysz regulamin lub prawo, możemy zawiesić lub usunąć Twoje konto. Jeśli prawo lub waga sprawy na to pozwalają, poinformujemy Cię o powodzie i damy możliwość odpowiedzi. Wykonujemy ważne nakazy prawne, ale możemy przekazać tylko nieliczne dane opisane w Polityce prywatności.
 
@@ -72,7 +72,7 @@ Jeśli naruszysz regulamin lub prawo, możemy zawiesić lub usunąć Twoje konto
 
 ## 8. Reklamacje
 
-Jeśli coś nie działa tak, jak obiecuje regulamin, napisz na **[WŁAŚCICIEL: adres e-mail]**. Podaj swoją nazwa#tag i opis problemu. Odpowiemy w ciągu **14 dni**.
+Jeśli coś nie działa tak, jak obiecuje regulamin, napisz na **umbra.kontakt@proton.me**. Podaj swoją nazwa#tag i opis problemu. Odpowiemy w ciągu **14 dni**.
 
 ## 9. Odpowiedzialność
 
