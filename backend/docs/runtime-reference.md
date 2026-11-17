@@ -52,6 +52,7 @@ Source of truth is `chat.gateway.ts` (`@Throttle` per handler); this is an orien
 
 - Key-exchange, identity-reset/recovery, device-list/revocation and provisioning events carry explicit limits (10–60/15min; `getDeviceList` 300/15min; `searchUsers` 100/15min; `setRequestQueue` / `getOwnRequestQueues` 30/15min); `fetchPreKeyBundle` / `checkOwnKeyBundle` use the guard's global default (100/15min).
 - `uploadKeyBundle` is the only handler without a `WsThrottlerGuard`.
+- Per TARGET, not per caller: `searchUsers` spends at most 5 one-time pre-keys per target device per hour, whoever searches (`SEARCH_OTP_BUDGET` in `chat-search.service.ts`, plan B5); past it the bundle carries no OTP. In-memory per process, map capped at 10k devices.
 - `getMessages` stays only as a compatibility answer (an empty `messageHistory`, 300/15min). The other old chat events (`sendMessage`, friends/blocks/reactions/…) have NO handler and no throttle row: an unknown event is unanswered silence. Their `WsThrottlerGuard` refusal-answer entries went with them.
 
 ## WsThrottlerGuard tracker (§6)

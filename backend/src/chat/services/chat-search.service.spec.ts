@@ -1,6 +1,10 @@
 import { ConfigService } from '@nestjs/config';
 import { Server, Socket } from 'socket.io';
-import { ChatSearchService } from './chat-search.service';
+import {
+  ChatSearchService,
+  SEARCH_OTP_BUDGET,
+  SEARCH_OTP_WINDOW_MS,
+} from './chat-search.service';
 import { UsersService } from '../../users/users.service';
 import { DevicesService } from '../../key-bundles/devices.service';
 import { DeviceListService } from '../../key-bundles/device-list.service';
@@ -44,7 +48,7 @@ describe('ChatSearchService', () => {
   let keyExchange: {
     claimBundle: jest.Mock<
       Promise<PreKeyBundleResponse | null>,
-      [number, number, Server]
+      [number, number, Server, boolean]
     >;
   };
   let client: FakeClient;
@@ -99,8 +103,16 @@ describe('ChatSearchService', () => {
     };
     keyExchange = {
       claimBundle: jest.fn(
-        (_userId: number, deviceId: number, _server: Server) =>
-          Promise.resolve<PreKeyBundleResponse | null>(bundleFor(deviceId)),
+        (_userId: number, deviceId: number, _server: Server, spend: boolean) =>
+          Promise.resolve<PreKeyBundleResponse | null>(
+            spend
+              ? bundleFor(deviceId)
+              : {
+                  ...bundleFor(deviceId),
+                  oneTimePreKeyId: null,
+                  oneTimePreKeyPublic: null,
+                },
+          ),
       ),
     };
     service = new ChatSearchService(
@@ -145,8 +157,8 @@ describe('ChatSearchService', () => {
       expect(users.findByUsernameAndTag).toHaveBeenCalledWith('alice', '1234');
       expect(devices.firstContactDevices).toHaveBeenCalledWith(2);
       expect(keyExchange.claimBundle.mock.calls).toEqual([
-        [2, 1, server],
-        [2, 3, server],
+        [2, 1, server, true],
+        [2, 3, server, true],
       ]);
       expect(payloadOf('searchUsersResult')).toEqual([
         {
@@ -175,6 +187,94 @@ describe('ChatSearchService', () => {
           },
         },
       ]);
+    });
+
+    describe('one-time pre-key budget per target device (plan B5)', () => {
+      const otpOf = () =>
+        (
+          payloadOf('searchUsersResult') as Array<{
+            devices: Array<{ deviceId: number; bundle: PreKeyBundleResponse }>;
+          }>
+        )[0].devices.map((d) => [d.deviceId, d.bundle.oneTimePreKeyPublic]);
+      const spends = () =>
+        keyExchange.claimBundle.mock.calls.filter(([, , , s]) => s).length;
+
+      beforeEach(() => {
+        users.findByUsernameAndTag.mockResolvedValue(stranger);
+        devices.firstContactDevices.mockResolvedValue([
+          { deviceId: 1, requestSid: sid, requestSealPub: sealPub },
+        ]);
+      });
+      afterEach(() => jest.useRealTimers());
+
+      it('repeated searches by one caller spend at most the budget; past it the answer still serves a usable signed-pre-key bundle', async () => {
+        for (let i = 0; i < SEARCH_OTP_BUDGET + 20; i++) {
+          client.emit.mockClear();
+          await search('alice#1234');
+        }
+        expect(spends()).toBe(SEARCH_OTP_BUDGET);
+        expect(keyExchange.claimBundle).toHaveBeenCalledTimes(
+          SEARCH_OTP_BUDGET + 20,
+        );
+        // The last answer: same device, same signed pre-key, no OTP.
+        expect(otpOf()).toEqual([[1, null]]);
+        const [result] = payloadOf('searchUsersResult') as Array<{
+          devices: Array<{ bundle: PreKeyBundleResponse }>;
+        }>;
+        expect(result.devices[0].bundle.signedPreKeyPublic).toBe('spk-1');
+        expect(result.devices[0].bundle.signedPreKeySignature).toBe('sig-1');
+      });
+
+      it('many callers share ONE budget per target: a sybil swarm cannot drain the pool', async () => {
+        for (let caller = 10; caller < 10 + SEARCH_OTP_BUDGET * 4; caller++) {
+          client = {
+            data: { user: { id: caller, deviceId: 1 } },
+            emit: jest.fn(),
+          };
+          await search('alice#1234');
+        }
+        expect(spends()).toBe(SEARCH_OTP_BUDGET);
+      });
+
+      it('the first contact gets an OTP, and the budget is per device: a fresh device of the target is not starved by its sibling', async () => {
+        await search('alice#1234');
+        expect(otpOf()).toEqual([[1, 'otp-1']]);
+        for (let i = 1; i < SEARCH_OTP_BUDGET + 3; i++)
+          await search('alice#1234');
+
+        devices.firstContactDevices.mockResolvedValue([
+          { deviceId: 1, requestSid: sid, requestSealPub: sealPub },
+          { deviceId: 4, requestSid: sid, requestSealPub: sealPub },
+        ]);
+        client.emit.mockClear();
+        await search('alice#1234');
+        expect(otpOf()).toEqual([
+          [1, null],
+          [4, 'otp-4'],
+        ]);
+      });
+
+      it('the budget refills once the window has passed', async () => {
+        jest.useFakeTimers({ now: 1_800_000_000_000 });
+        for (let i = 0; i < SEARCH_OTP_BUDGET + 2; i++)
+          await search('alice#1234');
+        expect(spends()).toBe(SEARCH_OTP_BUDGET);
+
+        jest.setSystemTime(1_800_000_000_000 + SEARCH_OTP_WINDOW_MS);
+        client.emit.mockClear();
+        await search('alice#1234');
+        expect(otpOf()).toEqual([[1, 'otp-1']]);
+        expect(spends()).toBe(SEARCH_OTP_BUDGET + 1);
+      });
+
+      it('another target has its own budget', async () => {
+        for (let i = 0; i < SEARCH_OTP_BUDGET + 2; i++)
+          await search('alice#1234');
+        users.findByUsernameAndTag.mockResolvedValue({ ...stranger, id: 7 });
+        client.emit.mockClear();
+        await search('bob#5678');
+        expect(otpOf()).toEqual([[1, 'otp-1']]);
+      });
     });
 
     it('leaves out a device whose bundle is gone by the time it is claimed', async () => {
