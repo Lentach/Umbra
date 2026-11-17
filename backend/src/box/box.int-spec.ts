@@ -2175,7 +2175,7 @@ describeWithDb('box over real sockets and Postgres', () => {
 
   describe('ceiling early warning (#204)', () => {
     it('the sweep logs one WARN when box_totals passes half the open band', async () => {
-      const [before] = await db.query(
+      const [before]: { msgCount: number }[] = await db.query(
         `SELECT "msgCount" FROM box_totals WHERE id = 1`,
       );
       const warn = jest
