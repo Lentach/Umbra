@@ -9,7 +9,10 @@ import 'box_wire.dart';
 /// file after 14 days (D8), so every device keeps what it downloaded, and the
 /// sender keeps its own. Holds the UNFRAMED AES-GCM ciphertext only — the
 /// file key lives in the sealed message record, so a copy here holds nothing
-/// the box did not. Keyed by account and the box's 32-byte media id.
+/// the box did not. The one exception is the uploader's DELETE SECRET (plan
+/// D3), stored in the clear beside the copy (native `<id>.del` in the app
+/// support directory, an IndexedDB record on the web); it is excluded from
+/// Android backup (`allowBackup=false` and `data_extraction_rules.xml`). Keyed by account and the box's 32-byte media id.
 ///
 /// A failure that is not an absent copy (disk, IndexedDB, a store that never
 /// answers) throws; [get] is null only when there is no copy.

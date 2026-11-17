@@ -680,7 +680,10 @@ void main() {
 
         final secret = ref.deleteSecret!;
         expect(secret, hasLength(kBoxMediaDeleteSecretBytes));
-        expect(seen.headers['Box-Delete-Hash'], boxB64(sha256.convert(secret).bytes));
+        expect(
+          seen.headers['Box-Delete-Hash'],
+          boxB64(sha256.convert(secret).bytes),
+        );
         // The secret itself is on the wire nowhere in the upload.
         expect(seen.headers.values, isNot(contains(boxB64(secret))));
         final second =
@@ -704,7 +707,10 @@ void main() {
 
       expect(result, isA<BoxOk<void>>());
       expect(seen.method, 'DELETE');
-      expect(seen.url.toString(), 'http://box.test/box/media/${boxB64(_bytes(32, 8))}');
+      expect(
+        seen.url.toString(),
+        'http://box.test/box/media/${boxB64(_bytes(32, 8))}',
+      );
       expect(seen.headers['Box-Delete-Secret'], boxB64(secret));
     });
 

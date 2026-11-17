@@ -916,8 +916,11 @@ extension MessagingBoxActions on MessagingProvider {
       _boxActionFailed(BoxActionFailure.delete);
       return;
     }
-    await _deleteBoxMediaOnServer(target);
+    // Read before `_applyBoxDelete`, whose `forget` drops the secret. The
+    // local delete never waits on the network.
+    final removal = await _boxMediaRemoval(target);
     await _applyBoxDelete(target.conversationId, wire);
+    if (removal != null) unawaited(removal());
   }
 
   /// Plan D3: removes the box's file of an own attachment deleted for
@@ -926,26 +929,37 @@ extension MessagingBoxActions on MessagingProvider {
   /// an envelope, sibling copies included), and the delete is best effort: a
   /// failure leaves the reaper's expiry. Read before `_applyBoxDelete`,
   /// whose `forget` drops the secret with the copy.
-  Future<void> _deleteBoxMediaOnServer(MessageModel target) async {
+  Future<Future<void> Function()?> _boxMediaRemoval(MessageModel target) async {
     final url = target.mediaUrl;
     final id = url == null ? null : boxMediaIdOf(url);
     final user = _currentUserId;
     final outbox = boxOutbox;
-    if (id == null || user == null || outbox == null) return;
+    if (id == null || user == null || outbox == null) return null;
+    final Uint8List? secret;
     try {
-      final secret = await boxMedia?.deleteSecretFor(user, id);
-      if (secret == null) return;
-      final result = await outbox.deleteMedia(id, secret);
-      if (result is! BoxOk) {
-        _e2eFlowLog('BOX_MEDIA_DELETE_FAILED', {
-          'result': '${result.runtimeType}',
-        });
-      }
+      secret = await boxMedia?.deleteSecretFor(user, id);
     } on Object catch (e) {
       _e2eFlowLog('BOX_MEDIA_DELETE_FAILED', {
         'error': e.runtimeType.toString(),
       });
+      return null;
     }
+    final held = secret;
+    if (held == null) return null;
+    return () async {
+      try {
+        final result = await outbox.deleteMedia(id, held);
+        if (result is! BoxOk) {
+          _e2eFlowLog('BOX_MEDIA_DELETE_FAILED', {
+            'result': '${result.runtimeType}',
+          });
+        }
+      } on Object catch (e) {
+        _e2eFlowLog('BOX_MEDIA_DELETE_FAILED', {
+          'error': e.runtimeType.toString(),
+        });
+      }
+    };
   }
 
   /// Pins box message [messageId] (decision 45): shown at once, sent over

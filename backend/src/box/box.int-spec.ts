@@ -4,7 +4,13 @@ import { APP_GUARD } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { generateKeyPairSync, randomBytes, sign, type KeyObject } from 'crypto';
+import {
+  createHash,
+  generateKeyPairSync,
+  randomBytes,
+  sign,
+  type KeyObject,
+} from 'crypto';
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { request as httpRequest } from 'http';
@@ -593,7 +599,7 @@ describeWithDb('box over real sockets and Postgres', () => {
       const columns: Record<string, string[]> = {};
       for (const r of rows) (columns[r.table_name] ??= []).push(r.column_name);
       expect(columns).toEqual({
-        box_media: ['id', 'path', 'sizeBucket', 'expiresAt'],
+        box_media: ['id', 'path', 'sizeBucket', 'expiresAt', 'deleteHash'],
         box_msgs: ['id', 'rid', 'blob', 'createdAt', 'expiresAt', 'quiet'],
         box_notifiers: ['nid', 'token', 'platform', 'verifiedAt'],
         box_totals: ['id', 'msgCount', 'mediaBytes'],
@@ -1819,6 +1825,49 @@ describeWithDb('box over real sockets and Postgres', () => {
       // Headers only: not one body byte is ever sent. A server that read
       // the body first would never answer.
       expect(await statusBeforeBody(queue.sid, 16 * 1024 * 1024 - 1)).toBe(413);
+    });
+
+    it('DELETE removes the file and refunds the total once for the right secret; a wrong one deletes nothing (plan D3)', async () => {
+      const bob = await connect();
+      const queue = await createQueue(bob);
+      const secret = randomBytes(32);
+      const hash = createHash('sha256').update(secret).digest('base64url');
+      const posted = await fetch(`${base}/box/media`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/octet-stream',
+          'box-sid': queue.sid,
+          'box-delete-hash': hash,
+          'x-real-ip': nextIp(),
+        },
+        body: new Uint8Array(randomBytes(4096)),
+      });
+      expect(posted.status).toBe(201);
+      const { id } = await readJson<{ id: string }>(posted);
+      const before = (await totals()).mediaBytes;
+      const files = () => readdirSync(join(mediaDir, 'box')).length;
+      const filesBefore = files();
+      const del = (key: Buffer) =>
+        fetch(`${base}/box/media/${id}`, {
+          method: 'DELETE',
+          headers: {
+            'box-delete-secret': key.toString('base64url'),
+            'x-real-ip': nextIp(),
+          },
+        });
+
+      expect((await del(randomBytes(32))).status).toBe(404);
+      expect(files()).toBe(filesBefore);
+      expect((await totals()).mediaBytes).toBe(before);
+      expect((await fetch(`${base}/box/media/${id}`)).status).toBe(200);
+
+      expect((await del(secret)).status).toBe(204);
+      expect(files()).toBe(filesBefore - 1);
+      expect((await totals()).mediaBytes).toBe(before - 4096);
+      expect((await fetch(`${base}/box/media/${id}`)).status).toBe(404);
+      // Once: a repeat finds no row and refunds nothing more.
+      expect((await del(secret)).status).toBe(404);
+      expect((await totals()).mediaBytes).toBe(before - 4096);
     });
 
     it('answers an unknown sid 201 with an id that is never stored', async () => {
