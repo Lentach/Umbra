@@ -17,7 +17,7 @@ These terms are the rules for using Umbra. By creating an account you accept the
 ## 1. Who provides Umbra
 
 Umbra is provided free of charge by a private individual:
-**[OWNER: full name]**, [OWNER: residence address], email: **umbra.kontakt@proton.me** ("we").
+**[OWNER: full name]**, [OWNER: residence address], email: **[OWNER: contact email]** ("we").
 
 ## 2. What Umbra is
 
@@ -61,7 +61,7 @@ You may not use Umbra to send, store or share **unlawful content**, or to:
 
 ## 6. How rules are enforced
 
-Messages are end-to-end encrypted, so we cannot read them and do not monitor them. You can **block** any user in the app. You can **report** a user to us [OWNER/TODO: in the app (once built) or] by email at **umbra.kontakt@proton.me**; a report can include messages you choose to forward to us.
+Messages are end-to-end encrypted, so we cannot read them and do not monitor them. You can **block** any user in the app. You can **report** a user to us [OWNER/TODO: in the app (once built) or] by email at **[OWNER: contact email]**; a report can include messages you choose to forward to us.
 
 If you break these terms or the law, we may suspend or delete your account. Unless the law or the seriousness of the case prevents it, we will tell you why and give you a chance to respond. We act on valid legal orders, but we can only hand over the little data described in the Privacy Policy.
 
@@ -74,7 +74,7 @@ If you break these terms or the law, we may suspend or delete your account. Unle
 
 ## 8. Complaints
 
-If something does not work as these terms promise, write to **umbra.kontakt@proton.me**. Please include your username#tag and a description of the problem. We will answer within **14 days**.
+If something does not work as these terms promise, write to **[OWNER: contact email]**. Please include your username#tag and a description of the problem. We will answer within **14 days**.
 
 ## 9. Liability
 

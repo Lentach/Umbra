@@ -14,7 +14,7 @@ Umbra to komunikator zbudowany tak, żeby osoby, które go prowadzą, nie mogły
 Umbrę prowadzi osoba prywatna, nie firma:
 
 - **[WŁAŚCICIEL: imię i nazwisko]**, [WŁAŚCICIEL: adres]
-- E-mail: **umbra.kontakt@proton.me**
+- E-mail: **[WŁAŚCICIEL: adres e-mail]**
 
 Ta osoba jest administratorem danych osobowych opisanych poniżej w rozumieniu RODO.
 
@@ -94,7 +94,7 @@ Jeśli stracisz wszystkie urządzenia i frazę odzyskiwania, nikt, także my, ni
 
 ## 10. Twoje prawa
 
-Na podstawie RODO masz prawo dostępu do swoich danych, ich sprostowania lub usunięcia, ograniczenia przetwarzania, sprzeciwu wobec przetwarzania, otrzymania danych w przenośnym formacie oraz wycofania udzielonej zgody (na przykład przez wyłączenie wyszukiwania GIF-ów). Napisz na **umbra.kontakt@proton.me**; odpowiemy w ciągu miesiąca.
+Na podstawie RODO masz prawo dostępu do swoich danych, ich sprostowania lub usunięcia, ograniczenia przetwarzania, sprzeciwu wobec przetwarzania, otrzymania danych w przenośnym formacie oraz wycofania udzielonej zgody (na przykład przez wyłączenie wyszukiwania GIF-ów). Napisz na **[WŁAŚCICIEL: adres e-mail]**; odpowiemy w ciągu miesiąca.
 
 Pamiętaj, że nie możemy przekazać Ci Twoich wiadomości, bo nigdy nie mamy ich w czytelnej postaci. Aplikacja pozwala wyeksportować historię czatów do pliku, który kontrolujesz.
 
@@ -114,4 +114,4 @@ Jeśli zmienimy tę politykę, opublikujemy nową wersję tutaj i poinformujemy 
 
 ## 14. Kontakt
 
-**[WŁAŚCICIEL: imię i nazwisko]**, [WŁAŚCICIEL: adres], **umbra.kontakt@proton.me**
+**[WŁAŚCICIEL: imię i nazwisko]**, [WŁAŚCICIEL: adres], **[WŁAŚCICIEL: adres e-mail]**
