@@ -133,13 +133,22 @@ export class ChatSearchService {
     for (const address of await this.devicesService.firstContactDevices(
       userId,
     )) {
-      const spend = this.takeSearchOtp(userId, address.deviceId);
-      const bundle = await this.chatKeyExchangeService.claimBundle(
-        userId,
-        address.deviceId,
-        server,
-        spend,
-      );
+      const slot = this.takeSearchOtp(userId, address.deviceId);
+      let bundle: PreKeyBundleResponse | null = null;
+      try {
+        bundle = await this.chatKeyExchangeService.claimBundle(
+          userId,
+          address.deviceId,
+          server,
+          slot !== null,
+        );
+      } finally {
+        // A slot that spent nothing (device gone, empty pool, a throw) is
+        // given back, so an empty pool does not burn the hour's budget.
+        if (slot !== null && bundle?.oneTimePreKeyId == null) {
+          this.refundSearchOtp(userId, address.deviceId, slot);
+        }
+      }
       // Gone between the listing and the claim (a revoke or reset racing the
       // search): a device with no bundle cannot be reached, so it is not served.
       if (!bundle) continue;
@@ -159,39 +168,48 @@ export class ChatSearchService {
   }
 
   /**
-   * Whether this search may spend one of [userId]'s device [deviceId] OTPs:
-   * true (and counted) while fewer than [SEARCH_OTP_BUDGET] searches spent one
-   * in the last [SEARCH_OTP_WINDOW_MS]. Keyed by target, never by caller, so
-   * many callers share one budget (plan B5).
+   * Takes one slot of [userId]'s device [deviceId] OTP budget: returns the
+   * slot's timestamp while fewer than [SEARCH_OTP_BUDGET] searches spent one in
+   * the last [SEARCH_OTP_WINDOW_MS], else null. Keyed by target, never by
+   * caller, so many callers share one budget (plan B5).
+   *
+   * Fail-closed: a target with no live entry while the map is full (after
+   * sweeping expired entries) gets null. Nothing is ever evicted to make room,
+   * so the bound can only withhold OTPs, never hand a drained target a fresh
+   * budget.
    */
-  private takeSearchOtp(userId: number, deviceId: number): boolean {
+  private takeSearchOtp(userId: number, deviceId: number): number | null {
     const now = Date.now();
     const key = `${userId}:${deviceId}`;
-    const recent = (this.searchOtpSpends.get(key) ?? []).filter(
+    const existing = this.searchOtpSpends.get(key);
+    const recent = (existing ?? []).filter(
       (t) => now - t < SEARCH_OTP_WINDOW_MS,
     );
     if (recent.length >= SEARCH_OTP_BUDGET) {
       this.searchOtpSpends.set(key, recent);
-      return false;
+      return null;
     }
-    recent.push(now);
-    this.searchOtpSpends.delete(key);
-    if (this.searchOtpSpends.size >= SEARCH_OTP_MAP_MAX_ENTRIES) {
+    if (!existing && this.searchOtpSpends.size >= SEARCH_OTP_MAP_MAX_ENTRIES) {
       for (const [k, times] of this.searchOtpSpends) {
         if (times.every((t) => now - t >= SEARCH_OTP_WINDOW_MS)) {
           this.searchOtpSpends.delete(k);
         }
       }
-      // Still full: drop the oldest-inserted entry (Map keeps insert order).
-      if (this.searchOtpSpends.size >= SEARCH_OTP_MAP_MAX_ENTRIES) {
-        for (const oldest of this.searchOtpSpends.keys()) {
-          this.searchOtpSpends.delete(oldest);
-          break;
-        }
-      }
+      if (this.searchOtpSpends.size >= SEARCH_OTP_MAP_MAX_ENTRIES) return null;
     }
+    recent.push(now);
     this.searchOtpSpends.set(key, recent);
-    return true;
+    return now;
+  }
+
+  /** Gives back a slot [takeSearchOtp] handed out that spent no pre-key. */
+  private refundSearchOtp(userId: number, deviceId: number, slot: number) {
+    const key = `${userId}:${deviceId}`;
+    const times = this.searchOtpSpends.get(key);
+    if (!times) return;
+    const i = times.indexOf(slot);
+    if (i >= 0) times.splice(i, 1);
+    if (times.length === 0) this.searchOtpSpends.delete(key);
   }
 
   /**

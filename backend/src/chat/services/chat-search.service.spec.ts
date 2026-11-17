@@ -267,6 +267,52 @@ describe('ChatSearchService', () => {
         expect(spends()).toBe(SEARCH_OTP_BUDGET + 1);
       });
 
+      it('an empty pool or a vanished device refunds its slot: nothing was spent, so the hour is not burned', async () => {
+        keyExchange.claimBundle.mockImplementation((_u, deviceId) =>
+          Promise.resolve({
+            ...bundleFor(deviceId),
+            oneTimePreKeyId: null,
+            oneTimePreKeyPublic: null,
+          }),
+        );
+        for (let i = 0; i < SEARCH_OTP_BUDGET * 3; i++)
+          await search('alice#1234');
+        keyExchange.claimBundle.mockResolvedValueOnce(null);
+        await search('alice#1234');
+        keyExchange.claimBundle.mockRejectedValueOnce(new Error('db down'));
+        await search('alice#1234');
+        // Every slot was given back: the next search still spends.
+        const last = keyExchange.claimBundle.mock.calls.length;
+        keyExchange.claimBundle.mockImplementation((_u, d, _s, spend) =>
+          Promise.resolve(bundleFor(d)),
+        );
+        await search('alice#1234');
+        expect(keyExchange.claimBundle.mock.calls[last][3]).toBe(true);
+      });
+
+      it('a full table never evicts a drained target into a fresh budget (fail-closed)', async () => {
+        // Drain target 2 first, the oldest entry in the table.
+        for (let i = 0; i < SEARCH_OTP_BUDGET + 1; i++)
+          await search('alice#1234');
+        // Fill the table with 10k other live targets.
+        for (let t = 1000; t < 1000 + 10_000; t++) {
+          users.findByUsernameAndTag.mockResolvedValue({ ...stranger, id: t });
+          await search('alice#1234');
+        }
+        keyExchange.claimBundle.mockClear();
+        // The drained target is still refused an OTP...
+        users.findByUsernameAndTag.mockResolvedValue(stranger);
+        await search('alice#1234');
+        expect(keyExchange.claimBundle.mock.calls[0][3]).toBe(false);
+        // ...and so is a brand-new target while the table is full.
+        users.findByUsernameAndTag.mockResolvedValue({
+          ...stranger,
+          id: 99999,
+        });
+        await search('alice#1234');
+        expect(keyExchange.claimBundle.mock.calls[1][3]).toBe(false);
+      });
+
       it('another target has its own budget', async () => {
         for (let i = 0; i < SEARCH_OTP_BUDGET + 2; i++)
           await search('alice#1234');
