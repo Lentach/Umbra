@@ -327,6 +327,23 @@ describe('AuthService', () => {
       expect(verifyDummyPasswords).toHaveBeenCalledTimes(BACKOFF_FREE_FAILURES);
     });
 
+    it('does not reveal which tags exist: after locking the bare name, a wrong tag answers 429 too, and another name is not locked', async () => {
+      usersService.findByUsername.mockResolvedValue([mockUser as User]);
+      usersService.findByUsernameAndTag.mockImplementation((_u, tag) =>
+        Promise.resolve(tag === '0427' ? (mockUser as User) : null),
+      );
+      usersService.checkPassword.mockResolvedValue(false);
+      await lockOut('testuser');
+
+      for (const id of ['testuser#0427', 'testuser#1111']) {
+        const err = await service.login(id, 'x', IP_A).catch((e) => e);
+        expect(err.getStatus()).toBe(429);
+      }
+      usersService.findByUsername.mockResolvedValue([]);
+      const other = await service.login('bob', 'x', IP_A).catch((e) => e);
+      expect(other.getStatus()).toBe(401);
+    });
+
     it('spellings of one unknown name share a key (parsed and trimmed like the lookup)', async () => {
       usersService.findByUsername.mockResolvedValue([]);
       for (let i = 0; i < BACKOFF_FREE_FAILURES; i++) {

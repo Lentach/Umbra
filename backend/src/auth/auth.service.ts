@@ -44,14 +44,14 @@ export class AuthService {
   async login(identifier: string, password: string, clientIp?: string) {
     const parsed = parseIdentifier(identifier);
     const user = await this.resolveIdentifier(identifier);
-    // Backoff per (account, client address) (plan D4). Unknown identifiers count
-    // under their parsed name, so a refusal reads the same whether the account
-    // exists. The attempt is reserved NOW, before any await, so parallel
-    // requests cannot all slip past the check.
+    // Backoff per (NAME, client address) (plan D4). The account part is the
+    // parsed, lower-cased NAME for everyone, resolved or not: keyed on the
+    // resolved id, a locked `alice` would answer 429 to `alice#1234` (real) and
+    // 401 to `alice#1111` (no such tag), which tells valid tags apart. The
+    // attempt is reserved NOW, before any await, so parallel requests cannot
+    // all slip past the check.
     const key = this.loginBackoff.reserve(
-      user
-        ? `u:${user.id}`
-        : `n:${parsed ? `${parsed.name.toLowerCase()}#${parsed.tag ?? ''}` : '-'}`,
+      parsed ? `name:${parsed.name.toLowerCase()}` : '-',
       clientIp,
     );
 
@@ -133,7 +133,7 @@ export class AuthService {
 
     const changedAt = await this.usersService.setPassword(user.id, newPassword);
     // The owner proved themselves by the phrase: forget every client's failures.
-    this.loginBackoff.clearAccount(`u:${user.id}`);
+    this.loginBackoff.clearAccount(`name:${user.username.toLowerCase()}`);
     this.auditLogger.log(`recoverPassword success`);
     // `JwtStrategy` and the socket handshake reject `iat <= passwordChangedAt`
     // in WHOLE SECONDS, and a JWT's `iat` is floored — a token signed in the

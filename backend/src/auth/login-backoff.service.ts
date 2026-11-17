@@ -67,7 +67,7 @@ export function clientBucket(ip: string | undefined): string {
  *
  * After {@link BACKOFF_FREE_FAILURES} failures the pair waits 15 s, 30 s, 1 min
  * … up to 15 min before the next attempt is even CHECKED (no hash runs). Residual:
- * guessing spread over many addresses gets about 5 tries per address per hour
+ * guessing spread over many addresses gets about 13 tries per /64 in the first hour, then about 4 per hour
  * per account (each address then waits up to 15 min), on top of the per-IP
  * throttle; a global per-account cap would close that and reopen the lockout.
  *
