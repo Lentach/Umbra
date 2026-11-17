@@ -410,21 +410,31 @@ clip — ask what the whole label said. (The earlier hypothesis about the loopba
 `playback_controller.dart:78-84` was doing its job all along.) Incidental, and worth knowing before
 diagnosing a "vanishing" message in that thread: it has **disappearing messages ON at 2 days**.
 
-## Distribution — SETTLED 2026-09-14 by the owner: a PLAIN CLOUD LINK, not GitHub Releases
+## Distribution — Google Play (public) plus the self-hosted APK, decided 2026-11-17
 
-- **Hand the APK over as a direct file/cloud link (Drive, Telegram, …). NOT a GitHub Release.**
-  The owner was asked and chose this over three alternatives, because a release on a PUBLIC repo is
-  world-downloadable and **registration against prod is open** — the APK is not the gate,
-  REGISTRATION is, and "friends" is not the same audience as "anyone who finds the repo".
-  The alternatives and what they cost, so this is not re-litigated from scratch:
-  (a) public release + open registration — one permanent link and Obtainium auto-update, but
-  anyone can join; (b) private-repo releases — friends each need a GitHub account and repo access;
-  (c) **plain cloud link — CHOSEN**; (d) public release + a server-side invite gate on registration,
-  the only option that separates "can install" from "can join", but that is backend work nobody has
-  scheduled. Revisit (d) if the user base ever outgrows hand-delivery.
-- **The cost of (c), stated plainly: there is NO auto-update path.** Obtainium needs a release feed,
-  so every update means the owner re-sends the file and each friend taps it. Budget for that, and
-  keep the version list below current so a friend can be told what they should be on.
+- **Decision 2026-11-17 (owner):** publish on Google Play, public, under a PERSONAL developer account
+  in the owner's name, and keep the self-hosted APK for people without Play. Play App Signing MUST
+  adopt `fireplace-release.jks` through PEPK (the one-way-door bullet below). No Play account exists
+  yet. Open before a submission: the app NAME (an unrelated "UMBRA" encrypted messenger went live at
+  `umbramessenger.com` in Aug 2026; the owner holds the domain purchase until he decides), our own
+  domain (`fireplace.ignorelist.com` is a FreeDNS subdomain of someone else's domain, and every APK
+  has it built in), the privacy policy and terms (drafts in `docs/legal/`), an in-app report flow,
+  terms accepted at sign-up, a web account-deletion path, the Data safety form, a reviewer account,
+  and the closed test (12 testers for 14 days in a row, for personal accounts created after
+  2023-11-13; Play Console Help 14151465).
+- **Android developer verification (developer.android.com/developer-verification):** from 2027 every
+  app on a certified Android device must be registered by a verified developer, whatever it was
+  downloaded from; an unregistered APK then needs each user's one-time "advanced flow" (developer
+  mode, restart, a 24-hour wait). Play App Signing registers a Play app automatically; the
+  self-hosted APK is covered only while it is signed with the same key [INFERENCE: confirm the
+  package's registration status in Play Console once the account exists].
+- **Today's channel (since 0.2.51, 2026-09-18):** the APK is served from
+  `https://fireplace.ignorelist.com/apk/umbra-<version>.apk` (nginx `location ^~ /apk/` →
+  `~/fireplace/apk/`, a sibling of `frontend-build`, which `deploy-web.ps1` deletes), and
+  `GET /version` advertises it through `ANDROID_APK_VERSION_CODE|_NAME|_URL`; installed apps show
+  `UpdateAvailableBanner`. Updates are offered, not silent: the user taps and installs over the old
+  build. This superseded the 2026-09-14 hand-delivered cloud link. Registration against prod is
+  open: the APK is not the gate.
 - **Name it `umbra-<version>.apk`.** The repo is now `Lentach/Umbra` (renamed from `Fireplace`
   2026-09-14, on the owner's call, BEFORE anything was published — so no redirect behaviour is being
   relied on; GitHub redirects the old URL and `gh api repos/Lentach/Fireplace` still resolves, but
@@ -448,20 +458,12 @@ diagnosing a "vanishing" message in that thread: it has **disappearing messages 
   `frontend/pubspec.yaml`), Android answers a lower one with `INSTALL_FAILED_VERSION_DOWNGRADE`,
   and the only way past that is `uninstall` — i.e. there is no rollback on a real device, only
   another bump. See the ⛔ note under "versionCode floor".
-- **No auto-update exists for sideloads, and the CHOSEN route has none at all** — with a plain cloud
-  link the owner re-sends the file and each friend taps it, every time. That is the accepted cost of
-  the 2026-09-14 decision above, not an oversight. The alternatives, cheapest first, ALL require
-  abandoning or supplementing the cloud link: Obtainium (zero app code, each user installs it once,
-  but it needs a **release feed** — i.e. GitHub Releases, which was declined for exposure reasons,
-  so it would only work on a PRIVATE repo the friends are invited to); a self-hosted manifest +
-  in-app "update available" banner (the JSON and APK must live OUTSIDE `frontend-build`, which every
-  `deploy-web.ps1` deletes — an `android-dist/` nginx alias beside `landing-build/` — plus
-  `REQUEST_INSTALL_PACKAGES` for a one-tap install; this is the only option that keeps distribution
-  entirely in our hands); or a Play internal-testing track (real silent updates, but the whole Play
-  gate list below applies).
-- Play Store later: needs `flutter build appbundle` — and the signer + 16KB gates must move onto the
-  BUNDLE's output, because `build-android.ps1` only ever inspects an APK — plus a privacy policy,
-  the data-safety form, and an in-app report path (UGC policy); 16KB + targetSdk are already met.
+- **Sideload updates are offered, never silent:** the `UpdateAvailableBanner` (above) links the new
+  APK, and the user downloads it and installs it over the old one (the app does not request
+  `REQUEST_INSTALL_PACKAGES`). Play installs get Play's own updates.
+- **Play needs** `flutter build appbundle`, and the signer + 16KB gates must move onto the BUNDLE's
+  output, because `build-android.ps1` only ever inspects an APK; plus the items listed under the
+  2026-11-17 decision above. 16KB + targetSdk are already met.
 - ⛔ **The signing certificate is a one-way door, and the trigger is a USER INSTALL — not a
   published release.** The old wording tied the deadline to "`gh release list` empty", which under
   the cloud-link decision above is unreachable: there will never be a release, so that test would
@@ -469,11 +471,9 @@ diagnosing a "vanishing" message in that thread: it has **disappearing messages 
   keystore can only take a Play update if Play App Signing ADOPTED this keystore via PEPK. Let
   Google generate its own key instead and those installs are refused (different cert) with uninstall
   as the only path — which destroys that user's Signal identity and local history.
-  **Status: the door is ALREADY partly shut.** The owner's phone has been running builds signed with
-  this key since 0.2.43, and he can wipe his own device; **friends cannot be asked to.** So this is a
-  decision owed BEFORE `umbra-0.2.48.apk` is sent to anyone, not after: either commit to PEPK
-  adoption if Play is ever wanted, or accept sideload-forever for everyone who installs from now on.
-  Rotation later does not repair already-installed sideloads.
+  **Status 2026-11-17: Play is decided, so PEPK adoption of THIS keystore is REQUIRED.** The owner's
+  phone has run builds signed with this key since 0.2.43, and every sideloaded install since 0.2.51
+  has it too; none of them can be asked to uninstall. Rotation later does not repair them.
 - **Foreground-service declaration (Play only, and avoidable).** `light_compressor_v2-1.9.1`'s
   library manifest merges `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_DATA_SYNC` and a
   `CompressionForegroundService` (`foregroundServiceType="dataSync"`) into our APK

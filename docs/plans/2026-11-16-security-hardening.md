@@ -58,7 +58,7 @@ Native apps (Android now, iOS next) become the product. **iOS is on hold (owner,
 
 ## 6. Tier F — native distribution
 
-- **Android:** decide Play Store or sideload, and whether Play App Signing can adopt the current keystore (`traps.md`: otherwise every installed user is stranded). Privacy policy and ToS.
+- **Android: decided 2026-11-17.** Google Play (public, personal account in the owner's name) plus the self-hosted APK; Play App Signing adopts the current keystore through PEPK (`traps.md`: otherwise every installed user is stranded). Privacy policy and terms are drafted in `docs/legal/` (owner review pending). Open: the app name, our own domain, an in-app report flow, terms accepted at sign-up, a web account-deletion path (runbook `docs/runbooks/android-release.md`, "Distribution").
 - **iOS, stage 1 — Ad Hoc (what quest-api.fly.dev does, checked 2026-11-16):** a Flutter app, signed with an Ad Hoc profile listing registered iPhones, with production push. `/install` links `itms-services://?action=download-manifest&url=…/manifest.plist`; the manifest points at an `.ipa` on HTTPS storage. A new build with the same bundle id and a higher build number installs over the old one and keeps its data.
   - Needs: Apple Developer Program ($99/year), each iPhone's UDID, a Mac or macOS CI (the repo is public, so GitHub's macOS runners are free), an APNs key in Firebase for push.
   - Limit: 100 iPhones per membership year; disabling a device frees no slot; the count resets only at renewal. Each new device means a re-signed build.
