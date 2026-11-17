@@ -512,6 +512,12 @@ diagnosing a "vanishing" message in that thread: it has **disappearing messages 
 
 - Output: `frontend/build/app/outputs/bundle/release/app-release.aab`, same `BASE_URL` /
   `GIT_COMMIT` / `BUILD_TIME` / `GIPHY_API_KEY` defines and versionCode derivation as the APK.
+- **Signer pin (both APK and bundle):** `-ExpectedSignerSha256` defaults to the record-of-truth
+  `8E:9A:6B:F3:…:5C:DF:40:5D` (colons/case ignored). The APK gate parses apksigner's
+  `certificate SHA-256 digest`; the bundle gate parses `keytool -printcert -jarfile` (`SHA256:`,
+  from the same JDK as jarsigner). Both FAIL unless there is exactly one signer and it equals the
+  pin. Override the parameter only to upload with a separate Play upload key; the sideload APK must
+  keep the default.
 - **Signer gate:** a `.aab` carries only a JAR (v1) signature, which `apksigner` does not verify,
   so the script runs `jarsigner -verify -verbose -certs` (JAVA_HOME, else Android Studio's
   `jbr\bin`). It fails on a non-zero exit, a missing `jar verified.`, any "unsigned entries", or a
@@ -539,15 +545,25 @@ Play updates.
    release, under **App signing**, choose **Change app signing key**, then one of the **Export and
    upload** options (the "Java keystore" one, for our `.jks`). Do this BEFORE anything rolls out:
    Play Console Help 9842756 says the key can be changed only "before a release is rolled out in the
-   open testing or production track", and it can never be changed afterwards.
+   open testing or production track". After that it can only be upgraded, which does not change the
+   key older installs verify against. **Quantum-ready default:** the same page says a new app "will
+   be automatically enrolled in quantum-ready, hybrid signing with Google-generated keys" (a
+   classical RSA 4096 key + an ML-DSA-65 key, plus "a separate classical key" for Android 16 and
+   lower: three Google keys). Replacing that default with our key is the whole point of this step.
+   Before leaving the page, EVERY app-signing fingerprint it lists must equal the release key
+   (`8e9a6b…5cdf405d`), and no hybrid, PQC or ML-DSA key may be listed. If one is, STOP: roll
+   nothing out and ask before going further.
 2. **Owner, Console:** the option page offers the PEPK tool download and shows an encryption public
    key plus a ready-made PEPK command line. Use THAT command; it is specific to the account. Never
    paste the command, the encryption key or the output file into the repo or a chat.
 3. **Owner, PC:** run PEPK against `frontend/android/keystore/fireplace-release.jks`, alias
    `fireplace`. It prompts for the store/key password (the same value, see setup above). It writes
    an encrypted ZIP holding the private key. Delete that ZIP after the upload.
-4. **Owner, Console:** upload the encrypted file. The app-signing-key SHA-256 that the Console then
-   shows MUST equal the record-of-truth fingerprint above (`8e9a6b…5cdf405d`). If it differs, STOP.
+4. **Owner, Console:** upload the encrypted file. Then, on **Manage Play app signing** > **App
+   signing key**, EVERY SHA-256 listed MUST equal the record-of-truth fingerprint above
+   (`8e9a6b…5cdf405d`), and NO quantum-ready/hybrid/ML-DSA key may be listed. Help 9842756 says
+   hybrid apps show "fingerprints for three keys". Anything else (a second fingerprint, a PQC key, a
+   differing hash) → STOP before any rollout.
 5. **Upload key (recommended by Google, owner decision):** Help 9842756 recommends a SEPARATE upload
    key, registered in the Console. A lost upload key can be reset; the app signing key cannot. Until
    one exists, `fireplace-release.jks` signs both the bundle and the sideload APK. The sideload APK
@@ -555,7 +571,7 @@ Play updates.
 6. **Owner, Console:** upload `app-release.aab` to the closed-test track. Then, from the app bundle
    explorer, compare the delivered APK's signer with `apksigner verify --print-certs` (same SHA-256).
 
-Sources read 2026-11-17: Play Console Help "Use Play App Signing"
+Sources read 2026-11-17 (Help 9842756 re-read the same day for the quantum-ready default): Play Console Help "Use Play App Signing"
 (https://support.google.com/googleplay/android-developer/answer/9842756). Today it names the page
 **Protected with Play > Play Store protection > Manage Play app signing**, with **Change key** and
 "Provide a copy of your app signing key"; for existing apps it says "Download the PEPK tool". Also

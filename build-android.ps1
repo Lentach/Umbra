@@ -32,7 +32,12 @@ param(
   [string]$GiphyApiKey = "$env:GIPHY_API_KEY",
   [switch]$SkipClean,
   # Build the Play App Bundle instead of the sideload APK.
-  [switch]$Bundle
+  [switch]$Bundle,
+  # Pinned signer: SHA-256 of the certificate that MUST sign the artifact
+  # (colons/case ignored). Default = fireplace-release.jks, the record of
+  # truth in docs/runbooks/android-release.md. Override only for a Play
+  # upload key; the sideload APK must always carry the default.
+  [string]$ExpectedSignerSha256 = "8E:9A:6B:F3:7B:58:A8:43:2C:42:D8:9E:31:99:00:7C:4A:A9:07:7E:29:7A:96:6A:2F:2C:A7:58:5C:DF:40:5D"
 )
 
 # NOTE: deliberately NOT $ErrorActionPreference='Stop' — native tools write
@@ -47,6 +52,9 @@ if ((Test-Path $cfg) -and -not $GiphyApiKey) { . $cfg }
 
 function Step($m) { Write-Host "`n=== $m ===" -ForegroundColor Cyan }
 function Fail($m) { Write-Host "FAIL: $m" -ForegroundColor Red; exit 1 }
+function NormFp($f) { ($f -replace '[^0-9A-Fa-f]', '').ToLower() }
+$expectedFp = NormFp $ExpectedSignerSha256
+if ($expectedFp.Length -ne 64) { Fail "ExpectedSignerSha256 is not a SHA-256 fingerprint." }
 
 # ---------- preconditions ----------
 Step "Preconditions"
@@ -82,6 +90,8 @@ if ($Bundle) {
   if (-not $jarsigner) {
     Fail "jarsigner.exe not found (JAVA_HOME\bin or Android Studio jbr\bin) - cannot verify the bundle signer."
   }
+  $keytool = Join-Path (Split-Path $jarsigner) "keytool.exe"
+  if (-not (Test-Path $keytool)) { Fail "keytool.exe not found next to $jarsigner - cannot pin the bundle signer." }
   Write-Host "jarsigner: $jarsigner"
 } else {
   Write-Host "apksigner: $($apksigner.FullName)"
@@ -165,16 +175,27 @@ if ($Bundle) {
   if ($certOut -match 'CN=Android Debug') {
     Fail "Bundle is DEBUG-SIGNED. Play would reject it as the upload key - investigate before uploading."
   }
+  # Pin: exactly one signer, and its SHA-256 is the expected one.
+  $ktOut = & $keytool -printcert -jarfile $apk 2>&1 | Out-String
+  $fps = @([regex]::Matches($ktOut, 'SHA256:\s*([0-9A-Fa-f:]+)') | ForEach-Object { NormFp $_.Groups[1].Value })
+  if ($fps.Count -ne 1 -or $fps[0] -ne $expectedFp) {
+    Fail "Bundle signer SHA-256 [$($fps -join ', ')] is not the pinned $ExpectedSignerSha256."
+  }
   $signerLine = ($certOut -split "`n" | Select-String -Pattern 'X\.509, ' | Select-Object -First 1)
-  Write-Host "Signer OK: $signerLine"
+  Write-Host "Signer OK (pinned SHA-256): $signerLine"
 } else {
   $certOut = & $apksigner.FullName verify --print-certs $apk 2>&1 | Out-String
   if ($LASTEXITCODE -ne 0) { Fail "apksigner rejected the APK signature:`n$certOut" }
   if ($certOut -match 'CN=Android Debug') {
     Fail "APK is DEBUG-SIGNED. The Gradle gate should have caught this - investigate before shipping."
   }
+  # Pin: exactly one signer, and its SHA-256 is the expected one.
+  $fps = @([regex]::Matches($certOut, 'certificate SHA-256 digest:\s*([0-9A-Fa-f:]+)') | ForEach-Object { NormFp $_.Groups[1].Value })
+  if ($fps.Count -ne 1 -or $fps[0] -ne $expectedFp) {
+    Fail "APK signer SHA-256 [$($fps -join ', ')] is not the pinned $ExpectedSignerSha256."
+  }
   $signerLine = ($certOut -split "`n" | Select-String -Pattern 'certificate DN' | Select-Object -First 1)
-  Write-Host "Signer OK: $signerLine"
+  Write-Host "Signer OK (pinned SHA-256): $signerLine"
 }
 
 # ---------- gate 2: 16KB page-size compliance of every 64-bit .so ----------
