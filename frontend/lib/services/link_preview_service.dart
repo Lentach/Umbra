@@ -96,61 +96,90 @@ class LinkPreviewService {
   /// The largest og:image this build downloads.
   static const int kMaxImageDownloadBytes = 2 * 1024 * 1024;
 
+  /// The whole og:image leg — every hop, the body and the scaling — gets this
+  /// long, so a slow host never holds the send for more than the page's 5 s
+  /// plus this.
+  static const Duration kImageBudget = Duration(seconds: 3);
+
   /// [rawImageUrl] (resolved against [pageUrl]) fetched from this device and
   /// scaled into a base64 JPEG thumbnail, or null on ANY failure — a preview
-  /// without an image, never a failed send. HTTPS and [isSafeImageUrl] only,
-  /// `image/*` only, streamed and abandoned past [kMaxImageDownloadBytes],
-  /// 5 s in all.
+  /// without an image, never a failed send. HTTPS and [isSafeImageUrl] only
+  /// (every redirect hop too), `image/*` only, streamed and abandoned past
+  /// [kMaxImageDownloadBytes], and ONE overall deadline of [budget]: on
+  /// expiry the download stops and the client is closed.
   static Future<String?> fetchThumbnail(
     String rawImageUrl,
     String pageUrl, {
     http.Client? client,
+    Duration budget = kImageBudget,
   }) async {
     if (!isSafeImageUrl(rawImageUrl, pageUrl)) return null;
     final http.Client c = client ?? http.Client();
+    var expired = false;
     try {
-      var uri = Uri.parse(pageUrl).resolve(rawImageUrl.trim());
-      // Redirects by hand: every hop must still pass the HTTPS / non-private
-      // check, as the backend's web path does.
-      http.StreamedResponse response;
-      var hops = 0;
-      while (true) {
-        response = await c
-            .send(
-              http.Request('GET', uri)
-                ..followRedirects = false
-                ..headers['User-Agent'] = 'Mozilla/5.0 (compatible; Umbra/1.0)',
-            )
-            .timeout(const Duration(seconds: 5));
-        final location = response.headers['location'];
-        if (response.statusCode < 300 ||
-            response.statusCode >= 400 ||
-            location == null) {
-          break;
-        }
-        if (++hops > 3 || !isSafeImageUrl(location, uri.toString())) {
+      return await _downloadThumbnail(
+        rawImageUrl,
+        pageUrl,
+        c,
+        () => expired,
+      ).timeout(
+        budget,
+        onTimeout: () {
+          expired = true;
+          debugPrint('[LinkPreviewService] Thumbnail deadline passed');
           return null;
-        }
-        uri = uri.resolve(location);
-      }
-      if (response.statusCode != 200) return null;
-      final type = (response.headers['content-type'] ?? '').toLowerCase();
-      if (!type.trimLeft().startsWith('image/')) return null;
-      if ((response.contentLength ?? 0) > kMaxImageDownloadBytes) return null;
-      final bytes = BytesBuilder(copy: false);
-      await for (final chunk in response.stream.timeout(
-        const Duration(seconds: 5),
-      )) {
-        bytes.add(chunk);
-        if (bytes.length > kMaxImageDownloadBytes) return null;
-      }
-      return await LinkPreviewThumb.scale(bytes.takeBytes());
+        },
+      );
     } catch (e) {
       debugPrint('[LinkPreviewService] Thumbnail failed: $e');
       return null;
     } finally {
+      // A caller's client is the caller's; ours is closed so a stalled
+      // socket is torn down at the deadline.
       if (client == null) c.close();
     }
+  }
+
+  static Future<String?> _downloadThumbnail(
+    String rawImageUrl,
+    String pageUrl,
+    http.Client c,
+    bool Function() expired,
+  ) async {
+    var uri = Uri.parse(pageUrl).resolve(rawImageUrl.trim());
+    // Redirects by hand: every hop must still pass the HTTPS / non-private
+    // check, as the backend's web path does.
+    http.StreamedResponse response;
+    var hops = 0;
+    while (true) {
+      response = await c.send(
+        http.Request('GET', uri)
+          ..followRedirects = false
+          ..headers['User-Agent'] = 'Mozilla/5.0 (compatible; Umbra/1.0)',
+      );
+      final location = response.headers['location'];
+      if (response.statusCode < 300 ||
+          response.statusCode >= 400 ||
+          location == null) {
+        break;
+      }
+      if (++hops > 3 || !isSafeImageUrl(location, uri.toString())) {
+        return null;
+      }
+      uri = uri.resolve(location);
+    }
+    if (response.statusCode != 200) return null;
+    final type = (response.headers['content-type'] ?? '').toLowerCase();
+    if (!type.trimLeft().startsWith('image/')) return null;
+    if ((response.contentLength ?? 0) > kMaxImageDownloadBytes) return null;
+    final bytes = BytesBuilder(copy: false);
+    await for (final chunk in response.stream) {
+      if (expired()) return null;
+      bytes.add(chunk);
+      if (bytes.length > kMaxImageDownloadBytes) return null;
+    }
+    if (expired()) return null;
+    return LinkPreviewThumb.scale(bytes.takeBytes());
   }
 
   static String? _extractOgTag(String html, String property) {

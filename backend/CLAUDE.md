@@ -99,7 +99,7 @@ Entities in `backend/src/**/*.entity.ts` define the dev schema (TypeORM `synchro
 - `POST /messages/link-preview` lives in `src/link-preview/` (`LinkPreviewModule`; the path predates the module and stays, nginx `location /messages/`). Box sends use it.
 - SSRF defence in `link-preview.service.ts` is two-layer (URL-literal `isPrivateIp` + undici DNS resolve-and-pin) and both layers must stay; do not swap `fetchImpl` back to global `fetch` (→ sec "SSRF defence layers").
 - Redirects are manual (max 5), each hop re-validated; do not switch to default fetch follow.
-- The backend also fetches the validated og:image (`fetchImage`: same pinned agent, manual re-validated redirects, `image/*` only, 2 MiB streamed cap, 5 s) and returns it base64 as `imageData` (C1); `imageUrl` stays for old web clients.
+- The backend also fetches the validated og:image (`fetchImage`: same pinned agent, manual re-validated redirects, `image/*` only, 512 KiB streamed cap, 5 s) and returns it base64 as `imageData` (C1); `imageUrl` stays for old web clients.
 - `og:image` must be HTTPS and non-private; relative image URLs are resolved against page URL.
 - Keep the live-loopback pinned-agent test in `link-preview.service.unit.spec.ts` if you touch the agent.
 

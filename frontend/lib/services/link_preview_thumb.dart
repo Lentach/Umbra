@@ -69,4 +69,24 @@ abstract final class LinkPreviewThumb {
     }
     return null;
   }
+
+  /// The backend's web preview answer ([preview] with `imageData`, the raw
+  /// og:image base64) as the envelope's preview: `imageData` scaled into
+  /// `img`, never an `imageUrl`. Null when neither a title nor an image is
+  /// left.
+  static Future<Map<String, String?>?> fromBackend(
+    Map<String, String?> preview,
+  ) async {
+    final data = preview['imageData'];
+    String? img;
+    if (data != null) {
+      try {
+        img = await scale(base64Decode(data));
+      } on FormatException {
+        img = null;
+      }
+    }
+    if (preview['title'] == null && img == null) return null;
+    return {'url': preview['url'], 'title': preview['title'], 'img': img};
+  }
 }

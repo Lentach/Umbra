@@ -298,7 +298,7 @@ describe('LinkPreviewService – og:image imageData', () => {
     expect(result?.imageUrl).toBe('https://example.com/og.jpg');
   });
 
-  it('aborts a streamed image past the 2 MiB cap', async () => {
+  it('aborts a streamed image past the 512 KiB cap', async () => {
     const chunk = new Uint8Array(MAX_IMAGE_BYTES / 2);
     const big = response('image/png', [chunk, chunk, new Uint8Array(1), chunk]);
     fetchImpl

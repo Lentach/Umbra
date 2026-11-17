@@ -237,7 +237,7 @@ function parseOgMeta(html: string, pageUrl: string): {
 }
 
 /** The largest og:image the server downloads for a web sender (C1). */
-export const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+export const MAX_IMAGE_BYTES = 512 * 1024;
 
 /** How long the og:image download may take, on top of the page's 5 s. */
 const IMAGE_TIMEOUT_MS = 5000;

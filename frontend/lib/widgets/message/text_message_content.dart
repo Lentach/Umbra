@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../constants/app_constants.dart';
@@ -49,9 +51,22 @@ class TextMessageContent extends StatefulWidget {
 class _TextMessageContentState extends State<TextMessageContent> {
   bool _expanded = false;
 
+  /// The thumbnail's bytes, decoded once per `linkPreviewImage` string so the
+  /// same [Uint8List] reaches `Image.memory` on every build (image-cache hit).
+  Uint8List? _previewImage;
+
+  @override
+  void initState() {
+    super.initState();
+    _previewImage = LinkPreviewThumb.decode(widget.message.linkPreviewImage);
+  }
+
   @override
   void didUpdateWidget(covariant TextMessageContent oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.message.linkPreviewImage != widget.message.linkPreviewImage) {
+      _previewImage = LinkPreviewThumb.decode(widget.message.linkPreviewImage);
+    }
     // A recycled bubble (list virtualization) now shows a different message:
     // drop any expansion so it does not leak onto an unrelated message.
     if (oldWidget.message.id != widget.message.id) _expanded = false;
@@ -164,7 +179,7 @@ class _TextMessageContentState extends State<TextMessageContent> {
 
   Widget _buildLinkPreviewCard(BuildContext context) {
     final message = widget.message;
-    final previewImage = LinkPreviewThumb.decode(message.linkPreviewImage);
+    final previewImage = _previewImage;
     final cardBg = widget.isDark
         ? Colors.white.withValues(alpha: 0.06)
         : Colors.black.withValues(alpha: 0.04);

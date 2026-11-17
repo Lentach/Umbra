@@ -298,7 +298,12 @@ extension MessagingDecrypt on MessagingProvider {
       if (decrypted.linkPreviewTitle != null)
         'linkPreviewTitle': decrypted.linkPreviewTitle!,
     };
-    final thumb = LinkPreviewThumb.validated(decrypted.linkPreviewImage);
+    // Web keeps its records in localStorage (~5 MB, shared with the Signal
+    // sessions): a ~11-15K-char thumbnail per record would exhaust it and
+    // break session writes. On web the thumbnail lives in memory only.
+    final thumb = kIsWeb
+        ? null
+        : LinkPreviewThumb.validated(decrypted.linkPreviewImage);
     if (thumb != null) data['linkPreviewImage'] = thumb;
     try {
       await _encryptionProvider?.saveDecryptedContent(
