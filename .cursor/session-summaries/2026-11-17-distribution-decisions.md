@@ -39,7 +39,7 @@
 - Next action: the owner reviews the four drafts and supplies the `[OWNER: …]` fields, then the agent publishes them as static pages (`/privacy`, `/terms`; today both paths serve the app shell). Before that, the owner decides on the name, then the domain.
 - Owner-owed:
   - his home address (he chose to publish it; UŚUDE art. 5), given at publication. His name is kept OUT of the public repo until then.
-  - the contact email: he chose `umbra.kontakt@proton.me` and creates it himself. The drafts keep the placeholder until he confirms the mailbox exists (an address named in a public repo before it exists can be registered by someone else; it was in `6a9dc4d7` for a few minutes).
+  - the contact email waits for our own domain: `contact@<domain>` with free forwarding to the owner's personal Gmail (his choice). The Proton idea was dropped (no free auto-forwarding). A Gmail sign-up (`umbracontact.app`) failed at Google's phone check: his phone is over Google's per-device verification limit. Nothing was created, and the temp files are deleted. The drafts keep the `[OWNER: …]` placeholder.
   - the app name (he is thinking it over); the domain follows it.
 - Contact-form retention is set to 12 months in both drafts (his choice).
 - Play checklist (not started): Play Console account; PEPK; `flutter build appbundle` gates; an in-app report flow (decide what a report sends); terms accepted at sign-up; a web account-deletion path; Data safety form; reviewer account; strip `light_compressor_v2`'s foreground service; closed test (12 × 14 days).
