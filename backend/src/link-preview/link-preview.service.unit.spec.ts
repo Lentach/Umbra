@@ -2,6 +2,7 @@ import { createServer, type Server } from 'node:http';
 import { AddressInfo } from 'node:net';
 import {
   LinkPreviewService,
+  MAX_IMAGE_BYTES,
   isPrivateIp,
   ssrfSafeFetch,
 } from './link-preview.service';
@@ -169,6 +170,169 @@ describe('LinkPreviewService – SSRF blocking', () => {
 
     expect(result).toBeNull();
     expect(fetchImpl.mock.calls.length).toBeLessThanOrEqual(6);
+  });
+});
+
+// C1: the og:image travels to the web sender as `imageData` (base64), fetched
+// through the same SSRF-safe path, so no receiver ever loads it.
+describe('LinkPreviewService – og:image imageData', () => {
+  let service: LinkPreviewService;
+  let fetchImpl: jest.Mock;
+  const page = (image: string) =>
+    `<head><meta property="og:title" content="T"/><meta property="og:image" content="${image}"/></head>`;
+
+  function response(
+    contentType: string,
+    chunks: Uint8Array[],
+    extraHeaders: Record<string, string> = {},
+  ) {
+    const read = jest.fn();
+    for (const value of chunks) read.mockResolvedValueOnce({ done: false, value });
+    read.mockResolvedValue({ done: true, value: undefined });
+    const cancel = jest.fn().mockResolvedValue(undefined);
+    return {
+      status: 200,
+      ok: true,
+      headers: {
+        get: (h: string) =>
+          h.toLowerCase() === 'content-type'
+            ? contentType
+            : (extraHeaders[h.toLowerCase()] ?? null),
+      },
+      body: { getReader: () => ({ read, cancel }) },
+      cancel,
+    } as unknown as Response & { cancel: jest.Mock };
+  }
+
+  function redirect(location: string) {
+    return {
+      status: 302,
+      ok: false,
+      headers: { get: (h: string) => (h.toLowerCase() === 'location' ? location : null) },
+      body: null,
+    } as unknown as Response;
+  }
+
+  const html = (s: string) => response('text/html', [new TextEncoder().encode(s)]);
+  const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]);
+
+  beforeEach(() => {
+    service = new LinkPreviewService();
+    fetchImpl = jest.fn();
+    service.fetchImpl = fetchImpl as unknown as typeof fetch;
+  });
+
+  it('returns the image bytes as base64 and keeps imageUrl for old clients', async () => {
+    fetchImpl
+      .mockResolvedValueOnce(html(page('/og.jpg')))
+      .mockResolvedValueOnce(response('image/jpeg', [jpeg]));
+
+    const result = await service.fetchPreview('https://example.com/page');
+
+    expect(result).toEqual({
+      url: 'https://example.com/page',
+      title: 'T',
+      imageUrl: 'https://example.com/og.jpg',
+      imageData: Buffer.from(jpeg).toString('base64'),
+    });
+    expect(fetchImpl).toHaveBeenLastCalledWith(
+      'https://example.com/og.jpg',
+      expect.objectContaining({ redirect: 'manual' }),
+    );
+  });
+
+  it('never fetches a private or plain-http og:image', async () => {
+    fetchImpl.mockResolvedValueOnce(html(page('https://169.254.169.254/x.jpg')));
+    const priv = await service.fetchPreview('https://example.com/a');
+    fetchImpl.mockResolvedValueOnce(html(page('http://example.com/x.jpg')));
+    const plain = await service.fetchPreview('https://example.com/b');
+
+    expect(priv?.imageData).toBeUndefined();
+    expect(plain?.imageData).toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledTimes(2); // the pages only
+  });
+
+  it('refuses an image redirect into a private host, keeping title and imageUrl', async () => {
+    fetchImpl
+      .mockResolvedValueOnce(html(page('https://cdn.example.com/og.jpg')))
+      .mockResolvedValueOnce(redirect('https://127.0.0.1/secret.jpg'));
+
+    const result = await service.fetchPreview('https://example.com/page');
+
+    expect(result?.title).toBe('T');
+    expect(result?.imageData).toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl).not.toHaveBeenCalledWith('https://127.0.0.1/secret.jpg', expect.anything());
+  });
+
+  it('refuses an image redirect that downgrades to http', async () => {
+    fetchImpl
+      .mockResolvedValueOnce(html(page('https://cdn.example.com/og.jpg')))
+      .mockResolvedValueOnce(redirect('http://cdn.example.com/og.jpg'));
+
+    const result = await service.fetchPreview('https://example.com/page');
+
+    expect(result?.imageData).toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('follows a public image redirect', async () => {
+    fetchImpl
+      .mockResolvedValueOnce(html(page('https://example.com/og.jpg')))
+      .mockResolvedValueOnce(redirect('https://cdn.example.com/og.jpg'))
+      .mockResolvedValueOnce(response('image/jpeg', [jpeg]));
+
+    const result = await service.fetchPreview('https://example.com/page');
+
+    expect(result?.imageData).toBe(Buffer.from(jpeg).toString('base64'));
+  });
+
+  it('drops a non-image content type', async () => {
+    fetchImpl
+      .mockResolvedValueOnce(html(page('https://example.com/og.jpg')))
+      .mockResolvedValueOnce(response('text/html', [jpeg]));
+
+    const result = await service.fetchPreview('https://example.com/page');
+
+    expect(result?.imageData).toBeUndefined();
+    expect(result?.imageUrl).toBe('https://example.com/og.jpg');
+  });
+
+  it('aborts a streamed image past the 2 MiB cap', async () => {
+    const chunk = new Uint8Array(MAX_IMAGE_BYTES / 2);
+    const big = response('image/png', [chunk, chunk, new Uint8Array(1), chunk]);
+    fetchImpl
+      .mockResolvedValueOnce(html(page('https://example.com/og.png')))
+      .mockResolvedValueOnce(big);
+
+    const result = await service.fetchPreview('https://example.com/page');
+
+    expect(result?.imageData).toBeUndefined();
+    expect(result?.title).toBe('T');
+  });
+
+  it('refuses a declared Content-Length over the cap without reading', async () => {
+    const big = response('image/png', [jpeg], {
+      'content-length': String(MAX_IMAGE_BYTES + 1),
+    });
+    fetchImpl
+      .mockResolvedValueOnce(html(page('https://example.com/og.png')))
+      .mockResolvedValueOnce(big);
+
+    const result = await service.fetchPreview('https://example.com/page');
+
+    expect(result?.imageData).toBeUndefined();
+  });
+
+  it('keeps the preview when the image fetch throws', async () => {
+    fetchImpl
+      .mockResolvedValueOnce(html(page('https://example.com/og.png')))
+      .mockRejectedValueOnce(new Error('ECONNRESET'));
+
+    const result = await service.fetchPreview('https://example.com/page');
+
+    expect(result?.title).toBe('T');
+    expect(result?.imageData).toBeUndefined();
   });
 });
 

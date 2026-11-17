@@ -236,6 +236,25 @@ function parseOgMeta(html: string, pageUrl: string): {
   };
 }
 
+/** The largest og:image the server downloads for a web sender (C1). */
+export const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+
+/** How long the og:image download may take, on top of the page's 5 s. */
+const IMAGE_TIMEOUT_MS = 5000;
+
+export interface LinkPreview {
+  url: string;
+  title: string | null;
+  /** Kept for web clients ≤0.2.88; new clients never send it on. */
+  imageUrl: string | null;
+  /**
+   * The validated og:image itself, base64 (C1): the web client scales it
+   * into the envelope's `img` thumbnail so no receiver ever fetches it.
+   * Absent when there is no image or it could not be fetched safely.
+   */
+  imageData?: string;
+}
+
 @Injectable()
 export class LinkPreviewService {
   private readonly logger = new Logger(LinkPreviewService.name);
@@ -246,76 +265,147 @@ export class LinkPreviewService {
    */
   fetchImpl: typeof fetch = ssrfSafeFetch;
 
-  async fetchPreview(
-    text: string,
-  ): Promise<{ url: string; title: string | null; imageUrl: string | null } | null> {
+  /**
+   * GET [startUrl] following redirects manually so every hop is
+   * SSRF-validated by [isAllowed]. fetch's own `redirect: 'follow'` would
+   * silently chase a 3xx into a private/metadata host without re-checking
+   * it — the classic open-redirect SSRF bypass. Hostname literals are
+   * checked here; hostnames that RESOLVE to private addresses are refused by
+   * ssrfSafeLookup at connect time (DNS pinned). Null on a non-2xx final
+   * answer, a bad Location or too many redirects.
+   */
+  private async fetchFollowingRedirects(
+    startUrl: string,
+    isAllowed: (url: string) => boolean,
+    signal: AbortSignal,
+  ): Promise<{ response: Response; finalUrl: string } | null> {
+    let currentUrl = startUrl;
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+      if (!isAllowed(currentUrl)) return null;
+
+      const response = await this.fetchImpl(currentUrl, {
+        signal,
+        redirect: 'manual',
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ChatBot/1.0)' },
+      });
+
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get('location');
+        if (!location) return null;
+        try {
+          currentUrl = new URL(location, currentUrl).href;
+        } catch {
+          return null;
+        }
+        continue; // re-validated at the top of the loop before the next fetch
+      }
+
+      if (!response.ok) return null;
+      return { response, finalUrl: currentUrl };
+    }
+    return null; // too many redirects
+  }
+
+  /**
+   * The og:image at [imageUrl], base64, or null: HTTPS and non-private on
+   * every hop, `image/*` only, at most [MAX_IMAGE_BYTES] (streamed, aborted
+   * past the cap), within [IMAGE_TIMEOUT_MS]. Never throws.
+   */
+  async fetchImage(imageUrl: string): Promise<string | null> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), IMAGE_TIMEOUT_MS);
+    try {
+      const fetched = await this.fetchFollowingRedirects(
+        imageUrl,
+        isSafeImageUrl,
+        controller.signal,
+      );
+      if (!fetched) return null;
+      const { response } = fetched;
+      const contentType = (response.headers.get('content-type') ?? '').toLowerCase();
+      if (!contentType.trim().startsWith('image/')) return null;
+      const declared = Number(response.headers.get('content-length'));
+      if (Number.isFinite(declared) && declared > MAX_IMAGE_BYTES) return null;
+
+      const reader = response.body?.getReader();
+      if (!reader) return null;
+      const chunks: Uint8Array[] = [];
+      let total = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.byteLength;
+        if (total > MAX_IMAGE_BYTES) {
+          reader.cancel().catch(() => undefined);
+          return null;
+        }
+        chunks.push(value);
+      }
+      if (total === 0) return null;
+      return Buffer.concat(chunks).toString('base64');
+    } catch (err) {
+      this.logger.debug(`Link preview image fetch failed: ${err.message}`);
+      return null;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  async fetchPreview(text: string): Promise<LinkPreview | null> {
     const startUrl =
       text.match(/https?:\/\/[^\s<>"{}|\\^`[\]]+/i)?.[0] ?? null;
     if (!startUrl) return null;
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
+    let page: { title: string | null; imageUrl: string | null };
     try {
-      // Follow redirects manually so every hop is SSRF-validated. fetch's own
-      // `redirect: 'follow'` would silently chase a 3xx into a private/metadata
-      // host without re-checking it — the classic open-redirect SSRF bypass.
-      // Hostname literals are checked here; hostnames that RESOLVE to private
-      // addresses are refused by ssrfSafeLookup at connect time (DNS pinned).
-      let currentUrl = startUrl;
-      for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-        if (!isFetchableUrl(currentUrl)) return null;
+      const fetched = await this.fetchFollowingRedirects(
+        startUrl,
+        isFetchableUrl,
+        controller.signal,
+      );
+      if (!fetched) return null;
+      const { response, finalUrl } = fetched;
 
-        const response = await this.fetchImpl(currentUrl, {
-          signal: controller.signal,
-          redirect: 'manual',
-          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ChatBot/1.0)' },
-        });
+      const contentType = response.headers.get('content-type') ?? '';
+      if (!contentType.includes('text/html')) return null;
 
-        if (response.status >= 300 && response.status < 400) {
-          const location = response.headers.get('location');
-          if (!location) return null;
-          try {
-            currentUrl = new URL(location, currentUrl).href;
-          } catch {
-            return null;
-          }
-          continue; // re-validated at the top of the loop before the next fetch
-        }
-
-        if (!response.ok) return null;
-
-        const contentType = response.headers.get('content-type') ?? '';
-        if (!contentType.includes('text/html')) return null;
-
-        // Read until </head> found (covers sites like YouTube with large inline JS)
-        // or until 800KB safety limit to avoid unbounded downloads.
-        const reader = response.body?.getReader();
-        if (!reader) return null;
-        let html = '';
-        let totalBytes = 0;
-        const decoder = new TextDecoder();
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          totalBytes += value.byteLength;
-          html += decoder.decode(value);
-          if (html.includes('</head>')) break;
-          if (totalBytes > 800_000) break;
-        }
-        reader.cancel();
-
-        const { title, imageUrl } = parseOgMeta(html, currentUrl);
-        if (!title && !imageUrl) return null;
-
-        // Preview is for the link as written in the message (startUrl).
-        return { url: startUrl, title, imageUrl };
+      // Read until </head> found (covers sites like YouTube with large inline JS)
+      // or until 800KB safety limit to avoid unbounded downloads.
+      const reader = response.body?.getReader();
+      if (!reader) return null;
+      let html = '';
+      let totalBytes = 0;
+      const decoder = new TextDecoder();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        totalBytes += value.byteLength;
+        html += decoder.decode(value);
+        if (html.includes('</head>')) break;
+        if (totalBytes > 800_000) break;
       }
-      return null; // too many redirects
+      reader.cancel();
+
+      page = parseOgMeta(html, finalUrl);
+      if (!page.title && !page.imageUrl) return null;
     } catch (err) {
       this.logger.debug(`Link preview fetch failed for ${startUrl}: ${err.message}`);
       return null;
     } finally {
       clearTimeout(timeout);
     }
+
+    const imageData = page.imageUrl
+      ? await this.fetchImage(page.imageUrl)
+      : null;
+    // Preview is for the link as written in the message (startUrl).
+    return {
+      url: startUrl,
+      title: page.title,
+      imageUrl: page.imageUrl,
+      ...(imageData ? { imageData } : {}),
+    };
   }
 }

@@ -1,6 +1,9 @@
 import 'dart:math';
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+
+import 'link_preview_thumb.dart';
 
 /// Client-side link preview fetcher.
 /// Used for E2E encrypted messages where the server cannot read content.
@@ -75,16 +78,78 @@ class LinkPreviewService {
 
       final title = _extractOgTag(html, 'og:title') ?? _extractTitle(html);
       final rawImageUrl = _extractOgTag(html, 'og:image');
-      final imageUrl = rawImageUrl != null && isSafeImageUrl(rawImageUrl, url)
-          ? rawImageUrl
-          : null;
+      final img = rawImageUrl == null
+          ? null
+          : await fetchThumbnail(rawImageUrl, url);
 
-      if (title == null && imageUrl == null) return null;
+      if (title == null && img == null) return null;
 
-      return {'url': url, 'title': title, 'imageUrl': imageUrl};
+      // Never `imageUrl` (C1): the receiver fetches nothing from the page's
+      // host; it renders only the thumbnail made here.
+      return {'url': url, 'title': title, 'img': img};
     } catch (e) {
       debugPrint('[LinkPreviewService] Failed to fetch preview for $url: $e');
       return null;
+    }
+  }
+
+  /// The largest og:image this build downloads.
+  static const int kMaxImageDownloadBytes = 2 * 1024 * 1024;
+
+  /// [rawImageUrl] (resolved against [pageUrl]) fetched from this device and
+  /// scaled into a base64 JPEG thumbnail, or null on ANY failure — a preview
+  /// without an image, never a failed send. HTTPS and [isSafeImageUrl] only,
+  /// `image/*` only, streamed and abandoned past [kMaxImageDownloadBytes],
+  /// 5 s in all.
+  static Future<String?> fetchThumbnail(
+    String rawImageUrl,
+    String pageUrl, {
+    http.Client? client,
+  }) async {
+    if (!isSafeImageUrl(rawImageUrl, pageUrl)) return null;
+    final http.Client c = client ?? http.Client();
+    try {
+      var uri = Uri.parse(pageUrl).resolve(rawImageUrl.trim());
+      // Redirects by hand: every hop must still pass the HTTPS / non-private
+      // check, as the backend's web path does.
+      http.StreamedResponse response;
+      var hops = 0;
+      while (true) {
+        response = await c
+            .send(
+              http.Request('GET', uri)
+                ..followRedirects = false
+                ..headers['User-Agent'] = 'Mozilla/5.0 (compatible; Umbra/1.0)',
+            )
+            .timeout(const Duration(seconds: 5));
+        final location = response.headers['location'];
+        if (response.statusCode < 300 ||
+            response.statusCode >= 400 ||
+            location == null) {
+          break;
+        }
+        if (++hops > 3 || !isSafeImageUrl(location, uri.toString())) {
+          return null;
+        }
+        uri = uri.resolve(location);
+      }
+      if (response.statusCode != 200) return null;
+      final type = (response.headers['content-type'] ?? '').toLowerCase();
+      if (!type.trimLeft().startsWith('image/')) return null;
+      if ((response.contentLength ?? 0) > kMaxImageDownloadBytes) return null;
+      final bytes = BytesBuilder(copy: false);
+      await for (final chunk in response.stream.timeout(
+        const Duration(seconds: 5),
+      )) {
+        bytes.add(chunk);
+        if (bytes.length > kMaxImageDownloadBytes) return null;
+      }
+      return await LinkPreviewThumb.scale(bytes.takeBytes());
+    } catch (e) {
+      debugPrint('[LinkPreviewService] Thumbnail failed: $e');
+      return null;
+    } finally {
+      if (client == null) c.close();
     }
   }
 

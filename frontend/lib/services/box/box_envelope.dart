@@ -24,8 +24,8 @@ const int kBoxEnvelopeMaxBytes =
 /// (`AppConstants.maxEnvelopeBytes`), and the quote's snippet and the timer
 /// are bounded too (E18c); a link preview is not the user's text and has no
 /// bound (a native og:title comes from up to 100 KB of HTML), so when the
-/// copy — the longer of the two — would not fit one frame the preview is
-/// dropped from BOTH: the text, quote and timer are never dropped, a message
+/// copy — the longer of the two — would not fit one frame the preview's
+/// thumbnail (`img`, C1) is dropped first, then the whole preview, from BOTH: the text, quote and timer are never dropped, a message
 /// the composer accepted is never refused for its preview, and every device
 /// shows the same message.
 ({String json, String copyJson, Map<String, String?>? linkPreview}) boxEnvelope(
@@ -66,11 +66,21 @@ const int kBoxEnvelopeMaxBytes =
       mediaThumbHash: mediaThumbHash,
     ),
   );
-  final fits =
-      linkPreview == null ||
-      utf8.encode(build(linkPreview, to: sentTo)).length <=
-          kBoxEnvelopeMaxBytes;
-  final preview = fits ? linkPreview : null;
+  // Whole preview first, then without its thumbnail, then none: a preview
+  // never costs the message, and the thumbnail goes before the title.
+  final candidates = <Map<String, String?>?>[
+    if (linkPreview != null) linkPreview,
+    if (linkPreview != null && linkPreview['img'] != null)
+      {...linkPreview}..remove('img'),
+  ];
+  Map<String, String?>? preview;
+  for (final candidate in candidates) {
+    if (utf8.encode(build(candidate, to: sentTo)).length <=
+        kBoxEnvelopeMaxBytes) {
+      preview = candidate;
+      break;
+    }
+  }
   return (
     json: build(preview),
     copyJson: build(preview, to: sentTo),

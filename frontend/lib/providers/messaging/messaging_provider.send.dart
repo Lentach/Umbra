@@ -777,6 +777,17 @@ extension MessagingSend on MessagingProvider {
             // Preview is for the link as written: restore the full URL so
             // the preview-card tap keeps the fragment (note key).
             if (linkPreview != null) linkPreview['url'] = firstUrl;
+            if (linkPreview != null) {
+              // The thumbnail the receiver will render (C1): scaled here,
+              // from the bytes the backend fetched. No `imageUrl` rides on.
+              final data = linkPreview.remove('imageData');
+              linkPreview['img'] = data == null
+                  ? null
+                  : await LinkPreviewThumb.scale(base64Decode(data));
+              if (linkPreview['title'] == null && linkPreview['img'] == null) {
+                linkPreview = null;
+              }
+            }
           } else {
             linkPreview = await LinkPreviewService.fetchPreview(content);
           }

@@ -176,20 +176,20 @@ void main() {
         linkPreview: {
           'url': 'https://example.com',
           'title': 'Example',
-          'imageUrl': 'https://example.com/og.png',
+          'img': 'QUJD',
         },
       );
       final result = E2eEnvelope.parse(jsonEncode(built));
       expect(result.linkPreviewUrl, 'https://example.com');
       expect(result.linkPreviewTitle, 'Example');
-      expect(result.linkPreviewImageUrl, 'https://example.com/og.png');
+      expect(result.linkPreviewImage, 'QUJD');
     });
 
     test('parse leaves linkPreview fields null when envelope has none', () {
       final result = E2eEnvelope.parse(jsonEncode({'content': 'hi'}));
       expect(result.linkPreviewUrl, isNull);
       expect(result.linkPreviewTitle, isNull);
-      expect(result.linkPreviewImageUrl, isNull);
+      expect(result.linkPreviewImage, isNull);
     });
 
     group('msgId (metadata-privacy PR2.1 wire id)', () {

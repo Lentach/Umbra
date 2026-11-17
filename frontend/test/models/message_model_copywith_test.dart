@@ -36,7 +36,7 @@ void main() {
     ),
     linkPreviewUrl: 'https://example.com',
     linkPreviewTitle: 'Example',
-    linkPreviewImageUrl: 'https://example.com/og.png',
+    linkPreviewImage: 'AAAA',
     encryptedContent: '3:AAAA',
     mediaKey: 'aes-key-b64',
     mediaIv: 'aes-iv-b64',
@@ -77,8 +77,8 @@ void main() {
         reason: 'linkPreviewUrl');
     expect(actual.linkPreviewTitle, expected.linkPreviewTitle,
         reason: 'linkPreviewTitle');
-    expect(actual.linkPreviewImageUrl, expected.linkPreviewImageUrl,
-        reason: 'linkPreviewImageUrl');
+    expect(actual.linkPreviewImage, expected.linkPreviewImage,
+        reason: 'linkPreviewImage');
     expect(actual.encryptedContent, expected.encryptedContent,
         reason: 'encryptedContent');
     expect(actual.mediaKey, expected.mediaKey, reason: 'mediaKey');
@@ -141,7 +141,7 @@ void main() {
         },
         'linkPreviewUrl': 'https://example.com',
         'linkPreviewTitle': 'Example',
-        'linkPreviewImageUrl': 'https://example.com/og.png',
+        'linkPreviewImage': 'AAAA',
         'encryptedContent': '3:AAAA',
         'editedAt': '2026-03-01T10:45:00.000Z',
       });

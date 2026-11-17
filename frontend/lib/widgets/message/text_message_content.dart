@@ -4,7 +4,7 @@ import '../../constants/app_constants.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/message_model.dart';
 import '../../providers/settings_provider.dart';
-import '../../services/link_preview_service.dart';
+import '../../services/link_preview_thumb.dart';
 import '../../theme/rpg_theme.dart';
 import '../../utils/anti_quantum_note_link.dart';
 import '../../utils/jumbo_emoji.dart';
@@ -164,6 +164,7 @@ class _TextMessageContentState extends State<TextMessageContent> {
 
   Widget _buildLinkPreviewCard(BuildContext context) {
     final message = widget.message;
+    final previewImage = LinkPreviewThumb.decode(message.linkPreviewImage);
     final cardBg = widget.isDark
         ? Colors.white.withValues(alpha: 0.06)
         : Colors.black.withValues(alpha: 0.04);
@@ -188,16 +189,17 @@ class _TextMessageContentState extends State<TextMessageContent> {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (message.linkPreviewImageUrl != null &&
-                  LinkPreviewService.isSafeImageUrl(
-                    message.linkPreviewImageUrl,
-                    message.linkPreviewUrl,
-                  ))
-                Image.network(
-                  message.linkPreviewImageUrl!,
+              // Only the sender-made thumbnail's bytes (C1): this widget never
+              // loads an image from the network, so a link cannot learn who
+              // read it. A legacy `imageUrl` record is never rendered.
+              if (previewImage != null)
+                Image.memory(
+                  previewImage,
                   width: double.infinity,
                   height: 120,
                   fit: BoxFit.cover,
+                  cacheWidth: 640,
+                  gaplessPlayback: true,
                   errorBuilder: (_, err, st) => const SizedBox.shrink(),
                 ),
               Padding(
