@@ -79,7 +79,7 @@ export class AuthService {
       }
     } catch (err) {
       // The hash gate was full: that is the server's failure, not a guess.
-      if (err instanceof HttpException && (err.getStatus() as number) === 503) {
+      if (err instanceof HttpException && err.getStatus() === 503) {
         this.loginBackoff.refund(key);
       }
       throw err;
