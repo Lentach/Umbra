@@ -6,23 +6,18 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import * as bcrypt from 'bcrypt';
 import * as argon2 from 'argon2';
 import { User } from '../users/user.entity';
 import { UsersService } from '../users/users.service';
 import { RefreshTokensService } from './refresh-tokens.service';
+import { LoginBackoffService } from './login-backoff.service';
+import { verifyDummyPassword } from './password-hash';
 import { DevicesService } from '../key-bundles/devices.service';
 import {
   IdentityResetService,
   TIMING_SAFE_DUMMY_VERIFIER,
 } from '../key-bundles/identity-reset.service';
 import { DEFAULT_DEVICE_ID } from '../key-bundles/key-bundles.service';
-
-// Precomputed bcrypt hash used for a constant-time comparison when the
-// identifier matches no user, so "no such user" takes the same time as a wrong
-// password (defeats timing-based user enumeration). The value is arbitrary.
-const TIMING_SAFE_DUMMY_HASH =
-  '$2b$10$pwiFDkB3zcAu0PKQqI13b.fGqVMlVlB8aCB22BL/qyvTghAEiP2N2';
 
 // `/auth/recover`'s timing guard lives with the verifier it mirrors:
 // `TIMING_SAFE_DUMMY_VERIFIER` in identity-reset.service.
@@ -37,6 +32,7 @@ export class AuthService {
     private refreshTokensService: RefreshTokensService,
     private devicesService: DevicesService,
     private identityResetService: IdentityResetService,
+    private loginBackoff: LoginBackoffService,
   ) {}
 
   async register(username: string, password: string) {
@@ -47,20 +43,31 @@ export class AuthService {
 
   async login(identifier: string, password: string) {
     const user = await this.resolveIdentifier(identifier);
+    // Per-account backoff (plan D4). Unknown identifiers count under their own
+    // name, so a refused attempt reads the same whether the account exists.
+    const key = user
+      ? `u:${user.id}`
+      : `n:${identifier.trim().toLowerCase().slice(0, 160)}`;
+    this.loginBackoff.assertAllowed(key);
+
     if (!user) {
-      // Constant-time guard: perform a real bcrypt compare so a missing user
-      // is indistinguishable by timing from a wrong password.
-      await bcrypt.compare(password, TIMING_SAFE_DUMMY_HASH);
+      // Constant-time guard: a real Argon2id verify so a missing user is
+      // indistinguishable by timing from a wrong password.
+      await verifyDummyPassword(password);
+      this.loginBackoff.recordFailure(key);
       this.auditLogger.log(`login failed`);
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    const passwordValid = await bcrypt.compare(password, user.password);
+    // Also upgrades a bcrypt hash to Argon2id after a correct password.
+    const passwordValid = await this.usersService.checkPassword(user, password);
     if (!passwordValid) {
+      this.loginBackoff.recordFailure(key);
       this.auditLogger.log(`login failed`);
       throw new UnauthorizedException('Invalid credentials');
     }
 
+    this.loginBackoff.recordSuccess(key);
     this.auditLogger.log(`login success`);
     return this.issueSession(user);
   }
@@ -85,7 +92,7 @@ export class AuthService {
   ) {
     const user = await this.resolveIdentifier(identifier);
     if (!user) {
-      // Constant-time guard, as login's bcrypt twin: no per-account counter
+      // Constant-time guard, as login's twin: no per-account counter
       // exists to spend, but the verify itself must cost the same.
       await argon2
         .verify(TIMING_SAFE_DUMMY_VERIFIER, phrase)

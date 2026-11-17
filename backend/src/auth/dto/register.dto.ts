@@ -17,7 +17,7 @@ export class RegisterDto {
   @MinLength(PASSWORD_MIN_LENGTH, {
     message: `Password must be at least ${PASSWORD_MIN_LENGTH} characters long`,
   })
-  @MaxLength(128) // M2: bcrypt limit 72 bytes; 128 chars reasonable
+  @MaxLength(128) // M2: 128 chars reasonable
   @Matches(PASSWORD_REGEX, { message: PASSWORD_REGEX_MESSAGE })
   password: string;
 }
