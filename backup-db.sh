@@ -20,7 +20,7 @@
 #
 # Usage:  cd ~/fireplace && ./backup-db.sh
 # Cron (daily 04:00) — passphrase lives in the file, NOT the cron line:
-#   0 4 * * * cd ~/fireplace && BACKUP_RCLONE_REMOTE=fireplace-b2:BUCKET/vps ./backup-db.sh >> ~/fireplace-backups/backup.log 2>&1
+#   0 4 * * * cd ~/fireplace && BACKUP_RCLONE_REMOTE=fireplace-r2:fireplace-backups/vps ./backup-db.sh >> ~/fireplace-backups/backup.log 2>&1
 set -euo pipefail
 
 REPO_DIR="${REPO_DIR:-$(cd "$(dirname "$0")" && pwd)}"
@@ -129,10 +129,11 @@ if [[ -n "${BACKUP_GCS_BUCKET:-}" ]]; then
   fi
 fi
 
-# Optional offsite copy via rclone (BACKUP_RCLONE_REMOTE=remote:bucket/prefix, e.g. B2).
-# Same guard: only ENCRYPTED artifacts ever leave the VM. Use an append-only key
-# (B2 application key WITHOUT deleteFiles) so a compromised VM cannot destroy history;
-# pruning is the bucket's lifecycle rule, never this script.
+# Optional offsite copy via rclone (BACKUP_RCLONE_REMOTE=remote:bucket/prefix; prod: Cloudflare R2
+# fireplace-r2:fireplace-backups/vps). Same guard: only ENCRYPTED artifacts ever leave the VM.
+# Pruning is the bucket's lifecycle rule (set in the Cloudflare dashboard), never this script.
+# The prod R2 token CAN delete objects (probed 2026-11-17), so only an R2 bucket lock rule makes
+# the offsite copy safe from a compromised VM (runbook: production-vm-deploy rule, "Backups").
 # OFFSITE_OK feeds the dead-man ping below: uploads are verified by listing the
 # remote, not trusted from rclone's exit code alone.
 OFFSITE_OK=1
