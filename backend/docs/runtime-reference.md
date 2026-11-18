@@ -14,6 +14,8 @@ The **box** (`src/box/`: `/box` namespace + `/box/media`, metadata-privacy PR1.1
 
 The box has NO account on its path: it imports nothing from `auth/`, `users/`, `chat/`, even transitively (invariant I1, enforced by `scripts/verify-box-imports.mjs` in CI). Contract: `docs/contracts/wire.md` "Box". Suite: `npm run test:int` (real sockets + Postgres, `BOX_IT_DATABASE_URL`).
 
+**Ceiling early warning (#204).** The 10-minute `BoxReaper` sweep reads `box_totals` and `BoxCeilingMonitor` (`box-ceiling-monitor.ts`) logs `[box] ceiling <msgCount|mediaBytes>=… openBand=… (N%) a->b`: WARN when a total reaches 50 % of its OPEN band (`BOX_OPEN_*_CEILING`), ERROR from 80 %, one INFO line on recovery. Once per level change per process (a restart re-logs a still-high level). Totals only, never an id; deliberately NOT on `/health`, `/version` or any route (waiting count is traffic metadata).
+
 ## Chat service map (§2)
 
 `chat-key-exchange`, `chat-search`, `chat-device-list`, `chat-device-revocation`, `chat-provisioning`. The old-path services (`chat-message`, `chat-friend-request`, `chat-conversation`, `chat-block`, `chat-reaction`, `chat-reaction-key`, `chat-validation`, `chat-link-preview`) were removed in Phase 4 step 5; `POST /messages/link-preview` lives in `src/link-preview/` (`LinkPreviewModule`).

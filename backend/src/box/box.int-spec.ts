@@ -1,4 +1,5 @@
 import type { INestApplication } from '@nestjs/common';
+import { Logger } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
@@ -2169,6 +2170,32 @@ describeWithDb('box over real sockets and Postgres', () => {
       expect((await fetch(`${base}/box/media/${expiring.id}`)).status).toBe(
         404,
       );
+    });
+  });
+
+  describe('ceiling early warning (#204)', () => {
+    it('the sweep logs one WARN when box_totals passes half the open band', async () => {
+      const [before]: { msgCount: number }[] = await db.query(
+        `SELECT "msgCount" FROM box_totals WHERE id = 1`,
+      );
+      const warn = jest
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => undefined);
+      try {
+        await db.query(`UPDATE box_totals SET "msgCount" = $1 WHERE id = 1`, [
+          BOX_OPEN_MSG_CEILING / 2,
+        ]);
+        await app.get(BoxReaper).sweep();
+        const lines = warn.mock.calls
+          .map((c) => String(c[0]))
+          .filter((m) => m.startsWith('[box] ceiling msgCount='));
+        expect(lines).toHaveLength(1);
+      } finally {
+        warn.mockRestore();
+        await db.query(`UPDATE box_totals SET "msgCount" = $1 WHERE id = 1`, [
+          before.msgCount,
+        ]);
+      }
     });
   });
 
