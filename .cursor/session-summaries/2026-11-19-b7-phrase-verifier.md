@@ -1,4 +1,4 @@
-# B7 Option V: the recovery phrase never leaves the device (draft PR #PRNUM, unmerged)
+# B7 Option V: the recovery phrase never leaves the device (draft PR #270, unmerged)
 
 **Date:** 2026-11-19 · **Version:** unchanged (0.2.88) · **Tiers deployed:** none
 
@@ -18,7 +18,7 @@
 - Read only: `docs/plans/metadata-privacy-decisions.md`, `link_crypto.dart`.
 
 ## Verification
-- CI: NOT RUN on the head sha at the time of writing (see PR #PRNUM checks).
+- CI: NOT RUN on the head sha at the time of writing (see PR #270 checks).
 - Backend `npm test`: 868 tests, 49 suites; `lint-ratchet` held at 252; knip, `verify-no-user-logs`, `verify-box-imports` clean.
 - Flutter `flutter test`: 3322 tests, 14 skipped; `flutter analyze --no-fatal-infos` exit 0; `dart-lint-ratchet` held at 2478.
 - Live drives: NONE. Not driven on any device: enrol, recover on a v2 row, an old client recovering on a `phrase_v1` row, the legacy prompt, a v1 backup restore.
