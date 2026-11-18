@@ -27,7 +27,11 @@ abstract final class ProfilePhotoCodec {
   /// [kSide]×[kSide] (never up) and encoded as a JPEG, flattened on white
   /// when it had transparency. Null when [picked] is not an image the
   /// platform decodes.
-  static Future<Uint8List?> scale(Uint8List picked) async {
+  static Future<Uint8List?> scale(
+    Uint8List picked, {
+    int side = kSide,
+    int quality = _jpegQuality,
+  }) async {
     ui.Codec? sourceCodec;
     ui.Image? source;
     ui.Codec? scaledCodec;
@@ -38,7 +42,7 @@ abstract final class ProfilePhotoCodec {
       final width = source.width;
       final height = source.height;
       if (width <= 0 || height <= 0) return null;
-      final ratio = math.min(1, kSide / math.max(width, height));
+      final ratio = math.min(1, side / math.max(width, height));
       final targetWidth = math.max(1, (width * ratio).round());
       final targetHeight = math.max(1, (height * ratio).round());
       // Decoded straight to the target size by the platform, so a 12 MP
@@ -71,7 +75,7 @@ abstract final class ProfilePhotoCodec {
         bytes: rgb.buffer,
         numChannels: 3,
       );
-      return Uint8List.fromList(img.encodeJpg(image, quality: _jpegQuality));
+      return Uint8List.fromList(img.encodeJpg(image, quality: quality));
     } on Object {
       return null;
     } finally {
@@ -86,8 +90,9 @@ abstract final class ProfilePhotoCodec {
       alpha == 255 ? channel : (channel * alpha + 255 * (255 - alpha)) ~/ 255;
 
   /// Whether [bytes] is a JPEG whose frame header states a size within
-  /// [kMaxAcceptedSide]: read from the markers, never decoded.
-  static bool isSound(Uint8List bytes) {
+  /// [maxSide] (default [kMaxAcceptedSide]): read from the markers, never
+  /// decoded. Link-preview thumbnails reuse it with their own bound.
+  static bool isSound(Uint8List bytes, {int maxSide = kMaxAcceptedSide}) {
     if (bytes.length < 4 || bytes[0] != 0xFF || bytes[1] != 0xD8) return false;
     var i = 2;
     while (i + 3 < bytes.length) {
@@ -116,8 +121,8 @@ abstract final class ProfilePhotoCodec {
         final width = (bytes[i + 7] << 8) | bytes[i + 8];
         return width > 0 &&
             height > 0 &&
-            width <= kMaxAcceptedSide &&
-            height <= kMaxAcceptedSide;
+            width <= maxSide &&
+            height <= maxSide;
       }
       i += 2 + length;
     }

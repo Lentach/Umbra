@@ -2629,7 +2629,7 @@ extension MessagingBox on MessagingProvider {
             : replyTo,
         linkPreviewUrl: preview?['url'],
         linkPreviewTitle: preview?['title'],
-        linkPreviewImageUrl: preview?['imageUrl'],
+        linkPreviewImage: preview?['img'],
       );
       enc.cacheDecryption(localId, sent);
       await _persistDecryptedContent(sent);
