@@ -1,4 +1,14 @@
-import { IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import {
+  IsOptional,
+  IsString,
+  Matches,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
+import {
+  AUTH_SECRET_PATTERN,
+  CredentialXor,
+} from '../../common/credential-xor';
 import {
   PASSWORD_MIN_LENGTH,
   PASSWORD_REGEX,
@@ -8,7 +18,11 @@ import {
 /**
  * `POST /auth/recover` — the recovery phrase as a credential (multi-device
  * spec §12 amendment (lxxxii) clause 2). Same identifier grammar as login,
- * same phrase bound as the WS ceremony DTOs, same password rules as register.
+ * same password rules as register. Plan B7: new clients send `authSecret`
+ * (HKDF output of the phrase) and never the phrase; `phrase` is the legacy
+ * plaintext field of clients up to 0.2.88. Exactly one of the two — and this
+ * DTO MUST declare both, because the global ValidationPipe strips fields it
+ * does not know.
  */
 export class RecoverPasswordDto {
   @IsString()
@@ -19,10 +33,17 @@ export class RecoverPasswordDto {
   })
   identifier: string;
 
+  @IsOptional()
   @IsString()
   @MinLength(1)
   @MaxLength(256)
-  phrase: string;
+  phrase?: string;
+
+  @CredentialXor('phrase', {
+    required: true,
+    isValid: (v) => typeof v === 'string' && AUTH_SECRET_PATTERN.test(v),
+  })
+  authSecret?: string;
 
   @MinLength(PASSWORD_MIN_LENGTH, {
     message: `Password must be at least ${PASSWORD_MIN_LENGTH} characters long`,

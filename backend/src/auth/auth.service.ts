@@ -15,6 +15,7 @@ import { passwordFormatOf, verifyDummyPasswords } from './password-hash';
 import { DevicesService } from '../key-bundles/devices.service';
 import {
   IdentityResetService,
+  RecoveryCredential,
   TIMING_SAFE_DUMMY_VERIFIER,
 } from '../key-bundles/identity-reset.service';
 import { DEFAULT_DEVICE_ID } from '../key-bundles/key-bundles.service';
@@ -105,7 +106,7 @@ export class AuthService {
    */
   async recoverPassword(
     identifier: string,
-    phrase: string,
+    credential: RecoveryCredential,
     newPassword: string,
   ) {
     const user = await this.resolveIdentifier(identifier);
@@ -113,15 +114,22 @@ export class AuthService {
       // Constant-time guard, as login's twin: no per-account counter
       // exists to spend, but the verify itself must cost the same.
       await argon2
-        .verify(TIMING_SAFE_DUMMY_VERIFIER, phrase)
+        .verify(TIMING_SAFE_DUMMY_VERIFIER, credential.value)
         .catch(() => false);
       this.auditLogger.log(`recoverPassword failed reason=unknown_account`);
       throw new UnauthorizedException('Invalid credentials');
     }
     const verdict = await this.identityResetService.verifyRecoveryPhrase(
       user.id,
-      phrase,
+      credential,
     );
+    if (verdict === 'legacy_recovery_key') {
+      // The stored key predates plan B7 and cannot check an authSecret; the
+      // owner must replace it from a signed-in device. Distinct on purpose so
+      // the client can say so (see the wire contract).
+      this.auditLogger.log(`recoverPassword refused reason=legacy_key`);
+      throw new HttpException('legacy_recovery_key', HttpStatus.CONFLICT);
+    }
     if (verdict === 'locked') {
       this.auditLogger.log(`recoverPassword locked`);
       throw new HttpException('recovery_locked', HttpStatus.LOCKED);

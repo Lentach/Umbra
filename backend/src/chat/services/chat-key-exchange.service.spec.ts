@@ -26,6 +26,7 @@ describe('ChatKeyExchangeService', () => {
     getIdentityBackup: jest.Mock;
     hasIdentityBackup: jest.Mock;
     hasRecoveryPhrase: jest.Mock;
+    isRecoveryKeyLegacy: jest.Mock;
   };
   let devicesService: { isActive: jest.Mock };
   let resetRosterService: { applyAfterReset: jest.Mock };
@@ -120,6 +121,8 @@ describe('ChatKeyExchangeService', () => {
       hasIdentityBackup: jest.fn().mockResolvedValue(false),
       // (lxxxiii) clause 4: no phrase at all unless a test opts in.
       hasRecoveryPhrase: jest.fn().mockResolvedValue(false),
+      // Plan B7: the stored key is not a legacy verifier unless a test opts in.
+      isRecoveryKeyLegacy: jest.fn().mockResolvedValue(false),
     };
     devicesService = {
       isActive: jest.fn().mockResolvedValue(true),
@@ -903,6 +906,8 @@ describe('ChatKeyExchangeService', () => {
           hasIdentityBackup: false,
           // (lxxxiii) clause 4: the Chats nudge keys off THIS one.
           hasRecoveryPhrase: false,
+          // Plan B7: additive, false unless the stored key is phrase_v1.
+          recoveryKeyLegacy: false,
           // 0b additions: additive, and null when the account is quiet.
           identityReset: null,
           identityReplacedAt: null,
@@ -927,6 +932,23 @@ describe('ChatKeyExchangeService', () => {
         expect.objectContaining({
           hasRecoveryPhrase: true,
           hasIdentityBackup: false,
+        }),
+      );
+    });
+  });
+
+  describe('handleCheckOwnKeyBundle — plan B7 recoveryKeyLegacy', () => {
+    it('flags a phrase_v1 row so the client can offer re-enrolment', async () => {
+      identityResetService.hasRecoveryPhrase.mockResolvedValue(true);
+      identityResetService.isRecoveryKeyLegacy.mockResolvedValue(true);
+
+      await service.handleCheckOwnKeyBundle(mockClient as Socket);
+
+      expect(mockClient.emit).toHaveBeenCalledWith(
+        'ownKeyBundleStatus',
+        expect.objectContaining({
+          hasRecoveryPhrase: true,
+          recoveryKeyLegacy: true,
         }),
       );
     });
@@ -1498,6 +1520,9 @@ describe('ChatKeyExchangeService', () => {
 
   // Phase 0b: reset ceremony (§6.2).
   describe('handleResetIdentityRequest', () => {
+    // base64 of 32 bytes: the shape of a client-derived authSecret.
+    const authSecret = Buffer.alloc(32, 1).toString('base64');
+
     it('notifies every session when a ceremony starts', async () => {
       const deadlineAt = new Date(Date.now() + 1000);
       identityResetService.requestReset.mockResolvedValue({
@@ -1580,11 +1605,68 @@ describe('ChatKeyExchangeService', () => {
       );
       await new Promise((resolve) => setImmediate(resolve));
 
-      expect(identityResetService.requestReset).toHaveBeenCalledWith(1, phrase);
+      expect(identityResetService.requestReset).toHaveBeenCalledWith(1, {
+        kind: 'phrase',
+        value: phrase,
+      });
       // Shortened shortens the delay; it never silences the notifications.
       expect(mockServer.emit).toHaveBeenCalledWith(
         'identityResetPending',
         expect.objectContaining({ shortened: true }),
+      );
+    });
+
+    // Plan B7: a new client sends only the derived secret, which reaches the
+    // service as an `auth` credential, never as the phrase.
+    it('passes recoveryAuth through as an auth credential', async () => {
+      identityResetService.requestReset.mockResolvedValue({
+        status: 'invalid_phrase',
+        deadlineAt: null,
+        shortened: false,
+      });
+
+      await service.handleResetIdentityRequest(
+        mockClient as Socket,
+        { recoveryAuth: authSecret },
+        mockServer as Server,
+      );
+
+      expect(identityResetService.requestReset).toHaveBeenCalledWith(1, {
+        kind: 'auth',
+        value: authSecret,
+      });
+    });
+
+    it('refuses a payload carrying BOTH credentials', async () => {
+      await service.handleResetIdentityRequest(
+        mockClient as Socket,
+        { recoveryAuth: authSecret, recoveryPhrase: 'abandon ability able' },
+        mockServer as Server,
+      );
+
+      expect(identityResetService.requestReset).not.toHaveBeenCalled();
+    });
+
+    it('answers legacy_recovery_key to the requester and rings nobody', async () => {
+      identityResetService.requestReset.mockResolvedValue({
+        status: 'legacy_recovery_key',
+        deadlineAt: null,
+        shortened: false,
+      });
+
+      await service.handleResetIdentityRequest(
+        mockClient as Socket,
+        { recoveryAuth: authSecret },
+        mockServer as Server,
+      );
+
+      expect(mockClient.emit).toHaveBeenCalledWith(
+        'identityResetStatus',
+        expect.objectContaining({ status: 'legacy_recovery_key' }),
+      );
+      expect(mockServer.emit).not.toHaveBeenCalledWith(
+        'identityResetPending',
+        expect.anything(),
       );
     });
 
@@ -1686,7 +1768,7 @@ describe('ChatKeyExchangeService', () => {
 
       expect(identityResetService.setRecoveryKey).toHaveBeenCalledWith(
         1,
-        phrase,
+        { kind: 'phrase', value: phrase },
         undefined,
       );
       expect(mockClient.emit).toHaveBeenCalledWith('recoveryKeySet', {
@@ -1740,7 +1822,7 @@ describe('ChatKeyExchangeService', () => {
 
       expect(identityResetService.setRecoveryKey).toHaveBeenCalledWith(
         1,
-        phrase,
+        { kind: 'phrase', value: phrase },
         expect.objectContaining(backup),
       );
       expect(mockClient.emit).toHaveBeenCalledWith('recoveryKeySet', {
@@ -1753,11 +1835,58 @@ describe('ChatKeyExchangeService', () => {
       ['iterations above the cap', { ...backup, iterations: 2000001 }],
       ['an oversized blob', { ...backup, blob: 'A'.repeat(16385) }],
       ['a non-base64 salt', { ...backup, salt: 'not base64 at all!!' }],
-      ['an unknown blob version', { ...backup, version: 2 }],
+      ['an unknown blob version', { ...backup, version: 3 }],
+      ['version 2 with PBKDF iterations', { ...backup, version: 2 }],
+      ['version 1 with zero iterations', { ...backup, iterations: 0 }],
     ])('refuses %s without writing anything', async (_name, badBackup) => {
       await service.handleSetRecoveryKey(
         mockClient as Socket,
         { phrase, backup: badBackup },
+        mockServer as Server,
+      );
+
+      expect(identityResetService.setRecoveryKey).not.toHaveBeenCalled();
+      expect(mockClient.emit).toHaveBeenCalledWith('recoveryKeySet', {
+        success: false,
+      });
+    });
+  });
+
+  describe('handleSetRecoveryKey — plan B7 authSecret', () => {
+    const authSecret = Buffer.alloc(32, 1).toString('base64');
+    const v2Backup = {
+      blob: 'c2VhbGVkLWJsb2I=',
+      salt: 'c2FsdC1zaXh0ZWVuLWI=',
+      iterations: 0,
+      version: 2,
+    };
+
+    it('stores an auth credential with a version-2 backup', async () => {
+      await service.handleSetRecoveryKey(
+        mockClient as Socket,
+        { authSecret, backup: v2Backup },
+        mockServer as Server,
+      );
+
+      expect(identityResetService.setRecoveryKey).toHaveBeenCalledWith(
+        1,
+        { kind: 'auth', value: authSecret },
+        expect.objectContaining(v2Backup),
+      );
+      expect(mockClient.emit).toHaveBeenCalledWith('recoveryKeySet', {
+        success: true,
+      });
+    });
+
+    it.each([
+      ['neither credential', {}],
+      ['both credentials', { authSecret, phrase: 'x'.repeat(20) }],
+      ['a short authSecret', { authSecret: 'AAAA' }],
+      ['a non-base64 authSecret', { authSecret: '!'.repeat(44) }],
+    ])('refuses %s without writing anything', async (_name, payload) => {
+      await service.handleSetRecoveryKey(
+        mockClient as Socket,
+        payload,
         mockServer as Server,
       );
 
@@ -1829,6 +1958,7 @@ describe('ChatKeyExchangeService', () => {
         linkingEnabled: false,
         hasIdentityBackup: false,
         hasRecoveryPhrase: false,
+        recoveryKeyLegacy: false,
         identityReset: {
           status: 'pending',
           deadlineAt: deadlineAt.toISOString(),
@@ -1857,6 +1987,7 @@ describe('ChatKeyExchangeService', () => {
         // (lxxviii): drives the "create your backup" nudge when false.
         hasIdentityBackup: false,
         hasRecoveryPhrase: false,
+        recoveryKeyLegacy: false,
         identityReset: null,
         identityReplacedAt: null,
         identityReplacedTo: null,

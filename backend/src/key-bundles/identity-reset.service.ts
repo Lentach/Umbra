@@ -5,7 +5,7 @@ import { DataSource, Repository } from 'typeorm';
 import * as argon2 from 'argon2';
 import { AccountAuthorization } from './account-authorization.entity';
 import { IdentityResetRequest } from './identity-reset-request.entity';
-import { RecoveryKey } from './recovery-key.entity';
+import { RecoveryKey, RecoveryVerifierKind } from './recovery-key.entity';
 
 /**
  * Phrase-sealed identity backup as written / served (amendment (lxxviii)
@@ -114,12 +114,52 @@ export const RECOVERY_ARGON2_OPTIONS: argon2.HashOptions = {
 export const TIMING_SAFE_DUMMY_VERIFIER =
   '$argon2id$v=19$m=19456,p=1,t=2$w2BrHORjqgyeXxt8gHZoKg$cJ92sbtx0cBRD/dsML6P5/sN5qKUBQNSM3Et6pDD5T0';
 
+/**
+ * A recovery credential as presented (plan B7). `auth` is the client-derived
+ * authSecret (the phrase never leaves the device); `phrase` is the legacy
+ * plaintext of clients up to 0.2.88. Each verifies only against a row of its
+ * own kind.
+ */
+export type RecoveryCredential =
+  { kind: 'auth'; value: string } | { kind: 'phrase'; value: string };
+
+/**
+ * The credential a DTO carries: the authSecret when present, else the legacy
+ * plaintext phrase, else none. The DTOs guarantee at most one is set.
+ */
+export function recoveryCredentialOf(
+  authSecret: string | undefined,
+  phrase: string | undefined,
+): RecoveryCredential | undefined {
+  if (authSecret != null) return { kind: 'auth', value: authSecret };
+  if (phrase != null) return { kind: 'phrase', value: phrase };
+  return undefined;
+}
+
+const VERIFIER_KIND_OF: Record<
+  RecoveryCredential['kind'],
+  RecoveryVerifierKind
+> = { auth: 'auth_v2', phrase: 'phrase_v1' };
+
+/** Why a recovery credential did not open a door (plus the happy path). */
+export type RecoveryVerdict =
+  | 'accepted'
+  | 'invalid_phrase'
+  | 'locked'
+  /**
+   * The row is a legacy `phrase_v1` verifier and the caller sent an
+   * authSecret: the server cannot check it, and the owner must replace the
+   * key from a signed-in device. Spends no attempt (nothing was guessed).
+   */
+  | 'legacy_recovery_key';
+
 export type RequestResetStatus =
   | 'pending'
   | 'existing'
   | 'cooldown'
   | 'invalid_phrase'
   | 'locked'
+  | 'legacy_recovery_key'
   /**
    * (lxxiii) opt-in lock: the account has no `account_authorizations` row,
    * so the §6.1 refusal is not armed and a fresh install replaces the
@@ -205,7 +245,7 @@ export class IdentityResetService {
    */
   async requestReset(
     userId: number,
-    recoveryPhrase?: string,
+    credential?: RecoveryCredential,
   ): Promise<RequestResetResult> {
     const existing = await this.resetRepo.findOne({
       where: { userId, status: 'pending' },
@@ -283,11 +323,11 @@ export class IdentityResetService {
       return await this.dataSource.transaction(async (manager) => {
         let shortened = false;
         let phraseTooNew = false;
-        if (recoveryPhrase != null && recoveryPhrase.length > 0) {
+        if (credential != null && credential.value.length > 0) {
           const outcome = await this.spendRecoveryPhrase(
             manager.getRepository(RecoveryKey),
             userId,
-            recoveryPhrase,
+            credential,
           );
           // `too_new` is the ONLY non-accepted outcome that still starts a
           // ceremony (amendment (xlii)): the phrase was right but cannot buy
@@ -369,8 +409,8 @@ export class IdentityResetService {
   private async spendRecoveryPhrase(
     recoveryRepo: Repository<RecoveryKey>,
     userId: number,
-    phrase: string,
-  ): Promise<'accepted' | 'invalid_phrase' | 'locked' | 'too_new'> {
+    credential: RecoveryCredential,
+  ): Promise<Exclude<RecoveryVerdict, 'accepted'> | 'accepted' | 'too_new'> {
     const row = await recoveryRepo.findOne({ where: { userId } });
     // No phrase enrolled, or already spent: same answer either way, so the
     // wording never distinguishes the two. It is not constant TIME — an
@@ -379,7 +419,7 @@ export class IdentityResetService {
     // only by a caller already authenticated AS the account, who can read the
     // enrolment state from their own settings screen anyway.
     if (!row || row.usedAt != null) return 'invalid_phrase';
-    const verdict = await this.verifyAgainstRow(recoveryRepo, row, phrase);
+    const verdict = await this.verifyAgainstRow(recoveryRepo, row, credential);
     if (verdict !== 'accepted') return verdict;
 
     // The phrase is correct. It may still be too YOUNG to buy the shortcut
@@ -415,29 +455,51 @@ export class IdentityResetService {
    */
   async verifyRecoveryPhrase(
     userId: number,
-    phrase: string,
-  ): Promise<'accepted' | 'invalid_phrase' | 'locked'> {
+    credential: RecoveryCredential,
+  ): Promise<RecoveryVerdict> {
     const row = await this.recoveryRepo.findOne({ where: { userId } });
     if (!row) {
       await argon2
-        .verify(TIMING_SAFE_DUMMY_VERIFIER, phrase)
+        .verify(TIMING_SAFE_DUMMY_VERIFIER, credential.value)
         .catch(() => false);
       return 'invalid_phrase';
     }
-    return this.verifyAgainstRow(this.recoveryRepo, row, phrase);
+    return this.verifyAgainstRow(this.recoveryRepo, row, credential);
   }
 
+  /**
+   * One verdict path for both kinds, so the lockout counter and the timing
+   * are shared. A credential verifies only against a row of its own kind:
+   *
+   * - authSecret vs a legacy row: nothing to compare against — answers
+   *   `legacy_recovery_key` (a dummy verify keeps the cost level, no attempt
+   *   is counted: nothing was guessed).
+   * - plaintext phrase vs an `auth_v2` row: refused as a wrong phrase, never
+   *   verified (the verifier is over a different string, and accepting the
+   *   phrase here would re-open the very channel Option V closed). Also not
+   *   counted: no guess is evaluated, so there is nothing to grind, and an
+   *   old client must not be able to lock the re-enrolled owner out.
+   */
   private async verifyAgainstRow(
     recoveryRepo: Repository<RecoveryKey>,
     row: RecoveryKey,
-    phrase: string,
-  ): Promise<'accepted' | 'invalid_phrase' | 'locked'> {
+    credential: RecoveryCredential,
+  ): Promise<RecoveryVerdict> {
     if (row.lockedUntil != null && row.lockedUntil.getTime() > Date.now()) {
       return 'locked';
     }
 
+    if (row.verifierKind !== VERIFIER_KIND_OF[credential.kind]) {
+      await argon2
+        .verify(TIMING_SAFE_DUMMY_VERIFIER, credential.value)
+        .catch(() => false);
+      return credential.kind === 'auth'
+        ? 'legacy_recovery_key'
+        : 'invalid_phrase';
+    }
+
     const valid = await argon2
-      .verify(row.verifierHash, phrase)
+      .verify(row.verifierHash, credential.value)
       .catch((error: unknown) => {
         // A malformed stored hash must never authorize anything.
         this.logger.error(
@@ -570,8 +632,9 @@ export class IdentityResetService {
   }
 
   /**
-   * Enrolls or replaces the account's recovery phrase. Only the Argon2id
-   * verifier is stored. Replacing clears the spent/lockout state, because the
+   * Enrolls or replaces the account's recovery key. Only the Argon2id
+   * verifier is stored — of the client-derived authSecret (`auth_v2`) or, for
+   * a client up to 0.2.88, of the plaintext phrase (`phrase_v1`). Replacing clears the spent/lockout state, because the
    * new phrase is a new secret.
    *
    * Replacing ALSO restarts the age clock (amendment (xlii)). `createdAt` is a
@@ -590,10 +653,14 @@ export class IdentityResetService {
    */
   async setRecoveryKey(
     userId: number,
-    phrase: string,
+    credential: RecoveryCredential,
     backup?: IdentityBackupInput,
   ): Promise<boolean> {
-    const verifierHash = await argon2.hash(phrase, RECOVERY_ARGON2_OPTIONS);
+    const verifierHash = await argon2.hash(
+      credential.value,
+      RECOVERY_ARGON2_OPTIONS,
+    );
+    const verifierKind = VERIFIER_KIND_OF[credential.kind];
     const backupColumns = backup
       ? {
           backupBlob: backup.blob,
@@ -609,6 +676,7 @@ export class IdentityResetService {
         { id: existing.id },
         {
           verifierHash,
+          verifierKind,
           usedAt: null,
           failedAttempts: 0,
           lockedUntil: null,
@@ -618,14 +686,23 @@ export class IdentityResetService {
       );
       return true;
     }
-    await this.recoveryRepo.insert({ userId, verifierHash, ...backupColumns });
+    await this.recoveryRepo.insert({
+      userId,
+      verifierHash,
+      verifierKind,
+      ...backupColumns,
+    });
     return false;
   }
 
   /**
    * The stored identity backup, or null when the account never uploaded one
-   * (amendment (lxxviii) clause 1). Served only to the authenticated owner —
-   * harmless even then, because the blob is sealed under the phrase.
+   * (amendment (lxxviii) clause 1). Served only to the authenticated owner.
+   * A version-2 blob is sealed under an HKDF output derived on the device from
+   * the phrase, and the server never receives anything that key follows from.
+   * A version-1 blob is sealed under PBKDF2 over the phrase itself: it is only
+   * as blind as the account's phrase was private, and a client up to 0.2.88
+   * sent that phrase in plaintext (`recovery_keys.verifierKind = 'phrase_v1'`).
    */
   async getIdentityBackup(
     userId: number,
@@ -655,6 +732,19 @@ export class IdentityResetService {
       select: { id: true, backupBlob: true },
     });
     return row?.backupBlob != null;
+  }
+
+  /**
+   * Whether the stored recovery key is a legacy plaintext-phrase verifier
+   * (`phrase_v1`, plan B7): the phrase of such an account crossed the wire,
+   * so its owner is asked to replace it. False without a row.
+   */
+  async isRecoveryKeyLegacy(userId: number): Promise<boolean> {
+    const row = await this.recoveryRepo.findOne({
+      where: { userId },
+      select: { id: true, verifierKind: true },
+    });
+    return row?.verifierKind === 'phrase_v1';
   }
 
   /**
