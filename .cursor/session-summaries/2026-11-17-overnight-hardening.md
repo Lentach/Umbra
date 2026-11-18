@@ -28,7 +28,7 @@
   - C1: native → web and web → native previews show the thumbnail; the web peer requested nothing from github.com or flutter.dev (its request log); the native receiver neither (emulator `-tcpdump` with Wi-Fi and private DNS off: backend traffic present, every other connection a Google/Play service, no lookup of either site); native keeps it after a force-stop; web shows the title card after reload (by design).
   - D3: photo upload row has `deleteHash`; GET 200, wrong-secret DELETE 404; delete-for-everyone → GET 404, row and file gone, web bubble removed.
   - Voice: failed voice send left `cache/voice_*.m4a`; next launch removed it (and the file_picker copy).
-  - Play manifest: a 20 MB video sent untouched; a 45 MB video transcoded by light_compressor while backgrounded (~45 s, no crash) and, in the foreground, transcoded and sent.
+  - Play manifest: a 20 MB video sent untouched; a 45 MB video transcoded and sent in the foreground (shrunk into the `32m` rung); backgrounding right after the pick: no crash, but that run ended `BOX_ROUTE_UNVERIFIED`, so compression while backgrounded is unproven.
   - E4 (local stack, server log): `msgCount=16000` gave one `[box] ceiling … (53%) ok->warn` per process, no repeats; reset to 0 gave one `warn->ok`.
 - NOT verified: any real phone; the web leg of D3/B5 beyond the peer's view.
 
