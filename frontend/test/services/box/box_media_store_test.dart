@@ -25,6 +25,21 @@ void main() {
 
   for (final MapEntry(key: name, value: make) in stores.entries) {
     group(name, () {
+      test(
+        'a delete secret is kept per copy and goes with delete (plan D3)',
+        () async {
+          final store = make();
+          expect(await store.getDeleteSecret(1, _id(1)), isNull);
+          await store.putDeleteSecret(1, _id(1), _id(7));
+          expect(await store.getDeleteSecret(1, _id(1)), _id(7));
+          expect(await store.has(1, _id(1)), isFalse, reason: 'not a copy');
+          expect(await store.get(1, _id(1)), isNull);
+          await store.put(1, _id(1), Uint8List.fromList([1]));
+          await store.delete(1, _id(1));
+          expect(await store.getDeleteSecret(1, _id(1)), isNull);
+        },
+      );
+
       test('put then get answers the bytes; an id never put is null', () async {
         final store = make();
         await store.put(1, _id(1), Uint8List.fromList([1, 2, 3]));
@@ -112,4 +127,12 @@ void main() {
       expect(await deleteAllBoxMediaCopies(root: () async => root), isTrue);
     },
   );
+
+  test('files: the secret survives a new store instance', () async {
+    await IoBoxMediaStore(
+      root: () async => root,
+    ).putDeleteSecret(1, _id(1), _id(7));
+    final again = IoBoxMediaStore(root: () async => root);
+    expect(await again.getDeleteSecret(1, _id(1)), _id(7));
+  });
 }

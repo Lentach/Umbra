@@ -139,8 +139,9 @@ Future<void> main() async {
     ),
   );
   // Plaintext media copies left in the temp/files directories: decrypted
-  // video a killed process left, the pickers' copies (hardening A5). After
-  // runApp: it must never delay the first frame.
+  // video a killed process left, the pickers' copies, and a voice recording
+  // whose send failed in an earlier launch (hardening A5). After runApp: it
+  // must never delay the first frame.
   unawaited(plaintext_temp.sweepStalePlaintextTempFiles());
 }
 

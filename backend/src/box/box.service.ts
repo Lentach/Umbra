@@ -41,6 +41,8 @@ export interface NewMedia {
   bucket: string;
   bytes: number;
   expiresAt: Date;
+  /** SHA-256 of the uploader's delete secret, or null (reaper-only). */
+  deleteHash: Buffer | null;
 }
 
 /**
@@ -527,9 +529,10 @@ export class BoxService {
         [sid, media.bytes],
       );
       await tx.query(
-        `INSERT INTO public.box_media (id, path, "sizeBucket", "expiresAt")
-         VALUES ($1, $2, $3, $4)`,
-        [media.id, media.path, media.bucket, media.expiresAt],
+        `INSERT INTO public.box_media
+           (id, path, "sizeBucket", "expiresAt", "deleteHash")
+         VALUES ($1, $2, $3, $4, $5)`,
+        [media.id, media.path, media.bucket, media.expiresAt, media.deleteHash],
       );
       return 'charged';
     });
@@ -558,6 +561,21 @@ export class BoxService {
       [id],
     );
     return rows[0]?.path ?? null;
+  }
+
+  /**
+   * The stored path and delete hash of a media id, expired or not (a
+   * deletion may beat the reaper); null when no row holds it.
+   */
+  async mediaForDelete(
+    id: Buffer,
+  ): Promise<{ path: string; deleteHash: Buffer | null } | null> {
+    const rows: { path: string; deleteHash: Buffer | null }[] =
+      await this.db.query(
+        `SELECT path, "deleteHash" FROM public.box_media WHERE id = $1`,
+        [id],
+      );
+    return rows[0] ?? null;
   }
 
   async expiredMedia(): Promise<{ id: Buffer; path: string }[]> {
@@ -629,6 +647,23 @@ export class BoxService {
       [now, utcDay(cutoff)],
     );
     return rows.map((r) => r.rid);
+  }
+
+  /**
+   * The running totals (one primary-key row) for the ceiling warning (#204);
+   * null when the row is missing (every store is then refused).
+   */
+  async totals(): Promise<{ msgCount: number; mediaBytes: number } | null> {
+    const rows: { msgCount: number; mediaBytes: string }[] =
+      await this.db.query(
+        `SELECT "msgCount", "mediaBytes" FROM public.box_totals WHERE id = 1`,
+      );
+    if (rows.length === 0) return null;
+    // pg returns bigint as a string; 2 GiB is far inside Number's exact range.
+    return {
+      msgCount: Number(rows[0].msgCount),
+      mediaBytes: Number(rows[0].mediaBytes),
+    };
   }
 
   /** The daily media budget restarts at 00:00 UTC. */

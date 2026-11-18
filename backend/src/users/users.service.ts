@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import * as bcrypt from 'bcrypt';
+import { hashPassword, verifyPassword } from '../auth/password-hash';
 import { User } from './user.entity';
 import { ProfilePhoto } from './profile-photo.entity';
 import { LocalStorageService } from '../media/local-storage.service';
@@ -35,7 +35,7 @@ export class UsersService {
       throw new ConflictException('nickname is already taken');
     }
     // Generate random 4-digit tag (1000-9999); retry on (username, tag) collision
-    const hash = await bcrypt.hash(password, 10);
+    const hash = await hashPassword(password);
     const maxAttempts = 10;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const tag = String(Math.floor(1000 + Math.random() * 9000));
@@ -96,6 +96,32 @@ export class UsersService {
     });
   }
 
+  /**
+   * LOGIN's check: verifies `plain` against the account's stored hash and, when
+   * it is valid but still bcrypt (or old Argon2 parameters), stores a fresh
+   * Argon2id hash. Every other door uses {@link passwordMatches}: they must not
+   * write (`verifyPassword`, decision R76), or are about to replace/delete the row.
+   * Only the `password` column changes: `passwordChangedAt` stays, so no
+   * session is dropped. The write is conditional on the hash we just read, so a
+   * concurrent password change is never overwritten.
+   */
+  async checkPassword(user: User, plain: string): Promise<boolean> {
+    const verdict = await verifyPassword(plain, user.password);
+    if (verdict.valid && verdict.needsRehash) {
+      const fresh = await hashPassword(plain);
+      await this.usersRepo.update(
+        { id: user.id, password: user.password },
+        { password: fresh },
+      );
+      user.password = fresh;
+    }
+    return verdict.valid;
+  }
+
+  private async passwordMatches(user: User, plain: string): Promise<boolean> {
+    return (await verifyPassword(plain, user.password)).valid;
+  }
+
   async resetPassword(
     userId: number,
     oldPassword: string,
@@ -107,7 +133,7 @@ export class UsersService {
     }
 
     // Verify old password
-    const isValidPassword = await bcrypt.compare(oldPassword, user.password);
+    const isValidPassword = await this.passwordMatches(user, oldPassword);
     if (!isValidPassword) {
       throw new UnauthorizedException('Invalid old password');
     }
@@ -128,7 +154,7 @@ export class UsersService {
       throw new NotFoundException('User not found');
     }
 
-    const isValidPassword = await bcrypt.compare(password, user.password);
+    const isValidPassword = await this.passwordMatches(user, password);
     if (!isValidPassword) {
       throw new ForbiddenException({ error: 'wrong_password' });
     }
@@ -154,7 +180,7 @@ export class UsersService {
     if (!user) {
       throw new NotFoundException('User not found');
     }
-    const hash = await bcrypt.hash(newPassword, 10);
+    const hash = await hashPassword(newPassword);
     await this.refreshTokensService.revokeAllForUser(userId);
     user.password = hash;
     user.passwordChangedAt = new Date();
@@ -168,7 +194,7 @@ export class UsersService {
       throw new NotFoundException('User not found');
     }
 
-    const isValidPassword = await bcrypt.compare(password, user.password);
+    const isValidPassword = await this.passwordMatches(user, password);
     if (!isValidPassword) {
       throw new UnauthorizedException('Invalid password');
     }

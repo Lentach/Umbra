@@ -916,7 +916,50 @@ extension MessagingBoxActions on MessagingProvider {
       _boxActionFailed(BoxActionFailure.delete);
       return;
     }
+    // Read before `_applyBoxDelete`, whose `forget` drops the secret. The
+    // local delete never waits on the network.
+    final removal = await _boxMediaRemoval(target);
     await _applyBoxDelete(target.conversationId, wire);
+    if (removal != null) unawaited(removal());
+  }
+
+  /// Plan D3: removes the box's file of an own attachment deleted for
+  /// everyone, so it stops being downloadable now rather than at the 14-day
+  /// reap. Only the device that uploaded it holds the secret (it is never in
+  /// an envelope, sibling copies included), and the delete is best effort: a
+  /// failure leaves the reaper's expiry. Read before `_applyBoxDelete`,
+  /// whose `forget` drops the secret with the copy.
+  Future<Future<void> Function()?> _boxMediaRemoval(MessageModel target) async {
+    final url = target.mediaUrl;
+    final id = url == null ? null : boxMediaIdOf(url);
+    final user = _currentUserId;
+    final outbox = boxOutbox;
+    if (id == null || user == null || outbox == null) return null;
+    final Uint8List? secret;
+    try {
+      secret = await boxMedia?.deleteSecretFor(user, id);
+    } on Object catch (e) {
+      _e2eFlowLog('BOX_MEDIA_DELETE_FAILED', {
+        'error': e.runtimeType.toString(),
+      });
+      return null;
+    }
+    final held = secret;
+    if (held == null) return null;
+    return () async {
+      try {
+        final result = await outbox.deleteMedia(id, held);
+        if (result is! BoxOk) {
+          _e2eFlowLog('BOX_MEDIA_DELETE_FAILED', {
+            'result': '${result.runtimeType}',
+          });
+        }
+      } on Object catch (e) {
+        _e2eFlowLog('BOX_MEDIA_DELETE_FAILED', {
+          'error': e.runtimeType.toString(),
+        });
+      }
+    };
   }
 
   /// Pins box message [messageId] (decision 45): shown at once, sent over

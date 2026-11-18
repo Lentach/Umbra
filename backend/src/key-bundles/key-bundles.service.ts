@@ -657,9 +657,14 @@ export class KeyBundlesService {
     );
   }
 
+  /**
+   * [spendOneTimePreKey] false serves the signed-pre-key-only bundle and
+   * claims nothing: the over-budget `searchUsers` answer (plan B5).
+   */
   async fetchPreKeyBundle(
     userId: number,
     deviceId: number = DEFAULT_DEVICE_ID,
+    spendOneTimePreKey = true,
   ): Promise<PreKeyBundleResponse | null> {
     // No fallback to another device: serving device 1's bundle for a device
     // that never published one would build a session that device cannot
@@ -668,6 +673,17 @@ export class KeyBundlesService {
       where: { userId, deviceId },
     });
     if (!bundle) return null;
+    if (!spendOneTimePreKey) {
+      return {
+        registrationId: bundle.registrationId,
+        identityPublicKey: bundle.identityPublicKey,
+        signedPreKeyId: bundle.signedPreKeyId,
+        signedPreKeyPublic: bundle.signedPreKeyPublic,
+        signedPreKeySignature: bundle.signedPreKeySignature,
+        oneTimePreKeyId: null,
+        oneTimePreKeyPublic: null,
+      };
+    }
 
     // Atomic claim: UPDATE ... WHERE id = (SELECT id ... LIMIT 1) RETURNING *
     // Prevents a race where two concurrent calls serve the same OTP.

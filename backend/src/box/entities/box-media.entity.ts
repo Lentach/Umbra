@@ -22,4 +22,11 @@ export class BoxMedia {
 
   @Column({ type: 'timestamptz' })
   expiresAt: Date;
+
+  /**
+   * SHA-256 of the uploader's delete secret (`Box-Delete-Hash`, plan D3);
+   * null for uploads that sent none, which only the reaper removes.
+   */
+  @Column({ type: 'bytea', nullable: true })
+  deleteHash: Buffer | null;
 }

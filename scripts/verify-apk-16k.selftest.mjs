@@ -111,7 +111,20 @@ expect('no-native-libs', zip([
 expect('only-32bit', zip([
   { name: 'lib/armeabi-v7a/libwebcrypto.so', data: elf64([4096]), deflate: false },
 ]), 1);
-// 5. Garbage file must FAIL, not crash into a pass.
+// 6. App Bundle layout (base/lib/<abi>/): misaligned must FAIL, aligned PASS.
+expect('aab-misaligned-4k', zip([
+  { name: 'base/manifest/AndroidManifest.xml', data: Buffer.from('m'), deflate: true },
+  { name: 'base/lib/arm64-v8a/libwebcrypto.so', data: elf64([16384, 4096]), deflate: true },
+]), 1);
+expect('aab-aligned-16k', zip([
+  { name: 'base/lib/arm64-v8a/libwebcrypto.so', data: elf64([16384]), deflate: false },
+  { name: 'base/lib/x86_64/libwebcrypto.so', data: elf64([65536]), deflate: true },
+]), 0);
+// 7. A lib nested under some other directory is not a loadable native lib.
+expect('aab-libs-outside-lib-dir', zip([
+  { name: 'base/assets/lib/arm64-v8a/libwebcrypto.so', data: elf64([16384]), deflate: false },
+]), 1);
+// 8. Garbage file must FAIL, not crash into a pass.
 expect('not-a-zip', Buffer.from('definitely not an apk'), 1);
 
 rmSync(dir, { recursive: true, force: true });

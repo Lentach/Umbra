@@ -1059,6 +1059,26 @@ describe('KeyBundlesService', () => {
         mockKeyBundleData.identityPublicKey,
       );
     });
+
+    it('serves the signed pre-key alone and burns no OTP when told not to spend (plan B5)', async () => {
+      keyBundleRepo.findOne.mockResolvedValue(bundle);
+
+      const result = await service.fetchPreKeyBundle(5, 2, false);
+
+      expect(otpRepo.query).not.toHaveBeenCalled();
+      expect(keyBundleRepo.findOne).toHaveBeenCalledWith({
+        where: { userId: 5, deviceId: 2 },
+      });
+      expect(result).toEqual({
+        registrationId: mockKeyBundleData.registrationId,
+        identityPublicKey: mockKeyBundleData.identityPublicKey,
+        signedPreKeyId: mockKeyBundleData.signedPreKeyId,
+        signedPreKeyPublic: mockKeyBundleData.signedPreKeyPublic,
+        signedPreKeySignature: mockKeyBundleData.signedPreKeySignature,
+        oneTimePreKeyId: null,
+        oneTimePreKeyPublic: null,
+      });
+    });
   });
 
   describe('countUnusedPreKeys', () => {

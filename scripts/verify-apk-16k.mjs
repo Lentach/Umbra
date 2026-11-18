@@ -17,7 +17,9 @@
 // Falsification proof lives in scripts/verify-apk-16k.selftest.mjs (crafted
 // APKs: misaligned => exit 1, aligned => exit 0).
 //
-// Usage: node scripts/verify-apk-16k.mjs <path-to.apk>
+// Usage: node scripts/verify-apk-16k.mjs <path-to.apk|path-to.aab>
+// An Android App Bundle is also a zip; its base module keeps native libs under
+// base/lib/<abi>/ instead of lib/<abi>/. Both layouts are checked.
 
 import { readFileSync } from 'node:fs';
 import { inflateRawSync } from 'node:zlib';
@@ -112,14 +114,14 @@ function minLoadAlign(name, data) {
   return minAlign;
 }
 
-const soEntries = entries.filter(
-  (e) => e.name.startsWith('lib/') && e.name.endsWith('.so'),
-);
+// APK: lib/<abi>/x.so ; AAB base module: base/lib/<abi>/x.so.
+const LIB_PATH = /^(?:base\/)?lib\/([^/]+)\/[^/]+\.so$/;
+const soEntries = entries.filter((e) => LIB_PATH.test(e.name));
 if (soEntries.length === 0) {
-  fail('APK contains no native libraries under lib/ — expected webcrypto at least');
+  fail('APK/AAB contains no native libraries under lib/ or base/lib/ — expected webcrypto at least');
 }
 
-const relevant = soEntries.filter((e) => ABIS_64.includes(e.name.split('/')[1]));
+const relevant = soEntries.filter((e) => ABIS_64.includes(LIB_PATH.exec(e.name)[1]));
 if (relevant.length === 0) {
   fail(
     `APK has native libs but NO 64-bit ABI (${soEntries.map((e) => e.name).join(', ')}) — Play requires 64-bit`,
