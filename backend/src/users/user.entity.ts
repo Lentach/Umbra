@@ -20,7 +20,7 @@ export class User {
   @Column({ length: 4, default: '0000' })
   tag: string;
 
-  // Password stored as bcrypt hash — never plain text
+  // Argon2id PHC string (legacy rows: bcrypt `$2…`, rehashed at next login) — never plain text
   @Column()
   password: string;
 

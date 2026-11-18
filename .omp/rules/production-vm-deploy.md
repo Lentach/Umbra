@@ -224,6 +224,7 @@ all of `/contact*`. Fastify + SQLite + web-push, one Docker container.
 
 ## Backups & monitoring
 
+- **Box ceiling early warning (#204):** `docker compose -f docker-compose.prod.yml logs backend | grep "\[box\] ceiling"` (sudo as needed). WARN = a box total passed 50 % of its OPEN band (15 000 msgs / 512 MiB media), ERROR = past 80 %, INFO `->ok`/`->warn` = recovery. Logged by the 10-min reaper sweep, only on a level change; never on `/health`.
 - **DB + media + .env backup:** `./backup-db.sh` (VM) → `pg_dump -Fc` of `chatdb` + tar of the
   `fireplace_media_storage` volume → `~/fireplace-backups/` (0700), prunes >`RETENTION_DAYS` (14).
 - **Encryption:** gpg AES256, keyed by `BACKUP_PASSPHRASE_FILE` (default

@@ -2,8 +2,10 @@ import {
   ArgumentsHost,
   Catch,
   Controller,
+  Delete,
   ExceptionFilter,
   Get,
+  HttpCode,
   HttpException,
   NotFoundException,
   Param,
@@ -14,11 +16,12 @@ import {
   UseFilters,
 } from '@nestjs/common';
 import { Throttle, ThrottlerException } from '@nestjs/throttler';
-import { randomBytes } from 'crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'crypto';
 import type { Request, Response } from 'express';
 import { finished } from 'stream/promises';
 import {
   BOX_LIMITS,
+  BOX_MEDIA_DELETE_SECRET_BYTES,
   BOX_MEDIA_ID_BYTES,
   BOX_MEDIA_LADDER,
   BOX_MEDIA_TTL_MS,
@@ -29,6 +32,9 @@ import { BoxMediaStore } from './box-media.store';
 import { boxTrackerFor, countRefusal } from './box-throttler.guard';
 import { decodeFixedB64 } from './box-wire';
 import { BoxService } from './box.service';
+
+/** A `Box-Delete-Hash` is a SHA-256 digest. */
+const SHA256_BYTES = 32;
 
 /**
  * The global `HttpThrottlerGuard` throttles these routes; this tracker makes
@@ -73,6 +79,12 @@ class BoxMediaThrottleFilter implements ExceptionFilter {
  *
  * `GET /box/media/:id` is a capability URL: `200` bytes with
  * `Cache-Control: no-store`, or `404`.
+ *
+ * `DELETE /box/media/:id` (plan D3) presents the uploader's delete secret in
+ * `Box-Delete-Secret`; the upload stored only its SHA-256 (`Box-Delete-Hash`).
+ * The right secret removes the file, then the row: `204`. Anything else —
+ * no such id, an upload that carried no hash, a missing, malformed or wrong
+ * secret — is the same `404`, so the route says no more than `GET` does.
  */
 @Controller('box/media')
 @UseFilters(BoxMediaThrottleFilter)
@@ -107,6 +119,16 @@ export class BoxMediaController {
       bucket: rung.bucket,
       expiresAt: expiresAt.toISOString(),
     };
+    // Optional (older clients send none: their upload stays reaper-only),
+    // but never ignored when present and malformed.
+    const hashHeader = req.headers['box-delete-hash'];
+    const deleteHash =
+      hashHeader === undefined
+        ? null
+        : decodeFixedB64(hashHeader, SHA256_BYTES);
+    if (hashHeader !== undefined && !deleteHash) {
+      throw new HttpException({ error: 'invalid_payload' }, 400);
+    }
     const sid = decodeFixedB64(req.headers['box-sid'], BOX_SID_BYTES);
     // Row first, inside the charge: a crash before the write leaves a row
     // whose GET 404s and which the TTL sweep removes, never an unreferenced
@@ -118,6 +140,7 @@ export class BoxMediaController {
       bucket: rung.bucket,
       bytes: rung.bytes,
       expiresAt,
+      deleteHash,
     });
     if (charge === 'over_budget' || charge === 'over_ceiling') {
       // Counted, never traced (E11).
@@ -161,5 +184,39 @@ export class BoxMediaController {
       type: 'application/octet-stream',
       length: file.size,
     });
+  }
+
+  @Delete(':id')
+  @HttpCode(204)
+  @Throttle({
+    default: {
+      limit: BOX_LIMITS.mediaDelete,
+      ttl: BOX_THROTTLE_TTL_MS,
+      getTracker: boxHttpTracker,
+    },
+  })
+  async remove(@Param('id') id: string, @Req() req: Request): Promise<void> {
+    const bytes = decodeFixedB64(id, BOX_MEDIA_ID_BYTES);
+    const secret = decodeFixedB64(
+      req.headers['box-delete-secret'],
+      BOX_MEDIA_DELETE_SECRET_BYTES,
+    );
+    const row = bytes && secret ? await this.box.mediaForDelete(bytes) : null;
+    const stored = row?.deleteHash;
+    if (
+      !bytes ||
+      !secret ||
+      !row ||
+      !stored ||
+      stored.length !== SHA256_BYTES
+    ) {
+      throw new NotFoundException();
+    }
+    const presented = createHash('sha256').update(secret).digest();
+    if (!timingSafeEqual(presented, stored)) throw new NotFoundException();
+    // File first, then row (the reaper's order): a crash between them leaves
+    // a row whose GET 404s and which the TTL sweep removes.
+    await this.store.remove(row.path);
+    await this.box.deleteMedia([bytes]);
   }
 }

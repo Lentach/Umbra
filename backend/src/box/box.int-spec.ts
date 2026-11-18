@@ -1,10 +1,17 @@
 import type { INestApplication } from '@nestjs/common';
+import { Logger } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { generateKeyPairSync, randomBytes, sign, type KeyObject } from 'crypto';
+import {
+  createHash,
+  generateKeyPairSync,
+  randomBytes,
+  sign,
+  type KeyObject,
+} from 'crypto';
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { request as httpRequest } from 'http';
@@ -593,7 +600,7 @@ describeWithDb('box over real sockets and Postgres', () => {
       const columns: Record<string, string[]> = {};
       for (const r of rows) (columns[r.table_name] ??= []).push(r.column_name);
       expect(columns).toEqual({
-        box_media: ['id', 'path', 'sizeBucket', 'expiresAt'],
+        box_media: ['id', 'path', 'sizeBucket', 'expiresAt', 'deleteHash'],
         box_msgs: ['id', 'rid', 'blob', 'createdAt', 'expiresAt', 'quiet'],
         box_notifiers: ['nid', 'token', 'platform', 'verifiedAt'],
         box_totals: ['id', 'msgCount', 'mediaBytes'],
@@ -1821,6 +1828,49 @@ describeWithDb('box over real sockets and Postgres', () => {
       expect(await statusBeforeBody(queue.sid, 16 * 1024 * 1024 - 1)).toBe(413);
     });
 
+    it('DELETE removes the file and refunds the total once for the right secret; a wrong one deletes nothing (plan D3)', async () => {
+      const bob = await connect();
+      const queue = await createQueue(bob);
+      const secret = randomBytes(32);
+      const hash = createHash('sha256').update(secret).digest('base64url');
+      const posted = await fetch(`${base}/box/media`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/octet-stream',
+          'box-sid': queue.sid,
+          'box-delete-hash': hash,
+          'x-real-ip': nextIp(),
+        },
+        body: new Uint8Array(randomBytes(4096)),
+      });
+      expect(posted.status).toBe(201);
+      const { id } = await readJson<{ id: string }>(posted);
+      const before = (await totals()).mediaBytes;
+      const files = () => readdirSync(join(mediaDir, 'box')).length;
+      const filesBefore = files();
+      const del = (key: Buffer) =>
+        fetch(`${base}/box/media/${id}`, {
+          method: 'DELETE',
+          headers: {
+            'box-delete-secret': key.toString('base64url'),
+            'x-real-ip': nextIp(),
+          },
+        });
+
+      expect((await del(randomBytes(32))).status).toBe(404);
+      expect(files()).toBe(filesBefore);
+      expect((await totals()).mediaBytes).toBe(before);
+      expect((await fetch(`${base}/box/media/${id}`)).status).toBe(200);
+
+      expect((await del(secret)).status).toBe(204);
+      expect(files()).toBe(filesBefore - 1);
+      expect((await totals()).mediaBytes).toBe(before - 4096);
+      expect((await fetch(`${base}/box/media/${id}`)).status).toBe(404);
+      // Once: a repeat finds no row and refunds nothing more.
+      expect((await del(secret)).status).toBe(404);
+      expect((await totals()).mediaBytes).toBe(before - 4096);
+    });
+
     it('answers an unknown sid 201 with an id that is never stored', async () => {
       const res = await upload(
         randomBytes(32).toString('base64url'),
@@ -2169,6 +2219,32 @@ describeWithDb('box over real sockets and Postgres', () => {
       expect((await fetch(`${base}/box/media/${expiring.id}`)).status).toBe(
         404,
       );
+    });
+  });
+
+  describe('ceiling early warning (#204)', () => {
+    it('the sweep logs one WARN when box_totals passes half the open band', async () => {
+      const [before]: { msgCount: number }[] = await db.query(
+        `SELECT "msgCount" FROM box_totals WHERE id = 1`,
+      );
+      const warn = jest
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => undefined);
+      try {
+        await db.query(`UPDATE box_totals SET "msgCount" = $1 WHERE id = 1`, [
+          BOX_OPEN_MSG_CEILING / 2,
+        ]);
+        await app.get(BoxReaper).sweep();
+        const lines = warn.mock.calls
+          .map((c) => String(c[0]))
+          .filter((m) => m.startsWith('[box] ceiling msgCount='));
+        expect(lines).toHaveLength(1);
+      } finally {
+        warn.mockRestore();
+        await db.query(`UPDATE box_totals SET "msgCount" = $1 WHERE id = 1`, [
+          before.msgCount,
+        ]);
+      }
     });
   });
 

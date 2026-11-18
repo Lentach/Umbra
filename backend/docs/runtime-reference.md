@@ -14,6 +14,8 @@ The **box** (`src/box/`: `/box` namespace + `/box/media`, metadata-privacy PR1.1
 
 The box has NO account on its path: it imports nothing from `auth/`, `users/`, `chat/`, even transitively (invariant I1, enforced by `scripts/verify-box-imports.mjs` in CI). Contract: `docs/contracts/wire.md` "Box". Suite: `npm run test:int` (real sockets + Postgres, `BOX_IT_DATABASE_URL`).
 
+**Ceiling early warning (#204).** The 10-minute `BoxReaper` sweep reads `box_totals` and `BoxCeilingMonitor` (`box-ceiling-monitor.ts`) logs `[box] ceiling <msgCount|mediaBytes>=… openBand=… (N%) a->b`: WARN when a total reaches 50 % of its OPEN band (`BOX_OPEN_*_CEILING`), ERROR from 80 %, one INFO line on recovery. Once per level change per process (a restart re-logs a still-high level). Totals only, never an id; deliberately NOT on `/health`, `/version` or any route (waiting count is traffic metadata).
+
 ## Chat service map (§2)
 
 `chat-key-exchange`, `chat-search`, `chat-device-list`, `chat-device-revocation`, `chat-provisioning`. The old-path services (`chat-message`, `chat-friend-request`, `chat-conversation`, `chat-block`, `chat-reaction`, `chat-reaction-key`, `chat-validation`, `chat-link-preview`) were removed in Phase 4 step 5; `POST /messages/link-preview` lives in `src/link-preview/` (`LinkPreviewModule`).
@@ -52,6 +54,7 @@ Source of truth is `chat.gateway.ts` (`@Throttle` per handler); this is an orien
 
 - Key-exchange, identity-reset/recovery, device-list/revocation and provisioning events carry explicit limits (10–60/15min; `getDeviceList` 300/15min; `searchUsers` 100/15min; `setRequestQueue` / `getOwnRequestQueues` 30/15min); `fetchPreKeyBundle` / `checkOwnKeyBundle` use the guard's global default (100/15min).
 - `uploadKeyBundle` is the only handler without a `WsThrottlerGuard`.
+- Per TARGET, not per caller: `searchUsers` spends at most 5 one-time pre-keys per target device per hour, whoever searches (`SEARCH_OTP_BUDGET` in `chat-search.service.ts`, plan B5); past it the bundle carries no OTP. In-memory per process. A slot that spent nothing (empty pool) is refunded. The table holds 10k live devices; when full, a new target is served without an OTP (fail-closed) and no entry is evicted, so the bound never resets a budget.
 - `getMessages` stays only as a compatibility answer (an empty `messageHistory`, 300/15min). The other old chat events (`sendMessage`, friends/blocks/reactions/…) have NO handler and no throttle row: an unknown event is unanswered silence. Their `WsThrottlerGuard` refusal-answer entries went with them.
 
 ## WsThrottlerGuard tracker (§6)

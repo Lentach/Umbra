@@ -855,17 +855,22 @@ export class ChatKeyExchangeService {
    * device's room (spec §5.2, decision-record T4 rider): telling every device
    * to mint keys for one device's empty pool is noise the others cannot act
    * on.
+   *
+   * [spendOneTimePreKey] false (the over-budget search answer, plan B5) serves
+   * the signed pre-key alone: nothing is spent, so nothing is signalled.
    */
   async claimBundle(
     userId: number,
     deviceId: number,
     server: Server,
+    spendOneTimePreKey = true,
   ): Promise<PreKeyBundleResponse | null> {
     const bundle = await this.keyBundlesService.fetchPreKeyBundle(
       userId,
       deviceId,
+      spendOneTimePreKey,
     );
-    if (bundle) {
+    if (bundle && spendOneTimePreKey) {
       const remaining = await this.keyBundlesService.countUnusedPreKeys(
         userId,
         deviceId,
