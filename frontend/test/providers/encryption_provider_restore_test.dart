@@ -568,6 +568,7 @@ void main() {
     provider.onRecoveryKeySet(const {'success': true});
     expect(provider.recoveryKeyLegacy, isFalse);
     provider.onOwnKeyBundleStatus({'exists': true, 'recoveryKeyLegacy': true});
+    expect(provider.recoveryKeyLegacy, isTrue);
     provider.clearAll();
     expect(provider.recoveryKeyLegacy, isNull);
   });

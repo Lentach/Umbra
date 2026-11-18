@@ -605,10 +605,9 @@ describe('AuthService', () => {
 
       await service.recoverPassword('testuser#0427', v2, 'NewPass1x');
 
-      expect(identityResetService.verifyRecoveryPhrase).toHaveBeenCalledWith(
-        1,
-        v2,
-      );
+      expect(identityResetService.verifyRecoveryPhrase.mock.calls).toEqual([
+        [1, v2],
+      ]);
     });
 
     it('a legacy key answers 409 legacy_recovery_key, distinct from wrong and locked', async () => {
@@ -620,7 +619,8 @@ describe('AuthService', () => {
       await expect(
         service.recoverPassword('testuser#0427', v2, 'NewPass1x'),
       ).rejects.toMatchObject({ status: 409, message: 'legacy_recovery_key' });
-      expect(usersService.setPassword).not.toHaveBeenCalled();
+      // The throw precedes every password change: nothing was issued.
+      expect(usersService.setPassword.mock.calls).toHaveLength(0);
     });
 
     it('an ambiguous bare username resolves to nobody', async () => {

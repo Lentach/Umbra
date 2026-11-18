@@ -197,7 +197,6 @@ void main() {
         blob: base64Encode(blob!),
         salt: base64Encode(salt),
         iterations: kIdentityBackupKdfIterations,
-        version: 1,
         phrase: phrase,
       );
       expect(opened.userId, payload.userId);
@@ -220,7 +219,6 @@ void main() {
           blob: sealed.blob,
           salt: sealed.salt,
           iterations: kIdentityBackupKdfIterations,
-          version: 1,
           phrase: phrase,
         ),
         throwsA(isA<IdentityBackupWrongPhrase>()),

@@ -14,13 +14,13 @@ import '../services/encryption/prekey_identity.dart' show FriendFrameIdentity;
 import '../services/encryption_service.dart';
 import '../services/device_link/dak_store.dart';
 import '../services/device_link/identity_backup.dart';
-import '../services/recovery_phrase.dart';
 import '../services/device_link/link_ceremony_controller.dart'
     show EncryptionServiceLinkGateway, linkPlatformLabel;
 import '../services/device_list/device_list_cache.dart';
 import '../services/device_list/device_list_canonical.dart';
 import '../services/device_list/device_authority_engine.dart';
 import '../services/passcode_unlock_gate.dart';
+import '../services/recovery_phrase.dart';
 import '../services/server_clock.dart';
 import '../utils/e2e_diag_log.dart';
 import '../utils/e2e_persistent_diag.dart';

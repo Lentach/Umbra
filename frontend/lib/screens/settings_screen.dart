@@ -587,7 +587,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           icon: const Icon(Icons.close, size: 18),
                           tooltip: l10n.recoveryKeyLegacyDismiss,
                           onPressed: () =>
-                              prefs.dismissRecoveryLegacyPrompt(userId),
+                              prefs.dismissRecoveryLegacyPrompt(userId).ignore(),
                         ),
                       );
                     },
