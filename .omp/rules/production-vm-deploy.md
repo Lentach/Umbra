@@ -232,18 +232,24 @@ all of `/contact*`. Fastify + SQLite + web-push, one Docker container.
   but ONLY when encryption is on** (no passphrase → `.env` skipped, never written cleartext).
   **Store the passphrase OFF the VM** (password manager) — an encrypted backup is useless if the only
   copy of the key dies with the machine.
-  Cron (no secret in the line): `0 4 * * * cd ~/fireplace && BACKUP_RCLONE_REMOTE=fireplace-b2:BUCKET/vps BACKUP_HEALTHCHECK_URL=https://hc-ping.com/<uuid> ./backup-db.sh >> ~/fireplace-backups/backup.log 2>&1`.
+  Cron (no secret in the line): `0 4 * * * cd ~/fireplace && BACKUP_RCLONE_REMOTE=fireplace-r2:fireplace-backups/vps BACKUP_HEALTHCHECK_URL=https://hc-ping.com/<uuid> ./backup-db.sh >> ~/fireplace-backups/backup.log 2>&1`.
 - **Offsite (rclone, current path):** `BACKUP_RCLONE_REMOTE=remote:bucket/prefix` uploads each run's
   encrypted artifacts and VERIFIES them by listing the remote (`offsite verified: N/N`), not by rclone's
-  exit code. Target is Backblaze B2 with an **application key WITHOUT `deleteFiles`** (append-only: a
-  compromised VM can upload but never destroy history) + a bucket lifecycle rule (~30 days) for pruning —
-  never the script. Credentials in `~/.config/rclone/rclone.conf` (0600). Cleartext NEVER leaves the VM:
-  no passphrase → upload refused.
+  exit code. Target is **Cloudflare R2** (remote `fireplace-r2`, bucket `fireplace-backups`, prefix
+  `vps/`; the older Backblaze B2 plan was never used). Pruning is the bucket's **lifecycle rule, set in
+  the Cloudflare dashboard** (R2 → `fireplace-backups` → Settings), never the script; the VM's token
+  cannot read it (`GET ?lifecycle` → AccessDenied). Observed 2026-11-17: 33 nightly sets, oldest
+  2026-10-17, so objects go after about 31-32 days. **The VM's token CAN delete** (an S3 `DELETE` of a
+  missing key answered 204, 2026-11-17), so a compromised VM can wipe the offsite history. Fix (owner,
+  dashboard): an R2 **bucket lock rule** on prefix `vps/` with an Age shorter than the lifecycle (e.g. 28
+  days); a lock blocks deletes and overwrites and overrides lifecycle
+  (developers.cloudflare.com/r2/buckets/bucket-locks). Credentials in `~/.config/rclone/rclone.conf`
+  (0600). Cleartext NEVER leaves the VM: no passphrase → upload refused.
 - **Dead-man's switch:** `BACKUP_HEALTHCHECK_URL` (healthchecks.io, ~26h grace) is pinged ONLY when the
   backup AND the offsite verification both succeeded — a silently failing night pages by missing ping
   instead of rotting in `backup.log`.
 - **Offsite (legacy GCS):** `BACKUP_GCS_BUCKET=gs://…` (gsutil/gcloud) still works but was built for the
-  GCP-era VM; on OVH it would need a service-account key on disk. Prefer rclone/B2.
+  GCP-era VM; on OVH it would need a service-account key on disk. Prefer rclone (R2).
 - **E2E-safe:** dumps hold only ciphertext messages + PUBLIC keys + metadata + bcrypt hashes;
   Signal private keys are device-only, never in the DB — a dump cannot decrypt messages. Still
   sensitive (metadata + hashes) → keep private / encrypt / lock down the bucket.
