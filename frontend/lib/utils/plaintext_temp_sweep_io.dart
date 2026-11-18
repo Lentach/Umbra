@@ -13,6 +13,12 @@ const String _transcodeAudioPrefix = 'lc_audio_';
 /// `cacheDir/file_picker/<ms>/<name>` and never deletes it.
 const String _filePickerDir = 'file_picker';
 
+/// `RecordingController` records a voice note to `tempDir/voice_<ms>.m4a`.
+/// A failed send keeps it for the in-session 'Ponów', which re-reads it; no
+/// stored row survives a restart with a local path (decision 104 keeps a
+/// send only once its attachment is on the box), so at launch it is orphaned.
+final RegExp _voiceRecording = RegExp(r'^voice_\d+\.m4a$');
+
 /// image_picker (Android) copies a gallery pick into
 /// `cacheDir/<random UUID>/<name>`.
 final RegExp _imagePickerDir = RegExp(
@@ -24,8 +30,8 @@ final RegExp _imagePickerDir = RegExp(
 /// process did not get to delete, and the pickers' copies of every file the
 /// user picked. Run once at launch, after `runApp`; never throws.
 ///
-/// Not swept: `voice_*.m4a`, a recording whose send failed — its retry reads
-/// it from there.
+/// Also swept: `voice_*.m4a`, a recording whose send failed in an earlier
+/// process — its retry lived only in that process's memory.
 Future<void> sweepStalePlaintextTempFiles() async {
   final before = DateTime.now();
   try {
@@ -74,7 +80,8 @@ Future<void> sweepPlaintextTempDirs({
       final name = _nameOf(entry);
       if (entry is File &&
           (name.startsWith(videoTempPrefix) ||
-              name.startsWith(_transcodeAudioPrefix))) {
+              name.startsWith(_transcodeAudioPrefix) ||
+              _voiceRecording.hasMatch(name))) {
         await dropIfStale(entry);
       } else if (entry is Directory && name == _filePickerDir) {
         for (final pick in entry.listSync()) {
