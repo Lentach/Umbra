@@ -81,7 +81,7 @@ void main() {
   test("other files in the app's directories are kept", () async {
     put(temp, 'libCachedImageData/a.jpg');
     put(temp, 'thumb_1.jpg');
-    put(temp, 'voice_1763294400000.m4a');
+    put(temp, 'voice_notes.txt');
     put(support, 'fp_content.db');
     put(temp, 'fp_video_41_1763294400000000.mp4');
 
@@ -92,10 +92,23 @@ void main() {
       unorderedEquals([
         'libCachedImageData/a.jpg',
         'thumb_1.jpg',
-        'voice_1763294400000.m4a',
+        'voice_notes.txt',
       ]),
-      reason: 'a failed voice send is retried from its recording',
     );
     expect(tree(support), ['fp_content.db']);
+  });
+
+  test('a recording left by a failed voice send of an earlier launch is deleted',
+      () async {
+    put(temp, 'voice_1763294400000.m4a');
+    put(temp, 'voice_1763294400001.m4a', modified: later);
+
+    await sweep();
+
+    expect(
+      tree(temp),
+      ['voice_1763294400001.m4a'],
+      reason: 'one recorded after the sweep began is never touched',
+    );
   });
 }

@@ -39,6 +39,7 @@ import '../services/encryption/prekey_identity.dart'
 import '../services/encryption_service.dart';
 import '../services/incoming_message_sound_service.dart';
 import '../services/link_preview_service.dart';
+import '../services/link_preview_thumb.dart';
 import '../services/plaintext_record_codec.dart';
 import '../services/profile/profile_photo_codec.dart';
 import '../services/profile/profile_photos.dart';

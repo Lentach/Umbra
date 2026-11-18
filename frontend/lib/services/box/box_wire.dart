@@ -172,12 +172,21 @@ class BoxMediaRef {
     required this.id,
     required this.bucket,
     required this.expiresAt,
+    this.deleteSecret,
   });
 
   final Uint8List id;
   final String bucket;
   final DateTime expiresAt;
+
+  /// The secret this upload registered the hash of (plan D3), made by the
+  /// uploader and never sent anywhere but `DELETE /box/media/<id>`; null for
+  /// a ref that carries none (an older box, a test double).
+  final Uint8List? deleteSecret;
 }
+
+/// The byte length of a media delete secret (and of its SHA-256 hash).
+const int kBoxMediaDeleteSecretBytes = 32;
 
 /// The ONE spelling the box accepts: base64url, no padding.
 String boxB64(List<int> bytes) => base64Url.encode(bytes).replaceAll('=', '');

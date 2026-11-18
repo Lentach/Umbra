@@ -777,6 +777,9 @@ extension MessagingSend on MessagingProvider {
             // Preview is for the link as written: restore the full URL so
             // the preview-card tap keeps the fragment (note key).
             if (linkPreview != null) linkPreview['url'] = firstUrl;
+            if (linkPreview != null) {
+              linkPreview = await LinkPreviewThumb.fromBackend(linkPreview);
+            }
           } else {
             linkPreview = await LinkPreviewService.fetchPreview(content);
           }

@@ -130,6 +130,10 @@ class SendOutbox implements BoxOutbox {
   Future<int?> nextLocalId() async => _next++;
 
   @override
+  Future<BoxResult<void>> deleteMedia(Uint8List id, Uint8List secret) async =>
+      const BoxOk(null);
+
+  @override
   Future<BoxResult<BoxMediaRef>> uploadMedia(
     ContactOutbound to,
     Uint8List framed,

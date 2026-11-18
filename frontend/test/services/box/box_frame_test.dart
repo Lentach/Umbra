@@ -169,7 +169,7 @@ void main() {
           linkPreview: {
             'url': 'https://example.com/${'a' * 200}',
             'title': '標題' * 50,
-            'imageUrl': 'https://example.com/${'i' * 200}.png',
+            'img': 'I' * 200,
           },
           senderListInfo: {
             'ownVersion': 12,
@@ -227,7 +227,7 @@ void main() {
         linkPreview: {
           'url': 'https://example.com/${'a' * 200}',
           'title': '標題' * 50,
-          'imageUrl': 'https://example.com/${'i' * 200}.png',
+          'img': 'I' * 200,
         },
       );
       expect(built.linkPreview, isNull, reason: 'the preview went');

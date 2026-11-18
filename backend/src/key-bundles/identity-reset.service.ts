@@ -108,7 +108,7 @@ export const RECOVERY_ARGON2_OPTIONS: argon2.HashOptions = {
  * identifier at `/auth/recover`, or a known account with no phrase enrolled —
  * so neither answers faster than a wrong phrase would ((lxxxii) clause 2:
  * the door is unauthenticated, and response time must not enumerate who
- * exists or who enrolled). Login's `TIMING_SAFE_DUMMY_HASH` is the bcrypt
+ * exists or who enrolled). Login's `TIMING_SAFE_DUMMY_PASSWORD_HASH` is the
  * precedent.
  */
 export const TIMING_SAFE_DUMMY_VERIFIER =

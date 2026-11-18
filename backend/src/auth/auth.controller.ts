@@ -1,4 +1,13 @@
-import { Controller, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Body,
+  HttpCode,
+  HttpStatus,
+  Req,
+} from '@nestjs/common';
+import type { Request } from 'express';
+import { proxiedClientIp } from '../common/client-ip';
 import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
@@ -22,8 +31,10 @@ export class AuthController {
   // Rate limit: 30 requests per 15 minutes per IP (shared-NAT tolerant; blocks credential stuffing)
   @Throttle({ default: { limit: 30, ttl: 900000 } })
   @Post('login')
-  login(@Body() dto: LoginDto) {
-    return this.authService.login(dto.identifier, dto.password);
+  login(@Body() dto: LoginDto, @Req() req: Request) {
+    // Same client identity the throttlers use (X-Real-IP, then the socket).
+    const clientIp = proxiedClientIp(req.headers) ?? req.ip;
+    return this.authService.login(dto.identifier, dto.password, clientIp);
   }
 
   /**

@@ -1,10 +1,12 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../constants/app_constants.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/message_model.dart';
 import '../../providers/settings_provider.dart';
-import '../../services/link_preview_service.dart';
+import '../../services/link_preview_thumb.dart';
 import '../../theme/rpg_theme.dart';
 import '../../utils/anti_quantum_note_link.dart';
 import '../../utils/jumbo_emoji.dart';
@@ -49,9 +51,22 @@ class TextMessageContent extends StatefulWidget {
 class _TextMessageContentState extends State<TextMessageContent> {
   bool _expanded = false;
 
+  /// The thumbnail's bytes, decoded once per `linkPreviewImage` string so the
+  /// same [Uint8List] reaches `Image.memory` on every build (image-cache hit).
+  Uint8List? _previewImage;
+
+  @override
+  void initState() {
+    super.initState();
+    _previewImage = LinkPreviewThumb.decode(widget.message.linkPreviewImage);
+  }
+
   @override
   void didUpdateWidget(covariant TextMessageContent oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.message.linkPreviewImage != widget.message.linkPreviewImage) {
+      _previewImage = LinkPreviewThumb.decode(widget.message.linkPreviewImage);
+    }
     // A recycled bubble (list virtualization) now shows a different message:
     // drop any expansion so it does not leak onto an unrelated message.
     if (oldWidget.message.id != widget.message.id) _expanded = false;
@@ -164,6 +179,7 @@ class _TextMessageContentState extends State<TextMessageContent> {
 
   Widget _buildLinkPreviewCard(BuildContext context) {
     final message = widget.message;
+    final previewImage = _previewImage;
     final cardBg = widget.isDark
         ? Colors.white.withValues(alpha: 0.06)
         : Colors.black.withValues(alpha: 0.04);
@@ -188,16 +204,17 @@ class _TextMessageContentState extends State<TextMessageContent> {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (message.linkPreviewImageUrl != null &&
-                  LinkPreviewService.isSafeImageUrl(
-                    message.linkPreviewImageUrl,
-                    message.linkPreviewUrl,
-                  ))
-                Image.network(
-                  message.linkPreviewImageUrl!,
+              // Only the sender-made thumbnail's bytes (C1): this widget never
+              // loads an image from the network, so a link cannot learn who
+              // read it. A legacy `imageUrl` record is never rendered.
+              if (previewImage != null)
+                Image.memory(
+                  previewImage,
                   width: double.infinity,
                   height: 120,
                   fit: BoxFit.cover,
+                  cacheWidth: 640,
+                  gaplessPlayback: true,
                   errorBuilder: (_, err, st) => const SizedBox.shrink(),
                 ),
               Padding(

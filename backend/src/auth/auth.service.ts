@@ -6,23 +6,18 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import * as bcrypt from 'bcrypt';
 import * as argon2 from 'argon2';
 import { User } from '../users/user.entity';
 import { UsersService } from '../users/users.service';
 import { RefreshTokensService } from './refresh-tokens.service';
+import { LoginBackoffService } from './login-backoff.service';
+import { passwordFormatOf, verifyDummyPasswords } from './password-hash';
 import { DevicesService } from '../key-bundles/devices.service';
 import {
   IdentityResetService,
   TIMING_SAFE_DUMMY_VERIFIER,
 } from '../key-bundles/identity-reset.service';
 import { DEFAULT_DEVICE_ID } from '../key-bundles/key-bundles.service';
-
-// Precomputed bcrypt hash used for a constant-time comparison when the
-// identifier matches no user, so "no such user" takes the same time as a wrong
-// password (defeats timing-based user enumeration). The value is arbitrary.
-const TIMING_SAFE_DUMMY_HASH =
-  '$2b$10$pwiFDkB3zcAu0PKQqI13b.fGqVMlVlB8aCB22BL/qyvTghAEiP2N2';
 
 // `/auth/recover`'s timing guard lives with the verifier it mirrors:
 // `TIMING_SAFE_DUMMY_VERIFIER` in identity-reset.service.
@@ -37,6 +32,7 @@ export class AuthService {
     private refreshTokensService: RefreshTokensService,
     private devicesService: DevicesService,
     private identityResetService: IdentityResetService,
+    private loginBackoff: LoginBackoffService,
   ) {}
 
   async register(username: string, password: string) {
@@ -45,22 +41,51 @@ export class AuthService {
     return { id: user.id, username: user.username, tag: user.tag };
   }
 
-  async login(identifier: string, password: string) {
+  async login(identifier: string, password: string, clientIp?: string) {
+    const parsed = parseIdentifier(identifier);
     const user = await this.resolveIdentifier(identifier);
-    if (!user) {
-      // Constant-time guard: perform a real bcrypt compare so a missing user
-      // is indistinguishable by timing from a wrong password.
-      await bcrypt.compare(password, TIMING_SAFE_DUMMY_HASH);
-      this.auditLogger.log(`login failed`);
-      throw new UnauthorizedException('Invalid credentials');
+    // Backoff per (NAME, client address) (plan D4). The account part is the
+    // parsed, lower-cased NAME for everyone, resolved or not: keyed on the
+    // resolved id, a locked `alice` would answer 429 to `alice#1234` (real) and
+    // 401 to `alice#1111` (no such tag), which tells valid tags apart. The
+    // attempt is reserved NOW, before any await, so parallel requests cannot
+    // all slip past the check.
+    const key = this.loginBackoff.reserve(
+      parsed ? `name:${parsed.name.toLowerCase()}` : '-',
+      clientIp,
+    );
+
+    try {
+      if (!user) {
+        // Unknown name: pay both formats, so it costs what a wrong password
+        // costs against either kind of stored hash.
+        await verifyDummyPasswords(password, ['bcrypt', 'argon2id']);
+        this.auditLogger.log(`login failed`);
+        throw new UnauthorizedException('Invalid credentials');
+      }
+
+      // Also upgrades a bcrypt hash to Argon2id after a correct password.
+      const passwordValid = await this.usersService.checkPassword(
+        user,
+        password,
+      );
+      if (!passwordValid) {
+        // The real verify paid the row's own format; pay the other one.
+        await verifyDummyPasswords(password, [
+          passwordFormatOf(user.password) === 'bcrypt' ? 'argon2id' : 'bcrypt',
+        ]);
+        this.auditLogger.log(`login failed`);
+        throw new UnauthorizedException('Invalid credentials');
+      }
+    } catch (err) {
+      // The hash gate was full: that is the server's failure, not a guess.
+      if (err instanceof HttpException && err.getStatus() === 503) {
+        this.loginBackoff.refund(key);
+      }
+      throw err;
     }
 
-    const passwordValid = await bcrypt.compare(password, user.password);
-    if (!passwordValid) {
-      this.auditLogger.log(`login failed`);
-      throw new UnauthorizedException('Invalid credentials');
-    }
-
+    this.loginBackoff.succeed(key);
     this.auditLogger.log(`login success`);
     return this.issueSession(user);
   }
@@ -85,7 +110,7 @@ export class AuthService {
   ) {
     const user = await this.resolveIdentifier(identifier);
     if (!user) {
-      // Constant-time guard, as login's bcrypt twin: no per-account counter
+      // Constant-time guard, as login's twin: no per-account counter
       // exists to spend, but the verify itself must cost the same.
       await argon2
         .verify(TIMING_SAFE_DUMMY_VERIFIER, phrase)
@@ -107,6 +132,8 @@ export class AuthService {
     }
 
     const changedAt = await this.usersService.setPassword(user.id, newPassword);
+    // The owner proved themselves by the phrase: forget every client's failures.
+    this.loginBackoff.clearAccount(`name:${user.username.toLowerCase()}`); // log-guard: key
     this.auditLogger.log(`recoverPassword success`);
     // `JwtStrategy` and the socket handshake reject `iat <= passwordChangedAt`
     // in WHOLE SECONDS, and a JWT's `iat` is floored — a token signed in the
@@ -134,12 +161,12 @@ export class AuthService {
    * refusal as a wrong secret. Lookup stays case-insensitive (findByUsername).
    */
   private async resolveIdentifier(identifier: string): Promise<User | null> {
-    if (identifier.includes('#')) {
-      const [u, t] = identifier.split('#');
-      if (!u || !t) return null;
-      return this.usersService.findByUsernameAndTag(u.trim(), t.trim());
+    const parsed = parseIdentifier(identifier);
+    if (!parsed) return null;
+    if (parsed.tag !== undefined) {
+      return this.usersService.findByUsernameAndTag(parsed.name, parsed.tag);
     }
-    const users = await this.usersService.findByUsername(identifier.trim());
+    const users = await this.usersService.findByUsername(parsed.name);
     if (users.length > 1) {
       this.auditLogger.log(`login failed (multiple users)`);
     }
@@ -203,4 +230,16 @@ export class AuthService {
   async logoutRefreshToken(refreshTokenPlain: string): Promise<void> {
     await this.refreshTokensService.revokeByPlain(refreshTokenPlain);
   }
+}
+
+/** `name` or `name#tag`, trimmed; null for a `#` with an empty side. */
+function parseIdentifier(
+  identifier: string,
+): { name: string; tag?: string } | null {
+  if (identifier.includes('#')) {
+    const [u, t] = identifier.split('#');
+    if (!u || !t) return null;
+    return { name: u.trim(), tag: t.trim() };
+  }
+  return { name: identifier.trim() };
 }
