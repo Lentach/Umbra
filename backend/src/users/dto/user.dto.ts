@@ -33,7 +33,7 @@ export class DeleteAccountDto {
 export class VerifyPasswordDto {
   @IsString()
   @MinLength(1)
-  @MaxLength(128) // bcrypt reads 72 bytes; 128 chars as LoginDto
+  @MaxLength(128) // 128 chars as LoginDto
   password: string;
 }
 

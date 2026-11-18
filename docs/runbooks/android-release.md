@@ -461,9 +461,9 @@ diagnosing a "vanishing" message in that thread: it has **disappearing messages 
 - **Sideload updates are offered, never silent:** the `UpdateAvailableBanner` (above) links the new
   APK, and the user downloads it and installs it over the old one (the app does not request
   `REQUEST_INSTALL_PACKAGES`). Play installs get Play's own updates.
-- **Play needs** `flutter build appbundle`, and the signer + 16KB gates must move onto the BUNDLE's
-  output, because `build-android.ps1` only ever inspects an APK; plus the items listed under the
-  2026-11-17 decision above. 16KB + targetSdk are already met.
+- **Play takes an App Bundle:** `.\build-android.ps1 -Bundle` (see "Play App Bundle + PEPK" below)
+  builds it with the same defines and versionCode and runs both gates on the `.aab`. 16KB + targetSdk
+  are already met; the open items are listed under the 2026-11-17 decision above.
 - ⛔ **The signing certificate is a one-way door, and the trigger is a USER INSTALL — not a
   published release.** The old wording tied the deadline to "`gh release list` empty", which under
   the cloud-link decision above is unreachable: there will never be a release, so that test would
@@ -474,17 +474,19 @@ diagnosing a "vanishing" message in that thread: it has **disappearing messages 
   **Status 2026-11-17: Play is decided, so PEPK adoption of THIS keystore is REQUIRED.** The owner's
   phone has run builds signed with this key since 0.2.43, and every sideloaded install since 0.2.51
   has it too; none of them can be asked to uninstall. Rotation later does not repair them.
-- **Foreground-service declaration (Play only, and avoidable).** `light_compressor_v2-1.9.1`'s
+- **Foreground-service declaration: AVOIDED, stripped 2026-11-17.** `light_compressor_v2-1.9.1`'s
   library manifest merges `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_DATA_SYNC` and a
-  `CompressionForegroundService` (`foregroundServiceType="dataSync"`) into our APK
-  unconditionally. At targetSdk 34+ Play then requires an App-content declaration for that type:
-  use-case description, user impact, **and a link to a demo video showing the user steps that
-  trigger it** — a mismatch is a rejection. **We never start that service**: `transcodeVideoToFit`
-  (`frontend/lib/utils/video_transcode_io.dart:37-56`) passes no `BackgroundConfig`, which is the
-  plugin's opt-in for background execution. So the honest options are (a) strip the service and
-  both permissions with `tools:node="remove"` in our manifest and re-verify against the MERGED
-  manifest, or (b) file a declaration plus a video for a service that cannot run. Prefer (a).
-  Unrelated but recorded from the same README: that plugin needs no R8/ProGuard keep rules.
+  `CompressionForegroundService` (`foregroundServiceType="dataSync"`) unconditionally. At targetSdk
+  34+ Play would then require an App-content declaration with a demo video. **We never start that
+  service.** `transcodeVideoToFit` (`frontend/lib/utils/video_transcode_io.dart`) passes no
+  `BackgroundConfig`, and the plugin calls `CompressionForegroundService.start` only when one is
+  passed (`LightCompressorPlugin.kt`, `if (background != null)`). The compression itself runs on the
+  plugin's `Dispatchers.IO` coroutine (`VideoCompressor.kt`). So `frontend/android/app/src/main/AndroidManifest.xml`
+  strips the service and both permissions with `tools:node="remove"`. Verified in the merged debug
+  manifest: before, 12 `uses-permission` entries + the service; after, 10 + no service.
+  `CompressionCancelReceiver` (not exported, needs no permission) stays. **Passing a
+  `BackgroundConfig` later requires deleting those removals AND filing the Play FGS declaration.**
+  That plugin needs no R8/ProGuard keep rules (its README).
 - **The permission set Play sees is the MERGED one — MEASURED 2026-09-13, not inferred.** Generate
   it with `cd frontend/android && sh ./gradlew :app:processReleaseManifest` (~2.5 min, needs NO
   keystore — the signing gate fires at `packageRelease`), then read
@@ -493,10 +495,90 @@ diagnosing a "vanishing" message in that thread: it has **disappearing messages 
   `RECORD_AUDIO` (record_android), `VIBRATE` (flutter_local_notifications), `WAKE_LOCK` +
   `ACCESS_NETWORK_STATE` (firebase_messaging), `FOREGROUND_SERVICE` +
   `FOREGROUND_SERVICE_DATA_SYNC` (light_compressor_v2, with its
-  `foregroundServiceType="dataSync"` service at line 237). `BIND_JOB_SERVICE`/`DUMP` appear only
+  `foregroundServiceType="dataSync"` service at line 237). **Since 2026-11-17 the last two and
+  the service are stripped** (bullet above), so a re-measure shows seven of these nine. `BIND_JOB_SERVICE`/`DUMP` appear only
   as `android:permission` attributes on Google services — they are NOT requested permissions.
   **No `READ_MEDIA_*`/`READ_EXTERNAL_STORAGE`** (image_picker/file_picker declare none), so Play's
   Photo and Video Permissions policy does not apply. Re-measure after any plugin bump.
+
+## Play App Bundle + PEPK (Console steps are OWNER-RUN)
+
+### Build the bundle (PC, needs the release keystore like the APK build)
+
+```powershell
+# repo root, on the PC (never the VM)
+.\build-android.ps1 -Bundle            # add -SkipClean for a quick rebuild
+```
+
+- Output: `frontend/build/app/outputs/bundle/release/app-release.aab`, same `BASE_URL` /
+  `GIT_COMMIT` / `BUILD_TIME` / `GIPHY_API_KEY` defines and versionCode derivation as the APK.
+- **Signer pin (both APK and bundle):** `-ExpectedSignerSha256` defaults to the record-of-truth
+  `8E:9A:6B:F3:…:5C:DF:40:5D` (colons/case ignored). The APK gate parses apksigner's
+  `certificate SHA-256 digest`; the bundle gate parses `keytool -printcert -jarfile` (`SHA256:`,
+  from the same JDK as jarsigner). Both FAIL unless there is exactly one signer and it equals the
+  pin. Override the parameter only to upload with a separate Play upload key; the sideload APK must
+  keep the default.
+- **Signer gate:** a `.aab` carries only a JAR (v1) signature, which `apksigner` does not verify,
+  so the script runs `jarsigner -verify -verbose -certs` (JAVA_HOME, else Android Studio's
+  `jbr\bin`). It fails on a non-zero exit, a missing `jar verified.`, any "unsigned entries", or a
+  `CN=Android Debug` signer. NOT `-strict`: a self-signed cert (every Android key, ours included)
+  fails its PKIX chain check with exit 4, so `-strict` would always fail. The "signed in JarFile
+  but is not signed in JarInputStream" lines are normal for a `.aab`, because `META-INF/MANIFEST.MF`
+  is not its first entry. Gradle's `packageReleaseBundle` gate already refuses to build without `key.properties`.
+- **16KB gate:** `scripts/verify-apk-16k.mjs` also reads the bundle's `base/lib/<abi>/*.so`
+  (falsified by the `aab-*` cases in `verify-apk-16k.selftest.mjs`).
+- The bundle and the sideload APK are SEPARATE runs of the script. Each run cleans first unless you
+  pass `-SkipClean`, so copy the first artifact out before the second run.
+- Proved 2026-11-17 with no release keystore in reach, running the script's gate block on three
+  bundles. The DEBUG bundle (`flutter build appbundle --debug`) passed the 16KB gate (15/15 64-bit
+  libs) and was REJECTED as `CN=Android Debug`. A copy with `META-INF/` stripped was REJECTED
+  (`jar is unsigned.`). The same copy re-signed with a throwaway non-debug key PASSED both gates.
+  The first release-signed `-Bundle` run is still pending; record its signer line here.
+
+### Adopt THIS keystore through PEPK (outline; Console = owner only)
+
+Why this is mandatory: see the ⛔ one-way-door bullet under "Distribution". Google's default for a
+new app is a Google-GENERATED signing key, and every existing sideload install would then refuse
+Play updates.
+
+1. **Owner, Play Console:** create the app (package `com.fireplace.app`). While preparing the FIRST
+   release, under **App signing**, choose **Change app signing key**, then one of the **Export and
+   upload** options (the "Java keystore" one, for our `.jks`). Do this BEFORE anything rolls out:
+   Play Console Help 9842756 says the key can be changed only "before a release is rolled out in the
+   open testing or production track". After that it can only be upgraded, which does not change the
+   key older installs verify against. **Quantum-ready default:** the same page says a new app "will
+   be automatically enrolled in quantum-ready, hybrid signing with Google-generated keys" (a
+   classical RSA 4096 key + an ML-DSA-65 key, plus "a separate classical key" for Android 16 and
+   lower: three Google keys). Replacing that default with our key is the whole point of this step.
+   Before leaving the page, EVERY app-signing fingerprint it lists must equal the release key
+   (`8e9a6b…5cdf405d`), and no hybrid, PQC or ML-DSA key may be listed. If one is, STOP: roll
+   nothing out and ask before going further.
+2. **Owner, Console:** the option page offers the PEPK tool download and shows an encryption public
+   key plus a ready-made PEPK command line. Use THAT command; it is specific to the account. Never
+   paste the command, the encryption key or the output file into the repo or a chat.
+3. **Owner, PC:** run PEPK against `frontend/android/keystore/fireplace-release.jks`, alias
+   `fireplace`. It prompts for the store/key password (the same value, see setup above). It writes
+   an encrypted ZIP holding the private key. Delete that ZIP after the upload.
+4. **Owner, Console:** upload the encrypted file. Then, on **Manage Play app signing** > **App
+   signing key**, EVERY SHA-256 listed MUST equal the record-of-truth fingerprint above
+   (`8e9a6b…5cdf405d`), and NO quantum-ready/hybrid/ML-DSA key may be listed. Help 9842756 says
+   hybrid apps show "fingerprints for three keys". Anything else (a second fingerprint, a PQC key, a
+   differing hash) → STOP before any rollout.
+5. **Upload key (recommended by Google, owner decision):** Help 9842756 recommends a SEPARATE upload
+   key, registered in the Console. A lost upload key can be reset; the app signing key cannot. Until
+   one exists, `fireplace-release.jks` signs both the bundle and the sideload APK. The sideload APK
+   must ALWAYS be signed with `fireplace-release.jks`, never the upload key.
+6. **Owner, Console:** upload `app-release.aab` to the closed-test track. Then, from the app bundle
+   explorer, compare the delivered APK's signer with `apksigner verify --print-certs` (same SHA-256).
+
+Sources read 2026-11-17 (Help 9842756 re-read the same day for the quantum-ready default): Play Console Help "Use Play App Signing"
+(https://support.google.com/googleplay/android-developer/answer/9842756). Today it names the page
+**Protected with Play > Play Store protection > Manage Play app signing**, with **Change key** and
+"Provide a copy of your app signing key"; for existing apps it says "Download the PEPK tool". Also
+Android Developers "Sign your app" (https://developer.android.com/studio/publish/app-signing):
+**Change app signing key** and "one of the **Export and upload** options". The two pages word it
+differently, so follow whatever the live Console says. The labels above are quotes from those pages,
+not from a Console session; no Play account exists yet.
 
 ## User wording (APK) — rewritten 2026-09-13: LINK THE DEVICE, never a new account
 
