@@ -18,6 +18,17 @@ interface AuthenticatedSocketData {
   user?: { id: number; deviceId?: number };
 }
 
+/**
+ * Plan B5: how many one-time pre-keys searches may spend per TARGET device per
+ * window, whoever searches. Past it the answer carries the signed pre-key
+ * alone (X3DH without the OTP, what an exhausted pool already serves), so a
+ * handle search can no longer drain a pool. Per process, like the gateway
+ * throttles; bounded by the device map cap.
+ */
+export const SEARCH_OTP_BUDGET = 5;
+export const SEARCH_OTP_WINDOW_MS = 60 * 60 * 1000;
+const SEARCH_OTP_MAP_MAX_ENTRIES = 10000;
+
 function socketUser(client: Socket): AuthenticatedSocketData['user'] {
   // socket.io types `Socket.data` as `any`; the gateway is its only writer.
   const data = client.data as AuthenticatedSocketData;
@@ -30,7 +41,8 @@ function socketUser(client: Socket): AuthenticatedSocketData['user'] {
  * While `BOX_ENABLED=true`, `searchUsers` answers any other account's handle,
  * stranger or friend alike, with everything a first contact needs in ONE
  * identity call: per addressable device a bundle (its next one-time pre-key
- * spent), the request queue that device published, and the account's
+ * spent, at most [SEARCH_OTP_BUDGET] per device per window — past it the
+ * bundle carries no one-time pre-key, plan B5), the request queue that device published, and the account's
  * DAK-signed list so the searcher verifies the device set instead of taking
  * the server's word. With the box off it answers with no device and no list,
  * and claims nothing. Residual
@@ -41,6 +53,8 @@ function socketUser(client: Socket): AuthenticatedSocketData['user'] {
 @Injectable()
 export class ChatSearchService {
   private readonly logger = new Logger(ChatSearchService.name);
+  /** `userId:deviceId` → times a search spent one of its OTPs, in window. */
+  private readonly searchOtpSpends = new Map<string, number[]>();
 
   constructor(
     private readonly usersService: UsersService,
@@ -119,11 +133,22 @@ export class ChatSearchService {
     for (const address of await this.devicesService.firstContactDevices(
       userId,
     )) {
-      const bundle = await this.chatKeyExchangeService.claimBundle(
-        userId,
-        address.deviceId,
-        server,
-      );
+      const slot = this.takeSearchOtp(userId, address.deviceId);
+      let bundle: PreKeyBundleResponse | null = null;
+      try {
+        bundle = await this.chatKeyExchangeService.claimBundle(
+          userId,
+          address.deviceId,
+          server,
+          slot !== null,
+        );
+      } finally {
+        // A slot that spent nothing (device gone, empty pool, a throw) is
+        // given back, so an empty pool does not burn the hour's budget.
+        if (slot !== null && bundle?.oneTimePreKeyId == null) {
+          this.refundSearchOtp(userId, address.deviceId, slot);
+        }
+      }
       // Gone between the listing and the claim (a revoke or reset racing the
       // search): a device with no bundle cannot be reached, so it is not served.
       if (!bundle) continue;
@@ -140,6 +165,51 @@ export class ChatSearchService {
         await this.deviceListService.getAuthorization(userId),
       ),
     };
+  }
+
+  /**
+   * Takes one slot of [userId]'s device [deviceId] OTP budget: returns the
+   * slot's timestamp while fewer than [SEARCH_OTP_BUDGET] searches spent one in
+   * the last [SEARCH_OTP_WINDOW_MS], else null. Keyed by target, never by
+   * caller, so many callers share one budget (plan B5).
+   *
+   * Fail-closed: a target with no live entry while the map is full (after
+   * sweeping expired entries) gets null. Nothing is ever evicted to make room,
+   * so the bound can only withhold OTPs, never hand a drained target a fresh
+   * budget.
+   */
+  private takeSearchOtp(userId: number, deviceId: number): number | null {
+    const now = Date.now();
+    const key = `${userId}:${deviceId}`; // log-guard: key
+    const existing = this.searchOtpSpends.get(key);
+    const recent = (existing ?? []).filter(
+      (t) => now - t < SEARCH_OTP_WINDOW_MS,
+    );
+    if (recent.length >= SEARCH_OTP_BUDGET) {
+      this.searchOtpSpends.set(key, recent);
+      return null;
+    }
+    if (!existing && this.searchOtpSpends.size >= SEARCH_OTP_MAP_MAX_ENTRIES) {
+      for (const [k, times] of this.searchOtpSpends) {
+        if (times.every((t) => now - t >= SEARCH_OTP_WINDOW_MS)) {
+          this.searchOtpSpends.delete(k);
+        }
+      }
+      if (this.searchOtpSpends.size >= SEARCH_OTP_MAP_MAX_ENTRIES) return null;
+    }
+    recent.push(now);
+    this.searchOtpSpends.set(key, recent);
+    return now;
+  }
+
+  /** Gives back a slot [takeSearchOtp] handed out that spent no pre-key. */
+  private refundSearchOtp(userId: number, deviceId: number, slot: number) {
+    const key = `${userId}:${deviceId}`; // log-guard: key
+    const times = this.searchOtpSpends.get(key);
+    if (!times) return;
+    const i = times.indexOf(slot);
+    if (i >= 0) times.splice(i, 1);
+    if (times.length === 0) this.searchOtpSpends.delete(key);
   }
 
   /**
