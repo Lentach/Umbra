@@ -658,6 +658,15 @@ class BoxSession
   }
 
   @override
+  Future<BoxResult<void>> deleteMedia(Uint8List id, Uint8List secret) async {
+    if (id.length != kBoxMediaIdBytes ||
+        secret.length != kBoxMediaDeleteSecretBytes) {
+      return const BoxRefused(BoxCode.invalidPayload);
+    }
+    return _box.deleteMedia(id, secret);
+  }
+
+  @override
   Future<SiblingWrite> takeSiblingHandoff(
     int deviceId, {
     required String sid,

@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:clock/clock.dart';
+import 'package:crypto/crypto.dart' show sha256;
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:http/http.dart' as http;
 import 'package:socket_io_client/socket_io_client.dart' as io;
@@ -858,6 +860,12 @@ class BoxClient {
     if (!kBoxMediaLadder.contains(body.length)) {
       throw ArgumentError.value(body.length, 'body', 'not a ladder size');
     }
+    // Plan D3: only the hash leaves the device now; the secret itself is
+    // presented once, by the delete.
+    final rng = Random.secure();
+    final secret = Uint8List.fromList(
+      List<int>.generate(kBoxMediaDeleteSecretBytes, (_) => rng.nextInt(256)),
+    );
     final http.Response res;
     try {
       res = await _http
@@ -865,6 +873,7 @@ class BoxClient {
             Uri.parse('$_baseUrl/box/media'),
             headers: {
               'Box-Sid': boxB64(sid),
+              'Box-Delete-Hash': boxB64(sha256.convert(secret).bytes),
               'Content-Type': 'application/octet-stream',
             },
             body: body,
@@ -883,7 +892,14 @@ class BoxClient {
       if (id == null || bucket is! String || expiresAt == null) {
         return const BoxUnknown(BoxUnknownReason.malformed);
       }
-      return BoxOk(BoxMediaRef(id: id, bucket: bucket, expiresAt: expiresAt));
+      return BoxOk(
+        BoxMediaRef(
+          id: id,
+          bucket: bucket,
+          expiresAt: expiresAt,
+          deleteSecret: secret,
+        ),
+      );
     }
     return _httpRefusal(res);
   }
@@ -903,6 +919,31 @@ class BoxClient {
       return const BoxUnknown(BoxUnknownReason.offline);
     }
     if (res.statusCode == 200) return BoxOk(res.bodyBytes);
+    if (res.statusCode == 404) return const BoxRefused(BoxCode.notFound);
+    return _httpRefusal(res);
+  }
+
+  /// Deletes media [id] with the [secret] its upload registered (plan D3):
+  /// ok once the box removed it; [BoxCode.notFound] when it is gone already,
+  /// was never ours to delete, or the secret is wrong (the box does not say
+  /// which).
+  Future<BoxResult<void>> deleteMedia(Uint8List id, Uint8List secret) async {
+    _requireLength(id, kBoxMediaIdBytes, 'id');
+    _requireLength(secret, kBoxMediaDeleteSecretBytes, 'secret');
+    final http.Response res;
+    try {
+      res = await _http
+          .delete(
+            Uri.parse('$_baseUrl/box/media/${boxB64(id)}'),
+            headers: {'Box-Delete-Secret': boxB64(secret)},
+          )
+          .timeout(_mediaTimeout);
+    } on TimeoutException {
+      return const BoxUnknown(BoxUnknownReason.timeout);
+    } on Object {
+      return const BoxUnknown(BoxUnknownReason.offline);
+    }
+    if (res.statusCode == 204) return const BoxOk(null);
     if (res.statusCode == 404) return const BoxRefused(BoxCode.notFound);
     return _httpRefusal(res);
   }

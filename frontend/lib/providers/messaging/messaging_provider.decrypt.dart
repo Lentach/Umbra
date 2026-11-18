@@ -214,16 +214,6 @@ extension MessagingDecrypt on MessagingProvider {
       parsed.senderListInfo,
       boxDevice: msg.originDeviceId ?? 1,
     );
-    // SSRF: validate imageUrl before storing
-    final safeImageUrl =
-        parsed.linkPreviewImageUrl != null &&
-            parsed.linkPreviewUrl != null &&
-            LinkPreviewService.isSafeImageUrl(
-              parsed.linkPreviewImageUrl,
-              parsed.linkPreviewUrl,
-            )
-        ? parsed.linkPreviewImageUrl
-        : null;
     return msg.copyWith(
       content: parsed.content,
       messageType: _parseMessageTypeString(parsed.messageType),
@@ -236,7 +226,9 @@ extension MessagingDecrypt on MessagingProvider {
       mediaThumbHash: parsed.mediaThumbHash,
       linkPreviewUrl: parsed.linkPreviewUrl,
       linkPreviewTitle: parsed.linkPreviewTitle,
-      linkPreviewImageUrl: safeImageUrl,
+      // The sender's thumbnail (C1): peer data, so an invalid one drops
+      // only the image. A legacy `imageUrl` is never read.
+      linkPreviewImage: LinkPreviewThumb.validated(parsed.linkPreviewImage),
       // The sender's wire id (PR2.1). A row that already has one keeps
       // it: an edit re-decrypts through here with a peer-built envelope.
       wireId: msg.wireId ?? parsed.msgId,
@@ -265,16 +257,6 @@ extension MessagingDecrypt on MessagingProvider {
     if (!hasText && !hasMedia && decrypted.messageType == MessageType.text) {
       return;
     }
-    // Validate linkPreviewImageUrl before persist (SSRF defense in depth)
-    final safeImageUrl =
-        decrypted.linkPreviewImageUrl != null &&
-            decrypted.linkPreviewUrl != null &&
-            LinkPreviewService.isSafeImageUrl(
-              decrypted.linkPreviewImageUrl,
-              decrypted.linkPreviewUrl,
-            )
-        ? decrypted.linkPreviewImageUrl
-        : null;
     final ttl = decrypted.disappearAfterSeconds;
     final expiresAt = decrypted.expiresAt;
     final data = <String, dynamic>{
@@ -316,9 +298,13 @@ extension MessagingDecrypt on MessagingProvider {
       if (decrypted.linkPreviewTitle != null)
         'linkPreviewTitle': decrypted.linkPreviewTitle!,
     };
-    if (safeImageUrl != null) {
-      data['linkPreviewImageUrl'] = safeImageUrl;
-    }
+    // Web keeps its records in localStorage (~5 MB, shared with the Signal
+    // sessions): a ~11-15K-char thumbnail per record would exhaust it and
+    // break session writes. On web the thumbnail lives in memory only.
+    final thumb = kIsWeb
+        ? null
+        : LinkPreviewThumb.validated(decrypted.linkPreviewImage);
+    if (thumb != null) data['linkPreviewImage'] = thumb;
     try {
       await _encryptionProvider?.saveDecryptedContent(
         decrypted.id,
@@ -419,23 +405,15 @@ extension MessagingDecrypt on MessagingProvider {
 
   /// Rebuild [msg] from a persisted plaintext [payload].
   ///
-  /// The link-preview image is re-validated so a payload written by an older
-  /// build cannot introduce an unsafe URL. Note this gates what the payload can
-  /// ADD: `copyWith` is null-preserving, so a failed check falls back to
-  /// `msg.linkPreviewImageUrl` rather than clearing it.
+  /// The link-preview thumbnail is re-validated so a payload cannot
+  /// introduce bytes the receive path would have refused. A legacy
+  /// `linkPreviewImageUrl` key is never read. `copyWith` is
+  /// null-preserving, so a failed check falls back to `msg.linkPreviewImage`.
   MessageModel _restoreFromPersistedPayload(
     MessageModel msg,
     Map<String, dynamic> payload,
   ) {
     final content = payload['content'] as String? ?? '';
-    final imageUrl = payload['linkPreviewImageUrl'] as String?;
-    final pageUrl = payload['linkPreviewUrl'] as String?;
-    final validImage =
-        imageUrl != null &&
-            pageUrl != null &&
-            LinkPreviewService.isSafeImageUrl(imageUrl, pageUrl)
-        ? imageUrl
-        : null;
     final restoredType = _parseMessageTypeString(
       payload['messageType'] as String?,
     );
@@ -459,7 +437,9 @@ extension MessagingDecrypt on MessagingProvider {
       mediaThumbHash: payload['mediaThumbHash'] as String?,
       linkPreviewUrl: payload['linkPreviewUrl'] as String?,
       linkPreviewTitle: payload['linkPreviewTitle'] as String?,
-      linkPreviewImageUrl: validImage,
+      linkPreviewImage: LinkPreviewThumb.validated(
+        payload['linkPreviewImage'] as String?,
+      ),
       wireId: payload[PlaintextRecordCodec.wireIdKey] as String?,
       replyTo: quote is Map<String, dynamic>
           ? ReplyToPreview.fromJson(quote)

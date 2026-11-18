@@ -21,7 +21,7 @@ This document describes what the Fireplace (Umbra) server stores and can observe
 | Recovery and identity resets | `recovery_keys`, `identity_reset_requests`, `identity_change_audit` | The recovery-phrase verifier and the reset ceremony | Until account deletion |
 | Box queues | `box_queues` | Random ids (`rid`, `sid`, `nid`) and the queue's auth key; no account. `touchedDay` is the UTC day of the last subscribe and feeds only the 90-day reaper | Deleted by the owner (unfriend, revoke, #234), or reaped after 90 idle days |
 | Undelivered blobs | `box_msgs` | 16 KiB ciphertext waiting for its recipient | Deleted on `ack`, else after 30 days |
-| Box media | `box_media` + disk | Encrypted attachments that fill a size rung (4 KiB … 32 MiB), linked to no queue. Since 0.2.83 the file's length is padded and sealed inside the encryption, so the server sees the rung only; a file from an older sender still shows its exact size (plan A1) | Until `expiresAt` (14 days) |
+| Box media | `box_media` + disk | Encrypted attachments that fill a size rung (4 KiB … 32 MiB), linked to no queue. Since 0.2.83 the file's length is padded and sealed inside the encryption, so the server sees the rung only; a file from an older sender still shows its exact size (plan A1) | Until `expiresAt` (14 days); sooner when the uploading device deletes the message for everyone (plan D3: the box stores only a hash of a secret that device keeps) |
 | Push notifiers | `box_notifiers` | One verified push endpoint (FCM token or Web Push subscription) per inbound queue | Deleted with its queue |
 | Contact backup | `contact_backups` | One opaque encrypted blob per account (see below) | Until account deletion |
 | Secret notes | `secret_notes` | Random token, ciphertext and expiry; no creator id | Deleted on reveal, on expired access, or by the per-minute cleanup |
@@ -39,7 +39,9 @@ This document describes what the Fireplace (Umbra) server stores and can observe
 - **Revoked-device check.** A closed device's revoked check follows a push wake-up by about a second, so the server could link "queue X woke" with "this session refreshed", at most once per device per 24 h (decision 131).
 - **Push providers.** Google (FCM) and Apple/Mozilla/Microsoft (Web Push) see that a device was woken. FCM wake-ups carry only `{type:'new_message'}`; Web Push payloads are encrypted (RFC 8291).
 
-**Known gaps, not accepted, being fixed** (`docs/plans/2026-11-16-security-hardening.md`): on web, link-preview URLs reach the server with the user's session (C4); a receiver loads a link preview's image from the sender's chosen host (C1). The app's own fonts are bundled since 0.2.86 (C3); on web only, Flutter's CanvasKit renderer still downloads its default font (Roboto) from Google's font server on every page load, and Noto/emoji fallback fonts when a glyph is missing.
+**Known gaps, not accepted, being fixed** (`docs/plans/2026-11-16-security-hardening.md`): on web, link-preview URLs reach the server with the user's session (C4).
+
+**Link-preview images (C1, fixed):** the SENDER fetches the page's og:image and puts a small JPEG thumbnail inside the E2E message, so a receiver contacts no third-party host. What remains: the sender's device (native) or our backend (web) still fetches the linked page and image, so that host sees the sender's IP (or the server's). The app's own fonts are bundled since 0.2.86 (C3); on web only, Flutter's CanvasKit renderer still downloads its default font (Roboto) from Google's font server on every page load, and Noto/emoji fallback fonts when a glyph is missing.
 
 **GIF search (Giphy)** is off by default since 0.2.87 (C2, decision 141): only a user who turns it on talks to Giphy, which then sees that user's searches, the previews they load, the GIF they pick and their IP address. A GIF they send travels as encrypted media; its receiver never contacts Giphy.
 

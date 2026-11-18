@@ -108,6 +108,30 @@ void main() {
     expect(picked.keys, ['$prefix${base + 3}', '$prefix${base + 2}']);
   });
 
+  test('catchUpRecords strips the link-preview thumbnail (C1)', () {
+    final record = {
+      'content': 'https://a.example',
+      'linkPreviewTitle': 'T',
+      'linkPreviewImage': 'A' * 10000,
+      PlaintextRecordCodec.createdAtKey:
+          now.subtract(const Duration(minutes: 5)).millisecondsSinceEpoch,
+      PlaintextRecordCodec.wireIdKey: 'wire-1',
+      PlaintextRecordCodec.wireSenderKey: 2,
+    };
+    final picked = catchUpRecords(
+      userId: 1,
+      records: {kFirstLocalMessageId + 1: record},
+      since: now.subtract(const Duration(hours: 1)),
+      now: now,
+      tombstoned: (_) => false,
+      usable: (_, _) => true,
+    );
+    final sent = jsonDecode(picked.values.single) as Map<String, dynamic>;
+    expect(sent, isNot(contains('linkPreviewImage')));
+    expect(sent['linkPreviewTitle'], 'T');
+    expect(record, contains('linkPreviewImage'), reason: 'store untouched');
+  });
+
   group('BoxCatchUpEnvelope', () {
     test('round-trips a request and a response', () {
       final since = DateTime.utc(2026, 10);

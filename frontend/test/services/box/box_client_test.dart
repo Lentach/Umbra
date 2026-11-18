@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart' show sha256;
 import 'package:ed25519_edwards/ed25519_edwards.dart' as ed;
 import 'package:fake_async/fake_async.dart';
 import 'package:fireplace/services/box/box_client.dart';
@@ -653,6 +654,75 @@ void main() {
         expect(ref.bucket, '4k');
       },
     );
+
+    test(
+      'an upload registers only the SHA-256 of a fresh secret, which the ref '
+      'hands back for the delete (plan D3)',
+      () async {
+        late http.Request seen;
+        final box = client(
+          httpClient: MockClient((req) async {
+            seen = req;
+            return http.Response(
+              jsonEncode({
+                'id': boxB64(_bytes(32, 8)),
+                'bucket': '4k',
+                'expiresAt': '2026-10-07T00:00:00.000Z',
+              }),
+              201,
+            );
+          }),
+        );
+        final ref =
+            ((await box.uploadMedia(_bytes(32, 5), _bytes(4096, 1)))
+                    as BoxOk<BoxMediaRef>)
+                .value;
+
+        final secret = ref.deleteSecret!;
+        expect(secret, hasLength(kBoxMediaDeleteSecretBytes));
+        expect(
+          seen.headers['Box-Delete-Hash'],
+          boxB64(sha256.convert(secret).bytes),
+        );
+        // The secret itself is on the wire nowhere in the upload.
+        expect(seen.headers.values, isNot(contains(boxB64(secret))));
+        final second =
+            ((await box.uploadMedia(_bytes(32, 5), _bytes(4096, 1)))
+                    as BoxOk<BoxMediaRef>)
+                .value;
+        expect(second.deleteSecret, isNot(secret));
+      },
+    );
+
+    test('a delete presents the secret in a header, never the URL', () async {
+      late http.Request seen;
+      final box = client(
+        httpClient: MockClient((req) async {
+          seen = req;
+          return http.Response('', 204);
+        }),
+      );
+      final secret = _bytes(32, 9);
+      final result = await box.deleteMedia(_bytes(32, 8), secret);
+
+      expect(result, isA<BoxOk<void>>());
+      expect(seen.method, 'DELETE');
+      expect(
+        seen.url.toString(),
+        'http://box.test/box/media/${boxB64(_bytes(32, 8))}',
+      );
+      expect(seen.headers['Box-Delete-Secret'], boxB64(secret));
+    });
+
+    test('a delete the box does not honor reads not_found', () async {
+      final box = client(
+        httpClient: MockClient((_) async => http.Response('', 404)),
+      );
+      expect(
+        await box.deleteMedia(_bytes(32, 8), _bytes(32, 9)),
+        isA<BoxRefused<void>>().having((r) => r.code, 'code', BoxCode.notFound),
+      );
+    });
 
     test('an off-ladder body is refused before any request', () async {
       final box = client(

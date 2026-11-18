@@ -13,6 +13,13 @@ export const BOX_SID_BYTES = 32;
 export const BOX_NID_BYTES = 16;
 export const BOX_MSG_ID_BYTES = 16;
 export const BOX_MEDIA_ID_BYTES = 32;
+
+/**
+ * Plan D3: a box upload may carry `Box-Delete-Hash`, the SHA-256 of a secret
+ * of this many bytes that only the uploading device holds; `DELETE
+ * /box/media/:id` presents the secret itself in `Box-Delete-Secret`.
+ */
+export const BOX_MEDIA_DELETE_SECRET_BYTES = 32;
 export const BOX_AUTH_PUB_BYTES = 32;
 export const BOX_SIG_BYTES = 64;
 export const BOX_CODE_BYTES = 16;
@@ -129,4 +136,5 @@ export const BOX_LIMITS = {
   registerNotifier: 30,
   mediaUpload: 300,
   mediaDownload: 3000,
+  mediaDelete: 300,
 } as const;

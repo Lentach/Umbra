@@ -65,4 +65,8 @@ abstract interface class BoxOutbox {
   /// The framed body of media [id]; [BoxCode.notFound] once the box dropped
   /// it (14 days, D8) or never held it.
   Future<BoxResult<Uint8List>> downloadMedia(Uint8List id);
+
+  /// Deletes media [id] from the box with the secret its upload returned
+  /// (plan D3, delete for everyone). Nothing is sent for a malformed pair.
+  Future<BoxResult<void>> deleteMedia(Uint8List id, Uint8List secret);
 }
