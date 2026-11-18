@@ -258,7 +258,7 @@ describe('ChatKeyExchangeService', () => {
 
     // expect.any(String) is typed `any`; the unknown hop keeps the ratchet flat.
     const anyIsoString: unknown = expect.any(String);
-    it('identity replacement alarms the account\'s OTHER sessions and nobody else', async () => {
+    it("identity replacement alarms the account's OTHER sessions and nobody else", async () => {
       keyBundlesService.upsertKeyBundle.mockResolvedValue({
         identityChanged: true,
         // A SIGNED rotation, not a reset: the roster teardown must stay out.
@@ -945,7 +945,12 @@ describe('ChatKeyExchangeService', () => {
         mockServer as Server,
       );
 
-      expect(keyBundlesService.fetchPreKeyBundle).toHaveBeenCalledWith(2, 1);
+      // The ≤0.2.88 path still spends an OTP: only searches are budgeted.
+      expect(keyBundlesService.fetchPreKeyBundle).toHaveBeenCalledWith(
+        2,
+        1,
+        true,
+      );
       expect(mockClient.emit).toHaveBeenCalledWith('preKeyBundleResponse', {
         userId: 2,
         deviceId: 1,
@@ -1010,6 +1015,32 @@ describe('ChatKeyExchangeService', () => {
       expect(mockServer.emit).toHaveBeenCalledWith('preKeysLow', {
         remaining: 4,
       });
+    });
+
+    it('claimBundle without spending (an over-budget search, plan B5) neither counts the pool nor signals preKeysLow', async () => {
+      keyBundlesService.fetchPreKeyBundle.mockResolvedValue({
+        ...mockBundle,
+        oneTimePreKeyId: null,
+        oneTimePreKeyPublic: null,
+      });
+      keyBundlesService.countUnusedPreKeys.mockResolvedValue(0);
+
+      const bundle = await service.claimBundle(
+        2,
+        1,
+        mockServer as Server,
+        false,
+      );
+
+      expect(keyBundlesService.fetchPreKeyBundle.mock.calls).toEqual([
+        [2, 1, false],
+      ]);
+      expect(bundle?.oneTimePreKeyPublic).toBeNull();
+      expect(keyBundlesService.countUnusedPreKeys.mock.calls).toHaveLength(0);
+      expect(mockServer.emit).not.toHaveBeenCalledWith(
+        'preKeysLow',
+        expect.anything(),
+      );
     });
 
     it('should not emit preKeysLow when remaining count >= 10', async () => {
