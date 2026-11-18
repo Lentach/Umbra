@@ -82,7 +82,7 @@ Entities in `backend/src/**/*.entity.ts` define the dev schema (TypeORM `synchro
 
 - Avatars are the only account-keyed files, and nothing writes them any more (decision 138): `POST /users/profile-picture` and every `/users/profile-photos/*` route are gone (404), and `searchUsers` answers carry no photo field. `GET /media/avatars/:filename` (public, basename only; types and layout → sec "Media storage") and `GET /users/me` `profilePictureUrl` stay for the one-time client migration; account delete still unlinks the files. Release B deletes the rest.
 - There is no `POST /media/upload`, no `GET /media/msgs/*` and no media sweep. Old `msgs/` files that survive on a volume are read, served and swept by nothing; the deploy that applied `0027` archives and removes them.
-- Box media lives in `MEDIA_DIR/box/` (→ sec "Box media location").
+- Box media lives in `MEDIA_DIR/box/` (→ sec "Box media location"). The uploader can delete its file with `DELETE /box/media/:id` (secret hash in `box_media.deleteHash`, migration `0029`; file first, then row; all failures `404`); the box still imports nothing account-keyed (I1).
 - `LocalStorageService.deleteFile()` has a resolved-path containment check against `MEDIA_DIR`. Keep it even if DTO validation looks strict.
 - `MEDIA_X_ACCEL_REDIRECT=true` only works with nginx internal `/internal/media/`; otherwise media responses can become empty 200s.
 

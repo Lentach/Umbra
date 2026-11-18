@@ -159,6 +159,16 @@ class BoxMediaFetcher {
   Future<void> keep(int userId, Uint8List id, Uint8List ciphertext) =>
       _store.put(userId, id, ciphertext);
 
+  /// Keeps the delete secret of an attachment this device uploaded (plan
+  /// D3), beside its copy.
+  Future<void> keepDeleteSecret(int userId, Uint8List id, Uint8List secret) =>
+      _store.putDeleteSecret(userId, id, secret);
+
+  /// The delete secret kept for [id]; null when this device did not upload
+  /// it (or the upload predates D3). Read it BEFORE [forget], which drops it.
+  Future<Uint8List?> deleteSecretFor(int userId, Uint8List id) =>
+      _store.getDeleteSecret(userId, id);
+
   /// Drops this device's copy of [id] and any background download of it:
   /// the message record, which held its only key, is destroyed.
   Future<void> forget(int userId, Uint8List id) async {

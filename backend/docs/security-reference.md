@@ -9,7 +9,7 @@ Detail relocated from `backend/CLAUDE.md` §8 (media), §10 (link previews and S
 
 ## Box media location (§8)
 
-Box media (`POST /box/media`, capability `GET`) lives in `MEDIA_DIR/box/`; box files expire by `box_media.expiresAt` (14 d, `BoxReaper`).
+Box media (`POST /box/media`, capability `GET`) lives in `MEDIA_DIR/box/`; box files expire by `box_media.expiresAt` (14 d, `BoxReaper`). The uploader can remove one earlier: `DELETE /box/media/:id` with the secret whose SHA-256 the upload stored in `box_media.deleteHash` (plan D3; constant-time compare, file before row, every failure a `404`; no stored hash = reaper-only). The box learns no account from it.
 
 ## SSRF defence layers (§10)
 
