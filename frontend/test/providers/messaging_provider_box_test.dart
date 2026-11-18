@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
@@ -8,14 +9,14 @@ import 'package:fireplace/services/box_hidden_notifier.dart';
 import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/services/contacts/contact_store.dart';
 import 'package:fireplace/services/device_list/device_list_cache.dart';
+import 'package:fireplace/services/encryption/signal_stores.dart';
 import 'package:fireplace/services/encryption_service.dart';
 import 'package:fireplace/utils/e2e_envelope.dart';
 import 'package:fireplace/utils/message_expiry.dart';
 import 'package:fireplace/utils/message_ids.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:libsignal_protocol_dart/libsignal_protocol_dart.dart'
-    show DuplicateMessageException, NoSessionException;
+import 'package:libsignal_protocol_dart/libsignal_protocol_dart.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../support/chat_seed.dart';
@@ -296,6 +297,72 @@ void main() {
       expect(posts, 1);
     });
   });
+
+  test(
+    'B3: a normal-queue PreKey frame under an identity other than the '
+    "friend's pinned one is neither decrypted nor shown "
+    '(docs/plans/2026-11-17-b3-impersonation.md)',
+    () async {
+      // The friend's identity as this device pinned it.
+      final real = generateIdentityKeyPair();
+      await SecureIdentityKeyStore(
+        DualStorage(const FlutterSecureStorage()),
+        'e2e_1_',
+      ).saveIdentity(const SignalProtocolAddress('2', 1), real.getPublicKey());
+
+      // An attacker's first message to us, built from OUR public bundle.
+      final b = (await encryption.store.getKeyBundleForReupload())!;
+      final attacker = InMemorySignalProtocolStore(
+        generateIdentityKeyPair(),
+        generateRegistrationId(false),
+      );
+      const to = SignalProtocolAddress('1', 1);
+      await SessionBuilder.fromSignalStore(attacker, to).processPreKeyBundle(
+        PreKeyBundle(
+          b['registrationId'] as int,
+          1,
+          null,
+          null,
+          b['signedPreKeyId'] as int,
+          Curve.decodePoint(
+            base64Decode(b['signedPreKeyPublic'] as String),
+            0,
+          ),
+          base64Decode(b['signedPreKeySignature'] as String),
+          IdentityKey.fromBytes(
+            base64Decode(b['identityPublicKey'] as String),
+            0,
+          ),
+        ),
+      );
+      final m = await SessionCipher.fromStore(
+        attacker,
+        to,
+      ).encrypt(Uint8List.fromList(utf8.encode('new number, send the code')));
+      expect(m.getType(), CiphertextMessage.prekeyType);
+      final forged = BoxInboxEntry(
+        rid: 'rid',
+        id: 'forged',
+        localId: nextLocal++,
+        peerUserId: 2,
+        senderDeviceId: 1,
+        signal: '${m.getType()}:${base64Encode(m.serialize())}',
+        receivedAt: receivedAt,
+        acked: true,
+      );
+      envelope('new number, send the code');
+
+      await deliver(forged, _peer(2, conversationId: 10));
+
+      expect(
+        encryption.decryptedIds,
+        isEmpty,
+        reason: 'Signal must never see a stranger identity as the friend',
+      );
+      expect(provider.messages.where((x) => x.id == forged.localId), isEmpty);
+    },
+    skip: 'B3 red test: fails until the friend-identity check lands',
+  );
 
   test(
     'a box message for a chat NOT on screen plays no sound: badge only '
