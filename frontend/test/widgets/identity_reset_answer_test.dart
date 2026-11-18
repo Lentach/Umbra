@@ -26,6 +26,7 @@ void main() {
     'invalid_phrase',
     'locked',
     'not_enrolled',
+    'legacy_recovery_key',
     EncryptionProvider.identityResetPhraseTooNewStatus,
   ];
 
@@ -62,6 +63,7 @@ void main() {
     expect(identityResetAnswerIsRefusal('invalid_phrase'), isTrue);
     expect(identityResetAnswerIsRefusal('locked'), isTrue);
     expect(identityResetAnswerIsRefusal('not_enrolled'), isTrue);
+    expect(identityResetAnswerIsRefusal('legacy_recovery_key'), isTrue);
     expect(identityResetAnswerIsRefusal('pending'), isFalse);
     expect(identityResetAnswerIsRefusal('existing'), isFalse);
   });

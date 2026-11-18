@@ -14,6 +14,7 @@ import '../services/encryption/prekey_identity.dart' show FriendFrameIdentity;
 import '../services/encryption_service.dart';
 import '../services/device_link/dak_store.dart';
 import '../services/device_link/identity_backup.dart';
+import '../services/recovery_phrase.dart';
 import '../services/device_link/link_ceremony_controller.dart'
     show EncryptionServiceLinkGateway, linkPlatformLabel;
 import '../services/device_list/device_list_cache.dart';
@@ -2523,6 +2524,8 @@ class EncryptionProvider extends ChangeNotifier {
     if (blob is! String || salt is! String || iterations is! int) {
       return _failRestore(IdentityRestoreFailure.failed, 'backup_shape');
     }
+    // Plan B7: an absent `version` is a pre-B7 server, whose blob is v1.
+    final version = answer['version'] is int ? answer['version'] as int : 1;
     _setRestoreStage(IdentityRestoreStage.unsealing);
     final IdentityBackupPayload payload;
     try {
@@ -2530,6 +2533,7 @@ class EncryptionProvider extends ChangeNotifier {
         blob: blob,
         salt: salt,
         iterations: iterations,
+        version: version,
         phrase: phrase,
       );
     } on IdentityBackupWrongPhrase {
@@ -2991,6 +2995,10 @@ class EncryptionProvider extends ChangeNotifier {
 
   /// Starts the ceremony. A recovery phrase shortens the wait but never
   /// silences the notifications, and never grants an instant replacement.
+  ///
+  /// Plan B7: [recoveryPhrase] stays on this device. The wire carries only
+  /// `recoveryAuth`, the HKDF-derived proof; the key `recoveryPhrase` is never
+  /// emitted by this client.
   void requestIdentityReset({String? recoveryPhrase}) {
     _e2eFlowLog('IDENTITY_RESET_REQUEST', {
       'withPhrase': recoveryPhrase != null,
@@ -3006,7 +3014,7 @@ class EncryptionProvider extends ChangeNotifier {
     });
     _emit?.call('resetIdentityRequest', <String, dynamic>{
       if (recoveryPhrase != null && recoveryPhrase.isNotEmpty)
-        'recoveryPhrase': recoveryPhrase,
+        'recoveryAuth': RecoveryPhrase.deriveAuthSecret(recoveryPhrase),
     });
   }
 
@@ -3031,10 +3039,12 @@ class EncryptionProvider extends ChangeNotifier {
   }
 
   /// Enrolls or replaces the recovery phrase. The phrase is generated on this
-  /// device, shown once, and never stored locally.
+  /// device, shown once, and never stored locally — and since plan B7 never
+  /// sent: the server receives `authSecret` (HKDF of the phrase) to verify
+  /// against, and a backup sealed under a key it cannot derive.
   void setRecoveryKey(String phrase, {SealedIdentityBackup? backup}) {
     _emit?.call('setRecoveryKey', <String, dynamic>{
-      'phrase': phrase,
+      'authSecret': RecoveryPhrase.deriveAuthSecret(phrase),
       // (lxxviii) clause 1: the phrase-sealed identity backup, written with
       // the verifier in one transaction. Absent only on legacy callers.
       if (backup != null) 'backup': backup.toWire(),
@@ -3125,6 +3135,13 @@ class EncryptionProvider extends ChangeNotifier {
   bool? get hasRecoveryPhrase => _hasRecoveryPhrase;
   bool? _hasRecoveryPhrase;
 
+  /// Plan B7: the stored recovery key was set by a client that sent the phrase
+  /// to the server in plaintext (`phrase_v1`), so it must be replaced. Null
+  /// until an `ownKeyBundleStatus` carried the field (absent on an older
+  /// server: nothing is asked).
+  bool? get recoveryKeyLegacy => _recoveryKeyLegacy;
+  bool? _recoveryKeyLegacy;
+
   void onRecoveryKeySet(dynamic data) {
     _recoveryKeySetResult = data is Map && data['success'] == true;
     // A phrase (re)enrolment always carries the freshly sealed blob now, so a
@@ -3133,6 +3150,8 @@ class EncryptionProvider extends ChangeNotifier {
     if (_recoveryKeySetResult == true) {
       _hasIdentityBackup = true;
       _hasRecoveryPhrase = true;
+      // Whatever was stored is replaced by an authSecret verifier.
+      _recoveryKeyLegacy = false;
     }
     notifyListeners();
   }
@@ -3279,6 +3298,13 @@ class EncryptionProvider extends ChangeNotifier {
       final hasPhrase = data['hasRecoveryPhrase'] as bool;
       if (hasPhrase != _hasRecoveryPhrase) {
         _hasRecoveryPhrase = hasPhrase;
+        changed = true;
+      }
+    }
+    if (data is Map && data['recoveryKeyLegacy'] is bool) {
+      final legacy = data['recoveryKeyLegacy'] as bool;
+      if (legacy != _recoveryKeyLegacy) {
+        _recoveryKeyLegacy = legacy;
         changed = true;
       }
     }
@@ -3633,6 +3659,7 @@ class EncryptionProvider extends ChangeNotifier {
     // below. Back to UNKNOWN, which renders nothing.
     _hasIdentityBackup = null;
     _hasRecoveryPhrase = null;
+    _recoveryKeyLegacy = null;
     // The §6.2 ceremony belongs to the ACCOUNT, and this provider is a process
     // singleton reused across logins. Left standing, user A's countdown renders
     // over user B's session — with a live cancel button that emits

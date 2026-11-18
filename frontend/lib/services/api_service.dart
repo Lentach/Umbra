@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
+import 'recovery_phrase.dart';
 import 'session_refresh_exception.dart';
 import 'api_exception.dart';
 
@@ -118,9 +119,10 @@ class ApiService {
 
   /// The recovery phrase as a credential (multi-device spec §12 amendment
   /// (lxxxii) clause 2): sets a new password and answers with login tokens.
-  /// The server holds the 5 / 15 min throttle. Callers pass the phrase through
-  /// `RecoveryPhrase.normalize` — the same form `setRecoveryKey` stored the
-  /// verifier for, so the same words verify at both doors.
+  /// The server holds the 5 / 15 min throttle. Plan B7: the phrase never
+  /// leaves the device — the body carries `authSecret`, the HKDF proof
+  /// `setRecoveryKey` stored a verifier of, so the same words verify at both
+  /// doors. (A key set by an older build answers 409 `legacy_recovery_key`.)
   Future<Map<String, dynamic>> recoverPassword(
     String identifier,
     String phrase,
@@ -131,7 +133,7 @@ class ApiService {
       headers: _authJsonHeaders,
       body: jsonEncode({
         'identifier': identifier,
-        'phrase': phrase,
+        'authSecret': RecoveryPhrase.deriveAuthSecret(phrase),
         'newPassword': newPassword,
       }),
     ).timeout(_kAuthTimeout);

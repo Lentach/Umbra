@@ -2,11 +2,19 @@
 //
 // The 12-word recovery phrase stops being a mere reset-shortener and becomes
 // a KEY BACKUP: the server holds `IK`, `registrationId` and the DAK only as
-// an AES-256-GCM blob sealed under a key derived from the phrase. The KDF
-// (PBKDF2-HMAC-SHA256, 600k, 16-byte random salt) is belt-and-braces — the
-// 128-bit CSPRNG entropy of the phrase is the guarantee. Signed/one-time
-// prekeys are deliberately NOT in the blob: they are regenerated on restore
-// and peers re-key.
+// an AES-256-GCM blob sealed under a key derived from the phrase. The
+// 128-bit CSPRNG entropy of the phrase is the guarantee.
+//
+//   version 1  PBKDF2-HMAC-SHA256(phrase, salt, 600k). Written by clients up
+//              to 0.2.88, which ALSO sent the phrase to the server in
+//              plaintext — such a blob is only as blind as that was. Still
+//              READ here so an old backup opens.
+//   version 2  HKDF-SHA256 seal key (`RecoveryPhrase.deriveSealKey`), plan B7:
+//              the phrase never leaves the device, so the server cannot
+//              derive the key. `iterations` is 0 (no stretching).
+//
+// Signed/one-time prekeys are deliberately NOT in the blob: they are
+// regenerated on restore and peers re-key.
 
 import 'dart:convert';
 import 'dart:typed_data';
@@ -15,9 +23,12 @@ import '../encryption/content_sealer.dart';
 import '../passcode_kdf.dart';
 import '../recovery_phrase.dart';
 
-/// Work factor for the backup key. Same OWASP floor the passcode verifier
-/// uses; a separate constant because the two must be free to diverge.
+/// Work factor of a VERSION-1 backup key (read path only since plan B7). Same
+/// OWASP floor the passcode verifier uses.
 const int kIdentityBackupKdfIterations = 600000;
+
+/// The blob format [IdentityBackupCodec.seal] writes.
+const int kIdentityBackupBlobVersion = 2;
 
 /// The GCM open failed: the phrase does not derive the key this blob was
 /// sealed under. The ONLY authentication signal a caller may treat as
@@ -92,17 +103,22 @@ class SealedIdentityBackup {
     required this.blob,
     required this.salt,
     required this.iterations,
+    this.version = kIdentityBackupBlobVersion,
   });
 
   final String blob;
   final String salt;
   final int iterations;
 
+  /// The blob format ([kIdentityBackupBlobVersion] for everything written
+  /// now). NOT the payload's own `v`.
+  final int version;
+
   Map<String, dynamic> toWire() => <String, dynamic>{
     'blob': blob,
     'salt': salt,
     'iterations': iterations,
-    'version': IdentityBackupPayload.version,
+    'version': version,
   };
 }
 
@@ -112,7 +128,7 @@ class SealedIdentityBackup {
 /// [ContentSealer] are abstract: the flutter_test binding has no webcrypto
 /// native on this host, and the tests that matter here are about the state
 /// machine and the failure taxonomy, not the cipher. Production always uses
-/// the real PBKDF2 + AES-GCM pair.
+/// the real PBKDF2 (version-1 read path) + AES-GCM pair.
 class IdentityBackupCodec {
   IdentityBackupCodec({PasscodeKdf? kdf, ContentSealer? sealer})
     : _kdf = kdf ?? const Pbkdf2PasscodeKdf(),
@@ -121,11 +137,11 @@ class IdentityBackupCodec {
   final PasscodeKdf _kdf;
   final ContentSealer _sealer;
 
-  /// Derives the 32-byte backup key. The phrase goes through
+  /// Derives the VERSION-1 32-byte backup key. The phrase goes through
   /// [RecoveryPhrase.normalize] so seal and unseal cannot drift; the result
   /// is lowercase ASCII (English BIP39 wordlist), for which the spec's NFKD
   /// normalization is the identity function.
-  Future<Uint8List> _deriveKey(
+  Future<Uint8List> _deriveKeyV1(
     String phrase,
     Uint8List salt,
     int iterations,
@@ -140,7 +156,7 @@ class IdentityBackupCodec {
     String phrase,
   ) async {
     final salt = generatePasscodeSalt();
-    final key = await _deriveKey(phrase, salt, kIdentityBackupKdfIterations);
+    final key = RecoveryPhrase.deriveSealKey(phrase, salt);
     final sealed = await _sealer.seal(
       key,
       Uint8List.fromList(utf8.encode(jsonEncode(payload.toJson()))),
@@ -152,7 +168,7 @@ class IdentityBackupCodec {
     return SealedIdentityBackup(
       blob: base64Encode(sealed),
       salt: base64Encode(salt),
-      iterations: kIdentityBackupKdfIterations,
+      iterations: 0,
     );
   }
 
@@ -161,11 +177,18 @@ class IdentityBackupCodec {
     required String salt,
     required int iterations,
     required String phrase,
+    int version = 1,
   }) async {
     // Parameter sanity BEFORE the KDF: a hostile or damaged answer must not
     // buy an unbounded derivation, and a malformed field is server-side
-    // damage — never the user's phrase.
-    if (iterations < 1 || iterations > 5000000) {
+    // damage — never the user's phrase. An absent `version` is 1: the server
+    // of every older build never sent one.
+    if (version != 1 && version != 2) {
+      throw IdentityBackupCorrupt('version');
+    }
+    if (version == 2
+        ? iterations != 0
+        : (iterations < 1 || iterations > 5000000)) {
       throw IdentityBackupCorrupt('iterations');
     }
     final Uint8List saltBytes;
@@ -179,7 +202,9 @@ class IdentityBackupCodec {
     if (saltBytes.length != 16 || sealedBytes.length < 13) {
       throw IdentityBackupCorrupt('lengths');
     }
-    final key = await _deriveKey(phrase, saltBytes, iterations);
+    final key = version == 2
+        ? RecoveryPhrase.deriveSealKey(phrase, saltBytes)
+        : await _deriveKeyV1(phrase, saltBytes, iterations);
     final plain = await _sealer.unseal(key, sealedBytes);
     if (plain == null) {
       // GCM authentication failure = the derived key is not the blob's key.

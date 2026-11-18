@@ -531,6 +531,24 @@ class AppLocalizationsPl extends AppLocalizations {
   String get authStatusPhraseRejected => 'Nazwa lub fraza nie pasuje.';
 
   @override
+  String get authStatusLegacyRecoveryKey =>
+      'Ten klucz odzyskiwania został ustawiony w starszej wersji Umbry i tu już nie działa. Na urządzeniu, na którym nadal jesteś zalogowany/a, ustaw nowy w Ustawieniach → Klucz odzyskiwania.';
+
+  @override
+  String get identityResetLegacyRecoveryKey =>
+      'Twój klucz odzyskiwania został ustawiony w starszej wersji i nie skróci czekania. Ustaw nowy w Ustawieniach na zalogowanym urządzeniu albo rozpocznij reset bez niego.';
+
+  @override
+  String get recoveryKeyLegacyTitle => 'Wymień klucz odzyskiwania';
+
+  @override
+  String get recoveryKeyLegacyBody =>
+      'Twój klucz odzyskiwania został ustawiony w starszej wersji i trzeba go wymienić.';
+
+  @override
+  String get recoveryKeyLegacyDismiss => 'Nie teraz';
+
+  @override
   String get authForgotPassword => 'Nie pamiętam hasła';
 
   @override

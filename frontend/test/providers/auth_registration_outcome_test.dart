@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:fireplace/providers/auth_provider.dart';
 import 'package:fireplace/services/api_exception.dart';
 import 'package:fireplace/services/api_service.dart';
+import 'package:fireplace/services/recovery_phrase.dart';
 
 // exp 9999999999; the client never verifies the signature.
 const _accessJwt =
@@ -383,6 +384,35 @@ void main() {
 
       expect(await auth.recoverPassword('ma0i#5269', phrase, 'NewPass1x'), isFalse);
       expect(auth.statusCode, AuthStatusCode.phraseRejected);
+    });
+
+    // Plan B7: the account's key predates it. 409 on REGISTER means "name
+    // taken"; on this door it means the owner must replace the key.
+    test('409 legacy_recovery_key names the old key, not a taken nickname',
+        () async {
+      final auth = _provider(
+        MockClient((req) async => _json({'message': 'legacy_recovery_key'}, 409)),
+      );
+
+      expect(await auth.recoverPassword('ma0i#5269', phrase, 'NewPass1x'), isFalse);
+      expect(auth.statusCode, AuthStatusCode.legacyRecoveryKey);
+    });
+
+    test('the request body carries authSecret and never the phrase', () async {
+      Map<String, dynamic>? body;
+      final auth = _provider(
+        MockClient((req) async {
+          body = jsonDecode(req.body) as Map<String, dynamic>;
+          return _json({'message': 'Invalid credentials'}, 401);
+        }),
+      );
+
+      await auth.recoverPassword('ma0i#5269', phrase, 'NewPass1x');
+
+      expect(body, isNotNull);
+      expect(body!.containsKey('phrase'), isFalse);
+      expect(body!['authSecret'], RecoveryPhrase.deriveAuthSecret(phrase));
+      expect(jsonEncode(body), isNot(contains(phrase)));
     });
 
     test('the lockout (423) reads as too many attempts', () async {

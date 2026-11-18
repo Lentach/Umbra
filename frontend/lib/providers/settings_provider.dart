@@ -344,6 +344,32 @@ class SettingsProvider extends ChangeNotifier {
     await prefs.setInt(_backupNudgeKey(userId), at.millisecondsSinceEpoch);
   }
 
+  /// Plan B7: whether this account dismissed the one-time "replace your
+  /// recovery key" prompt on this install. Per account. Unloaded reads as
+  /// dismissed, so the prompt never flashes up before the stored answer is
+  /// known; [loadRecoveryLegacyPrompt] runs at shell start.
+  bool get recoveryLegacyPromptDismissed => _recoveryLegacyPromptDismissed;
+  bool _recoveryLegacyPromptDismissed = true;
+
+  static String _recoveryLegacyPromptKey(int userId) =>
+      'recovery_legacy_prompt_dismissed_$userId';
+
+  Future<void> loadRecoveryLegacyPrompt(int userId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final next = prefs.getBool(_recoveryLegacyPromptKey(userId)) ?? false;
+    if (next == _recoveryLegacyPromptDismissed) return;
+    _recoveryLegacyPromptDismissed = next;
+    notifyListeners();
+  }
+
+  /// "Not now": the prompt is one-time. The Settings row itself stays.
+  Future<void> dismissRecoveryLegacyPrompt(int userId) async {
+    _recoveryLegacyPromptDismissed = true;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_recoveryLegacyPromptKey(userId), true);
+  }
+
   /// Decision 95: how many times this account put off the contact-backup
   /// password sheet on this install, or null until [loadContactBackupLaters]
   /// ran (read as "not due", so a muted ask never flashes up at start).

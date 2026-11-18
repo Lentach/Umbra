@@ -525,6 +525,24 @@ class AppLocalizationsEn extends AppLocalizations {
   String get authStatusPhraseRejected => 'Name or phrase does not match.';
 
   @override
+  String get authStatusLegacyRecoveryKey =>
+      'This recovery key was set by an older version of Umbra and no longer works here. On a device where you are still signed in, set a new one in Settings → Recovery key.';
+
+  @override
+  String get identityResetLegacyRecoveryKey =>
+      'Your recovery key was set by an older version and cannot shorten the wait. Set a new one in Settings on a signed-in device, or start the reset without it.';
+
+  @override
+  String get recoveryKeyLegacyTitle => 'Replace your recovery key';
+
+  @override
+  String get recoveryKeyLegacyBody =>
+      'Your recovery key was set by an older version and must be replaced.';
+
+  @override
+  String get recoveryKeyLegacyDismiss => 'Not now';
+
+  @override
   String get authForgotPassword => 'Forgot password';
 
   @override

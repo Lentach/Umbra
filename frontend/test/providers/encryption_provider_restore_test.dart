@@ -214,6 +214,7 @@ void main() {
                   'blob': sealed.blob,
                   'salt': sealed.salt,
                   'iterations': sealed.iterations,
+                  'version': sealed.version,
                 }));
           case 'getDeviceList':
             scheduleMicrotask(
@@ -325,6 +326,7 @@ void main() {
                 'blob': sealed.blob,
                 'salt': sealed.salt,
                 'iterations': sealed.iterations,
+                'version': sealed.version,
               }));
         case 'getRegistrationLockNonce':
           scheduleMicrotask(
@@ -428,6 +430,7 @@ void main() {
               'blob': sealed.blob,
               'salt': sealed.salt,
               'iterations': sealed.iterations,
+              'version': sealed.version,
             }));
       }
     });
@@ -479,6 +482,7 @@ void main() {
                 'blob': sealed.blob,
                 'salt': sealed.salt,
                 'iterations': sealed.iterations,
+                'version': sealed.version,
               }));
         case 'getRegistrationLockNonce':
           scheduleMicrotask(() => provider
@@ -493,6 +497,79 @@ void main() {
     expect(provider.restoreFailure, IdentityRestoreFailure.refused);
     expect(log, isNot(contains('updateDeviceList')));
     expect(log, isNot(contains('requestSessionRebuild')));
+  });
+
+  // Plan B7: a backup written before it (PBKDF2, and a server that sends no
+  // `version`) must still open — the version defaults to 1, not to 2.
+  test('a pre-B7 backup (v1 blob, no version field) still restores', () async {
+    final sealed = await arrangeSealedBackup();
+    final payload = await codec().unseal(
+      blob: sealed.blob,
+      salt: sealed.salt,
+      iterations: sealed.iterations,
+      version: sealed.version,
+      phrase: phrase,
+    );
+    final salt = Uint8List.fromList(List<int>.generate(16, (i) => i + 3));
+    final key = await FakePasscodeKdf().derive(
+      passcode: phrase,
+      salt: salt,
+      iterations: kIdentityBackupKdfIterations,
+    );
+    final v1Blob = await FakeContentSealer().seal(
+      key,
+      utf8.encode(jsonEncode(payload.toJson())),
+    );
+    final provider = await buildProvider();
+    final log = <String>[];
+    provider.setEmitCallback((event, data) {
+      log.add(event);
+      switch (event) {
+        case 'getIdentityBackup':
+          scheduleMicrotask(() => provider.onIdentityBackup({
+                'exists': true,
+                'blob': base64Encode(v1Blob!),
+                'salt': base64Encode(salt),
+                'iterations': kIdentityBackupKdfIterations,
+              }));
+        case 'getRegistrationLockNonce':
+          scheduleMicrotask(() => provider
+              .onRegistrationLockNonce({'nonce': base64Encode([1, 2, 3])}));
+        case 'uploadKeyBundle':
+          scheduleMicrotask(() => provider.onKeyBundleUploaded(
+              {'success': false, 'error': 'restore_refused'}));
+      }
+    });
+
+    await provider.restoreFromPhrase(phrase);
+
+    // It got past the unseal to the upload (which this test then refuses).
+    expect(log, contains('uploadKeyBundle'));
+    expect(provider.restoreFailure, IdentityRestoreFailure.refused);
+  });
+
+  test('recoveryKeyLegacy parses only an explicit bool, clears on a new key '
+      'and on account switch (plan B7)', () async {
+    FlutterSecureStorage.setMockInitialValues({});
+    SharedPreferences.setMockInitialValues({});
+    final provider = EncryptionProvider(
+      service: EncryptionService(),
+      backupCodec: codec(),
+    );
+    expect(provider.recoveryKeyLegacy, isNull);
+    provider.onOwnKeyBundleStatus({'exists': true});
+    expect(provider.recoveryKeyLegacy, isNull,
+        reason: 'an older server must read as UNKNOWN: nothing is asked');
+    provider.onOwnKeyBundleStatus({'exists': true, 'recoveryKeyLegacy': true});
+    expect(provider.recoveryKeyLegacy, isTrue);
+    provider.onRecoveryKeySet(const {'success': false});
+    expect(provider.recoveryKeyLegacy, isTrue,
+        reason: 'a refused enrolment replaced nothing');
+    provider.onRecoveryKeySet(const {'success': true});
+    expect(provider.recoveryKeyLegacy, isFalse);
+    provider.onOwnKeyBundleStatus({'exists': true, 'recoveryKeyLegacy': true});
+    provider.clearAll();
+    expect(provider.recoveryKeyLegacy, isNull);
   });
 
   test('hasIdentityBackup parses only an explicit bool', () async {
@@ -589,6 +666,7 @@ void main() {
                 'blob': sealed.blob,
                 'salt': sealed.salt,
                 'iterations': sealed.iterations,
+                'version': sealed.version,
               }));
         case 'getRegistrationLockNonce':
           scheduleMicrotask(
@@ -679,6 +757,7 @@ void main() {
                 'blob': sealed.blob,
                 'salt': sealed.salt,
                 'iterations': sealed.iterations,
+                'version': sealed.version,
               }));
         case 'getRegistrationLockNonce':
           scheduleMicrotask(() => provider.onRegistrationLockNonce(
@@ -717,6 +796,7 @@ void main() {
               'blob': sealed.blob,
               'salt': sealed.salt,
               'iterations': sealed.iterations,
+              'version': sealed.version,
             }));
       }
     });
@@ -746,6 +826,7 @@ void main() {
                 'blob': sealed.blob,
                 'salt': sealed.salt,
                 'iterations': sealed.iterations,
+                'version': sealed.version,
               }));
         case 'getRegistrationLockNonce':
           scheduleMicrotask(() => provider.onRegistrationLockNonce(

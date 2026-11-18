@@ -138,6 +138,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       final userId = auth.currentUser!.id;
       conn.connect(userId, auth.token!, AppConfig.baseUrl);
       settings.loadBackupNudge(userId).ignore();
+      settings.loadRecoveryLegacyPrompt(userId).ignore();
       if (auth.consumeFreshRegistration()) _armPhraseOffer(enc);
       unawaited(_offerContactBackupPrompt(auth, settings, userId));
     });

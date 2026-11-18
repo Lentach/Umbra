@@ -545,14 +545,49 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       },
                     ),
                   ),
-                  SettingsConsoleRow(
-                    glyph: ConsoleGlyph.keys,
-                    title: l10n.recoveryKeyTitle,
-                    subtitle: l10n.recoveryKeySubtitle,
-                    onTap: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => const RecoveryKeyScreen(),
+                  // Plan B7: a key set by an older build crossed the wire in
+                  // plaintext. One dismissible prompt on this very row; the
+                  // tap opens the ordinary enrolment screen, which mints a
+                  // NEW phrase (the old one may have leaked).
+                  Consumer2<EncryptionProvider, SettingsProvider>(
+                    builder: (context, enc, prefs, _) {
+                      void openRecoveryKey() {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const RecoveryKeyScreen(),
+                          ),
+                        );
+                      }
+
+                      final userId = context
+                          .read<AuthProvider>()
+                          .currentUser
+                          ?.id;
+                      final prompt =
+                          enc.recoveryKeyLegacy == true &&
+                          !prefs.recoveryLegacyPromptDismissed &&
+                          userId != null;
+                      if (!prompt) {
+                        return SettingsConsoleRow(
+                          glyph: ConsoleGlyph.keys,
+                          title: l10n.recoveryKeyTitle,
+                          subtitle: l10n.recoveryKeySubtitle,
+                          onTap: openRecoveryKey,
+                        );
+                      }
+                      return SettingsConsoleRow(
+                        key: const Key('settings-recovery-legacy-row'),
+                        glyph: ConsoleGlyph.keys,
+                        title: l10n.recoveryKeyLegacyTitle,
+                        subtitle: l10n.recoveryKeyLegacyBody,
+                        edge: ConsoleRowEdge.danger,
+                        onTap: openRecoveryKey,
+                        trailing: IconButton(
+                          key: const Key('settings-recovery-legacy-dismiss'),
+                          icon: const Icon(Icons.close, size: 18),
+                          tooltip: l10n.recoveryKeyLegacyDismiss,
+                          onPressed: () =>
+                              prefs.dismissRecoveryLegacyPrompt(userId),
                         ),
                       );
                     },

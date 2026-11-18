@@ -176,6 +176,7 @@ void main() {
         AuthStatusCode.tooManyAttempts: en.authStatusTooManyAttempts,
         AuthStatusCode.serverError: en.authStatusServerError,
         AuthStatusCode.phraseRejected: en.authStatusPhraseRejected,
+        AuthStatusCode.legacyRecoveryKey: en.authStatusLegacyRecoveryKey,
         AuthStatusCode.serverUnreachable: en.authStatusServerUnreachable,
         AuthStatusCode.unexpectedError: en.authStatusUnexpectedError,
         AuthStatusCode.deviceRevoked: en.deviceRevokedNotice,

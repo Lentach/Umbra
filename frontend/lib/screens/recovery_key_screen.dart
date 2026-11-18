@@ -16,8 +16,9 @@ import '../widgets/top_snackbar.dart';
 ///
 /// The phrase is a KEY BACKUP now, not just a reset-shortener: confirming it
 /// seals the identity (+ DAK, when one exists) under a phrase-derived key and
-/// uploads verifier + blob in one `setRecoveryKey`. Presenting the phrase
-/// later restores the account instantly ((lxxviii) clause 3).
+/// uploads verifier + blob in one `setRecoveryKey`. Plan B7: what is uploaded
+/// is an `authSecret` derived from the phrase, never the phrase. Presenting
+/// the phrase later restores the account instantly ((lxxviii) clause 3).
 ///
 /// The phrase is generated here, shown ONCE, and never written to local
 /// storage: a phrase kept on the device would be destroyed by the same event
@@ -94,12 +95,13 @@ class _RecoveryKeyScreenState extends State<RecoveryKeyScreen> {
 
     setState(() => _saving = true);
     encryption.clearRecoveryKeySetResult();
-    // Enrolment and later verification MUST produce byte-identical strings —
-    // the server compares an Argon2id hash, so any divergence fails the check
-    // and burns one of the few attempts before lockout. Both sides go through
-    // normalize() so they cannot drift apart. The SAME string derives the
-    // backup key, so the sealed blob is always openable by the phrase the
-    // verifier accepts ((lxxviii): the blob rides the latest phrase).
+    // Enrolment and later verification MUST derive from byte-identical
+    // strings — the server compares an Argon2id hash of the authSecret, so any
+    // divergence fails the check and burns one of the few attempts before
+    // lockout. Both sides go through normalize() so they cannot drift apart.
+    // The SAME string derives the (independent) backup key, so the sealed blob
+    // is always openable by the phrase the verifier accepts ((lxxviii): the
+    // blob rides the latest phrase). The phrase itself is never sent.
     final phrase = RecoveryPhrase.normalize(words.join(' '));
     try {
       final payload = await encryption.encryptionService

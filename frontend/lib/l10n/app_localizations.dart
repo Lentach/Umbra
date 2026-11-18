@@ -1004,6 +1004,36 @@ abstract class AppLocalizations {
   /// **'Nazwa lub fraza nie pasuje.'**
   String get authStatusPhraseRejected;
 
+  /// No description provided for @authStatusLegacyRecoveryKey.
+  ///
+  /// In pl, this message translates to:
+  /// **'Ten klucz odzyskiwania został ustawiony w starszej wersji Umbry i tu już nie działa. Na urządzeniu, na którym nadal jesteś zalogowany/a, ustaw nowy w Ustawieniach → Klucz odzyskiwania.'**
+  String get authStatusLegacyRecoveryKey;
+
+  /// No description provided for @identityResetLegacyRecoveryKey.
+  ///
+  /// In pl, this message translates to:
+  /// **'Twój klucz odzyskiwania został ustawiony w starszej wersji i nie skróci czekania. Ustaw nowy w Ustawieniach na zalogowanym urządzeniu albo rozpocznij reset bez niego.'**
+  String get identityResetLegacyRecoveryKey;
+
+  /// No description provided for @recoveryKeyLegacyTitle.
+  ///
+  /// In pl, this message translates to:
+  /// **'Wymień klucz odzyskiwania'**
+  String get recoveryKeyLegacyTitle;
+
+  /// No description provided for @recoveryKeyLegacyBody.
+  ///
+  /// In pl, this message translates to:
+  /// **'Twój klucz odzyskiwania został ustawiony w starszej wersji i trzeba go wymienić.'**
+  String get recoveryKeyLegacyBody;
+
+  /// No description provided for @recoveryKeyLegacyDismiss.
+  ///
+  /// In pl, this message translates to:
+  /// **'Nie teraz'**
+  String get recoveryKeyLegacyDismiss;
+
   /// Link under the sign-in form that opens the recover-with-phrase form.
   ///
   /// In pl, this message translates to:
