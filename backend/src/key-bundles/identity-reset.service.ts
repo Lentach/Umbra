@@ -117,7 +117,7 @@ export const TIMING_SAFE_DUMMY_VERIFIER =
 /**
  * A recovery credential as presented (plan B7). `auth` is the client-derived
  * authSecret (the phrase never leaves the device); `phrase` is the legacy
- * plaintext of clients up to 0.2.88. Each verifies only against a row of its
+ * plaintext of clients up to 0.2.89. Each verifies only against a row of its
  * own kind.
  */
 export type RecoveryCredential =
@@ -634,7 +634,7 @@ export class IdentityResetService {
   /**
    * Enrolls or replaces the account's recovery key. Only the Argon2id
    * verifier is stored — of the client-derived authSecret (`auth_v2`) or, for
-   * a client up to 0.2.88, of the plaintext phrase (`phrase_v1`). Replacing clears the spent/lockout state, because the
+   * a client up to 0.2.89, of the plaintext phrase (`phrase_v1`). Replacing clears the spent/lockout state, because the
    * new phrase is a new secret.
    *
    * Replacing ALSO restarts the age clock (amendment (xlii)). `createdAt` is a
@@ -701,7 +701,7 @@ export class IdentityResetService {
    * A version-2 blob is sealed under an HKDF output derived on the device from
    * the phrase, and the server never receives anything that key follows from.
    * A version-1 blob is sealed under PBKDF2 over the phrase itself: it is only
-   * as blind as the account's phrase was private, and a client up to 0.2.88
+   * as blind as the account's phrase was private, and a client up to 0.2.89
    * sent that phrase in plaintext (`recovery_keys.verifierKind = 'phrase_v1'`).
    */
   async getIdentityBackup(

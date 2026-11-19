@@ -2288,9 +2288,11 @@ extension MessagingBox on MessagingProvider {
       frameMediaToRung(body.ciphertext),
     );
     final Uint8List id;
+    final Uint8List? secret;
     switch (answer) {
       case BoxOk(:final value):
         id = value.id;
+        secret = value.deleteSecret;
       case BoxRefused(:final code):
         // quota_exceeded / rate_limited included: 'Ponów' (decision 31).
         _e2eFlowLog('BOX_MEDIA_UPLOAD_REFUSED', {
@@ -2312,6 +2314,11 @@ extension MessagingBox on MessagingProvider {
     final user = _currentUserId;
     // A copy that fails to write is downloaded like anyone's at a restore.
     if (user != null) boxMedia?.keep(user, id, body.ciphertext).ignore();
+    // Plan D3: the secret stays on this device, beside the copy; it is not
+    // in the record and never in an envelope.
+    if (user != null && secret != null) {
+      boxMedia?.keepDeleteSecret(user, id, secret).ignore();
+    }
     final index = _messages.indexWhere((m) => m.tempId == tempId);
     if (index != -1) {
       _messages[index] = _messages[index].copyWith(
@@ -2622,7 +2629,7 @@ extension MessagingBox on MessagingProvider {
             : replyTo,
         linkPreviewUrl: preview?['url'],
         linkPreviewTitle: preview?['title'],
-        linkPreviewImageUrl: preview?['imageUrl'],
+        linkPreviewImage: preview?['img'],
       );
       enc.cacheDecryption(localId, sent);
       await _persistDecryptedContent(sent);

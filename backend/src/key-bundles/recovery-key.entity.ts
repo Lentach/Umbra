@@ -1,4 +1,5 @@
 import {
+  Check,
   Column,
   CreateDateColumn,
   Entity,
@@ -17,7 +18,7 @@ export type RecoveryVerifierKind = 'phrase_v1' | 'auth_v2';
  * The stored value is an Argon2id verifier hash and nothing else — never the
  * phrase, never a fast hash. Since plan B7 it is a verifier of the
  * client-derived `authSecret` (`verifierKind` `auth_v2`); rows enrolled by
- * clients up to 0.2.88 are verifiers of the plaintext phrase (`phrase_v1`). Presenting a valid phrase SHORTENS the reset
+ * clients up to 0.2.89 are verifiers of the plaintext phrase (`phrase_v1`). Presenting a valid phrase SHORTENS the reset
  * delay from 72 h to 1 h; it never silences the notifications and never grants
  * an immediate identity replacement. Single-use: spent on a successful
  * presentation and invalidated by any completed reset.
@@ -25,6 +26,10 @@ export type RecoveryVerifierKind = 'phrase_v1' | 'auth_v2';
  * Prod truth is migration 0014; the backup columns are migration 0017;
  * `verifierKind` is migration 0030.
  */
+@Check(
+  'CHK_recovery_keys_verifierKind',
+  `"verifierKind" IN ('phrase_v1','auth_v2')`,
+)
 @Entity('recovery_keys')
 export class RecoveryKey {
   @PrimaryGeneratedColumn()

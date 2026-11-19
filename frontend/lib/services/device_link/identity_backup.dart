@@ -6,7 +6,7 @@
 // 128-bit CSPRNG entropy of the phrase is the guarantee.
 //
 //   version 1  PBKDF2-HMAC-SHA256(phrase, salt, 600k). Written by clients up
-//              to 0.2.88, which ALSO sent the phrase to the server in
+//              to 0.2.89, which ALSO sent the phrase to the server in
 //              plaintext — such a blob is only as blind as that was. Still
 //              READ here so an old backup opens.
 //   version 2  HKDF-SHA256 seal key (`RecoveryPhrase.deriveSealKey`), plan B7:

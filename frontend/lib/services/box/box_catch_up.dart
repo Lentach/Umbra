@@ -37,7 +37,8 @@ const Duration kCatchUpReach = Duration(days: 30);
 
 /// The most plaintext one catch-up blob carries: the payload JSON, newest
 /// records first, older ones left out past it. One MiB holds the whole
-/// plaintext store (it is capped at 2 000 records, ~0.4 KiB each); the
+/// plaintext store (it is capped at 2 000 records, ~0.4 KiB each; a link-preview thumbnail is
+/// ~8 KiB, so catch-up strips it); the
 /// sealed body (+16 B tag, +4 B length) stays on the 1 MiB rung, and the
 /// download stays small enough to run on the reader's chain.
 const int kCatchUpMaxBytes = 1024 * 1024 - 64;
@@ -154,7 +155,14 @@ Map<String, String> catchUpRecords({
   final out = <String, String>{};
   for (final (id, _, record) in picked) {
     final key = '$prefix$id';
-    final value = jsonEncode(record);
+    // The link-preview thumbnail (C1, ~8 KiB base64) stays out of a catch-up:
+    // it would shrink the blob to ~120 records, and the other device shows
+    // the preview without its image rather than not at all.
+    final value = jsonEncode(
+      record.containsKey('linkPreviewImage')
+          ? (Map<String, dynamic>.of(record)..remove('linkPreviewImage'))
+          : record,
+    );
     // As the payload JSON spells it: both quoted, the value escaped.
     final cost = key.length + utf8.encode(jsonEncode(value)).length + 4;
     if (bytes + cost > maxBytes) break;

@@ -386,18 +386,6 @@ void main() {
       expect(auth.statusCode, AuthStatusCode.phraseRejected);
     });
 
-    // Plan B7: the account's key predates it. 409 on REGISTER means "name
-    // taken"; on this door it means the owner must replace the key.
-    test('409 legacy_recovery_key names the old key, not a taken nickname',
-        () async {
-      final auth = _provider(
-        MockClient((req) async => _json({'message': 'legacy_recovery_key'}, 409)),
-      );
-
-      expect(await auth.recoverPassword('ma0i#5269', phrase, 'NewPass1x'), isFalse);
-      expect(auth.statusCode, AuthStatusCode.legacyRecoveryKey);
-    });
-
     test('the request body carries authSecret and never the phrase', () async {
       Map<String, dynamic>? body;
       final auth = _provider(

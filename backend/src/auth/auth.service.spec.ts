@@ -610,7 +610,29 @@ describe('AuthService', () => {
       ]);
     });
 
-    it('a legacy key answers 409 legacy_recovery_key, distinct from wrong and locked', async () => {
+    it('a legacy key is indistinguishable from an unknown account (no enumeration oracle)', async () => {
+      usersService.findByUsername.mockResolvedValue([]);
+      const unknown = await service
+        .recoverPassword('nobody', v2, 'NewPass1x')
+        .catch((e: unknown) => e as UnauthorizedException);
+      usersService.findByUsernameAndTag.mockResolvedValue(mockUser as User);
+      identityResetService.verifyRecoveryPhrase.mockResolvedValue(
+        'legacy_recovery_key',
+      );
+      const legacyKey = await service
+        .recoverPassword('testuser#0427', v2, 'NewPass1x')
+        .catch((e: unknown) => e as UnauthorizedException);
+
+      expect(legacyKey).toBeInstanceOf(UnauthorizedException);
+      expect((legacyKey as UnauthorizedException).getStatus()).toBe(
+        (unknown as UnauthorizedException).getStatus(),
+      );
+      expect((legacyKey as UnauthorizedException).getResponse()).toEqual(
+        (unknown as UnauthorizedException).getResponse(),
+      );
+    });
+
+    it('a legacy key answers 401 like a wrong phrase, never 409', async () => {
       usersService.findByUsernameAndTag.mockResolvedValue(mockUser as User);
       identityResetService.verifyRecoveryPhrase.mockResolvedValue(
         'legacy_recovery_key',
@@ -618,7 +640,7 @@ describe('AuthService', () => {
 
       await expect(
         service.recoverPassword('testuser#0427', v2, 'NewPass1x'),
-      ).rejects.toMatchObject({ status: 409, message: 'legacy_recovery_key' });
+      ).rejects.toMatchObject({ status: 401, message: 'Invalid credentials' });
       // The throw precedes every password change: nothing was issued.
       expect(usersService.setPassword.mock.calls).toHaveLength(0);
     });

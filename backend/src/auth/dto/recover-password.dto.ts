@@ -20,7 +20,7 @@ import {
  * spec §12 amendment (lxxxii) clause 2). Same identifier grammar as login,
  * same password rules as register. Plan B7: new clients send `authSecret`
  * (HKDF output of the phrase) and never the phrase; `phrase` is the legacy
- * plaintext field of clients up to 0.2.88. Exactly one of the two — and this
+ * plaintext field of clients up to 0.2.89. Exactly one of the two — and this
  * DTO MUST declare both, because the global ValidationPipe strips fields it
  * does not know.
  */

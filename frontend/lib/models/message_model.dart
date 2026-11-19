@@ -88,7 +88,8 @@ class MessageModel {
   final ReplyToPreview? replyTo;
   final String? linkPreviewUrl;
   final String? linkPreviewTitle;
-  final String? linkPreviewImageUrl;
+  /// The sender-made JPEG thumbnail, base64 (C1); never a URL.
+  final String? linkPreviewImage;
   final String? encryptedContent;
 
   /// Which of the SENDER's devices produced this row (spec §5.4). Null on
@@ -212,7 +213,7 @@ class MessageModel {
     this.replyTo,
     this.linkPreviewUrl,
     this.linkPreviewTitle,
-    this.linkPreviewImageUrl,
+    this.linkPreviewImage,
     this.encryptedContent,
     this.envelopeStatus,
     this.originDeviceId,
@@ -253,7 +254,7 @@ class MessageModel {
           : null,
       linkPreviewUrl: json['linkPreviewUrl'] as String?,
       linkPreviewTitle: json['linkPreviewTitle'] as String?,
-      linkPreviewImageUrl: json['linkPreviewImageUrl'] as String?,
+      linkPreviewImage: json['linkPreviewImage'] as String?,
       encryptedContent: json['encryptedContent'] as String?,
       // Additive per-device fields (spec §12 (viii)/(ix)); absent on an older
       // server, and `fromJson` simply reads null.
@@ -327,7 +328,7 @@ class MessageModel {
     ReplyToPreview? replyTo,
     String? linkPreviewUrl,
     String? linkPreviewTitle,
-    String? linkPreviewImageUrl,
+    String? linkPreviewImage,
     String? encryptedContent,
     String? envelopeStatus,
     int? originDeviceId,
@@ -361,7 +362,7 @@ class MessageModel {
       replyTo: replyTo ?? this.replyTo,
       linkPreviewUrl: linkPreviewUrl ?? this.linkPreviewUrl,
       linkPreviewTitle: linkPreviewTitle ?? this.linkPreviewTitle,
-      linkPreviewImageUrl: linkPreviewImageUrl ?? this.linkPreviewImageUrl,
+      linkPreviewImage: linkPreviewImage ?? this.linkPreviewImage,
       encryptedContent: encryptedContent ?? this.encryptedContent,
       // Per-device facts of the row, preserved across every merge: dropping
       // them would resurrect a decrypt attempt on a row that has no ciphertext

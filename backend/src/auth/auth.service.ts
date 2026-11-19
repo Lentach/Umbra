@@ -124,11 +124,12 @@ export class AuthService {
       credential,
     );
     if (verdict === 'legacy_recovery_key') {
-      // The stored key predates plan B7 and cannot check an authSecret; the
-      // owner must replace it from a signed-in device. Distinct on purpose so
-      // the client can say so (see the wire contract).
+      // The stored key predates plan B7 and cannot check an authSecret. Answered
+      // EXACTLY like a wrong phrase: this door is unauthenticated, so a distinct
+      // answer would tell anyone which accounts hold an old key. The client's
+      // refusal text says what to do. (The authenticated reset door does say so.)
       this.auditLogger.log(`recoverPassword refused reason=legacy_key`);
-      throw new HttpException('legacy_recovery_key', HttpStatus.CONFLICT);
+      throw new UnauthorizedException('Invalid credentials');
     }
     if (verdict === 'locked') {
       this.auditLogger.log(`recoverPassword locked`);

@@ -58,6 +58,25 @@ class _IdbBoxMediaStore implements BoxMediaStore {
   Future<void> delete(int userId, Uint8List id) async {
     final key = _key(userId, id);
     await _run('readwrite', (s) => s.delete(key.toJS));
+    await _run('readwrite', (s) => s.delete('$key.del'.toJS));
+  }
+
+  @override
+  Future<void> putDeleteSecret(
+    int userId,
+    Uint8List id,
+    Uint8List secret,
+  ) async {
+    final key = '${_key(userId, id)}.del';
+    await _run('readwrite', (s) => s.put(secret.toJS, key.toJS));
+  }
+
+  @override
+  Future<Uint8List?> getDeleteSecret(int userId, Uint8List id) async {
+    final key = '${_key(userId, id)}.del';
+    final result = await _run('readonly', (s) => s.get(key.toJS));
+    if (result == null || !result.isA<JSUint8Array>()) return null;
+    return (result as JSUint8Array).toDart;
   }
 }
 

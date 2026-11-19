@@ -21,7 +21,6 @@ String authStatusText(AppLocalizations l10n, AuthStatusCode code) {
     AuthStatusCode.tooManyAttempts => l10n.authStatusTooManyAttempts,
     AuthStatusCode.serverError => l10n.authStatusServerError,
     AuthStatusCode.phraseRejected => l10n.authStatusPhraseRejected,
-    AuthStatusCode.legacyRecoveryKey => l10n.authStatusLegacyRecoveryKey,
     AuthStatusCode.serverUnreachable => l10n.authStatusServerUnreachable,
     AuthStatusCode.unexpectedError => l10n.authStatusUnexpectedError,
     AuthStatusCode.deviceRevoked => l10n.deviceRevokedNotice,

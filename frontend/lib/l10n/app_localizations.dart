@@ -1001,14 +1001,8 @@ abstract class AppLocalizations {
   /// Auth surface status, localized from an AuthStatusCode: the recover door refused (unknown name, wrong phrase, or none enrolled — one wording by design).
   ///
   /// In pl, this message translates to:
-  /// **'Nazwa lub fraza nie pasuje.'**
+  /// **'Nazwa lub fraza nie pasuje. Jeśli Twój klucz odzyskiwania ustawiono w starszej wersji, wymień go w Ustawieniach na urządzeniu, na którym nadal jesteś zalogowany/a.'**
   String get authStatusPhraseRejected;
-
-  /// No description provided for @authStatusLegacyRecoveryKey.
-  ///
-  /// In pl, this message translates to:
-  /// **'Ten klucz odzyskiwania został ustawiony w starszej wersji Umbry i tu już nie działa. Na urządzeniu, na którym nadal jesteś zalogowany/a, ustaw nowy w Ustawieniach → Klucz odzyskiwania.'**
-  String get authStatusLegacyRecoveryKey;
 
   /// No description provided for @identityResetLegacyRecoveryKey.
   ///

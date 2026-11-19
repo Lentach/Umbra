@@ -9,7 +9,7 @@ Detail relocated from `backend/CLAUDE.md` §8 (media), §10 (link previews and S
 
 ## Box media location (§8)
 
-Box media (`POST /box/media`, capability `GET`) lives in `MEDIA_DIR/box/`; box files expire by `box_media.expiresAt` (14 d, `BoxReaper`).
+Box media (`POST /box/media`, capability `GET`) lives in `MEDIA_DIR/box/`; box files expire by `box_media.expiresAt` (14 d, `BoxReaper`). The uploader can remove one earlier: `DELETE /box/media/:id` with the secret whose SHA-256 the upload stored in `box_media.deleteHash` (plan D3; constant-time compare, file before row, every failure a `404`; no stored hash = reaper-only). The box learns no account from it.
 
 ## SSRF defence layers (§10)
 
@@ -17,6 +17,10 @@ The only user-URL fetch surface is `POST /messages/link-preview` (`src/link-prev
 
 1. URL-literal — `isPrivateIp` byte-parses the WHATWG-normalized hostname, so decimal/hex/octal IPv4, IPv4-mapped/NAT64 IPv6, `0.0.0.0`, CGNAT, ULA, and link-local literals are all rejected (replaced the old `PRIVATE_IP_RE`, which missed those and false-matched any `fd*` host).
 2. DNS resolve-and-pin — every outbound request goes through an undici `Agent` whose `connect.lookup` (`ssrfSafeLookup`) resolves all A/AAAA records and refuses the connection if ANY is private; the socket dials only those validated addresses, so DNS-rebinding cannot bypass it. Swapping `fetchImpl` back to global `fetch` drops the pin.
+
+The og:image download (`fetchImage`, C1) goes through the same `fetchImpl` and redirect loop with the HTTPS-only `isSafeImageUrl` check on every hop, `image/*` only, a 512 KiB streamed cap (and a Content-Length pre-check) and its own 5 s timeout; a failure drops only `imageData`.
+
+**Traffic profile of `POST /messages/link-preview` since C1:** one call is now up to two outbound fetches (page, then og:image) and a response of up to ~700 KB (512 KiB of image base64-encoded) instead of ~1 KB, per web send containing a link; worst case 5 s + 5 s of held request. The 30/min per-user throttle is unchanged (worst case ~21 MB/min outbound per user); the web client scales the bytes down to ≤6 KiB and discards them.
 
 Redirects are manual (`redirect:'manual'`, max 5); every hop is re-validated at the literal layer before the next fetch and re-pinned at the DNS layer on connect.
 

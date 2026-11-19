@@ -19,7 +19,7 @@ describe('RecoverPasswordDto (plan B7)', () => {
     expect(out.phrase).toBeUndefined();
   });
 
-  it('still accepts the legacy plaintext phrase of clients up to 0.2.88', async () => {
+  it('still accepts the legacy plaintext phrase of clients up to 0.2.89', async () => {
     const out = (await pipe.transform(
       { ...base, phrase: 'abandon ability able' },
       meta,

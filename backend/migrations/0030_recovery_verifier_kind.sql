@@ -3,7 +3,7 @@
 -- `recovery_keys."verifierHash"` is an Argon2id PHC string either way; this
 -- column says WHAT it was computed over, because both look like `$argon2id$`:
 --
---   phrase_v1  the plaintext 12-word phrase, sent by clients up to 0.2.88.
+--   phrase_v1  the plaintext 12-word phrase, sent by clients up to 0.2.89.
 --              Verifies ONLY a plaintext `phrase` (old clients keep their
 --              recovery during the transition). The client is asked to
 --              replace it (`ownKeyBundleStatus.recoveryKeyLegacy`).
@@ -23,6 +23,11 @@
 --   ALTER TABLE public.recovery_keys DROP COLUMN "verifierKind";
 -- (an auth_v2 row then verifies nothing an old backend accepts: its owner
 -- must enrol again.)
+--
+-- A CODE rollback past this release MUST run that inverse migration first:
+-- the previous backend verifies every row as a plaintext-phrase verifier, so
+-- it would refuse every auth_v2 row's owner (and the column would be
+-- unknown to its entity).
 ALTER TABLE public.recovery_keys
   ADD COLUMN IF NOT EXISTS "verifierKind" character varying(16) NOT NULL
   DEFAULT 'phrase_v1';

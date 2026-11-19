@@ -24,7 +24,7 @@ import {
  * The optional recovery credential shortens the delay (§6.2.1). Plan B7: new
  * clients send `recoveryAuth` (the HKDF-derived authSecret) and NEVER the
  * phrase; `recoveryPhrase` is the legacy plaintext field of clients up to
- * 0.2.88 and is verified only against a legacy (`phrase_v1`) row. At most one
+ * 0.2.89 and is verified only against a legacy (`phrase_v1`) row. At most one
  * of the two. Both are bounded in length so a hostile payload cannot turn the
  * memory-hard verifier into a denial-of-service lever.
  */
@@ -104,9 +104,35 @@ export class RecoveryBackupDto {
 }
 
 /**
+ * An `authSecret` enrolment must carry a version-2 backup: a v1 blob is
+ * PBKDF2 over the phrase, and storing an `auth_v2` verifier next to it would
+ * pair a server-blind verifier with a blob the old KDF could open.
+ */
+function AuthSecretNeedsV2Backup() {
+  return (object: object, propertyName: string): void => {
+    registerDecorator({
+      name: 'authSecretNeedsV2Backup',
+      target: object.constructor,
+      propertyName,
+      validator: {
+        validate(value: unknown, args?: ValidationArguments): boolean {
+          if (value == null) return true;
+          const backup = (args?.object as { backup?: { version?: unknown } })
+            .backup;
+          return backup?.version === 2;
+        },
+        defaultMessage(): string {
+          return 'authSecret requires a version 2 backup';
+        },
+      },
+    });
+  };
+}
+
+/**
  * Enrolls or replaces the account's recovery key (§6.2.1). Plan B7: new
  * clients send `authSecret` (HKDF output; the phrase never leaves the device).
- * `phrase` is the legacy plaintext field of clients up to 0.2.88; it stores a
+ * `phrase` is the legacy plaintext field of clients up to 0.2.89; it stores a
  * `phrase_v1` verifier. Exactly one of the two.
  */
 export class SetRecoveryKeyDto {
@@ -120,6 +146,7 @@ export class SetRecoveryKeyDto {
     required: true,
     isValid: (v) => typeof v === 'string' && AUTH_SECRET_PATTERN.test(v),
   })
+  @AuthSecretNeedsV2Backup()
   authSecret?: string;
 
   /**

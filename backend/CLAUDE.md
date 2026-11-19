@@ -82,7 +82,7 @@ Entities in `backend/src/**/*.entity.ts` define the dev schema (TypeORM `synchro
 
 - Avatars are the only account-keyed files, and nothing writes them any more (decision 138): `POST /users/profile-picture` and every `/users/profile-photos/*` route are gone (404), and `searchUsers` answers carry no photo field. `GET /media/avatars/:filename` (public, basename only; types and layout → sec "Media storage") and `GET /users/me` `profilePictureUrl` stay for the one-time client migration; account delete still unlinks the files. Release B deletes the rest.
 - There is no `POST /media/upload`, no `GET /media/msgs/*` and no media sweep. Old `msgs/` files that survive on a volume are read, served and swept by nothing; the deploy that applied `0027` archives and removes them.
-- Box media lives in `MEDIA_DIR/box/` (→ sec "Box media location").
+- Box media lives in `MEDIA_DIR/box/` (→ sec "Box media location"). The uploader can delete its file with `DELETE /box/media/:id` (secret hash in `box_media.deleteHash`, migration `0029`; file first, then row; all failures `404`); the box still imports nothing account-keyed (I1).
 - `LocalStorageService.deleteFile()` has a resolved-path containment check against `MEDIA_DIR`. Keep it even if DTO validation looks strict.
 - `MEDIA_X_ACCEL_REDIRECT=true` only works with nginx internal `/internal/media/`; otherwise media responses can become empty 200s.
 
@@ -100,6 +100,7 @@ Entities in `backend/src/**/*.entity.ts` define the dev schema (TypeORM `synchro
 - `POST /messages/link-preview` lives in `src/link-preview/` (`LinkPreviewModule`; the path predates the module and stays, nginx `location /messages/`). Box sends use it.
 - SSRF defence in `link-preview.service.ts` is two-layer (URL-literal `isPrivateIp` + undici DNS resolve-and-pin) and both layers must stay; do not swap `fetchImpl` back to global `fetch` (→ sec "SSRF defence layers").
 - Redirects are manual (max 5), each hop re-validated; do not switch to default fetch follow.
+- The backend also fetches the validated og:image (`fetchImage`: same pinned agent, manual re-validated redirects, `image/*` only, 512 KiB streamed cap, 5 s) and returns it base64 as `imageData` (C1); `imageUrl` stays for old web clients.
 - `og:image` must be HTTPS and non-private; relative image URLs are resolved against page URL.
 - Keep the live-loopback pinned-agent test in `link-preview.service.unit.spec.ts` if you touch the agent.
 

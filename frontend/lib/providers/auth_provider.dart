@@ -60,11 +60,6 @@ enum AuthStatusCode {
   /// here would point at the NEW-password field, which is not what failed.
   phraseRejected,
 
-  /// The recover door answered 409 `legacy_recovery_key` (plan B7): the
-  /// account's key was set by an older version and the server cannot check the
-  /// new proof against it. The owner must replace it from a signed-in device.
-  legacyRecoveryKey,
-
   /// The endpoint's rate limit refused this attempt (HTTP 429).
   tooManyAttempts,
 
@@ -136,8 +131,6 @@ AuthStatusCode classifyAuthFailure(
       },
       // 423: the recovery-phrase lockout (5 wrong phrases → 1 h).
       423 => AuthStatusCode.tooManyAttempts,
-      409 when attempt == AuthAttempt.recover =>
-        AuthStatusCode.legacyRecoveryKey,
       409 => AuthStatusCode.nicknameTaken,
       429 => AuthStatusCode.tooManyAttempts,
       >= 500 => AuthStatusCode.serverError,

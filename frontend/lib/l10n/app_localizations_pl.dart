@@ -528,11 +528,8 @@ class AppLocalizationsPl extends AppLocalizations {
       'Serwer nie mógł tego teraz obsłużyć. Spróbuj za chwilę.';
 
   @override
-  String get authStatusPhraseRejected => 'Nazwa lub fraza nie pasuje.';
-
-  @override
-  String get authStatusLegacyRecoveryKey =>
-      'Ten klucz odzyskiwania został ustawiony w starszej wersji Umbry i tu już nie działa. Na urządzeniu, na którym nadal jesteś zalogowany/a, ustaw nowy w Ustawieniach → Klucz odzyskiwania.';
+  String get authStatusPhraseRejected =>
+      'Nazwa lub fraza nie pasuje. Jeśli Twój klucz odzyskiwania ustawiono w starszej wersji, wymień go w Ustawieniach na urządzeniu, na którym nadal jesteś zalogowany/a.';
 
   @override
   String get identityResetLegacyRecoveryKey =>

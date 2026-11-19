@@ -392,7 +392,7 @@ surface.
 
 #### 6.2.1 Recovery key (owner-ratified for 0b; spec per round-2 security finding 2)
 Generated client-side on demand: **12-word BIP39-style phrase from ≥128 bits CSPRNG**, shown once,
-never stored on-device or transmitted except as a verifier (**plan B7: since the build after 0.2.88 not even that — the device sends only a value derived from it, `contract wire.md` "The recovery phrase never leaves the device"; a legacy row still holds a verifier of the plaintext phrase**). Server stores an **Argon2id** hash
+never stored on-device or transmitted except as a verifier (**plan B7: since the build after 0.2.89 not even that — the device sends only a value derived from it, `contract wire.md` "The recovery phrase never leaves the device"; a legacy row still holds a verifier of the plaintext phrase**). Server stores an **Argon2id** hash
 (memory-hard parameters pinned at implementation; NEVER a fast hash — a DB dump must not make the
 phrase brute-forceable). Semantics:
 - **Shortens, never silences:** presenting the phrase reduces the reset delay from 72 h to a

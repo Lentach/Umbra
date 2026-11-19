@@ -386,7 +386,10 @@ class ApiService {
     return {
       'url': data['url'] as String?,
       'title': data['title'] as String?,
-      'imageUrl': data['imageUrl'] as String?,
+      // The og:image bytes (base64), fetched by the backend's SSRF-safe
+      // path (C1); the caller scales them into the envelope's `img`. The
+      // response's `imageUrl` is for web clients <=0.2.88 and is ignored.
+      'imageData': data['imageData'] as String?,
     };
   }
 

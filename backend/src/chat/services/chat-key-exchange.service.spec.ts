@@ -1882,6 +1882,22 @@ describe('ChatKeyExchangeService', () => {
       ['neither credential', {}],
       ['both credentials', { authSecret, phrase: 'x'.repeat(20) }],
       ['a short authSecret', { authSecret: 'AAAA' }],
+      [
+        'an authSecret with no backup',
+        { authSecret: Buffer.alloc(32, 1).toString('base64') },
+      ],
+      [
+        'an authSecret with a version-1 backup',
+        {
+          authSecret: Buffer.alloc(32, 1).toString('base64'),
+          backup: {
+            blob: 'c2VhbGVkLWJsb2I=',
+            salt: 'c2FsdC1zaXh0ZWVuLWI=',
+            iterations: 600000,
+            version: 1,
+          },
+        },
+      ],
       ['a non-base64 authSecret', { authSecret: '!'.repeat(44) }],
     ])('refuses %s without writing anything', async (_name, payload) => {
       await service.handleSetRecoveryKey(

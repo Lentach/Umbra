@@ -16,7 +16,7 @@ typedef E2eEnvelopeFields = ({
   String? mediaThumbHash,
   String? linkPreviewUrl,
   String? linkPreviewTitle,
-  String? linkPreviewImageUrl,
+  String? linkPreviewImage,
   Object? senderListInfo,
   String? msgId,
   String type,
@@ -108,7 +108,9 @@ class E2eEnvelope {
   static const String _keyLinkPreview = 'linkPreview';
   static const String _keyUrl = 'url';
   static const String _keyTitle = 'title';
-  static const String _keyImageUrl = 'imageUrl';
+  /// The sender-made JPEG thumbnail, base64 (C1). A legacy `imageUrl` key is
+  /// ignored on receive: no receiver loads an image from a sender's host.
+  static const String _keyImage = 'img';
 
   /// The §5.2 layer-2 device-list cross-check (spec §12 amendment (xv)). Lives
   /// INSIDE the E2E plaintext: the server never sees it. Unknown keys are
@@ -421,7 +423,7 @@ class E2eEnvelope {
           : null,
       linkPreviewUrl: lp?[_keyUrl] as String?,
       linkPreviewTitle: lp?[_keyTitle] as String?,
-      linkPreviewImageUrl: lp?[_keyImageUrl] as String?,
+      linkPreviewImage: lp?[_keyImage] as String?,
       senderListInfo: envelope[_keySenderListInfo],
       msgId: rawMsgId is String && _msgIdShape.hasMatch(rawMsgId)
           ? rawMsgId

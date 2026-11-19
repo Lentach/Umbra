@@ -760,7 +760,7 @@ export class ChatKeyExchangeService {
    * Serves the caller's phrase-sealed identity backup (amendment (lxxviii)
    * clause 1). Own account only. A version-2 blob is AES-256-GCM under an HKDF
    * output the server never receives (plan B7); a version-1 blob is under
-   * PBKDF2 over the phrase, which a client up to 0.2.88 sent to the server in
+   * PBKDF2 over the phrase, which a client up to 0.2.89 sent to the server in
    * plaintext — so v1 is server-blind only for an account that never did. The
    * gateway throttles this like `setRecoveryKey` (10/15 min) — the blob is
    * useless without the phrase, but there is no reason to serve it in a loop.

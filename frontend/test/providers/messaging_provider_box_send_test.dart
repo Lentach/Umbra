@@ -9,6 +9,8 @@ import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/services/box/box_frame.dart';
+import 'package:fireplace/services/box/box_media_fetcher.dart';
+import 'package:fireplace/services/box/box_media_store.dart';
 import 'package:fireplace/services/box/box_media_frame.dart';
 import 'package:fireplace/services/box/box_outbox.dart';
 import 'package:fireplace/services/box/box_wire.dart';
@@ -94,7 +96,9 @@ class _SendEncryption extends EncryptionProvider {
       // Like the real cache: a verified answer is held, a non-enrolled one
       // included.
       lists[userId] =
-          served[userId] ?? lists[userId] ?? const VerifiedDeviceList.notEnrolled();
+          served[userId] ??
+          lists[userId] ??
+          const VerifiedDeviceList.notEnrolled();
     }
     return lists[userId] ?? const VerifiedDeviceList.notEnrolled();
   }
@@ -245,6 +249,19 @@ class _Outbox implements BoxOutbox {
   @override
   Future<int?> nextLocalId() async => noLocalId ? null : _next++;
 
+  /// Every `DELETE /box/media`, with the secret it presented.
+  final List<(Uint8List, Uint8List)> deletes = [];
+
+  /// When set, a delete never completes until it does.
+  Completer<void>? deleteHold;
+
+  @override
+  Future<BoxResult<void>> deleteMedia(Uint8List id, Uint8List secret) async {
+    deletes.add((id, secret));
+    await deleteHold?.future;
+    return const BoxOk(null);
+  }
+
   @override
   Future<BoxResult<BoxMediaRef>> uploadMedia(
     ContactOutbound to,
@@ -257,7 +274,13 @@ class _Outbox implements BoxOutbox {
     final id = Uint8List(kBoxMediaIdBytes)..[0] = media.length + 1;
     media[boxB64(id)] = framed;
     return BoxOk(
-      BoxMediaRef(id: id, bucket: 'd14', expiresAt: DateTime.utc(2026, 10, 10)),
+      BoxMediaRef(
+        id: id,
+        bucket: 'd14',
+        expiresAt: DateTime.utc(2026, 10, 10),
+        deleteSecret: Uint8List(kBoxMediaDeleteSecretBytes)
+          ..fillRange(0, kBoxMediaDeleteSecretBytes, 0x5a + id[0]),
+      ),
     );
   }
 
@@ -330,6 +353,7 @@ void main() {
   late _Outbox outbox;
   late List<String> emitted;
   late _MediaCrypto mediaUpload;
+  late MemoryBoxMediaStore mediaStore;
 
   MessagingProvider newProvider() => MessagingProvider()
     ..setConversationsProvider(conversations)
@@ -341,6 +365,10 @@ void main() {
     ..setActiveConversationIdForTest(10)
     ..setEmitCallback((event, data) => emitted.add(event))
     ..boxOutbox = outbox
+    ..boxMedia = BoxMediaFetcher(
+      store: mediaStore,
+      download: (id) async => const BoxRefused(BoxCode.notFound),
+    )
     ..setMediaCryptoForTest(mediaUpload);
 
   Future<void> setUpWith({int? timer}) async {
@@ -357,6 +385,7 @@ void main() {
     conversations = ConversationsProvider()..setCurrentUserId(1);
     seedConversations(conversations, [_conv(timer: timer)]);
     conversations.openConversation(10);
+    mediaStore = MemoryBoxMediaStore();
     outbox = _Outbox();
     mediaUpload = _MediaCrypto();
     emitted = [];
@@ -422,7 +451,11 @@ void main() {
         expect(frame.kind, BoxFrameKind.preKey);
         final envelope = envelopeOf(frame);
         expect(envelope['content'], 'hi over the box');
-        expect(envelope['msgId'], row.wireId, reason: 'one wire id per message');
+        expect(
+          envelope['msgId'],
+          row.wireId,
+          reason: 'one wire id per message',
+        );
         expect(envelope['ts'], row.createdAt.millisecondsSinceEpoch);
       }
       expect(isLocalMessageId(row.id), isTrue);
@@ -782,7 +815,8 @@ void main() {
         await pump();
         expect(sentTo(), unorderedEquals(['sid-1', 'self-3']));
         expect(
-          provider.messages.singleWhere((m) => m.tempId == row.tempId)
+          provider.messages
+              .singleWhere((m) => m.tempId == row.tempId)
               .deliveryStatus,
           MessageDeliveryStatus.sent,
         );
@@ -915,7 +949,8 @@ void main() {
 
       expect(emitted, isNot(contains('sendMessage')));
       expect(
-        provider.messages.singleWhere((m) => m.tempId == failed.tempId)
+        provider.messages
+            .singleWhere((m) => m.tempId == failed.tempId)
             .deliveryStatus,
         MessageDeliveryStatus.failed,
       );
@@ -936,14 +971,17 @@ void main() {
     },
   );
 
-  test('no local id (the store refused) fails before anything goes out', () async {
-    bob([1]);
-    outbox.noLocalId = true;
-    final row = await send('nowhere to keep it');
+  test(
+    'no local id (the store refused) fails before anything goes out',
+    () async {
+      bob([1]);
+      outbox.noLocalId = true;
+      final row = await send('nowhere to keep it');
 
-    expect(row.deliveryStatus, MessageDeliveryStatus.failed);
-    expect(outbox.delivered, isEmpty);
-  });
+      expect(row.deliveryStatus, MessageDeliveryStatus.failed);
+      expect(outbox.delivered, isEmpty);
+    },
+  );
 
   /// A fresh provider whose chat opens with an empty server page: box rows
   /// come back only from their records (decision 14).
@@ -1178,8 +1216,10 @@ void main() {
       provider.sendMessage('early');
       await pump();
       expect(outbox.delivered, isEmpty);
-      expect(provider.messages.last.deliveryStatus,
-          MessageDeliveryStatus.sending);
+      expect(
+        provider.messages.last.deliveryStatus,
+        MessageDeliveryStatus.sending,
+      );
 
       hold.complete();
       await pump();
@@ -1306,8 +1346,10 @@ void main() {
       provider.sendMessage('mine first');
       await pump();
       expect(outbox.delivered, isEmpty);
-      expect(provider.messages.last.deliveryStatus,
-          MessageDeliveryStatus.sending);
+      expect(
+        provider.messages.last.deliveryStatus,
+        MessageDeliveryStatus.sending,
+      );
 
       own.complete();
       await pump();
@@ -1445,7 +1487,11 @@ void main() {
         await pump();
         expect(outbox.delivered, hasLength(2), reason: row.tempId);
         for (final (_, frame) in outbox.delivered) {
-          expect(envelopeOf(frame), containsPair('ttl', 30), reason: row.tempId);
+          expect(
+            envelopeOf(frame),
+            containsPair('ttl', 30),
+            reason: row.tempId,
+          );
         }
       }
     },
@@ -1485,14 +1531,15 @@ void main() {
       provider.sendMessage('after the pre-build');
       await pump();
       expect(outbox.delivered, isEmpty);
-      expect(provider.messages.last.deliveryStatus,
-          MessageDeliveryStatus.sending);
+      expect(
+        provider.messages.last.deliveryStatus,
+        MessageDeliveryStatus.sending,
+      );
 
       build.complete();
       await pump();
       expect(outbox.delivered, hasLength(2));
-      expect(provider.messages.last.deliveryStatus,
-          MessageDeliveryStatus.sent);
+      expect(provider.messages.last.deliveryStatus, MessageDeliveryStatus.sent);
       expect(encryption.bundleFetches, [(2, 1), (2, 2)]);
     },
   );
@@ -1510,7 +1557,10 @@ void main() {
       expect(row.deliveryStatus, MessageDeliveryStatus.failed);
       expect(outbox.delivered, isEmpty);
       expect(emitted, isNot(contains('sendMessage')));
-      expect(encryption.bundleFetches, [(2, 1), (2, 2)], reason: 'connect only');
+      expect(encryption.bundleFetches, [
+        (2, 1),
+        (2, 2),
+      ], reason: 'connect only');
 
       provider
         ..onConnect(true)
@@ -1522,7 +1572,8 @@ void main() {
       await pump();
       expect(outbox.delivered, hasLength(2));
       expect(
-        provider.messages.singleWhere((m) => m.tempId == row.tempId)
+        provider.messages
+            .singleWhere((m) => m.tempId == row.tempId)
             .deliveryStatus,
         MessageDeliveryStatus.sent,
       );
@@ -1611,6 +1662,90 @@ void main() {
     }
 
     test(
+      'delete-for-everyone of our own attachment deletes its box file with '
+      'the secret the upload returned, and that secret is in no frame to a '
+      'peer or a sibling (plan D3)',
+      () async {
+        bob([1, 2]);
+        withSibling();
+        expect(await sendImage(), isTrue);
+        final row = rowOf(MessageType.image);
+        final secret = Uint8List(32)..fillRange(0, 32, 0x5a + 1);
+        expect(boxB64(secret), isNotEmpty);
+        outbox.delivered.clear();
+
+        provider.deleteMessage(row.id, forEveryone: true);
+        await pump();
+
+        expect(outbox.deletes, hasLength(1));
+        expect(boxB64(outbox.deletes.single.$1), outbox.media.keys.single);
+        expect(outbox.deletes.single.$2, secret);
+        // The upload's frames are gone from `delivered`; the delete frames
+        // (and every earlier frame, re-read below) never hold the secret.
+        for (final (_, frame) in outbox.delivered) {
+          expect(
+            jsonEncode(envelopeOf(frame)),
+            isNot(contains(boxB64(secret))),
+          );
+        }
+        expect(provider.messages.where((m) => m.id == row.id), isEmpty);
+      },
+    );
+
+    test(
+      'the local delete-for-everyone is applied even when the box delete '
+      'never completes (plan D3)',
+      () async {
+        bob([1]);
+        expect(await sendImage(), isTrue);
+        final row = rowOf(MessageType.image);
+        outbox.deleteHold = Completer<void>();
+
+        provider.deleteMessage(row.id, forEveryone: true);
+        await pump();
+
+        expect(outbox.deletes, hasLength(1));
+        expect(provider.messages.where((m) => m.id == row.id), isEmpty);
+        outbox.deleteHold!.complete();
+      },
+    );
+
+    test(
+      'the delete secret is never part of the sent envelopes (plan D3)',
+      () async {
+        bob([1, 2]);
+        withSibling();
+        expect(await sendImage(), isTrue);
+        final secret = boxB64(Uint8List(32)..fillRange(0, 32, 0x5a + 1));
+
+        expect(outbox.delivered, isNotEmpty);
+        for (final (to, frame) in outbox.delivered) {
+          final text = jsonEncode(envelopeOf(frame));
+          expect(text, isNot(contains(secret)), reason: to.sid);
+          expect(text, isNot(contains('eleteSecret')), reason: to.sid);
+        }
+      },
+    );
+
+    test(
+      'a sent attachment whose delete secret this device does not hold is '
+      'deleted for everyone without a box delete (plan D3)',
+      () async {
+        bob([1]);
+        expect(await sendImage(), isTrue);
+        final row = rowOf(MessageType.image);
+        final id = Uint8List(kBoxMediaIdBytes)..[0] = 1;
+        await mediaStore.delete(1, id);
+
+        provider.deleteMessage(row.id, forEveryone: true);
+        await pump();
+
+        expect(outbox.deletes, isEmpty);
+        expect(provider.messages.where((m) => m.id == row.id), isEmpty);
+      },
+    );
+
+    test(
       'an image to a covered peer is uploaded ONCE — framed to a ladder '
       'rung, charged to the first live peer device — and the same id and key '
       'ride in every peer frame and sent copy; nothing reaches /media/upload '
@@ -1625,7 +1760,10 @@ void main() {
         final (to, framed) = outbox.uploads.single;
         expect(to.sid, 'sid-1', reason: 'the first live peer target pays');
         expect(framed.length, 16 * 1024, reason: 'the smallest rung that fits');
-        expect(unframeMedia(framed), [...photo.reversed, ...List.filled(16, 1)]);
+        expect(unframeMedia(framed), [
+          ...photo.reversed,
+          ...List.filled(16, 1),
+        ]);
         final id = outbox.media.keys.single;
         expect(
           outbox.delivered.map((d) => d.$1.sid),
@@ -1973,8 +2111,7 @@ void main() {
       setUp(() {
         final dir = Directory.systemTemp.createTempSync('box_voice_');
         addTearDown(() => dir.deleteSync(recursive: true));
-        recording = File('${dir.path}/rec.m4a')
-          ..writeAsBytesSync([1, 2, 3, 4]);
+        recording = File('${dir.path}/rec.m4a')..writeAsBytesSync([1, 2, 3, 4]);
       });
 
       Future<void> sendVoice() => provider.sendVoiceMessage(
@@ -2032,11 +2169,11 @@ void main() {
   group('decision 104: a box message that did not go out is kept', () {
     const unsentPrefix = 'e2e_1_boxunsent_v1_';
 
-    Future<List<String>> unsentKeys() async => (await encryption.store
-            .contentKv)
-        .getKeys()
-        .where((k) => k.startsWith(unsentPrefix))
-        .toList();
+    Future<List<String>> unsentKeys() async =>
+        (await encryption.store.contentKv)
+            .getKeys()
+            .where((k) => k.startsWith(unsentPrefix))
+            .toList();
 
     /// The user leaves the chat and opens it again: its rows leave the
     /// provider, and the first (empty) server page brings them back.
@@ -2057,8 +2194,10 @@ void main() {
       expect(failed.deliveryStatus, MessageDeliveryStatus.failed);
 
       await reopenChat();
-      expect(rowOf(failed.tempId!).deliveryStatus,
-          MessageDeliveryStatus.failed);
+      expect(
+        rowOf(failed.tempId!).deliveryStatus,
+        MessageDeliveryStatus.failed,
+      );
 
       await restart();
       final back = rowOf(failed.tempId!);
@@ -2083,8 +2222,7 @@ void main() {
       outbox.hold = null;
       await restart();
 
-      expect(rowOf(stuck.tempId!).deliveryStatus,
-          MessageDeliveryStatus.failed);
+      expect(rowOf(stuck.tempId!).deliveryStatus, MessageDeliveryStatus.failed);
     });
 
     test('its retry after a restart re-seals under the SAME wire id and never '
@@ -2105,7 +2243,8 @@ void main() {
       expect(outbox.delivered, hasLength(1));
       expect(envelopeOf(outbox.delivered.single.$2)['msgId'], firstWire);
       expect(
-        provider.messages.singleWhere((m) => m.content == 'same wire')
+        provider.messages
+            .singleWhere((m) => m.content == 'same wire')
             .deliveryStatus,
         MessageDeliveryStatus.sent,
       );
@@ -2123,8 +2262,10 @@ void main() {
       await provider.retryFailedMessage(failed.tempId!);
       await pump();
 
-      expect(rowOf(failed.tempId!).deliveryStatus,
-          MessageDeliveryStatus.failed);
+      expect(
+        rowOf(failed.tempId!).deliveryStatus,
+        MessageDeliveryStatus.failed,
+      );
     });
 
     test('once it goes through it is no longer kept: a restart shows the '
@@ -2159,8 +2300,7 @@ void main() {
       outbox.refuse.add(1);
       final failed = await send('vanishing unsent');
       // Two minutes later: rewrite the kept entry's send time.
-      final kept =
-          (await encryption.store.boxUnsent(1, 10))[failed.tempId!]!;
+      final kept = (await encryption.store.boxUnsent(1, 10))[failed.tempId!]!;
       await encryption.store.saveBoxUnsent(1, failed.tempId!, {
         ...kept,
         'at': failed.createdAt.millisecondsSinceEpoch - 120 * 1000,
@@ -2193,13 +2333,17 @@ void main() {
 
       provider.deleteMessage(failed.id, forEveryone: false);
       await pump();
-      expect(provider.messages.where((m) => m.tempId == failed.tempId),
-          isEmpty);
+      expect(
+        provider.messages.where((m) => m.tempId == failed.tempId),
+        isEmpty,
+      );
       expect(emitted, isNot(contains('deleteMessage')));
 
       await restart();
-      expect(provider.messages.where((m) => m.tempId == failed.tempId),
-          isEmpty);
+      expect(
+        provider.messages.where((m) => m.tempId == failed.tempId),
+        isEmpty,
+      );
       expect(await unsentKeys(), isEmpty);
     });
 
@@ -2225,8 +2369,7 @@ void main() {
 
       await restart();
 
-      expect(rowOf(shown.tempId!).deliveryStatus,
-          MessageDeliveryStatus.failed);
+      expect(rowOf(shown.tempId!).deliveryStatus, MessageDeliveryStatus.failed);
     });
 
     test('a kept copy of a message whose sent record did land (the app died '
@@ -2251,35 +2394,43 @@ void main() {
       expect(await unsentKeys(), isEmpty);
     });
 
-    test('reopening the chat while it is still going adds no second row; '
-        'once it goes through there is one sent row and nothing kept',
-        () async {
-      bob([1]);
-      final hold = outbox.hold = Completer<void>();
-      provider.sendMessage('in flight');
-      await pump();
-      final tempId = provider.messages.last.tempId!;
+    test(
+      'reopening the chat while it is still going adds no second row; '
+      'once it goes through there is one sent row and nothing kept',
+      () async {
+        bob([1]);
+        final hold = outbox.hold = Completer<void>();
+        provider.sendMessage('in flight');
+        await pump();
+        final tempId = provider.messages.last.tempId!;
 
-      await reopenChat();
-      expect(provider.messages.where((m) => m.tempId == tempId), hasLength(1));
-      expect(rowOf(tempId).deliveryStatus, MessageDeliveryStatus.sending);
+        await reopenChat();
+        expect(
+          provider.messages.where((m) => m.tempId == tempId),
+          hasLength(1),
+        );
+        expect(rowOf(tempId).deliveryStatus, MessageDeliveryStatus.sending);
 
-      outbox.hold = null;
-      hold.complete();
-      await pump(80);
+        outbox.hold = null;
+        hold.complete();
+        await pump(80);
 
-      final rows = provider.messages.where((m) => m.content == 'in flight');
-      expect(rows, hasLength(1));
-      expect(rows.single.deliveryStatus, MessageDeliveryStatus.sent);
-      expect(await unsentKeys(), isEmpty);
-    });
+        final rows = provider.messages.where((m) => m.content == 'in flight');
+        expect(rows, hasLength(1));
+        expect(rows.single.deliveryStatus, MessageDeliveryStatus.sent);
+        expect(await unsentKeys(), isEmpty);
+      },
+    );
 
     test('a kept reply to a message that itself disappears holds none of '
         'its words (E18a)', () async {
       bob([1]);
       outbox.refuse.add(1);
       provider.setReplyingTo(
-        quotable(5, wireId: 'wire-00000005').copyWith(disappearAfterSeconds: 60),
+        quotable(
+          5,
+          wireId: 'wire-00000005',
+        ).copyWith(disappearAfterSeconds: 60),
       );
       final failed = await send('re: fleeting');
       expect(failed.deliveryStatus, MessageDeliveryStatus.failed);
