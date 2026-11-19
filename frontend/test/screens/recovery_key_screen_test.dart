@@ -169,10 +169,14 @@ void main() {
 
     final payload =
         emitted.firstWhere((e) => e.$1 == 'setRecoveryKey').$2 as Map;
-    expect(payload['phrase'], words.join(' '));
+    // Plan B7: the phrase itself is never in the emitted payload; the server
+    // gets the derived proof and a v2 backup sealed under an HKDF key.
+    expect(payload.containsKey('phrase'), isFalse);
+    expect(payload['authSecret'], RecoveryPhrase.deriveAuthSecret(words.join(' ')));
+    expect(payload.toString(), isNot(contains(words.join(' '))));
     final backup = payload['backup'] as Map;
-    expect(backup['version'], 1);
-    expect(backup['iterations'], kIdentityBackupKdfIterations);
+    expect(backup['version'], 2);
+    expect(backup['iterations'], 0);
     expect(backup['blob'], isA<String>());
     expect(backup['salt'], isA<String>());
     expect(results, [true], reason: 'a landed backup pops true');

@@ -522,7 +522,22 @@ class AppLocalizationsEn extends AppLocalizations {
       'The server could not handle that right now. Try again in a moment.';
 
   @override
-  String get authStatusPhraseRejected => 'Name or phrase does not match.';
+  String get authStatusPhraseRejected =>
+      'Name or phrase does not match. If your recovery key was set by an older version, replace it in Settings on a device where you are still signed in.';
+
+  @override
+  String get identityResetLegacyRecoveryKey =>
+      'Your recovery key was set by an older version and cannot shorten the wait. Set a new one in Settings on a signed-in device, or start the reset without it.';
+
+  @override
+  String get recoveryKeyLegacyTitle => 'Replace your recovery key';
+
+  @override
+  String get recoveryKeyLegacyBody =>
+      'Your recovery key was set by an older version and must be replaced.';
+
+  @override
+  String get recoveryKeyLegacyDismiss => 'Not now';
 
   @override
   String get authForgotPassword => 'Forgot password';

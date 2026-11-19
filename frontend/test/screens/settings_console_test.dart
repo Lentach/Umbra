@@ -3,6 +3,7 @@ import 'package:fireplace/l10n/app_localizations.dart';
 import 'package:fireplace/models/chat_background_preference.dart';
 import 'package:fireplace/providers/auth_provider.dart';
 import 'package:fireplace/providers/connection_provider.dart';
+import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/providers/passcode_provider.dart';
 import 'package:fireplace/providers/settings_provider.dart';
 import 'package:fireplace/screens/settings_screen.dart';
@@ -34,6 +35,7 @@ Widget _host({
     providers: [
       ChangeNotifierProvider(create: (_) => AuthProvider()),
       ChangeNotifierProvider(create: (_) => ConnectionProvider()),
+      ChangeNotifierProvider(create: (_) => EncryptionProvider()),
       ChangeNotifierProvider(
         create: (_) =>
             SettingsProvider(initialThemePreference: themePreference),
@@ -86,6 +88,7 @@ Widget _settingsApp({Locale locale = const Locale('en')}) {
     providers: [
       ChangeNotifierProvider(create: (_) => AuthProvider()),
       ChangeNotifierProvider(create: (_) => ConnectionProvider()),
+      ChangeNotifierProvider(create: (_) => EncryptionProvider()),
       ChangeNotifierProvider(create: (_) => SettingsProvider()),
       // The SECURITY section carries the Passcode Lock row.
       ChangeNotifierProvider(
@@ -304,6 +307,7 @@ void main() {
           providers: [
             ChangeNotifierProvider(create: (_) => AuthProvider()),
             ChangeNotifierProvider(create: (_) => ConnectionProvider()),
+            ChangeNotifierProvider(create: (_) => EncryptionProvider()),
             ChangeNotifierProvider(create: (_) => SettingsProvider()),
             // The SECURITY section carries the Passcode Lock row.
             ChangeNotifierProvider(

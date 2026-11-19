@@ -415,7 +415,11 @@ describe('AuthService', () => {
       checkPasswordMock.mockResolvedValue(false);
       await lockOut('testuser', IP_A);
       identityResetService.verifyRecoveryPhrase.mockResolvedValue('accepted');
-      await service.recoverPassword('testuser#0427', 'a b c', 'NewPass1x');
+      await service.recoverPassword(
+        'testuser#0427',
+        { kind: 'phrase', value: 'a b c' },
+        'NewPass1x',
+      );
 
       checkPasswordMock.mockResolvedValue(true);
       await expect(
@@ -472,6 +476,11 @@ describe('AuthService', () => {
   describe('recoverPassword', () => {
     const phrase =
       'abandon ability able about above absent absorb abstract absurd abuse access accident';
+    const legacy = { kind: 'phrase', value: phrase } as const;
+    const v2 = {
+      kind: 'auth',
+      value: Buffer.alloc(32, 1).toString('base64'),
+    } as const;
 
     it('a correct phrase sets the password and answers with login tokens', async () => {
       usersService.findByUsernameAndTag.mockResolvedValue(mockUser as User);
@@ -479,13 +488,13 @@ describe('AuthService', () => {
 
       const result = await service.recoverPassword(
         'testuser#0427',
-        phrase,
+        legacy,
         'NewPass1x',
       );
 
       expect(identityResetService.verifyRecoveryPhrase).toHaveBeenCalledWith(
         1,
-        phrase,
+        legacy,
       );
       expect(usersService.setPassword).toHaveBeenCalledWith(1, 'NewPass1x');
       expect(devicesService.resolveLoginDeviceId).toHaveBeenCalledWith(1);
@@ -524,7 +533,7 @@ describe('AuthService', () => {
       });
 
       try {
-        await service.recoverPassword('testuser#0427', phrase, 'NewPass1x');
+        await service.recoverPassword('testuser#0427', legacy, 'NewPass1x');
       } finally {
         timerSpy.mockRestore();
         nowSpy.mockRestore();
@@ -540,13 +549,13 @@ describe('AuthService', () => {
       usersService.findByUsername.mockResolvedValue([]);
 
       await expect(
-        service.recoverPassword('nobody', phrase, 'NewPass1x'),
+        service.recoverPassword('nobody', v2, 'NewPass1x'),
       ).rejects.toThrow(UnauthorizedException);
       // (F34) Timing parity with a known name — the login door's twin:
       // "no such user" must cost the same verify as a wrong phrase, or the
       // door enumerates usernames by response time.
       expect(argon2.verify).toHaveBeenCalledTimes(1);
-      expect(argon2.verify).toHaveBeenCalledWith(expect.any(String), phrase);
+      expect(argon2.verify).toHaveBeenCalledWith(expect.any(String), v2.value);
       // ...but no account's failure counter is touched.
       expect(identityResetService.verifyRecoveryPhrase).not.toHaveBeenCalled();
       expect(usersService.setPassword).not.toHaveBeenCalled();
@@ -559,7 +568,7 @@ describe('AuthService', () => {
       );
 
       await expect(
-        service.recoverPassword('testuser#0427', phrase, 'NewPass1x'),
+        service.recoverPassword('testuser#0427', legacy, 'NewPass1x'),
       ).rejects.toThrow(UnauthorizedException);
       expect(argon2.verify).not.toHaveBeenCalled();
     });
@@ -571,7 +580,11 @@ describe('AuthService', () => {
       );
 
       await expect(
-        service.recoverPassword('testuser#0427', 'wrong', 'NewPass1x'),
+        service.recoverPassword(
+          'testuser#0427',
+          { kind: 'phrase', value: 'wrong' },
+          'NewPass1x',
+        ),
       ).rejects.toThrow('Invalid credentials');
       expect(usersService.setPassword).not.toHaveBeenCalled();
     });
@@ -581,9 +594,55 @@ describe('AuthService', () => {
       identityResetService.verifyRecoveryPhrase.mockResolvedValue('locked');
 
       await expect(
-        service.recoverPassword('testuser#0427', phrase, 'NewPass1x'),
+        service.recoverPassword('testuser#0427', legacy, 'NewPass1x'),
       ).rejects.toMatchObject({ status: 423 });
       expect(usersService.setPassword).not.toHaveBeenCalled();
+    });
+
+    it('an authSecret reaches the verifier as an auth credential (v2 door)', async () => {
+      usersService.findByUsernameAndTag.mockResolvedValue(mockUser as User);
+      identityResetService.verifyRecoveryPhrase.mockResolvedValue('accepted');
+
+      await service.recoverPassword('testuser#0427', v2, 'NewPass1x');
+
+      expect(identityResetService.verifyRecoveryPhrase.mock.calls).toEqual([
+        [1, v2],
+      ]);
+    });
+
+    it('a legacy key is indistinguishable from an unknown account (no enumeration oracle)', async () => {
+      usersService.findByUsername.mockResolvedValue([]);
+      const unknown = await service
+        .recoverPassword('nobody', v2, 'NewPass1x')
+        .catch((e: unknown) => e as UnauthorizedException);
+      usersService.findByUsernameAndTag.mockResolvedValue(mockUser as User);
+      identityResetService.verifyRecoveryPhrase.mockResolvedValue(
+        'legacy_recovery_key',
+      );
+      const legacyKey = await service
+        .recoverPassword('testuser#0427', v2, 'NewPass1x')
+        .catch((e: unknown) => e as UnauthorizedException);
+
+      expect(legacyKey).toBeInstanceOf(UnauthorizedException);
+      expect((legacyKey as UnauthorizedException).getStatus()).toBe(
+        (unknown as UnauthorizedException).getStatus(),
+      );
+      expect((legacyKey as UnauthorizedException).getResponse()).toEqual(
+        (unknown as UnauthorizedException).getResponse(),
+      );
+    });
+
+    it('a legacy key answers 401 like a wrong phrase, never 409', async () => {
+      usersService.findByUsernameAndTag.mockResolvedValue(mockUser as User);
+      identityResetService.verifyRecoveryPhrase.mockResolvedValue(
+        'legacy_recovery_key',
+      );
+
+      await expect(
+        service.recoverPassword('testuser#0427', v2, 'NewPass1x'),
+      ).rejects.toMatchObject({ status: 401, message: 'Invalid credentials' });
+      // The throw precedes every password change: nothing was issued.
+      expect(usersService.setPassword.mock.calls).toHaveLength(0);
     });
 
     it('an ambiguous bare username resolves to nobody', async () => {
@@ -593,7 +652,7 @@ describe('AuthService', () => {
       ]);
 
       await expect(
-        service.recoverPassword('testuser', phrase, 'NewPass1x'),
+        service.recoverPassword('testuser', v2, 'NewPass1x'),
       ).rejects.toThrow(UnauthorizedException);
       expect(identityResetService.verifyRecoveryPhrase).not.toHaveBeenCalled();
       expect(argon2.verify).toHaveBeenCalledTimes(1);

@@ -150,6 +150,10 @@ String? identityResetAnswerMessage(AppLocalizations l10n, String? status) {
       return l10n.identityResetPhraseRejected;
     case 'locked':
       return l10n.identityResetPhraseLocked;
+    case 'legacy_recovery_key':
+      // Plan B7: the stored key predates it and cannot check this client's
+      // proof. Nothing was started and nothing was counted.
+      return l10n.identityResetLegacyRecoveryKey;
     case 'not_enrolled':
       // (lxxiii) opt-in lock: nothing is locked, so nothing needs resetting.
       // Point at the recovery that actually works for this account — a fresh

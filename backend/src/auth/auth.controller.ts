@@ -14,6 +14,7 @@ import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshBodyDto } from './dto/refresh-body.dto';
 import { RecoverPasswordDto } from './dto/recover-password.dto';
+import { recoveryCredentialOf } from '../key-bundles/identity-reset.service';
 
 @Controller('auth')
 export class AuthController {
@@ -49,7 +50,7 @@ export class AuthController {
   recover(@Body() dto: RecoverPasswordDto) {
     return this.authService.recoverPassword(
       dto.identifier,
-      dto.phrase,
+      recoveryCredentialOf(dto.authSecret, dto.phrase)!,
       dto.newPassword,
     );
   }

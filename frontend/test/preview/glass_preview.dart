@@ -178,6 +178,7 @@ class GlassPreviewApp extends StatelessWidget {
         ),
         ChangeNotifierProvider<FriendsProvider>.value(value: friends),
         ChangeNotifierProvider(create: (_) => ConnectionProvider()),
+        ChangeNotifierProvider(create: (_) => EncryptionProvider()),
         ChangeNotifierProvider.value(value: EncryptionProvider()),
         ChangeNotifierProvider(
           create: (_) => SettingsProvider(initialThemePreference: themeName),

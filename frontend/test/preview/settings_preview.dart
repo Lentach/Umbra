@@ -15,6 +15,7 @@ import 'package:provider/provider.dart';
 import 'package:fireplace/l10n/app_localizations.dart';
 import 'package:fireplace/providers/auth_provider.dart';
 import 'package:fireplace/providers/connection_provider.dart';
+import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/providers/settings_provider.dart';
 import 'package:fireplace/screens/settings_screen.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
@@ -50,6 +51,7 @@ class SettingsPreviewApp extends StatelessWidget {
       providers: [
         ChangeNotifierProvider.value(value: auth),
         ChangeNotifierProvider(create: (_) => ConnectionProvider()),
+        ChangeNotifierProvider(create: (_) => EncryptionProvider()),
         ChangeNotifierProvider(
           // Seeded from ?theme= so the Appearance row's summary agrees with
           // the surface it is drawn on.

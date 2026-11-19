@@ -16,6 +16,7 @@ import 'package:fireplace/l10n/app_localizations.dart';
 import 'package:fireplace/providers/auth_provider.dart';
 import 'package:fireplace/screens/auth_screen.dart';
 import 'package:fireplace/services/api_service.dart';
+import 'package:fireplace/services/recovery_phrase.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
 
 const _accessJwt =
@@ -93,7 +94,11 @@ void main() {
     );
 
     expect(sent?['identifier'], 'ma0i#5269');
-    expect(sent?['phrase'], _phrase);
+    // Plan B7: only the derived proof crosses the wire — never the phrase
+    // (and the typing noise above normalizes to the same proof).
+    expect(sent?['authSecret'], RecoveryPhrase.deriveAuthSecret(_phrase));
+    expect(sent?.containsKey('phrase'), isFalse);
+    expect(sent.toString(), isNot(contains(_phrase)));
     expect(sent?['newPassword'], 'NewPass1x');
     // The gate above this screen switches on the session; the screen itself
     // has nothing left to say.

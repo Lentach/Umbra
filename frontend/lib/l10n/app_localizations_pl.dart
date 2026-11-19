@@ -528,7 +528,22 @@ class AppLocalizationsPl extends AppLocalizations {
       'Serwer nie mógł tego teraz obsłużyć. Spróbuj za chwilę.';
 
   @override
-  String get authStatusPhraseRejected => 'Nazwa lub fraza nie pasuje.';
+  String get authStatusPhraseRejected =>
+      'Nazwa lub fraza nie pasuje. Jeśli Twój klucz odzyskiwania ustawiono w starszej wersji, wymień go w Ustawieniach na urządzeniu, na którym nadal jesteś zalogowany/a.';
+
+  @override
+  String get identityResetLegacyRecoveryKey =>
+      'Twój klucz odzyskiwania został ustawiony w starszej wersji i nie skróci czekania. Ustaw nowy w Ustawieniach na zalogowanym urządzeniu albo rozpocznij reset bez niego.';
+
+  @override
+  String get recoveryKeyLegacyTitle => 'Wymień klucz odzyskiwania';
+
+  @override
+  String get recoveryKeyLegacyBody =>
+      'Twój klucz odzyskiwania został ustawiony w starszej wersji i trzeba go wymienić.';
+
+  @override
+  String get recoveryKeyLegacyDismiss => 'Nie teraz';
 
   @override
   String get authForgotPassword => 'Nie pamiętam hasła';

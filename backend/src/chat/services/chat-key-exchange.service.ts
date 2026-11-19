@@ -9,7 +9,10 @@ import {
   KeyBundlesService,
   PreKeyBundleResponse,
 } from '../../key-bundles/key-bundles.service';
-import { IdentityResetService } from '../../key-bundles/identity-reset.service';
+import {
+  IdentityResetService,
+  recoveryCredentialOf,
+} from '../../key-bundles/identity-reset.service';
 import { DevicesService } from '../../key-bundles/devices.service';
 import { DeviceListService } from '../../key-bundles/device-list.service';
 import { validateDto } from '../utils/dto.validator';
@@ -554,6 +557,7 @@ export class ChatKeyExchangeService {
         linkingEnabled,
         hasIdentityBackup,
         hasRecoveryPhrase,
+        recoveryKeyLegacy,
       ] = await Promise.all([
         this.identityResetService.getStatusForUser(userId),
         this.keyBundlesService.latestIdentityChange(userId),
@@ -569,12 +573,16 @@ export class ChatKeyExchangeService {
         // Chats-list nudge and the post-registration offer key off THIS, so a
         // pre-(lxxviii) verifier-only phrase is not nagged into replacement.
         this.identityResetService.hasRecoveryPhrase(userId),
+        // Plan B7 — additive: the stored key is a legacy plaintext-phrase
+        // verifier, so the client offers a one-time re-enrolment.
+        this.identityResetService.isRecoveryKeyLegacy(userId),
       ]);
       client.emit('ownKeyBundleStatus', {
         exists,
         linkingEnabled,
         hasIdentityBackup,
         hasRecoveryPhrase,
+        recoveryKeyLegacy,
         identityReset: reset
           ? {
               status: reset.status,
@@ -621,7 +629,7 @@ export class ChatKeyExchangeService {
       const dto = validateDto(ResetIdentityRequestDto, data);
       const result = await this.identityResetService.requestReset(
         userId,
-        dto.recoveryPhrase,
+        recoveryCredentialOf(dto.recoveryAuth, dto.recoveryPhrase),
       );
       client.emit('identityResetStatus', {
         status: result.status,
@@ -707,9 +715,11 @@ export class ChatKeyExchangeService {
   }
 
   /**
-   * Enrolls or replaces the account's recovery phrase (§6.2.1). The phrase is
-   * generated and shown on the client; the server keeps only a memory-hard
-   * verifier and never returns it.
+   * Enrolls or replaces the account's recovery key (§6.2.1). The phrase is
+   * generated and shown on the client and (plan B7) never leaves it: the client
+   * sends `authSecret`, an HKDF output, and the server keeps only a memory-hard
+   * verifier of that. A legacy client's plaintext `phrase` is still accepted
+   * and stored as a `phrase_v1` verifier.
    *
    * Enrolment is LOUD (amendment (xlii)). I4 says the recovery key shortens
    * the reset delay but is never silent — yet the step that DETERMINES that
@@ -733,7 +743,8 @@ export class ChatKeyExchangeService {
       const dto = validateDto(SetRecoveryKeyDto, data);
       const replaced = await this.identityResetService.setRecoveryKey(
         userId,
-        dto.phrase,
+        // Validated exactly-one-of by SetRecoveryKeyDto.
+        recoveryCredentialOf(dto.authSecret, dto.phrase)!,
         // (lxxviii) clause 1: verifier and sealed blob land atomically.
         dto.backup,
       );
@@ -747,8 +758,10 @@ export class ChatKeyExchangeService {
 
   /**
    * Serves the caller's phrase-sealed identity backup (amendment (lxxviii)
-   * clause 1). Own account only, and harmless even so: the blob is AES-256-GCM
-   * under a key derived from the phrase, which the server never sees. The
+   * clause 1). Own account only. A version-2 blob is AES-256-GCM under an HKDF
+   * output the server never receives (plan B7); a version-1 blob is under
+   * PBKDF2 over the phrase, which a client up to 0.2.89 sent to the server in
+   * plaintext — so v1 is server-blind only for an account that never did. The
    * gateway throttles this like `setRecoveryKey` (10/15 min) — the blob is
    * useless without the phrase, but there is no reason to serve it in a loop.
    */

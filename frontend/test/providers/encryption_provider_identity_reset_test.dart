@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/services/encryption_service.dart';
+import 'package:fireplace/services/recovery_phrase.dart';
 
 /// Phase 0b client contract (multi-device spec §6.1/§6.2).
 ///
@@ -81,20 +82,25 @@ void main() {
       expect(emitted.single.event, 'resetIdentityCancel');
     });
 
-    test('requesting without a phrase sends no phrase field', () {
+    test('requesting without a phrase sends no credential at all', () {
       provider.requestIdentityReset();
 
       expect(emitted.single.event, 'resetIdentityRequest');
-      expect(
-        (emitted.single.data as Map).containsKey('recoveryPhrase'),
-        isFalse,
-      );
+      final data = emitted.single.data as Map;
+      expect(data.containsKey('recoveryPhrase'), isFalse);
+      expect(data.containsKey('recoveryAuth'), isFalse);
     });
 
-    test('requesting with a phrase forwards it once', () {
-      provider.requestIdentityReset(recoveryPhrase: 'twelve words here');
+    // Plan B7: the phrase NEVER goes on the wire. The client emits only the
+    // HKDF proof, and the plaintext key `recoveryPhrase` cannot appear.
+    test('requesting with a phrase sends recoveryAuth, never the phrase', () {
+      const phrase = 'twelve words here';
+      provider.requestIdentityReset(recoveryPhrase: phrase);
 
-      expect(emitted.single.data, {'recoveryPhrase': 'twelve words here'});
+      final data = emitted.single.data as Map;
+      expect(data, {'recoveryAuth': RecoveryPhrase.deriveAuthSecret(phrase)});
+      expect(data.containsKey('recoveryPhrase'), isFalse);
+      expect(data.toString(), isNot(contains(phrase)));
     });
 
     test('a malformed payload changes nothing', () {
