@@ -391,6 +391,7 @@ Standing warnings that used to live in the `LATEST.md` banner and in rotated-out
 - **`input keyevent 4` with no keyboard up EXITS the app into whatever ran before it** — on the owner's phone that was his SMS app, and the next `input text` would have typed there; dismiss the keyboard by tapping a neutral spot, or check `dumpsys input_method` `mInputShown=true` first (`2026-11-17-release-0288.md`).
 - **The owner's phone `f849cc68` has held NO Umbra session since the 0.2.83 drive** — it cannot be a "legacy session upgrade" canary; check the app's first screen (`uiautomator dump`) before promising that, and a drive on it needs a throwaway account that is then deleted (`2026-11-17-release-0288.md`).
 - **The owner's phone keyboard autocorrects `adb input text` (MIUI: `github.com` → `GitHub.com`)** — re-read the field from `uiautomator dump` before sending; a drive that asserts on typed text must expect the rewrite (`2026-11-19-release-0289.md`).
+- **After a prod release drive, `umbra_drive` holds the RELEASE APK pointed at prod** — uninstall it (or install a local debug build) before handing the emulator to a local drive; a subagent registered a throwaway on prod through it (`2026-11-19-release-0289.md`).
 
 ## Agent tooling / editing
 - **omp's headless browser keeps `localhost:8080` storage across sessions** — after a local `down -v`, an old web session's still-valid JWT re-uploaded its identity onto the reused user id 1 (`identity-churn`); clear the origin's storage and IndexedDB before registering (`2026-11-16-release-0284-a5.md`).
