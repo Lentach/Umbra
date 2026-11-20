@@ -11,6 +11,7 @@ import 'package:fireplace/services/contacts/contact_store.dart';
 import 'package:fireplace/services/device_list/device_list_cache.dart';
 import 'package:fireplace/services/encryption/signal_stores.dart';
 import 'package:fireplace/services/encryption_service.dart';
+import 'package:fireplace/utils/e2e_diag_log.dart';
 import 'package:fireplace/utils/e2e_envelope.dart';
 import 'package:fireplace/utils/message_expiry.dart';
 import 'package:fireplace/utils/message_ids.dart';
@@ -151,6 +152,7 @@ void main() {
     ]);
     conversations.openConversation(10);
     emitted = [];
+    E2eDiagLog.clear();
     provider = newProvider();
   });
 
@@ -298,61 +300,71 @@ void main() {
     });
   });
 
+  /// The friend's identity as this device pinned it (a first PreKey message
+  /// would), and a PreKey frame an attacker built from OUR public bundle
+  /// under another one. Returns the attacker's identity (base64).
+  late String attackerIdentity;
+
+  Future<BoxInboxEntry> pinFriendAndForge() async {
+    final real = generateIdentityKeyPair();
+    await SecureIdentityKeyStore(
+      DualStorage(const FlutterSecureStorage()),
+      'e2e_1_',
+    ).saveIdentity(const SignalProtocolAddress('2', 1), real.getPublicKey());
+
+    final b = (await encryption.store.getKeyBundleForReupload())!;
+    final attackerKeys = generateIdentityKeyPair();
+    attackerIdentity = base64Encode(attackerKeys.getPublicKey().serialize());
+    final attacker = InMemorySignalProtocolStore(
+      attackerKeys,
+      generateRegistrationId(false),
+    );
+    const to = SignalProtocolAddress('1', 1);
+    await SessionBuilder.fromSignalStore(attacker, to).processPreKeyBundle(
+      PreKeyBundle(
+        b['registrationId'] as int,
+        1,
+        null,
+        null,
+        b['signedPreKeyId'] as int,
+        Curve.decodePoint(base64Decode(b['signedPreKeyPublic'] as String), 0),
+        base64Decode(b['signedPreKeySignature'] as String),
+        IdentityKey.fromBytes(
+          base64Decode(b['identityPublicKey'] as String),
+          0,
+        ),
+      ),
+    );
+    final m = await SessionCipher.fromStore(
+      attacker,
+      to,
+    ).encrypt(Uint8List.fromList(utf8.encode('new number, send the code')));
+    expect(m.getType(), CiphertextMessage.prekeyType);
+    return BoxInboxEntry(
+      rid: 'rid',
+      id: 'forged',
+      localId: nextLocal++,
+      peerUserId: 2,
+      senderDeviceId: 1,
+      signal: '${m.getType()}:${base64Encode(m.serialize())}',
+      receivedAt: receivedAt,
+      acked: true,
+    );
+  }
+
   test(
     'B3: a normal-queue PreKey frame under an identity other than the '
     "friend's pinned one is neither decrypted nor shown "
     '(docs/plans/2026-11-17-b3-impersonation.md)',
     () async {
-      // The friend's identity as this device pinned it.
-      final real = generateIdentityKeyPair();
-      await SecureIdentityKeyStore(
-        DualStorage(const FlutterSecureStorage()),
-        'e2e_1_',
-      ).saveIdentity(const SignalProtocolAddress('2', 1), real.getPublicKey());
-
-      // An attacker's first message to us, built from OUR public bundle.
-      final b = (await encryption.store.getKeyBundleForReupload())!;
-      final attacker = InMemorySignalProtocolStore(
-        generateIdentityKeyPair(),
-        generateRegistrationId(false),
-      );
-      const to = SignalProtocolAddress('1', 1);
-      await SessionBuilder.fromSignalStore(attacker, to).processPreKeyBundle(
-        PreKeyBundle(
-          b['registrationId'] as int,
-          1,
-          null,
-          null,
-          b['signedPreKeyId'] as int,
-          Curve.decodePoint(
-            base64Decode(b['signedPreKeyPublic'] as String),
-            0,
-          ),
-          base64Decode(b['signedPreKeySignature'] as String),
-          IdentityKey.fromBytes(
-            base64Decode(b['identityPublicKey'] as String),
-            0,
-          ),
-        ),
-      );
-      final m = await SessionCipher.fromStore(
-        attacker,
-        to,
-      ).encrypt(Uint8List.fromList(utf8.encode('new number, send the code')));
-      expect(m.getType(), CiphertextMessage.prekeyType);
-      final forged = BoxInboxEntry(
-        rid: 'rid',
-        id: 'forged',
-        localId: nextLocal++,
-        peerUserId: 2,
-        senderDeviceId: 1,
-        signal: '${m.getType()}:${base64Encode(m.serialize())}',
-        receivedAt: receivedAt,
-        acked: true,
-      );
+      final forged = await pinFriendAndForge();
       envelope('new number, send the code');
 
-      await deliver(forged, _peer(2, conversationId: 10));
+      expect(
+        await deliver(forged, _peer(2, conversationId: 10)),
+        isFalse,
+        reason: 'held, not finished: it stays in the journal',
+      );
 
       expect(
         encryption.decryptedIds,
@@ -361,8 +373,162 @@ void main() {
       );
       expect(provider.messages.where((x) => x.id == forged.localId), isEmpty);
     },
-    skip: 'B3 red test: fails until the friend-identity check lands',
   );
+
+  for (final warnings in [false, true]) {
+    test(
+      'B3: the foreign frame is held with key-change warnings '
+      '${warnings ? 'ON' : 'OFF'}: the pin stays, the new key is staged for '
+      'the compare screen and nothing acknowledges it',
+      () async {
+        encryption.store.keyChangeWarnings = () => warnings;
+        final forged = await pinFriendAndForge();
+        final pinned = await encryption.store.peerTofuIdentityBase64(2);
+        envelope('new number, send the code');
+
+        expect(await deliver(forged, _peer(2, conversationId: 10)), isFalse);
+        // Offered again (every connect does): the same verdict, no new write.
+        expect(await deliver(forged, _peer(2, conversationId: 10)), isFalse);
+
+        expect(encryption.decryptedIds, isEmpty);
+        expect(encryption.peersWithChangedIdentity, contains(2));
+        expect(encryption.peersWithHeldMessages, contains(2));
+        expect(await encryption.store.peerTofuIdentityBase64(2), pinned);
+        final verification = await encryption.store.peerIdentityVerification(
+          2,
+        );
+        expect(verification.offeredIdentityBase64, attackerIdentity);
+        expect(encryption.store.peerKeyChangeNotes, isEmpty);
+        expect(
+          E2eDiagLog.entries
+              .where((e) => e.contains('BOX_FOREIGN_IDENTITY_HELD'))
+              .length,
+          1,
+          reason: 'logged once per held frame, peer and device only',
+        );
+      },
+    );
+  }
+
+  group('B3: frames held behind a foreign PreKey frame', () {
+    /// The friend's later whispers ride the session the held frame would
+    /// build: they cannot read yet.
+    Future<(BoxInboxEntry, List<BoxInboxEntry>)> heldWithWhispers() async {
+      final forged = await pinFriendAndForge();
+      encryption.inbound = StateError('no session yet');
+      final whispers = [entry(), entry()];
+      return (forged, whispers);
+    }
+
+    test('with no accept: all three stay held — nothing shown, finished, '
+        'or answered with a re-key', () async {
+      final (forged, whispers) = await heldWithWhispers();
+      E2eDiagLog.clear();
+      emitted.clear();
+      final peer = _peer(2, conversationId: 10);
+
+      expect(await deliver(forged, peer), isFalse);
+      for (final w in whispers) {
+        expect(await deliver(w, peer), isFalse);
+      }
+
+      expect(provider.messages, isEmpty);
+      expect(
+        E2eDiagLog.entries.where(
+          (e) => e.contains('BOX_DECRYPT_FAILED') || e.contains('REBUILD'),
+        ),
+        isEmpty,
+        reason: 'no failure policy, no re-key, no rebuild request',
+      );
+      expect(emitted, isEmpty);
+    });
+
+    test('accept: the held PreKey frame and both whispers are shown, in '
+        'order, and the pin moved', () async {
+      final (forged, whispers) = await heldWithWhispers();
+      final peer = _peer(2, conversationId: 10);
+      var released = 0;
+      encryption.onHeldFramesReleased = (_) => released++;
+      await deliver(forged, peer);
+      for (final w in whispers) {
+        await deliver(w, peer);
+      }
+
+      expect(await encryption.acknowledgePeerIdentity(2), isTrue);
+      expect(released, 1, reason: 'the journal is offered again');
+      expect(encryption.peersWithHeldMessages, isNot(contains(2)));
+      expect(await encryption.store.peerTofuIdentityBase64(2), attackerIdentity);
+
+      for (final (i, e) in [forged, ...whispers].indexed) {
+        envelope('held $i');
+        expect(await deliver(e, peer), isTrue);
+      }
+
+      // The two earlier attempts on the whispers failed (no session yet).
+      expect(encryption.decryptedIds.skip(2), [
+        forged.localId,
+        ...whispers.map((w) => w.localId),
+      ]);
+      expect(
+        [
+          for (final m in provider.messages)
+            if (m.senderId == 2) m.content,
+        ],
+        ['held 0', 'held 1', 'held 2'],
+      );
+    });
+
+    test('held frames survive a restart: the journal offers them again, the '
+        'candidate and warning persist, and the accept still releases them',
+        () async {
+      final (forged, whispers) = await heldWithWhispers();
+      final peer = _peer(2, conversationId: 10);
+      await deliver(forged, peer);
+      await deliver(whispers.first, peer);
+
+      // A new process on the same storage: RAM is gone, the journal is not.
+      provider.dispose();
+      final service = EncryptionService();
+      await service.initialize(
+        1,
+        checkServerIdentity: () async =>
+            const ServerIdentityGuard(exists: false),
+      );
+      encryption = _BoxEncryption(service);
+      provider = newProvider();
+      expect(encryption.peersWithChangedIdentity, contains(2));
+      expect(
+        (await service.peerIdentityVerification(2)).offeredIdentityBase64,
+        attackerIdentity,
+      );
+      encryption.inbound = StateError('no session yet');
+
+      expect(await deliver(forged, peer), isFalse);
+      expect(await deliver(whispers.first, peer), isFalse);
+      expect(encryption.peersWithHeldMessages, contains(2));
+      expect(provider.messages, isEmpty);
+
+      expect(await encryption.acknowledgePeerIdentity(2), isTrue);
+      envelope('after the restart');
+      expect(await deliver(forged, peer), isTrue);
+      expect(provider.messages.single.content, 'after the restart');
+    });
+
+    test('a peer that is no longer a friend has its held frames discarded',
+        () async {
+      final (forged, _) = await heldWithWhispers();
+
+      expect(await deliver(forged, _peer(2, conversationId: 10)), isFalse);
+      expect(
+        await deliver(
+          forged,
+          _peer(2, conversationId: 10, state: ContactState.former),
+        ),
+        isTrue,
+      );
+      expect(provider.messages, isEmpty);
+    });
+  });
 
   test(
     'a box message for a chat NOT on screen plays no sound: badge only '

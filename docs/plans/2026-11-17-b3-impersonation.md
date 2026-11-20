@@ -1,6 +1,6 @@
 # B3: can a malicious server impersonate a friend?
 
-Status: investigation + red test; no fix implemented. Date 2026-11-17.
+Status: investigation + red test (2026-11-17). Option A part 1 BUILT on `feat/b3-hold-changed-identity` (2026-11-20, decision 143; E143a-E143g; the red test is unskipped and passes; not merged, not device-driven). Part 2 (the `preKeyWouldReplaceSession` re-key gate) is not built, see E143g.
 Red test: `frontend/test/services/encryption_b3_impersonation_test.dart` (skipped).
 
 ## Verdict

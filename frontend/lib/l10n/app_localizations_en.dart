@@ -627,6 +627,11 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String peerIdentityHeldTimelineRow(String name) {
+    return '$name\'s keys changed. Their messages are held until you accept the new key. Tap to verify.';
+  }
+
+  @override
   String get ownIdentityReplacedTitle => 'New encryption keys on your account';
 
   @override

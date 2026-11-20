@@ -257,6 +257,10 @@
   "@peerIdentityChangedTimelineRow": {
     "placeholders": { "name": { "type": "String" } }
   },
+  "peerIdentityHeldTimelineRow": "Klucze {name} się zmieniły. Wiadomości są wstrzymane, dopóki nie zaakceptujesz nowego klucza. Dotknij, aby sprawdzić.",
+  "@peerIdentityHeldTimelineRow": {
+    "placeholders": { "name": { "type": "String" } }
+  },
   "ownIdentityReplacedTitle": "Nowe klucze szyfrowania na Twoim koncie",
   "ownIdentityReplacedBody": "Nowe logowanie zmieniło klucze konta. To nie Ty? Zmień hasło.",
   "ownIdentityReplacedDismissAction": "Rozumiem",

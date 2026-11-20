@@ -226,6 +226,19 @@ class EncryptionProvider extends ChangeNotifier {
   /// onPeerIdentityChanged wire, same as the warning set.
   Set<int> get peersRefusedIdentity => _encryptionService.peersRefusedIdentity;
 
+  /// Friends with a frame held unread under an identity other than their
+  /// pinned one (plan B3): the chat says messages wait until it is accepted.
+  Set<int> get peersWithHeldMessages => _encryptionService.peersHeldForIdentity;
+
+  /// Called once the user accepted a friend's changed identity while frames
+  /// of it were held, after the session state the old key poisoned was
+  /// dropped: the box reader offers the journal again.
+  void Function(int peerId)? onHeldFramesReleased;
+
+  /// Delegates to [EncryptionService.holdForeignFrame].
+  Future<void> holdForeignFrame(int userId, String ciphertext) =>
+      _encryptionService.holdForeignFrame(userId, ciphertext);
+
   /// One-shot muted key-change notes (amendment (lxxix)): peerId → ISO-8601
   /// instant of the auto-acknowledged change. Rendered as a calm system line
   /// while [keyChangeWarnings] is off; persisted so it survives a reload.
@@ -3795,6 +3808,7 @@ class EncryptionProvider extends ChangeNotifier {
     // record of which devices we ever addressed, and device 1 covers the legacy
     // single-device address that predates any list.
     final known = _deviceListCache.cached(peerId);
+    final wasHeld = peersWithHeldMessages.contains(peerId);
     final addresses = <int>{1, ...?known?.liveDeviceIds};
     // Record the rebuild intent DURABLY BEFORE the anchor advances (amendment
     // (xlviii) clause 1). The advance and the warning clear are both persisted,
@@ -3817,6 +3831,7 @@ class EncryptionProvider extends ChangeNotifier {
         'peerId': peerId,
         'rebuiltAddresses': addresses.toList(),
       });
+      if (wasHeld) onHeldFramesReleased?.call(peerId);
     } else {
       // Explicitly refused: nothing advanced, so nothing is poisoned and the
       // speculative intent above names no real damage. Only an EXPLICIT refusal

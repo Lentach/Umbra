@@ -19,10 +19,15 @@ class PeerIdentityChangedRow extends StatelessWidget {
   final int peerId;
   final String peerName;
 
+  /// A message of the peer is held unread until its new key is accepted
+  /// (plan B3): the row says so.
+  final bool held;
+
   const PeerIdentityChangedRow({
     super.key,
     required this.peerId,
     required this.peerName,
+    this.held = false,
   });
 
   @override
@@ -55,7 +60,9 @@ class PeerIdentityChangedRow extends StatelessWidget {
                   const SizedBox(width: 6),
                   Flexible(
                     child: Text(
-                      l10n.peerIdentityChangedTimelineRow(peerName),
+                      held
+                          ? l10n.peerIdentityHeldTimelineRow(peerName)
+                          : l10n.peerIdentityChangedTimelineRow(peerName),
                       textAlign: TextAlign.center,
                       style: RpgTheme.bodyFont(
                         fontSize: 11,

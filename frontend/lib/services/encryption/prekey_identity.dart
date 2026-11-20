@@ -35,6 +35,29 @@ bool ciphertextMatchesIdentity(
   }
 }
 
+/// The identity key (base64 of the serialized key) a `"{type}:{base64}"`
+/// PreKey message carries, read WITHOUT decrypting it; null for a whisper
+/// message and for anything unparseable (plan B3, decision 143: a friend's
+/// frame under a foreign identity is held and this key staged as the
+/// candidate the user compares).
+String? preKeyIdentityOf(String ciphertext) {
+  final colon = ciphertext.indexOf(':');
+  if (colon < 0) return null;
+  if (int.tryParse(ciphertext.substring(0, colon)) !=
+      CiphertextMessage.prekeyType) {
+    return null;
+  }
+  try {
+    return base64Encode(
+      PreKeySignalMessage(
+        base64Decode(ciphertext.substring(colon + 1)),
+      ).getIdentityKey().serialize(),
+    );
+  } on Object {
+    return null;
+  }
+}
+
 /// Whether decrypting the `"{type}:{base64}"` Signal ciphertext would
 /// REPLACE the session [record] holds (metadata-privacy decision 37, E37a).
 ///

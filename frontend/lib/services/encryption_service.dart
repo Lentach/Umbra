@@ -338,6 +338,13 @@ class EncryptionService {
   final Set<int> _peersRefusedIdentity = <int>{};
   Set<int> get peersRefusedIdentity => Set.unmodifiable(_peersRefusedIdentity);
 
+  /// Peers with a friend's frame HELD unread because it carried an identity
+  /// other than the pinned one (plan B3, decision 143; `holdForeignFrame`).
+  /// In memory: the held frames wait in the box journal, whose next read
+  /// re-judges them and puts the peer back. Cleared when the anchor advances.
+  final Set<int> _peersHeldForIdentity = <int>{};
+  Set<int> get peersHeldForIdentity => Set.unmodifiable(_peersHeldForIdentity);
+
   static const int _identityChangedCap = 200;
 
   String _identityChangedKey(int userId) =>
@@ -371,6 +378,9 @@ class EncryptionService {
   /// manual-confirmation surface is unchanged.
   Future<void> _demoteKeyChangeIfMuted(int peerId) async {
     if (keyChangeWarnings()) return;
+    // B3 (decision 143): a frame was held under this identity, whatever the
+    // setting says. The staged candidate is the one nobody has seen yet.
+    if (_peersHeldForIdentity.contains(peerId)) return;
     // Re-insert so a repeat change moves the note to the newest end.
     _peerKeyChangeNotes.remove(peerId);
     _peerKeyChangeNotes[peerId] = DateTime.now().toUtc().toIso8601String();
@@ -565,9 +575,45 @@ class EncryptionService {
     if (!advanced) return false;
     _peersWithChangedIdentity.remove(peerId);
     _peersRefusedIdentity.remove(peerId);
+    _peersHeldForIdentity.remove(peerId);
     await _persistIdentityChanged();
     onPeerIdentityChanged?.call(peerId);
     return true;
+  }
+
+  /// A friend's PreKey frame [ciphertext] carries an identity other than the
+  /// one pinned for [peerId] and was NOT decrypted (plan B3, decision 143).
+  /// Stages that identity as the pending candidate (only when the slot is
+  /// empty, like [_recordAccountIdentityRefusal]: the slot is the evidence a
+  /// human compares, and varying frames must not move it), puts the peer in
+  /// the warning set so the existing pill and compare screen show, and marks
+  /// it held so [_demoteKeyChangeIfMuted] never auto-acknowledges it.
+  /// Idempotent: every re-offer of a held frame lands here. Logs peer only.
+  Future<void> holdForeignFrame(int peerId, String ciphertext) async {
+    final identity = preKeyIdentityOf(ciphertext);
+    if (identity != null) {
+      try {
+        final name = peerId.toString();
+        if (await _identityStore.pendingAccountIdentity(name) == null) {
+          await _identityStore.stagePendingAccountIdentity(
+            name,
+            IdentityKey.fromBytes(base64Decode(identity), 0),
+          );
+        }
+      } on Object catch (e) {
+        debugPrint('[EncryptionService] stage held identity failed: $e');
+      }
+    }
+    final newlyHeld = _peersHeldForIdentity.add(peerId);
+    final newlyChanged = _peersWithChangedIdentity.add(peerId);
+    if (newlyChanged) {
+      E2ePersistentDiag.record('PEER_IDENTITY_CHANGED', {
+        'peerId': peerId,
+        'source': 'held_foreign_frame',
+      });
+      await _persistIdentityChanged();
+    }
+    if (newlyHeld || newlyChanged) onPeerIdentityChanged?.call(peerId);
   }
 
   /// A peer's device list failed the I7 chain against the anchor this device
@@ -1721,6 +1767,7 @@ class EncryptionService {
     _peersWithChangedIdentity.clear();
     _peerKeyChangeNotes.clear();
     _peersRefusedIdentity.clear();
+    _peersHeldForIdentity.clear();
     _pendingSessionRebuilds.clear();
     _deviceListPins.clear();
     _peerDeviceLists.clear();
@@ -2831,6 +2878,7 @@ class EncryptionService {
           : base64Encode(pending.serialize()),
     );
     E2ePersistentDiag.record('ACCOUNT_ANCHOR_REPLACED', {'peerId': peerId});
+    _peersHeldForIdentity.remove(peerId);
     if (_peersWithChangedIdentity.remove(peerId) |
         _peersRefusedIdentity.remove(peerId)) {
       await _persistIdentityChanged();

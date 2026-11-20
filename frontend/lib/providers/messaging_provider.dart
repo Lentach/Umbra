@@ -375,6 +375,13 @@ class MessagingProvider extends ChangeNotifier {
   /// the journal's next offer stores it.
   final Map<int, MessageModel> _boxUnsaved = {};
 
+  /// Friend frames held unread under a foreign identity (plan B3), by local
+  /// id; the value is whether the held PreKey frame was a decision-88 re-mint
+  /// when it was judged — the accept drops the cached list that judgement
+  /// reads, so it is remembered. RAM only: the journal row is the frame, and
+  /// a restart judges it again.
+  final Map<int, bool> _boxHeld = {};
+
   /// Where a message goes: the box, the only path. `ConnectionProvider`
   /// wires the account session's one. Null = no route: every send fails.
   BoxOutbox? boxOutbox;
@@ -892,6 +899,7 @@ class MessagingProvider extends ChangeNotifier {
       // Local ids restart at the same base for every account: an unsaved
       // row of the previous session must never be stored into this one.
       _boxUnsaved.clear();
+      _boxHeld.clear();
       _profileSent.clear();
       _profileFilesChecked = false;
       _profileMigrateTriedAt = null;
@@ -956,6 +964,7 @@ class MessagingProvider extends ChangeNotifier {
     _rebuildRequestedPeers.clear();
     _pingEffectFiredIds.clear();
     _boxUnsaved.clear();
+    _boxHeld.clear();
     _profileSent.clear();
     _profileFilesChecked = false;
     _profileMigrateTriedAt = null;
