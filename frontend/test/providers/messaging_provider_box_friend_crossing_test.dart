@@ -115,6 +115,10 @@ class _Side {
   late _Side other;
   int otp = 0;
 
+  /// Frames this side's reader held (not finished): the box journal keeps
+  /// them and offers them again.
+  final List<BoxInboxEntry> held = [];
+
   ContactRecord get peerRecord => ContactRecord(
     userId: peerId,
     username: 'p$peerId',
@@ -348,24 +352,39 @@ void main() {
       final batch = [...mail];
       mail.clear();
       for (final m in batch) {
-        await m.to.reader.consumeBoxEntry(
-          BoxInboxEntry(
-            rid: m.viaRequest ? 'request-rid' : 'friend-rid',
-            id: 'm${nextLocal - kFirstLocalMessageId}',
-            localId: nextLocal++,
-            peerUserId: m.to.peerId,
-            senderDeviceId: m.to.peerDevice,
-            signal: m.signal,
-            receivedAt: DateTime.now().toUtc(),
-            acked: true,
-            viaRequestQueue: m.viaRequest,
-          ),
-          m.to.peerRecord,
+        final entry = BoxInboxEntry(
+          rid: m.viaRequest ? 'request-rid' : 'friend-rid',
+          id: 'm${nextLocal - kFirstLocalMessageId}',
+          localId: nextLocal++,
+          peerUserId: m.to.peerId,
+          senderDeviceId: m.to.peerDevice,
+          signal: m.signal,
+          receivedAt: DateTime.now().toUtc(),
+          acked: true,
+          viaRequestQueue: m.viaRequest,
         );
+        if (!await m.to.reader.consumeBoxEntry(entry, m.to.peerRecord)) {
+          m.to.held.add(entry);
+        }
       }
       await pumpEventQueue();
     }
     expect(mail, isEmpty, reason: 'the pump must settle');
+  }
+
+  /// The user accepts the friend's new key on [side] (the dialog's confirm),
+  /// and the box journal offers what was held again, in order.
+  Future<void> acceptAndReoffer(_Side side) async {
+    expect(await side.enc.acknowledgePeerIdentity(side.peerId), isTrue);
+    final again = [...side.held];
+    side.held.clear();
+    for (final entry in again) {
+      if (!await side.reader.consumeBoxEntry(entry, side.peerRecord)) {
+        side.held.add(entry);
+      }
+    }
+    await pumpEventQueue();
+    await pump();
   }
 
   bool converged() =>
@@ -498,14 +517,24 @@ void main() {
       );
     }
 
-    test('hands its new queue over the queue we gave it, and we take it: '
-        'what we write reaches the restored device', () async {
+    test('is HELD until we accept its new key (decision 143); then the '
+        'handoff is taken and what we write reaches the restored device, '
+        'both ways', () async {
       onTheBox();
       final restored = await restoreA();
 
       await restored.link.restart();
       await pump();
 
+      // Under the new identity nothing is read: no decrypt, no handoff.
+      expect(b.held, hasLength(1));
+      expect(b.refusals, isEmpty);
+      expect(b.link.learned, a.sid, reason: 'the old address stands');
+      expect(b.enc.peersWithHeldMessages, contains(1));
+
+      await acceptAndReoffer(b);
+
+      expect(b.held, isEmpty);
       expect(b.refusals, isEmpty);
       expect(b.link.learned, restored.sid);
       expect(restored.link.acked, isTrue);
@@ -523,6 +552,11 @@ void main() {
 
         await restored.link.restart();
         await pump();
+
+        // Held first (a new identity), then, accepted, refused like any
+        // unasked PreKey handoff.
+        expect(b.held, hasLength(1));
+        await acceptAndReoffer(b);
 
         expect(b.refusals, ['prekey_unasked']);
         expect(b.link.learned, a.sid);
@@ -582,11 +616,15 @@ void main() {
       final restored = await restoreA();
       await restored.link.restart();
       await pump();
+      await acceptAndReoffer(b);
       expect(b.link.learned, restored.sid);
 
       await handOffFrom(a);
 
-      expect(b.refusals, ['prekey_unasked']);
+      // The pin is the restored identity now: the old one is foreign, held
+      // and unread, and never takes the address back.
+      expect(b.refusals, isEmpty);
+      expect(b.held, hasLength(1));
       expect(b.link.learned, restored.sid);
     });
   });

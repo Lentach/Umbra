@@ -658,6 +658,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     required Color messagesAreaBg,
     required UserModel? peer,
     required bool peerIdentityChanged,
+    required bool peerHeld,
     required bool peerRefused,
     required bool peerKeyChangeNoted,
     required int currentUserId,
@@ -714,6 +715,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
                       // Only ever true when the peer is known; see build().
                       peerId: peer!.id,
                       peerName: _getContactName(),
+                      held: peerHeld,
                     )
                   else if (peerKeyChangeNoted)
                     PeerIdentityChangedNote(
@@ -776,6 +778,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
                           // build() when otherUser (this `peer`) is non-null.
                           peerId: peer!.id,
                           peerName: _getContactName(),
+                          held: peerHeld,
                         );
                       }
                       if (peerKeyChangeNoted && index == 0) {
@@ -938,6 +941,13 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
             context.select<EncryptionProvider, bool>(
               (e) => e.peersWithChangedIdentity.contains(otherUser.id),
             ));
+    // B3 (decision 143): messages of this friend are held unread until the
+    // new key is accepted; the pill says so.
+    final peerHeld =
+        otherUser != null &&
+        context.select<EncryptionProvider, bool>(
+          (e) => e.peersWithHeldMessages.contains(otherUser.id),
+        );
     // (lxxxiv): the muted note lives until the next message — it renders only
     // while nothing in the conversation is newer than the change it
     // announces. The list's `lastMessages` entry covers the window before
@@ -1027,6 +1037,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
               currentUserId: currentUserId,
               peer: otherUser,
               peerIdentityChanged: peerIdentityChanged,
+              peerHeld: peerHeld,
               peerRefused: peerRefused,
               peerKeyChangeNoted: peerKeyChangeNoted,
             ),
@@ -1054,6 +1065,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
                 currentUserId: currentUserId,
                 peer: otherUser,
                 peerIdentityChanged: peerIdentityChanged,
+                peerHeld: peerHeld,
                 peerRefused: peerRefused,
                 peerKeyChangeNoted: peerKeyChangeNoted,
               ),

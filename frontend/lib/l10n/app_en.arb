@@ -259,6 +259,10 @@
   "@peerIdentityChangedTimelineRow": {
     "placeholders": { "name": { "type": "String" } }
   },
+  "peerIdentityHeldTimelineRow": "{name}'s keys changed. Their messages are held until you accept the new key. Tap to verify.",
+  "@peerIdentityHeldTimelineRow": {
+    "placeholders": { "name": { "type": "String" } }
+  },
   "ownIdentityReplacedTitle": "New encryption keys on your account",
   "ownIdentityReplacedBody": "A new sign-in changed the account keys. Not you? Change your password.",
   "ownIdentityReplacedDismissAction": "Got it",

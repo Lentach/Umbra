@@ -151,6 +151,7 @@ extension MessagingBox on MessagingProvider {
         msg,
         entry.receivedAt,
         controlOnly: conversationId == null,
+        peer: peer,
       ),
     );
   }
@@ -164,11 +165,13 @@ extension MessagingBox on MessagingProvider {
     MessageModel msg,
     DateTime receivedAt, {
     bool controlOnly = false,
+    ContactRecord? peer,
   }) async {
     final finished = await _readBox(
       msg,
       receivedAt,
       controlOnly: controlOnly,
+      peer: peer,
     );
     if (finished) await _encryptionProvider?.removeRawReplay(msg.id);
     return finished;
@@ -1035,6 +1038,7 @@ extension MessagingBox on MessagingProvider {
     MessageModel msg,
     DateTime receivedAt, {
     bool controlOnly = false,
+    ContactRecord? peer,
   }) async {
     // Read and shown earlier, but its plaintext record never committed: only
     // the store is owed, never a second decrypt or a second display.
@@ -1092,7 +1096,7 @@ extension MessagingBox on MessagingProvider {
     final preKey = msg.encryptedContent!.startsWith(
       '${BoxFrameKind.preKey.byte}:',
     );
-    final newIdentity =
+    var newIdentity =
         preKey &&
         enc.cachedDeviceList(msg.senderId)?.enrolled == false &&
         await enc.preKeyFromNewIdentity(
@@ -1100,6 +1104,24 @@ extension MessagingBox on MessagingProvider {
           msg.originDeviceId ?? 1,
           msg.encryptedContent!,
         );
+    // B3 (decision 143): a PreKey frame under an identity other than the
+    // friend's pinned one is HELD, whatever the key-change setting says —
+    // never decrypted, never shown. Anyone who holds the friend's queue
+    // address (a hostile server, a revoked device) can seal one.
+    if (preKey) {
+      switch (await enc.friendFrameIdentity(
+        msg.senderId,
+        msg.encryptedContent!,
+      )) {
+        case FriendFrameIdentity.matches || FriendFrameIdentity.noAnchor:
+          // Accepted earlier as a re-mint: that judgement stands (the accept
+          // dropped the list it reads).
+          newIdentity = newIdentity || (_boxHeld[msg.id] ?? false);
+          _boxHeld.remove(msg.id);
+        case FriendFrameIdentity.foreign:
+          return _holdForeignFrame(msg, enc, peer, remint: newIdentity);
+      }
+    }
     final String plaintext;
     try {
       plaintext = await enc.decrypt(
@@ -1109,8 +1131,19 @@ extension MessagingBox on MessagingProvider {
         deviceId: msg.originDeviceId ?? 1,
       );
     } on Object catch (e) {
+      // A whisper of a friend with a frame held rides the session that frame
+      // would build: it cannot read yet, and must neither be finished, nor
+      // ask the friend to re-key, nor repair anything. Held in arrival
+      // order behind it. (One that DOES read — the friend's real session,
+      // while the held frame is a forgery — proceeds below.)
+      if (!preKey &&
+          enc.peersWithHeldMessages.contains(msg.senderId) &&
+          _classifyDecryptError(e) != DecryptionFailureKind.duplicate) {
+        return _holdBehindForeignFrame(msg, peer);
+      }
       return _boxDecryptFailed(msg, e);
     }
+    _boxHeld.remove(msg.id);
     _rebuildRequestedPeers.remove(msg.senderId);
     // A friend device that writes to us may have lost our handoff (item 5).
     boxFriends?.friendHeard(msg.senderId, msg.originDeviceId ?? 1);
@@ -1260,6 +1293,62 @@ extension MessagingBox on MessagingProvider {
         _e2eFlowLog('BOX_UNKNOWN_TYPE', {'msgId': msg.id, 't': parsed.type});
         return true;
     }
+  }
+
+  /// Holds friend frame [msg] (a PreKey message under a foreign identity)
+  /// until the user decides (plan B3, decision 143): returns false, so the
+  /// journal row stays unconsumed — it is acked already, never pruned
+  /// unconsumed, and not bound by [kBoxRedeliveryWindow] — and the next
+  /// offer (a connect, E2E ready, or the accept) judges it again. Returns at
+  /// once: nothing here waits for the user, so no read queued behind it
+  /// stalls. A peer this account no longer calls a friend has its frame
+  /// finished (unfriend and block discard what was held).
+  Future<bool> _holdForeignFrame(
+    MessageModel msg,
+    EncryptionProvider enc,
+    ContactRecord? peer, {
+    required bool remint,
+  }) async {
+    if (peer != null && peer.state != ContactState.friend) {
+      return _dropHeld(msg);
+    }
+    await enc.holdForeignFrame(msg.senderId, msg.encryptedContent!);
+    final fresh = !_boxHeld.containsKey(msg.id);
+    _boxHeld[msg.id] = remint;
+    if (fresh) _logBoxHeld(msg);
+    return false;
+  }
+
+  Future<bool> _holdBehindForeignFrame(
+    MessageModel msg,
+    ContactRecord? peer,
+  ) async {
+    if (peer != null && peer.state != ContactState.friend) {
+      return _dropHeld(msg);
+    }
+    if (!_boxHeld.containsKey(msg.id)) {
+      _boxHeld[msg.id] = false;
+      _logBoxHeld(msg);
+    }
+    return false;
+  }
+
+  bool _dropHeld(MessageModel msg) {
+    _boxHeld.remove(msg.id);
+    _e2eFlowLog('BOX_HELD_DISCARDED', {
+      'peer': msg.senderId,
+      'device': msg.originDeviceId ?? 1,
+    });
+    return true;
+  }
+
+  /// Once per held frame per run (the caller's `_boxHeld` mark): peer and
+  /// device only, never key material or content.
+  void _logBoxHeld(MessageModel msg) {
+    _e2eFlowLog('BOX_FOREIGN_IDENTITY_HELD', {
+      'peer': msg.senderId,
+      'device': msg.originDeviceId ?? 1,
+    });
   }
 
   /// What only a box message carries (item 3), on [row]: its own timer and

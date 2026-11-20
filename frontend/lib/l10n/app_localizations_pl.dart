@@ -634,6 +634,11 @@ class AppLocalizationsPl extends AppLocalizations {
   }
 
   @override
+  String peerIdentityHeldTimelineRow(String name) {
+    return 'Klucze $name się zmieniły. Wiadomości są wstrzymane, dopóki nie zaakceptujesz nowego klucza. Dotknij, aby sprawdzić.';
+  }
+
+  @override
   String get ownIdentityReplacedTitle =>
       'Nowe klucze szyfrowania na Twoim koncie';
 

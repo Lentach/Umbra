@@ -1160,6 +1160,12 @@ abstract class AppLocalizations {
   /// **'Klucze {name} się zmieniły. Dotknij, aby sprawdzić.'**
   String peerIdentityChangedTimelineRow(String name);
 
+  /// No description provided for @peerIdentityHeldTimelineRow.
+  ///
+  /// In pl, this message translates to:
+  /// **'Klucze {name} się zmieniły. Wiadomości są wstrzymane, dopóki nie zaakceptujesz nowego klucza. Dotknij, aby sprawdzić.'**
+  String peerIdentityHeldTimelineRow(String name);
+
   /// No description provided for @ownIdentityReplacedTitle.
   ///
   /// In pl, this message translates to:
