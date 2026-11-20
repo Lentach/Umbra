@@ -59,7 +59,13 @@ class _ImageMessageContentState extends State<ImageMessageContent> {
       child: FutureBuilder<Uint8List?>(
         future: _future,
         builder: (context, snap) {
-          if (snap.connectionState != ConnectionState.done) {
+          // Our own photo still uploading has no media yet: it is on its
+          // way, not broken (owner report 2026-11-20: a red "failed to
+          // load" showed for a few seconds on every send).
+          if (snap.connectionState != ConnectionState.done ||
+              (widget.message.deliveryStatus ==
+                      MessageDeliveryStatus.sending &&
+                  (widget.message.mediaUrl?.isEmpty ?? true))) {
             return const Center(
               child: CircularProgressIndicator(strokeWidth: 2),
             );

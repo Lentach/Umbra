@@ -1,10 +1,14 @@
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show MethodChannel;
 import 'package:flutter/foundation.dart'
     show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:image_picker_android/image_picker_android.dart';
+import 'package:image_picker_platform_interface/image_picker_platform_interface.dart';
 import '../utils/file_utils_stub.dart'
     if (dart.library.io) '../utils/file_utils_io.dart'
     as file_utils;
@@ -38,7 +42,10 @@ import 'ping_glyph.dart';
 /// split view the user may have opened another chat by then. Policy checks
 /// and rejection toasts happen inside.
 typedef PickedFilesCallback =
-    Future<void> Function(List<PickedAttachment> files, {required int pickedIn});
+    Future<void> Function(
+      List<PickedAttachment> files, {
+      required int pickedIn,
+    });
 
 class ChatActionTiles extends StatelessWidget {
   final double bottomPadding;
@@ -194,7 +201,12 @@ class ChatActionTiles extends StatelessWidget {
   ///   2026-08-30) and offers no gallery door, so the paperclip opens an
   ///   in-app glass sheet with three unambiguous doors: Gallery / Camera /
   ///   File (owner ruling 2026-08-19, re-confirmed wanted 2026-08-30).
-  /// - Desktop web + native: system picker via file_picker.
+  /// - Native Android: the same four-door sheet (owner 2026-11-20: the
+  ///   system chooser offered only "take a photo" and "add a file", no way to
+  ///   pick photos and videos from the gallery). Gallery is the Android photo
+  ///   picker, Camera and Record video the camera apps, File the document
+  ///   picker as before.
+  /// - Desktop web, iOS: system picker via file_picker.
   ///
   /// Every door that can browse (all but the two capture doors) allows
   /// selecting several files; the composer sends them all immediately, in
@@ -218,31 +230,43 @@ class ChatActionTiles extends StatelessWidget {
       );
       return;
     }
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      await _showNativeAndroidAttachmentSheet(context, pickedIn: pickedIn);
+      return;
+    }
 
     beginComposerNativePicker();
-    FilePickerResult? pickResult;
+    final List<PickedAttachment>? picked;
     try {
-      pickResult = await FilePicker.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: [
-          ...kPickableImageExtensions,
-          ...kSendableVideoExtensions,
-          ...kPickableDocumentExtensions,
-        ],
-        allowMultiple: true,
-        // Web has no path, so file_picker reads EVERY picked file into RAM
-        // before it returns; native reads each file from its path when its
-        // turn to send comes.
-        withData: kIsWeb,
-      );
+      picked = await _pickWithFilePicker();
     } finally {
       endComposerNativePicker();
     }
-    if (pickResult == null || pickResult.files.isEmpty) return;
-    await onPickedFiles?.call([
+    if (picked == null) return;
+    await onPickedFiles?.call(picked, pickedIn: pickedIn);
+  }
+
+  /// The system file picker (images, videos, documents); null when nothing
+  /// was picked.
+  static Future<List<PickedAttachment>?> _pickWithFilePicker() async {
+    final pickResult = await FilePicker.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: [
+        ...kPickableImageExtensions,
+        ...kSendableVideoExtensions,
+        ...kPickableDocumentExtensions,
+      ],
+      allowMultiple: true,
+      // Web has no path, so file_picker reads EVERY picked file into RAM
+      // before it returns; native reads each file from its path when its
+      // turn to send comes.
+      withData: kIsWeb,
+    );
+    if (pickResult == null || pickResult.files.isEmpty) return null;
+    return [
       for (final file in pickResult.files)
         PickedAttachment(name: file.name, readBytes: () => _readBytes(file)),
-    ], pickedIn: pickedIn);
+    ];
   }
 
   static Future<Uint8List?> _readBytes(PlatformFile file) async {
@@ -270,9 +294,9 @@ class ChatActionTiles extends StatelessWidget {
     return box.localToGlobal(Offset.zero) & box.size;
   }
 
-  /// Android four-door sheet: Gallery / Camera / Record video / File. Each
-  /// door opens the anchored input with a door-specific accept, so Chrome
-  /// never shows its ambiguous camera/camcorder/media chooser.
+  /// Android four-door sheet (web): Gallery / Camera / Record video / File.
+  /// Each door opens the anchored input with a door-specific accept, so
+  /// Chrome never shows its ambiguous camera/camcorder/media chooser.
   ///
   /// Video capture is its own door because Android has no single input that
   /// offers "photo or video": `image/*` + `capture` opens the camera in photo
@@ -284,6 +308,134 @@ class ChatActionTiles extends StatelessWidget {
     BuildContext context,
     Rect anchor, {
     required int pickedIn,
+  }) => _showAttachmentDoors(
+    context,
+    gallery: (sheet) => _openDoor(
+      sheet,
+      anchor,
+      pickedIn: pickedIn,
+      accept: 'image/*,video/*',
+      multiple: true,
+    ),
+    camera: (sheet) => _openDoor(
+      sheet,
+      anchor,
+      pickedIn: pickedIn,
+      accept: 'image/*',
+      capture: 'environment',
+    ),
+    recordVideo: (sheet) => _openDoor(
+      sheet,
+      anchor,
+      pickedIn: pickedIn,
+      accept: 'video/*',
+      capture: 'environment',
+    ),
+    file: (sheet) => _openDoor(
+      sheet,
+      anchor,
+      pickedIn: pickedIn,
+      accept: _dotAccept(kPickableDocumentExtensions),
+      multiple: true,
+    ),
+  );
+
+  /// The same four doors in the native Android app: Gallery is the system
+  /// photo picker (photos and videos, several at once) or, where Android has
+  /// none, the device's gallery app; Camera and Record video hand off to the
+  /// camera app, File is the system file picker.
+  Future<void> _showNativeAndroidAttachmentSheet(
+    BuildContext context, {
+    required int pickedIn,
+  }) => _showAttachmentDoors(
+    context,
+    gallery: (sheet) => _openNativeDoor(
+      sheet,
+      pickedIn: pickedIn,
+      pick: _pickFromGallery,
+    ),
+    camera: (sheet) => _openNativeDoor(
+      sheet,
+      pickedIn: pickedIn,
+      pick: () async =>
+          _fromXFile(await ImagePicker().pickImage(source: ImageSource.camera)),
+    ),
+    recordVideo: (sheet) => _openNativeDoor(
+      sheet,
+      pickedIn: pickedIn,
+      pick: () async =>
+          _fromXFile(await ImagePicker().pickVideo(source: ImageSource.camera)),
+    ),
+    file: (sheet) => _openNativeDoor(
+      sheet,
+      pickedIn: pickedIn,
+      pick: _pickWithFilePicker,
+    ),
+  );
+
+  static const MethodChannel _galleryChannel = MethodChannel(
+    'fireplace/gallery',
+  );
+
+  /// Android 13+ (or a backported picker): the system photo picker, a grid
+  /// of the device's photos and videos. Older Android has none, and
+  /// image_picker would open the document browser there, "a file picker, not
+  /// a gallery" (owner 2026-11-21): the gallery app answers instead
+  /// (`GalleryPicker.kt`), and the document browser only when the device has
+  /// no gallery app at all.
+  static Future<List<PickedAttachment>?> _pickFromGallery() async {
+    final hasPhotoPicker =
+        await _galleryChannel.invokeMethod<bool>(
+          'systemPhotoPickerAvailable',
+        ) ??
+        false;
+    if (!hasPhotoPicker) {
+      final paths = await _galleryChannel.invokeListMethod<String>(
+        'pickFromGalleryApp',
+      );
+      if (paths != null) {
+        return paths.isEmpty
+            ? null
+            : [
+                for (final path in paths)
+                  PickedAttachment(
+                    name: path.split('/').last,
+                    readBytes: () async {
+                      try {
+                        return Uint8List.fromList(
+                          await file_utils.readFileBytes(path),
+                        );
+                      } on Object {
+                        return null;
+                      }
+                    },
+                  ),
+              ];
+      }
+    }
+    final platform = ImagePickerPlatform.instance;
+    if (platform is ImagePickerAndroid) platform.useAndroidPhotoPicker = true;
+    return _fromXFiles(
+      await ImagePicker().pickMultipleMedia(limit: kMaxFilesPerPick),
+    );
+  }
+
+  static List<PickedAttachment>? _fromXFile(XFile? file) =>
+      file == null ? null : _fromXFiles([file]);
+
+  static List<PickedAttachment>? _fromXFiles(List<XFile> files) => files.isEmpty
+      ? null
+      : [
+          for (final file in files)
+            PickedAttachment(name: file.name, readBytes: file.readAsBytes),
+        ];
+
+  Future<void> _showAttachmentDoors(
+    BuildContext context, {
+    required void Function(BuildContext sheet) gallery,
+    required void Function(BuildContext sheet) camera,
+    required void Function(BuildContext sheet) recordVideo,
+    required void Function(BuildContext sheet) file,
   }) async {
     // The modal sheet route unfocuses the composer and drops the keyboard
     // before any door is tapped — that drop is not a user dismiss either.
@@ -306,52 +458,28 @@ class ChatActionTiles extends StatelessWidget {
                 icon: Icons.photo_library_outlined,
                 label: l10n.attachmentOptionGallery,
                 color: glass.onGlassAccent,
-                onTap: () => _openDoor(
-                  sheetContext,
-                  anchor,
-                  pickedIn: pickedIn,
-                  accept: 'image/*,video/*',
-                  multiple: true,
-                ),
+                onTap: () => gallery(sheetContext),
               ),
               _AttachmentDoorRow(
                 key: const Key('attachment-door-camera'),
                 icon: Icons.photo_camera_outlined,
                 label: l10n.attachmentOptionCamera,
                 color: glass.onGlassAccent,
-                onTap: () => _openDoor(
-                  sheetContext,
-                  anchor,
-                  pickedIn: pickedIn,
-                  accept: 'image/*',
-                  capture: 'environment',
-                ),
+                onTap: () => camera(sheetContext),
               ),
               _AttachmentDoorRow(
                 key: const Key('attachment-door-record-video'),
                 icon: Icons.videocam_outlined,
                 label: l10n.attachmentOptionRecordVideo,
                 color: glass.onGlassAccent,
-                onTap: () => _openDoor(
-                  sheetContext,
-                  anchor,
-                  pickedIn: pickedIn,
-                  accept: 'video/*',
-                  capture: 'environment',
-                ),
+                onTap: () => recordVideo(sheetContext),
               ),
               _AttachmentDoorRow(
                 key: const Key('attachment-door-file'),
                 icon: Icons.folder_outlined,
                 label: l10n.attachmentOptionFile,
                 color: glass.onGlassAccent,
-                onTap: () => _openDoor(
-                  sheetContext,
-                  anchor,
-                  pickedIn: pickedIn,
-                  accept: _dotAccept(kPickableDocumentExtensions),
-                  multiple: true,
-                ),
+                onTap: () => file(sheetContext),
               ),
               const SizedBox(height: 8),
             ],
@@ -392,6 +520,34 @@ class ChatActionTiles extends StatelessWidget {
         })
         .whenComplete(endComposerNativePicker)
         .ignore();
+  }
+
+  /// Native door tap: pop the sheet, run [pick] (a system picker or the
+  /// camera app), then hand the files to the composer once the picker span
+  /// is over, as the plain file_picker path does. A picker error (camera
+  /// permission refused, no camera app) is a pick of nothing.
+  void _openNativeDoor(
+    BuildContext sheetContext, {
+    required int pickedIn,
+    required Future<List<PickedAttachment>?> Function() pick,
+  }) {
+    beginComposerNativePicker();
+    Navigator.of(sheetContext).pop();
+    Future<List<PickedAttachment>?> guarded() async {
+      try {
+        return await pick();
+      } on Object catch (e) {
+        debugPrint('[ChatActionTiles] native pick failed: $e');
+        return null;
+      } finally {
+        endComposerNativePicker();
+      }
+    }
+
+    guarded().then((picked) async {
+      if (picked == null || picked.isEmpty) return;
+      await onPickedFiles?.call(picked, pickedIn: pickedIn);
+    }).ignore();
   }
 
   bool _ensureHasActiveConversation(BuildContext context) {

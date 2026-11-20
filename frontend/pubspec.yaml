@@ -42,6 +42,10 @@ dependencies:
   shared_preferences_platform_interface: ^2.4.2
   package_info_plus: ^8.3.0
   image_picker: ^1.2.3
+  # Chat Gallery door on native Android: opt in to the system photo picker
+  # (`useAndroidPhotoPicker`), photos and videos, no storage permission.
+  image_picker_android: ^0.8.13
+  image_picker_platform_interface: ^2.11.1
   # Profile photo (decision 138): the ONLY JPEG encoder — dart:ui encodes
   # PNG alone. Fed a ≤256×256 buffer the platform codec already scaled.
   image: ^4.8.0

@@ -17,6 +17,7 @@ class MainActivity : FlutterActivity() {
     // any HTTP request.
     private var pendingLinkFragment: String? = null
     private var linkChannel: MethodChannel? = null
+    private val galleryPicker = GalleryPicker(this)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -52,6 +53,15 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "fireplace/gallery",
+        ).setMethodCallHandler(galleryPicker)
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (galleryPicker.onActivityResult(requestCode, resultCode, data)) return
+        super.onActivityResult(requestCode, resultCode, data)
     }
 
     override fun onNewIntent(intent: Intent) {

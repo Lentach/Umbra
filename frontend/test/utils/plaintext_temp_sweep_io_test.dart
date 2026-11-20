@@ -55,6 +55,9 @@ void main() {
     put(temp, 'file_picker/1763294400000/IMG_0001.jpg');
     put(temp, 'file_picker/1763294400000/contract.pdf');
     put(temp, '3f2a9c1e-5b7d-4e8a-9c0b-1d2e3f4a5b6c/avatar.jpg');
+    // Camera captures (photo, video) from the attachment sheet.
+    put(temp, '9b1d2e3f-4a5b-4c6d-8e7f-0a1b2c3d4e5f8812345678901234.jpg');
+    put(temp, '0c1d2e3f-4a5b-4c6d-8e7f-0a1b2c3d4e5f1234567890.mp4');
 
     await sweep();
 
