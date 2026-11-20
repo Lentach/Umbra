@@ -392,6 +392,9 @@ class ChatActionTiles extends StatelessWidget {
     if (!hasPhotoPicker) {
       final paths = await _galleryChannel.invokeListMethod<String>(
         'pickFromGalleryApp',
+        // One past the cap: the composer then sends ten and says the rest
+        // were dropped, and the gallery app's copies stop there.
+        {'limit': kMaxFilesPerPick + 1},
       );
       if (paths != null) {
         return paths.isEmpty

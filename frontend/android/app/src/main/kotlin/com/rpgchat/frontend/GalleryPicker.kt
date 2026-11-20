@@ -27,17 +27,19 @@ import java.util.concurrent.Executors
  * Channel `fireplace/gallery`:
  *  - `systemPhotoPickerAvailable` → Boolean: image_picker's photo picker
  *    will show a real gallery grid.
- *  - `pickFromGalleryApp` → null when no gallery app exists (the caller
+ *  - `pickFromGalleryApp({limit})` → null when no gallery app exists (the caller
  *    falls back), else the picked file paths (empty: cancelled).
  */
 class GalleryPicker(private val activity: Activity) : MethodChannel.MethodCallHandler {
     private var pending: MethodChannel.Result? = null
+    private var pendingLimit = Int.MAX_VALUE
     private val io = Executors.newSingleThreadExecutor()
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
             "systemPhotoPickerAvailable" -> result.success(systemPhotoPickerAvailable())
-            "pickFromGalleryApp" -> pickFromGalleryApp(result)
+            "pickFromGalleryApp" ->
+                pickFromGalleryApp(call.argument<Int>("limit") ?: Int.MAX_VALUE, result)
             else -> result.notImplemented()
         }
     }
@@ -70,7 +72,7 @@ class GalleryPicker(private val activity: Activity) : MethodChannel.MethodCallHa
             .putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("image/*", "video/*"))
             .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
 
-    private fun pickFromGalleryApp(result: MethodChannel.Result) {
+    private fun pickFromGalleryApp(limit: Int, result: MethodChannel.Result) {
         if (pending != null) {
             result.error("busy", "a gallery pick is already open", null)
             return
@@ -90,6 +92,7 @@ class GalleryPicker(private val activity: Activity) : MethodChannel.MethodCallHa
             )
         }
         pending = result
+        pendingLimit = limit
         try {
             activity.startActivityForResult(launch, REQUEST_CODE)
         } catch (e: ActivityNotFoundException) {
@@ -113,7 +116,9 @@ class GalleryPicker(private val activity: Activity) : MethodChannel.MethodCallHa
         }
         if (uris.isEmpty()) data.data?.let(uris::add)
         io.execute {
-            val paths = uris.mapNotNull(::copyToCache)
+            // Copies only what the composer can send (it caps the count; a
+            // gallery app has no limit of its own).
+            val paths = uris.take(pendingLimit).mapNotNull(::copyToCache)
             activity.runOnUiThread { result.success(paths) }
         }
         return true
