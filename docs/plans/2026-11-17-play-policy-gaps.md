@@ -286,6 +286,8 @@ other IDs, and Contacts (if declared conservatively), all encrypted in transit a
 
 ## Owner questions (verbatim list)
 
+**Answered 2026-11-20 (decision 146): all ten as recommended**; OWNER-3 = the VM contact inbox, OWNER-4 = the owner, "reviewed within 7 days".
+
 1. **[OWNER-1]** Approve option (a), reporter-selected plaintext, with the consent text above? Or do you
    want (b) handle-and-category only, accepting weaker moderation?
 2. **[OWNER-2]** Retention for reports: 12 months maximum, with the reporter id dropped when the case is

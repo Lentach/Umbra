@@ -231,3 +231,5 @@ Owner questions: (1) may a normal-queue PreKey frame under a changed identity
 be held even with key-change warnings off (reverses dropped row B2/(lxxix))?
 (2) approve Option V and a phrase re-enrolment prompt for existing users?
 (3) is requiring the phrase to restore contacts (W1/W2) acceptable?
+
+**Owner answers 2026-11-20:** (1) yes, hold (decision 143); (2) done as 0.2.90 (B7); (3) no, keep the password wrap (decision 144).
