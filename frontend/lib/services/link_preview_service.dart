@@ -11,10 +11,66 @@ class LinkPreviewService {
   static final _urlRegex =
       RegExp(r'https?://[^\s<>"{}|\\^`\[\]]+', caseSensitive: false);
 
-  static final _privateIpRegex = RegExp(
-    r'^(localhost|127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|::1|f[cd][0-9a-f]{0,2}:)',
-    caseSensitive: false,
-  );
+  /// Whether [host] names this device, its network, or another address no
+  /// public site lives at: loopback, private, link-local, CGNAT, unspecified,
+  /// multicast and reserved IPv4; IPv6 loopback, unspecified, IPv4-mapped or
+  /// -compatible, ULA, link-local and multicast; and any numeric IPv4 form
+  /// other than a plain dotted quad (`2130706433`, `0x7f.1`, `0177.0.0.1`),
+  /// which resolvers read as an address the dotted check never sees.
+  /// A DNS name is judged by its text only: one that RESOLVES to a private
+  /// address is not caught here.
+  @visibleForTesting
+  static bool isPrivateHost(String host) {
+    var h = host.toLowerCase();
+    if (h.startsWith('[') && h.endsWith(']')) h = h.substring(1, h.length - 1);
+    final zone = h.indexOf('%');
+    if (zone != -1) h = h.substring(0, zone);
+    if (h.endsWith('.')) h = h.substring(0, h.length - 1);
+    if (h.isEmpty) return true;
+    if (h == 'localhost' || h.endsWith('.localhost')) return true;
+    if (h.contains(':')) return _isPrivateIpv6(h);
+    final labels = h.split('.');
+    final numeric = RegExp(r'^(0x[0-9a-f]*|\d+)$');
+    if (!labels.every(numeric.hasMatch)) return false;
+    final octets = <int>[];
+    for (final label in labels) {
+      // A hex or zero-led (octal) part, or a short form: not a plain quad.
+      if (label.startsWith('0x') ||
+          (label.length > 1 && label.startsWith('0'))) {
+        return true;
+      }
+      octets.add(int.parse(label));
+    }
+    if (octets.length != 4 || octets.any((o) => o > 255)) return true;
+    return _isPrivateIpv4(octets);
+  }
+
+  static bool _isPrivateIpv4(List<int> o) {
+    final a = o[0];
+    final b = o[1];
+    return a == 0 || // this network
+        a == 10 ||
+        a == 127 ||
+        (a == 100 && b >= 64 && b <= 127) || // CGNAT
+        (a == 169 && b == 254) || // link-local
+        (a == 172 && b >= 16 && b <= 31) ||
+        (a == 192 && b == 168) ||
+        (a == 192 && b == 0 && o[2] == 0) || // IETF protocol assignments
+        (a == 198 && (b == 18 || b == 19)) || // benchmarking
+        a >= 224; // multicast, reserved, broadcast
+  }
+
+  static bool _isPrivateIpv6(String h) {
+    // `::` first (unspecified, loopback, IPv4-compatible/-mapped) or a
+    // zero first hextet (the same, written out): reserved space.
+    if (h.startsWith(':')) return true;
+    final first = int.tryParse(h.split(':').first, radix: 16);
+    if (first == null) return true;
+    return first == 0 ||
+        (first >= 0xfc00 && first <= 0xfdff) || // ULA
+        (first >= 0xfe80 && first <= 0xfeff) || // link-local, old site-local
+        first >= 0xff00; // multicast
+  }
 
   /// SSRF protection: only HTTPS, no private IPs.
   /// [pageUrl] used to resolve relative imageUrl (e.g. /image.png).
@@ -28,8 +84,7 @@ class LinkPreviewService {
       if (resolved.scheme != 'https') return false;
       final host = resolved.host;
       if (host.isEmpty) return false;
-      final hostNorm = host.startsWith('[') ? host.substring(1, host.length - 1) : host;
-      return !_privateIpRegex.hasMatch(hostNorm);
+      return !isPrivateHost(host);
     } catch (_) {
       return false;
     }
@@ -58,7 +113,7 @@ class LinkPreviewService {
     if (uri == null || !uri.hasScheme) return null;
 
     // SSRF protection: skip private/local URLs
-    if (_privateIpRegex.hasMatch(uri.host)) return null;
+    if (isPrivateHost(uri.host)) return null;
 
     try {
       final response = await http
