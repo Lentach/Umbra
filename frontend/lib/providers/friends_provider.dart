@@ -441,13 +441,15 @@ class FriendsProvider extends ChangeNotifier {
         // The record is `pendingOut` in the store already: the getters show it.
         _clearSendAction(userId);
         notifyListeners();
+      case FirstContactSend.busy:
+        _failSend(userId, reason: InvitationFailure.serversBusy);
       case FirstContactSend.failed:
         _failSend(userId);
     }
   }
 
   /// A send the ack timeout already released was reported already.
-  void _failSend(int userId) {
+  void _failSend(int userId, {String reason = 'send_failed'}) {
     final held = _sendActions.containsKey(userId);
     _clearSendAction(userId);
     if (held) {
@@ -455,7 +457,7 @@ class FriendsProvider extends ChangeNotifier {
         action: InvitationAction.send,
         requestId: null,
         recipientId: userId,
-        reason: 'send_failed',
+        reason: reason,
       );
     }
     notifyListeners();

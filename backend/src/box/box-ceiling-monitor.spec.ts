@@ -1,5 +1,6 @@
 import { BoxCeilingMonitor } from './box-ceiling-monitor';
 import {
+  BOX_GLOBAL_MSG_CEILING as CEILING,
   BOX_OPEN_MEDIA_CEILING_BYTES as MEDIA,
   BOX_OPEN_MSG_CEILING as MSGS,
 } from './box.constants';
@@ -84,5 +85,16 @@ describe('BoxCeilingMonitor', () => {
     expect(lines[0].text).toBe(
       `[box] ceiling msgCount=${MSGS * 0.5} openBand=${MSGS} (50%) ok->warn`,
     );
+  });
+
+  it('also tracks the whole ceiling (T2) and reports whether anything is at WARN', () => {
+    const { lines, check } = setup();
+    expect(check(MSGS * 0.5 - 1)).toBe(false);
+    expect(check(CEILING * 0.5)).toBe(true);
+    expect(lines.map((l) => l.text)).toEqual([
+      `[box] ceiling msgCount=${CEILING * 0.5} openBand=${MSGS} (${Math.round(((CEILING * 0.5) / MSGS) * 100)}%) ok->error`,
+      `[box] ceiling msgCount=${CEILING * 0.5} ceiling=${CEILING} (50%) ok->warn`,
+    ]);
+    expect(check(0)).toBe(false);
   });
 });

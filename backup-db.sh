@@ -73,15 +73,21 @@ ts="$(date -u +%Y%m%dT%H%M%SZ)"
 db_file="$BACKUP_DIR/chatdb-$ts.dump"
 media_file="$BACKUP_DIR/media-$ts.tar.gz"
 
-echo "==> [$ts] pg_dump $DB_NAME (custom/compressed format)"
-compose exec -T db pg_dump -U "$DB_USER" -d "$DB_NAME" -Fc > "$db_file"
+# The box's CONTENTS stay out (decision 147, plan D2): the waiting ciphertext
+# (box_msgs) and the media rows (box_media), like the box/ media folder below.
+# They live 30 and 14 days, a full box is ~8 GB, and 14 nights of copies would
+# fill the disk; a restore zeroes the box counters to match (restore-db.sh).
+echo "==> [$ts] pg_dump $DB_NAME (custom/compressed format, box contents left out)"
+compose exec -T db pg_dump -U "$DB_USER" -d "$DB_NAME" -Fc \
+  --exclude-table-data=public.box_msgs --exclude-table-data=public.box_media \
+  > "$db_file"
 [[ -s "$db_file" ]] || { echo "ERROR: dump is empty — aborting" >&2; rm -f "$db_file"; exit 1; }
 
 echo "==> tar media volume ($MEDIA_VOLUME)"
 if ! docker volume inspect "$MEDIA_VOLUME" >/dev/null 2>&1; then
   echo "WARN: media volume '$MEDIA_VOLUME' not found — SKIPPING media (check: docker volume ls). Not creating an empty one."
 elif ! docker run --rm -v "$MEDIA_VOLUME":/data:ro -v "$BACKUP_DIR":/backup alpine \
-       tar czf "/backup/$(basename "$media_file")" -C /data . ; then
+       tar czf "/backup/$(basename "$media_file")" -C /data --exclude=./box . ; then
   echo "WARN: media backup failed — removing partial archive"
   rm -f "$media_file"
 fi

@@ -86,6 +86,10 @@ services:
       # Pinned here, not read from .env, so a change is a reviewed commit,
       # never a .env edit.
       BOX_ENABLED: 'true'
+      # Box flood alarm (plan D2 O1, decision 147): a healthchecks.io check URL;
+      # the reaper pings it every 10 min, `/fail` while the box is >= 50 % full.
+      # Unset = off. Holds the check's secret: .env only, never a commit.
+      BOX_ALERT_URL: ${BOX_ALERT_URL:-}
       FIREBASE_SERVICE_ACCOUNT: ${FIREBASE_SERVICE_ACCOUNT:-}
       WEB_PUSH_VAPID_PUBLIC_KEY: ${WEB_PUSH_VAPID_PUBLIC_KEY:?set WEB_PUSH_VAPID_PUBLIC_KEY in ~/fireplace/.env}
       WEB_PUSH_VAPID_PRIVATE_KEY: ${WEB_PUSH_VAPID_PRIVATE_KEY:?set WEB_PUSH_VAPID_PRIVATE_KEY in ~/fireplace/.env}

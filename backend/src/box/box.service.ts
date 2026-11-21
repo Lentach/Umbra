@@ -34,6 +34,27 @@ export type EnqueueResult =
 export type MediaCharge =
   'charged' | 'over_budget' | 'over_ceiling' | 'unknown_sid';
 
+/**
+ * Which queues an operator purge takes (plan D2 O2, decision 145): the
+ * attacker-shaped ones, holding at least `minMsgs` with a message stored
+ * before `olderThan` that nobody acked since — the fullest first, at most
+ * `maxQueues`. An honest owner who reads its queue acks within minutes.
+ */
+export interface PurgeCriteria {
+  minMsgs: number;
+  olderThan: Date;
+  maxQueues: number;
+  /** Count what would go; delete nothing. */
+  dryRun: boolean;
+}
+
+/** Counts only: an operator command prints these, never an address. */
+export interface PurgeResult {
+  normalQueues: number;
+  requestQueues: number;
+  msgs: number;
+}
+
 /** An upload about to be streamed to `path`, on one ladder rung. */
 export interface NewMedia {
   id: Buffer;
@@ -326,23 +347,27 @@ export class BoxService {
   /**
    * A subscribe claims the queue (clears `claimBy`) and stamps the UTC day.
    * One on or after a normal queue's probation day also ESTABLISHES it
-   * (clears `probationUntil`), like `ack`: its owner still reads it a week
-   * on. Without this, a queue on probation behind a full open band could
-   * never store the message it would have to ack, and stayed on probation
-   * for good. The WHERE skips rows already in that state: a reconnect loop
-   * must not rewrite every row of a device on every connect.
+   * (clears `probationUntil`), like `ack`, but only while the queue holds
+   * NOTHING (plan D2 O3, E145a). That empty case is E65c's: a queue on
+   * probation behind a full open band could never store the message it
+   * would have to ack, and stayed on probation for good. A queue that does
+   * hold messages gets out by acking one; a subscribe alone would let whoever
+   * minted a queue full of junk move it into the reserved band just by
+   * waiting a week. The WHERE skips rows already in that state: a reconnect
+   * loop must not rewrite every row of a device on every connect.
    */
   async markSubscribed(rids: Buffer[]): Promise<void> {
     await this.db.query(
       `UPDATE public.box_queues
           SET "touchedDay" = $2::date, "claimBy" = NULL,
-              "probationUntil" = CASE WHEN "probationUntil" <= $2::date
+              "probationUntil" = CASE
+                WHEN "probationUntil" <= $2::date AND "msgCount" = 0
                 THEN NULL ELSE "probationUntil" END
         WHERE rid IN (
           SELECT rid FROM public.box_queues
            WHERE rid = ANY($1::bytea[])
              AND ("touchedDay" IS DISTINCT FROM $2::date OR "claimBy" IS NOT NULL
-                  OR "probationUntil" <= $2::date)
+                  OR ("probationUntil" <= $2::date AND "msgCount" = 0))
            ORDER BY rid FOR UPDATE)`,
       [rids, utcDay(new Date())],
     );
@@ -647,6 +672,67 @@ export class BoxService {
       [now, utcDay(cutoff)],
     );
     return rows.map((r) => r.rid);
+  }
+
+  /**
+   * The operator purge (plan D2 O2, decision 145; `box-purge.cli.ts`): every
+   * message of the queues `criteria` picks is deleted and the global total
+   * gives them back, and each normal one goes BACK on probation from today
+   * (`BOX_PROBATION_DAYS`), so refilling it is held to the open band again.
+   * The queues themselves stay: a falsely picked honest queue keeps its
+   * address and its friends' later sends, losing only what was waiting
+   * (the residual decision 145 accepted). Media is not touched: a box medium
+   * names no queue (I1), so nothing ties it to one. Lock order as everywhere:
+   * the picked queue rows in rid order, then their messages, then the totals.
+   */
+  async purgeStaleBacklogs(criteria: PurgeCriteria): Promise<PurgeResult> {
+    const probationUntil = new Date();
+    probationUntil.setUTCDate(probationUntil.getUTCDate() + BOX_PROBATION_DAYS);
+    return this.db.transaction(async (tx) => {
+      const picked: { rid: Buffer }[] = await tx.query(
+        `SELECT q.rid FROM public.box_queues q
+          WHERE q."msgCount" >= $1
+            AND EXISTS (SELECT 1 FROM public.box_msgs m
+                         WHERE m.rid = q.rid AND m."createdAt" <= $2)
+          ORDER BY q."msgCount" DESC, q.rid
+          LIMIT $3`,
+        [criteria.minMsgs, criteria.olderThan, criteria.maxQueues],
+      );
+      const rids = picked.map((r) => r.rid);
+      const locked: { kind: QueueKind; msgCount: number }[] = rids.length
+        ? await tx.query(
+            `SELECT kind, "msgCount" FROM public.box_queues
+              WHERE rid = ANY($1::bytea[]) ORDER BY rid FOR UPDATE`,
+            [rids],
+          )
+        : [];
+      const normalQueues = locked.filter((q) => q.kind === 'normal').length;
+      const requestQueues = locked.length - normalQueues;
+      if (criteria.dryRun || locked.length === 0) {
+        const msgs = locked.reduce((sum, q) => sum + q.msgCount, 0);
+        return { normalQueues, requestQueues, msgs };
+      }
+      // A SELECT outside, so `query()` answers the rows alone.
+      const gone: { n: number }[] = await tx.query(
+        `WITH gone AS (
+           DELETE FROM public.box_msgs WHERE rid = ANY($1::bytea[])
+           RETURNING rid),
+         queues AS (
+           UPDATE public.box_queues q
+              SET "msgCount" = q."msgCount" - g.n,
+                  "probationUntil" = CASE WHEN q.kind = 'normal'
+                    THEN $2::date ELSE NULL END
+             FROM (SELECT rid, count(*)::int AS n FROM gone GROUP BY rid) g
+            WHERE q.rid = g.rid),
+         total AS (
+           UPDATE public.box_totals
+              SET "msgCount" = "msgCount" - (SELECT count(*) FROM gone)
+            WHERE id = 1 AND EXISTS (SELECT 1 FROM gone))
+         SELECT count(*)::int AS n FROM gone`,
+        [rids, utcDay(probationUntil)],
+      );
+      return { normalQueues, requestQueues, msgs: gone[0]?.n ?? 0 };
+    });
   }
 
   /**

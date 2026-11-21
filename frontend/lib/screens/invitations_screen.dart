@@ -90,6 +90,8 @@ class _InvitationsScreenState extends State<InvitationsScreen> {
 
   String _failureMessage(AppLocalizations l10n, InvitationFailure failure) {
     return switch (failure.action) {
+      InvitationAction.send when failure.reason == InvitationFailure.serversBusy =>
+        l10n.invitationSendServersBusy,
       InvitationAction.send => l10n.invitationSendFailed,
       InvitationAction.accept => l10n.invitationAcceptFailed,
       InvitationAction.decline => l10n.invitationDeclineFailed,

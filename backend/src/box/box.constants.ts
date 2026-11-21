@@ -92,14 +92,17 @@ export const BOX_MEDIA_LADDER: ReadonlyArray<{
 export const BOX_MEDIA_DAILY_BUDGET_BYTES = 1024 * 1024 * 1024;
 
 /**
- * The GLOBAL ceiling (owner decision 30, E12): everything the box holds, all
- * queues together — 2 GiB of media on disk plus 60 000 undelivered 16 KiB
- * blobs (~0.9 GiB), about 3 GB on the disk Postgres shares. Past either, a
- * `send` answers `quota_exceeded` and an upload `429 quota_exceeded`. Kept as
+ * The GLOBAL ceiling (owner decisions 30 and 145, E12): everything the box
+ * holds, all queues together — 6 GiB of media on disk plus 120 000
+ * undelivered 16 KiB blobs (~1.9 GiB), about 8 GB of the VPS disk Postgres
+ * shares (19 GB free on 2026-11-21). Sized to the disk because the box's
+ * contents are NOT in the nightly backups (decision 147), which would
+ * otherwise multiply them by the 14 nights kept. Past either, a `send`
+ * answers `quota_exceeded` and an upload `429 quota_exceeded`. Kept as
  * running totals in `box_totals` (migration 0024), never counted per send.
  */
-export const BOX_GLOBAL_MSG_CEILING = 60_000;
-export const BOX_GLOBAL_MEDIA_CEILING_BYTES = 2 * 1024 * 1024 * 1024;
+export const BOX_GLOBAL_MSG_CEILING = 120_000;
+export const BOX_GLOBAL_MEDIA_CEILING_BYTES = 6 * 1024 * 1024 * 1024;
 
 /**
  * The OPEN band of each global ceiling (G5, BOX-CEILING-DOS): what any store
@@ -108,13 +111,17 @@ export const BOX_GLOBAL_MEDIA_CEILING_BYTES = 2 * 1024 * 1024 * 1024;
  * to fill the box stops here while existing friendships keep sending. A
  * request queue never reaches the reserve: its sid is public.
  */
-export const BOX_OPEN_MSG_CEILING = 30_000;
-export const BOX_OPEN_MEDIA_CEILING_BYTES = 1024 * 1024 * 1024;
+export const BOX_OPEN_MSG_CEILING = 60_000;
+export const BOX_OPEN_MEDIA_CEILING_BYTES = 3 * 1024 * 1024 * 1024;
 
 /**
  * A new normal queue is on probation until the UTC day this many days after
- * its creation; its owner's first ack or subscribe on or after that day
- * establishes it (`box_queues."probationUntil"`, migration 0026).
+ * its creation (`box_queues."probationUntil"`, migration 0026). On or after
+ * that day its owner's ack of a stored message establishes it, and so does
+ * its owner's subscribe while it holds NOTHING (plan D2 O3, E145a): a
+ * subscribe alone no longer turns a queue full of its own junk into a
+ * reserve-band queue, while a queue the open band kept empty can still get
+ * out of probation (E65c).
  */
 export const BOX_PROBATION_DAYS = 7;
 

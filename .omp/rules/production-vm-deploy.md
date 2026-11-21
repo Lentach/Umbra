@@ -224,9 +224,12 @@ all of `/contact*`. Fastify + SQLite + web-push, one Docker container.
 
 ## Backups & monitoring
 
-- **Box ceiling early warning (#204):** `docker compose -f docker-compose.prod.yml logs backend | grep "\[box\] ceiling"` (sudo as needed). WARN = a box total passed 50 % of its OPEN band (15 000 msgs / 512 MiB media), ERROR = past 80 %, INFO `->ok`/`->warn` = recovery. Logged by the 10-min reaper sweep, only on a level change; never on `/health`.
+- **Box ceiling early warning (#204):** `docker compose -f docker-compose.prod.yml logs backend | grep "\[box\] ceiling"` (sudo as needed). WARN = a box total passed 50 % of its OPEN band (30 000 msgs / 1.5 GiB media) or of the whole ceiling, ERROR = past 80 %, INFO `->ok`/`->warn` = recovery. Logged by the 10-min reaper sweep, only on a level change; never on `/health`. The same sweep pings `BOX_ALERT_URL` (below, "Box flood").
 - **DB + media + .env backup:** `./backup-db.sh` (VM) → `pg_dump -Fc` of `chatdb` + tar of the
   `fireplace_media_storage` volume → `~/fireplace-backups/` (0700), prunes >`RETENTION_DAYS` (14).
+  **The box's contents are left out (decision 147):** no `box_msgs`/`box_media` rows, no `box/` media
+  folder (a full box is ~8 GB; 14 nights of it would fill the disk). `restore-db.sh` recounts the box
+  after a restore; messages waiting in the box at backup time are not restorable.
 - **Encryption:** gpg AES256, keyed by `BACKUP_PASSPHRASE_FILE` (default
   `~/.config/fireplace/backup.pass`, **chmod 600** — refused otherwise) or `BACKUP_PASSPHRASE` env.
   Fed via `--passphrase-file` → never in `ps`/argv or the cron line. **`.env` is included in the set
@@ -278,6 +281,22 @@ all of `/contact*`. Fastify + SQLite + web-push, one Docker container.
 - **Uptime monitor (external):** point UptimeRobot / healthchecks.io at
   `https://fireplace.ignorelist.com/health` (expect `{"status":"ok","db":"ok"}`) so an outage pages
   you instead of being noticed by hand.
+
+## Box flood (plan D2, decisions 145 and 147)
+
+- **Alarm:** `BOX_ALERT_URL` in `~/fireplace/.env` = a healthchecks.io check (Period 10 min, Grace
+  30 min; the owner's account, email on). The reaper pings it every 10 min; `/fail` when any box total
+  is ≥ 50 % of the open band or the ceiling. A missing ping (backend down) alerts too. After setting it:
+  `./deploy-backend.sh` (never `restart`), then check the check turns green within 10 min.
+- **Look:** `docker compose -f docker-compose.prod.yml exec -T db psql -U postgres -d chatdb -c 'select * from box_totals'`
+  (ceiling 120 000 msgs / 6 GiB; open band 60 000 / 3 GiB) and the `[box] ceiling` / `[box] refusals` log lines.
+- **Purge (operator, during an incident only):** dry run first, then the same flags plus `--execute`:
+  `docker compose -f docker-compose.prod.yml exec -T backend node dist/box/box-purge.cli.js --min-msgs 32 --min-age-hours 24 --max-queues 500`.
+  It deletes every message of the fullest queues holding an unacked message older than the age, puts
+  each normal one back on probation (7 days, open band only), and keeps the queues. Prints counts only.
+  Decision 145's accepted cost: a real friend offline since before the age loses what was waiting.
+  Back up first (`BACKUP_RCLONE_REMOTE=… ./backup-db.sh`; it no longer holds box messages, so a
+  purge is not undoable). Media cannot be purged by queue (a medium names none): it expires in 14 days.
 
 ## Agent checklist after a production-related PR
 

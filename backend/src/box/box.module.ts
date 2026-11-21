@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { BoxAlert } from './box-alert';
 import { BoxDelivery } from './box-delivery.service';
 import { BoxMediaController } from './box-media.controller';
 import { BoxMediaStore } from './box-media.store';
@@ -50,6 +51,7 @@ export const BOX_ENTITIES = [
     BoxNotifierService,
     BoxMediaStore,
     BoxReaper,
+    BoxAlert,
     BoxGateway,
     { provide: BOX_PUSH_TRANSPORT, useClass: FirebaseWebPushTransport },
     {

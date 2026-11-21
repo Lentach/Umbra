@@ -25,6 +25,10 @@ class InvitationOutcome {
 }
 
 class InvitationFailure {
+  /// [reason] of a send the box refused at its global ceiling (plan D2):
+  /// "servers are busy, try later" (decision 145).
+  static const serversBusy = 'servers_busy';
+
   final InvitationAction action;
   final int? requestId;
   final int? recipientId;

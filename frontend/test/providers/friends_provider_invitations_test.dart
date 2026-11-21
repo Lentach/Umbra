@@ -88,6 +88,26 @@ void main() {
       );
     });
 
+    test('a send the box refused at its ceiling fails as "servers busy", '
+        'any other failed send as a plain failure (plan D2)', () async {
+      for (final (answer, reason) in [
+        (FirstContactSend.busy, InvitationFailure.serversBusy),
+        (FirstContactSend.failed, 'send_failed'),
+      ]) {
+        final friends = provider()
+          ..boxSendRequest = ((_) async => answer)
+          ..searchUsers('u2#0002')
+          ..onSearchUsersResult([
+            {'id': 2, 'username': 'u2', 'tag': '0002'},
+          ])
+          ..sendFriendRequest(2);
+        await pumpEventQueue();
+        final failure = friends.consumeInvitationFailure();
+        expect(failure?.action, InvitationAction.send);
+        expect(failure?.reason, reason);
+      }
+    });
+
     test('a finished step releases only its own key', () async {
       final friends = provider()
         ..boxAcceptRequest = ((_) async => FirstContactAccept.failed)
