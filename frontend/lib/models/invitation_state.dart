@@ -25,6 +25,13 @@ class InvitationOutcome {
 }
 
 class InvitationFailure {
+  /// [reason] of a send the box refused for being full (plan D2): "servers
+  /// are busy, try later" (decision 145).
+  static const serversBusy = 'servers_busy';
+
+  /// [reason] of any other failed send.
+  static const sendFailed = 'send_failed';
+
   final InvitationAction action;
   final int? requestId;
   final int? recipientId;

@@ -416,6 +416,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get invitationSendFailed => 'Could not send the invitation';
 
   @override
+  String get invitationSendServersBusy =>
+      'Servers are busy. Try sending the invitation later';
+
+  @override
   String get invitationAcceptFailed => 'Could not accept the invitation';
 
   @override

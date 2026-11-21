@@ -619,19 +619,35 @@ class BoxSession
     ContactOutbound to,
     Uint8List body, {
     BoxSendMode? mode,
-  }) async {
+  }) async => switch (await _sealAndSend(to, body, mode)) {
+    BoxOk() => BoxSendOutcome.taken,
+    BoxRefused(code: BoxCode.queueFull) => BoxSendOutcome.full,
+    BoxRefused() || BoxUnknown() || null => BoxSendOutcome.failed,
+  };
+
+  @override
+  Future<BoxRequestSend> deliverRequest(
+    ContactOutbound to,
+    Uint8List body,
+  ) async => switch (await _sealAndSend(to, body, null)) {
+    BoxOk() => BoxRequestSend.taken,
+    BoxRefused(code: BoxCode.quotaExceeded) => BoxRequestSend.busy,
+    BoxRefused() || BoxUnknown() || null => BoxRequestSend.failed,
+  };
+
+  /// The box's answer to [body] sealed to [to]; null when nothing was sent
+  /// (a bad address, a failed seal, a disposed session).
+  Future<BoxResult<void>?> _sealAndSend(
+    ContactOutbound to,
+    Uint8List body,
+    BoxSendMode? mode,
+  ) async {
     final sid = boxB64Decode(to.sid, kBoxSidBytes);
     final sealPub = boxB64Decode(to.sealPub, 32);
-    if (_disposed || sid == null || sealPub == null) {
-      return BoxSendOutcome.failed;
-    }
+    if (_disposed || sid == null || sealPub == null) return null;
     final blob = await _seal.seal(sealPub, body);
-    if (blob == null || _disposed) return BoxSendOutcome.failed;
-    return switch (await _box.send(sid, blob, mode: mode)) {
-      BoxOk() => BoxSendOutcome.taken,
-      BoxRefused(code: BoxCode.queueFull) => BoxSendOutcome.full,
-      BoxRefused() || BoxUnknown() => BoxSendOutcome.failed,
-    };
+    if (blob == null || _disposed) return null;
+    return _box.send(sid, blob, mode: mode);
   }
 
   @override

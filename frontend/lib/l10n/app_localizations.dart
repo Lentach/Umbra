@@ -830,6 +830,12 @@ abstract class AppLocalizations {
   /// **'Nie udało się wysłać zaproszenia'**
   String get invitationSendFailed;
 
+  /// No description provided for @invitationSendServersBusy.
+  ///
+  /// In pl, this message translates to:
+  /// **'Serwery są zajęte. Spróbuj wysłać zaproszenie później'**
+  String get invitationSendServersBusy;
+
   /// No description provided for @invitationAcceptFailed.
   ///
   /// In pl, this message translates to:

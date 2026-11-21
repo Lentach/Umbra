@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { BoxAlert } from './box-alert';
 import { BoxCeilingMonitor } from './box-ceiling-monitor';
 import { BoxDelivery } from './box-delivery.service';
 import { BoxMediaStore } from './box-media.store';
@@ -15,8 +16,10 @@ import { BoxService } from './box.service';
  * (their messages and notifier go by FK cascade). The same pass logs how many
  * socket events were throttled and how many sends and uploads the quotas
  * refused since the last one (counts per event, never a client), and checks
- * `box_totals` against the OPEN band (WARN from 50 %, ERROR from 80 %, #204). At 00:00
- * UTC every queue's daily media budget restarts.
+ * `box_totals` against the OPEN band and the whole ceiling (WARN from 50 %,
+ * ERROR from 80 %, #204), then pings the operator's alarm with the one-bit
+ * result (`BoxAlert`, plan D2 O1). At 00:00 UTC every queue's daily media
+ * budget restarts.
  */
 @Injectable()
 export class BoxReaper {
@@ -28,6 +31,7 @@ export class BoxReaper {
     private readonly box: BoxService,
     private readonly store: BoxMediaStore,
     private readonly delivery: BoxDelivery,
+    private readonly alert: BoxAlert,
   ) {}
 
   @Cron(CronExpression.EVERY_10_MINUTES)
@@ -52,10 +56,10 @@ export class BoxReaper {
           '[box] ceiling box_totals row missing (box refusing all stores)',
         );
       }
-    } else {
-      this.ceiling.check(totals, this.logger);
     }
+    const alarming = totals === null || this.ceiling.check(totals, this.logger);
     this.totalsMissing = totals === null;
+    await this.alert.report(alarming);
     const refused = takeRefusalCounts();
     if (refused.size > 0) {
       const counts = [...refused].map(([event, n]) => `${event}=${n}`);

@@ -129,6 +129,7 @@
   "accept": "Accept",
   "invitationStatusPending": "Pending",
   "invitationSendFailed": "Could not send the invitation",
+  "invitationSendServersBusy": "Servers are busy. Try sending the invitation later",
   "invitationAcceptFailed": "Could not accept the invitation",
   "invitationDeclineFailed": "Could not decline the invitation",
   "invitationSemanticIncoming": "{name}, invitation received, wants to connect",

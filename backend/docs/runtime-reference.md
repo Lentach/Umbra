@@ -10,11 +10,11 @@ Production backend deploy runs on the VM only (`cd ~/fireplace && ./deploy-backe
 
 ## Box module (§2)
 
-The **box** (`src/box/`: `/box` namespace + `/box/media`, metadata-privacy PR1.1) is dark until a client speaks it. It is registered only when `BOX_ENABLED=true` (`ConditionalModule`); dev compose sets it, and prod pins it ON since step B (decision 75, 2026-09-30; one-way, fix forward only: E69d). Its global ceiling (60 000 blobs + 2 GiB media, decision 30) is the one-row `box_totals` (migration 0024); lock order `box_queues` → `box_msgs` → `box_totals` (header of `box.service.ts`).
+The **box** (`src/box/`: `/box` namespace + `/box/media`, metadata-privacy PR1.1) is dark until a client speaks it. It is registered only when `BOX_ENABLED=true` (`ConditionalModule`); dev compose sets it, and prod pins it ON since step B (decision 75, 2026-09-30; one-way, fix forward only: E69d). Its global ceiling (120 000 blobs + 6 GiB media, decisions 30 and 145) is the one-row `box_totals` (migration 0024); lock order `box_queues` → `box_msgs` → `box_totals` (header of `box.service.ts`).
 
 The box has NO account on its path: it imports nothing from `auth/`, `users/`, `chat/`, even transitively (invariant I1, enforced by `scripts/verify-box-imports.mjs` in CI). Contract: `docs/contracts/wire.md` "Box". Suite: `npm run test:int` (real sockets + Postgres, `BOX_IT_DATABASE_URL`).
 
-**Ceiling early warning (#204).** The 10-minute `BoxReaper` sweep reads `box_totals` and `BoxCeilingMonitor` (`box-ceiling-monitor.ts`) logs `[box] ceiling <msgCount|mediaBytes>=… openBand=… (N%) a->b`: WARN when a total reaches 50 % of its OPEN band (`BOX_OPEN_*_CEILING`), ERROR from 80 %, one INFO line on recovery. Once per level change per process (a restart re-logs a still-high level). Totals only, never an id; deliberately NOT on `/health`, `/version` or any route (waiting count is traffic metadata).
+**Ceiling early warning (#204, plan D2 O1).** The 10-minute `BoxReaper` sweep reads `box_totals` and `BoxCeilingMonitor` (`box-ceiling-monitor.ts`) logs `[box] ceiling <msgCount|mediaBytes>=… <openBand|ceiling>=… (N%) a->b`: WARN when a total reaches 50 % of its OPEN band (`BOX_OPEN_*_CEILING`) or of the whole ceiling, ERROR from 80 %, one INFO line on recovery. Then `BoxAlert` (`box-alert.ts`) GETs `BOX_ALERT_URL` (fine) or `<url>/fail` (any total at WARN, or the totals row missing): one bit, no body, the URL never logged; a failed ping logs `[box] alarm ping failed (…)` once per streak. **Operator purge (plan D2 O2):** `node dist/box/box-purge.cli.js` (dry run unless `--execute`) → `BoxService.purgeStaleBacklogs`; runbook `.omp/rules/production-vm-deploy.md` "Box flood". Once per level change per process (a restart re-logs a still-high level). Totals only, never an id; deliberately NOT on `/health`, `/version` or any route (waiting count is traffic metadata).
 
 ## Chat service map (§2)
 
@@ -43,6 +43,7 @@ The box has NO account on its path: it imports nothing from `auth/`, `users/`, `
 | `WEB_PUSH_VAPID_PUBLIC_KEY`, `WEB_PUSH_VAPID_PRIVATE_KEY`, `WEB_PUSH_VAPID_SUBJECT` | Web Push for the box wake-up push only. Public key must match frontend build. |
 | `APP_VERSION`, `GIT_COMMIT`, `BUILD_TIME` | `/version`; set by deploy script. |
 | `BOX_ENABLED` | `true` registers the box module (dev compose; prod pins `'true'` since step B, 2026-09-30). |
+| `BOX_ALERT_URL` | Optional https healthchecks.io check URL: the box reaper pings it every 10 min, `/fail` while the box is ≥ 50 % full (plan D2 O1, decision 147). Unset = off. A secret: `.env` only. |
 
 ## Presence on disconnect (§6)
 

@@ -419,6 +419,10 @@ class AppLocalizationsPl extends AppLocalizations {
   String get invitationSendFailed => 'Nie udało się wysłać zaproszenia';
 
   @override
+  String get invitationSendServersBusy =>
+      'Serwery są zajęte. Spróbuj wysłać zaproszenie później';
+
+  @override
   String get invitationAcceptFailed => 'Nie udało się zaakceptować zaproszenia';
 
   @override

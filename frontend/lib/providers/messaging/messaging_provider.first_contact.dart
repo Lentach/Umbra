@@ -178,15 +178,21 @@ extension MessagingFirstContact on MessagingProvider {
       tag: me.tag,
     ));
     var delivered = 0;
+    var busy = false;
     for (final d in targets) {
-      if (await _sendRequestFrame(enc, outbox, own, userId, served[d]!, (
+      switch (await _sendRequestFrame(enc, link, own, userId, served[d]!, (
         request: request,
         claim: claim,
       ))) {
-        delivered++;
-        // This device started that session: the device's answer may come
-        // as a PreKey message replacing it (item 5's "asked" rule).
-        friends.friendSessionStarted(userId, d);
+        case BoxRequestSend.taken:
+          delivered++;
+          // This device started that session: the device's answer may come
+          // as a PreKey message replacing it (item 5's "asked" rule).
+          friends.friendSessionStarted(userId, d);
+        case BoxRequestSend.busy:
+          busy = true;
+        case BoxRequestSend.failed:
+          break;
       }
     }
     if (delivered == 0) {
@@ -194,7 +200,8 @@ extension MessagingFirstContact on MessagingProvider {
       // siblings' copies lapse with the request (decision 54).
       if (fresh) await link.retireFirstContact(userId);
       onBoxContactsChanged?.call();
-      return FirstContactSend.failed;
+      // The box is full (plan D2): the sender is told to try later.
+      return busy ? FirstContactSend.busy : FirstContactSend.failed;
     }
     _firstContactLog('BOX_REQUEST_SENT', userId, {
       'devices': targets.length,
@@ -206,17 +213,17 @@ extension MessagingFirstContact on MessagingProvider {
 
   /// One claim-bearing PreKey frame for [device] (E15b): a FRESH session
   /// from the bundle this very answer served, the envelope inside Signal,
-  /// the claim outside it. True only when the box took it.
-  Future<bool> _sendRequestFrame(
+  /// the claim outside it. [BoxRequestSend.taken] only when the box took it.
+  Future<BoxRequestSend> _sendRequestFrame(
     EncryptionProvider enc,
-    BoxOutbox outbox,
+    BoxFirstContactLink link,
     int own,
     int userId,
     FirstContactDevice device,
     ({String request, String claim}) payload,
   ) async {
     final to = device.request;
-    if (to == null) return false;
+    if (to == null) return BoxRequestSend.failed;
     try {
       await enc.buildSessionFromServedBundle(
         userId,
@@ -227,24 +234,25 @@ extension MessagingFirstContact on MessagingProvider {
         await enc.encrypt(userId, payload.request, deviceId: device.deviceId),
         senderDeviceId: enc.ownDeviceId,
       );
-      if (frame == null || frame.kind != BoxFrameKind.preKey) return false;
-      return await outbox.deliver(
-            to,
-            BoxFrame(
-              kind: frame.kind,
-              senderDeviceId: frame.senderDeviceId,
-              senderUserId: own,
-              signal: frame.signal,
-              carriedClaim: payload.claim,
-            ).encode(),
-          ) ==
-          BoxSendOutcome.taken;
+      if (frame == null || frame.kind != BoxFrameKind.preKey) {
+        return BoxRequestSend.failed;
+      }
+      return await link.deliverRequest(
+        to,
+        BoxFrame(
+          kind: frame.kind,
+          senderDeviceId: frame.senderDeviceId,
+          senderUserId: own,
+          signal: frame.signal,
+          carriedClaim: payload.claim,
+        ).encode(),
+      );
     } on Object catch (e) {
       _firstContactLog('BOX_REQUEST_FRAME_FAILED', userId, {
         'device': device.deviceId,
         'error': e.runtimeType.toString(),
       });
-      return false;
+      return BoxRequestSend.failed;
     }
   }
 

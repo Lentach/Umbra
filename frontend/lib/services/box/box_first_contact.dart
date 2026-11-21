@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import '../../models/profile_photo.dart';
 import '../../utils/e2e_envelope.dart';
@@ -13,6 +14,11 @@ import 'box_friends.dart';
 abstract interface class BoxFirstContactLink {
   /// The contact records a first contact makes ([BoxFirstContact]).
   BoxFirstContact get firstContact;
+
+  /// Seals a request frame [body] to [to], a peer device's public request
+  /// queue, and sends it: `BoxOutbox.deliver` for first contact, which also
+  /// tells the box's "full" refusal apart ([BoxRequestSend.busy]).
+  Future<BoxRequestSend> deliverRequest(ContactOutbound to, Uint8List body);
 
   /// This device's inbound queue for [userId] (a `pendingOut` record, E15b),
   /// created, stored and subscribed now — the address our request offers.
@@ -60,9 +66,25 @@ abstract interface class BoxFirstContactLink {
 }
 
 /// How a friend request sent from a search answer went (E15a): [sent] over
-/// the box, or [failed] — the box could not take every frame, or some device
-/// on either side is not on the box. Nothing is sent any other way.
-enum FirstContactSend { sent, failed }
+/// the box; [busy] — no device took it and the box refused for being full
+/// (`quota_exceeded`: a request queue stops at the OPEN band; plan D2,
+/// decision 145: the sender sees "servers are busy, try later"); [failed] —
+/// anything else: the box could not take every frame, or some device on
+/// either side is not on the box. Nothing is sent any other way.
+enum FirstContactSend { sent, busy, failed }
+
+/// What one first-contact request frame came to ([BoxFirstContactLink.deliverRequest]).
+enum BoxRequestSend {
+  /// The box stored it in the peer's request queue.
+  taken,
+
+  /// `quota_exceeded`: the box is full (a request queue stops at the open
+  /// band, plan D2).
+  busy,
+
+  /// Anything else: another refusal, no answer, a seal that failed.
+  failed,
+}
 
 /// How accepting a box request went (E15d, decision 53): [unverified] — the
 /// accept-time lookup did not vouch for the key the request carries, so it

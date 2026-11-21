@@ -127,6 +127,7 @@
   "accept": "Zaakceptuj",
   "invitationStatusPending": "Oczekuje",
   "invitationSendFailed": "Nie udało się wysłać zaproszenia",
+  "invitationSendServersBusy": "Serwery są zajęte. Spróbuj wysłać zaproszenie później",
   "invitationAcceptFailed": "Nie udało się zaakceptować zaproszenia",
   "invitationDeclineFailed": "Nie udało się odrzucić zaproszenia",
   "invitationSemanticIncoming": "{name}, otrzymane zaproszenie, chce się połączyć",

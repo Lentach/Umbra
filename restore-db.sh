@@ -76,6 +76,34 @@ restore_status=0
 compose exec -T db pg_restore -U "$DB_USER" -d "$DB_NAME" \
   --clean --if-exists --single-transaction < "$SRC" || restore_status=$?
 
+recount_status=0
+if [[ "$restore_status" -eq 0 ]]; then
+  # Dumps leave the box's messages and media out (decision 147): count the box
+  # again from what the tables hold, or it would refuse sends for messages it
+  # no longer has. Rung sizes = BOX_MEDIA_LADDER (backend/src/box/box.constants.ts).
+  echo "==> recounting the box (its contents are not in backups)"
+  compose exec -T db psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -q <<'SQL' || recount_status=$?
+BEGIN;
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM public.box_media WHERE "sizeBucket" NOT IN
+      ('4k', '16k', '64k', '256k', '1m', '4m', '16m', '32m')) THEN
+    RAISE EXCEPTION 'box_media holds a rung this recount does not know: update it from BOX_MEDIA_LADDER';
+  END IF;
+END $$;
+UPDATE public.box_queues q
+   SET "msgCount" = (SELECT count(*) FROM public.box_msgs m WHERE m.rid = q.rid);
+UPDATE public.box_totals
+   SET "msgCount" = (SELECT count(*) FROM public.box_msgs),
+       "mediaBytes" = (SELECT coalesce(sum(CASE "sizeBucket"
+           WHEN '4k' THEN 4096 WHEN '16k' THEN 16384 WHEN '64k' THEN 65536
+           WHEN '256k' THEN 262144 WHEN '1m' THEN 1048576
+           WHEN '4m' THEN 4194304 WHEN '16m' THEN 16777216
+           WHEN '32m' THEN 33554432 END), 0) FROM public.box_media)
+ WHERE id = 1;
+COMMIT;
+SQL
+fi
+
 echo "==> starting backend"
 compose up -d backend
 
@@ -83,5 +111,10 @@ if [[ "$restore_status" -ne 0 ]]; then
   echo "ERROR: pg_restore failed (exit $restore_status). The transaction rolled back —" >&2
   echo "       the database is unchanged and the backend is back up on the prior data." >&2
   exit "$restore_status"
+fi
+if [[ "$recount_status" -ne 0 ]]; then
+  echo "ERROR: the data is restored but the box recount failed (exit $recount_status): the box" >&2
+  echo "       may refuse sends. Re-run the recount SQL in this script by hand, then restart the backend." >&2
+  exit "$recount_status"
 fi
 echo "==> restore complete. Verify:  curl -fsS http://127.0.0.1:3000/health"

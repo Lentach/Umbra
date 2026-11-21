@@ -152,6 +152,8 @@ class _RoutingBox {
           }
           return {'ok': true, 'refused': <Object?>[]};
         case 'send':
+          final refusal = refuseSends;
+          if (refusal != null) return {'ok': false, 'code': refusal};
           final rid = _ridOfSid[f.frame['sid']];
           final reader = rid == null ? null : _reader[rid];
           if (reader != null) {
@@ -169,6 +171,9 @@ class _RoutingBox {
   static List<int> _bytes(int n) => List.generate(32, (i) => (n + i) & 0xff);
 
   final FakeBoxSockets sockets = FakeBoxSockets();
+
+  /// Set: every `send` is refused with this code.
+  String? refuseSends;
   final Map<String, String> _ridOfSid = {};
   final Map<String, FakeBoxSocket> _reader = {};
   int _queues = 0;
@@ -944,6 +949,29 @@ void main() {
       restored.session.dispose();
     });
   }
+
+  test('a request the box refuses at its global ceiling is BUSY, any other '
+      'refusal FAILED, and neither leaves a record (plan D2)', () async {
+    for (final (code, outcome) in [
+      ('quota_exceeded', FirstContactSend.busy),
+      ('queue_full', FirstContactSend.failed),
+    ]) {
+      box.refuseSends = code;
+      expect(
+        await alice.reader.sendBoxFriendRequest(bob.searchEntry),
+        outcome,
+        reason: code,
+      );
+      await settle();
+      expect(alice.recordOf(5), isNull, reason: code);
+    }
+    box.refuseSends = null;
+    expect(
+      await alice.reader.sendBoxFriendRequest(bob.searchEntry),
+      FirstContactSend.sent,
+      reason: 'the request goes once the box has room',
+    );
+  });
 
   test('a request to an account one of whose devices publishes no request '
       'address FAILS: there is no old path (E15a)', () async {
