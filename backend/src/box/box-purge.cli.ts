@@ -3,7 +3,7 @@
  * D2 O2, decision 145; runbook: production-vm-deploy rule, "Box flood").
  *
  *   docker compose -f docker-compose.prod.yml exec -T backend \
- *     node dist/box/box-purge.cli.js [--min-msgs 32] [--min-age-hours 24]
+ *     node dist/box/box-purge.cli.js [--min-msgs 32] [--min-age-hours 72]
  *       [--max-queues 500] [--execute]
  *
  * Without `--execute` it only counts. It prints counts, never an address. It
@@ -12,9 +12,8 @@
  */
 import { DataSource } from 'typeorm';
 import {
-  BOX_GLOBAL_MEDIA_CEILING_BYTES,
+  BOX_DEFAULT_CEILING,
   BOX_GLOBAL_MSG_CEILING,
-  BOX_OPEN_MEDIA_CEILING_BYTES,
   BOX_OPEN_MSG_CEILING,
 } from './box.constants';
 import { BoxService, type PurgeCriteria } from './box.service';
@@ -25,7 +24,7 @@ const HOUR_MS = 60 * 60 * 1000;
 export function parsePurgeArgs(argv: string[], now: Date): PurgeCriteria {
   const options = new Map<string, number>([
     ['--min-msgs', 32],
-    ['--min-age-hours', 24],
+    ['--min-age-hours', 72],
     ['--max-queues', 500],
   ]);
   let dryRun = true;
@@ -64,19 +63,13 @@ async function main(): Promise<void> {
   });
   await db.initialize();
   try {
-    const box = new BoxService(db, {
-      msgs: BOX_GLOBAL_MSG_CEILING,
-      mediaBytes: BOX_GLOBAL_MEDIA_CEILING_BYTES,
-      openMsgs: BOX_OPEN_MSG_CEILING,
-      openMediaBytes: BOX_OPEN_MEDIA_CEILING_BYTES,
-    });
+    const box = new BoxService(db, { ...BOX_DEFAULT_CEILING });
     const before = await box.totals();
     const result = await box.purgeStaleBacklogs(criteria);
     const after = await box.totals();
     const verb = criteria.dryRun ? 'would purge' : 'purged';
     console.log(
-      `[box] purge ${verb} normalQueues=${result.normalQueues} ` +
-        `requestQueues=${result.requestQueues} msgs=${result.msgs} ` +
+      `[box] purge ${verb} queues=${result.queues} msgs=${result.msgs} ` +
         `(min-msgs=${criteria.minMsgs} older-than=${criteria.olderThan.toISOString()} ` +
         `max-queues=${criteria.maxQueues})`,
     );

@@ -114,6 +114,14 @@ export const BOX_GLOBAL_MEDIA_CEILING_BYTES = 6 * 1024 * 1024 * 1024;
 export const BOX_OPEN_MSG_CEILING = 60_000;
 export const BOX_OPEN_MEDIA_CEILING_BYTES = 3 * 1024 * 1024 * 1024;
 
+/** The ceiling the box runs with (`BoxModule`, the purge CLI). */
+export const BOX_DEFAULT_CEILING = {
+  msgs: BOX_GLOBAL_MSG_CEILING,
+  mediaBytes: BOX_GLOBAL_MEDIA_CEILING_BYTES,
+  openMsgs: BOX_OPEN_MSG_CEILING,
+  openMediaBytes: BOX_OPEN_MEDIA_CEILING_BYTES,
+} as const;
+
 /**
  * A new normal queue is on probation until the UTC day this many days after
  * its creation (`box_queues."probationUntil"`, migration 0026). On or after

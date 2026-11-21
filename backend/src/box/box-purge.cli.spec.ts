@@ -6,7 +6,7 @@ describe('parsePurgeArgs', () => {
   it('is a dry run unless --execute is given', () => {
     expect(parsePurgeArgs([], NOW)).toEqual({
       minMsgs: 32,
-      olderThan: new Date('2026-11-20T12:00:00Z'),
+      olderThan: new Date('2026-11-18T12:00:00Z'),
       maxQueues: 500,
       dryRun: true,
     });

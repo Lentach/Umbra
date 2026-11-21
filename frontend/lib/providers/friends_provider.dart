@@ -377,7 +377,7 @@ class FriendsProvider extends ChangeNotifier {
         action: InvitationAction.send,
         requestId: null,
         recipientId: userId,
-        reason: 'send_failed',
+        reason: InvitationFailure.sendFailed,
       );
       notifyListeners();
     });
@@ -449,7 +449,7 @@ class FriendsProvider extends ChangeNotifier {
   }
 
   /// A send the ack timeout already released was reported already.
-  void _failSend(int userId, {String reason = 'send_failed'}) {
+  void _failSend(int userId, {String reason = InvitationFailure.sendFailed}) {
     final held = _sendActions.containsKey(userId);
     _clearSendAction(userId);
     if (held) {

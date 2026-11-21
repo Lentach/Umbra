@@ -2249,7 +2249,7 @@ describeWithDb('box over real sockets and Postgres', () => {
   });
 
   describe('operator purge (plan D2 O2)', () => {
-    it('empties the fullest queues holding an old unacked backlog, puts a normal one back on probation, and leaves the rest; a dry run counts only', async () => {
+    it('empties the fullest normal queues holding an old unacked backlog and nothing else: request queues, fresh and thin backlogs stay, an established queue stays established; a dry run counts only', async () => {
       const bob = await connect();
       const alice = await connect();
       const junk = await establishedQueue(bob, alice);
@@ -2269,7 +2269,7 @@ describeWithDb('box over real sockets and Postgres', () => {
       await fill(thin, 1);
       const age = async (q: Queue): Promise<void> => {
         await db.query(
-          `UPDATE box_msgs SET "createdAt" = now() - interval '3 days'
+          `UPDATE box_msgs SET "createdAt" = now() - interval '5 days'
             WHERE rid = $1`,
           [Buffer.from(q.rid, 'base64url')],
         );
@@ -2278,46 +2278,38 @@ describeWithDb('box over real sockets and Postgres', () => {
       await age(request);
       await age(thin);
       const purge = app.get(BoxService);
-      // Older than 2 days: only this test's backdated messages qualify.
+      // Older than 4 days: only this test's backdated messages qualify.
       const criteria = {
         minMsgs: 4,
-        olderThan: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
+        olderThan: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000),
         maxQueues: 10,
       };
       const before = await totals();
 
       expect(
         await purge.purgeStaleBacklogs({ ...criteria, dryRun: true }),
-      ).toEqual({ normalQueues: 1, requestQueues: 1, msgs: 8 });
+      ).toEqual({ queues: 1, msgs: 4 });
       expect(await totals()).toEqual(before);
 
       expect(
         await purge.purgeStaleBacklogs({ ...criteria, dryRun: false }),
-      ).toEqual({ normalQueues: 1, requestQueues: 1, msgs: 8 });
+      ).toEqual({ queues: 1, msgs: 4 });
       expect(await storedIds(junk.rid)).toEqual([]);
-      expect(await storedIds(request.rid)).toEqual([]);
       expect((await queueRow(junk.rid)).msgCount).toBe(0);
+      expect(await storedIds(request.rid)).toHaveLength(4);
       expect(await storedIds(fresh.rid)).toHaveLength(4);
       expect(await storedIds(thin.rid)).toHaveLength(1);
-      expect(await totals()).toEqual({ ...before, msgs: before.msgs - 8 });
-      const probation: { normal: boolean; request: boolean }[] = await db.query(
-        `SELECT
-           (SELECT "probationUntil" = (now() AT TIME ZONE 'utc')::date + 7
-              FROM box_queues WHERE rid = $1) AS normal,
-           (SELECT "probationUntil" IS NULL
-              FROM box_queues WHERE rid = $2) AS request`,
-        [
-          Buffer.from(junk.rid, 'base64url'),
-          Buffer.from(request.rid, 'base64url'),
-        ],
-      );
-      expect(probation[0]).toEqual({ normal: true, request: true });
+      expect(await totals()).toEqual({ ...before, msgs: before.msgs - 4 });
 
-      // Back on probation: with the open band shut it stores nothing.
+      // Still established: with the open band shut it keeps storing.
       ceiling.openMsgs = 0;
       expect(
         await call(alice, 'send', { v: 1, sid: junk.sid, blob: blob() }),
-      ).toEqual({ ok: false, code: 'quota_exceeded' });
+      ).toEqual({ ok: true });
+      // Nothing old is left: a second run takes nothing.
+      expect(
+        await purge.purgeStaleBacklogs({ ...criteria, dryRun: false }),
+      ).toEqual({ queues: 0, msgs: 0 });
     });
   });
 

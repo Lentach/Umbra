@@ -84,6 +84,12 @@ if [[ "$restore_status" -eq 0 ]]; then
   echo "==> recounting the box (its contents are not in backups)"
   compose exec -T db psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -q <<'SQL' || recount_status=$?
 BEGIN;
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM public.box_media WHERE "sizeBucket" NOT IN
+      ('4k', '16k', '64k', '256k', '1m', '4m', '16m', '32m')) THEN
+    RAISE EXCEPTION 'box_media holds a rung this recount does not know: update it from BOX_MEDIA_LADDER';
+  END IF;
+END $$;
 UPDATE public.box_queues q
    SET "msgCount" = (SELECT count(*) FROM public.box_msgs m WHERE m.rid = q.rid);
 UPDATE public.box_totals

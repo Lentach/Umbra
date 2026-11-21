@@ -291,10 +291,11 @@ all of `/contact*`. Fastify + SQLite + web-push, one Docker container.
 - **Look:** `docker compose -f docker-compose.prod.yml exec -T db psql -U postgres -d chatdb -c 'select * from box_totals'`
   (ceiling 120 000 msgs / 6 GiB; open band 60 000 / 3 GiB) and the `[box] ceiling` / `[box] refusals` log lines.
 - **Purge (operator, during an incident only):** dry run first, then the same flags plus `--execute`:
-  `docker compose -f docker-compose.prod.yml exec -T backend node dist/box/box-purge.cli.js --min-msgs 32 --min-age-hours 24 --max-queues 500`.
-  It deletes every message of the fullest queues holding an unacked message older than the age, puts
-  each normal one back on probation (7 days, open band only), and keeps the queues. Prints counts only.
-  Decision 145's accepted cost: a real friend offline since before the age loses what was waiting.
+  `docker compose -f docker-compose.prod.yml exec -T backend node dist/box/box-purge.cli.js --min-msgs 32 --min-age-hours 72 --max-queues 500`.
+  It deletes every message of the fullest NORMAL queues holding an unacked message older than the age
+  (default 72 h; shorter only in a real incident) and changes nothing else: queues, addresses and
+  established status stay, request queues are never touched (decision 148). Prints counts only.
+  Accepted cost (decisions 145, 148): a real friend offline longer than the age loses what was waiting.
   Back up first (`BACKUP_RCLONE_REMOTE=… ./backup-db.sh`; it no longer holds box messages, so a
   purge is not undoable). Media cannot be purged by queue (a medium names none): it expires in 14 days.
 

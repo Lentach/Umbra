@@ -35,23 +35,23 @@ export type MediaCharge =
   'charged' | 'over_budget' | 'over_ceiling' | 'unknown_sid';
 
 /**
- * Which queues an operator purge takes (plan D2 O2, decision 145): the
- * attacker-shaped ones, holding at least `minMsgs` with a message stored
- * before `olderThan` that nobody acked since — the fullest first, at most
+ * Which queues an operator purge takes (plan D2 O2, decisions 145 and 148):
+ * NORMAL queues holding at least `minMsgs` with a message stored before
+ * `olderThan` that nobody acked since — the fullest first, at most
  * `maxQueues`. An honest owner who reads its queue acks within minutes.
+ * Request queues are never taken (decision 148).
  */
 export interface PurgeCriteria {
   minMsgs: number;
   olderThan: Date;
   maxQueues: number;
-  /** Count what would go; delete nothing. */
+  /** Count what would go; delete nothing and lock nothing. */
   dryRun: boolean;
 }
 
 /** Counts only: an operator command prints these, never an address. */
 export interface PurgeResult {
-  normalQueues: number;
-  requestQueues: number;
+  queues: number;
   msgs: number;
 }
 
@@ -99,9 +99,9 @@ export interface BoxCeiling {
 export const BOX_CEILING = Symbol('BOX_CEILING');
 
 /**
- * SQL over a `box_queues` row: a NORMAL queue whose owner acked or subscribed
- * it after its probation (`ack`, `markSubscribed`). Only its stores may use
- * the top band of the ceiling.
+ * SQL over a `box_queues` row: a NORMAL queue whose owner acked a message in
+ * it, or subscribed it while it held nothing, after its probation (`ack`,
+ * `markSubscribed`). Only its stores may use the top band of the ceiling.
  */
 const ESTABLISHED = `(kind = 'normal' AND "probationUntil" IS NULL)`;
 
@@ -121,7 +121,7 @@ function utcDay(at: Date): string {
  * 0024): `msgCount` = every `box_msgs` row, `mediaBytes` = every `box_media`
  * row at its rung size. `enqueue` and `chargeMedia` check and bump it with
  * ONE conditional UPDATE on its primary key; counting the tables instead
- * would scan up to 60 000 rows on every send. Each path that removes a
+ * would scan up to 120 000 rows on every send. Each path that removes a
  * message or a medium gives it back in the same statement: ack, the TTL
  * sweep, `deleteQueue` and the reaper (a queue's `msgCount` is exactly the
  * rows its FK cascade removes), `deleteMedia`. A request-queue eviction
@@ -675,43 +675,46 @@ export class BoxService {
   }
 
   /**
-   * The operator purge (plan D2 O2, decision 145; `box-purge.cli.ts`): every
-   * message of the queues `criteria` picks is deleted and the global total
-   * gives them back, and each normal one goes BACK on probation from today
-   * (`BOX_PROBATION_DAYS`), so refilling it is held to the open band again.
-   * The queues themselves stay: a falsely picked honest queue keeps its
-   * address and its friends' later sends, losing only what was waiting
+   * The operator purge (plan D2 O2, decisions 145 and 148; `box-purge.cli.ts`):
+   * every message of the normal queues `criteria` picks is deleted and the
+   * global total gives them back. Nothing else about a queue changes — its
+   * address, and an established queue's place in the reserved band, stay
+   * (decision 148), so a falsely picked friend only loses what was waiting
    * (the residual decision 145 accepted). Media is not touched: a box medium
-   * names no queue (I1), so nothing ties it to one. Lock order as everywhere:
-   * the picked queue rows in rid order, then their messages, then the totals.
+   * names no queue (I1). The criteria are checked again under the queue
+   * locks, so a queue drained between the pick and the lock is skipped. Lock
+   * order as everywhere: queue rows in rid order, their messages, the totals.
    */
   async purgeStaleBacklogs(criteria: PurgeCriteria): Promise<PurgeResult> {
-    const probationUntil = new Date();
-    probationUntil.setUTCDate(probationUntil.getUTCDate() + BOX_PROBATION_DAYS);
+    const stale = `q.kind = 'normal' AND q."msgCount" >= $1
+            AND EXISTS (SELECT 1 FROM public.box_msgs m
+                         WHERE m.rid = q.rid AND m."createdAt" <= $2)`;
+    const args = [criteria.minMsgs, criteria.olderThan];
+    if (criteria.dryRun) {
+      const picked: { msgCount: number }[] = await this.db.query(
+        `SELECT q."msgCount" FROM public.box_queues q WHERE ${stale}
+          ORDER BY q."msgCount" DESC, q.rid LIMIT $3`,
+        [...args, criteria.maxQueues],
+      );
+      return {
+        queues: picked.length,
+        msgs: picked.reduce((sum, q) => sum + q.msgCount, 0),
+      };
+    }
     return this.db.transaction(async (tx) => {
       const picked: { rid: Buffer }[] = await tx.query(
-        `SELECT q.rid FROM public.box_queues q
-          WHERE q."msgCount" >= $1
-            AND EXISTS (SELECT 1 FROM public.box_msgs m
-                         WHERE m.rid = q.rid AND m."createdAt" <= $2)
-          ORDER BY q."msgCount" DESC, q.rid
-          LIMIT $3`,
-        [criteria.minMsgs, criteria.olderThan, criteria.maxQueues],
+        `SELECT q.rid FROM public.box_queues q WHERE ${stale}
+          ORDER BY q."msgCount" DESC, q.rid LIMIT $3`,
+        [...args, criteria.maxQueues],
       );
-      const rids = picked.map((r) => r.rid);
-      const locked: { kind: QueueKind; msgCount: number }[] = rids.length
-        ? await tx.query(
-            `SELECT kind, "msgCount" FROM public.box_queues
-              WHERE rid = ANY($1::bytea[]) ORDER BY rid FOR UPDATE`,
-            [rids],
-          )
-        : [];
-      const normalQueues = locked.filter((q) => q.kind === 'normal').length;
-      const requestQueues = locked.length - normalQueues;
-      if (criteria.dryRun || locked.length === 0) {
-        const msgs = locked.reduce((sum, q) => sum + q.msgCount, 0);
-        return { normalQueues, requestQueues, msgs };
-      }
+      if (picked.length === 0) return { queues: 0, msgs: 0 };
+      const locked: { rid: Buffer }[] = await tx.query(
+        `SELECT q.rid FROM public.box_queues q
+          WHERE q.rid = ANY($3::bytea[]) AND ${stale}
+          ORDER BY q.rid FOR UPDATE`,
+        [...args, picked.map((r) => r.rid)],
+      );
+      if (locked.length === 0) return { queues: 0, msgs: 0 };
       // A SELECT outside, so `query()` answers the rows alone.
       const gone: { n: number }[] = await tx.query(
         `WITH gone AS (
@@ -719,9 +722,7 @@ export class BoxService {
            RETURNING rid),
          queues AS (
            UPDATE public.box_queues q
-              SET "msgCount" = q."msgCount" - g.n,
-                  "probationUntil" = CASE WHEN q.kind = 'normal'
-                    THEN $2::date ELSE NULL END
+              SET "msgCount" = q."msgCount" - g.n
              FROM (SELECT rid, count(*)::int AS n FROM gone GROUP BY rid) g
             WHERE q.rid = g.rid),
          total AS (
@@ -729,9 +730,9 @@ export class BoxService {
               SET "msgCount" = "msgCount" - (SELECT count(*) FROM gone)
             WHERE id = 1 AND EXISTS (SELECT 1 FROM gone))
          SELECT count(*)::int AS n FROM gone`,
-        [rids, utcDay(probationUntil)],
+        [locked.map((r) => r.rid)],
       );
-      return { normalQueues, requestQueues, msgs: gone[0]?.n ?? 0 };
+      return { queues: locked.length, msgs: gone[0]?.n ?? 0 };
     });
   }
 
