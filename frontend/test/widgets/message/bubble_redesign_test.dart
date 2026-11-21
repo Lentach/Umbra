@@ -129,6 +129,42 @@ void main() {
     });
   });
 
+  group('ImageMessageContent while sending', () {
+    MessageModel image(MessageDeliveryStatus status) => MessageModel(
+      id: -1,
+      content: '',
+      senderId: 1,
+      senderUsername: 'a',
+      conversationId: 1,
+      deliveryStatus: status,
+      messageType: MessageType.image,
+      createdAt: DateTime(2026, 1, 1, 14, 30),
+    );
+
+    testWidgets('an own photo still uploading shows progress, not a failure', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _wrapBubble(
+          ImageMessageContent(message: image(MessageDeliveryStatus.sending)),
+        ),
+      );
+      await tester.pump();
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      expect(find.text('Image failed to load'), findsNothing);
+    });
+
+    testWidgets('a photo whose send failed says so', (tester) async {
+      await tester.pumpWidget(
+        _wrapBubble(
+          ImageMessageContent(message: image(MessageDeliveryStatus.failed)),
+        ),
+      );
+      await tester.pump();
+      expect(find.text('Image failed to load'), findsOneWidget);
+    });
+  });
+
   group('TextMessageContent layout', () {
     testWidgets('renders text content without metadata overlay', (
       tester,

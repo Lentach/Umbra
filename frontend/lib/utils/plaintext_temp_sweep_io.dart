@@ -25,6 +25,13 @@ final RegExp _imagePickerDir = RegExp(
   r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
 );
 
+/// image_picker (Android) writes a camera capture to
+/// `cacheDir/<random UUID><digits>.jpg` (photo) or `.mp4` (video)
+/// (`File.createTempFile`).
+final RegExp _imagePickerCapture = RegExp(
+  r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\d+\.(jpg|mp4)$',
+);
+
 /// Deletes the plaintext media copies the app leaves outside its sealed
 /// stores (hardening A5): decrypted video and transcoder files a killed
 /// process did not get to delete, and the pickers' copies of every file the
@@ -81,7 +88,8 @@ Future<void> sweepPlaintextTempDirs({
       if (entry is File &&
           (name.startsWith(videoTempPrefix) ||
               name.startsWith(_transcodeAudioPrefix) ||
-              _voiceRecording.hasMatch(name))) {
+              _voiceRecording.hasMatch(name) ||
+              _imagePickerCapture.hasMatch(name))) {
         await dropIfStale(entry);
       } else if (entry is Directory && name == _filePickerDir) {
         for (final pick in entry.listSync()) {
