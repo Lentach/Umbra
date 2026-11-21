@@ -132,8 +132,9 @@ fi
 # Optional offsite copy via rclone (BACKUP_RCLONE_REMOTE=remote:bucket/prefix; prod: Cloudflare R2
 # fireplace-r2:fireplace-backups/vps). Same guard: only ENCRYPTED artifacts ever leave the VM.
 # Pruning is the bucket's lifecycle rule (set in the Cloudflare dashboard), never this script.
-# The prod R2 token CAN delete objects (probed 2026-11-17), so only an R2 bucket lock rule makes
-# the offsite copy safe from a compromised VM (runbook: production-vm-deploy rule, "Backups").
+# The prod R2 token CAN delete objects (probed 2026-11-17); the R2 bucket lock rule on vps/ (30 days,
+# verified 2026-11-21) keeps the offsite copy safe from a compromised VM (runbook: production-vm-deploy
+# rule, "Backups").
 # OFFSITE_OK feeds the dead-man ping below: uploads are verified by listing the
 # remote, not trusted from rclone's exit code alone.
 OFFSITE_OK=1

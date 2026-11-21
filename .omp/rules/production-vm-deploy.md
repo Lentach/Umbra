@@ -241,10 +241,12 @@ all of `/contact*`. Fastify + SQLite + web-push, one Docker container.
   the Cloudflare dashboard** (R2 → `fireplace-backups` → Settings), never the script; the VM's token
   cannot read it (`GET ?lifecycle` → AccessDenied). Observed 2026-11-17: 33 nightly sets, oldest
   2026-10-17, so objects go after about 31-32 days. **The VM's token CAN delete** (an S3 `DELETE` of a
-  missing key answered 204, 2026-11-17), so a compromised VM can wipe the offsite history. Fix (owner,
-  dashboard): an R2 **bucket lock rule** on prefix `vps/` with an Age shorter than the lifecycle (e.g. 28
-  days); a lock blocks deletes and overwrites and overrides lifecycle
-  (developers.cloudflare.com/r2/buckets/bucket-locks). Credentials in `~/.config/rclone/rclone.conf`
+  missing key answered 204, 2026-11-17). Guard: R2 **bucket lock rule** `lock-rule` on prefix `vps/`,
+  30 days (lifecycle `prune-vps-backups` expires `vps/` at 31 days); a lock blocks deletes and overwrites
+  and overrides lifecycle (developers.cloudflare.com/r2/buckets/bucket-locks). Verified 2026-11-21: a
+  VM `rclone deletefile` of a fresh `vps/locktest-*` object → 409 `ObjectLockedByBucketPolicy`. Read
+  the rules with `npx wrangler r2 bucket lock list fireplace-backups` (needs `wrangler login`, owner's
+  OAuth; log out after). Credentials in `~/.config/rclone/rclone.conf`
   (0600). Cleartext NEVER leaves the VM: no passphrase → upload refused.
 - **Dead-man's switch:** `BACKUP_HEALTHCHECK_URL` (healthchecks.io, ~26h grace) is pinged ONLY when the
   backup AND the offsite verification both succeeded — a silently failing night pages by missing ping
