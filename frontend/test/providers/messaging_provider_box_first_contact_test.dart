@@ -491,6 +491,28 @@ class _RetireSpy implements BoxFirstContactLink {
   Future<void> retireAccountQueues() => _inner.retireAccountQueues();
 }
 
+/// A link whose request frames wait at the box until [release], which then
+/// fails them: a request that was slow to go out and did not go.
+class _ParkedRequest extends _RetireSpy {
+  _ParkedRequest(super._inner);
+
+  /// Completes when the first request frame reaches the box.
+  final Completer<void> parked = Completer<void>();
+  final Completer<void> _gate = Completer<void>();
+
+  void release() => _gate.complete();
+
+  @override
+  Future<BoxRequestSend> deliverRequest(
+    ContactOutbound to,
+    Uint8List body,
+  ) async {
+    if (!parked.isCompleted) parked.complete();
+    await _gate.future;
+    return BoxRequestSend.failed;
+  }
+}
+
 Future<void> settle() async {
   for (var i = 0; i < 12; i++) {
     await pumpEventQueue();
@@ -858,6 +880,48 @@ void main() {
       expect(await alice.textsFrom(5), ['b0', 'b1', 'b2']);
       expect(alice.namedToServer(5), isEmpty);
       expect(bob.namedToServer(1), isEmpty);
+    },
+  );
+
+  test(
+    "a request of ours that fails after the account's own crossing request "
+    'made us friends keeps the friendship and its queue: the friend still '
+    'reaches us',
+    () async {
+      final toBob = bob.searchEntry;
+      final toAlice = alice.searchEntry;
+      final link = _ParkedRequest(alice.session);
+      alice.reader.boxFirstContact = link;
+
+      final asking = alice.reader.sendBoxFriendRequest(toBob);
+      await link.parked.future;
+      expect(alice.recordOf(5)?.state, ContactState.pendingOut);
+
+      // Bob asks at the same moment: his request is the accept of ours.
+      expect(
+        await bob.reader.sendBoxFriendRequest(toAlice),
+        FirstContactSend.sent,
+      );
+      await settleUntil(
+        () =>
+            alice.recordOf(5)?.state == ContactState.friend &&
+            bob.recordOf(1)?.state == ContactState.friend,
+      );
+      expect(alice.recordOf(5)?.state, ContactState.friend);
+      expect(bob.recordOf(1)?.state, ContactState.friend);
+      final queue = alice.recordOf(5)!.queues.single.rid;
+
+      link.release();
+      await asking;
+      await settle();
+
+      expect(alice.recordOf(5)?.state, ContactState.friend);
+      expect(alice.recordOf(5)?.queues.map((q) => q.rid), [queue]);
+      expect(_queuesDeletedBy(alice), isNot(contains(queue)));
+      expect(link.retired, isEmpty);
+      await bob.sendText(1, 'still here?');
+      await settle();
+      expect(await alice.textsFrom(5), ['still here?']);
     },
   );
 
