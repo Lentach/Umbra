@@ -11,6 +11,7 @@ import 'package:fireplace/services/box/queue_seal.dart';
 import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/services/contacts/contact_store.dart';
 import 'package:fireplace/services/encryption/content_kv.dart';
+import 'package:fireplace/services/encryption/content_sealer.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -55,6 +56,36 @@ class _RefusingKv implements ContentKv {
   Future<bool> remove(String key) => _inner.remove(key);
 }
 
+/// The real cipher, whose next unseals can be made to THROW.
+class _FaultySealer implements ContentSealer {
+  final ContentSealer _inner = PointyGcmSealer();
+  bool failUnseal = false;
+
+  @override
+  Future<Uint8List?> seal(Uint8List key, Uint8List plaintext) =>
+      _inner.seal(key, plaintext);
+
+  @override
+  Future<Uint8List?> unseal(Uint8List key, Uint8List sealed) async {
+    if (failUnseal) throw StateError('unseal');
+    return _inner.unseal(key, sealed);
+  }
+}
+
+/// The platform signer, whose next signatures can be made to THROW.
+class _FaultySigner implements BoxSigner {
+  bool fail = false;
+
+  @override
+  BoxAuthKey mint() => boxSigner.mint();
+
+  @override
+  Future<Uint8List> sign(BoxAuthKey key, List<int> message) async {
+    if (fail) throw StateError('sign');
+    return boxSigner.sign(key, message);
+  }
+}
+
 Uint8List _bytes(int length, int fill) =>
     Uint8List(length)..fillRange(0, length, fill);
 
@@ -75,7 +106,9 @@ ContactQueue _queue(int fill) {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  final seal = QueueSeal(cipher: PointyGcmSealer());
+  final cipher = _FaultySealer();
+  final signer = _FaultySigner();
+  final seal = QueueSeal(cipher: cipher);
   late _RefusingKv kv;
   late ContactStore store;
   late FakeBoxSockets sockets;
@@ -118,8 +151,13 @@ void main() {
         'ack' => ackAnswer,
         _ => {'ok': true},
       };
-    box = BoxClient(baseUrl: 'http://box.test', socketFactory: sockets.call)
-      ..connect();
+    cipher.failUnseal = false;
+    signer.fail = false;
+    box = BoxClient(
+      baseUrl: 'http://box.test',
+      signer: signer,
+      socketFactory: sockets.call,
+    )..connect();
     sockets.last.serverConnect('S1');
     await pumpEventQueue();
 
@@ -423,6 +461,45 @@ void main() {
       await inbox.idle;
       expect(ackedIds(), hasLength(17));
       expect(offered.map((e) => e.signal).toSet(), hasLength(17));
+    },
+  );
+
+  test(
+    'a delivery whose intake THROWS stays held, unacked — the next drain '
+    'journals, acks and offers it once',
+    () async {
+      cipher.failUnseal = true;
+      await push(bobQueue, 1, await signalBlob(bobQueue));
+      expect(offered, isEmpty);
+      expect(ackedIds(), isEmpty, reason: 'not stored: the box must keep it');
+
+      cipher.failUnseal = false;
+      await inbox.drain();
+      await inbox.idle;
+      expect(offered, hasLength(1));
+      expect(ackedIds(), [boxB64(_bytes(16, 1))]);
+      expect(store.pendingInbox, isEmpty);
+
+      await inbox.drain();
+      await inbox.idle;
+      expect(offered, hasLength(1), reason: 'held once, not for good');
+      expect(ackedIds(), hasLength(1));
+    },
+  );
+
+  test(
+    'a junk blob whose ack THROWS stays held: the next drain acks it, so it '
+    'never keeps a slot of the socket window',
+    () async {
+      signer.fail = true;
+      await push(bobQueue, 1, _bytes(kBoxBlobBytes, 7));
+      expect(ackedIds(), isEmpty);
+
+      signer.fail = false;
+      await inbox.drain();
+      await inbox.idle;
+      expect(ackedIds(), [boxB64(_bytes(16, 1))]);
+      expect(offered, isEmpty);
     },
   );
 
