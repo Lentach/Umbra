@@ -55,13 +55,32 @@ class _Enc extends EncryptionProvider {
   /// that this test does not run (a sibling of ours).
   String? plaintextOf;
 
+  /// Set: the next decrypt waits here after completing [decryptParked].
+  Completer<void>? decryptGate;
+  final Completer<void> decryptParked = Completer<void>();
+
   @override
   Future<String> decrypt(
     int senderId,
     String ciphertext, {
     int? messageId,
     int deviceId = 1,
-  }) async =>
+  }) async {
+    final gate = decryptGate;
+    if (gate != null) {
+      decryptGate = null;
+      decryptParked.complete();
+      await gate.future;
+    }
+    return _decrypt(senderId, ciphertext, messageId, deviceId);
+  }
+
+  Future<String> _decrypt(
+    int senderId,
+    String ciphertext,
+    int? messageId,
+    int deviceId,
+  ) async =>
       plaintextOf ??
       await super.decrypt(
         senderId,
@@ -919,6 +938,47 @@ void main() {
       expect(alice.recordOf(5)?.queues.map((q) => q.rid), [queue]);
       expect(_queuesDeletedBy(alice), isNot(contains(queue)));
       expect(link.retired, isEmpty);
+      await bob.sendText(1, 'still here?');
+      await settle();
+      expect(await alice.textsFrom(5), ['still here?']);
+    },
+  );
+
+  test(
+    'a request of ours that fails while the crossing request is still being '
+    'taken waits for it: they end friends with a live queue',
+    () async {
+      final toBob = bob.searchEntry;
+      final toAlice = alice.searchEntry;
+      final link = _ParkedRequest(alice.session);
+      alice.reader.boxFirstContact = link;
+
+      final asking = alice.reader.sendBoxFriendRequest(toBob);
+      await link.parked.future;
+      final gate = Completer<void>();
+      alice.enc.decryptGate = gate;
+
+      expect(
+        await bob.reader.sendBoxFriendRequest(toAlice),
+        FirstContactSend.sent,
+      );
+      await alice.enc.decryptParked.future;
+      expect(alice.recordOf(5)?.state, ContactState.pendingOut);
+
+      link.release();
+      await settle();
+      gate.complete();
+      await asking;
+      await settleUntil(
+        () =>
+            alice.recordOf(5)?.state == ContactState.friend &&
+            bob.recordOf(1)?.state == ContactState.friend,
+      );
+
+      expect(alice.recordOf(5)?.state, ContactState.friend);
+      expect(bob.recordOf(1)?.state, ContactState.friend);
+      final queue = alice.recordOf(5)!.queues.single.rid;
+      expect(_queuesDeletedBy(alice), isNot(contains(queue)));
       await bob.sendText(1, 'still here?');
       await settle();
       expect(await alice.textsFrom(5), ['still here?']);

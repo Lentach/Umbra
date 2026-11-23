@@ -408,6 +408,10 @@ class MessagingProvider extends ChangeNotifier {
   /// account session's one; null = every request fails.
   BoxFirstContactLink? boxFirstContact;
 
+  /// Peers whose crossing request is being taken as an accept right now
+  /// (`_takeCrossedRequest`), until it finished.
+  final Map<int, Future<void>> _crossingsInFlight = {};
+
   /// One `searchUsers` of a handle and its raw answer (null: none came) —
   /// the accept-time check of decision 53 and a box friend's list lookup
   /// (E15h). `ConnectionProvider` wires `FriendsProvider.lookupHandle`.
