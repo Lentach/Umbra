@@ -228,6 +228,7 @@ class AuthProvider extends ChangeNotifier {
   bool _isError = false;
   Timer? _sessionRefreshTimer;
   Future<void>? _sessionRefreshInFlight;
+  int _sessionRefreshInFlightEpoch = 0;
 
   /// Bumped when a session ends ([logout] start, [_clearLocalAuthState]). A
   /// refresh that began under an older value belongs to a session the user
@@ -363,8 +364,11 @@ class AuthProvider extends ChangeNotifier {
   /// Installs the deviceId-bound session a §5.1 provisioning ceremony
   /// returned in `provisioningCompleted` (spec §12 item (iii)). Same storage
   /// path as login/refresh — a second token path would drift.
-  Future<void> adoptProvisionedSession(Map<String, dynamic> tokens) =>
-      _persistTokens(tokens);
+  Future<void> adoptProvisionedSession(Map<String, dynamic> tokens) {
+    // The old session's refresh still in flight must not overwrite it.
+    _sessionEpoch++;
+    return _persistTokens(tokens);
+  }
 
   Future<void> _silentRefresh() async {
     final r = _refreshToken;
@@ -405,12 +409,16 @@ class AuthProvider extends ChangeNotifier {
 
   /// Single in-flight refresh for startup, resume, and parallel [ensureSessionReady].
   Future<void> _refreshSessionLocked() async {
-    if (_sessionRefreshInFlight != null) {
+    // A flight begun under an older session is dropped when it lands: a
+    // caller of this session must not wait on it.
+    if (_sessionRefreshInFlight != null &&
+        _sessionRefreshInFlightEpoch == _sessionEpoch) {
       return _sessionRefreshInFlight!;
     }
 
     final future = _silentRefresh();
     _sessionRefreshInFlight = future;
+    _sessionRefreshInFlightEpoch = _sessionEpoch;
     try {
       await future;
     } finally {

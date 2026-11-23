@@ -21,6 +21,7 @@ String _jwt({required int exp}) => [
 
 final String _savedAccess = _jwt(exp: 9999999999);
 final String _refreshedAccess = _jwt(exp: 9999999998);
+final String _linkedAccess = _jwt(exp: 9999999997);
 final String _expiredAccess = _jwt(exp: 1516239022);
 
 http.Response _json(Object body, int status) => http.Response(
@@ -193,5 +194,52 @@ void main() {
       isEmpty,
       reason: 'an explicit logout was recorded as an involuntary session end',
     );
+  });
+
+  // The link rebind installs a new device-bound session; the old session's
+  // refresh still in flight must not overwrite it.
+  test('a refresh of the old session does not overwrite a rebound session', () async {
+    final refresh = server.refreshGate = Completer<http.Response>();
+    final auth = AuthProvider(api: server.api(), rotateRefreshTokens: true);
+    await _settle(
+      () => auth.isLoggedIn && server.refreshes == 1,
+      'boot slide never asked',
+    );
+
+    await auth.adoptProvisionedSession({
+      'access_token': _linkedAccess,
+      'refresh_token': 'rt-linked',
+    });
+    refresh.complete(_freshTokens());
+    await pumpEventQueue();
+
+    expect(auth.token, _linkedAccess);
+    expect(prefs.getString('refresh_token'), 'rt-linked');
+  });
+
+  // A caller in a new session must not wait on, and lose to, the dropped
+  // refresh of the session before it.
+  test('a new session asks for its own refresh instead of joining a stale one', () async {
+    final stale = server.refreshGate = Completer<http.Response>();
+    final auth = AuthProvider(api: server.api(), rotateRefreshTokens: true);
+    await _settle(
+      () => auth.isLoggedIn && server.refreshes == 1,
+      'boot slide never asked',
+    );
+    await auth.logout();
+    await auth.adoptProvisionedSession({
+      'access_token': _linkedAccess,
+      'refresh_token': 'rt-linked',
+    });
+    auth.setAccessTokenForTest(_expiredAccess);
+
+    final ready = auth.ensureSessionReady();
+    await pumpEventQueue();
+    stale.complete(_freshTokens());
+    await ready;
+    await pumpEventQueue();
+
+    expect(server.refreshes, 2, reason: 'joined the old session refresh');
+    expect(auth.token, _savedAccess, reason: 'still on the expired access');
   });
 }
