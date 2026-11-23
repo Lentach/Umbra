@@ -150,10 +150,11 @@ class BoxInbox {
   /// the box's next resubscribe, and hold a slot of the socket window until
   /// then.
   Future<void> _intake(BoxDelivery delivery) async {
-    final slot = '${boxB64(delivery.rid)}.${boxB64(delivery.id)}';
+    final rid = boxB64(delivery.rid);
+    final slot = '$rid.${boxB64(delivery.id)}';
     _held.remove(slot);
     try {
-      await _route(delivery, slot);
+      await _route(delivery, rid, slot);
     } on Object catch (e) {
       _held[slot] = delivery;
       E2ePersistentDiag.record('BOX_INBOX_FAILED', {
@@ -162,8 +163,7 @@ class BoxInbox {
     }
   }
 
-  Future<void> _route(BoxDelivery delivery, String slot) async {
-    final rid = boxB64(delivery.rid);
+  Future<void> _route(BoxDelivery delivery, String rid, String slot) async {
     if (!_store.isOpen) {
       _held[slot] = delivery;
       return;
