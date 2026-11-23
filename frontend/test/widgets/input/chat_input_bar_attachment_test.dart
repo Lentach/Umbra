@@ -45,7 +45,7 @@ final kTinyPng = Uint8List.fromList(const [
 /// plus a 16-byte tag. [fail] makes every encryption throw (an upload that
 /// cannot go out). The size guard is the real one's.
 class _FakeMediaCrypto extends MediaCryptoService {
-  _FakeMediaCrypto({this.fail = false, this.gate});
+  _FakeMediaCrypto({this.fail = false, this.gate, this.onParked});
 
   final bool fail;
 
@@ -53,10 +53,14 @@ class _FakeMediaCrypto extends MediaCryptoService {
   /// mid-flight while later ones go through.
   Future<void>? gate;
 
+  /// Called when an encryption starts waiting on [gate].
+  final void Function()? onParked;
+
   @override
   Future<EncryptedMedia> encrypt(Uint8List bytes) async {
     final parked = gate;
     gate = null;
+    if (parked != null) onParked?.call();
     await parked;
     if (fail || bytes.length > MediaCryptoService.maxBytes) {
       throw StateError('cannot encrypt');
@@ -229,6 +233,10 @@ class _ThrowingVideoMessaging extends MessagingProvider {
   }
 }
 
+/// Lets a test unmount the composer while the rest of the app stays up (a
+/// popped chat on mobile).
+final _barVisible = ValueNotifier<bool>(true);
+
 Future<
   ({
     GlobalKey<ChatInputBarState> key,
@@ -242,6 +250,7 @@ pumpComposer(
   Object? throwOnUpload,
   MessagingProvider? messagingOverride,
   Future<void>? encryptGate,
+  void Function()? onEncryptParked,
 }) async {
   final key = GlobalKey<ChatInputBarState>();
   // What the box was handed, in order: each message's kind, and its envelope.
@@ -285,7 +294,11 @@ pumpComposer(
   messaging.setIncomingMessageSoundEnabledForTest(false);
   messaging.onConnect(false);
   messaging.setMediaCryptoForTest(
-    _FakeMediaCrypto(fail: throwOnUpload != null, gate: encryptGate),
+    _FakeMediaCrypto(
+      fail: throwOnUpload != null,
+      gate: encryptGate,
+      onParked: onEncryptParked,
+    ),
   );
   messaging.setEncryptionProvider(encryption);
   messaging.boxOutbox = _Outbox((envelope) {
@@ -317,7 +330,11 @@ pumpComposer(
               create: (_) => SettingsProvider(initialThemePreference: 'light'),
             ),
           ],
-          child: ChatInputBar(key: key),
+          child: ValueListenableBuilder<bool>(
+            valueListenable: _barVisible,
+            builder: (_, visible, _) =>
+                visible ? ChatInputBar(key: key) : const SizedBox.shrink(),
+          ),
         ),
       ),
     ),
@@ -336,7 +353,10 @@ Future<void> _textSettled(WidgetTester tester) async {
 void main() {
   // AuthProvider reads its saved token on construction; without a mock that
   // channel call fails asynchronously and lands in whichever test runs then.
-  setUp(() => SharedPreferences.setMockInitialValues({}));
+  setUp(() {
+    _barVisible.value = true;
+    SharedPreferences.setMockInitialValues({});
+  });
 
   testWidgets('staged image shows chip; remove clears it', (tester) async {
     final h = await pumpComposer(tester);
@@ -959,20 +979,38 @@ void main() {
     testWidgets('a second pick made mid-batch goes out after the first, '
         'in full and in order', (tester) async {
       final gate = Completer<void>();
-      final h = await pumpComposer(tester, encryptGate: gate.future);
+      var secondReads = 0;
+      var parked = false;
+      final h = await pumpComposer(
+        tester,
+        encryptGate: gate.future,
+        onEncryptParked: () => parked = true,
+      );
 
       late Future<void> first;
       late Future<void> second;
       await tester.runAsync(() async {
         first = pick(h, [photo('a1.jpg'), photo('a2.jpg')]);
-        await Future<void>.delayed(const Duration(milliseconds: 100));
-        // a1 is parked in its upload; the user picks again.
+        // a1 is parked in its upload (poll the flag in the real zone).
+        while (!parked) {
+          await Future<void>.delayed(Duration.zero);
+        }
         second = pick(h, [
-          PickedAttachment(name: 'b1.mp4', readBytes: () async => Uint8List(64)),
+          PickedAttachment(
+            name: 'b1.mp4',
+            readBytes: () async {
+              secondReads++;
+              return Uint8List(64);
+            },
+          ),
         ]);
-        await Future<void>.delayed(const Duration(milliseconds: 100));
+        // A fixed number of event-loop turns, not a wall-clock window: an
+        // unqueued second batch reads its first file within the first few.
+        await pumpEventQueue();
       });
-      expect(h.emitted, isEmpty); // the second batch waits for the first
+      // The second batch waits for the first: nothing read, nothing sent.
+      expect(secondReads, 0);
+      expect(h.emitted, isEmpty);
 
       gate.complete();
       await tester.runAsync(() => Future.wait([first, second]));
@@ -1036,5 +1074,125 @@ void main() {
       tester.widget<TextField>(find.byType(TextField)).controller!.text,
       'my caption',
     );
+  });
+
+  // UI-05, second half: on mobile the user pops the chat, the composer
+  // unmounts, and `if (!mounted) return` used to drop the caption silently.
+  Future<
+    ({
+      GlobalKey<ChatInputBarState> key,
+      List<String> emitted,
+      List<Map<String, dynamic>> emittedData,
+      ConversationsProvider convs,
+    })
+  >
+  stageAndPark(WidgetTester tester, Completer<void> gate) async {
+    final h = await pumpComposer(tester, encryptGate: gate.future);
+    h.key.currentState!.attachmentControllerForTest.stage(
+      bytes: kTinyPng,
+      mimeType: 'image/png',
+      filename: 'pasted.png',
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'my caption');
+    return h;
+  }
+
+  testWidgets('composer unmounted mid-send, chat still open: the caption is '
+      'still sent', (tester) async {
+    final gate = Completer<void>();
+    final h = await stageAndPark(tester, gate);
+    late Future<void> sending;
+    await tester.runAsync(() async {
+      sending = h.key.currentState!.sendForTest();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    });
+    _barVisible.value = false;
+    await tester.pump();
+    gate.complete();
+    await tester.runAsync(() => sending);
+    await _textSettled(tester);
+
+    expect(h.emitted, ['IMAGE', 'TEXT']);
+  });
+
+  testWidgets('composer unmounted mid-send and the chat left: no caption in '
+      'any chat, and the user is told', (tester) async {
+    final gate = Completer<void>();
+    final h = await stageAndPark(tester, gate);
+    late Future<void> sending;
+    await tester.runAsync(() async {
+      sending = h.key.currentState!.sendForTest();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    });
+    _barVisible.value = false;
+    await tester.pump();
+    h.convs.closeConversation(); // what popping the chat screen does
+    gate.complete();
+    await tester.runAsync(() => sending);
+    await _textSettled(tester);
+    await tester.pump();
+
+    expect(h.emitted, ['IMAGE']);
+    expect(
+      find.text('Some files were not sent — you left the chat'),
+      findsOneWidget,
+    );
+    await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
+  });
+
+  // UI-06 follow-up: a queued batch must re-check the chat before it reads
+  // its first file (a web pick's reads are the expensive part).
+  testWidgets('a queued batch whose chat was left reads none of its files', (
+    tester,
+  ) async {
+    final gate = Completer<void>();
+    var parked = false;
+    final h = await pumpComposer(
+      tester,
+      encryptGate: gate.future,
+      onEncryptParked: () => parked = true,
+    );
+    seedConversations(h.convs, [
+      for (final (id, peerId, peer) in [(10, 2, 'bob'), (11, 3, 'carol')])
+        {
+          'id': id,
+          'userOne': {'id': 1, 'username': 'alice', 'tag': '0001'},
+          'userTwo': {'id': peerId, 'username': peer, 'tag': '0003'},
+          'createdAt': '2026-01-01T00:00:00.000Z',
+          'unreadCount': 0,
+          'lastMessage': null,
+        },
+    ]);
+    var secondReads = 0;
+    PickedAttachment photo(String n) =>
+        PickedAttachment(name: n, readBytes: () async => kTinyPng);
+    late Future<void> first;
+    late Future<void> second;
+    await tester.runAsync(() async {
+      first = h.key.currentState!.sendPickedFiles([
+        photo('a1.jpg'),
+        photo('a2.jpg'),
+      ], pickedIn: 10);
+      while (!parked) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      second = h.key.currentState!.sendPickedFiles([
+        PickedAttachment(
+          name: 'b1.jpg',
+          readBytes: () async {
+            secondReads++;
+            return kTinyPng;
+          },
+        ),
+      ], pickedIn: 10);
+    });
+    h.convs.openConversation(11);
+    gate.complete();
+    await tester.runAsync(() => Future.wait([first, second]));
+    await tester.pump();
+
+    expect(secondReads, 0);
+    await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
   });
 }
