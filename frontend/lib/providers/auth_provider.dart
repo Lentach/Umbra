@@ -228,6 +228,7 @@ class AuthProvider extends ChangeNotifier {
   bool _isError = false;
   Timer? _sessionRefreshTimer;
   Future<void>? _sessionRefreshInFlight;
+  int _sessionRefreshInFlightEpoch = 0;
 
   /// Bumped when a session ends ([logout] start, [_clearLocalAuthState]). A
   /// refresh that began under an older value belongs to a session the user
@@ -408,12 +409,16 @@ class AuthProvider extends ChangeNotifier {
 
   /// Single in-flight refresh for startup, resume, and parallel [ensureSessionReady].
   Future<void> _refreshSessionLocked() async {
-    if (_sessionRefreshInFlight != null) {
+    // A flight begun under an older session is dropped when it lands: a
+    // caller of this session must not wait on it.
+    if (_sessionRefreshInFlight != null &&
+        _sessionRefreshInFlightEpoch == _sessionEpoch) {
       return _sessionRefreshInFlight!;
     }
 
     final future = _silentRefresh();
     _sessionRefreshInFlight = future;
+    _sessionRefreshInFlightEpoch = _sessionEpoch;
     try {
       await future;
     } finally {
