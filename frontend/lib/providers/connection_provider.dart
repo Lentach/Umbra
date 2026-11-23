@@ -781,6 +781,11 @@ class ConnectionProvider extends ChangeNotifier {
       if (readyDeviceId is int) {
         _encryptionProvider?.setOwnDeviceId(readyDeviceId);
       }
+      // E2E init emits (`checkOwnKeyBundle`, `uploadKeyBundle`), and the server
+      // drops every such event until its auth lookups have set the socket's
+      // user — which is exactly what `socketReady` announces. Started at the
+      // transport connect it could lose that race and stay down all session.
+      _encryptionProvider?.initializeE2E(userId);
       _onSocketReady();
       _box?.accountReady(readyDeviceId is int ? readyDeviceId : null);
       _accountReady = true;
@@ -832,8 +837,6 @@ class ConnectionProvider extends ChangeNotifier {
     _isConnected = true;
     notifyListeners();
     _armSocketReadyWatchdog();
-
-    _encryptionProvider?.initializeE2E(userId);
 
     if (!_pushInitialized) {
       _pushInitialized = true;
@@ -1015,6 +1018,8 @@ class ConnectionProvider extends ChangeNotifier {
   // ---------- Disconnect ----------
 
   void disconnect({bool isLogout = false}) {
+    // A connect() parked on an await must not resume into a closed session.
+    _connectGeneration++;
     _intentionalDisconnect = true;
     _debouncedConnectTimer?.cancel();
     _resumeProbeTimer?.cancel();
@@ -1812,6 +1817,7 @@ class ConnectionProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    _connectGeneration++;
     _debouncedConnectTimer?.cancel();
     _plaintextSweepTimer?.cancel();
     _resumeProbeTimer?.cancel();
