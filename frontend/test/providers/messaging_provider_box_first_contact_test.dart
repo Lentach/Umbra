@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:fireplace/models/user_model.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
@@ -7,6 +8,7 @@ import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/services/box/box_client.dart';
 import 'package:fireplace/services/box/box_first_contact.dart';
+import 'package:fireplace/services/box/box_friends.dart';
 import 'package:fireplace/services/box/box_outbox.dart';
 import 'package:fireplace/services/box/box_session.dart';
 import 'package:fireplace/services/box/box_wire.dart';
@@ -48,6 +50,29 @@ class _Enc extends EncryptionProvider {
 
   @override
   bool get ownDeviceIdConfirmed => true;
+
+  /// When set, every decrypt answers this plaintext: a frame from a device
+  /// that this test does not run (a sibling of ours).
+  String? plaintextOf;
+
+  @override
+  Future<String> decrypt(
+    int senderId,
+    String ciphertext, {
+    int? messageId,
+    int deviceId = 1,
+  }) async =>
+      plaintextOf ??
+      await super.decrypt(
+        senderId,
+        ciphertext,
+        messageId: messageId,
+        deviceId: deviceId,
+      );
+
+  @override
+  Future<bool> carriesOwnIdentity(String ciphertext) async =>
+      plaintextOf != null || await super.carriesOwnIdentity(ciphertext);
 
   List<int>? ownLive;
   int? ownId;
@@ -409,6 +434,61 @@ class _Side {
         if (records[id]!['senderId'] == peer) records[id]!['content'] as String,
     ];
   }
+}
+
+/// The real session as the messaging side's first-contact link, recording
+/// which accounts it was asked to retire.
+class _RetireSpy implements BoxFirstContactLink {
+  _RetireSpy(this._inner);
+
+  final BoxFirstContactLink _inner;
+  final List<int> retired = [];
+
+  @override
+  BoxFirstContact get firstContact => _inner.firstContact;
+
+  @override
+  Future<BoxRequestSend> deliverRequest(ContactOutbound to, Uint8List body) =>
+      _inner.deliverRequest(to, body);
+
+  @override
+  Future<ContactQueue?> firstContactQueue(int userId) =>
+      _inner.firstContactQueue(userId);
+
+  @override
+  void firstContactFriend(int userId) => _inner.firstContactFriend(userId);
+
+  @override
+  Future<FriendWrite> acceptFirstContact(
+    int userId,
+    int deviceId, {
+    required String sid,
+    required String sealPub,
+    required E2eProfile profile,
+  }) => _inner.acceptFirstContact(
+    userId,
+    deviceId,
+    sid: sid,
+    sealPub: sealPub,
+    profile: profile,
+  );
+
+  @override
+  Future<void> retireFirstContact(int userId) {
+    retired.add(userId);
+    return _inner.retireFirstContact(userId);
+  }
+
+  @override
+  Future<void> endBoxFriendship(int userId, {required bool block}) =>
+      _inner.endBoxFriendship(userId, block: block);
+
+  @override
+  void takeServedAddresses(int userId, List<ContactOutbound> addresses) =>
+      _inner.takeServedAddresses(userId, addresses);
+
+  @override
+  Future<void> retireAccountQueues() => _inner.retireAccountQueues();
 }
 
 Future<void> settle() async {
@@ -1172,6 +1252,165 @@ void main() {
     final record = alice.recordOf(5);
     expect(record?.state, ContactState.blocked);
     expect(record?.queues.map((q) => q.rid), [rid]);
+  });
+
+  /// Alice asked Bob over the box and the ask lapsed (decision 54: shown for
+  /// 30 d), then Bob — who knows nothing of it — asked Alice. Returns the rid
+  /// of the queue Alice's lapsed ask still holds.
+  Future<String> aliceHoldsALapsedAsk() async {
+    await alice.reader.sendBoxFriendRequest(bob.searchEntry);
+    await settle();
+    final held = alice.recordOf(5)!;
+    expect(held.state, ContactState.pendingOut);
+    final origin = held.boxOrigin!;
+    await alice.store.update(
+      5,
+      (r) => r!.copyWith(
+        boxOrigin: ContactBoxOrigin(
+          at: origin.at.subtract(BoxFirstContact.lifetime * 2),
+          addresses: origin.addresses,
+          kept: origin.kept,
+          bundles: origin.bundles,
+        ),
+      ),
+    );
+    expect(
+      BoxFirstContact.shownPending(alice.recordOf(5)!, DateTime.now().toUtc()),
+      isFalse,
+      reason: 'the ask is past its lifetime',
+    );
+    await bob.store.remove(1);
+    await bob.reader.sendBoxFriendRequest(alice.searchEntry);
+    await settle();
+    return held.queues.single.rid;
+  }
+
+  // Mutation: `_readFirstContact` reads a lapsed own ask as shown, so the
+  // request is taken as its accept (the `shownPending` guard dropped).
+  test('a request from an account whose request of ours lapsed is a new '
+      'request, not its accept: kept undecrypted, no friendship, our old '
+      'queue still held', () async {
+    final rid = await aliceHoldsALapsedAsk();
+
+    final record = alice.recordOf(5);
+    expect(record?.state, ContactState.pendingIn);
+    expect(record?.boxOrigin?.kept, hasLength(1));
+    expect(record?.queues.map((q) => q.rid), [rid]);
+    expect(record?.outbound, isEmpty);
+    expect(bob.recordOf(1)?.state, ContactState.pendingOut);
+    expect(await alice.textsFrom(5), isEmpty);
+  });
+
+  // Mutation: `_dropBoxRequest` does not retire the queue a declined request
+  // still holds (the retire condition negated).
+  test('declining a request whose record holds a queue of ours retires that '
+      'queue now: deleted on the box, the record gone', () async {
+    final rid = await aliceHoldsALapsedAsk();
+    final link = _RetireSpy(alice.session);
+    alice.reader.boxFirstContact = link;
+
+    await alice.reader.declineBoxFriendRequest(5);
+    await settle();
+
+    expect(link.retired, [5]);
+    expect(_queuesDeletedBy(alice), contains(rid));
+    expect(alice.recordOf(5), isNull);
+  });
+
+  test('declining a request that holds no queue of ours retires nothing: the '
+      'record goes and the box is asked to delete nothing', () async {
+    await alice.reader.sendBoxFriendRequest(bob.searchEntry);
+    await settle();
+    expect(bob.recordOf(1)?.state, ContactState.pendingIn);
+    expect(bob.recordOf(1)?.queues, isEmpty);
+    final link = _RetireSpy(bob.session);
+    bob.reader.boxFirstContact = link;
+
+    await bob.reader.declineBoxFriendRequest(1);
+    await settle();
+
+    expect(link.retired, isEmpty);
+    expect(_queuesDeletedBy(bob), isEmpty);
+    expect(bob.recordOf(1), isNull);
+  });
+
+  group('a goodbye from a sibling of ours (E15j)', () {
+    var localId = 9000;
+    late List<int> ended;
+
+    setUp(() {
+      alice.enc
+        ..ownId = 1
+        ..ownLive = [1, 3];
+      ended = [];
+      alice.reader.onBoxFriendshipEnded = ended.add;
+    });
+
+    /// A `goodbye` for [peer] read on Alice's self-queue from her device 3.
+    Future<bool> goodbyeCopy(int peer) {
+      alice.enc.plaintextOf = jsonEncode(
+        E2eEnvelope.buildGoodbye(sentTo: peer),
+      );
+      return alice.reader.consumeBoxEntry(
+        BoxInboxEntry(
+          rid: 'self-rid',
+          id: 'm$localId',
+          localId: localId++,
+          peerUserId: 1,
+          senderDeviceId: 3,
+          signal: '2:AQID',
+          receivedAt: DateTime.now().toUtc(),
+          acked: true,
+          viaSelfQueue: true,
+        ),
+        null,
+      );
+    }
+
+    // Mutation: `_takeGoodbye` ends a friendship for any user id that has a
+    // record (the route check reduced to a null check).
+    test('for a user this device holds no record of changes nothing', () async {
+      expect(await goodbyeCopy(9), isTrue);
+      await settle();
+
+      expect(alice.recordOf(9), isNull);
+      expect(ended, isEmpty);
+      expect(_queuesDeletedBy(alice), isEmpty);
+    });
+
+    test('for a friend this device holds no box route for changes nothing, '
+        'and ends it once a route exists', () async {
+      await alice.store.update(
+        5,
+        (_) => const ContactRecord(
+          userId: 5,
+          username: 'bob',
+          tag: '0005',
+          state: ContactState.friend,
+          legacy: ContactLegacy(conversationId: 10),
+        ),
+      );
+      expect(alice.recordOf(5)!.onBoxRoute, isFalse);
+
+      expect(await goodbyeCopy(5), isTrue);
+      await settle();
+
+      expect(alice.recordOf(5)?.state, ContactState.friend);
+      expect(ended, isEmpty);
+
+      // The control: the same frame ends it once the friend has a route.
+      await alice.store.update(
+        5,
+        (r) => r!.copyWith(
+          boxOrigin: ContactBoxOrigin(at: DateTime.now().toUtc()),
+        ),
+      );
+      expect(await goodbyeCopy(5), isTrue);
+      await settle();
+
+      expect(alice.recordOf(5), isNull);
+      expect(ended, [5]);
+    });
   });
 
   // ---------- Account delete (decision 113, E114h, E114i) ----------
