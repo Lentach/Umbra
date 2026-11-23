@@ -148,6 +148,9 @@ class ChatInputBarState extends State<ChatInputBar>
   final _attachment = ComposerAttachmentController();
   bool _isSendingStagedMedia = false;
 
+  /// Completes when the last queued [sendPickedFiles] batch has finished.
+  Future<void> _pickedBatchTail = Future<void>.value();
+
   @override
   void initState() {
     super.initState();
@@ -395,6 +398,10 @@ class ChatInputBarState extends State<ChatInputBar>
   /// desktop split view keeps this composer mounted across a chat switch, so
   /// `mounted` alone is no guard. The toast goes on the root overlay, which
   /// outlives this composer.
+  ///
+  /// A pick made while an earlier batch is still going waits for it
+  /// ([_pickedBatchTail]): two loops running at once would interleave their
+  /// files and break the pick order the peer sees. Nothing is dropped.
   Future<void> sendPickedFiles(
     List<PickedAttachment> files, {
     required int pickedIn,
@@ -407,20 +414,28 @@ class ChatInputBarState extends State<ChatInputBar>
       showTopSnackBar(context, l10n.attachmentPickLimit(kMaxFilesPerPick));
       batch = files.sublist(0, kMaxFilesPerPick);
     }
-    for (final file in batch) {
-      final bytes = await file.readBytes();
-      if (!mounted ||
-          _chatSwitchedFrom(pickedIn) ||
-          !await _sendPickedFile(file, bytes)) {
-        if (rootOverlay.mounted) {
-          showTopSnackBar(
-            rootOverlay.context,
-            l10n.attachmentBatchInterrupted,
-            overlay: rootOverlay,
-          );
+    final previous = _pickedBatchTail;
+    final turn = Completer<void>();
+    _pickedBatchTail = turn.future;
+    try {
+      await previous;
+      for (final file in batch) {
+        final bytes = await file.readBytes();
+        if (!mounted ||
+            _chatSwitchedFrom(pickedIn) ||
+            !await _sendPickedFile(file, bytes)) {
+          if (rootOverlay.mounted) {
+            showTopSnackBar(
+              rootOverlay.context,
+              l10n.attachmentBatchInterrupted,
+              overlay: rootOverlay,
+            );
+          }
+          return;
         }
-        return;
       }
+    } finally {
+      turn.complete();
     }
   }
 
@@ -747,7 +762,10 @@ class ChatInputBarState extends State<ChatInputBar>
 
   /// Media-then-caption send (spec §3 ordering contract): await the staged
   /// item's post-emit completion, only then emit the caption; on media failure
-  /// the caption is restored to the field (the failed bubble owns retry).
+  /// the caption is restored to the field (the failed bubble owns retry). The
+  /// provider sends into the ACTIVE chat, so the caption is also kept back
+  /// (restored) when the user switched chats during the image's send — the
+  /// desktop split view keeps this composer mounted across that switch.
   Future<void> _sendStaged() async {
     if (_isSendingStagedMedia) return;
     final staged = _attachment.staged;
@@ -760,6 +778,9 @@ class ChatInputBarState extends State<ChatInputBar>
     final expiresIn = context
         .read<ConversationsProvider>()
         .conversationDisappearingTimer;
+    final conversationId = context
+        .read<ConversationsProvider>()
+        .activeConversationId;
 
     setState(() => _isSendingStagedMedia = true);
     _attachment.clear();
@@ -773,7 +794,7 @@ class ChatInputBarState extends State<ChatInputBar>
       );
       if (!mounted) return;
       if (caption.isNotEmpty) {
-        if (sent) {
+        if (sent && !_chatSwitchedFrom(conversationId)) {
           messaging.sendMessage(caption, expiresIn: expiresIn);
         } else {
           final current = _controller.text;

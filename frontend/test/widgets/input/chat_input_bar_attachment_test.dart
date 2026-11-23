@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:fireplace/l10n/app_localizations.dart';
+import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/providers/auth_provider.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
@@ -43,12 +45,19 @@ final kTinyPng = Uint8List.fromList(const [
 /// plus a 16-byte tag. [fail] makes every encryption throw (an upload that
 /// cannot go out). The size guard is the real one's.
 class _FakeMediaCrypto extends MediaCryptoService {
-  _FakeMediaCrypto({this.fail = false});
+  _FakeMediaCrypto({this.fail = false, this.gate});
 
   final bool fail;
 
+  /// When set, the FIRST encryption waits for it: a media send parked
+  /// mid-flight while later ones go through.
+  Future<void>? gate;
+
   @override
   Future<EncryptedMedia> encrypt(Uint8List bytes) async {
+    final parked = gate;
+    gate = null;
+    await parked;
     if (fail || bytes.length > MediaCryptoService.maxBytes) {
       throw StateError('cannot encrypt');
     }
@@ -201,6 +210,25 @@ class _Outbox implements BoxOutbox {
   }
 }
 
+/// A provider whose video send THROWS instead of answering false: the
+/// optimistic video row's notification blows up, once.
+class _ThrowingVideoMessaging extends MessagingProvider {
+  bool _thrown = false;
+
+  @override
+  void notifyListeners() {
+    final rows = loadedMessagesForTest;
+    if (!_thrown &&
+        rows.isNotEmpty &&
+        rows.last.messageType == MessageType.video &&
+        rows.last.deliveryStatus == MessageDeliveryStatus.sending) {
+      _thrown = true;
+      throw StateError('video send blew up');
+    }
+    super.notifyListeners();
+  }
+}
+
 Future<
   ({
     GlobalKey<ChatInputBarState> key,
@@ -209,7 +237,12 @@ Future<
     ConversationsProvider convs,
   })
 >
-pumpComposer(WidgetTester tester, {Object? throwOnUpload}) async {
+pumpComposer(
+  WidgetTester tester, {
+  Object? throwOnUpload,
+  MessagingProvider? messagingOverride,
+  Future<void>? encryptGate,
+}) async {
   final key = GlobalKey<ChatInputBarState>();
   // What the box was handed, in order: each message's kind, and its envelope.
   final emitted = <String>[];
@@ -245,13 +278,15 @@ pumpComposer(WidgetTester tester, {Object? throwOnUpload}) async {
   ]);
   convs.openConversation(10);
 
-  final messaging = MessagingProvider();
+  final messaging = messagingOverride ?? MessagingProvider();
   messaging.setConversationsProvider(convs);
   messaging.setCurrentUserId(1);
   messaging.setToken('tok');
   messaging.setIncomingMessageSoundEnabledForTest(false);
   messaging.onConnect(false);
-  messaging.setMediaCryptoForTest(_FakeMediaCrypto(fail: throwOnUpload != null));
+  messaging.setMediaCryptoForTest(
+    _FakeMediaCrypto(fail: throwOnUpload != null, gate: encryptGate),
+  );
   messaging.setEncryptionProvider(encryption);
   messaging.boxOutbox = _Outbox((envelope) {
     emitted.add(envelope['messageType'] as String? ?? 'TEXT');
@@ -891,5 +926,115 @@ void main() {
       expect(find.text('Unsupported file type'), findsOneWidget);
       await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
     });
+
+    // UI-07: sendImage and sendDocument swallow a throw and toast; a video
+    // that threw used to end the whole batch without a word.
+    testWidgets('a video whose send throws says so and the rest still go', (
+      tester,
+    ) async {
+      final h = await pumpComposer(
+        tester,
+        messagingOverride: _ThrowingVideoMessaging(),
+      );
+
+      await tester.runAsync(
+        () => pick(h, [
+          PickedAttachment(
+            name: 'clip.mp4',
+            readBytes: () async => Uint8List(64),
+          ),
+          photo('after.jpg'),
+        ]),
+      );
+      await tester.pump();
+
+      expect(h.emitted, ['IMAGE']);
+      expect(find.text('Upload failed'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
+    });
+
+    // UI-06: a second pick made while the first batch is still sending used
+    // to interleave with it, so the peer saw the files out of pick order.
+    testWidgets('a second pick made mid-batch goes out after the first, '
+        'in full and in order', (tester) async {
+      final gate = Completer<void>();
+      final h = await pumpComposer(tester, encryptGate: gate.future);
+
+      late Future<void> first;
+      late Future<void> second;
+      await tester.runAsync(() async {
+        first = pick(h, [photo('a1.jpg'), photo('a2.jpg')]);
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        // a1 is parked in its upload; the user picks again.
+        second = pick(h, [
+          PickedAttachment(name: 'b1.mp4', readBytes: () async => Uint8List(64)),
+        ]);
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      });
+      expect(h.emitted, isEmpty); // the second batch waits for the first
+
+      gate.complete();
+      await tester.runAsync(() => Future.wait([first, second]));
+      await tester.pump();
+
+      expect(h.emitted, ['IMAGE', 'IMAGE', 'VIDEO']);
+    });
+  });
+
+  // UI-05: the desktop split view keeps the composer mounted across a chat
+  // switch, and the provider sends into the ACTIVE chat — a caption sent
+  // after the image's await landed in whichever chat was open by then.
+  testWidgets('switching chats while a staged image sends keeps the caption '
+      'out of the new chat', (tester) async {
+    final gate = Completer<void>();
+    final h = await pumpComposer(tester, encryptGate: gate.future);
+    seedConversations(h.convs, [
+      for (final (id, peerId, peer) in [(10, 2, 'bob'), (11, 3, 'carol')])
+        {
+          'id': id,
+          'userOne': {'id': 1, 'username': 'alice', 'tag': '0001'},
+          'userTwo': {'id': peerId, 'username': peer, 'tag': '0003'},
+          'createdAt': '2026-01-01T00:00:00.000Z',
+          'unreadCount': 0,
+          'lastMessage': null,
+        },
+    ]);
+    final state = h.key.currentState!;
+    final messaging = tester
+        .element(find.byType(ChatInputBar))
+        .read<MessagingProvider>();
+    state.attachmentControllerForTest.stage(
+      bytes: kTinyPng,
+      mimeType: 'image/png',
+      filename: 'pasted.png',
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'my caption');
+
+    late Future<void> sending;
+    await tester.runAsync(() async {
+      sending = state.sendForTest();
+      // Let the image reach its parked encryption.
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    });
+    h.convs.openConversation(11); // the user opens another chat mid-send
+    gate.complete();
+    await tester.runAsync(() => sending);
+    await tester.pumpAndSettle();
+    await _textSettled(tester);
+
+    expect(h.emitted, ['IMAGE']); // the image went to Bob, the caption nowhere
+    expect(
+      messaging.loadedMessagesForTest.where(
+        (m) => m.messageType == MessageType.text,
+      ),
+      isEmpty,
+    );
+    // The words are not lost: they come back to the field.
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller!.text,
+      'my caption',
+    );
   });
 }
