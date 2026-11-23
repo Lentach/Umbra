@@ -117,7 +117,15 @@ Not a refactor: a document for the owner, `docs/plans/2026-1x-signal-grade-gap.m
 7. Backend: `chat/**`, `key-bundles/**`, `box/**`, `auth/**`, crons, gateway maps, migrations vs entities.
 8. Tests and docs: duplicate or wiring tests, `CLAUDE.md`/`wire.md`/runtime-reference drift.
 
-## 7. Done means
+## 7. Obligations that run during the freeze
+
+- **Prod stays watched.** The healthchecks.io check "Umbra box full" emails the owner when the box passes 50 % or the backend stops checking in. If it fires, follow `.omp/rules/production-vm-deploy.md` "Box flood" before any cleanup work.
+- **Release B (avatar file deletion, `docs/plans/2026-11-08-e2e-profile-photos.md` "Release B") is due on or after 2026-12-08.** It is already-decided work, not a new feature: ship it as its own batch or inside a cleanup release, with the owner's OK.
+- **Security fixes are always allowed.** Open Dependabot alert (2026-11-23): one HIGH, `@azure/msal-node` in `scripts/smoke/package-lock.json` (dev tooling, not shipped). Fold it into the first batch.
+- **Parked, not in this program:** the new app name and domain move, the Play items (decision 146), the Play Console account, O7/O6 (plan D2), E143g. Do not start them; list them in the Phase 3 report.
+- **Leftovers to clean when possible:** the folder `C:/Users/olek2/Desktop/fireplace-b7` (locked `frontend/`, delete after a reboot), and the exited Docker projects `fireplace-b7` and `fireplace-gallery`.
+
+## 8. Done means
 
 - Every P0/P1 finding fixed or explicitly accepted by the owner. No file outside the encryption layer over ~1 000 lines without a recorded reason. Knip and the Dart unused hints are clean. Ratchets are lowered, not raised.
 - Before/after metrics in `metrics.md`; every batch released and driven on Android and web; the Signal-grade gap report delivered.
