@@ -1,23 +1,7 @@
 import 'dart:js_interop';
 import 'dart:typed_data';
 
-import 'package:http/http.dart' as http;
 import 'package:web/web.dart' as web;
-
-/// Downloads a file from [url] and triggers browser save with [filename].
-/// Web-only implementation (blob + anchor download).
-///
-/// The 20 s budget matches ApiService's default class: a stalled download must
-/// surface as a failure the caller can report, not as a future that never
-/// completes.
-Future<void> downloadFile(String url, String filename) async {
-  final response =
-      await http.get(Uri.parse(url)).timeout(const Duration(seconds: 20));
-  if (response.statusCode != 200) {
-    throw Exception('Download failed: ${response.statusCode}');
-  }
-  await _saveBytesAsDownload(response.bodyBytes, filename);
-}
 
 /// Trigger browser download of decrypted [bytes].
 Future<void> saveBytesAsDownload(List<int> bytes, String filename) async {
