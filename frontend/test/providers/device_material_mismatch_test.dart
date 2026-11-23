@@ -161,8 +161,9 @@ void main() {
 
     // Authorized re-homing: stamp cleared, then the reconnect sequence.
     await provider.encryptionService.clearMaterialDeviceStamp();
-    provider.onConnect(true); // isReconnect — state deliberately preserved
-    provider.setOwnDeviceId(2); // socketReady with the fresh id ...
+    provider
+      ..onConnect(true) // isReconnect — state deliberately preserved
+      ..setOwnDeviceId(2); // socketReady with the fresh id ...
     await provider.initializeE2E(ownUserId); // ... then the init it starts
     await pumpEventQueue(times: 200);
 
