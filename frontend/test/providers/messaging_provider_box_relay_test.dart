@@ -1,10 +1,12 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:clock/clock.dart';
 import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
+import 'package:fireplace/services/box/box_device_pause.dart';
 import 'package:fireplace/services/box/box_frame.dart';
 import 'package:fireplace/services/box/box_friends.dart';
 import 'package:fireplace/services/box/box_outbox.dart';
@@ -584,6 +586,33 @@ void main() {
 
         expect(outbox.delivered.map((d) => d.$1.sid), ['self-4']);
         expect(encryption.sealedTo, [(1, 4)]);
+
+        // Past the pause window the next relay is the probe: sealed and
+        // delivered to the paused sibling once, the wait then doubles.
+        await withClock(
+          Clock.fixed(DateTime.now().add(kBoxPauseFirstProbeWait * 1.5)),
+          () async {
+            outbox.delivered.clear();
+            encryption.sealedTo.clear();
+            expect(
+              await fromBob(bobSays('third', wire: 'wire-3', ad: [1])),
+              isTrue,
+            );
+            expect(
+              outbox.delivered.map((d) => d.$1.sid),
+              unorderedEquals(['self-3', 'self-4']),
+              reason: 'the probe goes to the paused sibling',
+            );
+            expect(encryption.sealedTo, contains((1, 3)));
+
+            outbox.delivered.clear();
+            expect(
+              await fromBob(bobSays('fourth', wire: 'wire-4', ad: [1])),
+              isTrue,
+            );
+            expect(outbox.delivered.map((d) => d.$1.sid), ['self-4']);
+          },
+        );
       },
     );
 
