@@ -116,6 +116,16 @@ Not a refactor: a document for the owner, `docs/plans/2026-1x-signal-grade-gap.m
 6. Web-only: `web/web-push-sw.js`, IndexedDB, web key wrapping, multi-tab. Tag `[web-only]`.
 7. Backend: `chat/**`, `key-bundles/**`, `box/**`, `auth/**`, crons, gateway maps, migrations vs entities.
 8. Tests and docs: duplicate or wiring tests, `CLAUDE.md`/`wire.md`/runtime-reference drift.
+9. Tests, as their own area (owner addendum, 2026-11-23; results go to `findings.md` with kind `TEST`):
+   1. **Skips.** List all 16 from the runner's output (`flutter test --reporter json`, entries with `skipped: true`), never from a grep. Then:
+      - `session_cross_context_lock_web_test.dart` (`skip: kIsWeb`, a platform skip) guards the PWA's Web Lock: NEVER delete it. Run it with `flutter test --platform chrome` and check whether the CI probe job (`.github/workflows/ci.yml`, `session-lock`) fully covers it.
+      - `encryption_b3_impersonation_test.dart` (`_skip = 'B3 red test…'`): B3 shipped in 0.2.91, so the skip is stale. Unskip first; every test still red becomes a finding (E143g, the decision-37 re-key gate, is not built).
+      - Every other skip: fix it, or delete it with a written reason.
+   2. **Tests of removed features** (65 files mention legacy / old path / pre-box): keep the ones guarding old data still held by installs or the server; delete the ones testing code that no longer exists.
+   3. **Wording, wiring and duplicate tests:** list each with the test that already covers the same behaviour.
+   4. **Mutation sampling** on the risky areas (box send/receive, first contact, device lists, connection lifecycle): record survivors by id. A survivor is a missing test (add it) or dead code (delete it).
+   5. Record the 10 slowest test files and the CI time, before and after.
+   - Pruning follows §3: a deleted test names the test that covers its behaviour, and the `CLAUDE.md` §3 counts are updated.
 
 ## 7. Obligations that run during the freeze
 
