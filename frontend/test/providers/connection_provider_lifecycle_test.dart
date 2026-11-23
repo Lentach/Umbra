@@ -325,6 +325,61 @@ void main() {
     });
   });
 
+  // CONN-01. Mutation: drop the `_connectGeneration++` from `disconnect()` /
+  // `dispose()`.
+  group('a connect() still waiting does not outlive the session', () {
+    ContactStore storeOpening(Future<void> gate) => ContactStore(
+      open: () async {
+        await gate;
+        return PrefsContentKv.open();
+      },
+      lock: <T>(_, action) => action(),
+      accepts: (_) => true,
+    );
+
+    test('a logout while the contact store opens: no socket is opened once '
+        'the store lands', () async {
+      final gate = Completer<void>();
+      wire(contactStore: storeOpening(gate.future));
+
+      final waiting = connection.connect(2, 'token', _url);
+      await pumpEventQueue();
+      expect(socket.connectTokens, isEmpty, reason: 'waits for the store');
+      connection.disconnect(isLogout: true);
+      gate.complete();
+      await waiting;
+      await pumpEventQueue();
+
+      expect(socket.connectTokens, isEmpty);
+    });
+
+    test('a dispose while the contact store opens: no socket is opened once '
+        'the store lands', () async {
+      final gate = Completer<void>();
+      final doomedSocket = _Socket();
+      final doomed = ConnectionProvider(socketService: doomedSocket)
+        ..setProviders(
+          encryption: _Encryption(log),
+          friends: _Friends(log),
+          conversations: _Conversations(log),
+          messaging: _Messaging(log),
+          contactStore: storeOpening(gate.future),
+        );
+
+      final waiting = doomed.connect(2, 'token', _url);
+      await pumpEventQueue();
+      expect(doomedSocket.connectTokens, isEmpty, reason: 'waits for the store');
+      doomed.dispose();
+      gate.complete();
+      // Unfixed, the resumed connect may also throw on the disposed notifier;
+      // the socket is what this test is about.
+      await waiting.catchError((Object _) {});
+      await pumpEventQueue();
+
+      expect(doomedSocket.connectTokens, isEmpty);
+    });
+  });
+
   // MC-09. Mutation: drop `_reconnectManager.resetAttempts()` from
   // `_onSocketReady`.
   test('a session that turned ready starts its reconnect count over: every '

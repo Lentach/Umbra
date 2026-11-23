@@ -1015,6 +1015,8 @@ class ConnectionProvider extends ChangeNotifier {
   // ---------- Disconnect ----------
 
   void disconnect({bool isLogout = false}) {
+    // A connect() parked on an await must not resume into a closed session.
+    _connectGeneration++;
     _intentionalDisconnect = true;
     _debouncedConnectTimer?.cancel();
     _resumeProbeTimer?.cancel();
@@ -1812,6 +1814,7 @@ class ConnectionProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    _connectGeneration++;
     _debouncedConnectTimer?.cancel();
     _plaintextSweepTimer?.cancel();
     _resumeProbeTimer?.cancel();
