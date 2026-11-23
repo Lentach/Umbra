@@ -270,7 +270,7 @@ class LinkCeremonyController extends ChangeNotifier
   Timer? _expiryTimer;
   bool _identityAdopted = false;
 
-  /// CONT-05: a ceremony epoch, bumped by every start and every abort. A
+  /// A ceremony epoch, bumped by every start and every abort. A
   /// [_handleBlob] parked in its awaits compares it afterwards: a changed
   /// epoch means the ceremony it belongs to is over.
   int _ceremonyEpoch = 0;
@@ -283,6 +283,11 @@ class LinkCeremonyController extends ChangeNotifier
   /// cannot arrive in that window: it answers our `provisioningComplete`,
   /// which is the last thing a run does.
   int? _blobRunEpoch;
+
+  /// Blob handlers run strictly one after another, across epochs too: an
+  /// abort-and-restart must not start the new ceremony's adopt while the old
+  /// run is still inside its own.
+  Future<void> _blobRuns = Future<void>.value();
 
   /// Issue #208: whether the current socket is authenticated, and whether
   /// the new-device `openProvisioning` may have reached no server handler —
@@ -1288,17 +1293,19 @@ class LinkCeremonyController extends ChangeNotifier
     }
     if (_blobRunEpoch == _ceremonyEpoch) return;
     _blobRunEpoch = _ceremonyEpoch;
-    unawaited(_handleBlob(blobB64, ephPubP, _ceremonyEpoch));
+    final epoch = _ceremonyEpoch;
+    _blobRuns = _blobRuns
+        .then((_) => _handleBlob(blobB64, ephPubP, epoch))
+        .catchError((Object _) {});
   }
 
   bool _ceremonyOver(int epoch) => _disposed || epoch != _ceremonyEpoch;
 
   /// The ceremony ended (abort, restart or dispose) while an adopt was
   /// parked, so the abort saw nothing adopted and skipped its discard. What
-  /// the adopt landed since is removed here — unless a newer ceremony has
-  /// adopted for itself meanwhile.
+  /// the adopt landed since is removed here. Handlers are serialised, so no
+  /// newer ceremony has adopted anything yet.
   Future<void> _discardOrphanedAdopt() async {
-    if (_identityAdopted) return;
     try {
       await _identity.discardProvisionedIdentity(userId);
     } on Object catch (_) {
@@ -1311,6 +1318,11 @@ class LinkCeremonyController extends ChangeNotifier
     Uint8List ephPubP,
     int epoch,
   ) async {
+    // Queued behind an older run; its ceremony may be over by now.
+    if (_ceremonyOver(epoch)) {
+      if (_blobRunEpoch == epoch) _blobRunEpoch = null;
+      return;
+    }
     try {
       final transcript = linkTranscript(
         provisioningId: _openProvisioningId!,

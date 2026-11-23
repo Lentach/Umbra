@@ -1,4 +1,4 @@
-// CONT-05 — the new-device blob handler is single-flight and honours an
+// The new-device blob handler is single-flight and honours an
 // abort that lands while it is parked.
 //
 // `onProvisioningBlob` accepted a blob in `showSas`, and the step left
@@ -238,6 +238,35 @@ void main() {
       expect(controller.newDeviceError, 'cancelled_locally');
       expect(count('provisioningComplete'), 0);
       expect(identity.holdsIdentity, isFalse);
+    },
+  );
+
+  test(
+    'abort then restart: the new ceremony adopts after the old run ends and '
+    'keeps its keys',
+    () async {
+      final oldBlob = await reachSasAndSealBlob();
+      controller.onProvisioningBlob(oldBlob);
+      await _settle();
+      expect(identity.gates, hasLength(1));
+
+      await controller.abortNewDevice('cancelled_locally');
+      final newBlob = await reachSasAndSealBlob();
+      controller.onProvisioningBlob(newBlob);
+      await _settle();
+      // The old run is still inside its adopt: nothing may run beside it.
+      expect(identity.gates, hasLength(1));
+
+      identity.gates[0].complete();
+      await _settle();
+      expect(identity.gates, hasLength(2));
+      identity.gates[1].complete();
+      await _settle();
+
+      expect(identity.maxRunning, 1);
+      expect(controller.newDeviceStep, NewDeviceLinkStep.completing);
+      expect(count('provisioningComplete'), 1);
+      expect(identity.holdsIdentity, isTrue);
     },
   );
 }
