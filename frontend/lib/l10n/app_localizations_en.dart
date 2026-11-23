@@ -1428,7 +1428,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get messageTooLong => 'Message is too long to send';
 
   @override
-  String get snackbarChatHistoryDeleted => 'Chat deleted for both sides';
+  String get snackbarChatHistoryDeleted => 'Chat deleted on this device';
 
   @override
   String get snackbarFailedToSendImage => 'Failed to send image';

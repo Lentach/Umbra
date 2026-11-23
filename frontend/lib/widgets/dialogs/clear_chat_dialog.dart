@@ -2,10 +2,9 @@ import 'package:flutter/material.dart';
 import '../../l10n/app_localizations.dart';
 import '../glass/glass_dialog.dart';
 
-/// Informed consent for `clearChatHistory`, which is NOT a local tidy-up: the
-/// server drops EVERY message row of the conversation for BOTH participants
-/// (`deleteAllByConversation`) and unlinks all of its media, irreversibly,
-/// pre-link history included.
+/// Informed consent for `clearChatHistory`: every message and media file of
+/// the chat is deleted from THIS device, irreversibly (owner decision 52).
+/// The other person keeps their copy and nothing is sent to them.
 ///
 /// The action tile's 1.5 s hold guards against an accidental touch and cannot
 /// state that scope — a warning has to be readable at the user's own pace, not

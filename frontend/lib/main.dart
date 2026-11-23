@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
@@ -32,6 +33,7 @@ import 'services/box/box_client.dart';
 import 'services/contacts/contact_store.dart';
 import 'services/content_key_canary.dart';
 import 'services/portrait_lock_service.dart';
+import 'services/wake_up_mute.dart';
 import 'theme/app_scroll_behavior.dart';
 import 'utils/storage_persist.dart';
 import 'utils/e2e_persistent_diag.dart';
@@ -180,7 +182,15 @@ class _FireplaceAppState extends State<FireplaceApp> {
         ),
         ChangeNotifierProvider(create: (_) => EncryptionProvider()),
         ChangeNotifierProvider(create: (_) => FriendsProvider()),
-        ChangeNotifierProvider(create: (_) => ConversationsProvider()),
+        ChangeNotifierProvider(
+          create: (_) => ConversationsProvider(
+            // Android only: the FCM wake-up handler reads it (decision 149).
+            wakeUpMute:
+                !kIsWeb && defaultTargetPlatform == TargetPlatform.android
+                ? writeWakeUpMute
+                : null,
+          ),
+        ),
         ChangeNotifierProvider(create: (_) => MessagingProvider()),
         ChangeNotifierProvider(
           create: (_) => ConnectionProvider(

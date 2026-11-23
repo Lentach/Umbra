@@ -546,7 +546,7 @@
   "snackbarNoActiveConversation": "Brak aktywnej rozmowy",
   "snackbarOpenConversationFirst": "Najpierw otwórz rozmowę",
   "messageTooLong": "Wiadomość jest za długa, aby ją wysłać",
-  "snackbarChatHistoryDeleted": "Czat usunięty u obu stron",
+  "snackbarChatHistoryDeleted": "Czat usunięty na tym urządzeniu",
   "snackbarFailedToSendImage": "Nie udało się wysłać zdjęcia",
   "snackbarMicrophonePermissionRequired": "Wymagane jest uprawnienie do mikrofonu",
   "snackbarMicrophonePermissionDenied": "Odmowa dostępu do mikrofonu",
