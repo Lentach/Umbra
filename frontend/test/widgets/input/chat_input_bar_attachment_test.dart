@@ -49,12 +49,15 @@ class _FakeMediaCrypto extends MediaCryptoService {
 
   final bool fail;
 
-  /// When set, every encryption waits for it: a media send parked mid-flight.
-  final Future<void>? gate;
+  /// When set, the FIRST encryption waits for it: a media send parked
+  /// mid-flight while later ones go through.
+  Future<void>? gate;
 
   @override
   Future<EncryptedMedia> encrypt(Uint8List bytes) async {
-    await gate;
+    final parked = gate;
+    gate = null;
+    await parked;
     if (fail || bytes.length > MediaCryptoService.maxBytes) {
       throw StateError('cannot encrypt');
     }
@@ -949,6 +952,33 @@ void main() {
       expect(find.text('Upload failed'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
+    });
+
+    // UI-06: a second pick made while the first batch is still sending used
+    // to interleave with it, so the peer saw the files out of pick order.
+    testWidgets('a second pick made mid-batch goes out after the first, '
+        'in full and in order', (tester) async {
+      final gate = Completer<void>();
+      final h = await pumpComposer(tester, encryptGate: gate.future);
+
+      late Future<void> first;
+      late Future<void> second;
+      await tester.runAsync(() async {
+        first = pick(h, [photo('a1.jpg'), photo('a2.jpg')]);
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        // a1 is parked in its upload; the user picks again.
+        second = pick(h, [
+          PickedAttachment(name: 'b1.mp4', readBytes: () async => Uint8List(64)),
+        ]);
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      });
+      expect(h.emitted, isEmpty); // the second batch waits for the first
+
+      gate.complete();
+      await tester.runAsync(() => Future.wait([first, second]));
+      await tester.pump();
+
+      expect(h.emitted, ['IMAGE', 'IMAGE', 'VIDEO']);
     });
   });
 
