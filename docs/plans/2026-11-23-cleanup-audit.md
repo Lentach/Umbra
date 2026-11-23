@@ -92,6 +92,8 @@ Release B (drop of old tables/files) is due on or after 2026-12-08 and rides whi
 | EC-8 | The slowest-file list is re-measured on an idle PC before any test is pruned for speed; the contended run is not used. |
 | EC-9 | (Owner had no view, 11-23.) `encryption_b3_impersonation_test.dart` is deleted in batch 5; the PR names the covering tests `messaging_provider_box_test.dart:356,380,413`. The missing Signal-layer re-key gate (E143g) goes into the Phase 3 report. |
 | EC-10 | Android per-chat mute while closed needs fetch-then-notify (wake-up carries nothing, the phone decrypts, then decides). Listed for after the freeze; not built in this program. |
+| EC-11 | (Batch 1b, CONN-06.) E2E init starts at `socketReady`, not at transport connect. Cost accepted: a link that connects but never turns ready runs no E2E init, so stored messages stay unread until the next good connect, the same as an offline start. Running init twice (once local, once after ready) was rejected as a larger change than the finding. |
+| EC-12 | (Batch 1b.) BOX-02 parked: every subscribe is ordered after the store write that makes the queue visible to `_ownerOf`, so the ack-and-drop window cannot open. |
 
 ## 7. Gaps in this audit
 
