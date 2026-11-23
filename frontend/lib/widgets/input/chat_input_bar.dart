@@ -417,20 +417,29 @@ class ChatInputBarState extends State<ChatInputBar>
     final previous = _pickedBatchTail;
     final turn = Completer<void>();
     _pickedBatchTail = turn.future;
+    void interrupted() {
+      if (!rootOverlay.mounted) return;
+      showTopSnackBar(
+        rootOverlay.context,
+        l10n.attachmentBatchInterrupted,
+        overlay: rootOverlay,
+      );
+    }
+
     try {
       await previous;
+      // Left the chat while queued: read nothing (a web pick's files are
+      // already in RAM, a native one reads each file on its turn).
+      if (!mounted || _chatSwitchedFrom(pickedIn)) {
+        interrupted();
+        return;
+      }
       for (final file in batch) {
         final bytes = await file.readBytes();
         if (!mounted ||
             _chatSwitchedFrom(pickedIn) ||
             !await _sendPickedFile(file, bytes)) {
-          if (rootOverlay.mounted) {
-            showTopSnackBar(
-              rootOverlay.context,
-              l10n.attachmentBatchInterrupted,
-              overlay: rootOverlay,
-            );
-          }
+          interrupted();
           return;
         }
       }
@@ -775,12 +784,13 @@ class ChatInputBarState extends State<ChatInputBar>
 
     final caption = _controller.text.trim();
     final messaging = context.read<MessagingProvider>();
-    final expiresIn = context
-        .read<ConversationsProvider>()
-        .conversationDisappearingTimer;
-    final conversationId = context
-        .read<ConversationsProvider>()
-        .activeConversationId;
+    final convs = context.read<ConversationsProvider>();
+    final expiresIn = convs.conversationDisappearingTimer;
+    final conversationId = convs.activeConversationId;
+    // The composer may unmount during the send (mobile: the chat is popped);
+    // what the caption needs afterwards is captured while it is mounted.
+    final l10n = AppLocalizations.of(context);
+    final rootOverlay = Overlay.of(context, rootOverlay: true);
 
     setState(() => _isSendingStagedMedia = true);
     _attachment.clear();
@@ -792,7 +802,20 @@ class ChatInputBarState extends State<ChatInputBar>
         filename: staged.filename,
         mimeType: staged.mimeType,
       );
-      if (!mounted) return;
+      if (!mounted) {
+        if (sent && caption.isNotEmpty) {
+          if (convs.activeConversationId == conversationId) {
+            messaging.sendMessage(caption, expiresIn: expiresIn);
+          } else if (rootOverlay.mounted) {
+            showTopSnackBar(
+              rootOverlay.context,
+              l10n.attachmentBatchInterrupted,
+              overlay: rootOverlay,
+            );
+          }
+        }
+        return;
+      }
       if (caption.isNotEmpty) {
         if (sent && !_chatSwitchedFrom(conversationId)) {
           messaging.sendMessage(caption, expiresIn: expiresIn);
