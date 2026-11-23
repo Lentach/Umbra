@@ -557,7 +557,7 @@
   "snackbarNoActiveConversation": "No active conversation",
   "snackbarOpenConversationFirst": "Open a conversation first",
   "messageTooLong": "Message is too long to send",
-  "snackbarChatHistoryDeleted": "Chat deleted for both sides",
+  "snackbarChatHistoryDeleted": "Chat deleted on this device",
   "snackbarFailedToSendImage": "Failed to send image",
   "snackbarMicrophonePermissionRequired": "Microphone permission required",
   "snackbarMicrophonePermissionDenied": "Microphone permission denied",

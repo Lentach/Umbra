@@ -1452,7 +1452,7 @@ class AppLocalizationsPl extends AppLocalizations {
   String get messageTooLong => 'Wiadomość jest za długa, aby ją wysłać';
 
   @override
-  String get snackbarChatHistoryDeleted => 'Czat usunięty u obu stron';
+  String get snackbarChatHistoryDeleted => 'Czat usunięty na tym urządzeniu';
 
   @override
   String get snackbarFailedToSendImage => 'Nie udało się wysłać zdjęcia';
