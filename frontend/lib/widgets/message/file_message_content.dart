@@ -11,7 +11,7 @@ import '../top_snackbar.dart';
 import '../../utils/encrypted_media_loader.dart';
 import 'box_media_source.dart';
 
-/// FILE/document message: legacy direct URL download or fetch+decrypt+save.
+/// FILE/document message: fetch, decrypt when it carries a key, save.
 class FileMessageContent extends StatefulWidget {
   final MessageModel message;
   final Color textColor;
@@ -37,19 +37,15 @@ class _FileMessageContentState extends State<FileMessageContent> {
     final box = boxMediaSourceFor(context, url);
 
     try {
-      final key = widget.message.mediaKey;
-      final iv = widget.message.mediaIv;
-      if (key != null && iv != null) {
-        final plain = await loadDecryptedMediaBytes(
-          url: url,
-          key: key,
-          iv: iv,
-          box: box,
-        );
-        await download_utils.saveBytesAsDownload(plain, _filename);
-      } else {
-        await download_utils.downloadFile(url, _filename);
-      }
+      // One loader for keyed and keyless rows: a keyless (old-path) url is
+      // sender-chosen too, so it takes the same host rule as all media.
+      final plain = await loadDecryptedMediaBytes(
+        url: url,
+        key: widget.message.mediaKey,
+        iv: widget.message.mediaIv,
+        box: box,
+      );
+      await download_utils.saveBytesAsDownload(plain, _filename);
       if (context.mounted) {
         showTopSnackBar(context, l10n.documentDownloaded);
       }
