@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:fireplace/l10n/app_localizations.dart';
@@ -44,12 +45,16 @@ final kTinyPng = Uint8List.fromList(const [
 /// plus a 16-byte tag. [fail] makes every encryption throw (an upload that
 /// cannot go out). The size guard is the real one's.
 class _FakeMediaCrypto extends MediaCryptoService {
-  _FakeMediaCrypto({this.fail = false});
+  _FakeMediaCrypto({this.fail = false, this.gate});
 
   final bool fail;
 
+  /// When set, every encryption waits for it: a media send parked mid-flight.
+  final Future<void>? gate;
+
   @override
   Future<EncryptedMedia> encrypt(Uint8List bytes) async {
+    await gate;
     if (fail || bytes.length > MediaCryptoService.maxBytes) {
       throw StateError('cannot encrypt');
     }
@@ -233,6 +238,7 @@ pumpComposer(
   WidgetTester tester, {
   Object? throwOnUpload,
   MessagingProvider? messagingOverride,
+  Future<void>? encryptGate,
 }) async {
   final key = GlobalKey<ChatInputBarState>();
   // What the box was handed, in order: each message's kind, and its envelope.
@@ -275,7 +281,9 @@ pumpComposer(
   messaging.setToken('tok');
   messaging.setIncomingMessageSoundEnabledForTest(false);
   messaging.onConnect(false);
-  messaging.setMediaCryptoForTest(_FakeMediaCrypto(fail: throwOnUpload != null));
+  messaging.setMediaCryptoForTest(
+    _FakeMediaCrypto(fail: throwOnUpload != null, gate: encryptGate),
+  );
   messaging.setEncryptionProvider(encryption);
   messaging.boxOutbox = _Outbox((envelope) {
     emitted.add(envelope['messageType'] as String? ?? 'TEXT');
@@ -942,5 +950,61 @@ void main() {
       expect(tester.takeException(), isNull);
       await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
     });
+  });
+
+  // UI-05: the desktop split view keeps the composer mounted across a chat
+  // switch, and the provider sends into the ACTIVE chat — a caption sent
+  // after the image's await landed in whichever chat was open by then.
+  testWidgets('switching chats while a staged image sends keeps the caption '
+      'out of the new chat', (tester) async {
+    final gate = Completer<void>();
+    final h = await pumpComposer(tester, encryptGate: gate.future);
+    seedConversations(h.convs, [
+      for (final (id, peerId, peer) in [(10, 2, 'bob'), (11, 3, 'carol')])
+        {
+          'id': id,
+          'userOne': {'id': 1, 'username': 'alice', 'tag': '0001'},
+          'userTwo': {'id': peerId, 'username': peer, 'tag': '0003'},
+          'createdAt': '2026-01-01T00:00:00.000Z',
+          'unreadCount': 0,
+          'lastMessage': null,
+        },
+    ]);
+    final state = h.key.currentState!;
+    final messaging = tester
+        .element(find.byType(ChatInputBar))
+        .read<MessagingProvider>();
+    state.attachmentControllerForTest.stage(
+      bytes: kTinyPng,
+      mimeType: 'image/png',
+      filename: 'pasted.png',
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'my caption');
+
+    late Future<void> sending;
+    await tester.runAsync(() async {
+      sending = state.sendForTest();
+      // Let the image reach its parked encryption.
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    });
+    h.convs.openConversation(11); // the user opens another chat mid-send
+    gate.complete();
+    await tester.runAsync(() => sending);
+    await tester.pumpAndSettle();
+    await _textSettled(tester);
+
+    expect(h.emitted, ['IMAGE']); // the image went to Bob, the caption nowhere
+    expect(
+      messaging.loadedMessagesForTest.where(
+        (m) => m.messageType == MessageType.text,
+      ),
+      isEmpty,
+    );
+    // The words are not lost: they come back to the field.
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller!.text,
+      'my caption',
+    );
   });
 }

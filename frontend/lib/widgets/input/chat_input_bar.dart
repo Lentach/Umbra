@@ -747,7 +747,10 @@ class ChatInputBarState extends State<ChatInputBar>
 
   /// Media-then-caption send (spec §3 ordering contract): await the staged
   /// item's post-emit completion, only then emit the caption; on media failure
-  /// the caption is restored to the field (the failed bubble owns retry).
+  /// the caption is restored to the field (the failed bubble owns retry). The
+  /// provider sends into the ACTIVE chat, so the caption is also kept back
+  /// (restored) when the user switched chats during the image's send — the
+  /// desktop split view keeps this composer mounted across that switch.
   Future<void> _sendStaged() async {
     if (_isSendingStagedMedia) return;
     final staged = _attachment.staged;
@@ -760,6 +763,9 @@ class ChatInputBarState extends State<ChatInputBar>
     final expiresIn = context
         .read<ConversationsProvider>()
         .conversationDisappearingTimer;
+    final conversationId = context
+        .read<ConversationsProvider>()
+        .activeConversationId;
 
     setState(() => _isSendingStagedMedia = true);
     _attachment.clear();
@@ -773,7 +779,7 @@ class ChatInputBarState extends State<ChatInputBar>
       );
       if (!mounted) return;
       if (caption.isNotEmpty) {
-        if (sent) {
+        if (sent && !_chatSwitchedFrom(conversationId)) {
           messaging.sendMessage(caption, expiresIn: expiresIn);
         } else {
           final current = _controller.text;
