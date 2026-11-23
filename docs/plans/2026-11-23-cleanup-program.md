@@ -35,7 +35,9 @@ Start with the `umbra-session-start` skill. End every session with `umbra-sessio
 ## 3. Hard rules (break one = stop and ask)
 
 - **Two kinds of change, never mixed:** a STRUCTURAL change (move, rename, split, delete proven-dead code) changes no behaviour. A BEHAVIOURAL change fixes a bug or race. Never in one commit, and preferably not in one PR.
-- **Structural proof:** the same test suite is green before and after, with the same test count. Splitting a file needs no test edits beyond imports.
+- **Structural proof:**
+  - A move, rename or split: the same suite is green before and after, with the same test count; no test edits beyond imports.
+  - A deletion of proven-dead code: the count drops by exactly the tests that covered the removed symbols, listed by name in the commit; every other test stays green and unchanged.
 - **"Dead" needs evidence:**
   - a tool flag (knip, `dart analyze` unused-element hints, a coverage hole);
   - AND no reference found by LSP find-references;
@@ -55,6 +57,7 @@ Start with the `umbra-session-start` skill. End every session with `umbra-sessio
   - `findings.md`: every finding, one row each;
   - `batches.md`: what is in each batch and its proof;
   - `metrics.md`: before/after sizes, counts, lint.
+- **Model class:** scouts and reviewers (the `code-review` subagents) run on the same model class as you, the lead; never a cheaper one for audit or review.
 - **Delegate the audit, never the decisions.** Use read-only `scout` agents, one per area (§6), in parallel. Each returns findings in the §5 format with file:symbol evidence.
   - Execution stays with you, or with one task agent per PR on disjoint files.
   - Subagents start blank in the main checkout: give them the ABSOLUTE worktree path, the traps for their area, and only their slice.
