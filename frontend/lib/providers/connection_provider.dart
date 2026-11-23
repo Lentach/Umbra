@@ -300,8 +300,10 @@ class ConnectionProvider extends ChangeNotifier {
       _contactStoreUnavailable != null && _contactStoreUnavailable != 'locked';
 
   /// The chat list's "try again" for [contactStoreFailed]. The E2E init of
-  /// this connect (run at transport connect) read the same store, so it
-  /// failed with it and is run again once the store is open. A tap while a
+  /// this connect (run at `socketReady`) read the same store, so it
+  /// failed with it and is run again once the store is open. Before
+  /// `socketReady` nothing is re-run: that event starts the init itself, and
+  /// one earlier would emit before the server finished authenticating. A tap while a
   /// retry runs joins it: a second open overtaking the first would clear
   /// the failure while the store is still closed.
   Future<void> retryContactStore() =>
@@ -315,7 +317,7 @@ class ConnectionProvider extends ChangeNotifier {
     await _reopenContactStore();
     final encryption = _encryptionProvider;
     if (_contactStore?.isOpen != true ||
-        !_isConnected ||
+        !_accountReady ||
         encryption == null ||
         encryption.isE2EReady) {
       return;

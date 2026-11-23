@@ -30,10 +30,22 @@ class _SilentSocket extends SocketService {
 }
 
 /// A transport that connects right after `connect` (as socket.io does, once
-/// the listeners are on) and never sends `socketReady`: the window between
-/// the connect's E2E init and the account socket.
+/// the listeners are on) and sends `socketReady` only when told to: the window
+/// between the transport connect and the server finishing its auth.
 class _ConnectedNotReadySocket extends _SilentSocket {
   void Function()? _onConnect;
+  final _ready = <void Function(dynamic)>[];
+  void serveReady() {
+    for (final h in List.of(_ready)) {
+      h(null);
+    }
+  }
+
+  @override
+  void on(String event, void Function(dynamic) callback) {
+    if (event == 'socketReady') _ready.add(callback);
+  }
+
   @override
   bool get isConnected => true;
   @override
@@ -46,10 +58,11 @@ class _ConnectedNotReadySocket extends _SilentSocket {
 /// E2E that never becomes ready; counts the retries it is asked for.
 class _UnreadyEncryption extends EncryptionProvider {
   int retries = 0;
+  int inits = 0;
   @override
   bool get isE2EReady => false;
   @override
-  Future<void> initializeE2E(int userId) async {}
+  Future<void> initializeE2E(int userId) async => inits++;
   @override
   Future<void> retryE2EInit() async => retries++;
 }
@@ -411,14 +424,16 @@ void main() {
   );
 
   test(
-    'a retry before socketReady still re-runs the E2E init it unblocked (A3)',
+    'a retry waits for socketReady: no init before the server authenticated, '
+    'one at ready, a re-run after it (A3)',
     () async {
       await seedSession();
       var fails = true;
       final encryption = _UnreadyEncryption();
       final convs = ConversationsProvider();
+      final socket = _ConnectedNotReadySocket();
       final connection =
-          ConnectionProvider(socketService: _ConnectedNotReadySocket())
+          ConnectionProvider(socketService: socket)
             ..setProviders(
               encryption: encryption,
               friends: FriendsProvider(),
@@ -443,12 +458,15 @@ void main() {
       await connection.retryContactStore();
 
       expect(connection.contactStoreFailed, isFalse);
-      expect(
-        encryption.retries,
-        1,
-        reason: "the connect's own init already failed on the closed store, "
-            'and socketReady does not run it again',
-      );
+      expect(encryption.retries, 0, reason: 'the server has not authenticated');
+      expect(encryption.inits, 0);
+
+      socket.serveReady();
+      await pumpEventQueue();
+      expect(encryption.inits, 1);
+
+      await connection.retryContactStore();
+      expect(encryption.retries, 1, reason: 'ready, store open, E2E still down');
     },
   );
 }

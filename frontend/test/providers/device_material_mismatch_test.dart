@@ -149,8 +149,8 @@ void main() {
       'strand the device (final-review P1)', () async {
     // The real §6.2 rebind and §5.1 link reconnect reuse the SAME provider
     // singleton: connect() sees isReconnect=true, clearAll does NOT run, and
-    // the transport-connect initializeE2E fires BEFORE socketReady delivers
-    // the freshly allocated id. The previously confirmed OLD id must not
+    // the `socketReady` handler confirms the freshly allocated id and THEN
+    // starts initializeE2E. The previously confirmed OLD id must not
     // TOFU-stamp the just-cleared slot, or the recovered/linked device is
     // stranded out of E2E by its own gate.
     final provider = buildProvider();
@@ -162,9 +162,8 @@ void main() {
     // Authorized re-homing: stamp cleared, then the reconnect sequence.
     await provider.encryptionService.clearMaterialDeviceStamp();
     provider.onConnect(true); // isReconnect — state deliberately preserved
-    await provider.initializeE2E(ownUserId); // transport connect, ready NOT yet in
-    await pumpEventQueue(times: 200);
-    provider.setOwnDeviceId(2); // socketReady with the fresh id
+    provider.setOwnDeviceId(2); // socketReady with the fresh id ...
+    await provider.initializeE2E(ownUserId); // ... then the init it starts
     await pumpEventQueue(times: 200);
 
     expect(provider.deviceMaterialMismatch, isFalse,
