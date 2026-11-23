@@ -21,6 +21,7 @@ import 'package:libsignal_protocol_dart/libsignal_protocol_dart.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../support/chat_seed.dart';
+import '../support/contact_seed.dart';
 
 /// The real store behind [EncryptionProvider]; only Signal and the device
 /// list round trip are faked.
@@ -295,6 +296,34 @@ void main() {
         },
         _conv(11, 3, 'carol'),
       ]);
+      await deliverWhile(hidden: true);
+      expect(posts, 1);
+    });
+
+    // Issue #274: a chat deleted on this device has no row, yet its record
+    // keeps the mute, and its next message is told before the row is back.
+    Future<void> chatTenDeletedHere({required bool muted}) async {
+      conversations.contactStore = await openContactStore([
+        contactRecord(
+          2,
+          'bob',
+          ContactState.friend,
+          chatId: 10,
+          settings: ContactSettings(muted: muted, chatHidden: true),
+        ),
+      ], resetPrefs: false);
+      seedConversations(conversations, [_conv(11, 3, 'carol')]);
+      expect(conversations.getConversationById(10), isNull);
+    }
+
+    test('a muted chat deleted here stays silent', () async {
+      await chatTenDeletedHere(muted: true);
+      await deliverWhile(hidden: true);
+      expect(posts, 0);
+    });
+
+    test('a chat deleted here that is not muted posts its card', () async {
+      await chatTenDeletedHere(muted: false);
       await deliverWhile(hidden: true);
       expect(posts, 1);
     });

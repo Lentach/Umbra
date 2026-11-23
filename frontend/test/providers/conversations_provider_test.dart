@@ -13,6 +13,7 @@ import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/services/contacts/contact_store.dart';
 import 'package:fireplace/services/encryption/content_kv.dart';
 import 'package:fireplace/services/push_sw_channel_stub.dart';
+import 'package:fireplace/services/wake_up_mute.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -651,6 +652,232 @@ void main() {
         chats.conversations.firstWhere((c) => c.userTwo.id == 2).userTwo.avatar,
         photo(5),
       );
+    });
+  });
+
+  // Issue #274: a chat deleted on this device is hidden, not gone, and its
+  // record still holds the mute. Its next message is told to the user before
+  // the chat is back in the list, so the mute must be read from the record.
+  group('ConversationsProvider mute of a chat deleted here (#274)', () {
+    late _RecordingPushSwChannel channel;
+
+    Future<(ConversationsProvider, int)> hiddenChat({
+      required bool muted,
+      DateTime? mutedUntil,
+    }) async {
+      final store = await openContactStore([
+        contactRecord(
+          2,
+          'bob',
+          ContactState.friend,
+          box: true,
+          settings: ContactSettings(
+            muted: muted,
+            mutedUntil: mutedUntil,
+            chatHidden: true,
+          ),
+        ),
+      ]);
+      channel = _RecordingPushSwChannel();
+      final chats = ConversationsProvider(pushSwChannel: channel)
+        ..contactStore = store
+        ..setCurrentUserId(store.userId!)
+        ..hydrateFromStore()
+        ..setClientVisible(false);
+      expect(chats.conversations, isEmpty, reason: 'the chat is hidden');
+      return (chats, store.byUserId(2)!.chatId!);
+    }
+
+    List<Map<String, Object?>> cards() =>
+        channel.messages.where((m) => m['type'] == 'local-card').toList();
+
+    test('a muted hidden chat posts no card', () async {
+      final (chats, chatId) = await hiddenChat(muted: true);
+
+      chats.postHiddenArrivalCard(chatId);
+
+      expect(cards(), isEmpty);
+    });
+
+    test('a hidden chat whose mute ran out posts its card', () async {
+      final (chats, chatId) = await hiddenChat(
+        muted: true,
+        mutedUntil: DateTime.now().subtract(const Duration(hours: 1)),
+      );
+
+      chats.postHiddenArrivalCard(chatId);
+
+      expect(cards(), hasLength(1));
+    });
+
+    test('a hidden chat that is not muted posts its card', () async {
+      final (chats, chatId) = await hiddenChat(muted: false);
+
+      chats.postHiddenArrivalCard(chatId);
+
+      expect(cards(), hasLength(1));
+    });
+  });
+
+  // Decision 149: the closed Android app is told only whether EVERY chat is
+  // muted (the FCM wake-up names none).
+  group('ConversationsProvider wake-up mute (decision 149)', () {
+    late List<String?> written;
+
+    ContactRecord peer(int id, {bool muted = false, bool hidden = false}) =>
+        contactRecord(
+          id,
+          'peer$id',
+          ContactState.friend,
+          box: true,
+          settings: ContactSettings(muted: muted, chatHidden: hidden),
+        );
+
+    Future<ConversationsProvider> over(List<ContactRecord> records) async {
+      final store = await openContactStore(records);
+      written = [];
+      return ConversationsProvider(
+          wakeUpMute: (value) async => written.add(value),
+        )
+        ..contactStore = store
+        ..setCurrentUserId(store.userId!)
+        ..hydrateFromStore();
+    }
+
+    test('every chat muted is written as forever', () async {
+      await over([peer(2, muted: true), peer(3, muted: true)]);
+
+      expect(written, [kWakeUpMutedForever]);
+    });
+
+    test('one audible chat writes "not all muted"', () async {
+      await over([peer(2, muted: true), peer(3)]);
+
+      expect(written, [null]);
+    });
+
+    test('muting the last audible chat silences; un-muting one ends it',
+        () async {
+      final chats = await over([peer(2, muted: true), peer(3)]);
+      final carol = chats.conversations.firstWhere((c) => c.userTwo.id == 3);
+
+      chats.setConversationMute(carol.id, 'always');
+      expect(written.last, kWakeUpMutedForever);
+
+      chats.setConversationMute(carol.id, 'off');
+      expect(written.last, isNull);
+    });
+
+    test('a chat deleted here still counts, by the mute its record keeps',
+        () async {
+      await over([peer(2, muted: true), peer(3, muted: true, hidden: true)]);
+      expect(written, [kWakeUpMutedForever]);
+
+      await over([peer(2, muted: true), peer(3, hidden: true)]);
+      expect(written, [null]);
+    });
+
+    test('the same answer is written once', () async {
+      final chats = await over([peer(2, muted: true)]);
+
+      chats
+        ..updateUnreadCount(chats.conversations.single.id, 3)
+        ..refreshChats();
+
+      expect(written, [kWakeUpMutedForever]);
+    });
+
+    test('logout clears it', () async {
+      final chats = await over([peer(2, muted: true)]);
+
+      chats.clearAll();
+
+      expect(written, [kWakeUpMutedForever, null]);
+    });
+
+    test('a session whose store is closed writes nothing: what the last '
+        'open session left stands', () {
+      written = [];
+      ConversationsProvider(wakeUpMute: (value) async => written.add(value))
+        ..setCurrentUserId(1)
+        ..hydrateFromStore()
+        ..updateUnreadCount(10, 1);
+
+      expect(written, isEmpty);
+    });
+
+    // A request we sent holds a queue with its own push notifier: the
+    // friend's first messages after an accept arrive on it while the app is
+    // closed, and that chat is not muted.
+    test('a pending request that holds a queue keeps wake-ups audible, and '
+        'is seen when the app goes to the background', () async {
+      final chats = await over([peer(2, muted: true)]);
+      expect(written, [kWakeUpMutedForever]);
+
+      await putContacts(chats.contactStore!, [
+        contactRecord(5, 'dave', ContactState.pendingOut, box: true).copyWith(
+          queues: const [
+            ContactQueue(
+              rid: 'r',
+              sid: 's',
+              nid: 'n',
+              authPriv: 'a',
+              sealPriv: 'sp',
+              sealPub: 'p',
+            ),
+          ],
+        ),
+      ]);
+      // Sending a request tells the friends list, not this provider; leaving
+      // the app is the moment the answer must be right.
+      chats.setClientVisible(false);
+
+      expect(written, [kWakeUpMutedForever, null]);
+    });
+
+    test('a blocked contact that still holds a queue does not count',
+        () async {
+      await over([
+        peer(2, muted: true),
+        contactRecord(6, 'eve', ContactState.blocked, box: true).copyWith(
+          queues: const [
+            ContactQueue(
+              rid: 'r6',
+              sid: 's6',
+              nid: 'n6',
+              authPriv: 'a',
+              sealPriv: 'sp',
+              sealPub: 'p',
+            ),
+          ],
+        ),
+      ]);
+
+      expect(written, [kWakeUpMutedForever]);
+    });
+
+    test('a write that failed is tried again on the next change', () async {
+      final store = await openContactStore([peer(2, muted: true)]);
+      final attempts = <String?>[];
+      var fail = true;
+      final chats =
+          ConversationsProvider(
+              wakeUpMute: (value) async {
+                attempts.add(value);
+                if (fail) throw StateError('prefs refused');
+              },
+            )
+            ..contactStore = store
+            ..setCurrentUserId(store.userId!)
+            ..hydrateFromStore();
+      await Future<void>.delayed(Duration.zero);
+      expect(attempts, [kWakeUpMutedForever]);
+
+      fail = false;
+      chats.updateUnreadCount(chats.conversations.single.id, 1);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(attempts, [kWakeUpMutedForever, kWakeUpMutedForever]);
     });
   });
 }

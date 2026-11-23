@@ -2495,7 +2495,7 @@ abstract class AppLocalizations {
   /// No description provided for @snackbarChatHistoryDeleted.
   ///
   /// In pl, this message translates to:
-  /// **'Czat usunięty u obu stron'**
+  /// **'Czat usunięty na tym urządzeniu'**
   String get snackbarChatHistoryDeleted;
 
   /// No description provided for @snackbarFailedToSendImage.

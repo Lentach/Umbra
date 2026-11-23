@@ -637,6 +637,54 @@ void main() {
     },
   );
 
+  // Mutation: `friendHeard` checks only that a record exists, not that it is
+  // a friend's.
+  for (final state in [ContactState.blocked, ContactState.former]) {
+    test(
+      'a ${state.name} contact that still holds our queue and is heard from '
+      'is not handed it again: its handoff stamp stays',
+      () async {
+        await a.start();
+        await b.start();
+        b.deaf = true;
+        a.session.runPass();
+        await settle();
+        final toB = b.store.requestQueue!.sid;
+        int handoffs() => box.sent.where((sid) => sid == toB).length;
+        expect(handoffs(), 1);
+
+        // A later connect that handed nothing: a friend heard now would be
+        // handed the queue again at once.
+        a.clock = a.clock.add(const Duration(hours: 1));
+        a.session
+          ..accountLost()
+          ..accountReady(2)
+          ..e2eReady();
+        await settle();
+        expect(handoffs(), 1);
+        final handed = a.friend.queues.single.handedAt[3];
+        expect(handed, isNotNull);
+
+        await a.store.update(5, (c) => c!.copyWith(state: state));
+        a.session.friendHeard(5, 3);
+        await settle();
+
+        expect(a.friend.state, state);
+        expect(a.friend.queues.single.handedAt[3], handed);
+        expect(handoffs(), 1);
+
+        // The control: nothing but the state held it back.
+        await a.store.update(
+          5,
+          (c) => c!.copyWith(state: ContactState.friend),
+        );
+        a.session.friendHeard(5, 3);
+        await settle();
+        expect(handoffs(), 2);
+      },
+    );
+  }
+
   test(
     'a handoff goes out only once its new queue is subscribed: a subscribe '
     'that is rate limited holds every send, and the pass runs again after '

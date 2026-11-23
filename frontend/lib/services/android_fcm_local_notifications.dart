@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config/app_config.dart';
 import 'auth_token_store.dart';
+import 'wake_up_mute.dart';
 import 'wake_up_revocation_check.dart';
 
 
@@ -72,8 +73,23 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
   // The box's FCM wake-up is `{type:'new_message'}` and nothing else (E9).
   if (message.data['type'] != 'new_message') return;
-  await _showWakeUpCard(_backgroundIsolateNotificationsPlugin);
+  // Decision 149: the wake-up names no chat, so it is silent only while
+  // every chat of this install is muted. A read that fails shows the card.
+  if (!await _everyChatMuted()) {
+    await _showWakeUpCard(_backgroundIsolateNotificationsPlugin);
+  }
   await _endWakeUpsIfRevoked();
+}
+
+/// Whether the main isolate last left "every chat is muted" and it still
+/// holds now (decision 149). Unreadable prefs count as not muted.
+Future<bool> _everyChatMuted() async {
+  try {
+    return wakeUpIsSilenced(await readWakeUpMuteFresh(), DateTime.now());
+  } on Object catch (e) {
+    debugPrint('[wake-up] mute read failed: ${e.runtimeType}');
+    return false;
+  }
 }
 
 /// Prefs-backed pacing state of [RevokedWakeUpCheck]. This isolate keeps its

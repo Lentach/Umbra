@@ -15,6 +15,7 @@ import '../services/notification_cleaner_stub.dart'
     if (dart.library.io) '../services/notification_cleaner_io.dart';
 import '../services/push_sw_channel_stub.dart'
     if (dart.library.html) '../services/push_sw_channel_web.dart';
+import '../services/wake_up_mute.dart';
 
 /// ConversationsProvider — owns conversation list state, active conversation,
 /// unread counts, and pending-open navigation pattern.
@@ -226,9 +227,69 @@ class ConversationsProvider extends ChangeNotifier {
   final PushSwChannel _pushSwChannel;
 
   /// [pushSwChannel] is injectable for tests; production uses the real push-SW
-  /// channel (web) or a no-op (other platforms).
-  ConversationsProvider({PushSwChannel? pushSwChannel})
-    : _pushSwChannel = pushSwChannel ?? createPushSwChannel();
+  /// channel (web) or a no-op (other platforms). [wakeUpMute] is where the
+  /// Android app leaves "every chat is muted" for its FCM wake-up handler
+  /// (decision 149); absent on the other platforms.
+  ConversationsProvider({
+    PushSwChannel? pushSwChannel,
+    WakeUpMuteWriter? wakeUpMute,
+  }) : _pushSwChannel = pushSwChannel ?? createPushSwChannel(),
+       _wakeUpMute = wakeUpMute;
+
+  final WakeUpMuteWriter? _wakeUpMute;
+
+  /// What [_wakeUpMute] was last told, once it was told anything.
+  String? _wakeUpMuteWritten;
+  bool _wakeUpMuteKnown = false;
+
+  /// Every change of the chats or their mutes ends in a notify, so this is
+  /// the one place the wake-up handler's answer is kept current.
+  @override
+  void notifyListeners() {
+    _syncWakeUpMute();
+    super.notifyListeners();
+  }
+
+  /// Tells [_wakeUpMute] until when every chat is muted, when that changed.
+  /// Counted is every contact whose queues can wake this phone (the ones
+  /// that get a push notifier: not blocked, not former): a chat by its mute
+  /// (a chat deleted here by the mute its record keeps), and a request
+  /// still pending as NOT muted, because the friend's first messages after
+  /// an accept arrive on its queue. With the store closed (locked, not yet
+  /// open) nothing is known, so what the last open session wrote stands.
+  void _syncWakeUpMute() {
+    final store = _store;
+    if (_wakeUpMute == null || store == null) return;
+    final shown = {for (final c in _conversations) c.id: c};
+    final value = allChatsMutedUntil([
+      for (final r in store.all)
+        if (r.state == ContactState.friend && r.chatId != null)
+          if (shown[r.chatId] case final row?)
+            (muted: row.muted, until: row.mutedUntil)
+          else
+            (muted: r.settings.muted, until: r.settings.mutedUntil)
+        else if (r.state != ContactState.blocked &&
+            r.state != ContactState.former &&
+            r.queues.isNotEmpty)
+          (muted: false, until: null),
+    ], DateTime.now());
+    _writeWakeUpMute(value);
+  }
+
+  void _writeWakeUpMute(String? value) {
+    final write = _wakeUpMute;
+    if (write == null) return;
+    if (_wakeUpMuteKnown && value == _wakeUpMuteWritten) return;
+    _wakeUpMuteKnown = true;
+    _wakeUpMuteWritten = value;
+    unawaited(
+      write(value).catchError((Object _) {
+        // Not stored: the next change, or the next trip to the background,
+        // writes again instead of trusting what never landed.
+        _wakeUpMuteKnown = false;
+      }),
+    );
+  }
 
   /// Foreground truth for gating client-side effects (e.g. read receipts).
   bool get isClientVisible => _clientVisible;
@@ -239,13 +300,35 @@ class ConversationsProvider extends ChangeNotifier {
     _clientVisible = visible;
     if (visible) _hiddenArrivals.clear();
     _postActiveConversationToSw();
-    if (visible) onClientVisible?.call();
+    if (visible) {
+      onClientVisible?.call();
+    } else {
+      // The wake-up handler only matters once the app is out of sight, and a
+      // request sent since the last notify changed the answer without one.
+      _syncWakeUpMute();
+    }
   }
 
   /// Box messages that reached this page per chat since it was last
   /// visible: the count a hidden app's card shows when the chat's own unread
   /// is not counting (the open chat's never is).
   final Map<int, int> _hiddenArrivals = {};
+
+  /// Whether notifications for [conversationId] are muted now. A shown chat
+  /// answers from its row (a setting whose store write is still queued); a
+  /// chat deleted on this device has no row, yet its record keeps the mute
+  /// and its next message is told before the chat shows again (issue #274).
+  bool isChatMuted(int conversationId) {
+    final shown = getConversationById(conversationId);
+    if (shown != null) return shown.isNotificationMuted;
+    final settings = _store?.all
+        .where((r) => r.chatId == conversationId)
+        .firstOrNull
+        ?.settings;
+    if (settings == null || !settings.muted) return false;
+    final until = settings.mutedUntil;
+    return until == null || until.isAfter(DateTime.now());
+  }
 
   /// A box message for [conversationId] reached this page while it is
   /// HIDDEN (owner decision 76): the socket is still alive, so the box sent
@@ -256,9 +339,7 @@ class ConversationsProvider extends ChangeNotifier {
   /// visible (decision 80: badge only).
   void postHiddenArrivalCard(int conversationId) {
     if (_clientVisible) return;
-    if (getConversationById(conversationId)?.isNotificationMuted ?? false) {
-      return;
-    }
+    if (isChatMuted(conversationId)) return;
     final arrived = (_hiddenArrivals[conversationId] ?? 0) + 1;
     _hiddenArrivals[conversationId] = arrived;
     final unread = getUnreadCount(conversationId);
@@ -868,6 +949,9 @@ class ConversationsProvider extends ChangeNotifier {
     _hydrated = false;
     // Clear all push notifications on logout.
     _notificationCleaner.sweepNotificationsKeepUnread(const {}, 0);
+    // No account, no chats: the next account's wake-ups are not silenced by
+    // this one's mutes.
+    _writeWakeUpMute(null);
     notifyListeners();
     _postActiveConversationToSw();
   }

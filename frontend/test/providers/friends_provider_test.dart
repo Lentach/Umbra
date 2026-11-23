@@ -580,6 +580,61 @@ void main() {
         });
       });
 
+      // Mutation: `_end` sends a block of a pending box request down the
+      // local path, or an unfriend of one over the box.
+      group('a request pending over the box', () {
+        const queue = ContactQueue(
+          rid: 'r',
+          sid: 's',
+          nid: 'n',
+          authPriv: 'a',
+          sealPriv: 'sp',
+          sealPub: 'p',
+        );
+
+        for (final state in [ContactState.pendingIn, ContactState.pendingOut]) {
+          test('a block of a ${state.name} box request ends over the box: the '
+              'record and the queue it holds are not rewritten here', () async {
+            await seed([record(8, state).copyWith(queues: const [queue])]);
+            final ended = <(int, bool)>[];
+            final friends = provider()
+              ..boxEndFriendship = ((userId, {required block}) async =>
+                  ended.add((userId, block)));
+
+            expect(await friends.blockUser(8), isTrue);
+            await store.settled;
+
+            expect(ended, [(8, true)]);
+            // The box end owns the record: the local fallback would turn it
+            // `blocked` and drop the queue, whose auth key only it holds.
+            final kept = store.byUserId(8);
+            expect(kept?.state, state);
+            expect(kept?.queues.map((q) => q.rid), ['r']);
+            expect(kept?.boxOrigin, isNotNull);
+            expect(events(), isEmpty);
+          });
+
+          test('an unfriend of a ${state.name} box request is local: the '
+              'record goes, nothing ends over the box', () async {
+            await seed([record(8, state).copyWith(queues: const [queue])]);
+            final ended = <(int, bool)>[];
+            final purged = <int>[];
+            final friends = provider()
+              ..boxEndFriendship = ((userId, {required block}) async =>
+                  ended.add((userId, block)))
+              ..onRemoveConversationsForUser = purged.add;
+
+            expect(await friends.unfriend(8), isTrue);
+            await store.settled;
+
+            expect(ended, isEmpty);
+            expect(store.byUserId(8), isNull);
+            expect(purged, [8]);
+            expect(events(), isEmpty);
+          });
+        }
+      });
+
       test('unblocking a box-blocked contact deletes it locally', () async {
         await seed([record(10, ContactState.blocked)]);
         final friends = provider()..unblockUser(10);
