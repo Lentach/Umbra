@@ -219,6 +219,7 @@ extension MessagingFirstContact on MessagingProvider {
     BoxFriendLink friends,
     int userId,
   ) async {
+    await _crossingsInFlight[userId];
     if (!_boxPending(friends.contactOf(userId), ContactState.pendingOut)) {
       return;
     }
@@ -467,6 +468,27 @@ extension MessagingFirstContact on MessagingProvider {
   /// request built counts as asked, so a crossing PreKey replaces it (item
   /// 5's rule, decision 49).
   Future<bool> _takeCrossedRequest(
+    BoxFirstContactLink link,
+    EncryptionProvider enc,
+    BoxInboxEntry entry,
+    String signal,
+  ) async {
+    // Registered before the first await: a send of ours failing meanwhile
+    // waits for this accept instead of retiring the queue it is making.
+    final user = entry.peerUserId;
+    final done = Completer<void>();
+    _crossingsInFlight[user] = done.future;
+    try {
+      return await _finishCrossedRequest(link, enc, entry, signal);
+    } finally {
+      if (identical(_crossingsInFlight[user], done.future)) {
+        _crossingsInFlight.remove(user)?.ignore();
+      }
+      done.complete();
+    }
+  }
+
+  Future<bool> _finishCrossedRequest(
     BoxFirstContactLink link,
     EncryptionProvider enc,
     BoxInboxEntry entry,
