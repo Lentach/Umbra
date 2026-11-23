@@ -73,12 +73,18 @@ class _Encryption extends EncryptionProvider {
     sessions.add((recipientId, deviceId));
   }
 
+  /// Every (user, device) a frame was sealed to, in order.
+  final List<(int, int)> sealedTo = [];
+
   @override
   Future<String> encrypt(
     int recipientId,
     String plaintext, {
     int deviceId = 1,
-  }) async => '3:${base64Encode(utf8.encode(plaintext))}';
+  }) async {
+    sealedTo.add((recipientId, deviceId));
+    return '3:${base64Encode(utf8.encode(plaintext))}';
+  }
 
   @override
   Future<String> decrypt(
@@ -104,6 +110,9 @@ class _Outbox implements BoxOutbox {
   final Map<int, ContactOutbound> siblings = {};
   final List<(ContactOutbound, BoxFrame)> delivered = [];
   final List<BoxSendMode?> modes = [];
+
+  /// What a `deliver` to a sid answers; `taken` for one not named.
+  final Map<String, BoxSendOutcome> answers = {};
   int _next = kFirstLocalMessageId + 500;
 
   @override
@@ -127,7 +136,7 @@ class _Outbox implements BoxOutbox {
   }) async {
     delivered.add((to, BoxFrame.decode(body)!));
     modes.add(mode);
-    return BoxSendOutcome.taken;
+    return answers[to.sid] ?? BoxSendOutcome.taken;
   }
 
   @override
@@ -545,6 +554,38 @@ void main() {
 
       expect(outbox.delivered, isEmpty);
     });
+
+    // Mutation: `_sendRelays` seals to a paused sibling.
+    test(
+      'a sibling whose self-queue answered full is paused: the next message '
+      'is neither sealed nor relayed to it, while another sibling still '
+      'gets it (E93a)',
+      () async {
+        encryption.lists[1] = _enrolled([1, 3, 4]);
+        outbox.siblings[4] = _selfQueue(4);
+        encryption.sessions
+          ..add((1, 3))
+          ..add((1, 4));
+        outbox.answers['self-3'] = BoxSendOutcome.full;
+
+        expect(await fromBob(bobSays('first', ad: [1])), isTrue);
+        expect(
+          outbox.delivered.map((d) => d.$1.sid),
+          unorderedEquals(['self-3', 'self-4']),
+          reason: 'the relay that found the queue full',
+        );
+        outbox.delivered.clear();
+        encryption.sealedTo.clear();
+
+        expect(
+          await fromBob(bobSays('second', wire: 'wire-2', ad: [1])),
+          isTrue,
+        );
+
+        expect(outbox.delivered.map((d) => d.$1.sid), ['self-4']);
+        expect(encryption.sealedTo, [(1, 4)]);
+      },
+    );
 
     test(
       "an action is relayed like a message; an edit of someone else's "
