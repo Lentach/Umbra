@@ -144,10 +144,26 @@ class BoxInbox {
     return run;
   }
 
+  /// One delivery through [_route]. A step that THROWS (the seal, the signer,
+  /// the journal's read) leaves it held, exactly as a refused write does: it
+  /// is neither journaled nor acked, so dropping it here would lose it until
+  /// the box's next resubscribe, and hold a slot of the socket window until
+  /// then.
   Future<void> _intake(BoxDelivery delivery) async {
-    final rid = boxB64(delivery.rid);
-    final slot = '$rid.${boxB64(delivery.id)}';
+    final slot = '${boxB64(delivery.rid)}.${boxB64(delivery.id)}';
     _held.remove(slot);
+    try {
+      await _route(delivery, slot);
+    } on Object catch (e) {
+      _held[slot] = delivery;
+      E2ePersistentDiag.record('BOX_INBOX_FAILED', {
+        'error': e.runtimeType.toString(),
+      });
+    }
+  }
+
+  Future<void> _route(BoxDelivery delivery, String slot) async {
+    final rid = boxB64(delivery.rid);
     if (!_store.isOpen) {
       _held[slot] = delivery;
       return;
