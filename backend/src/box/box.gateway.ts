@@ -181,7 +181,10 @@ export class BoxGateway implements OnGatewayDisconnect {
     );
     if (fits.length > 0) {
       await this.box.markSubscribed(fits);
-      over.push(...this.delivery.attach(client, fits));
+      // A socket that dropped during the awaits above was already detached
+      // (nothing then); attaching it now would leave a dead owner that makes
+      // every later send skip the wake-up.
+      if (client.connected) over.push(...this.delivery.attach(client, fits));
     }
     const overRids = new Set(over.map((rid) => rid.toString('base64url')));
     const refused: { rid: string; code: 'auth_failed' | 'limit' }[] = [];

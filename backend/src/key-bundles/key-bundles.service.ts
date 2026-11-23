@@ -685,8 +685,11 @@ export class KeyBundlesService {
       };
     }
 
-    // Atomic claim: UPDATE ... WHERE id = (SELECT id ... LIMIT 1) RETURNING *
-    // Prevents a race where two concurrent calls serve the same OTP.
+    // Atomic claim: UPDATE ... WHERE id = (SELECT id ... LIMIT 1 FOR UPDATE
+    // SKIP LOCKED) RETURNING *. Without the row lock, two concurrent calls both
+    // pick row X, the second UPDATE waits on it and then (READ COMMITTED)
+    // re-checks only `id = X`, so both are served the same OTP. With it, the
+    // loser skips X and takes the next unused row (or none).
     //
     // The "identityPublicKey" = $2 filter is the DURABLE fix for the stale-OTP
     // bad-MAC wave (2026-07-11): only claim OTPs minted under the CURRENT
@@ -712,6 +715,7 @@ export class KeyBundlesService {
            AND "deviceId" = $3
          ORDER BY id ASC
          LIMIT 1
+         FOR UPDATE SKIP LOCKED
        )
        RETURNING id, "keyId", "publicKey"`,
       [userId, bundle.identityPublicKey, deviceId],
