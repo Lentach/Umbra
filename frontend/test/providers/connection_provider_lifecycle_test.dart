@@ -86,6 +86,11 @@ class _Encryption extends EncryptionProvider {
     log.add('encryption.onConnect($isReconnect)');
     super.onConnect(isReconnect);
   }
+
+  @override
+  Future<void> initializeE2E(int userId) async {
+    log.add('encryption.initializeE2E($userId)');
+  }
 }
 
 class _Friends extends FriendsProvider {
@@ -377,6 +382,50 @@ void main() {
       await pumpEventQueue();
 
       expect(doomedSocket.connectTokens, isEmpty);
+    });
+  });
+
+  // CONN-06. Mutation: call `initializeE2E` from `_onSocketTransportConnect`
+  // again instead of from the `socketReady` handler.
+  group('E2E init waits for the server to finish authenticating', () {
+    List<String> inits() =>
+        log.where((e) => e.startsWith('encryption.initializeE2E')).toList();
+
+    test('a transport connect emits nothing; socketReady starts it once', () {
+      fakeAsync((async) {
+        wire();
+        unawaited(connection.connect(1, 'token', _url));
+        async.flushMicrotasks();
+
+        // The server binds its handlers at connect but sets the user only
+        // after its JWT, user and revocation lookups: an event emitted now is
+        // dropped there.
+        socket.transportConnect();
+        async.flushMicrotasks();
+        expect(inits(), isEmpty, reason: 'auth is not finished');
+
+        socket.serve('socketReady');
+        async.flushMicrotasks();
+        expect(inits(), ['encryption.initializeE2E(1)']);
+        connection.disconnect(isLogout: true);
+      });
+    });
+
+    test('a link that never turns ready is dropped by the watchdog without '
+        'ever starting E2E', () {
+      fakeAsync((async) {
+        wire();
+        unawaited(connection.connect(1, 'token', _url));
+        async.flushMicrotasks();
+        socket.transportConnect();
+        final dropped = socket.disconnectCalls;
+
+        async.elapse(const Duration(seconds: 11));
+
+        expect(socket.disconnectCalls, dropped + 1);
+        expect(inits(), isEmpty);
+        connection.disconnect(isLogout: true);
+      });
     });
   });
 
