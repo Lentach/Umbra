@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:fireplace/l10n/app_localizations.dart';
+import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/providers/auth_provider.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
@@ -201,6 +202,25 @@ class _Outbox implements BoxOutbox {
   }
 }
 
+/// A provider whose video send THROWS instead of answering false: the
+/// optimistic video row's notification blows up, once.
+class _ThrowingVideoMessaging extends MessagingProvider {
+  bool _thrown = false;
+
+  @override
+  void notifyListeners() {
+    final rows = loadedMessagesForTest;
+    if (!_thrown &&
+        rows.isNotEmpty &&
+        rows.last.messageType == MessageType.video &&
+        rows.last.deliveryStatus == MessageDeliveryStatus.sending) {
+      _thrown = true;
+      throw StateError('video send blew up');
+    }
+    super.notifyListeners();
+  }
+}
+
 Future<
   ({
     GlobalKey<ChatInputBarState> key,
@@ -209,7 +229,11 @@ Future<
     ConversationsProvider convs,
   })
 >
-pumpComposer(WidgetTester tester, {Object? throwOnUpload}) async {
+pumpComposer(
+  WidgetTester tester, {
+  Object? throwOnUpload,
+  MessagingProvider? messagingOverride,
+}) async {
   final key = GlobalKey<ChatInputBarState>();
   // What the box was handed, in order: each message's kind, and its envelope.
   final emitted = <String>[];
@@ -245,7 +269,7 @@ pumpComposer(WidgetTester tester, {Object? throwOnUpload}) async {
   ]);
   convs.openConversation(10);
 
-  final messaging = MessagingProvider();
+  final messaging = messagingOverride ?? MessagingProvider();
   messaging.setConversationsProvider(convs);
   messaging.setCurrentUserId(1);
   messaging.setToken('tok');
@@ -889,6 +913,33 @@ void main() {
 
       expect(h.emitted, ['IMAGE']);
       expect(find.text('Unsupported file type'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
+    });
+
+    // UI-07: sendImage and sendDocument swallow a throw and toast; a video
+    // that threw used to end the whole batch without a word.
+    testWidgets('a video whose send throws says so and the rest still go', (
+      tester,
+    ) async {
+      final h = await pumpComposer(
+        tester,
+        messagingOverride: _ThrowingVideoMessaging(),
+      );
+
+      await tester.runAsync(
+        () => pick(h, [
+          PickedAttachment(
+            name: 'clip.mp4',
+            readBytes: () async => Uint8List(64),
+          ),
+          photo('after.jpg'),
+        ]),
+      );
+      await tester.pump();
+
+      expect(h.emitted, ['IMAGE']);
+      expect(find.text('Upload failed'), findsOneWidget);
+      expect(tester.takeException(), isNull);
       await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
     });
   });
