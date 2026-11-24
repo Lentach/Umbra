@@ -3288,6 +3288,47 @@ class EncryptionService {
     DateTime? expiresAt,
     int? disappearAfterSeconds,
     WireKey? wire,
+  }) {
+    // ENC-11: the guards below read the held record and the write lands one
+    // or more awaits later (the Android store commits to its view only after
+    // the seal + put), so two saves of one id used to each guard against a
+    // record the other had not yet written. One chain per id, in call order;
+    // a failure never poisons it ([_saveDecryptedContent] swallows its own).
+    final userId = _userId;
+    if (userId == null) return Future<void>.value();
+    final chainKey = _decryptedContentKey(userId, id);
+    final tail = _decryptedSaveTails[chainKey] ?? Future<void>.value();
+    final run = tail.then(
+      (_) => _saveDecryptedContent(
+        id,
+        data,
+        conversationId: conversationId,
+        createdAt: createdAt,
+        expiresAt: expiresAt,
+        disappearAfterSeconds: disappearAfterSeconds,
+        wire: wire,
+      ),
+    );
+    _decryptedSaveTails[chainKey] = run;
+    return run.whenComplete(() {
+      if (identical(_decryptedSaveTails[chainKey], run)) {
+        _decryptedSaveTails.remove(chainKey);
+      }
+    });
+  }
+
+  /// In-flight [saveDecryptedContent] tail per record key (this engine only;
+  /// another web tab is a separate heap and is not covered here).
+  final Map<String, Future<void>> _decryptedSaveTails = {};
+
+  Future<void> _saveDecryptedContent(
+    int id,
+    Map<String, dynamic> data, {
+    int? conversationId,
+    DateTime? createdAt,
+    DateTime? expiresAt,
+    int? disappearAfterSeconds,
+    WireKey? wire,
   }) async {
     final userId = _userId;
     if (userId == null) return;

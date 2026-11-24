@@ -4,7 +4,48 @@ import 'package:libsignal_protocol_dart/libsignal_protocol_dart.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:fireplace/services/encryption/content_kv.dart';
 import 'package:fireplace/services/encryption_service.dart';
+
+/// [_inner] with the commit behaviour of the Android `NativeContentStore`: a
+/// write reaches the readable view only AFTER an await (seal + SQLCipher put),
+/// so a read-modify-write that starts meanwhile still reads the old record.
+class _CommitAfterAwaitKv implements ContentKv {
+  _CommitAfterAwaitKv(this._inner);
+
+  final ContentKv _inner;
+
+  @override
+  Future<bool> setString(String key, String value) async {
+    await Future<void>.delayed(Duration.zero);
+    return _inner.setString(key, value);
+  }
+
+  @override
+  Future<void> reload() => _inner.reload();
+
+  @override
+  Future<Map<String, Object>?> authoritativeSnapshot() =>
+      _inner.authoritativeSnapshot();
+
+  @override
+  String? getString(String key) => _inner.getString(key);
+
+  @override
+  int? getInt(String key) => _inner.getInt(key);
+
+  @override
+  bool containsKey(String key) => _inner.containsKey(key);
+
+  @override
+  Set<String> getKeys() => _inner.getKeys();
+
+  @override
+  Future<bool> setInt(String key, int value) => _inner.setInt(key, value);
+
+  @override
+  Future<bool> remove(String key) => _inner.remove(key);
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -118,6 +159,31 @@ void main() {
       expect(result!['mediaKey'], 'KEYbase64');
       expect(result['mediaIv'], 'IVbase64');
       expect(result['messageType'], 'VOICE');
+      expect(result['content'], isNot('[Decryption failed]'));
+    });
+
+    test('ENC-11: a [Decryption failed] write racing the first keyed write '
+        'never clobbers the media keys', () async {
+      // Fail-before: both saves read "no record yet" before either commit
+      // reached the view, so the keyless placeholder passed both guards and,
+      // landing second, replaced the only copy of the media keys.
+      service.debugSetContentKv(_CommitAfterAwaitKv(await service.contentKv));
+      final keyed = service.saveDecryptedContent(2101, {
+        'content': '',
+        'messageType': 'VOICE',
+        'mediaUrl': 'https://x/media/msgs/a.bin',
+        'mediaKey': 'KEYbase64',
+        'mediaIv': 'IVbase64',
+      });
+      final failed = service.saveDecryptedContent(2101, {
+        'content': '[Decryption failed]',
+      });
+      await Future.wait([keyed, failed]);
+
+      final result = await service.getDecryptedContent(2101);
+      expect(result, isNotNull);
+      expect(result!['mediaKey'], 'KEYbase64');
+      expect(result['mediaIv'], 'IVbase64');
       expect(result['content'], isNot('[Decryption failed]'));
     });
 
