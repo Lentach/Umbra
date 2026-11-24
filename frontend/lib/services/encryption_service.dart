@@ -1407,6 +1407,9 @@ class EncryptionService {
       // it: uploaded under another it would publish the wrong identity.
       _keysForUpload = null;
       needsKeyUpload = false;
+      // Ids buffered for the previous account would be flushed under this one.
+      // Dropping them only restores the old behaviour for A (attempt decrypt).
+      _pendingLedgerIds.clear();
     }
     _userId = userId;
     final p = 'e2e_${userId}_'; // per-user storage key prefix
