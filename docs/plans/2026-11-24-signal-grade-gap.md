@@ -191,6 +191,17 @@ Order that makes an audit worth its money: (1) `SECURITY.md`, licence, CodeQL fo
 - **Q7. Reproducible builds:** start with §4.4 step 1 (CI-built APK + published checksum)?
 - **Q8. Small items that need only a yes:** CodeQL for TypeScript; `SECURITY.md` with a contact address (which address?); B7 legacy-row count and re-enrol prompt.
 
+### 6.1 Answers (owner, 2026-11-24)
+
+- **Q1:** W-a. Retire the PWA first, then B6; web is linked-only in the interim.
+- **Q2:** Apple Developer enrolment stays on hold, so W-a and B6 stay on hold with it. The §1.5 step is approved as the next work (PATCHES.md, pinned upstream commit, known-answer tests).
+- **Q3:** B1/B2 stay dropped. The threat model is to say in plain words that an active server at first contact is out of scope.
+- **Q4:** E143g is recorded as accepted until B6 forces a re-key design.
+- **Q5:** A lawyer first, before the Play listing. No licence file is added until then.
+- **Q6:** Full audit after B6; none now.
+- **Q7:** Yes: §4.4 step 1 (CI-built APK and a published checksum).
+- **Q8:** Yes to all three: CodeQL for TypeScript; `SECURITY.md` (contact address not given yet: still owed); B7 legacy-row count, re-enrol prompt, then removal of the legacy server branch.
+
 ## 7. Parked, not started (cleanup program §7)
 
 - **New app name and own domain:** open. Host is `fireplace.ignorelist.com`; the Play package is `com.fireplace.app`.
