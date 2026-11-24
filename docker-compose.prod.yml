@@ -92,10 +92,6 @@ services:
       WEB_PUSH_VAPID_PUBLIC_KEY: ${WEB_PUSH_VAPID_PUBLIC_KEY:?set WEB_PUSH_VAPID_PUBLIC_KEY in ~/fireplace/.env}
       WEB_PUSH_VAPID_PRIVATE_KEY: ${WEB_PUSH_VAPID_PRIVATE_KEY:?set WEB_PUSH_VAPID_PRIVATE_KEY in ~/fireplace/.env}
       WEB_PUSH_VAPID_SUBJECT: ${WEB_PUSH_VAPID_SUBJECT:-mailto:admin@example.com}
-      # Landing contact form: Web Push ping target (optional; unset = store-only)
-      CONTACT_NOTIFY_USER_ID: ${CONTACT_NOTIFY_USER_ID:-}
-      # Landing contact form: secret key guarding /contact/inbox (hex, >=32 chars)
-      CONTACT_INBOX_KEY: ${CONTACT_INBOX_KEY:-}
       APP_VERSION: ${APP_VERSION:-0.0.1}
       GIT_COMMIT: ${GIT_COMMIT:-unknown}
       BUILD_TIME: ${BUILD_TIME:-}
