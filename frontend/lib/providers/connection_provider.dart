@@ -1259,13 +1259,21 @@ class ConnectionProvider extends ChangeNotifier {
         await _encryptionProvider?.encryptionService.clearMaterialDeviceStamp();
         await onSessionRebound!(tokens);
         if (userId != null) {
+          // `immediate` takes exactly one generation; connect() returns
+          // quietly when a newer connect or a disconnect took another, and
+          // then no socket was opened by this call.
+          final ownGeneration = _connectGeneration + 1;
           await connect(
             userId,
             tokens['access_token'] as String,
             AppConfig.baseUrl,
             immediate: true,
           );
-          rebound = true;
+          if (_connectGeneration == ownGeneration) {
+            rebound = true;
+          } else {
+            E2ePersistentDiag.record('RESET_REBIND_SUPERSEDED', {});
+          }
         } else {
           // Adopted but NOT reconnected: the replenish this ack triggers would
           // ride whatever socket exists, which is a weaker form of the very
