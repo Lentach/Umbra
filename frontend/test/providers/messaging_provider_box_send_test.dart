@@ -1497,7 +1497,7 @@ void main() {
 
     test(
       'a refused upload (quota_exceeded, rate_limited) or no answer fails the '
-      'row for a retry: no frame, nothing emitted to the server (decisions 19, 31)',
+      'row for a retry: no frame, no sendMessage emit (decisions 19, 31)',
       () async {
         bob([1]);
         for (final answer in <BoxResult<BoxMediaRef>>[
