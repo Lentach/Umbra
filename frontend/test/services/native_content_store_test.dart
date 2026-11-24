@@ -12,6 +12,8 @@ import 'package:fireplace/services/encryption/content_kv.dart';
 import 'package:fireplace/services/encryption/native_content_store.dart';
 import 'package:fireplace/services/encryption/record_db.dart';
 
+import '../support/native_webcrypto.dart';
+
 /// Secure storage fake with the failure modes the store defends against:
 /// throwing enumeration (transient Keystore unavailability) and writes that
 /// silently drop (the armed-gate case).
@@ -499,12 +501,12 @@ void main() {
       final Uint8List? sealed;
       try {
         sealed = await cipher.seal(key, plain);
-      } catch (_) {
-        markTestSkipped('webcrypto native unavailable');
+      } catch (e) {
+        skipWithoutNativeWebcrypto(e);
         return;
       }
       if (sealed == null) {
-        markTestSkipped('webcrypto native unavailable');
+        skipWithoutNativeWebcrypto();
         return;
       }
       expect(utf8.decode((await cipher.unseal(key, sealed))!),

@@ -207,6 +207,13 @@ jobs:
           - leg: screens
             paths: test/screens test/main test/utils
 
+    # TD-10: a real-crypto test that finds no native webcrypto library FAILS here
+    # instead of reporting "skipped" (test/support/native_webcrypto.dart reads
+    # this). Set for every leg on purpose: a crypto test added outside `services`
+    # goes red until it moves, rather than skipping where nothing builds the library.
+    env:
+      REQUIRE_NATIVE_WEBCRYPTO: '1'
+
     defaults:
       run:
         working-directory: frontend
@@ -224,6 +231,37 @@ jobs:
 
       - name: Install Flutter dependencies
         run: flutter pub get
+
+      # Native webcrypto for the services leg (O-4). Until 2026-11-24 nothing
+      # built it, so 13 real AES-GCM / PBKDF2 round-trip tests reported "skipped"
+      # on every run anywhere and a green leg proved no crypto at all.
+      # `webcrypto:setup` compiles the BoringSSL sources vendored in the pub
+      # package with cmake + gcc (both on the runner image, nothing downloaded)
+      # into frontend/.dart_tool/webcrypto/. Only the .so is cached; the key
+      # carries the package version and the runner image, because a library
+      # built against another image's glibc may not load.
+      - name: Resolve webcrypto version
+        if: matrix.leg == 'services'
+        id: webcrypto
+        run: |
+          version=$(awk '/^  webcrypto:$/{f=1} f && /version:/{gsub(/"/,"",$2); print $2; exit}' pubspec.lock)
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "image=${ImageOS:-unknown}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore native webcrypto
+        if: matrix.leg == 'services'
+        id: webcrypto-cache
+        uses: actions/cache@v5
+        with:
+          path: frontend/.dart_tool/webcrypto/libwebcrypto.so
+          key: webcrypto-so-${{ runner.os }}-${{ runner.arch }}-${{ steps.webcrypto.outputs.image }}-${{ steps.webcrypto.outputs.version }}
+
+      - name: Build native webcrypto
+        if: matrix.leg == 'services' && steps.webcrypto-cache.outputs.cache-hit != 'true'
+        env:
+          CMAKE_BUILD_PARALLEL_LEVEL: 4
+        run: dart run webcrypto:setup && test -f .dart_tool/webcrypto/libwebcrypto.so
 
       # Log captured by redirect rather than `| tee` so the step's exit status is
       # Flutter's own and never depends on pipefail being set.

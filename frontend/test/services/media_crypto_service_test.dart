@@ -3,16 +3,21 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fireplace/services/media_crypto_service.dart';
 
-/// `flutter pub run webcrypto:setup` (requires cmake on Windows) must succeed
-/// for native webcrypto; otherwise encrypt throws. Skip round-trip tests gracefully.
+import '../support/native_webcrypto.dart';
+
+/// Needs the native webcrypto library (`dart run webcrypto:setup`; cmake + a C
+/// compiler). Without it the round-trip tests are SKIPPED on a dev machine and
+/// FAIL in CI (`REQUIRE_NATIVE_WEBCRYPTO=1`, see support/native_webcrypto.dart).
 bool? _webcryptoOk;
+Object? _webcryptoError;
 
 Future<bool> _ensureWebcryptoAvailable() async {
   if (_webcryptoOk != null) return _webcryptoOk!;
   try {
     await MediaCryptoService().encrypt(Uint8List.fromList([1]));
     _webcryptoOk = true;
-  } catch (_) {
+  } catch (e) {
+    _webcryptoError = e;
     _webcryptoOk = false;
   }
   return _webcryptoOk!;
@@ -24,7 +29,7 @@ void main() {
   group('MediaCryptoService', () {
     test('encrypt produces ciphertext different from input', () async {
       if (!await _ensureWebcryptoAvailable()) {
-        markTestSkipped('webcrypto native unavailable');
+        skipWithoutNativeWebcrypto(_webcryptoError);
         return;
       }
       final input = Uint8List.fromList(List.generate(100, (i) => i));
@@ -36,7 +41,7 @@ void main() {
 
     test('decrypt restores original bytes', () async {
       if (!await _ensureWebcryptoAvailable()) {
-        markTestSkipped('webcrypto native unavailable');
+        skipWithoutNativeWebcrypto(_webcryptoError);
         return;
       }
       final input = Uint8List.fromList([1, 2, 3, 4, 5, 6, 7, 8]);
@@ -51,7 +56,7 @@ void main() {
 
     test('each encrypt call produces unique key and IV', () async {
       if (!await _ensureWebcryptoAvailable()) {
-        markTestSkipped('webcrypto native unavailable');
+        skipWithoutNativeWebcrypto(_webcryptoError);
         return;
       }
       final input = Uint8List.fromList([42, 43, 44]);
@@ -63,7 +68,7 @@ void main() {
 
     test('decrypt with wrong key throws', () async {
       if (!await _ensureWebcryptoAvailable()) {
-        markTestSkipped('webcrypto native unavailable');
+        skipWithoutNativeWebcrypto(_webcryptoError);
         return;
       }
       final input = Uint8List.fromList([1, 2, 3]);

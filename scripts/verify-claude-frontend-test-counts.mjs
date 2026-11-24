@@ -103,10 +103,18 @@ if (logPaths.length > 0) {
 const expected = parseClaudeCounts(readFileSync(claudePath, 'utf8'));
 
 if (expected.tests !== actual.tests || expected.skipped !== actual.skipped) {
+  const noLibrary =
+    actual.tests === expected.tests - 13 && actual.skipped === expected.skipped + 13;
   console.error(
     `CLAUDE.md drift: documented ${expected.tests} tests / ${expected.skipped} skipped, ` +
       `flutter has ${actual.tests} tests / ${actual.skipped} skipped.\n` +
-      `Update the Tests line in CLAUDE.md (and re-run).`,
+      (noLibrary
+        ? `This is not drift: do not edit CLAUDE.md. Without the native webcrypto library ` +
+          `(\`dart run webcrypto:setup\`; CI builds it) 13 real-crypto tests skip, so a local ` +
+          `run reports 13 fewer passed and 13 more skipped than CLAUDE.md.`
+        : `Update the Tests line in CLAUDE.md (and re-run). The documented counts assume the ` +
+          `native webcrypto library is present: without it a run reports 13 fewer passed and ` +
+          `13 more skipped, and that difference is not drift.`),
   );
   process.exit(1);
 }
