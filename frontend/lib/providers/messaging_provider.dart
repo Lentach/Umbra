@@ -380,7 +380,7 @@ class MessagingProvider extends ChangeNotifier {
   final Set<int> _pingEffectFiredIds = {};
 
   /// Box messages shown whose plaintext record has not been PROVEN stored
-  /// yet, by local id (`messaging_provider.box.dart`): the only copy until
+  /// yet, by local id (`messaging_provider.box_store.dart`, `_storeBoxMessage`): the only copy until
   /// the journal's next offer stores it.
   final Map<int, MessageModel> _boxUnsaved = {};
 

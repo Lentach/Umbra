@@ -4,8 +4,9 @@ part of '../messaging_provider.dart';
 /// journaled delivery is decrypted here, NOW — unlike a server row, nothing
 /// can serve its ciphertext again — and routed on the envelope's `t`.
 ///
-/// And the send side (slice (c)): [MessagingBoxSend._boxRoute] decides whether a text goes
-/// over the box at all, [MessagingBoxSend._sendOverBox] sends it.
+/// The send side lives in [MessagingBoxSend] (`box_send.dart`). The B3 hold of
+/// a foreign friend frame ([_holdForeignFrame], [_holdBehindForeignFrame])
+/// stays here.
 extension MessagingBox on MessagingProvider {
   /// Reads one journaled delivery from [peer]. True when finished with it —
   /// stored and shown, a duplicate, or refused for good; false to be offered
