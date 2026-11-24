@@ -21,7 +21,7 @@ Section 6 lists the decisions only the owner can make.
 ### 1.1 What runs today ✔
 
 - `libsignal_protocol_dart` `0.8.2+umbra.1`, the MixinNetwork pure-Dart port, vendored in `frontend/third_party/` with two local patches (`session_state.dart:30` deep copy of session state; `session_cipher.dart:178`). There is no PATCHES file; the patches are documented only by their in-code markers and decision row `metadata-privacy-decisions.md:271`.
-- About 4 100 lines of hand-written Dart (generated protobuf excluded). Its primitives come from `pointycastle`, `x25519`, `ed25519_edwards`: pure Dart, not constant-time by construction `[INFERENCE]`, never audited as far as the repo records.
+- About 4 100 lines of hand-written Dart (generated protobuf excluded). Its primitives come from `pointycastle`, `x25519`, `ed25519_edwards`: pure Dart packages whose READMEs make no constant-time or audit claim `[R§7]`.
 - Used: X3DH, Double Ratchet, XEdDSA signatures. Not used: sender keys (no groups), sealed sender (the box replaces it), the library's fingerprint module (no match in `frontend/lib`).
 - The same Dart code runs on Android and on web. Only storage differs (SQLCipher on native, AES-GCM-sealed IndexedDB/localStorage on web).
 - No post-quantum code anywhere.
@@ -60,7 +60,7 @@ A browser cannot load an FFI library. And because libsignal rejects the classic 
 
 B6 is months. Two things give most of the audit value sooner and are not thrown away by B6:
 - write `third_party/libsignal_protocol_dart/PATCHES.md` (what was changed, why, the test that proves each patch), and pin the upstream commit the vendored tree came from;
-- add known-answer tests that run the port against published test vectors for X3DH and the Double Ratchet (the classic protocol is gone from current libsignal `[R§4]`, so the vectors must come from the specifications or from a libsignal tag before v0.75.0; finding them is the first task). Today nothing proves the port agrees with the reference; these tests also become the acceptance test for the FFI move.
+- add known-answer tests that run the port against published test vectors for X3DH and the Double Ratchet (the classic protocol is gone from current libsignal `[R§4]`, so the vectors must come from the specifications or from a libsignal tag before v0.75.0; finding them is the first task). Today nothing proves the port agrees with the reference; they are also the only way to show an auditor that the port implements the classic protocol correctly. (They are not an acceptance test for B6: libsignal no longer speaks the classic protocol.)
 
 ## 2. Remaining hardening items
 
@@ -69,7 +69,7 @@ Status of `2026-11-16-security-hardening.md`, re-checked today. That file's rows
 ### 2.1 Dropped by the owner: the gap that matters most
 
 - **B1** (safety numbers / QR / a lasting "verified" mark) and **B2** (blocking warning on a changed key) were dropped on 2026-11-16. Today a friend's key change shows one muted timeline line by default.
-- What this means in Signal's terms: the protocol protects against a server that only *reads*. Against a server that *acts* (hands out a wrong key bundle at first contact), protection exists only for a user who compares raw hex by hand. Signal's own guarantee against an active server rests on safety numbers plus, since 2023, key transparency for usernames.
+- What this means in Signal's terms: the protocol protects against a server that only *reads*. Against a server that *acts* (hands out a wrong key bundle at first contact), protection exists only for a user who compares raw hex by hand. Signal's answer to an active server is the safety number a user can compare; libsignal also carries a key-transparency module (`rust/keytrans` in the repository ✔), which this report did not study.
 - B3 (0.2.91) closed the worst form of this for *existing* friends: a frame under a non-pinned identity is held until accepted. It does not cover first contact (`noAnchor`: the first frame pins).
 - This is not a request to reopen the decision. It is the item an external auditor will name first, so the report says so.
 
