@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:fireplace/models/profile_photo.dart';
@@ -54,6 +55,10 @@ class _FakeBackend {
   /// server holds" case, which is NOT the same as a 404.
   int? nextGetStatus;
 
+  /// Holds the NEXT put open until completed; [putHeld] fires when it is in.
+  Completer<void>? holdNextPut;
+  final Completer<void> putHeld = Completer<void>();
+
   http.Client client() => MockClient((request) async {
     if (request.url.path != '/backup/contacts') {
       return http.Response('not found', 404);
@@ -75,6 +80,12 @@ class _FakeBackend {
     }
     final body = jsonDecode(request.body) as Map<String, dynamic>;
     puts.add(body);
+    final hold = holdNextPut;
+    if (hold != null) {
+      holdNextPut = null;
+      putHeld.complete();
+      await hold.future;
+    }
     final forced = nextPutStatus;
     if (forced != null) {
       nextPutStatus = null;
@@ -729,6 +740,38 @@ void main() {
 
     expect(backend.puts.length, greaterThan(parked));
     expect(backend.row!['rev'], 4);
+  });
+
+  // CONT-11: an upload in flight is not a failure of the NEXT write. The
+  // password change reads a `false` here as "the backup would be orphaned"
+  // and refuses the change.
+  test('a wrap added while a debounced upload is in flight waits for it and '
+      'lands', () async {
+    await seedRow(password: 'old');
+    final svc = await service();
+    svc.attach(store);
+    await svc.onSession(userId: 7, token: 'jwt', password: 'old');
+    await svc.applyRestore();
+
+    final release = backend.holdNextPut = Completer<void>();
+    await store.update(41, (_) => _friend(41));
+    await backend.putHeld.future;
+
+    final rewrapped = svc.addWrap(
+      kind: ContactWrapKind.password,
+      secret: 'new',
+    );
+    await pumpEventQueue();
+    release.complete();
+
+    expect(await rewrapped, isTrue);
+    expect(backend.puts, hasLength(2));
+    expect(backend.row!['wraps'], hasLength(2));
+
+    // The new password opens the row the server now holds.
+    final other = await service();
+    await other.onSession(userId: 7, token: 'jwt2', password: 'new');
+    expect(other.holdsOpenableBackup, isTrue);
   });
 
   test('logout destroys the cached content key', () async {
