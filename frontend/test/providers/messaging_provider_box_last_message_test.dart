@@ -94,8 +94,8 @@ Map<String, dynamic> _conv(
 };
 
 /// The chat list's last message and order across reconnects and cold
-/// starts: Bob (2) and Alice (1) have server chat 10 made on the old path,
-/// then talk over the box — local ids, no server row, so no
+/// starts: Bob (2) and Alice (1) have chat 10 made before the box (a stored
+/// chat id), then talk over the box — local ids, no server row, so no
 /// `conversationsList` ever names a box message. Carol (3), server chat
 /// 11, is the chat Bob's must stay above while its real last message is
 /// newer.
