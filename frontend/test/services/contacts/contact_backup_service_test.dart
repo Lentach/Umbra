@@ -1045,9 +1045,9 @@ void main() {
 
   // G2 follow-up (2026-09-22), found on the iOS drive and invisible to every
   // test above. `AuthProvider.logout` calls `ContactBackupService.clear`
-  // (auth_provider.dart:434), which nulls BOTH `_store` and
+  // (`_clearLocalAuthState`, auth_provider.session.dart), which nulls BOTH `_store` and
   // `store.onChanged`. Logging in again only calls `onSession`
-  // (auth_provider.dart:838); `attach` is reachable ONLY from
+  // (`_resolveContactBackup`, auth_provider.dart); `attach` is reachable ONLY from
   // `ConnectionProvider.setProviders` (connection_provider.dart:158), which
   // runs once at widget wire-up. So a logout -> login inside one app instance
   // left the service holding no store at all: `uploadNow` bails on its
@@ -1104,7 +1104,7 @@ void main() {
 
   // A page reload / app relaunch resumes from the stored refresh token, so
   // `AuthProvider` calls `onSession` with NO password
-  // (auth_provider.dart:558). That is the session shape a PWA spends most of
+  // (`_resolveContactBackup`, auth_provider.dart). That is the session shape a PWA spends most of
   // its life in — on the 2026-09-22 drive every session after the first was
   // one of these. If it cannot publish, the backup only ever tracks the graph
   // immediately after a password login and silently misses everything else.
