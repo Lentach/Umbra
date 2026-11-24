@@ -90,6 +90,11 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   int? _scrollTargetListIndex;
   GlobalKey? _scrollTargetKey;
 
+  /// Names the scroll in flight. A newer call owns the target fields and the
+  /// unavailable toast; an older one stands down at its next step instead of
+  /// clearing the key the newer call is still waiting on.
+  int _scrollGeneration = 0;
+
   Future<void> _scrollToMessageId(int messageId) async {
     final messaging = context.read<MessagingProvider>();
     final l10n = AppLocalizations.of(context);
@@ -106,6 +111,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
       return;
     }
 
+    final generation = ++_scrollGeneration;
     setState(() {
       _scrollTargetListIndex = listIndex;
       _scrollTargetKey = GlobalKey();
@@ -121,7 +127,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
         _scrollController.jumpTo((maxExtent * fraction).clamp(0.0, maxExtent));
       }
       await WidgetsBinding.instance.endOfFrame;
-      if (!mounted) return;
+      if (!mounted || generation != _scrollGeneration) return;
       final targetContext = _scrollTargetKey?.currentContext;
       if (targetContext != null) {
         await Scrollable.ensureVisible(
@@ -134,16 +140,15 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
       }
     }
 
-    if (!revealed && mounted) {
+    if (!mounted || generation != _scrollGeneration) return;
+    if (!revealed) {
       showTopSnackBar(context, l10n.snackbarPinnedMessageUnavailable);
     }
 
-    if (mounted) {
-      setState(() {
-        _scrollTargetListIndex = null;
-        _scrollTargetKey = null;
-      });
-    }
+    setState(() {
+      _scrollTargetListIndex = null;
+      _scrollTargetKey = null;
+    });
   }
 
   Widget _buildMessageListItem({

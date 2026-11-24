@@ -1,8 +1,11 @@
 import 'dart:async';
-import 'dart:typed_data';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:fireplace/l10n/app_localizations.dart';
+import 'package:fireplace/l10n/app_localizations_en.dart';
 import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/services/voice_audio_coordinator.dart';
 import 'package:fireplace/widgets/audio/playback_controller.dart';
@@ -79,7 +82,9 @@ class FakeVoicePlayer implements VoicePlayer {
   }
 }
 
-MessageModel _voiceMessage() => MessageModel(
+MessageModel _voiceMessage({
+  String? mediaUrl = 'https://example.test/media/msgs/x.bin',
+}) => MessageModel(
       id: 1,
       content: '',
       senderId: 2,
@@ -87,12 +92,50 @@ MessageModel _voiceMessage() => MessageModel(
       conversationId: 7,
       createdAt: DateTime(2026, 1, 1),
       messageType: MessageType.voice,
-      mediaUrl: 'https://example.test/media/msgs/x.bin',
+      mediaUrl: mediaUrl,
       mediaDuration: 10,
     );
 
+/// A voice note already in the audio cache, held in memory: every file under
+/// [dir] exists and reads as [bytes] (a legacy plain note, so no content
+/// store is needed to open it). Keeps the load path off the real disk, whose
+/// futures would not complete under `testWidgets`.
+base class _CachedNoteIo extends IOOverrides {
+  _CachedNoteIo(this.dir, this.bytes);
+
+  final String dir;
+  final Uint8List bytes;
+
+  @override
+  File createFile(String path) =>
+      path.startsWith(dir) ? _CachedNote(path, bytes) : super.createFile(path);
+}
+
+class _CachedNote implements File {
+  _CachedNote(this.path, this.bytes);
+
+  @override
+  final String path;
+  final Uint8List bytes;
+
+  @override
+  bool existsSync() => true;
+
+  @override
+  Future<Uint8List> readAsBytes() async => bytes;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+int _count(FakeVoicePlayer fake, String call) =>
+    fake.calls.where((c) => c == call).length;
+
 Widget _host(FakeVoicePlayer fake, MessageModel msg) {
   return MaterialApp(
+    locale: const Locale('en'),
+    localizationsDelegates: AppLocalizations.localizationsDelegates,
+    supportedLocales: AppLocalizations.supportedLocales,
     home: Scaffold(
       body: PlaybackController(
         message: msg,
@@ -102,6 +145,7 @@ Widget _host(FakeVoicePlayer fake, MessageModel msg) {
           return Column(
             children: [
               Text('playing:$isPlaying', key: const Key('playing')),
+              Text('loading:$isLoading', key: const Key('loading')),
               Text('speed:$speed', key: const Key('speed')),
               Text('pos:${position.inMilliseconds}', key: const Key('pos')),
               Text('dur:${duration.inMilliseconds}', key: const Key('dur')),
@@ -217,6 +261,116 @@ void main() {
     expect(find.text('playing:false'), findsOneWidget);
     expect(fake.calls, contains('stop'));
     expect(fake.lastSeek, Duration.zero);
+  });
+
+  testWidgets(
+      'a load cancelled by a tap stays cancelled when play is tapped again',
+      (tester) async {
+    // Each load first asks path_provider for the cache directory: holding
+    // that answer holds the load in flight.
+    const channel = MethodChannel('plugins.flutter.io/path_provider');
+    const cacheRoot = '/voice-cache-test';
+    final inFlight = <Completer<String>>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
+      call,
+    ) {
+      final gate = Completer<String>();
+      inFlight.add(gate);
+      return gate.future;
+    });
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null),
+    );
+    IOOverrides.global = _CachedNoteIo(
+      cacheRoot,
+      Uint8List.fromList([1, 2, 3, 4, 5, 6, 7, 8]),
+    );
+    addTearDown(() => IOOverrides.global = null);
+
+    final fake = FakeVoicePlayer();
+    await tester.pumpWidget(_host(fake, _voiceMessage()));
+
+    // Play: the first load is in flight.
+    await tester.tap(find.text('toggle'));
+    await tester.pump();
+    expect(find.text('loading:true'), findsOneWidget);
+    expect(inFlight, hasLength(1));
+
+    // Tap again: cancelled.
+    await tester.tap(find.text('toggle'));
+    await tester.pump();
+    expect(find.text('loading:false'), findsOneWidget);
+
+    // Play again while the first load is still in flight.
+    await tester.tap(find.text('toggle'));
+    await tester.pump();
+    expect(find.text('loading:true'), findsOneWidget);
+    expect(inFlight, hasLength(2));
+
+    // The cancelled load finishes first: it must not play, and the second
+    // load is still loading.
+    inFlight[0].complete(cacheRoot);
+    await tester.pump();
+    await tester.pump();
+    expect(fake.calls, isNot(contains('play')));
+    expect(fake.calls, isNot(contains('setAudioBytes')));
+    expect(find.text('loading:true'), findsOneWidget);
+
+    inFlight[1].complete(cacheRoot);
+    await tester.pump();
+    await tester.pump();
+    expect(_count(fake, 'setAudioBytes'), 1);
+    expect(_count(fake, 'play'), 1);
+    expect(find.text('loading:false'), findsOneWidget);
+    expect(find.text('playing:true'), findsOneWidget);
+  });
+
+  testWidgets('a load in flight at dispose never reaches the player',
+      (tester) async {
+    const channel = MethodChannel('plugins.flutter.io/path_provider');
+    final gate = Completer<String>();
+    tester.binding.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) => gate.future);
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null),
+    );
+    IOOverrides.global = _CachedNoteIo(
+      '/voice-cache-test',
+      Uint8List.fromList([1, 2, 3, 4, 5, 6, 7, 8]),
+    );
+    addTearDown(() => IOOverrides.global = null);
+
+    final fake = FakeVoicePlayer();
+    await tester.pumpWidget(_host(fake, _voiceMessage()));
+    await tester.tap(find.text('toggle'));
+    await tester.pump();
+
+    await tester.pumpWidget(const SizedBox());
+    gate.complete('/voice-cache-test');
+    await tester.pump();
+    await tester.pump();
+
+    expect(fake.calls, isNot(contains('setAudioBytes')));
+  });
+
+  testWidgets('a voice note with no media URL says it failed to load',
+      (tester) async {
+    final fake = FakeVoicePlayer();
+    await tester.pumpWidget(_host(fake, _voiceMessage(mediaUrl: null)));
+
+    await tester.tap(find.text('toggle'));
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
+    expect(find.text(AppLocalizationsEn().snackbarFailedToLoadAudio), findsOneWidget);
+    expect(find.text('loading:false'), findsOneWidget);
+    expect(fake.calls, isNot(contains('play')));
+
+    // Let the toast leave.
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
   });
 }
 

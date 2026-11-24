@@ -1,5 +1,6 @@
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { CronExpression } from '@nestjs/schedule';
 import { Repository } from 'typeorm';
 import { UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -298,6 +299,30 @@ describe('RefreshTokensService', () => {
       expect(txQuery).toHaveBeenCalledTimes(1);
       expect(txQuery.mock.calls[0][1]).toEqual([42]);
       expect(defaultQuery).not.toHaveBeenCalled();
+    });
+  });
+
+  // BE-08: nothing else removed the rows of abandoned installs and of revoked
+  // devices (kept on purpose, by `revokeAllForUser`) once their year was up.
+  describe('deleteExpired (daily reaper)', () => {
+    it('a failing delete is logged by code and does not reject into the scheduler', async () => {
+      repo.delete.mockRejectedValue(new Error('connection lost'));
+
+      await expect(service.deleteExpired()).resolves.toBe(0);
+    });
+
+    it('runs once a day', () => {
+      // The descriptor, not `Prototype.method`: unbound-method and the
+      // no-unsafe-* rules would push the ratchet floor.
+      const handler = Object.getOwnPropertyDescriptor(
+        RefreshTokensService.prototype,
+        'deleteExpired',
+      )?.value as object;
+      const options = Reflect.getMetadata('SCHEDULE_CRON_OPTIONS', handler) as
+        { cronTime?: string; timeZone?: string } | undefined;
+
+      expect(options?.cronTime).toBe(CronExpression.EVERY_DAY_AT_4AM);
+      expect(options?.timeZone).toBe('UTC');
     });
   });
 });

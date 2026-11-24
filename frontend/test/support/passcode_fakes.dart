@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:fireplace/services/local_data_eraser.dart';
+import 'package:fireplace/services/lock_signal.dart';
 import 'package:fireplace/services/encryption/content_sealer.dart';
 import 'package:fireplace/services/secure_kv.dart';
 import 'package:fireplace/services/passcode_kdf.dart';
@@ -176,4 +177,36 @@ class FakeContentSealer implements ContentSealer {
     }
     return Uint8List.fromList(sealed.sublist(4));
   }
+}
+
+/// Stands in for one `BroadcastChannel` name shared by several tabs: a message
+/// reaches every OTHER opener, never the one that posted it, and carries no
+/// payload (like the real signal). [web-only: retire with §7]
+class FakeLockSignalHub {
+  final List<void Function()> _listeners = <void Function()>[];
+  int announcements = 0;
+
+  LockSignal open(void Function() onPeerLocked) {
+    final tab = _FakeTabSignal(this, onPeerLocked);
+    _listeners.add(onPeerLocked);
+    return tab;
+  }
+}
+
+class _FakeTabSignal implements LockSignal {
+  _FakeTabSignal(this._hub, this._onPeerLocked);
+
+  final FakeLockSignalHub _hub;
+  final void Function() _onPeerLocked;
+
+  @override
+  void announce() {
+    _hub.announcements++;
+    for (final listener in List<void Function()>.of(_hub._listeners)) {
+      if (listener != _onPeerLocked) listener();
+    }
+  }
+
+  @override
+  void close() => _hub._listeners.remove(_onPeerLocked);
 }

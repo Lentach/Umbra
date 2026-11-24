@@ -1,10 +1,121 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:libsignal_protocol_dart/libsignal_protocol_dart.dart';
 import 'package:fireplace/services/encryption/signal_stores.dart';
 
+/// In-memory [DualStorage] that parks the next delete of a pending-candidate
+/// row until the test releases it.
+class _HoldPendingDeleteStorage extends DualStorage {
+  _HoldPendingDeleteStorage() : super(const FlutterSecureStorage());
+
+  final Map<String, String> store = {};
+  bool armed = false;
+  final Completer<void> parked = Completer<void>();
+  final Completer<void> _released = Completer<void>();
+
+  void release() => _released.complete();
+
+  @override
+  Future<void> write({required String key, required String value}) async {
+    store[key] = value;
+  }
+
+  @override
+  Future<String?> read({required String key}) async => store[key];
+
+  @override
+  Future<void> delete({required String key}) async {
+    if (armed && key.contains('pending_account_identity_')) {
+      armed = false;
+      parked.complete();
+      await _released.future;
+    }
+    store.remove(key);
+  }
+
+  @override
+  Future<Map<String, String>> readAll() async => Map.of(store);
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  test('ENC-05: a second engine reads the account anchor the first one '
+      'advanced, not its own memo of the old one', () async {
+    // Two engines (two web tabs) over one store. Fail-before: the second kept
+    // the key it read first, so buildSession compared the peer's new bundle
+    // to a stale anchor and every send failed closed until a reload.
+    FlutterSecureStorage.setMockInitialValues({});
+    final tabA = SecureIdentityKeyStore(
+      DualStorage(const FlutterSecureStorage()),
+      'test_',
+    );
+    final tabB = SecureIdentityKeyStore(
+      DualStorage(const FlutterSecureStorage()),
+      'test_',
+    );
+    const address = SignalProtocolAddress('peer', 1);
+    final first = generateIdentityKeyPair().getPublicKey();
+    final second = generateIdentityKeyPair().getPublicKey();
+    await tabA.saveIdentity(address, first);
+    expect(
+      (await tabB.getAccountIdentity('peer'))?.serialize(),
+      first.serialize(),
+    );
+
+    await tabA.stagePendingAccountIdentity('peer', second);
+    expect(
+      await tabA.promotePendingAccountIdentity(
+        'peer',
+        expectedIdentityBase64: SecureIdentityKeyStore.encodedOf(second),
+      ),
+      isTrue,
+    );
+
+    expect(
+      (await tabB.getAccountIdentity('peer'))?.serialize(),
+      second.serialize(),
+    );
+  });
+
+  test('ENC-03: a candidate a decrypt records while a promote is deleting '
+      'the acknowledged one is not erased by that delete', () async {
+    final storage = _HoldPendingDeleteStorage();
+    final store = SecureIdentityKeyStore(storage, 'test_');
+    const address = SignalProtocolAddress('peer', 1);
+    final pinned = generateIdentityKeyPair().getPublicKey();
+    final shown = generateIdentityKeyPair().getPublicKey();
+    final arriving = generateIdentityKeyPair().getPublicKey();
+    await store.saveIdentity(address, pinned);
+    await store.stagePendingAccountIdentity('peer', shown);
+
+    // The human confirms the candidate they were shown; the promote has
+    // pinned it and is deleting the slot when a decrypt presents ANOTHER key.
+    storage.armed = true;
+    final promote = store.promotePendingAccountIdentity(
+      'peer',
+      expectedIdentityBase64: SecureIdentityKeyStore.encodedOf(shown),
+    );
+    await storage.parked.future;
+    final decrypt = store.isTrustedIdentity(
+      address,
+      arriving,
+      Direction.receiving,
+    );
+    await pumpEventQueue();
+    storage.release();
+
+    expect(await promote, isTrue);
+    expect(await decrypt, isTrue);
+    expect(
+      (await store.pendingAccountIdentity('peer'))?.serialize(),
+      arriving.serialize(),
+      reason: 'the new candidate was never shown or promoted; erasing it '
+          'leaves the per-device row on a key the anchor refuses',
+    );
+  });
 
   group('SecureIdentityKeyStore.isTrustedIdentity', () {
     late SecureIdentityKeyStore store;

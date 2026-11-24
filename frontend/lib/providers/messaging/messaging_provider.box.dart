@@ -1617,6 +1617,14 @@ extension MessagingBox on MessagingProvider {
     return stored;
   }
 
+  /// True inside a box read queued before the last `clearAll` or fresh
+  /// connect ([_runDecryptSerialized]): local ids restart at the same base
+  /// per account, so its result must not land in the session now running.
+  bool get _boxReadStale {
+    final queuedIn = Zone.current[_boxReadEpochKey];
+    return queuedIn != null && queuedIn != _boxSessionEpoch;
+  }
+
   /// Stores [msg]'s plaintext and shows it. True only once the record is
   /// PROVEN on disk (read back from the store, not the write's word — the
   /// save path swallows a refused commit): the entry leaves the journal only
@@ -1632,9 +1640,13 @@ extension MessagingBox on MessagingProvider {
     required bool alreadyShown,
     required DateTime receivedAt,
   }) async {
+    if (_boxReadStale) return false;
     final enc = _encryptionProvider!..cacheDecryption(msg.id, msg);
     await _persistDecryptedContent(msg);
     final stored = await enc.recordExists(msg.id) == true;
+    // Signed out (or another account signed in) while it was stored: shown
+    // nowhere, and not finished, so the old account's next offer re-reads it.
+    if (_boxReadStale) return false;
     // Held BEFORE it is shown: showing starts its countdown
     // ([_startBoxCountdowns]), which updates the held row, so the next
     // store keeps the start instead of resetting it to the unread cap.
@@ -2666,6 +2678,10 @@ extension MessagingBox on MessagingProvider {
         _markMessageFailed(tempId, 'Could not send. Try again.');
         return false;
       }
+      // Signed out, or switched to another account, while the frames were in
+      // flight: local ids restart at the same base per account, so nothing of
+      // this send may land in the next session's rows, cache or retries.
+      if (_currentUserId != ownUserId) return true;
       if (owedPeers.isNotEmpty || owedSiblings.isNotEmpty) {
         _oweBoxFrames(
           'msg|${route.conversationId}|$sendToken',
@@ -2730,6 +2746,8 @@ extension MessagingBox on MessagingProvider {
         // peer drops the repeat (decision 104).
         E2ePersistentDiag.record('BOX_SENT_STORE_UNPROVEN', {'msgId': localId});
       }
+      // Another account signed in while the record was being stored.
+      if (_currentUserId != ownUserId) return true;
       _addMessageToState(sent);
       return true;
     } finally {

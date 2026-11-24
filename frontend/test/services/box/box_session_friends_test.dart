@@ -1244,6 +1244,59 @@ void main() {
     },
   );
 
+  // Mutation (BOX-03): `rekeyFriend` keeps `_friendRekeyed` when it had no
+  // queue to hand: that device is never re-keyed again this process, though
+  // nothing was built or sent.
+  test(
+    'a re-key that had no queue to hand (the box made none) is made again by '
+    'the next one',
+    () async {
+      box.createRefusal = {'ok': false, 'code': 'rate_limited'};
+      await a.start();
+      await b.start();
+      expect(a.friend.queues, isEmpty);
+
+      await a.session.rekeyFriend(5, 3);
+      await settle();
+      expect(a.freshFor, isEmpty);
+
+      box.createRefusal = null;
+      await a.session.rekeyFriend(5, 3);
+
+      expect(a.freshFor, [3]);
+      expect(box.sent, contains(b.store.requestQueue!.sid));
+    },
+  );
+
+  // Mutation: `rekeyFriend` releases `_friendRekeyed` when the send was
+  // refused, or `accountLost` clears it: whoever can forge a request-queue
+  // frame and refuse a send, or drop the account socket, times a bundle
+  // fetch per frame.
+  test(
+    'a re-key the box refused, and a reconnect, do not re-key that friend '
+    'device again: one fresh session per friend device per session '
+    '(decision 70)',
+    () async {
+      await a.start();
+      await b.start();
+      box.refuseSendsTo.add(b.store.requestQueue!.sid);
+      await a.session.rekeyFriend(5, 3);
+      await settle();
+      expect(a.freshFor, [3]);
+
+      box.refuseSendsTo.clear();
+      await a.session.rekeyFriend(5, 3);
+      a.session
+        ..accountLost()
+        ..accountReady(2)
+        ..e2eReady();
+      await settle();
+      await a.session.rekeyFriend(5, 3);
+
+      expect(a.freshFor, [3]);
+    },
+  );
+
   // Mutation: `rekeyFriend` keeps `_friendAddressAsked` when the lookup
   // answers false (drop the `remove`): a re-key provoked while E2E was not
   // ready is given up for the session.

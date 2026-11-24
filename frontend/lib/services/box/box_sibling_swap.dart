@@ -12,6 +12,19 @@ import 'box_siblings.dart';
 import 'box_wire.dart';
 import 'queue_seal.dart';
 
+/// What [BoxSiblingSwap.rekeyViaRequest] did with a re-key.
+enum SiblingRekeyRoute {
+  /// The box took the handoff.
+  sent,
+
+  /// No request-queue address for that sibling yet: owed to the next
+  /// `ownRequestQueues` answer, which hands off.
+  owed,
+
+  /// Nothing left and nothing is owed.
+  failed,
+}
+
 /// Hands this device's SELF-queue to every sibling that has not
 /// acknowledged it (metadata-privacy PR3.1 sibling queues, owner decision
 /// 26): through each sibling's REQUEST queue, never the link blob, so ONE
@@ -177,20 +190,24 @@ class BoxSiblingSwap {
   /// built crossing sessions before either learned the other's self-queue
   /// refused each other's handoff (`would_replace`) and could never answer,
   /// for good. An address not known yet is owed to the next
-  /// `ownRequestQueues` answer, asked for now. True only when the handoff
-  /// left now.
-  Future<bool> rekeyViaRequest(int deviceId) async {
+  /// `ownRequestQueues` answer, asked for now ([SiblingRekeyRoute.owed]);
+  /// the caller keeps its once-per-connect guard for that device, since
+  /// that answer hands off. [SiblingRekeyRoute.failed] left nothing and
+  /// owes nothing: the caller's next re-key makes it again.
+  Future<SiblingRekeyRoute> rekeyViaRequest(int deviceId) async {
     final address = _requestAddresses[deviceId];
     final self = _self();
     final own = _store.userId;
     final seal = encrypt;
-    if (_disposed || self == null || own == null || seal == null) return false;
+    if (_disposed || self == null || own == null || seal == null) {
+      return SiblingRekeyRoute.failed;
+    }
     if (address == null) {
       _rekeyOwed.add(deviceId);
       handAgain();
-      return false;
+      return SiblingRekeyRoute.owed;
     }
-    return _handoff(
+    final sent = await _handoff(
       seal,
       own,
       deviceId,
@@ -199,6 +216,7 @@ class BoxSiblingSwap {
       self,
       fresh: true,
     );
+    return sent ? SiblingRekeyRoute.sent : SiblingRekeyRoute.failed;
   }
 
   void dispose() {

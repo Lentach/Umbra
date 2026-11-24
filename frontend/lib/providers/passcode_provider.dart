@@ -6,6 +6,9 @@ import 'package:flutter/foundation.dart';
 import '../services/e2e_lock_revoker.dart';
 import '../services/encryption/content_key_manager.dart';
 import '../services/encryption/content_key_wrap.dart';
+import '../services/lock_signal.dart';
+import '../services/lock_signal_stub.dart'
+    if (dart.library.html) '../services/lock_signal_web.dart';
 import '../services/passcode_kdf.dart';
 import '../services/passcode_store.dart';
 import '../services/passcode_unlock_gate.dart';
@@ -112,6 +115,7 @@ class PasscodeProvider extends ChangeNotifier {
     ContentKeyWrap? vault,
     PasscodeUnlockGate? gate,
     E2eLockRevoker? revoker,
+    @visibleForTesting LockSignalOpener? openLockSignalFn,
     bool? wrapKeys,
     @visibleForTesting bool Function()? canRelaunch,
     @visibleForTesting void Function()? relaunch,
@@ -138,6 +142,7 @@ class PasscodeProvider extends ChangeNotifier {
     // owns. Last-writer-wins is correct: the app has exactly one live
     // PasscodeProvider.
     PasscodeWrapHook.afterRawKeysLanded = wrapRawKeysNow;
+    _lockSignal = (openLockSignalFn ?? openLockSignal)(_lockFromPeer);
   }
 
   static int _wallClock() => DateTime.now().millisecondsSinceEpoch;
@@ -155,6 +160,10 @@ class PasscodeProvider extends ChangeNotifier {
   /// Tears the LIVE E2E stack down on a re-lock, and brings it back on an
   /// unlock that did not restart the process.
   final E2eLockRevoker _revoker;
+
+  /// [web-only: retire with §7] Tells the other tabs of this origin that the
+  /// user locked here, and hears them. No-op off-web.
+  late final LockSignal _lockSignal;
 
   /// Web-only in-place process restart. See [_lock] step 3.
   final bool Function() _canRelaunch;
@@ -595,7 +604,19 @@ class PasscodeProvider extends ChangeNotifier {
   /// covers the app — before the first await.
   Future<void> lockNow() {
     if (_state != PasscodeLockState.unlocked) return Future<void>.value();
-    return _lock();
+    final locking = _lock();
+    // After _lock's synchronous half, so this tab is already covered. Only the
+    // user's own padlock is announced: an auto-lock fires on the tab the user
+    // just LEFT, and must not lock the one they went to.
+    _lockSignal.announce();
+    return locking;
+  }
+
+  /// Another tab of this origin was locked by the user: run the same lock,
+  /// without announcing it back.
+  void _lockFromPeer() {
+    if (_state != PasscodeLockState.unlocked) return;
+    unawaited(_lock());
   }
 
   /// Locking is a real revocation wherever the passcode is real key material,
@@ -851,6 +872,7 @@ class PasscodeProvider extends ChangeNotifier {
   void dispose() {
     _credentialRetry?.cancel();
     _credentialRetry = null;
+    _lockSignal.close();
     super.dispose();
   }
 }

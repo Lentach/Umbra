@@ -875,6 +875,77 @@ void main() {
       expect(a.session.awaitingRekeyFrom(3), isFalse);
     });
 
+    // Mutation (BOX-03): `rekeySibling` keeps `_rekeyed` when no handoff
+    // could be built: the sibling is never re-keyed again this process.
+    test(
+      'a re-key whose handoff could not be built is made again by the next '
+      'one',
+      () async {
+        await linked();
+        final before = box.sent.length;
+        a.encryptFails = true;
+        await a.session.rekeySibling(3);
+        expect(box.sent, hasLength(before));
+
+        a.encryptFails = false;
+        await a.session.rekeySibling(3);
+        await settle();
+
+        expect(a.freshFor, [3]);
+        expect(
+          box.sent.sublist(before),
+          contains(b.store.selfQueue!.sid),
+          reason: 'the second re-key left',
+        );
+      },
+    );
+
+    // Mutation (BOX-03): `rekeySibling` keeps `_rekeyed` when the box
+    // refused the send.
+    test(
+      'a re-key the box did not take is made again by the next one',
+      () async {
+        await linked();
+        final route = box.sockets.respond;
+        var refuse = true;
+        box.sockets.respond = (socket, f) => refuse && f.event == 'send'
+            ? {'ok': false, 'code': 'queue_full'}
+            : route!(socket, f);
+        await a.session.rekeySibling(3);
+        expect(a.freshFor, [3]);
+
+        refuse = false;
+        final before = box.sent.length;
+        await a.session.rekeySibling(3);
+        await settle();
+
+        expect(a.freshFor, [3, 3]);
+        expect(box.sent.sublist(before), contains(b.store.selfQueue!.sid));
+      },
+    );
+
+    // Mutation (BOX-03): `accountLost` keeps `_rekeyed`: a sibling re-keyed
+    // once is never re-keyed again, however many connects later it loses
+    // its session.
+    test(
+      'the once-per-session guard ends with the account connection: a '
+      'sibling re-keyed before a reconnect is re-keyed again after it',
+      () async {
+        await linked();
+        await a.session.rekeySibling(3);
+        expect(a.freshFor, [3]);
+
+        a.session
+          ..accountLost()
+          ..accountReady(2)
+          ..e2eReady();
+        await settle();
+        await a.session.rekeySibling(3);
+
+        expect(a.freshFor, [3, 3]);
+      },
+    );
+
     test(
       'the mark is cleared once that sibling answers, and a second loss in '
       'the same session re-keys nothing (the once-per-session guard)',
@@ -898,6 +969,68 @@ void main() {
       now = now.add(const Duration(seconds: 1));
       expect(a.session.awaitingRekeyFrom(3), isFalse);
     });
+
+    // Mutation (BOX-03): `rekeySibling` keeps `_rekeyed` when the handoff
+    // through the request queue was refused by the box.
+    test(
+      'a re-key through the request queue the box did not take is made '
+      'again by the next one',
+      () async {
+        now = DateTime.utc(2026, 9, 25, 12);
+        a = _Device(2, box, clock: () => now);
+        await a.start();
+        await b.start(wireEncrypt: false);
+        a.session.accountReady(2);
+        await settle();
+        a.answer([b]);
+        await settle();
+        final route = box.sockets.respond;
+        var refuse = true;
+        box.sockets.respond = (socket, f) => refuse && f.event == 'send'
+            ? {'ok': false, 'code': 'queue_full'}
+            : route!(socket, f);
+
+        await a.session.rekeySibling(3);
+        await settle();
+        expect(a.session.awaitingRekeyFrom(3), isFalse);
+
+        refuse = false;
+        final before = box.sent.length;
+        await a.session.rekeySibling(3);
+        await settle();
+
+        expect(box.sent.sublist(before), contains(b.store.requestQueue!.sid));
+        expect(a.session.awaitingRekeyFrom(3), isTrue);
+      },
+    );
+
+    // Mutation (BOX-03): `rekeySibling` releases `_rekeyed` when the re-key
+    // is OWED to the next `ownRequestQueues` answer: that answer hands off,
+    // and the next loss hands off a second time.
+    test(
+      "a re-key owed until the sibling's address is known is handed off "
+      'ONCE, by the answer that names it',
+      () async {
+        now = DateTime.utc(2026, 9, 25, 12);
+        a = _Device(2, box, clock: () => now);
+        await a.start();
+        await b.start(wireEncrypt: false);
+        a.session.accountReady(2);
+        await settle();
+
+        await a.session.rekeySibling(3);
+        await settle();
+        expect(box.sent, isEmpty, reason: 'no address for it yet');
+
+        a.answer([b]);
+        await settle();
+        expect(box.sent, [b.store.requestQueue!.sid]);
+
+        await a.session.rekeySibling(3);
+        await settle();
+        expect(box.sent, [b.store.requestQueue!.sid]);
+      },
+    );
 
     test(
       'a sibling whose self-queue address is not held is re-keyed through '

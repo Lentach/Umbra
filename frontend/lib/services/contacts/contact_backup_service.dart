@@ -118,6 +118,11 @@ class ContactBackupService {
   bool _dirty = false;
   bool _uploading = false;
 
+  /// Completes when the write now holding [_uploading] ends. A wrap write
+  /// waits on it ([_commit] `waitForUpload`) instead of reading the upload
+  /// in flight as its own failure.
+  late Completer<void> _uploadDone;
+
   /// Set only when the server ANSWERED that this account has no row (a 404).
   /// Defaults false, so an unresolved or failed session reads as "unknown"
   /// rather than "nothing to lose" — the fail-safe direction for
@@ -196,9 +201,12 @@ class ContactBackupService {
     String? password,
     String? phrase,
   }) async {
-    final previous = _resolving;
-    if (previous != null && !previous.isCompleted) {
-      await previous.future;
+    // A loop, not one await: every caller queued on one gate wakes in the
+    // same round, and only the first may take the next gate. The rest see it
+    // and wait again, so resolves run one after the other.
+    for (var gate = _resolving; gate != null && !gate.isCompleted;) {
+      await gate.future;
+      gate = _resolving;
     }
     if (_userId != userId) {
       _resetSession();
@@ -490,7 +498,7 @@ class ContactBackupService {
       _dirty = true;
       return false;
     }
-    return _commit(() async {
+    return _commit(waitForUpload: true, () async {
       final blob = _blob;
       if (blob == null) throw ContactBackupCorrupt('blob_gone');
       return blob;
@@ -855,7 +863,19 @@ class ContactBackupService {
   ///
   /// [produce] is called per attempt so a retry publishes the store as it is
   /// NOW, not a snapshot the 409 already proved stale.
-  Future<bool> _commit(Future<String> Function() produce) async {
+  ///
+  /// A wrap write ([waitForUpload]) queues behind a write in flight rather
+  /// than answering `false`: `resetPassword` reads that `false` as "the
+  /// backup could not be re-wrapped" and refuses the password change, though
+  /// only a debounced upload was running. A graph upload still answers
+  /// `false` and stays owed, because the in-flight one coalesces it.
+  Future<bool> _commit(
+    Future<String> Function() produce, {
+    bool waitForUpload = false,
+  }) async {
+    while (waitForUpload && _uploading) {
+      await _uploadDone.future;
+    }
     final token = _token;
     final ckId = _ckId;
     final salt = _salt;
@@ -867,6 +887,7 @@ class ContactBackupService {
       return false;
     }
     _uploading = true;
+    final done = _uploadDone = Completer<void>();
     _debounce?.cancel();
     _debounce = null;
     try {
@@ -911,6 +932,7 @@ class ContactBackupService {
       return false;
     } finally {
       _uploading = false;
+      done.complete();
     }
   }
 

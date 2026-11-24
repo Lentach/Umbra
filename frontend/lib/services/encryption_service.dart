@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -1400,7 +1401,13 @@ class EncryptionService {
     // the loader below restores it). Cleared only when the account
     // CHANGES — a same-user re-run (passcode re-lock → unlock) must keep the
     // unpersisted refusals.
-    if (_userId != userId) _forgetAccountRam();
+    if (_userId != userId) {
+      _forgetAccountRam();
+      // Key material this process minted belongs to the account that minted
+      // it: uploaded under another it would publish the wrong identity.
+      _keysForUpload = null;
+      needsKeyUpload = false;
+    }
     _userId = userId;
     final p = 'e2e_${userId}_'; // per-user storage key prefix
 
@@ -1669,6 +1676,7 @@ class EncryptionService {
   /// one row may still exist, and the caller MUST NOT mint over a row it
   /// could not see or could not remove.
   Future<bool> _wipeSignalMaterial(String p) async {
+    await _drainSessionOps();
     final Map<String, String> all;
     try {
       all = await _storage.readAll();
@@ -1699,6 +1707,14 @@ class EncryptionService {
     return deletedAll;
   }
 
+  /// Lets every session mutation already in flight finish before a
+  /// wipe lists the store. One that stored after the listing would resurrect
+  /// a record of the life being wiped, and the wipe would still report PROVEN.
+  /// Waits only on work queued BEFORE this call; the tails never fail
+  /// ([_runSessionSerialized] swallows errors into them).
+  Future<void> _drainSessionOps() =>
+      Future.wait(_sessionTails.values.toList());
+
   /// Issue #208: deletes EVERY row of [userId]'s `e2e_<uid>_` namespace this
   /// service holds — Signal material, the material stamp, the content store
   /// (box queues, sibling book, request queue, journal, sealed history) — so
@@ -1717,6 +1733,7 @@ class EncryptionService {
   /// a wipe that stops part-way still reads as a previous life on the next
   /// start instead of passing for a healthy device.
   Future<bool> _wipeAccountNamespace(int userId) async {
+    await _drainSessionOps();
     final p = 'e2e_${userId}_';
     final stampKey = _materialDeviceKey(userId);
     final kept = {
@@ -3288,9 +3305,53 @@ class EncryptionService {
     DateTime? expiresAt,
     int? disappearAfterSeconds,
     WireKey? wire,
-  }) async {
+  }) {
+    // The guards below read the held record and the write lands one
+    // or more awaits later (the Android store commits to its view only after
+    // the seal + put), so two saves of one id used to each guard against a
+    // record the other had not yet written. One chain per id, in call order;
+    // a failure never poisons it ([_saveDecryptedContent] swallows its own).
     final userId = _userId;
-    if (userId == null) return;
+    if (userId == null) return Future<void>.value();
+    final chainKey = _decryptedContentKey(userId, id);
+    final tail = _decryptedSaveTails[chainKey] ?? Future<void>.value();
+    final run = tail.then(
+      (_) => _saveDecryptedContent(
+        userId,
+        id,
+        data,
+        conversationId: conversationId,
+        createdAt: createdAt,
+        expiresAt: expiresAt,
+        disappearAfterSeconds: disappearAfterSeconds,
+        wire: wire,
+      ),
+    );
+    _decryptedSaveTails[chainKey] = run;
+    return run.whenComplete(() {
+      if (identical(_decryptedSaveTails[chainKey], run)) {
+        unawaited(_decryptedSaveTails.remove(chainKey));
+      }
+    });
+  }
+
+  /// In-flight [saveDecryptedContent] tail per record key (this engine only;
+  /// another web tab is a separate heap and is not covered here).
+  final Map<String, Future<void>> _decryptedSaveTails = {};
+
+  Future<void> _saveDecryptedContent(
+    int userId,
+    int id,
+    Map<String, dynamic> data, {
+    int? conversationId,
+    DateTime? createdAt,
+    DateTime? expiresAt,
+    int? disappearAfterSeconds,
+    WireKey? wire,
+  }) async {
+    // Queued behind another save, this can run after a sign-out and sign-in:
+    // the account it was called for is gone, so it writes nothing.
+    if (_userId != userId) return;
     try {
       final prefs = await _sharedPrefs;
       final key = _decryptedContentKey(userId, id);

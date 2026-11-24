@@ -7,6 +7,14 @@ import { BoxMediaStore } from './box-media.store';
 import { takeRefusalCounts } from './box-throttler.guard';
 import { BoxService } from './box.service';
 
+const FAILED = Symbol('failed');
+
+/** An errno code (`EACCES`) when the failure has one; never its message. */
+function failureCode(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && /^[A-Z0-9_]+$/.test(code) ? code : 'error';
+}
+
 /**
  * I3, the bounded residue: nothing the box stores outlives its window.
  *
@@ -26,6 +34,7 @@ export class BoxReaper {
   private readonly logger = new Logger(BoxReaper.name);
   private readonly ceiling = new BoxCeilingMonitor();
   private totalsMissing = false;
+  private sweeping = false;
 
   constructor(
     private readonly box: BoxService,
@@ -34,32 +43,104 @@ export class BoxReaper {
     private readonly alert: BoxAlert,
   ) {}
 
+  /**
+   * Each step, and each file, fails on its own: one undeletable file
+   * or one failed query must not stop the steps after it, least of all the
+   * alarm ping, and a sweep that could not finish its work pings `/fail`.
+   * A sweep that starts while the previous one still runs does nothing.
+   */
   @Cron(CronExpression.EVERY_10_MINUTES)
   async sweep(): Promise<void> {
-    await this.box.deleteExpiredMessages();
-    const expired = await this.box.expiredMedia();
-    for (const { path } of expired) await this.store.remove(path);
-    if (expired.length > 0) {
-      await this.box.deleteMedia(expired.map((m) => m.id));
+    if (this.sweeping) {
+      this.logger.warn('[box] sweep skipped (previous sweep still running)');
+      return;
     }
-    const reaped = await this.box.reapQueues(new Date());
-    for (const rid of reaped) this.delivery.forget(rid);
-    // Counts only: never an id, never an address.
-    this.logger.debug(
-      `[box] sweep media=${expired.length} queues=${reaped.length}`,
-    );
-    const totals = await this.box.totals();
-    if (totals === null) {
-      // No row: every store is refused. Log the transition once, not per sweep.
-      if (!this.totalsMissing) {
+    this.sweeping = true;
+    try {
+      await this.sweepOnce();
+    } finally {
+      this.sweeping = false;
+    }
+  }
+
+  private async sweepOnce(): Promise<void> {
+    let failed = false;
+    const attempt = async <T>(
+      step: string,
+      run: () => Promise<T> | T,
+    ): Promise<T | typeof FAILED> => {
+      try {
+        return await run();
+      } catch (error) {
+        failed = true;
+        // The step and an errno code only: an fs message carries the path.
         this.logger.error(
-          '[box] ceiling box_totals row missing (box refusing all stores)',
+          `[box] sweep step=${step} failed (${failureCode(error)})`,
+        );
+        return FAILED;
+      }
+    };
+
+    await attempt('messages', () => this.box.deleteExpiredMessages());
+    const expired = await attempt('media-list', () => this.box.expiredMedia());
+    let mediaGone = 0;
+    if (expired !== FAILED) {
+      // File first, then row: a file that stayed keeps its row for a retry.
+      const gone: Buffer[] = [];
+      const codes = new Set<string>();
+      for (const { id, path } of expired) {
+        try {
+          await this.store.remove(path);
+          gone.push(id);
+        } catch (error) {
+          failed = true;
+          codes.add(failureCode(error));
+        }
+      }
+      if (gone.length < expired.length) {
+        this.logger.error(
+          `[box] sweep media undeletable=${expired.length - gone.length} (${[...codes].join(' ')})`,
         );
       }
+      if (gone.length > 0) {
+        const rows = await attempt('media-rows', () =>
+          this.box.deleteMedia(gone),
+        );
+        if (rows !== FAILED) mediaGone = gone.length;
+      }
     }
-    const alarming = totals === null || this.ceiling.check(totals, this.logger);
-    this.totalsMissing = totals === null;
-    await this.alert.report(alarming);
+    const reaped = await attempt('queues', () =>
+      this.box.reapQueues(new Date()),
+    );
+    const queuesGone = reaped === FAILED ? 0 : reaped.length;
+    if (reaped !== FAILED) {
+      await attempt('forget', () => {
+        for (const rid of reaped) this.delivery.forget(rid);
+      });
+    }
+    // Counts only: never an id, never an address.
+    this.logger.debug(`[box] sweep media=${mediaGone} queues=${queuesGone}`);
+    const totals = await attempt('totals', () => this.box.totals());
+    let alarming = failed;
+    if (totals !== FAILED) {
+      if (totals === null) {
+        // No row: every store is refused. Log the transition once, not per sweep.
+        if (!this.totalsMissing) {
+          this.logger.error(
+            '[box] ceiling box_totals row missing (box refusing all stores)',
+          );
+        }
+      }
+      const over =
+        totals === null
+          ? true
+          : await attempt('ceiling', () =>
+              this.ceiling.check(totals, this.logger),
+            );
+      alarming = over === FAILED || over || failed;
+      this.totalsMissing = totals === null;
+    }
+    await attempt('alarm', () => this.alert.report(alarming));
     const refused = takeRefusalCounts();
     if (refused.size > 0) {
       const counts = [...refused].map(([event, n]) => `${event}=${n}`);

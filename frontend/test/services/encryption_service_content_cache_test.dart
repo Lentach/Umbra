@@ -1,10 +1,62 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:libsignal_protocol_dart/libsignal_protocol_dart.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:fireplace/services/encryption/content_kv.dart';
 import 'package:fireplace/services/encryption_service.dart';
+
+/// [_inner] with the commit behaviour of the Android `NativeContentStore`: a
+/// write reaches the readable view only AFTER an await (seal + SQLCipher put),
+/// so a read-modify-write that starts meanwhile still reads the old record.
+class _CommitAfterAwaitKv implements ContentKv {
+  _CommitAfterAwaitKv(this._inner);
+
+  final ContentKv _inner;
+
+  /// When set, the next write parks here until it completes.
+  Completer<void>? hold;
+  Completer<void>? parked;
+
+  @override
+  Future<bool> setString(String key, String value) async {
+    final gate = hold;
+    if (gate != null) {
+      hold = null;
+      parked!.complete();
+      await gate.future;
+    }
+    await Future<void>.delayed(Duration.zero);
+    return _inner.setString(key, value);
+  }
+
+  @override
+  Future<void> reload() => _inner.reload();
+
+  @override
+  Future<Map<String, Object>?> authoritativeSnapshot() =>
+      _inner.authoritativeSnapshot();
+
+  @override
+  String? getString(String key) => _inner.getString(key);
+
+  @override
+  int? getInt(String key) => _inner.getInt(key);
+
+  @override
+  bool containsKey(String key) => _inner.containsKey(key);
+
+  @override
+  Set<String> getKeys() => _inner.getKeys();
+
+  @override
+  Future<bool> setInt(String key, int value) => _inner.setInt(key, value);
+
+  @override
+  Future<bool> remove(String key) => _inner.remove(key);
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -119,6 +171,83 @@ void main() {
       expect(result['mediaIv'], 'IVbase64');
       expect(result['messageType'], 'VOICE');
       expect(result['content'], isNot('[Decryption failed]'));
+    });
+
+    test('ENC-11: a [Decryption failed] write racing the first keyed write '
+        'never clobbers the media keys', () async {
+      // Fail-before: both saves read "no record yet" before either commit
+      // reached the view, so the keyless placeholder passed both guards and,
+      // landing second, replaced the only copy of the media keys.
+      service.debugSetContentKv(_CommitAfterAwaitKv(await service.contentKv));
+      final keyed = service.saveDecryptedContent(2101, {
+        'content': '',
+        'messageType': 'VOICE',
+        'mediaUrl': 'https://x/media/msgs/a.bin',
+        'mediaKey': 'KEYbase64',
+        'mediaIv': 'IVbase64',
+      });
+      final failed = service.saveDecryptedContent(2101, {
+        'content': '[Decryption failed]',
+      });
+      await Future.wait([keyed, failed]);
+
+      final result = await service.getDecryptedContent(2101);
+      expect(result, isNotNull);
+      expect(result!['mediaKey'], 'KEYbase64');
+      expect(result['mediaIv'], 'IVbase64');
+      expect(result['content'], isNot('[Decryption failed]'));
+    });
+
+    test('ENC-11: a save queued before a sign-out never lands under the next '
+        'account', () async {
+      // Fail-before: the queued save re-read _userId when it finally ran and
+      // wrote account 42's plaintext under account 99.
+      final kv = _CommitAfterAwaitKv(await service.contentKv);
+      service.debugSetContentKv(kv);
+      final release = Completer<void>();
+      kv
+        ..hold = release
+        ..parked = Completer<void>();
+      final first = service.saveDecryptedContent(3001, {'content': 'one'});
+      await kv.parked!.future;
+      final queued = service.saveDecryptedContent(3001, {'content': 'two'});
+
+      await service.initialize(
+        99,
+        checkServerIdentity: () async =>
+            const ServerIdentityGuard(exists: false),
+      );
+      release.complete();
+      await Future.wait([first, queued]);
+
+      expect(await service.getDecryptedContent(3001), isNull,
+          reason: 'account 99 must not hold account 42 plaintext');
+    });
+
+    test('keys minted for one account are never uploaded under another',
+        () async {
+      // Fail-before: the singleton kept account B's minted bundle, so A's
+      // re-entry reported needsKeyUpload and handed B's keys out for upload.
+      const fresh = ServerIdentityGuard(exists: false);
+      final svc = EncryptionService();
+      await svc.initialize(5, checkServerIdentity: () async => fresh);
+      await svc.initialize(6, checkServerIdentity: () async => fresh);
+      expect(svc.getKeysForUpload(), isNotNull, reason: 'B minted');
+
+      await svc.initialize(5, checkServerIdentity: () async => fresh);
+
+      expect(svc.needsKeyUpload, isFalse);
+      expect(svc.getKeysForUpload(), isNull);
+    });
+
+    test('a same-user re-init keeps the pending upload of its own mint',
+        () async {
+      const fresh = ServerIdentityGuard(exists: false);
+      final svc = EncryptionService();
+      await svc.initialize(5, checkServerIdentity: () async => fresh);
+      await svc.initialize(5, checkServerIdentity: () async => fresh);
+      expect(svc.needsKeyUpload, isTrue);
+      expect(svc.getKeysForUpload(), isNotNull);
     });
 
     test('a keyed write still updates an existing keyed entry', () async {

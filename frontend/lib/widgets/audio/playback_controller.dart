@@ -66,7 +66,11 @@ class _PlaybackControllerState extends State<PlaybackController>
       widget.playerFactory?.call() ?? createVoicePlayer();
   bool _isPlaying = false;
   bool _isLoading = false;
-  bool _loadCancelled = false;
+
+  /// Names the load in flight. A tap that cancels it, or a newer load, moves
+  /// this on; a load that finishes under an older number is stale and leaves
+  /// the player and [_isLoading] alone.
+  int _loadGeneration = 0;
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
   double _playbackSpeed = 1.0;
@@ -125,6 +129,7 @@ class _PlaybackControllerState extends State<PlaybackController>
 
   @override
   void dispose() {
+    _loadGeneration++;
     VoiceAudioCoordinator.instance.onStoppedPlaying(this);
     _player.dispose();
     super.dispose();
@@ -137,7 +142,7 @@ class _PlaybackControllerState extends State<PlaybackController>
 
   Future<void> _togglePlayPause() async {
     if (_isLoading) {
-      _loadCancelled = true;
+      _loadGeneration++;
       _player.stop();
       setState(() => _isLoading = false);
       return;
@@ -163,19 +168,19 @@ class _PlaybackControllerState extends State<PlaybackController>
     }
 
     final mediaUrl = widget.message.mediaUrl;
-    if (mediaUrl == null || mediaUrl.isEmpty) {
-      throw Exception('No media URL');
-    }
     // A box voice note (item 3 / media wiring) comes from this device's
     // copy or the box, never `/media`.
     final box = boxMediaSourceFor(context, mediaUrl);
 
-    _loadCancelled = false;
+    final generation = ++_loadGeneration;
     setState(() {
       _isLoading = true;
     });
 
     try {
+      if (mediaUrl == null || mediaUrl.isEmpty) {
+        throw Exception('No media URL');
+      }
       if (kIsWeb) {
         // Web Audio decodes raw bytes (no HTML <audio> element ⇒ no
         // MediaSession). Fetch the bytes ourselves (encrypted media already
@@ -203,12 +208,12 @@ class _PlaybackControllerState extends State<PlaybackController>
               ? await MediaCryptoService().decrypt(Uint8List.fromList(raw), mk, mi)
               : Uint8List.fromList(raw);
         }
-        await _player.setAudioBytes(plain);
+        await _setAudioBytes(generation, plain);
       } else {
         _cachedFilePath = await _getCachedFilePath();
 
         if (_cachedFilePath != null && File(_cachedFilePath!).existsSync()) {
-          final played = await _playCachedFile(_cachedFilePath!);
+          final played = await _playCachedFile(_cachedFilePath!, generation);
           if (!played) {
             // Sealed under a key this device no longer holds (or torn):
             // unlike message plaintext, voice audio IS re-derivable — the
@@ -220,11 +225,15 @@ class _PlaybackControllerState extends State<PlaybackController>
             _cachedFilePath = null;
           }
         }
-        _cachedFilePath ??= await _downloadCacheAndPlay(mediaUrl, box);
+        _cachedFilePath ??= await _downloadCacheAndPlay(
+          mediaUrl,
+          box,
+          generation,
+        );
       }
 
-      if (mounted) setState(() => _isLoading = false);
-      if (_loadCancelled || !mounted) return;
+      if (generation != _loadGeneration || !mounted) return;
+      setState(() => _isLoading = false);
       await _player.play();
     } catch (e) {
       debugPrint('Audio load error: $e');
@@ -233,7 +242,7 @@ class _PlaybackControllerState extends State<PlaybackController>
             context, AppLocalizations.of(context).snackbarFailedToLoadAudio);
       }
     } finally {
-      if (mounted) {
+      if (mounted && generation == _loadGeneration) {
         setState(() {
           _isLoading = false;
         });
@@ -251,18 +260,24 @@ class _PlaybackControllerState extends State<PlaybackController>
   /// over a legacy file, and a player reading the path would then read
   /// sealed bytes on its next seek. False means the file is unreadable
   /// (sealed, key gone) and the caller should re-download.
-  Future<bool> _playCachedFile(String path) async {
+  Future<bool> _playCachedFile(String path, int generation) async {
     final bytes = await File(path).readAsBytes();
     if (!SealedAudioCodec.hasMagic(bytes)) {
       // A plain note an older build cached, not sealed yet this launch.
-      await _player.setAudioBytes(bytes);
+      await _setAudioBytes(generation, bytes);
       return true;
     }
     final store = NativeContentStore.instance;
     final plain = store == null ? null : await store.unsealAudioBytes(bytes);
     if (plain == null) return false;
-    await _player.setAudioBytes(plain);
+    await _setAudioBytes(generation, plain);
     return true;
+  }
+
+  /// Hands [bytes] to the player, unless load [generation] is stale.
+  Future<void> _setAudioBytes(int generation, Uint8List bytes) async {
+    if (generation != _loadGeneration) return;
+    await _player.setAudioBytes(bytes);
   }
 
   /// Downloads, decrypts and starts playback from memory. The cache gets the
@@ -272,6 +287,7 @@ class _PlaybackControllerState extends State<PlaybackController>
   Future<String?> _downloadCacheAndPlay(
     String url,
     BoxCiphertextSource? box,
+    int generation,
   ) async {
     // Native-only: the web branch of _loadAndPlayAudio decrypts into memory
     // and never reaches here.
@@ -309,7 +325,7 @@ class _PlaybackControllerState extends State<PlaybackController>
       plain,
       NativeContentStore.instance?.sealAudioBytes,
     );
-    await _player.setAudioBytes(plain);
+    await _setAudioBytes(generation, plain);
     return cached ? file.path : null;
   }
 

@@ -57,6 +57,9 @@ class _Encryption extends EncryptionProvider {
   @override
   VerifiedDeviceList? cachedDeviceList(int userId) => lists[userId];
 
+  /// While set, every [decrypt] waits for it: a read in flight.
+  Completer<void>? decryptHold;
+
   @override
   Future<VerifiedDeviceList> getVerifiedDeviceList(
     int userId, {
@@ -91,7 +94,10 @@ class _Encryption extends EncryptionProvider {
     String ciphertext, {
     int? messageId,
     int deviceId = 1,
-  }) async => inboundFor[messageId] ?? inbound;
+  }) async {
+    await decryptHold?.future;
+    return inboundFor[messageId] ?? inbound;
+  }
 
   @override
   Future<bool> carriesOwnIdentity(String ciphertext) async => true;
@@ -1015,6 +1021,60 @@ void main() {
         await pump();
         expect(row(msg.id)!.content, 'second');
         expect((await recordOf(msg.id))?['content'], 'second');
+      },
+    );
+
+    test(
+      'an edit NO device took still reverts when the socket reconnected '
+      'while its frames were in flight',
+      () async {
+        final msg = await mine('typo');
+        final slow = outbox.gate = Completer<void>();
+        provider.editMessage(msg.id, 'fixed');
+        await pump();
+        expect(row(msg.id)!.content, 'fixed');
+
+        provider.onConnect(true);
+        outbox.refuse.addAll([1, 2, 3]);
+        slow.complete();
+        await pump();
+
+        expect(failures, [BoxActionFailure.edit]);
+        expect(row(msg.id)!.content, 'typo');
+        expect(row(msg.id)!.editedAt, isNull);
+        expect((await recordOf(msg.id))?['content'], 'typo');
+      },
+    );
+
+    test(
+      'a read still decrypting when the account signs out and another signs '
+      "in lands nothing in the next account's chat",
+      () async {
+        encryption.inbound = jsonEncode(
+          E2eEnvelope.build(
+            'old account words',
+            msgId: 'wire-bob-0900',
+            sentAt: DateTime.now().toUtc().subtract(const Duration(minutes: 1)),
+          ),
+        );
+        final hold = encryption.decryptHold = Completer<void>();
+        final read = provider.consumeBoxEntry(entry(), _bob);
+        await pump();
+
+        provider
+          ..clearAll()
+          ..setCurrentUserId(9)
+          ..setToken('tok9')
+          ..onConnect(false);
+        encryption.decryptHold = null;
+        hold.complete();
+        await read;
+        await pump();
+
+        expect(
+          provider.messages.where((m) => m.content == 'old account words'),
+          isEmpty,
+        );
       },
     );
 

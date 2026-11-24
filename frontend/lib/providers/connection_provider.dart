@@ -416,7 +416,15 @@ class ConnectionProvider extends ChangeNotifier {
         final wait = AppConstants.reconnectConnectCooldown - since;
         _debouncedConnectTimer?.cancel();
         _debouncedConnectTimer = Timer(wait, () {
-          connect(userId, token, baseUrl);
+          // A JWT refresh inside the cooldown lands in the reconnect manager,
+          // not in this closure: read it at fire time, but only for the same
+          // account (another account's call brings its own token).
+          final newest = _reconnectManager.tokenForReconnect;
+          connect(
+            userId,
+            userId == _currentUserId && newest != null ? newest : token,
+            baseUrl,
+          );
         });
         return;
       }
@@ -425,8 +433,10 @@ class ConnectionProvider extends ChangeNotifier {
     _lastConnectStartedAt = now;
     final generation = ++_connectGeneration;
 
-    // 1. Cancel any pending reconnect timer
+    // 1. Cancel any pending reconnect timer, and the resume probe: it judges
+    // the socket it was armed on, which this connect is about to replace.
     _reconnectManager.cancel();
+    _resumeProbeTimer?.cancel();
     _intentionalDisconnect = false;
     _reconnectManager.tokenForReconnect = token;
 
@@ -747,6 +757,9 @@ class ConnectionProvider extends ChangeNotifier {
     // 7. Replace socket (enableForceNew). Suppress reconnect from the old socket's
     // disconnect event — otherwise WiFi/cellular handoff + connect() races schedule
     // extra connect() calls that can clear lists (non-reconnect) or use a stale JWT.
+    // The old socket stayed live across the awaits above; if it dropped there
+    // its handler armed a backoff timer that would tear this session down.
+    _reconnectManager.cancel();
     _intentionalDisconnect = true;
     _socketService.disconnect();
     // Every lookup still waiting left on the socket just torn down, so its
@@ -1246,13 +1259,21 @@ class ConnectionProvider extends ChangeNotifier {
         await _encryptionProvider?.encryptionService.clearMaterialDeviceStamp();
         await onSessionRebound!(tokens);
         if (userId != null) {
+          // `immediate` takes exactly one generation; connect() returns
+          // quietly when a newer connect or a disconnect took another, and
+          // then no socket was opened by this call.
+          final ownGeneration = _connectGeneration + 1;
           await connect(
             userId,
             tokens['access_token'] as String,
             AppConfig.baseUrl,
             immediate: true,
           );
-          rebound = true;
+          if (_connectGeneration == ownGeneration) {
+            rebound = true;
+          } else {
+            E2ePersistentDiag.record('RESET_REBIND_SUPERSEDED', {});
+          }
         } else {
           // Adopted but NOT reconnected: the replenish this ack triggers would
           // ride whatever socket exists, which is a weaker form of the very

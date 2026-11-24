@@ -31,7 +31,11 @@ void main() {
   late bool canRelaunch;
   late bool pickerActive;
 
-  PasscodeProvider build({bool wrapKeys = false}) => PasscodeProvider(
+  PasscodeProvider build({
+    bool wrapKeys = false,
+    FakeLockSignalHub? tabs,
+  }) => PasscodeProvider(
+    openLockSignalFn: tabs?.open,
     store: store,
     kdf: kdf,
     nowMs: () => now,
@@ -68,6 +72,84 @@ void main() {
   String hex(int seed) => List<int>.generate(32, (i) => (seed + i) & 0xff)
       .map((b) => b.toRadixString(16).padLeft(2, '0'))
       .join();
+
+  // WEB-05 [web-only: retire with §7]: two tabs of one origin. Each has its
+  // own provider, vault and revoker (RAM is per tab); the passcode store is the
+  // shared localStorage.
+  group('a lock in one tab locks the others (WEB-05)', () {
+    late FakeLockSignalHub tabs;
+    late PasscodeProvider tabA;
+    late PasscodeProvider tabB;
+    late ContentKeyWrap vaultB;
+    late List<String> revokerCallsB;
+    late int relaunchesB;
+
+    setUp(() async {
+      tabs = FakeLockSignalHub();
+      tabA = build(wrapKeys: true, tabs: tabs);
+      await tabA.initialize();
+      await tabA.enable(passcode: '123456', mode: PasscodeMode.digits6);
+
+      vaultB = ContentKeyWrap(sealer: FakeContentSealer(), meta: vaultStore);
+      revokerCallsB = <String>[];
+      relaunchesB = 0;
+      tabB = PasscodeProvider(
+        store: store,
+        kdf: kdf,
+        nowMs: () => now,
+        vault: vaultB,
+        gate: PasscodeUnlockGate()..open(),
+        revoker: E2eLockRevoker()
+          ..onRevoke = () async {
+            revokerCallsB.add('revoke');
+          },
+        wrapKeys: true,
+        canRelaunch: () => true,
+        relaunch: () => relaunchesB++,
+        nativePickerActive: () => false,
+        openLockSignalFn: tabs.open,
+      );
+      await tabB.initialize();
+      expect(await tabB.unlock('123456'), PasscodeUnlockResult.ok);
+      expect(tabB.state, PasscodeLockState.unlocked);
+    });
+
+    test('the padlock in tab A revokes tab B the same way', () async {
+      await tabA.lockNow();
+      await pumpEventQueue();
+
+      expect(tabB.state, PasscodeLockState.locked);
+      expect(vaultB.isLocked, isTrue);
+      expect(revokerCallsB, ['revoke']);
+      expect(relaunchesB, 1);
+      // Tab A did its own lock once and was not told back.
+      expect(revokerCalls, ['revoke']);
+      expect(tabs.announcements, 1, reason: 'B must not echo the lock');
+    });
+
+    test('an auto-lock on the tab the user just left does not lock the other',
+        () async {
+      await tabA.setAutoLockSeconds(0);
+
+      await tabA.noteBackgrounded(); // the immediate setting: A locks itself
+      await pumpEventQueue();
+
+      expect(tabA.state, PasscodeLockState.locked);
+      expect(tabs.announcements, 0);
+      expect(tabB.state, PasscodeLockState.unlocked);
+    });
+
+    test('a tab that is already locked ignores the signal', () async {
+      await tabB.lockNow();
+      await pumpEventQueue();
+      final before = revokerCallsB.length;
+
+      await tabA.lockNow();
+      await pumpEventQueue();
+
+      expect(revokerCallsB.length, before);
+    });
+  });
 
   group('key wrapping (Phase 2)', () {
     test('enabling wraps the existing content keys and opens the E2E gate',

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:clock/clock.dart';
@@ -7,12 +8,15 @@ import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/providers/friends_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
+import 'package:fireplace/services/contacts/contact_store.dart';
 import 'package:fireplace/services/device_list/device_list_canonical.dart';
+import 'package:fireplace/services/encryption/content_kv.dart';
 import 'package:fireplace/services/encryption_service.dart';
 import 'package:fireplace/services/socket_service.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:libsignal_protocol_dart/libsignal_protocol_dart.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// The §6.2 recovery ack re-homes this account onto a NEWLY allocated device
 /// and hands back the session bound to it. The server states the contract at
@@ -491,5 +495,58 @@ void main() {
           'the latch guards CONCURRENCY, not the session — and the answer '
           'must have landed for it to have cleared at all',
     );
+  });
+
+  // CONN-17. Mutation: set `rebound = true` unconditionally after the awaited
+  // `connect()` in `_adoptReboundSession`.
+  test('a rebind whose connect() was superseded enrolls NOTHING on the '
+      'socket that is left', () async {
+    SharedPreferences.setMockInitialValues({});
+    var gate = Future<void>.value();
+    final store = ContactStore(
+      open: () async {
+        await gate;
+        return PrefsContentKv.open();
+      },
+      lock: <T>(_, action) => action(),
+      accepts: (_) => true,
+    );
+    final parkedSocket = _FakeSocket();
+    final parked = ConnectionProvider(socketService: parkedSocket)
+      ..setProviders(
+        encryption: _RecordingEncryption(
+          order,
+          _FakeEncryptionService(generateIdentityKeyPair()),
+        ),
+        friends: FriendsProvider(),
+        conversations: ConversationsProvider(),
+        messaging: MessagingProvider(),
+        contactStore: store,
+      )
+      ..onSessionRebound = (_) async {};
+    await parked.connect(7, 'old-token', 'http://127.0.0.1:3000');
+    // The rebind's connect must re-open the store, and that parks it.
+    final slow = Completer<void>();
+    gate = slow.future;
+    store.close();
+
+    parkedSocket.emitServer('keyBundleUploaded', {
+      ...recoveryAck(),
+      'nextListVersion': 4,
+    });
+    await pumpEventQueue();
+    // The session ends while that connect waits: it opens no socket.
+    parked.disconnect();
+    slow.complete();
+    await pumpEventQueue();
+
+    expect(parkedSocket.connects, 1, reason: 'the superseded connect opened none');
+    expect(
+      parkedSocket.enrollments,
+      isEmpty,
+      reason: 'the rebind never happened, so nothing is owed on a socket it '
+          'did not open',
+    );
+    parked.dispose();
   });
 }

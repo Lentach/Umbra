@@ -1,0 +1,25 @@
+-- A nickname is unique case-insensitively, and the database says so.
+--
+-- `UsersService.create` checked the name with `LOWER(username)` and then
+-- inserted. The only constraint was UNIQUE (username, tag), so two
+-- registrations of one name racing past the check each drew a different tag
+-- and both rows were stored. Bare-name login then found two accounts and
+-- resolved to nobody for either.
+--
+-- One index on LOWER(username) closes that: the loser of the race gets a 23505
+-- on this index, which `create` answers as the ordinary "nickname is already
+-- taken". The pair (username, tag) stays unique as before.
+--
+-- Production held no two names differing only by case when this was written
+-- (checked 2026-11-24), so the index builds. On any other database, find them
+-- first:
+--   SELECT LOWER(username), count(*) FROM public.users
+--     GROUP BY 1 HAVING count(*) > 1;
+--
+-- Mirrored in `backend/src/users/user.entity.ts` with `synchronize: false`:
+-- dev `synchronize` drops every index the entity does not declare.
+--
+-- Inverse (add it as the NEXT numbered file, never edit this one):
+--   DROP INDEX IF EXISTS public."UQ_users_lower_username";
+CREATE UNIQUE INDEX IF NOT EXISTS "UQ_users_lower_username"
+  ON public.users USING btree (LOWER(username));

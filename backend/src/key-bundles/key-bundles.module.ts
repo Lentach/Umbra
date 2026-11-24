@@ -10,6 +10,7 @@ import { RecoveryKey } from './recovery-key.entity';
 import { DevicesService } from './devices.service';
 import { KeyBundlesService } from './key-bundles.service';
 import { IdentityResetService } from './identity-reset.service';
+import { IdentityRetentionService } from './identity-retention.service';
 import { DeviceListService } from './device-list.service';
 import { ProvisioningStagesService } from './provisioning-stages.service';
 import { ResetRosterService } from './reset-roster.service';
@@ -41,6 +42,7 @@ import { RefreshTokensModule } from '../auth/refresh-tokens.module';
     DeviceListService,
     ProvisioningStagesService,
     ResetRosterService,
+    IdentityRetentionService,
   ],
   exports: [
     DevicesService,
