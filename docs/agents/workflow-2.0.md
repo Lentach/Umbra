@@ -91,7 +91,7 @@ Principle: **the always-on file holds only rules that change a decision on every
 | §3 Local commands (647) | keep ~400 | test-count sentences stay (verifiers read them) |
 | §4 Deploy (387) | keep | already a pointer to the rule |
 | §5 Version, §6 DB/E2E (932) | keep ~700 | migration `0015` essay → `backend/CLAUDE.md` §4 (backend-only fact) |
-| **§7 Wire contracts (8,120)** | **→ `docs/contracts/wire.md`**, keep a 10-line index | load-on-demand rule: *touching `chat.gateway.ts`, `socket_service.dart`, `connection_provider.dart` (and its parts under `frontend/lib/providers/connection/**`), any DTO under `backend/src/**/dto`, or `messaging_provider.dart` (and its parts under `frontend/lib/providers/messaging/**`) → read `docs/contracts/wire.md` first.* Enforced by a `.omp/rules/wire-contracts.md` rule with those globs, so it auto-attaches exactly when relevant. |
+| **§7 Wire contracts (8,120)** | **→ `docs/contracts/wire.md`**, keep a 10-line index | load-on-demand rule: *touching `chat.gateway.ts`, the box gateway (`backend/src/box/**`), `socket_service.dart`, `connection_provider.dart` (and its parts under `frontend/lib/providers/connection/**`), any DTO under `backend/src/**/dto`, or `messaging_provider.dart` (and its parts under `frontend/lib/providers/messaging/**`) → read `docs/contracts/wire.md` first.* Enforced by a `.omp/rules/wire-contracts.md` rule with those globs, so it auto-attaches exactly when relevant. |
 | §8, §9 (385) | keep §8; §9 shrinks to two lines | |
 
 `docs/contracts/wire.md` becomes the *canonical* place for the §7 paragraphs — same text, moved, not rewritten. `docs/design/multi-device.md` §12 amendments keep pointing at it.
