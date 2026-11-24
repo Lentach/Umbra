@@ -192,7 +192,7 @@ class _MemKv implements ContentKv {
 /// the production box socket, beside [me]'s logged-in account socket, with
 /// its own contact store naming [friend] a friend. The messaging reader is
 /// stood in by a plain decrypt that hands a handoff or an ack to the session
-/// (`messaging_provider_box_friend_test` drives the real reader's checks on
+/// (`messaging_provider_box_friend_handoff_test` drives the real reader's checks on
 /// real Signal); what is proven here is the rest of the chain against the
 /// real server: the friend's request queues from a handle lookup, request
 /// queues, routing, sealing.

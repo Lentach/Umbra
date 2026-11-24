@@ -1410,13 +1410,14 @@ void main() {
       },
     );
 
-    test('an E2E action never lands on a server row (decision 46)', () async {
-      // A server row whose record carries Bob's wire id (PR2.1 stamps both
-      // paths): the E2E delete resolves to it, and must leave it alone.
+    test('an E2E action never lands on a pre-box record (decision 46)', () async {
+      // A pre-box record (an id below kFirstLocalMessageId, still on installs
+      // that talked before the box) carrying Bob's wire id: the E2E delete
+      // resolves to it, and must leave it alone.
       await encryption.store.saveDecryptedContent(
         77,
         // `senderId` too: without the local-id rule nothing else stops it.
-        {'content': 'old path', 'senderId': 2},
+        {'content': 'pre-box record', 'senderId': 2},
         conversationId: 10,
         createdAt: DateTime.now().toUtc(),
         wire: (senderId: 2, wireId: 'wire-old-0001'),
@@ -1424,11 +1425,11 @@ void main() {
       expect(await bobDoes(action('del', s: 2, w: 'wire-old-0001')), isTrue);
       expect(await recordOf(77), isNotNull);
 
-      // Nor is one parked for a server row that is still there: it is
+      // Nor is one parked for a pre-box record that is still there: it is
       // never a box target (no tombstone stands in for this check).
       await encryption.store.saveDecryptedContent(
         78,
-        {'content': 'old path too', 'senderId': 2},
+        {'content': 'pre-box record too', 'senderId': 2},
         conversationId: 10,
         createdAt: DateTime.now().toUtc(),
         wire: (senderId: 2, wireId: 'wire-old-0002'),
