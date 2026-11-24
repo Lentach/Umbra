@@ -5,6 +5,7 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 import { UsersService } from '../../users/users.service';
 import { DevicesService } from '../../key-bundles/devices.service';
 import { DEFAULT_DEVICE_ID } from '../../key-bundles/key-bundles.service';
+import { resolveJwtSecret } from '../jwt-secret';
 
 // Passport strategy — automatically verifies the JWT token
 // and injects user data into request.user
@@ -15,10 +16,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     private devicesService: DevicesService,
     configService: ConfigService,
   ) {
-    const secret = configService.get<string>('JWT_SECRET');
-    if (!secret) {
-      throw new Error('JWT_SECRET is not configured');
-    }
+    const secret = resolveJwtSecret(configService);
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       secretOrKey: secret,

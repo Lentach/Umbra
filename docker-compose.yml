@@ -34,7 +34,6 @@ services:
       DB_NAME: ${DB_NAME:-chatdb}
       JWT_SECRET: ${JWT_SECRET:-my-super-secret-jwt-key-change-in-production}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
-      MEDIA_BASE_URL: ${MEDIA_BASE_URL:-http://localhost:3000}
       MEDIA_DIR: /app/media
       # The box is OFF unless this is `true` (backend/src/app.module.ts). Dev and
       # CI's e2e stacks (this file) run it on; prod pins it off until the owner
