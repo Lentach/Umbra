@@ -517,8 +517,8 @@ class ApiService {
 /// Rewrites a loopback (`localhost` / `127.0.0.1`) media host to [baseUrl]'s
 /// scheme/host/port so the URL is reachable from the current client: the
 /// Android emulator (`10.0.2.2`), a phone hitting a dev PC over the LAN, or a
-/// web build whose stored `mediaUrl` carries the backend's default
-/// `MEDIA_BASE_URL` (`http://localhost:3000`). Non-loopback hosts (e.g. a
+/// web build whose stored `mediaUrl` carries the backend's old default media
+/// host (`http://localhost:3000`). Non-loopback hosts (e.g. a
 /// correctly-configured production origin) are returned unchanged.
 ///
 /// Applies on ALL platforms, web included. Web previously skipped this, so a
