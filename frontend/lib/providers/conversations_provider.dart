@@ -33,7 +33,7 @@ class ConversationsProvider extends ChangeNotifier {
   /// once.
   final Map<int, Set<int>> _boxUnread = {};
 
-  /// The session's stored-row pass (`MessagingBox.applyStoredBoxLastMessages`)
+  /// The session's stored-row pass (`MessagingBoxLocalRows.applyStoredBoxLastMessages`)
   /// has started: it rebuilds state only a fresh connect or [clearAll] drops,
   /// and a reconnect keeps (live messages maintain it).
   bool _storedBoxPassClaimed = false;

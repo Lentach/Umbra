@@ -94,7 +94,7 @@ C4 (link previews through our server with the user's JWT), D7 (CSP is report-onl
 
 ### 2.4 Found during this program, still open
 
-`chat-search.service.ts:17-34` duplicate socket-data helpers; UI-23; WEB-16 (unexplained composer state, not reproduced); the 6th account delete per hour per IP fails silently; `messaging_provider.box.dart` is 2 890 lines; `encryption_service.dart` (5 768) and `encryption_provider.dart` (4 052) were out of scope by design. From the batch 5 review: five IPv6 entries in the link-preview `blocked` test list pass even with the URL guard off (the URL regex in `fetchPreview` stops at `[`, so an IPv6-literal URL never reaches the guard: nothing is fetched, and nothing is tested); the `frontend-composer-media` agent rule has two triggers that match no file; seven `expect(emitted, isNot(contains('sendMessage')))` lines in the send test can no longer fail.
+`chat-search.service.ts:17-34` duplicate socket-data helpers; UI-23; WEB-16 (unexplained composer state, not reproduced); the 6th account delete per hour per IP fails silently; `messaging_provider.box.dart` was 2 890 lines (split in batch 4b: 431 plus six part files); `encryption_service.dart` (5 768) and `encryption_provider.dart` (4 052) were out of scope by design. From the batch 5 review: five IPv6 entries in the link-preview `blocked` test list pass even with the URL guard off (the URL regex in `fetchPreview` stops at `[`, so an IPv6-literal URL never reaches the guard: nothing is fetched, and nothing is tested); the `frontend-composer-media` agent rule has two triggers that match no file; seven `expect(emitted, isNot(contains('sendMessage')))` lines in the send test can no longer fail.
 
 ## 3. Threat model and invariants
 
@@ -170,7 +170,7 @@ A PWA's code is whatever the server sends on the next load. `/version.json` name
 |---|---|
 | A protocol document: how Umbra uses X3DH/Double Ratchet, the box, device lists, linking, recovery, backups, in one place | Missing. The content is spread over `multi-device.md` (3 252 lines), `metadata-privacy-decisions.md` (408 dense rows), `wire.md` (152), `e2e-invariants.md`, `METADATA.md` |
 | Threat model and invariants | §3: to be written |
-| A scoped, readable code base | `encryption_service.dart` 5 768 lines, `encryption_provider.dart` 4 052, `services/encryption/` 6 212, `services/box/` 8 289, `messaging_provider.box.dart` 2 890, vendored library ~4 100: about 31 000 lines in scope. The first two files were deliberately excluded from this cleanup program |
+| A scoped, readable code base | `encryption_service.dart` 5 768 lines, `encryption_provider.dart` 4 052, `services/encryption/` 6 212, `services/box/` 8 289, `messaging_provider.box.dart` 2 890 (before the batch 4b split), vendored library ~4 100: about 31 000 lines in scope. The first two files were deliberately excluded from this cleanup program |
 | A stable target | Feature freeze holds; the wire still changes in security fixes |
 | `SECURITY.md` + disclosure address | Missing |
 | Licence | Missing (§1.2) |
@@ -199,4 +199,4 @@ Order that makes an audit worth its money: (1) `SECURITY.md`, licence, CodeQL fo
 - **O7 / O6 of plan D2:** O7 accepted, not built; O6 deferred (decision 145).
 - **E143g:** §2.2.
 - **Release B** (avatar file deletion, with TD-13): due on or after 2026-12-08.
-- **Owner-owed from the cleanup batches:** BE-12 confirmation; UI-16 and UI-17; a batch 4b for `messaging_provider.box.dart` and the composer split; TD-07 (tests bound to English UI strings); the two composer comments of TD-15.
+- **Owner-owed from the cleanup batches:** BE-12 confirmation; UI-16 and UI-17; the composer split; TD-07 (tests bound to English UI strings); the two composer comments of TD-15.
