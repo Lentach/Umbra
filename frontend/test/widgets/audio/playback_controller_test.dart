@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fireplace/l10n/app_localizations.dart';
+import 'package:fireplace/l10n/app_localizations_en.dart';
 import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/services/voice_audio_coordinator.dart';
 import 'package:fireplace/widgets/audio/playback_controller.dart';
@@ -325,6 +326,35 @@ void main() {
     expect(find.text('playing:true'), findsOneWidget);
   });
 
+  testWidgets('a load in flight at dispose never reaches the player',
+      (tester) async {
+    const channel = MethodChannel('plugins.flutter.io/path_provider');
+    final gate = Completer<String>();
+    tester.binding.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) => gate.future);
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null),
+    );
+    IOOverrides.global = _CachedNoteIo(
+      '/voice-cache-test',
+      Uint8List.fromList([1, 2, 3, 4, 5, 6, 7, 8]),
+    );
+    addTearDown(() => IOOverrides.global = null);
+
+    final fake = FakeVoicePlayer();
+    await tester.pumpWidget(_host(fake, _voiceMessage()));
+    await tester.tap(find.text('toggle'));
+    await tester.pump();
+
+    await tester.pumpWidget(const SizedBox());
+    gate.complete('/voice-cache-test');
+    await tester.pump();
+    await tester.pump();
+
+    expect(fake.calls, isNot(contains('setAudioBytes')));
+  });
+
   testWidgets('a voice note with no media URL says it failed to load',
       (tester) async {
     final fake = FakeVoicePlayer();
@@ -334,7 +364,7 @@ void main() {
     await tester.pump();
 
     expect(tester.takeException(), isNull);
-    expect(find.text('Failed to load audio'), findsOneWidget);
+    expect(find.text(AppLocalizationsEn().snackbarFailedToLoadAudio), findsOneWidget);
     expect(find.text('loading:false'), findsOneWidget);
     expect(fake.calls, isNot(contains('play')));
 

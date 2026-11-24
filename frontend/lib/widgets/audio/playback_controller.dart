@@ -129,6 +129,7 @@ class _PlaybackControllerState extends State<PlaybackController>
 
   @override
   void dispose() {
+    _loadGeneration++;
     VoiceAudioCoordinator.instance.onStoppedPlaying(this);
     _player.dispose();
     super.dispose();

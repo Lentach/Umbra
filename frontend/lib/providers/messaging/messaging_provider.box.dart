@@ -2746,6 +2746,8 @@ extension MessagingBox on MessagingProvider {
         // peer drops the repeat (decision 104).
         E2ePersistentDiag.record('BOX_SENT_STORE_UNPROVEN', {'msgId': localId});
       }
+      // Another account signed in while the record was being stored.
+      if (_currentUserId != ownUserId) return true;
       _addMessageToState(sent);
       return true;
     } finally {

@@ -155,9 +155,14 @@ class _SendEncryption extends EncryptionProvider {
   /// swallowed).
   bool recordsUnproven = false;
 
+  /// While set, `recordExists` waits for it: a store write in flight.
+  Completer<void>? recordHold;
+
   @override
-  Future<bool?> recordExists(int messageId) async =>
-      recordsUnproven ? false : super.recordExists(messageId);
+  Future<bool?> recordExists(int messageId) async {
+    await recordHold?.future;
+    return recordsUnproven ? false : super.recordExists(messageId);
+  }
 
   @override
   Future<void> saveDecryptedContent(
@@ -2384,6 +2389,29 @@ void main() {
         encryption.getCachedDecryption(kFirstLocalMessageId + 40),
         isNull,
         reason: "the old account's plaintext is not in the RAM cache",
+      );
+    });
+
+    test('a switch of account while the sent record is being stored shows '
+        "nothing in the next account's chat", () async {
+      bob([1]);
+      final hold = encryption.recordHold = Completer<void>();
+      provider.sendMessage('old account words');
+      await pump();
+      expect(outbox.delivered, isNotEmpty);
+
+      provider
+        ..clearAll()
+        ..setCurrentUserId(9)
+        ..setToken('tok9')
+        ..onConnect(false);
+      encryption.recordHold = null;
+      hold.complete();
+      await pump(80);
+
+      expect(
+        provider.messages.where((m) => m.content == 'old account words'),
+        isEmpty,
       );
     });
 
