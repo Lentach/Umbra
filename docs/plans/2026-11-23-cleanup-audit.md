@@ -119,5 +119,6 @@ Release B (drop of old tables/files) is due on or after 2026-12-08 and rides whi
 | O-8 | Log fingerprints and old records (BE-20, BE-29) | Remove fingerprints; 30 days for old rows; newest identity-change row per account stays (decision 150). |
 | O-9 | Composer | OK for the three bug fixes UI-05/06/07, each with a failing test and a drive. The composer file split stays last. |
 | O-10 | Passcode lock across tabs (WEB-05) | Fix it. |
+| O-11 | (11-24, batch 1c.) Old account's push table left in the browser after logout (WEB-02, web-only, about 15 lines) | Keep the fix. |
 
 Effect on the batches: 1a loses F-001 and gains F-002 (small fix) and F-003; 1b gains UI-05/06/07; 1c gains WEB-05, BE-05, BE-20, BE-29; batch 2 gains the `getMessages` shim.
