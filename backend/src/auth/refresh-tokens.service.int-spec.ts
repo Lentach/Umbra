@@ -358,4 +358,30 @@ describeWithDb('RefreshTokensService rotation on real Postgres', () => {
     expect(await sessionsOf(userId)).toEqual([]);
     await expect(rotate(t1)).rejects.toThrow(INVALID);
   });
+
+  it("deleteExpired drops only rows past their expiry: live sessions and a revoked device's unexpired row stay", async () => {
+    const userId = await seedUser();
+    const live1 = await service.createToken(userId, 1);
+    const expired = await service.createToken(userId, 2);
+    const revokedUnexpired = await service.createToken(userId, 3);
+    await db.query(
+      `INSERT INTO public.devices ("userId", "deviceId", "revokedAt")
+       VALUES ($1, 3, now())`,
+      [userId],
+    );
+    await db.query(
+      `UPDATE public.refresh_tokens SET expires_at = now() - interval '1 day'
+        WHERE token_hash = $1`,
+      [RefreshTokensService.hashToken(expired)],
+    );
+
+    await service.deleteExpired();
+
+    const left = (await sessionsOf(userId)).map((row) => row.tokenHash).sort();
+    expect(left).toEqual(
+      [live1, revokedUnexpired]
+        .map((token) => RefreshTokensService.hashToken(token))
+        .sort(),
+    );
+  });
 });

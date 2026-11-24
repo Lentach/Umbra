@@ -1,7 +1,8 @@
 import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, Repository } from 'typeorm';
+import { Cron, CronExpression } from '@nestjs/schedule';
+import { EntityManager, LessThan, Repository } from 'typeorm';
 import { createHash, createHmac, randomBytes, randomUUID } from 'crypto';
 import { RefreshToken } from './refresh-token.entity';
 import { resolveJwtSecret } from './jwt-secret';
@@ -255,6 +256,33 @@ export class RefreshTokensService {
       '[auth-session-end] reason=refresh_reuse source=refresh_endpoint',
     );
     throw new UnauthorizedException('Invalid refresh token');
+  }
+
+  /**
+   * Daily: drops every session past its expiry. Nothing else removes the rows
+   * of an abandoned install, or of a revoked device (`revokeAllForUser` keeps
+   * those on purpose, so a woken device can be told it was revoked), once
+   * their 365 days are up. The expiry is the ONLY predicate: a revoked
+   * device's row that has not expired stays. A count, never an id, is logged.
+   */
+  @Cron(CronExpression.EVERY_DAY_AT_4AM)
+  async deleteExpired(): Promise<number> {
+    try {
+      const result = await this.refreshRepo.delete({
+        expiresAt: LessThan(new Date()),
+      });
+      const removed = result.affected ?? 0;
+      if (removed > 0) {
+        this.logger.log(`Deleted ${removed} expired refresh sessions`);
+      }
+      return removed;
+    } catch (error) {
+      const code = (error as { code?: unknown } | null)?.code;
+      this.logger.error(
+        `Expired refresh session sweep failed (${typeof code === 'string' ? code : 'error'})`,
+      );
+      return 0;
+    }
   }
 
   /** Logout: ends the session the client's current (or just replaced) token names. */

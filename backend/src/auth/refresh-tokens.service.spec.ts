@@ -1,6 +1,7 @@
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { CronExpression } from '@nestjs/schedule';
+import { FindOperator, Repository } from 'typeorm';
 import { UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -298,6 +299,45 @@ describe('RefreshTokensService', () => {
       expect(txQuery).toHaveBeenCalledTimes(1);
       expect(txQuery.mock.calls[0][1]).toEqual([42]);
       expect(defaultQuery).not.toHaveBeenCalled();
+    });
+  });
+
+  // BE-08: nothing else removed the rows of abandoned installs and of revoked
+  // devices (kept on purpose, by `revokeAllForUser`) once their year was up.
+  describe('deleteExpired (daily reaper)', () => {
+    it('deletes by expiry alone: no user, device or revocation predicate', async () => {
+      repo.delete.mockResolvedValue({ affected: 3, raw: [] });
+      const before = Date.now();
+
+      const removed = await service.deleteExpired();
+
+      expect(removed).toBe(3);
+      expect(repo.delete.mock.calls).toHaveLength(1);
+      const criteria = repo.delete.mock.calls[0][0] as Record<string, unknown>;
+      expect(Object.keys(criteria)).toEqual(['expiresAt']);
+      const cutoff = criteria.expiresAt as FindOperator<Date>;
+      expect(cutoff.type).toBe('lessThan');
+      expect(cutoff.value.getTime()).toBeGreaterThanOrEqual(before);
+      expect(cutoff.value.getTime()).toBeLessThanOrEqual(Date.now());
+    });
+
+    it('a failing delete is logged by code and does not reject into the scheduler', async () => {
+      repo.delete.mockRejectedValue(new Error('connection lost'));
+
+      await expect(service.deleteExpired()).resolves.toBe(0);
+    });
+
+    it('runs once a day', () => {
+      // The descriptor, not `Prototype.method`: unbound-method and the
+      // no-unsafe-* rules would push the ratchet floor.
+      const handler = Object.getOwnPropertyDescriptor(
+        RefreshTokensService.prototype,
+        'deleteExpired',
+      )?.value as object;
+      const options = Reflect.getMetadata('SCHEDULE_CRON_OPTIONS', handler) as
+        { cronTime?: string } | undefined;
+
+      expect(options?.cronTime).toBe(CronExpression.EVERY_DAY_AT_4AM);
     });
   });
 });
