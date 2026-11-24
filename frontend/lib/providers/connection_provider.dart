@@ -757,6 +757,9 @@ class ConnectionProvider extends ChangeNotifier {
     // 7. Replace socket (enableForceNew). Suppress reconnect from the old socket's
     // disconnect event — otherwise WiFi/cellular handoff + connect() races schedule
     // extra connect() calls that can clear lists (non-reconnect) or use a stale JWT.
+    // The old socket stayed live across the awaits above; if it dropped there
+    // its handler armed a backoff timer that would tear this session down.
+    _reconnectManager.cancel();
     _intentionalDisconnect = true;
     _socketService.disconnect();
     // Every lookup still waiting left on the socket just torn down, so its

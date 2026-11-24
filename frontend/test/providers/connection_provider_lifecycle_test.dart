@@ -490,6 +490,47 @@ void main() {
     });
   });
 
+  // CONN-03. Mutation: drop `_reconnectManager.cancel()` before the socket
+  // swap in `connect()`.
+  test('the old socket dropping while a connect() is parked does not tear '
+      'down the healthy session that connect then opens', () {
+    fakeAsync((async) {
+      var gate = Future<void>.value();
+      final store = ContactStore(
+        open: () async {
+          await gate;
+          return PrefsContentKv.open();
+        },
+        lock: <T>(_, action) => action(),
+        accepts: (_) => true,
+      );
+      wire(contactStore: store);
+      unawaited(connection.connect(1, 'a', _url));
+      async.flushMicrotasks();
+      socket
+        ..transportConnect()
+        ..serve('socketReady');
+
+      final slow = Completer<void>();
+      gate = slow.future;
+      unawaited(connection.connect(2, 'b', _url, immediate: true));
+      async.flushMicrotasks();
+      // The old socket is still live while the store opens, and it dies.
+      socket.drop();
+      slow.complete();
+      async.flushMicrotasks();
+      socket
+        ..transportConnect()
+        ..serve('socketReady');
+      expect(socket.connectTokens, ['a', 'b']);
+
+      async.elapse(AppConstants.reconnectMaxDelay);
+
+      expect(socket.connectTokens, ['a', 'b']);
+      connection.disconnect(isLogout: true);
+    });
+  });
+
   // MC-09. Mutation: drop `_reconnectManager.resetAttempts()` from
   // `_onSocketReady`.
   test('a session that turned ready starts its reconnect count over: every '
