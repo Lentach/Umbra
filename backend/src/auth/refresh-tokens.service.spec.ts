@@ -33,8 +33,16 @@ describe('RefreshTokensService', () => {
           provide: getRepositoryToken(RefreshToken),
           useValue: mockRepo,
         },
-        // No JWT_SECRET: the dev fallback keys the rotation chain.
-        { provide: ConfigService, useValue: { get: () => undefined } },
+        // An explicit secret keys the rotation chain (there is no fallback).
+        {
+          provide: ConfigService,
+          useValue: {
+            get: (key: string) =>
+              key === 'JWT_SECRET'
+                ? 'spec-jwt-secret-of-at-least-32-chars'
+                : undefined,
+          },
+        },
       ],
     }).compile();
 
