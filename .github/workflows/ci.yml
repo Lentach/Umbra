@@ -107,7 +107,7 @@ jobs:
         working-directory: .
         run: node scripts/verify-claude-backend-test-counts.mjs --log backend/test-output.txt
 
-      # Invariant I1: nothing under backend/src/box may reach auth/, users/ or
+      # Invariant I1: nothing under backend/src/box may reach auth/, auth-core/, refresh-tokens/, users/ or
       # chat/ — transitively, so a one-hop leak (box -> push -> fcm-tokens ->
       # users) fails too. The self-test proves the walker catches exactly that.
       - name: Verify box imports (I1)

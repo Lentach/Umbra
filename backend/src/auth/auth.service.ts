@@ -11,7 +11,10 @@ import { User } from '../users/user.entity';
 import { UsersService } from '../users/users.service';
 import { RefreshTokensService } from '../refresh-tokens/refresh-tokens.service';
 import { LoginBackoffService } from './login-backoff.service';
-import { passwordFormatOf, verifyDummyPasswords } from '../auth-core/password-hash';
+import {
+  passwordFormatOf,
+  verifyDummyPasswords,
+} from '../auth-core/password-hash';
 import { DevicesService } from '../key-bundles/devices.service';
 import {
   IdentityResetService,

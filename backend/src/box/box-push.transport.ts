@@ -22,7 +22,7 @@ export type BoxPush =
  *
  * The box has a sender of its own because it never resolves a token by user
  * id: tokens arrive as raw strings from the notifier registration, and I1
- * forbids importing `users/`, `auth/` or `chat/` here.
+ * forbids importing `auth/`, `auth-core/`, `refresh-tokens/`, `users/` or `chat/` here.
  */
 export interface BoxPushTransport {
   send(
