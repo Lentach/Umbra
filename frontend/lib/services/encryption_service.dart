@@ -1401,7 +1401,13 @@ class EncryptionService {
     // the loader below restores it). Cleared only when the account
     // CHANGES — a same-user re-run (passcode re-lock → unlock) must keep the
     // unpersisted refusals.
-    if (_userId != userId) _forgetAccountRam();
+    if (_userId != userId) {
+      _forgetAccountRam();
+      // Key material this process minted belongs to the account that minted
+      // it: uploaded under another it would publish the wrong identity.
+      _keysForUpload = null;
+      needsKeyUpload = false;
+    }
     _userId = userId;
     final p = 'e2e_${userId}_'; // per-user storage key prefix
 

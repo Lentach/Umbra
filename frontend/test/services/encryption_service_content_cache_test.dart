@@ -224,6 +224,32 @@ void main() {
           reason: 'account 99 must not hold account 42 plaintext');
     });
 
+    test('keys minted for one account are never uploaded under another',
+        () async {
+      // Fail-before: the singleton kept account B's minted bundle, so A's
+      // re-entry reported needsKeyUpload and handed B's keys out for upload.
+      const fresh = ServerIdentityGuard(exists: false);
+      final svc = EncryptionService();
+      await svc.initialize(5, checkServerIdentity: () async => fresh);
+      await svc.initialize(6, checkServerIdentity: () async => fresh);
+      expect(svc.getKeysForUpload(), isNotNull, reason: 'B minted');
+
+      await svc.initialize(5, checkServerIdentity: () async => fresh);
+
+      expect(svc.needsKeyUpload, isFalse);
+      expect(svc.getKeysForUpload(), isNull);
+    });
+
+    test('a same-user re-init keeps the pending upload of its own mint',
+        () async {
+      const fresh = ServerIdentityGuard(exists: false);
+      final svc = EncryptionService();
+      await svc.initialize(5, checkServerIdentity: () async => fresh);
+      await svc.initialize(5, checkServerIdentity: () async => fresh);
+      expect(svc.needsKeyUpload, isTrue);
+      expect(svc.getKeysForUpload(), isNotNull);
+    });
+
     test('a keyed write still updates an existing keyed entry', () async {
       await service.saveDecryptedContent(2002, {
         'content': '',
