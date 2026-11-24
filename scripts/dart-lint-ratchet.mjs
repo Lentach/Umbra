@@ -39,7 +39,10 @@ if (run.error || typeof run.stdout !== "string") {
 }
 const raw = run.stdout + "\n" + run.stderr;
 
-const line = /^\s*(info|warning|error) - .* - ([a-z_0-9]+)\s*$/;
+// flutter_tools picks the column separator by HOST: "-" on Windows, "•" everywhere else
+// (packages/flutter_tools/lib/src/dart/analysis.dart, `_separator`). Accept both — a
+// "-"-only pattern matched nothing on CI's Linux runner and "passed" at 0 for months.
+const line = /^\s*(info|warning|error) [-•] .* [-•] ([a-z_0-9]+)\s*$/;
 const byRule = new Map();
 let infos = 0;
 let others = 0;
@@ -58,6 +61,17 @@ for (const l of raw.split(/\r?\n/)) {
 const summary = /(\d+) issues? found|No issues found/.exec(raw);
 if (!summary) {
   console.error("could not find the flutter analyze summary line — tooling error, not a pass:\n" + raw.slice(-2000));
+  process.exit(2);
+}
+// GUARD: every finding flutter counted must have been parsed. A silent undercount (0 of
+// 2 485 on Linux) reads as "PASS, IMPROVED" and switches the ratchet off.
+const reported = Number(summary[1] ?? 0);
+if (infos + others !== reported) {
+  console.error(
+    `PARSER ERROR — flutter analyze reported ${reported} issues but this script parsed ${infos + others}. ` +
+      "The finding-line format changed; fix the `line` pattern. Not a pass.\n" +
+      raw.split(/\r?\n/).filter((l) => l.trim()).slice(0, 5).join("\n"),
+  );
   process.exit(2);
 }
 
