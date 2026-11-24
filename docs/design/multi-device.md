@@ -1825,7 +1825,7 @@ that is the designed outcome).
     ENROLLED account.** §6.1 admits an identity replacement on either a signature by the PREVIOUS
     identity key or a completed §6.2 ceremony. That was sound in Phase 0b and multi-device
     DELIBERATELY FALSIFIED ITS PREMISE: the §5.1 link blob ships `ikPriv` to every linked device
-    (`link_ceremony_controller.dart:460`), because a device must sign its own X3DH signed prekey
+    (`link_ceremony_controller.primary.dart:151`), because a device must sign its own X3DH signed prekey
     under the account identity. So "holds `ikPriv`" no longer means "is the account's primary", and
     the signature path silently became available to every linked device.
     A compromised LINKED device therefore reaches, with no ceremony and no 72 h delay: mint a new
@@ -2545,7 +2545,7 @@ that is the designed outcome).
   - **(lxxiv) clause 1 — a web PRIMARY is asked to be INSTALLED first.** §8 said only a
     Keystore-capable device may be primary; code disagreed since (li) — `enableLinking(platform:'web')`
     mints and persists a DAK on web in the same sealed `sig_` KV as the IK
-    (`link_ceremony_controller.dart:352-372`, `dak_store.dart`), and every web primary in the field is
+    (`link_ceremony_controller.devices.dart:90-141`, `dak_store.dart`), and every web primary in the field is
     real. Code wins; §8 is rewritten below. The exposure is EVICTION, not theft: a browser-tab origin
     is the first thing a storage-pressure sweep or a "clear browsing data" takes, and a wiped primary
     is the one shape whose only exit is the §6.2 delay (I2 — the DAK exists nowhere else). Rule: on
