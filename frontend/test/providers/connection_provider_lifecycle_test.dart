@@ -429,6 +429,108 @@ void main() {
     });
   });
 
+  // CONN-02. Mutation: pass the captured `token` from the debounce timer.
+  group('a connect() the cooldown deferred', () {
+    test('opens with the token a refresh brought while it waited', () {
+      fakeAsync((async) {
+        unawaited(connection.connect(1, 'old', _url));
+        async.flushMicrotasks();
+        unawaited(connection.connect(1, 'old', _url));
+        async.flushMicrotasks();
+        expect(socket.connectTokens, ['old'], reason: 'deferred');
+
+        connection.applyRefreshedAccessToken('fresh');
+        async.elapse(AppConstants.reconnectConnectCooldown);
+
+        expect(socket.connectTokens, ['old', 'fresh']);
+        connection.disconnect(isLogout: true);
+      });
+    });
+
+    // The control: with no refresh since, the caller's token is the newest.
+    test('opens with its own token when nothing was refreshed since', () {
+      fakeAsync((async) {
+        unawaited(connection.connect(1, 'old', _url));
+        async.flushMicrotasks();
+        unawaited(connection.connect(2, 'other', _url));
+        async.flushMicrotasks();
+
+        async.elapse(AppConstants.reconnectConnectCooldown);
+
+        expect(socket.connectTokens, ['old', 'other']);
+        connection.disconnect(isLogout: true);
+      });
+    });
+  });
+
+  // CONN-05. Mutation: drop `_resumeProbeTimer?.cancel()` from `connect()`.
+  test('a resume probe armed before a fresh connect does not replace the '
+      'healthy socket that connect opened', () {
+    fakeAsync((async) {
+      unawaited(connection.connect(1, 'token', _url));
+      async.flushMicrotasks();
+      socket
+        ..transportConnect()
+        ..serve('socketReady');
+      connection.ensureReconnectIfNeeded(); // arms the 6 s probe
+      async.elapse(const Duration(seconds: 3));
+
+      // The socket died; the reconnect completes inside the probe window.
+      unawaited(connection.connect(1, 'token', _url));
+      async.flushMicrotasks();
+      socket
+        ..transportConnect()
+        ..serve('socketReady');
+      final opened = socket.connectTokens.length;
+
+      async.elapse(const Duration(seconds: 7));
+
+      expect(socket.connectTokens, hasLength(opened));
+      connection.disconnect(isLogout: true);
+    });
+  });
+
+  // CONN-03. Mutation: drop `_reconnectManager.cancel()` before the socket
+  // swap in `connect()`.
+  test('the old socket dropping while a connect() is parked does not tear '
+      'down the healthy session that connect then opens', () {
+    fakeAsync((async) {
+      var gate = Future<void>.value();
+      final store = ContactStore(
+        open: () async {
+          await gate;
+          return PrefsContentKv.open();
+        },
+        lock: <T>(_, action) => action(),
+        accepts: (_) => true,
+      );
+      wire(contactStore: store);
+      unawaited(connection.connect(1, 'a', _url));
+      async.flushMicrotasks();
+      socket
+        ..transportConnect()
+        ..serve('socketReady');
+
+      final slow = Completer<void>();
+      gate = slow.future;
+      unawaited(connection.connect(2, 'b', _url, immediate: true));
+      async.flushMicrotasks();
+      // The old socket is still live while the store opens, and it dies.
+      socket.drop();
+      slow.complete();
+      async.flushMicrotasks();
+      socket
+        ..transportConnect()
+        ..serve('socketReady');
+      expect(socket.connectTokens, ['a', 'b']);
+
+      async.elapse(AppConstants.reconnectMaxDelay);
+
+      expect(socket.connectTokens, ['a', 'b']);
+      connection.disconnect(isLogout: true);
+    });
+  });
+
   // MC-09. Mutation: drop `_reconnectManager.resetAttempts()` from
   // `_onSocketReady`.
   test('a session that turned ready starts its reconnect count over: every '
