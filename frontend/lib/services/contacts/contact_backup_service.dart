@@ -201,9 +201,12 @@ class ContactBackupService {
     String? password,
     String? phrase,
   }) async {
-    final previous = _resolving;
-    if (previous != null && !previous.isCompleted) {
-      await previous.future;
+    // A loop, not one await: every caller queued on one gate wakes in the
+    // same round, and only the first may take the next gate. The rest see it
+    // and wait again, so resolves run one after the other.
+    for (var gate = _resolving; gate != null && !gate.isCompleted;) {
+      await gate.future;
+      gate = _resolving;
     }
     if (_userId != userId) {
       _resetSession();

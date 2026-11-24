@@ -46,6 +46,12 @@ class _FakeBackend {
   Map<String, dynamic>? row;
   final List<Map<String, dynamic>> puts = [];
   int gets = 0;
+  int getsInFlight = 0;
+  int maxGetsInFlight = 0;
+
+  /// Holds the NEXT get open until completed; [getHeld] fires when it is in.
+  Completer<void>? holdNextGet;
+  final Completer<void> getHeld = Completer<void>();
 
   /// Forces the NEXT put to answer 409 — the "another device wrote" case.
   bool nextPutIsStale = false;
@@ -65,6 +71,19 @@ class _FakeBackend {
     }
     if (request.method == 'GET') {
       gets++;
+      getsInFlight++;
+      if (getsInFlight > maxGetsInFlight) maxGetsInFlight = getsInFlight;
+      try {
+        final hold = holdNextGet;
+        if (hold != null) {
+          holdNextGet = null;
+          getHeld.complete();
+          await hold.future;
+        }
+        await Future<void>.delayed(Duration.zero);
+      } finally {
+        getsInFlight--;
+      }
       final forcedGet = nextGetStatus;
       if (forcedGet != null) {
         nextGetStatus = null;
@@ -772,6 +791,30 @@ void main() {
     final other = await service();
     await other.onSession(userId: 7, token: 'jwt2', password: 'new');
     expect(other.holdsOpenableBackup, isTrue);
+  });
+
+  // CONT-10: two sessions queued behind one resolve must run one after the
+  // other, not both at once on the same fields.
+  test('two callers waiting on one resolve run one after the other', () async {
+    await seedRow(password: 'pw');
+    final svc = await service();
+    svc.attach(store);
+    final release = backend.holdNextGet = Completer<void>();
+    final first = svc.onSession(userId: 7, token: 'jwt', password: 'pw');
+    await backend.getHeld.future;
+    final second = svc.onSession(userId: 7, token: 'jwt', password: 'pw');
+    final third = svc.onSession(userId: 7, token: 'jwt', password: 'pw');
+    await pumpEventQueue();
+    release.complete();
+    await Future.wait([first, second, third]);
+
+    expect(backend.gets, 3);
+    expect(
+      backend.maxGetsInFlight,
+      1,
+      reason: 'a resolve started while another is still running',
+    );
+    expect(svc.state, ContactBackupState.ready);
   });
 
   test('logout destroys the cached content key', () async {
