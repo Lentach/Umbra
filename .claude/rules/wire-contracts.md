@@ -1,6 +1,7 @@
 ---
 paths:
   - "backend/src/chat/**"
+  - "backend/src/box/**"
   - "backend/src/**/dto/**"
   - "backend/src/key-bundles/**"
   - "backend/src/auth/**"
