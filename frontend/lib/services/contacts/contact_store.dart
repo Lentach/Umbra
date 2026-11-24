@@ -170,6 +170,10 @@ class ContactStore {
     encode: (book) => book.encode(),
     write: _BookWrite.unlessSameBook,
   );
+
+  /// Only `key`, `loader` and `reset` may be read through this list: `encode`
+  /// and `decode` take `T`, so reaching them through `_BookRow<Object>` would
+  /// throw a `TypeError`. They go through the typed field, in `_updateBook`.
   late final List<_BookRow<Object>> _bookRows = [
     _siblingRow,
     _notifierRow,
@@ -654,13 +658,17 @@ class ContactStore {
           if (_generation == generation) row.book = current;
           return false;
         }
+        // Encoded ONCE: the compare and the write take the same string, as
+        // each hand-written book did (`jsonEncode` of the sibling book is not
+        // free).
+        final encoded = row.encode(next);
         final write = switch (row.write) {
           _BookWrite.always => true,
-          _BookWrite.whenEncodingDiffers => row.encode(next) != raw,
+          _BookWrite.whenEncodingDiffers => encoded != raw,
           _BookWrite.unlessSameBook =>
-            !identical(next, current) && row.encode(next) != raw,
+            !identical(next, current) && encoded != raw,
         };
-        if (write && !await kv.setString(key, row.encode(next))) return false;
+        if (write && !await kv.setString(key, encoded)) return false;
         if (_generation == generation) row.book = next;
         return true;
       }),
@@ -833,8 +841,11 @@ class _Decoded {
   final bool unsupported;
 }
 
-/// When [ContactStore._updateBook] writes the book its mutate kept. The three
-/// differ only when the row on disk is not already that book's encoding.
+/// When [ContactStore._updateBook] writes the book its mutate kept.
+/// `always` writes even when the row already holds this encoding; the other
+/// two skip that write. `whenEncodingDiffers` and `unlessSameBook` part only
+/// when the mutate hands back the very book it got over an absent or
+/// unreadable row: the first replaces it, the second leaves it.
 enum _BookWrite {
   /// Every time, an identical encoding included (the notifier book).
   always,

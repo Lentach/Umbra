@@ -705,8 +705,11 @@ class MessagingProvider extends ChangeNotifier {
   /// Runs [action] after every read queued earlier for [senderId], under
   /// the session epoch it was queued in ([_boxReadStale]).
   ///
-  /// Box reads are serialised twice, on different keys (audit BOX-11):
-  /// - `BoxInbox._reads`: ONE chain for every journaled delivery. The three
+  /// Box reads are serialised twice, on different keys:
+  /// - `BoxInbox._reads`: ONE chain per box session for every journaled
+  ///   delivery (an account switch builds a new session, so a read still
+  ///   running in the old inbox can overlap the new one's — the epoch above
+  ///   is what covers that). The three
   ///   calls in `consumeBoxEntry` and the one in `_takeRelayed` (reached
   ///   from inside a sibling read) run only inside it, so among themselves
   ///   this chain orders nothing.

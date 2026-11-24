@@ -33,7 +33,7 @@ void main() {
     await store.open(1);
   });
 
-  // Mutation: `open` does not decode the row (`_lookupBook` stays empty), or
+  // Mutation: `open` does not decode the row (the lookup book stays empty), or
   // `noteFriendLookup` keeps a stamp that is later than the new one (the clock
   // went back: the stamp from the future then makes the friend due at every
   // start, second review).
