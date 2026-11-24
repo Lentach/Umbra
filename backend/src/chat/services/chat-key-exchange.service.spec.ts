@@ -469,7 +469,7 @@ describe('ChatKeyExchangeService', () => {
 
         // AND IT IS NEVER TOLD IT WAS REVOKED. This matters more than the
         // disconnect: the client's handler does NOT filter on device id
-        // (connection_provider.dart `_onOwnDeviceRevoked` logs out
+        // (connection/connection_provider.box.dart `_onOwnDeviceRevoked` logs out
         // unconditionally), so a room-wide announcement would make the
         // recovering device wipe the very session it adopted from the ack a
         // moment earlier.

@@ -92,7 +92,7 @@ export class ChatKeyExchangeService {
    * matters more than the disconnect. Its socket is still joined to the room
    * of its PRE-reset device id, which this teardown just revoked, so a
    * room-wide emit reaches it — and the client's `deviceRevoked` handler does
-   * NOT filter on device id (`connection_provider.dart:_onOwnDeviceRevoked`
+   * NOT filter on device id (`connection/connection_provider.box.dart:23` `_onOwnDeviceRevoked`
    * logs out unconditionally; the id only decides whether the box queues are
    * deleted). It would therefore wipe the very session it had just adopted
    * from the ack, moments earlier. Sparing it from `disconnect()` alone does
