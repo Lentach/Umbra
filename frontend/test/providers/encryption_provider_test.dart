@@ -127,6 +127,7 @@ void main() {
         // ordered deletion (the 2026-08-02 dump's exact ambiguity).
         await provider.saveDecryptedContent(1101, {'content': 'doomed'});
         await provider.flushDecryptedLedger();
+        expect((await provider.diagStorageSets()).ledger, contains(1101));
 
         final result = await provider.purgeLocalPlaintext([1101]);
 
