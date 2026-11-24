@@ -5,6 +5,7 @@ import { AuthService } from './auth.service';
 const createAuthServiceMock = () => ({
   login: jest.fn(),
   refreshWithToken: jest.fn(),
+  logoutRefreshToken: jest.fn(),
 });
 
 describe('AuthController', () => {
@@ -50,5 +51,13 @@ describe('AuthController', () => {
       ['old_refresh', false],
       ['old_refresh', true],
     ]);
+  });
+
+  // The only test that fails if the controller stops revoking (or passes the
+  // wrong field): a logged-out refresh token would otherwise stay valid.
+  it('logout revokes the refresh token from the body', async () => {
+    await controller.logout({ refresh_token: 'to_revoke' });
+
+    expect(authService.logoutRefreshToken).toHaveBeenCalledWith('to_revoke');
   });
 });
