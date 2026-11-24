@@ -3729,11 +3729,7 @@ class EncryptionService {
         'failed': failed.length,
       });
     }
-    return LocalHistoryWipeResult(
-      removed: removed,
-      failedKeys: failed,
-      wipedIds: wiped,
-    );
+    return LocalHistoryWipeResult(removed: removed, failedKeys: failed);
   }
 
   /// Permanently destroy the persisted plaintext for [ids].
@@ -5690,7 +5686,6 @@ class LocalHistoryWipeResult {
   const LocalHistoryWipeResult({
     required this.removed,
     required this.failedKeys,
-    this.wipedIds = const <int>{},
   });
 
   /// Records confirmed removed and confirmed committed.
@@ -5698,12 +5693,6 @@ class LocalHistoryWipeResult {
 
   /// Keys — or `<prefix>*` markers — whose plaintext may still be on disk.
   final Set<String> failedKeys;
-
-  /// Message ids whose record this wipe destroyed AND retired. The provider
-  /// mirrors these into its in-memory retired set: `markRetired` persists to
-  /// disk only, and a same-session history pass reading the stale RAM set was
-  /// how a deliberate wipe could masquerade as `LEDGER_RECORD_LOST`.
-  final Set<int> wipedIds;
 
   /// Only this licenses telling the user their history is gone.
   bool get isComplete => failedKeys.isEmpty;

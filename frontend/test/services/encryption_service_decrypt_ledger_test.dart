@@ -241,7 +241,7 @@ void main() {
 
     test('runs once, then leaves the ledger alone', () async {
       // The marker stops a whole-store re-enumeration at every launch, and
-      // stops a later backfill resurrecting an id that an edit forgot.
+      // stops a later backfill resurrecting an id that was forgotten.
       await service.saveDecryptedContent(18703, {'content': 'seeded'});
       await service.flushDecryptedLedger();
       await service.forgetDecryptedMany([18703]);
@@ -267,18 +267,16 @@ void main() {
       expect(ledger, isNot(contains(18902)));
     });
 
-    test('the full wipe reports wiped ids and forgets their ledger entries',
+    test('the full wipe retires wiped ids and forgets their ledger entries',
         () async {
-      // Fail-before (memory-sync half lives in the provider test): the wipe
-      // used to leave ledger entries for records it destroyed, so a row the
-      // server still served re-read as UNEXPECTED loss — LEDGER_RECORD_LOST
-      // for a deletion the user ordered.
+      // Fail-before: the wipe used to leave ledger entries for records it
+      // destroyed, so a row the server still served re-read as UNEXPECTED
+      // loss — LEDGER_RECORD_LOST for a deletion the user ordered.
       await service.saveDecryptedContent(18910, {'content': 'wiped'});
       await service.flushDecryptedLedger();
 
-      final result = await service.clearDecryptedContentCache();
+      await service.clearDecryptedContentCache();
 
-      expect(result.wipedIds, contains(18910));
       expect(await service.decryptedLedgerIds(), isNot(contains(18910)));
       expect(await service.retiredMessageIds(), contains(18910));
     });
