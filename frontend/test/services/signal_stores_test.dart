@@ -42,6 +42,44 @@ class _HoldPendingDeleteStorage extends DualStorage {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  test('ENC-05: a second engine reads the account anchor the first one '
+      'advanced, not its own memo of the old one', () async {
+    // Two engines (two web tabs) over one store. Fail-before: the second kept
+    // the key it read first, so buildSession compared the peer's new bundle
+    // to a stale anchor and every send failed closed until a reload.
+    FlutterSecureStorage.setMockInitialValues({});
+    final tabA = SecureIdentityKeyStore(
+      DualStorage(const FlutterSecureStorage()),
+      'test_',
+    );
+    final tabB = SecureIdentityKeyStore(
+      DualStorage(const FlutterSecureStorage()),
+      'test_',
+    );
+    final address = SignalProtocolAddress('peer', 1);
+    final first = generateIdentityKeyPair().getPublicKey();
+    final second = generateIdentityKeyPair().getPublicKey();
+    await tabA.saveIdentity(address, first);
+    expect(
+      (await tabB.getAccountIdentity('peer'))?.serialize(),
+      first.serialize(),
+    );
+
+    await tabA.stagePendingAccountIdentity('peer', second);
+    expect(
+      await tabA.promotePendingAccountIdentity(
+        'peer',
+        expectedIdentityBase64: SecureIdentityKeyStore.encodedOf(second),
+      ),
+      isTrue,
+    );
+
+    expect(
+      (await tabB.getAccountIdentity('peer'))?.serialize(),
+      second.serialize(),
+    );
+  });
+
   test('ENC-03: a candidate a decrypt records while a promote is deleting '
       'the acknowledged one is not erased by that delete', () async {
     final storage = _HoldPendingDeleteStorage();

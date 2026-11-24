@@ -533,9 +533,10 @@ class SecureIdentityKeyStore extends IdentityKeyStore {
   /// compare and — since the write below is now conditional — strictly cheaper
   /// than the unconditional write this code used to do per message.
   ///
-  /// Engine-local by design: a sibling tab writing a peer key is not observed
-  /// here, which can only cost a duplicate warning, never trust of a key this
-  /// engine did not itself verify against storage on first contact.
+  /// Engine-local by design for the per-DEVICE rows: a sibling tab writing a
+  /// peer key is not observed here, which can only cost a duplicate warning.
+  /// The ACCOUNT anchor is NOT served from here ([getAccountIdentity] reads
+  /// the store): a stale anchor is not a duplicate warning, it fails sends.
   final Map<String, IdentityKey> _trustedMemo = {};
 
   @override
@@ -575,8 +576,12 @@ class SecureIdentityKeyStore extends IdentityKeyStore {
   /// — far worse than the defect being fixed.
   Future<IdentityKey?> getAccountIdentity(String name) async {
     final key = _accountKey(name);
-    final memo = _trustedMemo[key];
-    if (memo != null) return memo;
+    // ENC-05 [web-only: retire with §7]: always read the store, never serve
+    // the memo. The anchor moves on a human acknowledgement, possibly in a
+    // sibling tab; this engine's memo kept the OLD key, so buildSession
+    // compared the peer's new bundle to a stale anchor and every send failed
+    // closed until a reload. Callers are the gates and the mismatch path, not
+    // the per-message check ([isTrustedIdentity] reads the per-device row).
     final stored = await _storage.read(key: key);
     if (stored != null) {
       final identity = IdentityKey.fromBytes(base64Decode(stored), 0);
