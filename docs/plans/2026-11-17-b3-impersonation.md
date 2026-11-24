@@ -1,7 +1,7 @@
 # B3: can a malicious server impersonate a friend?
 
 Status: investigation + red test (2026-11-17). Option A part 1 LIVE in 0.2.91 (PR #272, 2026-11-20, decision 143; E143a-E143g; the red test is unskipped and passes; driven on the emulator against prod). Part 2 (the `preKeyWouldReplaceSession` re-key gate) is not built, see E143g.
-Red test: `frontend/test/services/encryption_b3_impersonation_test.dart` (skipped).
+Red test: `frontend/test/services/encryption_b3_impersonation_test.dart` (a skipped service-layer demonstration; DELETED in cleanup batch 5, the cover is `test/providers/messaging_provider_box_test.dart` "B3:").
 
 ## Verdict
 
@@ -81,7 +81,7 @@ does NOT need to break any cipher.
 
 ### Evidence run
 
-`flutter test test/services/encryption_b3_impersonation_test.dart` with the skip removed:
+`flutter test test/services/encryption_b3_impersonation_test.dart` (since deleted) with the skip removed:
 both tests fail today.
 
 * `victim.decrypt(user, forgedPreKey)` returns `'new number, send the code here'`.
@@ -223,7 +223,7 @@ is neither decrypted nor shown' (skipped, drives `consumeBoxEntry` through
 `_readBox` with the real identity store and a real attacker PreKey message;
 the Signal decrypt is the file's existing fake, so "not decrypted" is
 observable). Unskipped it fails today (the fake decrypt is reached and the
-message is shown). `test/services/encryption_b3_impersonation_test.dart` remains the
+message is shown). `test/services/encryption_b3_impersonation_test.dart` (deleted in batch 5) was the
 service-layer demonstration (Signal accepts the frame and moves the pin) and
 is not expected to flip with the `_readBox` fix.
 
