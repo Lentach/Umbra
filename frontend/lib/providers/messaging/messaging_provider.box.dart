@@ -2647,17 +2647,13 @@ extension MessagingBox on MessagingProvider {
       }
       _boxTempIds.add(tempId);
       final peerFrames = route.targets.length;
-      final answers = await Future.wait([
-        for (var i = 0; i < frames.length; i++)
-          route.outbox
-              .deliver(
-                frames[i].$1,
-                frames[i].$2,
-                mode: _boxFrameMode(message: true, toPeer: i < peerFrames),
-              )
-              .catchError((Object _) => BoxSendOutcome.failed),
-      ]);
-      _noteBoxAnswers(recipientId, frames, answers, peerFrames: peerFrames);
+      final answers = await _deliverBoxFrames(
+        route.outbox,
+        recipientId,
+        frames,
+        peerFrames: peerFrames,
+        message: true,
+      );
       final owedPeers = <int>{};
       final owedSiblings = <int>{};
       var peerTaken = 0;
@@ -2812,6 +2808,33 @@ extension MessagingBox on MessagingProvider {
       frames.add((to, frame.encode()));
     }
     return (frames: frames, failure: null, detail: const <String, Object>{});
+  }
+
+  /// Sends [frames] — the first [peerFrames] to [peer]'s devices, the rest
+  /// our own siblings', as [_sealBoxFrames] builds them — all at once, each
+  /// kept as [_boxFrameMode] says for a [message] or an action, and applies
+  /// the answers to the pause ([_noteBoxAnswers]). A delivery that threw is
+  /// a frame not taken, as `deliver` answers a failed seal: the frames other
+  /// devices took still stand (E19l). The answers, in [frames]' order.
+  Future<List<BoxSendOutcome>> _deliverBoxFrames(
+    BoxOutbox outbox,
+    int peer,
+    List<(ContactOutbound, Uint8List)> frames, {
+    required int peerFrames,
+    required bool message,
+  }) async {
+    final answers = await Future.wait([
+      for (var i = 0; i < frames.length; i++)
+        outbox
+            .deliver(
+              frames[i].$1,
+              frames[i].$2,
+              mode: _boxFrameMode(message: message, toPeer: i < peerFrames),
+            )
+            .catchError((Object _) => BoxSendOutcome.failed),
+    ]);
+    _noteBoxAnswers(peer, frames, answers, peerFrames: peerFrames);
+    return answers;
   }
 
   /// What the box answered each of [frames] — the first [peerFrames] to
