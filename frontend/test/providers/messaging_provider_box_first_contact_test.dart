@@ -1178,7 +1178,7 @@ void main() {
   });
 
   test('a request to an account one of whose devices publishes no request '
-      'address FAILS: there is no old path (E15a)', () async {
+      'address FAILS and leaves no record on either side (E15a)', () async {
     final entry = bob.searchEntry;
     final d1 = (entry['devices'] as List).first as Map<String, dynamic>;
     final partial = {
@@ -1199,7 +1199,7 @@ void main() {
 
   test(
     'with E2E not ready, a request to an account not all on the box FAILS, '
-    'as does one the box would carry (there is no old path)',
+    'as does one the box would carry (neither leaves a record)',
     () async {
       final entry = bob.searchEntry;
       final d1 = (entry['devices'] as List).first as Map<String, dynamic>;
@@ -1226,7 +1226,8 @@ void main() {
   );
 
   test('a request from an account with a live sibling this device holds no '
-      'self-queue address for FAILS: there is no old path (E15a)', () async {
+      'self-queue address for FAILS and leaves no record on either side '
+      '(E15a)', () async {
     alice.enc
       ..ownId = 1
       ..ownLive = [1, 2];
@@ -1313,7 +1314,7 @@ void main() {
   });
 
   test('a request whose verified list names a live device the answer did not '
-      'serve FAILS: there is no old path (E15a)', () async {
+      'serve FAILS and leaves no record on either side (E15a)', () async {
     alice.enc.servedList = VerifiedDeviceList.enrolled(
       version: 1,
       listHash: 'H' * 44,
@@ -1806,8 +1807,8 @@ void main() {
     () async {
       E2eDiagLog.clear();
       await befriendBeforeTheBoxWithNoRoute();
-      // Alice pinned bob's key long ago (an old-path session did) but holds
-      // no list of his: a connect before its refresh landed.
+      // Alice pinned bob's key long ago (a session from before the box did)
+      // but holds no list of his: a connect before its refresh landed.
       await alice.enc.adoptServedAccount(
         5,
         identityKey: servedKey(bob.searchEntry),

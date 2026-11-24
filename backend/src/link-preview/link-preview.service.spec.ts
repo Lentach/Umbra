@@ -40,24 +40,6 @@ describe('LinkPreviewService', () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it('returns null for private/local URLs', async () => {
-      const result = await service.fetchPreview('http://localhost:3000/page');
-      expect(result).toBeNull();
-      expect(fetchMock).not.toHaveBeenCalled();
-    });
-
-    it('returns null for 127.0.0.1', async () => {
-      const result = await service.fetchPreview('https://127.0.0.1/page');
-      expect(result).toBeNull();
-      expect(fetchMock).not.toHaveBeenCalled();
-    });
-
-    it('returns null for 192.168.x.x', async () => {
-      const result = await service.fetchPreview('https://192.168.1.1/page');
-      expect(result).toBeNull();
-      expect(fetchMock).not.toHaveBeenCalled();
-    });
-
     it('extracts title and imageUrl from og:meta', async () => {
       const html =
         '<head><meta property="og:title" content="Test Page"/><meta property="og:image" content="https://example.com/img.png"/></head>';

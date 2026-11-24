@@ -46,6 +46,9 @@ The box has NO account on its path: it imports nothing from `auth/`, `users/`, `
 | `APP_VERSION`, `GIT_COMMIT`, `BUILD_TIME` | `/version`; set by deploy script. |
 | `BOX_ENABLED` | `true` registers the box module (dev compose; prod pins `'true'` since step B, 2026-09-30). |
 | `BOX_ALERT_URL` | Optional https healthchecks.io check URL: the box reaper pings it every 10 min, `/fail` while the box is ≥ 50 % full or when a sweep step or file failed (plan D2 O1, decision 147). Unset = off. A secret: `.env` only. |
+| `TZ` | Prod compose pins `UTC`: deadline columns are `timestamp WITHOUT time zone` and node-postgres parses them as local time, so a non-UTC backend shifts every deadline (comment in `docker-compose.prod.yml`). |
+| `MIGRATIONS_DIR` | Optional override of the migration directory; default `<cwd>/migrations` (`database/migration-runner.ts`). Not passed by either compose file. |
+| `ANDROID_APK_VERSION_CODE`, `ANDROID_APK_VERSION_NAME`, `ANDROID_APK_URL` | Optional sideloaded-APK channel, served as the `android` block of `GET /version` (`version.controller.ts`); any missing or invalid one means no channel (`null`). Prod compose passes all three with an empty default. |
 
 ## Presence on disconnect (§6)
 

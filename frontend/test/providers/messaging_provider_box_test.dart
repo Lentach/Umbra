@@ -666,7 +666,7 @@ void main() {
 
   test(
     'a box message with no session yet is kept, and decrypts once the '
-    "session exists (the peer's PreKey message may still be on the old path)",
+    'session exists (the session may not be built yet when it arrives)',
     () async {
       final e = entry();
       encryption.inbound = NoSessionException('no session');
@@ -1047,7 +1047,7 @@ void main() {
 
     test(
       'an unread box message is destroyable only past its send + 1 day, by '
-      'its own stamp; an old-path record with no server stamp never is by '
+      'its own stamp; a record with no server stamp (stored before the box) never is by '
       'expiry (decision 41, `_recordExpiryDeadlineMs`)',
       () async {
         conversations.setClientVisible(false);
@@ -1058,7 +1058,7 @@ void main() {
         final row = await receive();
         await encryption.store.saveDecryptedContent(
           700,
-          {'content': 'old path, read-mode'},
+          {'content': 'pre-box record, read-mode'},
           conversationId: 10,
           createdAt: sentAt,
           disappearAfterSeconds: 60,
@@ -1082,7 +1082,7 @@ void main() {
             cap.add(kExpiryPurgeGrace).add(const Duration(seconds: 1)),
           ),
           {row.id},
-          reason: 'the old-path record has no stamp: never by expiry',
+          reason: 'the record has no stamp: never by expiry',
         );
       },
     );

@@ -363,12 +363,17 @@ Media and `.env` restore are manual.
 
 ### Core env vars
 
+The complete list with semantics is `backend/docs/runtime-reference.md` "Environment variables". The container receives ONLY what the `environment:` block of `docker-compose.prod.yml` enumerates (a key added to `~/fireplace/.env` alone never reaches it), so a new backend var needs a line there. Prod-relevant rows:
+
 | Area | Vars |
 |---|---|
 | DB | `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASS`, `DB_NAME` |
 | Auth/CORS | `JWT_SECRET` (>=32 chars, generated once and persisted — do NOT rotate during normal deploys or host moves; if exposed, rotate only after sticky-session refresh is deployed, since valid refresh tokens mint new access JWTs without re-login), `ALLOWED_ORIGINS` |
-| Media | `MEDIA_DIR`, `MEDIA_X_ACCEL_REDIRECT` |
+| Media | `MEDIA_DIR` (`/app/media`). `MEDIA_X_ACCEL_REDIRECT` is NOT in the prod compose, so it is unset in prod and Node serves media itself |
 | Push (box wake-up only) | `FIREBASE_SERVICE_ACCOUNT`, `WEB_PUSH_VAPID_PUBLIC_KEY`, `WEB_PUSH_VAPID_PRIVATE_KEY`, `WEB_PUSH_VAPID_SUBJECT` |
+| Box | `BOX_ENABLED` (pinned `'true'` in the compose file, not read from `.env`; never set it back to false, see traps.md), `BOX_ALERT_URL` (healthchecks.io check, a secret: `.env` only) |
+| Runtime | `TZ` (pinned `UTC`; see the compose comment), `NODE_ENV` (`production`) |
+| Android channel | `ANDROID_APK_VERSION_CODE`, `ANDROID_APK_VERSION_NAME`, `ANDROID_APK_URL` (all three or `/version` reports `android: null`) |
 | Frontend dart-defines | `BASE_URL`, `GIPHY_API_KEY`, `WEB_PUSH_VAPID_PUBLIC_KEY`, `GIT_COMMIT`, `BUILD_TIME` |
 | Deploy metadata | `APP_VERSION`, `GIT_COMMIT`, `BUILD_TIME` |
 
