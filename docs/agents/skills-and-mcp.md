@@ -54,7 +54,7 @@ Licenses travel with the copies: `.claude/skills/LICENSE.dash_skills.txt` (Apach
 |---|---|---|
 | `frontend-flutter-design` | `frontend/lib/{widgets,screens,theme}/**` | `flutter-frontend-design`; defers to `frontend/docs/composer-media.md` in the keyboard-adjacent do-not-animate zone |
 | `frontend-dart-idioms` | `frontend/lib/{models,services,providers,utils,constants}/**` | `dart-modern-features`, `dart-seal-type-hierarchies` |
-| `tests-and-coverage` | `frontend/test/**`, `**/*_test.dart`, `backend/**/*.spec.ts`, `backend/test/**` | `dart-test-*` for Dart, `tdd` for Jest, plus the repo's test bar |
+| `tests-and-coverage` | `frontend/test/**`, `frontend/test_e2e/**`, `frontend/integration_test/**`, `backend/**/*.spec.ts`, `backend/**/*.int-spec.ts` (exact list: `.omp/rules/tests-and-coverage.md`) | `dart-test-*` for Dart, `tdd` for Jest, plus the repo's test bar |
 
 An OMP edit-time rule needs `condition: ".*"` **and** an explicit `scope: "tool:edit(<glob>), tool:write(<glob>)"`; the YAML-list `condition:` shorthand registers nothing. A rule with a `description` and no condition lands in the rulebook instead (listed by name, body read via `rule://`) — that is how `production-vm-deploy` works. Mirror every file-triggered rule into both trees (`.omp/rules`, `.claude/rules`); a single-tree rule silently does not fire for the other harness.
 
