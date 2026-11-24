@@ -56,11 +56,11 @@ class _LookupBook {
 extension ContactStoreFriendLookups on ContactStore {
   /// A NEWER build wrote the row: it is never overwritten, and nothing is
   /// remembered (the per-process bound still holds).
-  bool get friendLookupsUnsupported => _lookupsUnsupported;
+  bool get friendLookupsUnsupported => _lookupRow.unsupported;
 
   /// When friend [userId] was last looked up here; null when never, or not
   /// remembered.
-  DateTime? friendLookedUpAt(int userId) => _lookupBook.at[userId];
+  DateTime? friendLookedUpAt(int userId) => _lookupRow.book.at[userId];
 
   /// Friend [userId] was looked up [at]; the last write wins. A stamp later
   /// than [at] is one a clock that has since gone back wrote, and keeping it
@@ -85,32 +85,9 @@ extension ContactStoreFriendLookups on ContactStore {
           }),
   );
 
-  /// Read-modify-write of the row under the account lock, from GROUND TRUTH.
-  /// [mutate] returns the book to keep; an unchanged encoding writes nothing.
-  /// False when nothing could be written (closed, uncommitted, a newer
-  /// build's row).
+  /// [ContactStore._updateBook] of the row: the same book handed back, or an
+  /// unchanged encoding, writes nothing.
   Future<bool> _updateLookups(
     _LookupBook Function(_LookupBook current) mutate,
-  ) {
-    final kv = _kv;
-    final userId = _userId;
-    if (kv == null || userId == null) return Future.value(false);
-    final generation = _generation;
-    return _serial(
-      () => _lock(ContactStore.lockName(userId), () async {
-        if (_generation != generation) return false;
-        final key = ContactStore.friendLookupKey(userId);
-        final raw = (await ContactStore._readWhere(kv, (k) => k == key))[key];
-        final current = _LookupBook.decode(raw);
-        if (current == null) return false;
-        final next = mutate(current);
-        if (!identical(next, current)) {
-          final encoded = next.encode();
-          if (encoded != raw && !await kv.setString(key, encoded)) return false;
-        }
-        if (_generation == generation) _lookupBook = next;
-        return true;
-      }),
-    );
-  }
+  ) => _updateBook(_lookupRow, mutate);
 }
