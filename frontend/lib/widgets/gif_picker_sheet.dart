@@ -11,7 +11,11 @@ import 'glass/glass_sheet.dart';
 class GifPickerSheet extends StatefulWidget {
   final void Function(String gifFullUrl) onGifSelected;
 
-  const GifPickerSheet({super.key, required this.onGifSelected});
+  /// Test seam: the Giphy client. Defaults to a real [GifService].
+  @visibleForTesting
+  final GifService? service;
+
+  const GifPickerSheet({super.key, required this.onGifSelected, this.service});
 
   @override
   State<GifPickerSheet> createState() => _GifPickerSheetState();
@@ -67,7 +71,7 @@ class GifPickerSheet extends StatefulWidget {
 }
 
 class _GifPickerSheetState extends State<GifPickerSheet> {
-  final _gifService = GifService();
+  late final _gifService = widget.service ?? GifService();
   final _searchController = TextEditingController();
   final _scrollController = ScrollController();
   List<GifModel> _gifs = [];
@@ -77,6 +81,10 @@ class _GifPickerSheetState extends State<GifPickerSheet> {
   Timer? _debounce;
   int _offset = 0;
   String _lastQuery = '';
+
+  /// Names the list the grid is showing: every trending load and every search
+  /// takes a new number, and a response that finds a newer one is stale.
+  int _listId = 0;
 
   @override
   void initState() {
@@ -95,14 +103,16 @@ class _GifPickerSheetState extends State<GifPickerSheet> {
   }
 
   Future<void> _loadTrending() async {
+    final id = ++_listId;
     setState(() {
       _loading = true;
+      _loadingMore = false;
       _error = null;
       _offset = 0;
       _lastQuery = '';
     });
     final results = await _gifService.fetchTrending();
-    if (!mounted) return;
+    if (!mounted || id != _listId) return;
     setState(() {
       _gifs = results;
       _loading = false;
@@ -123,14 +133,16 @@ class _GifPickerSheetState extends State<GifPickerSheet> {
   }
 
   Future<void> _doSearch(String query) async {
+    final id = ++_listId;
     setState(() {
       _loading = true;
+      _loadingMore = false;
       _error = null;
       _offset = 0;
       _lastQuery = query;
     });
     final results = await _gifService.search(query);
-    if (!mounted) return;
+    if (!mounted || id != _listId) return;
     setState(() {
       _gifs = results;
       _loading = false;
@@ -149,12 +161,16 @@ class _GifPickerSheetState extends State<GifPickerSheet> {
   Future<void> _loadMore() async {
     if (_loadingMore) return;
     setState(() => _loadingMore = true);
-    _offset += 25;
+    final id = _listId;
+    final offset = _offset + 25;
     final results = _lastQuery.isEmpty
-        ? await _gifService.fetchTrending(offset: _offset)
-        : await _gifService.search(_lastQuery, offset: _offset);
-    if (!mounted) return;
+        ? await _gifService.fetchTrending(offset: offset)
+        : await _gifService.search(_lastQuery, offset: offset);
+    if (!mounted || id != _listId) return;
     setState(() {
+      // A page that came back empty (the service answers [] on failure) does
+      // not move the offset, so the next scroll asks for the same page.
+      if (results.isNotEmpty) _offset = offset;
       _gifs.addAll(results);
       _loadingMore = false;
     });
