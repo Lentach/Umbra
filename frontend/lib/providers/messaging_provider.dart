@@ -111,6 +111,9 @@ const String kEncryptionNotInitializedLabel = '[Encryption not initialized]';
 /// nothing failed here.
 const String kNotLinkedYetMessageLabel = '[Sent before this device was linked]';
 
+/// Zone key under which a box read carries the session epoch it was queued in.
+final Object _boxReadEpochKey = Object();
+
 /// MessagingProvider — owns all message state, send/receive handlers,
 /// encryption orchestration, typing/recording indicators, and reactions.
 /// Wired by [ConnectionProvider] and ConversationsScreen (setEncryptionProvider, setConversationsProvider).
@@ -374,6 +377,11 @@ class MessagingProvider extends ChangeNotifier {
   /// yet, by local id (`messaging_provider.box.dart`): the only copy until
   /// the journal's next offer stores it.
   final Map<int, MessageModel> _boxUnsaved = {};
+
+  /// Bumped by `clearAll` and a fresh connect. A box read remembers the value
+  /// it was queued under ([_runDecryptSerialized]); a read that finds it moved
+  /// belongs to a signed-out session and writes nothing ([_boxReadStale]).
+  int _boxSessionEpoch = 0;
 
   /// Friend frames held unread under a foreign identity (plan B3), by local
   /// id; the value is whether the held PreKey frame was a decision-88 re-mint
@@ -699,7 +707,12 @@ class MessagingProvider extends ChangeNotifier {
     Future<T> Function() action,
   ) {
     final previous = _decryptChainBySender[senderId] ?? Future<void>.value();
-    final result = previous.then((_) => action());
+    // The epoch is taken when the read is QUEUED: one that starts after a
+    // sign-out and a new sign-in still belongs to the old session.
+    final epoch = _boxSessionEpoch;
+    final result = previous.then(
+      (_) => runZoned(action, zoneValues: {_boxReadEpochKey: epoch}),
+    );
     _decryptChainBySender[senderId] = result.then<void>(
       (_) {},
       onError: (_) {},
@@ -903,6 +916,7 @@ class MessagingProvider extends ChangeNotifier {
       // Local ids restart at the same base for every account: an unsaved
       // row of the previous session must never be stored into this one.
       _boxUnsaved.clear();
+      _boxSessionEpoch++;
       _boxHeld.clear();
       _profileSent.clear();
       _profileFilesChecked = false;
@@ -968,6 +982,7 @@ class MessagingProvider extends ChangeNotifier {
     _rebuildRequestedPeers.clear();
     _pingEffectFiredIds.clear();
     _boxUnsaved.clear();
+    _boxSessionEpoch++;
     _boxHeld.clear();
     _profileSent.clear();
     _profileFilesChecked = false;
