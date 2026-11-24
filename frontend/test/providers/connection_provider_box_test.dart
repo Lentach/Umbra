@@ -74,8 +74,6 @@ class _QuietEncryption extends EncryptionProvider {
   _QuietEncryption({super.service});
 
   @override
-  Future<void> loadRetiredIds() async {}
-  @override
   Future<void> drainPurgeBacklog() async {}
   @override
   Future<void> sweepDestroyablePlaintext() async {}

@@ -133,14 +133,6 @@ class EncryptionProvider extends ChangeNotifier {
   /// DuplicateMessageException (session already advanced by live messages).
   final Map<int, MessageModel> _decryptedContentCache = {};
 
-  /// Ids whose plaintext retention destroyed while the server may STILL serve
-  /// the row. Mirrors the persisted set; see [isRetired].
-  final Set<int> _retiredIds = {};
-
-  /// Ids whose plaintext was successfully persisted at least once. Mirrors the
-  /// persisted ledger; see [wasDecryptedBefore].
-  final Set<int> _decryptedLedger = {};
-
   String? _error;
 
   /// Callback to emit socket events. Set by [ConnectionProvider] via [setEmitCallback].
@@ -934,8 +926,6 @@ class EncryptionProvider extends ChangeNotifier {
       });
     }
     _decryptedContentCache.clear();
-    _retiredIds.clear();
-    _decryptedLedger.clear();
     _forceSessionRebuild.clear();
     _deviceListCache.clear();
     _forgetFriendLookups();
@@ -1577,59 +1567,19 @@ class EncryptionProvider extends ChangeNotifier {
     );
   }
 
-  /// True when [messageId]'s plaintext was destroyed by RETENTION while the
-  /// server may still serve the row.
-  ///
-  /// Such a row must never enter the decrypt path: its ratchet key was consumed
-  /// at first decrypt, so a retry lands on DuplicateMessage and renders as
-  /// "[Decryption failed]" — a data-loss alarm for something the app did on
-  /// purpose. Callers show a deliberate "no longer stored on this device"
-  /// state instead.
-  bool isRetired(int messageId) => _retiredIds.contains(messageId);
-
-  /// Load the persisted retired-id set into memory. Called once per session,
-  /// before the first history pass can try to decrypt anything.
-  Future<void> loadRetiredIds() async {
-    final ids = await _encryptionService.retiredMessageIds();
-    _retiredIds
-      ..clear()
-      ..addAll(ids);
-  }
-
-  /// True when [messageId]'s plaintext was persisted at least once, so a
-  /// missing record means it was LOST rather than never decrypted.
-  ///
-  /// The distinction is the whole point: retrying a lost row re-runs Signal
-  /// decrypt against a consumed ratchet key, which throws DuplicateMessage and
-  /// burns the row into a permanent "[Decryption failed]". A ledger hit means
-  /// the app can say "no longer available, ask the sender to resend" instead
-  /// of destroying the row to find out.
-  bool wasDecryptedBefore(int messageId) =>
-      _decryptedLedger.contains(messageId);
-
-  /// Load the persisted ledger. Sits beside [loadRetiredIds] and must complete
-  /// before the first history pass, or that pass makes exactly the mistake the
-  /// ledger exists to prevent.
-  ///
-  /// Backfills first, so an account that predates the ledger is protected from
-  /// its very first pass instead of only for messages decrypted from now on.
-  Future<void> loadDecryptedLedger() async {
-    await _encryptionService.backfillLedgerFromStore();
-    final ids = await _encryptionService.decryptedLedgerIds();
-    _decryptedLedger
-      ..clear()
-      ..addAll(ids);
-  }
+  /// Seed the persisted decrypt ledger for an account that predates it.
+  /// Runs before the first history pass.
+  Future<void> loadDecryptedLedger() =>
+      _encryptionService.backfillLedgerFromStore();
 
   /// Persist ids buffered during a decrypt pass. Called at pass boundaries.
   Future<void> flushDecryptedLedger() =>
       _encryptionService.flushDecryptedLedger();
 
   /// Diagnostic snapshot of the three persisted id sets, for the hacker-mode
-  /// Privacy & Safety panel. Read-only; disk truth, not the in-memory mirrors
-  /// (the mirrors can be stale within a session — that staleness is one of
-  /// the things this exists to make visible in the field, where the owner has
-  /// no devtools (iOS Safari PWA)). Metadata only: message ids, never content.
+  /// Privacy & Safety panel. Read-only; disk truth, for the field where the
+  /// owner has no devtools (iOS Safari PWA). Metadata only: message ids,
+  /// never content.
   Future<({Set<int> retired, Set<int> ledger, Set<int> stored})>
   diagStorageSets() async {
     return (
@@ -1700,7 +1650,6 @@ class EncryptionProvider extends ChangeNotifier {
     // into an undecryptable "[Decryption failed]" the user reads as corruption.
     if (due.retired.isNotEmpty) {
       await _encryptionService.markRetired(due.retired);
-      _retiredIds.addAll(due.retired);
     }
     final result = await purgeLocalPlaintext({...due.expired, ...due.retired});
     final condemned = [...due.expired, ...due.retired]..sort();
@@ -1826,14 +1775,8 @@ class EncryptionProvider extends ChangeNotifier {
   Future<LocalHistoryWipeResult> clearLocalDecryptedContentCache() async {
     final result = await _encryptionService.clearDecryptedContentCache();
     _decryptedContentCache.clear();
-    // Mirror the wipe into the in-memory sets. `markRetired` inside the
-    // service persists to DISK; `isRetired` reads THIS set, and the ledger
-    // gate runs only when the retired check misses. Without this sync a
-    // history pass in the SAME session read the stale RAM set, missed every
-    // wiped id, and reported the user's own deliberate wipe as
-    // `LEDGER_RECORD_LOST` (2026-08-02, five false alarms).
-    _retiredIds.addAll(result.wipedIds);
-    _decryptedLedger.removeAll(result.wipedIds);
+    // The service already marked the wiped ids retired and dropped them from
+    // the persisted ledger.
     // Scope on record: plaintext cache only — identity, sessions and pre-keys
     // are untouched. If a user report says "cleared cache" and sessions died,
     // it was NOT this path (browser site-data clear / reinstall wipes those).
@@ -1952,7 +1895,6 @@ class EncryptionProvider extends ChangeNotifier {
     // text record, and audio failures already fail the purge result.
     final settled = ids.difference(disk.failedIds);
     if (settled.isNotEmpty) {
-      _decryptedLedger.removeAll(settled);
       await _encryptionService.forgetDecryptedMany(settled);
     }
     final released = [
@@ -2155,16 +2097,9 @@ class EncryptionProvider extends ChangeNotifier {
         );
         _identityIncomplete = false;
         _setIdentityCheckUnavailable(false);
-        // Load the retired-id set BEFORE flipping the ready flag. This is the
-        // only point that provably precedes any decrypt attempt: decrypting
+        // Seed the decrypt ledger BEFORE flipping the ready flag: decrypting
         // requires E2E to be ready, so nothing can start while this await is
-        // outstanding. Setting `_e2eInitialized = true` first would reopen the
-        // window — the await yields with the flag already true and the set
-        // still empty — and a decrypt that wins that race persists a permanent
-        // "[Decryption failed]" for a row the app deliberately purged.
-        await loadRetiredIds();
-        // Same reason, one step further: without the ledger loaded, the first
-        // history pass cannot tell a lost record from one never decrypted.
+        // outstanding.
         await loadDecryptedLedger();
         // Rebuild intents recorded by a PREVIOUS process (amendment (xlviii)
         // clause 1). Seeded before the flag flips, for the same reason as the
@@ -3626,8 +3561,6 @@ class EncryptionProvider extends ChangeNotifier {
     if (!isReconnect) {
       _e2eInitialized = false;
       _decryptedContentCache.clear();
-      _retiredIds.clear();
-      _decryptedLedger.clear();
       _forceSessionRebuild.clear();
       _generatingMoreKeys = false;
       _deviceMaterialMismatch = false;
@@ -3675,8 +3608,6 @@ class EncryptionProvider extends ChangeNotifier {
     _error = null;
     _currentUserId = null;
     _decryptedContentCache.clear();
-    _retiredIds.clear();
-    _decryptedLedger.clear();
     _forceSessionRebuild.clear();
     // Which device we are belongs to the SESSION, not the install (spec §12
     // amendment (xii)). This provider is a process singleton reused across
@@ -3736,9 +3667,7 @@ class EncryptionProvider extends ChangeNotifier {
   /// [restoreAfterPasscodeUnlock] needs to know who to re-initialise for.
   ///
   /// Every cache dropped here holds message plaintext or the ability to
-  /// produce it. `_retiredIds` and `_decryptedLedger` are ids, kept dropped
-  /// anyway so a post-unlock init reloads them from storage in the one order
-  /// that is provably before any decrypt (see [_initializeE2EInner]).
+  /// produce it.
   ///
   /// Nothing needs to guard the decrypt paths afterwards: they all gate on
   /// [isE2EReady], and this clears it BEFORE the teardown — so no decrypt can
@@ -3749,8 +3678,6 @@ class EncryptionProvider extends ChangeNotifier {
     _e2eInitialized = false;
     _generatingMoreKeys = false;
     _decryptedContentCache.clear();
-    _retiredIds.clear();
-    _decryptedLedger.clear();
     _forceSessionRebuild.clear();
     _cancelPendingFetches();
     onPasscodeLockRevoke?.call();

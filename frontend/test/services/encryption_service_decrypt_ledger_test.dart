@@ -121,19 +121,6 @@ void main() {
     expect(await service.decryptedLedgerIds(), isNot(contains(18600)));
   });
 
-  test('an edit forgets the id so new ciphertext can be decrypted', () async {
-    // An edit puts NEW ciphertext under the SAME id. Leaving the entry would
-    // veto a payload that has genuinely never been decrypted, and the edit
-    // would render "no longer stored" forever.
-    await service.saveDecryptedContent(18601, {'content': 'before edit'});
-    await service.flushDecryptedLedger();
-    expect(await service.decryptedLedgerIds(), contains(18601));
-
-    await service.forgetDecrypted(18601);
-
-    expect(await service.decryptedLedgerIds(), isNot(contains(18601)));
-  });
-
   test('recordExists distinguishes present from definitely absent', () async {
     await service.saveDecryptedContent(18602, {'content': 'here'});
 
@@ -257,7 +244,7 @@ void main() {
       // stops a later backfill resurrecting an id that an edit forgot.
       await service.saveDecryptedContent(18703, {'content': 'seeded'});
       await service.flushDecryptedLedger();
-      await service.forgetDecrypted(18703);
+      await service.forgetDecryptedMany([18703]);
 
       await service.backfillLedgerFromStore();
 
