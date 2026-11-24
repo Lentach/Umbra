@@ -2,9 +2,9 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestExpressApplication } from '@nestjs/platform-express';
-import { json, type NextFunction, type Request, type Response } from 'express';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
+import { contactBackupJsonParser } from './backup/contact-backup-json';
 import { runMigrations } from './database/migration-runner';
 
 async function bootstrap() {
@@ -51,17 +51,7 @@ async function bootstrap() {
   // is already on the stack (isMiddlewareApplied), and that is exactly what
   // `json()` returns — mounting it bare here would silently leave every OTHER
   // route with no JSON body at all.
-  const backupJson = json({ limit: '4mb' });
-  app.use(
-    '/backup/contacts',
-    function contactBackupJsonParser(
-      req: Request,
-      res: Response,
-      next: NextFunction,
-    ) {
-      backupJson(req, res, next);
-    },
-  );
+  app.use('/backup/contacts', contactBackupJsonParser);
 
   // ValidationPipe validates DTOs (e.g. checks if email is valid).
   // whitelist: true — strips properties not defined in the DTO (security).
