@@ -77,6 +77,11 @@ part 'messaging/messaging_provider.send.dart';
 part 'messaging/messaging_provider.decrypt.dart';
 part 'messaging/messaging_provider.actions.dart';
 part 'messaging/messaging_provider.first_contact.dart';
+part 'messaging/messaging_provider.first_contact_accept.dart';
+part 'messaging/messaging_provider.first_contact_end.dart';
+part 'messaging/messaging_provider.first_contact_friend.dart';
+part 'messaging/messaging_provider.first_contact_receive.dart';
+part 'messaging/messaging_provider.first_contact_relay.dart';
 part 'messaging/messaging_provider.profile.dart';
 
 // ---------- Library-private top-level helpers ----------
