@@ -200,23 +200,31 @@ class ConversationsProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Store write for one settled conversation event: finds the peer by
-  /// legacy id in the CURRENT list and rewrites the settings half of the
-  /// record. Membership is never changed here — that is the friends path.
+  /// Store write for one settled conversation event: finds the peer by chat
+  /// id in the store (a chat deleted on this device is not in the shown
+  /// list, and its record still takes the write) and rewrites the settings
+  /// half of the record. Membership is never changed here — that is the
+  /// friends path. [onRefused] runs when the store did not keep the write.
   void _storeSettings(
     int conversationId,
-    ContactSettings Function(ContactSettings current) mutate,
-  ) {
+    ContactSettings Function(ContactSettings current) mutate, {
+    void Function()? onRefused,
+  }) {
     final store = _store;
     if (store == null) return;
-    final index = _conversations.indexWhere((c) => c.id == conversationId);
-    if (index == -1) return;
-    final peerId = getOtherUserId(_conversations[index]);
+    final peer = store.all
+        .where((r) => r.chatId == conversationId)
+        .firstOrNull;
+    if (peer == null) return;
     unawaited(
-      store.update(
-        peerId,
-        (record) => record?.copyWith(settings: mutate(record.settings)),
-      ),
+      store
+          .update(
+            peer.userId,
+            (record) => record?.copyWith(settings: mutate(record.settings)),
+          )
+          .then((kept) {
+            if (!kept) onRefused?.call();
+          }),
     );
   }
 
@@ -728,6 +736,20 @@ class ConversationsProvider extends ChangeNotifier {
         mutedUntil: mutedUntil,
         clearMutedUntil: mutedUntil == null,
       ),
+      // Not kept: the row goes back to what it showed, unless a later mute
+      // already replaced this one.
+      onRefused: () {
+        final at = _conversations.indexWhere((c) => c.id == conversationId);
+        if (at == -1) return;
+        final row = _conversations[at];
+        if (row.muted != muted || row.mutedUntil != mutedUntil) return;
+        _conversations[at] = row.copyWith(
+          muted: old.muted,
+          mutedUntil: old.mutedUntil,
+          clearMutedUntil: old.mutedUntil == null,
+        );
+        notifyListeners();
+      },
     );
     notifyListeners();
   }
