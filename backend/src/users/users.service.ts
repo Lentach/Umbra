@@ -8,11 +8,11 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { hashPassword, verifyPassword } from '../auth/password-hash';
+import { hashPassword, verifyPassword } from '../auth-core/password-hash';
 import { User } from './user.entity';
 import { ProfilePhoto } from './profile-photo.entity';
 import { LocalStorageService } from '../media/local-storage.service';
-import { RefreshTokensService } from '../auth/refresh-tokens.service';
+import { RefreshTokensService } from '../refresh-tokens/refresh-tokens.service';
 
 /** Postgres unique-violation SQLSTATE. */
 const PG_UNIQUE_VIOLATION = '23505';

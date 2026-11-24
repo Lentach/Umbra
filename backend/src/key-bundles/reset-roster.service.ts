@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
-import { RefreshTokensService } from '../auth/refresh-tokens.service';
+import { RefreshTokensService } from '../refresh-tokens/refresh-tokens.service';
 import { Device } from './device.entity';
 import { DevicesService } from './devices.service';
 import { KeyBundle } from './key-bundle.entity';

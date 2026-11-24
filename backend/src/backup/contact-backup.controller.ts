@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Put, Request, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { JwtAuthGuard } from '../auth-core/jwt-auth.guard';
 import {
   ContactBackupService,
   ContactBackupView,

@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { GUARDS_METADATA, HTTP_CODE_METADATA } from '@nestjs/common/constants';
 import { Test } from '@nestjs/testing';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { JwtAuthGuard } from '../auth-core/jwt-auth.guard';
 import { VerifyPasswordDto } from './dto/user.dto';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';

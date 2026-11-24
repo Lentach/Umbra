@@ -11,7 +11,7 @@ import {
 } from '../../key-bundles/device-list.service';
 import { encodeCanonicalDeviceList } from '../../key-bundles/device-list-canonical.util';
 import { verifyDeviceListSignature } from '../../key-bundles/device-list-signature.util';
-import { RefreshTokensService } from '../../auth/refresh-tokens.service';
+import { RefreshTokensService } from '../../refresh-tokens/refresh-tokens.service';
 import { UsersService } from '../../users/users.service';
 
 // The signature LAW lives in device-list-signature.util.spec.ts (real Dart

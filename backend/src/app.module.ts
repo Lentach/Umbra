@@ -20,7 +20,7 @@ import { SecretNotesModule } from './secret-notes/secret-notes.module';
 import { validate } from './config/env.validation';
 import { HealthModule } from './health/health.module';
 import { VersionModule } from './version/version.module';
-import { RefreshToken } from './auth/refresh-token.entity';
+import { RefreshToken } from './refresh-tokens/refresh-token.entity';
 import { APP_GUARD } from '@nestjs/core';
 import { HttpThrottlerGuard } from './common/http-throttler.guard';
 

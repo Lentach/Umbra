@@ -5,7 +5,7 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 import { UsersService } from '../../users/users.service';
 import { DevicesService } from '../../key-bundles/devices.service';
 import { DEFAULT_DEVICE_ID } from '../../key-bundles/key-bundles.service';
-import { resolveJwtSecret } from '../jwt-secret';
+import { resolveJwtSecret } from '../../auth-core/jwt-secret';
 
 // Passport strategy — automatically verifies the JWT token
 // and injects user data into request.user

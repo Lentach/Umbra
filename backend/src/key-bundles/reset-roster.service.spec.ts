@@ -5,7 +5,7 @@ import { DevicesService } from './devices.service';
 import { KeyBundle } from './key-bundle.entity';
 import { OneTimePreKey } from './one-time-pre-key.entity';
 import { ResetRosterService } from './reset-roster.service';
-import { RefreshTokensService } from '../auth/refresh-tokens.service';
+import { RefreshTokensService } from '../refresh-tokens/refresh-tokens.service';
 
 /**
  * The §6.2 reset roster teardown (spec §12 amendments (f) and (xxviii)) —

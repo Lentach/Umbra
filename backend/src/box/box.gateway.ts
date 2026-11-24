@@ -40,7 +40,7 @@ const AUTH_FAILED: BoxRefusal = { ok: false, code: 'auth_failed' };
 /**
  * The box (metadata-privacy PR1.1, G3 surface A "Plain RPC"): a message path
  * with no account on it. The namespace has NO handshake auth and this file
- * imports nothing from `auth/`, `users/` or `chat/` (I1,
+ * imports nothing from `auth/`, `auth-core/`, `refresh-tokens/`, `users/` or `chat/` (I1,
  * `scripts/verify-box-imports.mjs`).
  *
  * Six events, each answered by its handler's return value on the socket.io

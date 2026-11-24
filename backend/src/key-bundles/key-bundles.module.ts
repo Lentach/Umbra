@@ -14,7 +14,7 @@ import { IdentityRetentionService } from './identity-retention.service';
 import { DeviceListService } from './device-list.service';
 import { ProvisioningStagesService } from './provisioning-stages.service';
 import { ResetRosterService } from './reset-roster.service';
-import { RefreshTokensModule } from '../auth/refresh-tokens.module';
+import { RefreshTokensModule } from '../refresh-tokens/refresh-tokens.module';
 
 @Module({
   imports: [

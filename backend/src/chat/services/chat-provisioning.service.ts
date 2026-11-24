@@ -3,7 +3,7 @@ import { JwtService } from '@nestjs/jwt';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { Server, Socket } from 'socket.io';
-import { RefreshTokensService } from '../../auth/refresh-tokens.service';
+import { RefreshTokensService } from '../../refresh-tokens/refresh-tokens.service';
 import { Device } from '../../key-bundles/device.entity';
 import { DevicesService } from '../../key-bundles/devices.service';
 import {

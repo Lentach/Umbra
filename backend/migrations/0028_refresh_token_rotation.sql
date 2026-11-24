@@ -16,7 +16,7 @@
 -- exist before this file are sessions whose token has no family prefix yet;
 -- their first rotation gives them one.
 --
--- Names match `backend/src/auth/refresh-token.entity.ts` exactly (dev
+-- Names match `backend/src/refresh-tokens/refresh-token.entity.ts` exactly (dev
 -- `synchronize` runs after this file).
 --
 -- Inverse (add it as the NEXT numbered file, never edit this one):

@@ -126,7 +126,7 @@ There is no system-wide threat model. There are five partial ones:
 2. Every device-list mutation is signed by the DAK, which exists only on the primary (I2).
 3. Linking requires possession: QR + SAS + explicit approve (I3).
 4. A box queue row names no account, device, sender or peer; a send is unsigned (`METADATA.md:8`).
-5. Nothing under `backend/src/box` reaches `auth/`, `users/` or `chat/` (CI `verify-box-imports.mjs`).
+5. Nothing under `backend/src/box` reaches `auth/`, `auth-core/`, `refresh-tokens/`, `users/` or `chat/` (CI `verify-box-imports.mjs`).
 6. No backend log line carries a user identifier (CI `verify-no-user-logs.mjs`).
 7. A box send never fetches a pre-key bundle (E38b).
 8. A friend's normal-queue PreKey frame under a non-pinned identity is held, never decrypted (decision 143).

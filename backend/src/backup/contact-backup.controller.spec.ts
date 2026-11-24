@@ -3,7 +3,7 @@ import { Test } from '@nestjs/testing';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { BadRequestException, ValidationPipe } from '@nestjs/common';
 import { GUARDS_METADATA } from '@nestjs/common/constants';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { JwtAuthGuard } from '../auth-core/jwt-auth.guard';
 import { ContactBackupController } from './contact-backup.controller';
 import { ContactBackupService } from './contact-backup.service';
 import { PutContactBackupDto } from './dto/contact-backup.dto';

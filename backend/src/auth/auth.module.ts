@@ -7,9 +7,9 @@ import { LoginBackoffService } from './login-backoff.service';
 import { AuthController } from './auth.controller';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { UsersModule } from '../users/users.module';
-import { RefreshTokensModule } from './refresh-tokens.module';
+import { RefreshTokensModule } from '../refresh-tokens/refresh-tokens.module';
 import { KeyBundlesModule } from '../key-bundles/key-bundles.module';
-import { resolveJwtSecret } from './jwt-secret';
+import { resolveJwtSecret } from '../auth-core/jwt-secret';
 
 @Module({
   imports: [

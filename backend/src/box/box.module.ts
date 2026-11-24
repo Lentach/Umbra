@@ -30,7 +30,7 @@ export const BOX_ENTITIES = [
 /**
  * The box: a second logical service in the same process (design §4.1). It
  * reads its tables through the root `DataSource` and depends on nothing but
- * `common/` and config — never on `auth/`, `users/` or `chat/` (I1).
+ * `common/` and config — never on `auth/`, `auth-core/`, `refresh-tokens/`, `users/` or `chat/` (I1).
  *
  * Its HTTP routes are throttled by the app's global `HttpThrottlerGuard`
  * (per-route limits and tracker on the controller) — which is also why
