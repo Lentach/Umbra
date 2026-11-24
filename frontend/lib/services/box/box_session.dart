@@ -23,6 +23,12 @@ import 'box_wire.dart';
 import 'queue_keys.dart';
 import 'queue_seal.dart';
 
+part 'box_session_connection.dart';
+part 'box_session_deliver.dart';
+part 'box_session_queues.dart';
+part 'box_session_retire.dart';
+part 'box_session_wiring.dart';
+
 /// How long a request-queue publish the server failed waits before it is
 /// sent again. The event is throttled at 30 / 15 min.
 const Duration kRequestQueueRetry = Duration(minutes: 1);
@@ -177,24 +183,6 @@ class BoxSession
   ContactQueue? _self;
   bool _ensuringSelf = false;
 
-  /// The self-queue to hand a sibling: the one the ROW holds, once this
-  /// session ensured one. Any write re-reads the row, and another tab of
-  /// this device may have rotated it meanwhile (E6): that queue is followed
-  /// — subscribed here too — and the one this session ensured, now
-  /// retiring, is never handed out again.
-  ContactQueue? _currentSelf() {
-    final ensured = _self;
-    final current = _store.selfQueue;
-    if (ensured == null || current == null || current.rid == ensured.rid) {
-      return ensured;
-    }
-    final owned = QueueKeys.authOf(current);
-    if (owned == null) return ensured;
-    _self = current;
-    unawaited(_box.subscribe([owned]));
-    return current;
-  }
-
   /// Null until the account socket is ready; the device id it names (null
   /// from a server that predates the field — the server still files it).
   ({int? deviceId})? _account;
@@ -218,121 +206,6 @@ class BoxSession
   /// This device was revoked ([retireRevokedDevice]): no queue is followed,
   /// made or registered again.
   bool _revoked = false;
-
-  /// The app's reader of box deliveries (`MessagingProvider`). Wiring one
-  /// offers it everything that landed in the journal meanwhile.
-  BoxInboxConsumer? get consumer => _inbox.consumer;
-
-  set consumer(BoxInboxConsumer? read) {
-    _inbox.consumer = read;
-    if (read != null) unawaited(_inbox.drain());
-  }
-
-  /// Called when the inbox has read everything queued so far (slice (g),
-  /// E61d: one delivered receipt per drain).
-  void Function()? get onReadsIdle => _inbox.onReadsIdle;
-
-  set onReadsIdle(void Function()? idle) => _inbox.onReadsIdle = idle;
-
-  /// Offers the journal again — the reader may be able to read what it
-  /// refused (E2E just became ready).
-  void drainInbox() {
-    if (!_disposed) unawaited(_inbox.drain());
-  }
-
-  /// The Signal side of the sibling swap (`MessagingProvider`).
-  OwnDeviceEncrypt? get encryptForOwnDevice => _swap.encrypt;
-
-  set encryptForOwnDevice(OwnDeviceEncrypt? encrypt) {
-    _swap
-      ..encrypt = encrypt
-      ..run();
-  }
-
-  /// The own verified list, for the rotation on revoke (`MessagingProvider`).
-  OwnLiveDevices? get ownLiveDevices => _rotation.liveDevices;
-
-  set ownLiveDevices(OwnLiveDevices? lookup) {
-    _rotation
-      ..liveDevices = lookup
-      ..run();
-  }
-
-  /// The Signal side of the friend handoff (`MessagingProvider`).
-  FriendEncrypt? get encryptForFriend => _friends.encrypt;
-
-  set encryptForFriend(FriendEncrypt? encrypt) {
-    _friends
-      ..encrypt = encrypt
-      ..run();
-  }
-
-  /// Friends' verified lists, for the friend handoff (`MessagingProvider`).
-  FriendLiveDevices? get friendLiveDevices => _friends.liveDevices;
-
-  set friendLiveDevices(FriendLiveDevices? lookup) {
-    _friends
-      ..liveDevices = lookup
-      ..run();
-  }
-
-  /// This account's device list, carried on request-queue frames to
-  /// friends (slice (e), decision 50; `MessagingProvider`).
-  Future<Map<String, dynamic>?> Function()? get ownDeviceList =>
-      _friends.ownDeviceList;
-
-  set ownDeviceList(Future<Map<String, dynamic>?> Function()? lookup) {
-    _friends.ownDeviceList = lookup;
-  }
-
-  /// The devices friends' verified lists name revoked, for the rotation
-  /// (slice (e), E50e; `MessagingProvider`).
-  Future<Set<int>?> Function(int userId)? get friendRevokedDevices =>
-      _friends.revokedDevices;
-
-  set friendRevokedDevices(Future<Set<int>?> Function(int userId)? lookup) {
-    _friends.revokedDevices = lookup;
-  }
-
-  /// Whether a friend's device has answered this device's Signal session
-  /// with it (issue #208; `EncryptionProvider.friendAnsweredSession`): a
-  /// handoff over no answered session goes to that device's request queue.
-  SessionAnswered? get friendAnswered => _friends.answered;
-
-  set friendAnswered(SessionAnswered? check) => _friends.answered = check;
-
-  /// One handle lookup of a friend, for the request queues of its devices
-  /// (E114b; `MessagingProvider.lookupFriendAddresses`): the answer reaches
-  /// [takeServedAddresses].
-  Future<bool> Function(int userId)? get friendAddressLookup =>
-      _friends.addressLookup;
-
-  set friendAddressLookup(Future<bool> Function(int userId)? lookup) {
-    _friends.addressLookup = lookup;
-  }
-
-  /// E2E is ready on this connect: the request queue may be published, a
-  /// handoff encrypted and the own list read now.
-  void e2eReady() {
-    if (_disposed) return;
-    _e2eReady = true;
-    _publish();
-    _swap.e2eReady();
-    _rotation.run();
-    _friends.e2eReady();
-  }
-
-  /// The own verified device list was dropped (a device linked or revoked).
-  void ownDevicesChanged() {
-    if (_disposed) return;
-    _swap.ownDevicesChanged();
-    _rotation.run();
-  }
-
-  /// `ownRequestQueues { success, devices?, error?, retryAfterMs? }`.
-  void onOwnRequestQueues(Object? data) {
-    if (!_disposed) unawaited(_swap.onOwnRequestQueues(data));
-  }
 
   /// Friend [userId]'s verified device list was dropped or moved (a device
   /// linked or revoked): its devices may have changed, so the handoff runs
@@ -364,39 +237,6 @@ class BoxSession
   @override
   Future<bool> announceOwnList(Map<String, dynamic> auth) =>
       _disposed ? Future.value(false) : _friends.announceOwnList(auth);
-
-  /// Connects the box and starts following it. Only for a device that does
-  /// E2E duty under its session (`ConnectionProvider` calls it once E2E is
-  /// ready): a device on the link gate would subscribe the queues it holds
-  /// and take messages it can never show (issue #205). Idempotent.
-  void start() {
-    if (_started || _disposed || _revoked) return;
-    _started = true;
-    _inbox.start();
-    _notifiers?.start();
-    _subscriptions
-      ..add(
-        _box.states.listen((state) {
-          if (state != BoxState.ready || _revoked) return;
-          if (_request == null) unawaited(_ensure());
-          if (_self == null) unawaited(_ensureSelf());
-          unawaited(_receive());
-          unawaited(_deleteOwedQueues());
-          _swap.run();
-          _rotation.run();
-          _registerPush();
-          _friends.run();
-        }),
-      )
-      ..add(_box.lostQueues.listen(_onLost));
-    _box.connect();
-  }
-
-  /// Reconnects the box after [close] (the account reconnected); a box
-  /// never [start]ed stays closed.
-  void resume() {
-    if (!_disposed && _started && !_revoked) _box.connect();
-  }
 
   /// How long [retireRevokedDevice] waits by default before recording what
   /// is left as owed (`boxgone_v1`).
@@ -484,122 +324,6 @@ class BoxSession
     }
   }
 
-  /// The app came back from the background
-  /// (`ConnectionProvider.ensureReconnectIfNeeded`): the box connection is
-  /// replaced only if it went dead meanwhile ([BoxClient.checkAlive]).
-  void checkAlive() {
-    if (!_disposed) _box.checkAlive();
-  }
-
-  /// Drops the box connection; [resume] brings it back.
-  void close() => _box.close();
-
-  /// Holds the box's subscribes until the account socket confirms the
-  /// session (issue #206): a session made before its account socket
-  /// confirmed it (`ConnectionProvider`). [accountReady] or
-  /// [accountAnswered] releases.
-  void holdSubscribes() => _box.holdSubscribes();
-
-  /// Issue #206: makes every LOST box connection hold its subscribes too, and
-  /// asks [confirm] once the next one is up and waiting: the account socket
-  /// may claim connected while dead, this device revoked meanwhile. The owner
-  /// answers with [accountAnswered] or [accountReady] (`deviceRevoked`
-  /// retires the box instead).
-  void confirmSessionWith(void Function() confirm) {
-    _box
-      ..holdOnLoss = true
-      ..onHeldConnection = confirm;
-  }
-
-  /// The account socket answered (`serverTime`): the server still holds the
-  /// session (a revoke closes it there), so the held subscribes go out.
-  void accountAnswered() => _box.releaseSubscribes();
-
-  /// The account socket is ready (`socketReady`) as [deviceId]: the server
-  /// confirmed the session, so the queues may be subscribed (issue #206).
-  void accountReady(int? deviceId) {
-    _box.releaseSubscribes();
-    _account = (deviceId: deviceId);
-    _inFlight = null;
-    if (_request == null) {
-      unawaited(_ensure());
-    } else {
-      _publish();
-    }
-    _swap.accountReady(deviceId);
-    // `socketReady` is what confirms this device's id for the own list.
-    _rotation.run();
-    if (deviceId != null) _friends.accountReady();
-  }
-
-  /// The contact store (re)opened — a web vault that booted locked was just
-  /// unlocked, or a slow open landed after the budget. Every earlier attempt
-  /// found it closed, and neither socket will say "ready" again on its own.
-  void storeOpened() {
-    if (!_started || _revoked) return;
-    if (_request == null) unawaited(_ensure());
-    if (_self == null) unawaited(_ensureSelf());
-    if (_box.state == BoxState.ready) unawaited(_deleteOwedQueues());
-    unawaited(_receive());
-    _swap.run();
-    _rotation.run();
-    _registerPush();
-    _friends.run();
-  }
-
-  /// A queue appeared, or the box is ready: every contact queue gets its
-  /// push notifier (E9), and the push worker its nid → chat table (decision
-  /// 77) — the worker has no other way to name the chat a wake-up is for.
-  void _registerPush() {
-    _nids?.sync();
-    _notifiers?.run();
-  }
-
-  /// The account socket dropped: an answer still owed will never come, and
-  /// no queue is subscribed until the next connect gate confirmed the
-  /// session (issue #206) — a device revoked meanwhile hears
-  /// `deviceRevoked` instead of `socketReady`.
-  void accountLost() {
-    _box.holdSubscribes();
-    _account = null;
-    _e2eReady = false;
-    _inFlight = null;
-    _retry?.cancel();
-    // The sibling re-key guard ends with the connect: a sibling
-    // that loses its session again on a later one is re-keyed again.
-    // [_friendRekeyed] stays: decision 70 bounds what a forged frame can
-    // time to one bundle fetch per friend device per session.
-    _rekeyed.clear();
-    _swap.accountLost();
-    _friends.accountLost();
-  }
-
-  /// `requestQueueSet { success, error?, retryAfterMs? }`.
-  void onRequestQueueSet(Object? data) {
-    final sent = _inFlight;
-    _inFlight = null;
-    if (sent == null || data is! Map) return;
-    if (data['success'] == true) {
-      final first = _published == null;
-      _published = sent;
-      if (first) onBoxReady?.call();
-      return;
-    }
-    final error = data['error'];
-    final retryMs = data['retryAfterMs'];
-    // `invalid_payload` and `unknown_device` are verdicts on this very
-    // publish: the same one would be refused again, so it waits for the next
-    // ready. Anything else (`internal`) is the server's own failure.
-    if (error == 'invalid_payload' || error == 'unknown_device') return;
-    _retry?.cancel();
-    _retry = Timer(
-      error == 'rate_limited' && retryMs is int
-          ? Duration(milliseconds: retryMs)
-          : kRequestQueueRetry,
-      _publish,
-    );
-  }
-
   @override
   Map<int, ContactOutbound> addressesFor(int peerUserId) {
     // Answered whatever the box's state: a peer the box covers must FAIL a
@@ -655,21 +379,6 @@ class BoxSession
     BoxRefused(code: BoxCode.quotaExceeded) => BoxRequestSend.busy,
     BoxRefused() || BoxUnknown() || null => BoxRequestSend.failed,
   };
-
-  /// The box's answer to [body] sealed to [to]; null when nothing was sent
-  /// (a bad address, a failed seal, a disposed session).
-  Future<BoxResult<void>?> _sealAndSend(
-    ContactOutbound to,
-    Uint8List body,
-    BoxSendMode? mode,
-  ) async {
-    final sid = boxB64Decode(to.sid, kBoxSidBytes);
-    final sealPub = boxB64Decode(to.sealPub, 32);
-    if (_disposed || sid == null || sealPub == null) return null;
-    final blob = await _seal.seal(sealPub, body);
-    if (blob == null || _disposed) return null;
-    return _box.send(sid, blob, mode: mode);
-  }
 
   @override
   Future<BoxResult<BoxMediaRef>> uploadMedia(
@@ -751,43 +460,11 @@ class BoxSession
     return SiblingWrite.stored;
   }
 
-  /// Encrypts [envelope] for sibling [to] and seals it into its self-queue
-  /// as a normal frame; true only when the box took it.
-  Future<bool> _sendToSibling(
-    ContactOutbound to,
-    Map<String, dynamic> envelope,
-  ) async {
-    final encrypt = _swap.encrypt;
-    if (_disposed || encrypt == null) return false;
-    final frame = await encrypt(to.peerDeviceId, jsonEncode(envelope));
-    return frame != null &&
-        await deliver(to, frame.encode()) == BoxSendOutcome.taken;
-  }
-
   @override
   Future<SiblingWrite> siblingAcked(int deviceId, String sid) async {
     if (_disposed) return SiblingWrite.retryLater;
     final written = await _store.markSiblingAcked(deviceId, sid);
     return written == SiblingWrite.refused ? _staleAck(deviceId, sid) : written;
-  }
-
-  /// Sibling [deviceId] acked [sid], which is not our current self-queue: it
-  /// learned an older handoff after the newer one (they travel through
-  /// different queues, which the box does not order), and would send into a
-  /// queue that is retiring or gone. Its ack is forgotten, so the
-  /// swap hands it the current queue — asked again now, and on every
-  /// connect until it acks. The re-hand leaves only after the stale handoff
-  /// was read, so it cannot be overtaken by it.
-  Future<SiblingWrite> _staleAck(int deviceId, String sid) async {
-    final self = _store.selfQueue;
-    if (self == null || self.sid == sid || _store.siblingsUnsupported) {
-      return SiblingWrite.refused;
-    }
-    final forgot = await _store.forgetSiblingAck(deviceId);
-    if (forgot != SiblingWrite.stored) return forgot;
-    E2eDiagLog.add('BOX_SIBLING_STALE_ACK', {'device': deviceId});
-    _swap.handAgain();
-    return SiblingWrite.stored;
   }
 
   @override
@@ -874,96 +551,6 @@ class BoxSession
     sealPub: sealPub,
     profile: profile,
   );
-
-  /// Store → ack → hand-back (item 5): [userId]'s [deviceId] address, on a
-  /// record already `friend`; our hand-back carries [profile] when this is
-  /// the accept of a first contact (slice (f), decision 55).
-  Future<FriendWrite> _takeHandoff(
-    int userId,
-    int deviceId, {
-    required String sid,
-    required String sealPub,
-    E2eProfile? profile,
-  }) async {
-    if (_disposed) return FriendWrite.retryLater;
-    var friend = false;
-    final committed = await _store.update(userId, (current) {
-      if (current == null || current.state != ContactState.friend) return null;
-      friend = true;
-      final held = current.outbound
-          .where((o) => o.peerDeviceId == deviceId)
-          .firstOrNull;
-      // What the device last said about relaying (decision 101 A, E101b)
-      // holds on its new queue; the frame that said it may be this handoff.
-      final relays = _friendRelays[(userId, deviceId)] ?? held?.relays ?? false;
-      if (held?.sid == sid &&
-          held?.sealPub == sealPub &&
-          held?.relays == relays) {
-        return null;
-      }
-      return current.copyWith(
-        outbound: [
-          for (final o in current.outbound)
-            if (o.peerDeviceId != deviceId) o,
-          ContactOutbound(
-            peerDeviceId: deviceId,
-            sid: sid,
-            sealPub: sealPub,
-            relays: relays,
-          ),
-        ],
-      );
-    });
-    if (!committed) return FriendWrite.retryLater;
-    if (!friend) return FriendWrite.refused;
-    _friends.noteRoutes();
-    final acked = await _sendToFriend(
-      userId,
-      deviceId,
-      E2eEnvelope.buildQueueHandoffAck(sid: sid),
-    );
-    final ours = _store.byUserId(userId)?.queues.firstOrNull;
-    bool? handedBack;
-    if (ours == null || !ours.ackedBy.contains(deviceId)) {
-      handedBack = false;
-      final ensured = await _keys.ensureInbound(userId);
-      if (ensured case InboundQueueCreated(:final queue)) {
-        if (ours == null) _registerPush();
-        handedBack = await _sendToFriend(
-          userId,
-          deviceId,
-          E2eEnvelope.buildQueueHandoff(
-            sid: queue.sid,
-            sealPub: queue.sealPub,
-            profile: profile,
-          ),
-        );
-        if (handedBack) _friends.noteHanded(userId, deviceId, queue.sid);
-      }
-    }
-    E2eDiagLog.add('BOX_FRIEND_HANDOFF', {
-      'device': deviceId,
-      'acked': acked,
-      'handedBack': ?handedBack,
-      if (profile != null) 'accept': true,
-    });
-    return FriendWrite.stored;
-  }
-
-  /// Encrypts [envelope] for [userId]'s [deviceId] and sends it to where
-  /// that device takes it (the queue it handed us, else its request queue);
-  /// true only when the box took it.
-  Future<bool> _sendToFriend(
-    int userId,
-    int deviceId,
-    Map<String, dynamic> envelope,
-  ) async {
-    final encrypt = _friends.encrypt;
-    final target = _friends.targetOf(userId, deviceId);
-    if (_disposed || encrypt == null || target == null) return false;
-    final frame = await encrypt(userId, deviceId, jsonEncode(envelope));
-    return frame != null && await _friends.send(target, frame) is BoxOk;
-  }
 
   @override
   Future<FriendWrite> friendAcked(int userId, int deviceId, String sid) async {
@@ -1179,95 +766,7 @@ class BoxSession
     await _retireQueues(() => !_disposed);
   }
 
-  /// Deletes every queue this device holds, read from the store ONCE up
-  /// front; stops at the first [keepGoing] that answers false, and stops
-  /// waiting on a delete still in flight at [deadline]. Returns how many it
-  /// held and the queues whose delete was not confirmed ([_oweDeletes]).
-  Future<({int held, List<BoxQueueAuth> owed})> _retireQueues(
-    bool Function() keepGoing, {
-    DateTime? deadline,
-  }) async {
-    final deletes = <(BoxQueueAuth?, Future<bool> Function())>[
-      for (final record in _store.all)
-        for (final queue in record.queues)
-          (
-            QueueKeys.authOf(queue),
-            () => _keys.retireInbound(record.userId, queue),
-          ),
-      for (final queue in [..._store.retiringSelfQueues])
-        (QueueKeys.authOf(queue.queue), () => _keys.retire(queue)),
-      for (final queue in [_store.selfQueue, _store.requestQueue])
-        if (queue != null)
-          if (QueueKeys.authOf(queue) case final auth?)
-            (auth, () async => await _box.deleteQueue(auth) is BoxOk),
-    ];
-    final owed = <BoxQueueAuth>[];
-    var next = 0;
-    try {
-      for (; next < deletes.length; next++) {
-        if (!keepGoing()) break;
-        final pending = deletes[next].$2();
-        final done = await (deadline == null
-            ? pending
-            : pending.timeout(deadline.difference(_now())));
-        if (!done) {
-          if (deletes[next].$1 case final auth?) owed.add(auth);
-        }
-      }
-    } on TimeoutException {
-      // The one in flight is owed with the rest.
-    }
-    for (; next < deletes.length; next++) {
-      if (deletes[next].$1 case final auth?) owed.add(auth);
-    }
-    return (held: deletes.length, owed: owed);
-  }
-
-  /// Issue #208: queues whose delete the retire could not confirm go to the
-  /// store's `boxgone_v1` row, which the fresh-start wipe keeps; the next
-  /// life's box deletes them ([_deleteOwedQueues]).
-  Future<void> _oweDeletes(List<BoxQueueAuth> owed) async {
-    if (owed.isEmpty || !_store.isOpen) return;
-    await _store.addOwedQueueDeletes([
-      for (final auth in owed)
-        (rid: boxB64(auth.rid), key: boxB64(auth.key.bytes)),
-    ]);
-  }
-
   bool _deletingOwed = false;
-
-  /// Deletes the queues an ended device life of this install still owes
-  /// ([_oweDeletes]); a delete the box does not confirm stays owed for the
-  /// next ready box.
-  Future<void> _deleteOwedQueues() async {
-    if (_deletingOwed || _disposed || _revoked || !_store.isOpen) return;
-    _deletingOwed = true;
-    try {
-      final owed = await _store.owedQueueDeletes();
-      if (owed.isEmpty) return;
-      final gone = <String>[];
-      for (final queue in owed) {
-        if (_disposed || _revoked || _box.state != BoxState.ready) break;
-        final rid = boxB64Decode(queue.rid, kBoxRidBytes);
-        final key = boxB64Decode(queue.key, 64);
-        if (rid == null ||
-            key == null ||
-            await _box.deleteQueue(
-                  BoxQueueAuth(rid: rid, key: BoxAuthKey.fromBytes(key)),
-                )
-                is BoxOk) {
-          gone.add(queue.rid);
-        }
-      }
-      if (gone.isNotEmpty) await _store.dropOwedQueueDeletes(gone);
-      E2eDiagLog.add('BOX_OWED_QUEUES_DELETED', {
-        'deleted': gone.length,
-        'owed': owed.length - gone.length,
-      });
-    } finally {
-      _deletingOwed = false;
-    }
-  }
 
   /// Called when a box-made record changed outside the messaging reader —
   /// a pending request expired (E15i) — so the lists and chats re-read the
@@ -1275,23 +774,6 @@ class BoxSession
   void Function()? onFirstContactsChanged;
 
   DateTime? _expiryRanAt;
-
-  /// E15i, whenever the box and the store are ready and at most once a day
-  /// (a long-lived tab outlives a request's lifetime): every pending box
-  /// request older than [BoxFirstContact.lifetime] retires.
-  Future<void> _expireFirstContacts() async {
-    final last = _expiryRanAt;
-    if (last != null && _now().difference(last) < const Duration(days: 1)) {
-      return;
-    }
-    _expiryRanAt = _now();
-    final expired = await firstContact.expired();
-    for (final userId in expired) {
-      if (_disposed) return;
-      await retireFirstContact(userId);
-    }
-    if (expired.isNotEmpty && !_disposed) onFirstContactsChanged?.call();
-  }
 
   void dispose() {
     if (_disposed) return;
@@ -1306,72 +788,5 @@ class BoxSession
     }
     _inbox.dispose();
     _box.dispose();
-  }
-
-  /// Subscribes every contact queue the box is not already following, then
-  /// offers what the journal holds. The box keeps the set and re-signs it on
-  /// every reconnect, so each queue is subscribed here once per session.
-  Future<void> _receive() async {
-    if (_disposed || _revoked || _box.state != BoxState.ready) return;
-    if (!_store.isOpen) return;
-    final following = {for (final rid in _box.subscribed) boxB64(rid)};
-    final missing = [
-      for (final queue in _keys.inbound())
-        if (!following.contains(boxB64(queue.rid))) queue,
-    ];
-    if (missing.isNotEmpty) await _box.subscribe(missing);
-    if (!_disposed) await _inbox.drain();
-    if (!_disposed) await _expireFirstContacts();
-  }
-
-  Future<void> _ensure() async {
-    if (_ensuring || _disposed || _revoked || _box.state != BoxState.ready) {
-      return;
-    }
-    _ensuring = true;
-    try {
-      final queue = await _keys.ensureRequest();
-      if (_disposed || queue == null) return;
-      _request = queue;
-      _publish();
-    } finally {
-      _ensuring = false;
-    }
-  }
-
-  Future<void> _ensureSelf() async {
-    if (_ensuringSelf || _disposed || _revoked) return;
-    if (_box.state != BoxState.ready) return;
-    _ensuringSelf = true;
-    try {
-      final queue = await _keys.ensureSelf();
-      if (_disposed || queue == null) return;
-      // A rotation that landed while this ran is followed on the next read
-      // ([_currentSelf]).
-      _self = queue;
-      _swap.run();
-    } finally {
-      _ensuringSelf = false;
-    }
-  }
-
-  /// A reconnect's subscribe refused the request queue or the self-queue:
-  /// it is gone for good. Forgotten here; the `ready` that follows the
-  /// resubscribe ensures it again, which sees the same refusal, drops the
-  /// stored row and creates a replacement.
-  void _onLost(BoxRefusal refusal) {
-    final rid = boxB64(refusal.rid);
-    if (rid == _request?.rid) _request = null;
-    if (rid == _self?.rid) _self = null;
-  }
-
-  void _publish() {
-    final account = _account;
-    final queue = _request;
-    if (_disposed || !_e2eReady || account == null || queue == null) return;
-    final key = '${account.deviceId}:${queue.sid}';
-    if (key == _published || key == _inFlight) return;
-    _inFlight = key;
-    _emit('setRequestQueue', {'sid': queue.sid, 'sealPub': queue.sealPub});
   }
 }
