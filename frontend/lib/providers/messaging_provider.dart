@@ -702,6 +702,23 @@ class MessagingProvider extends ChangeNotifier {
     );
   }
 
+  /// Runs [action] after every read queued earlier for [senderId], under
+  /// the session epoch it was queued in ([_boxReadStale]).
+  ///
+  /// Box reads are serialised twice, on different keys:
+  /// - `BoxInbox._reads`: ONE chain per box session for every journaled
+  ///   delivery (an account switch builds a new session, so a read still
+  ///   running in the old inbox can overlap the new one's — the epoch above
+  ///   is what covers that). The three
+  ///   calls in `consumeBoxEntry` and the one in `_takeRelayed` (reached
+  ///   from inside a sibling read) run only inside it, so among themselves
+  ///   this chain orders nothing.
+  /// - this chain, per sender: `_openKept` (accepting a first contact)
+  ///   decrypts from a user action, OUTSIDE `_reads`. It is ordered against
+  ///   that sender's inbox reads only because they take this chain too.
+  ///
+  /// So no call site may drop the wrap: the inbox ones are what `_openKept`
+  /// waits behind, and they get their epoch here.
   Future<T> _runDecryptSerialized<T>(
     int senderId,
     Future<T> Function() action,

@@ -196,17 +196,18 @@ class _SiblingBook {
 extension ContactStoreSiblings on ContactStore {
   /// This device's self-queue as last read or claimed; null when there is
   /// none, or the row is unreadable (replaceable) or a newer build's.
-  ContactQueue? get selfQueue => _siblingBook.self;
+  ContactQueue? get selfQueue => _siblingRow.book.self;
 
   /// Every sibling this device knows of, by device id.
-  List<SiblingAddress> get siblings => List.unmodifiable(_siblingBook.siblings);
+  List<SiblingAddress> get siblings =>
+      List.unmodifiable(_siblingRow.book.siblings);
 
   /// Self-queues this device replaced and has not deleted yet (E6).
   List<RetiringSelfQueue> get retiringSelfQueues =>
-      List.unmodifiable(_siblingBook.retiring);
+      List.unmodifiable(_siblingRow.book.retiring);
 
   /// A NEWER build wrote the row: it is never overwritten.
-  bool get siblingsUnsupported => _siblingsUnsupported;
+  bool get siblingsUnsupported => _siblingRow.unsupported;
 
   /// Stores [candidate] as this device's self-queue UNLESS a readable one is
   /// already on disk (another tab claimed first), which is kept and
@@ -340,41 +341,22 @@ extension ContactStoreSiblings on ContactStore {
     ),
   );
 
-  /// Read-modify-write of the row under the account lock, from GROUND TRUTH.
-  /// [mutate] returns the book to keep (the same content = no write) or null
-  /// to refuse.
+  /// [ContactStore._updateBook] of the row. [mutate] returns the book to keep
+  /// (the same content = no write) or null to refuse.
   Future<SiblingWrite> _updateSiblings(
     _SiblingBook? Function(_SiblingBook current) mutate,
   ) {
-    final kv = _kv;
-    final userId = _userId;
-    if (kv == null || userId == null) {
-      return Future.value(SiblingWrite.retryLater);
-    }
-    final generation = _generation;
-    var outcome = SiblingWrite.retryLater;
-    return _serial(
-      () => _lock(ContactStore.lockName(userId), () async {
-        if (_generation != generation) return false;
-        final key = ContactStore.siblingsKey(userId);
-        final raw = (await ContactStore._readWhere(kv, (k) => k == key))[key];
-        final current = _SiblingBook.decode(raw);
-        if (current == null) {
-          outcome = SiblingWrite.refused;
-          return false;
-        }
-        final next = mutate(current);
-        if (next == null) {
-          outcome = SiblingWrite.refused;
-          if (_generation == generation) _siblingBook = current;
-          return false;
-        }
-        final encoded = jsonEncode(next.toJson());
-        if (encoded != raw && !await kv.setString(key, encoded)) return false;
-        if (_generation == generation) _siblingBook = next;
-        outcome = SiblingWrite.stored;
-        return true;
-      }),
-    ).then((_) => outcome);
+    var refused = false;
+    return _updateBook(
+      _siblingRow,
+      mutate,
+      onRefused: () => refused = true,
+    ).then(
+      (stored) => stored
+          ? SiblingWrite.stored
+          : refused
+          ? SiblingWrite.refused
+          : SiblingWrite.retryLater,
+    );
   }
 }

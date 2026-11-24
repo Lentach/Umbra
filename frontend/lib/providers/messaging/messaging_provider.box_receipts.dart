@@ -273,6 +273,9 @@ extension MessagingBoxReceipts on MessagingProvider {
         dropped(failure.name);
         return false;
       }
+      // Not `_deliverBoxFrames`: every frame goes as [mode], and a delivery
+      // that throws drops the whole signal (the `catch` below) instead of
+      // counting as one frame not taken.
       final answers = await Future.wait([
         for (final (to, body) in sealed.frames)
           route.outbox.deliver(to, body, mode: mode),

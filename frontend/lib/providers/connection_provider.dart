@@ -823,7 +823,7 @@ class ConnectionProvider extends ChangeNotifier {
       notifyListeners();
 
       if (!_intentionalDisconnect) {
-        _reconnectManager.onDisconnect(_scheduleReconnect, (msg) {
+        _reconnectManager.onDisconnect(_reconnectWithStoredCredentials, (msg) {
           _errorMessage = msg;
           notifyListeners();
         });
@@ -839,7 +839,9 @@ class ConnectionProvider extends ChangeNotifier {
     if (_accountReady) _messagingProvider?.refreshBoxDeviceLists();
   }
 
-  void _scheduleReconnect() {
+  /// Connects with the account and token this provider holds for a reconnect;
+  /// nothing when either is gone (a logout cleared them).
+  void _reconnectWithStoredCredentials() {
     final userId = _currentUserId;
     final token = _reconnectManager.tokenForReconnect;
     if (userId == null || token == null) return;
@@ -1091,11 +1093,7 @@ class ConnectionProvider extends ChangeNotifier {
     // for the session to be confirmed, issue #206).
     _box?.checkAlive();
     if (!claimsConnected) {
-      connect(
-        _currentUserId!,
-        _reconnectManager.tokenForReconnect!,
-        AppConfig.baseUrl,
-      );
+      _reconnectWithStoredCredentials();
       return;
     }
     // Socket CLAIMS connected, but iOS suspends the transport in background
@@ -1130,10 +1128,7 @@ class ConnectionProvider extends ChangeNotifier {
     _resumeProbeTimer = Timer(_kResumeProbeWindow, () {
       if (_serverResponseCounter != probeStart) return; // server replied: alive
       E2eDiagLog.add('RESUME_PROBE_TIMEOUT', {'forcedReconnect': true});
-      final userId = _currentUserId;
-      final token = _reconnectManager.tokenForReconnect;
-      if (userId == null || token == null) return;
-      connect(userId, token, AppConfig.baseUrl);
+      _reconnectWithStoredCredentials();
     });
   }
 

@@ -17,7 +17,7 @@ import '../services/profile/profile_photos.dart' show ProfilePhotoOutcome;
 import '../theme/rpg_theme.dart';
 import '../utils/linkify.dart';
 import '../theme/glass_theme.dart';
-import '../widgets/glass/glass_dialog.dart';
+import '../widgets/dialogs/confirm_dialog.dart';
 import '../widgets/glass/glass_surface.dart';
 import '../widgets/glass/glass_menu.dart';
 import '../widgets/top_snackbar.dart' show showTopSnackBar;
@@ -192,38 +192,11 @@ class _UserCardScreenState extends State<UserCardScreen> {
     });
   }
 
-  Future<bool> _confirmAction({
-    required String title,
-    required String message,
-    required String confirmLabel,
-  }) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) {
-        final l10n = AppLocalizations.of(dialogContext);
-        return GlassDialog(
-          title: Text(title),
-          content: Text(message),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: Text(l10n.cancel),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: Text(confirmLabel),
-            ),
-          ],
-        );
-      },
-    );
-    return confirmed ?? false;
-  }
-
   Future<void> _removeProfilePhoto() async {
     final actions = _photoActions();
     final l10n = AppLocalizations.of(context);
-    if (!await _confirmAction(
+    if (!await showConfirmDialog(
+      context: context,
       title: l10n.userCardDeletePhotoTitle,
       message: l10n.userCardDeletePhotoConfirm,
       confirmLabel: l10n.delete,
@@ -238,7 +211,8 @@ class _UserCardScreenState extends State<UserCardScreen> {
     final userId = widget.data.userId;
     if (userId == null) return;
     final l10n = AppLocalizations.of(context);
-    if (!await _confirmAction(
+    if (!await showConfirmDialog(
+      context: context,
       title: l10n.removeFriendTitle,
       message: l10n.removeFriendConfirm(widget.data.username),
       confirmLabel: l10n.remove,
@@ -262,7 +236,8 @@ class _UserCardScreenState extends State<UserCardScreen> {
     final userId = widget.data.userId;
     if (userId == null) return;
     final l10n = AppLocalizations.of(context);
-    if (!await _confirmAction(
+    if (!await showConfirmDialog(
+      context: context,
       title: l10n.userCardBlockTitle(widget.data.handle),
       message: l10n.userCardBlockConfirm,
       confirmLabel: l10n.block,

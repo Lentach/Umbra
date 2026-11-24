@@ -10,15 +10,15 @@ import '../providers/conversations_provider.dart';
 import '../providers/encryption_provider.dart';
 import '../providers/messaging_provider.dart';
 import '../providers/settings_provider.dart';
+import '../services/audio_cache_store.dart';
 import '../services/backup/history_backup.dart';
 import '../services/backup/history_backup_service.dart';
 import '../services/contacts/contact_store.dart';
 import '../theme/rpg_theme.dart';
 import '../utils/e2e_diag_log.dart';
 import '../utils/e2e_persistent_diag.dart';
-import '../widgets/audio/playback_controller.dart';
 import '../widgets/dialogs/backup_passphrase_dialog.dart';
-import '../widgets/glass/glass_dialog.dart';
+import '../widgets/dialogs/confirm_dialog.dart';
 import '../widgets/glass/glass_top_bar.dart';
 import '../widgets/settings_console.dart';
 import '../widgets/top_snackbar.dart';
@@ -930,47 +930,14 @@ class _PrivacySafetyScreenState extends State<PrivacySafetyScreen> {
     }
   }
 
-  Future<bool> _confirmAction({
-    required String title,
-    required String message,
-    required String confirmLabel,
-  }) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) {
-        final colorScheme = Theme.of(dialogContext).colorScheme;
-        final l10n = AppLocalizations.of(dialogContext);
-
-        return GlassDialog(
-          title: Text(title),
-          content: Text(message),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: Text(l10n.cancel),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-              style: FilledButton.styleFrom(
-                backgroundColor: colorScheme.error,
-                foregroundColor: colorScheme.onError,
-              ),
-              child: Text(confirmLabel),
-            ),
-          ],
-        );
-      },
-    );
-    if (!mounted) return false;
-    return confirmed ?? false;
-  }
-
   Future<void> _deleteAllLocalHistory() async {
     final l10n = AppLocalizations.of(context);
-    final confirmed = await _confirmAction(
+    final confirmed = await showConfirmDialog(
+      context: context,
       title: l10n.deleteAllLocalHistoryDialogTitle,
       message: l10n.deleteAllLocalHistoryDialogBody,
       confirmLabel: l10n.deleteAllLocalHistoryConfirm,
+      destructive: true,
     );
     if (!mounted) return;
     if (!confirmed) return;
@@ -980,7 +947,7 @@ class _PrivacySafetyScreenState extends State<PrivacySafetyScreen> {
     try {
       final result = await encryptionProvider.clearLocalDecryptedContentCache();
       if (!mounted) return;
-      await PlaybackController.clearAudioCache();
+      await AudioCacheStore.clear();
       if (!mounted) return;
 
       showTopSnackBar(

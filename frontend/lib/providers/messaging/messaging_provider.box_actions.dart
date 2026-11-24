@@ -251,19 +251,13 @@ extension MessagingBoxActions on MessagingProvider {
       failed('seal_threw', e);
       return false;
     }
-    // A delivery that threw is a frame not taken, as `deliver` answers a
-    // failed seal: the frames other devices took still stand (E19l).
-    final answers = await Future.wait([
-      for (final (to, body) in frames)
-        route.outbox
-            .deliver(
-              to,
-              body,
-              mode: _boxFrameMode(message: false, toPeer: true),
-            )
-            .catchError((Object _) => BoxSendOutcome.failed),
-    ]);
-    _noteBoxAnswers(peer, frames, answers, peerFrames: route.targets.length);
+    final answers = await _deliverBoxFrames(
+      route.outbox,
+      peer,
+      frames,
+      peerFrames: route.targets.length,
+      message: false,
+    );
     _e2eFlowLog('BOX_ACTION_SEND', {
       't': type,
       'frames': frames.length,
@@ -369,24 +363,12 @@ extension MessagingBoxActions on MessagingProvider {
       copyJson: retry.copyJson,
     );
     if (sealed.failure != null) return;
-    final answers = await Future.wait([
-      for (var i = 0; i < sealed.frames.length; i++)
-        route.outbox
-            .deliver(
-              sealed.frames[i].$1,
-              sealed.frames[i].$2,
-              mode: _boxFrameMode(
-                message: retry.message,
-                toPeer: i < targets.length,
-              ),
-            )
-            .catchError((Object _) => BoxSendOutcome.failed),
-    ]);
-    _noteBoxAnswers(
+    final answers = await _deliverBoxFrames(
+      route.outbox,
       retry.peer,
       sealed.frames,
-      answers,
       peerFrames: targets.length,
+      message: retry.message,
     );
     for (var i = 0; i < answers.length; i++) {
       // Taken, or full: a full queue is paused, never owed (E93a).

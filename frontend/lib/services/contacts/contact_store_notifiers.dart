@@ -46,35 +46,25 @@ class _NotifierBook {
 /// every other row here; never fires [ContactStore.onChanged].
 extension ContactStoreNotifiers on ContactStore {
   /// A NEWER build wrote the row: it is never overwritten.
-  bool get notifiersUnsupported => _notifiersUnsupported;
+  bool get notifiersUnsupported => _notifierRow.unsupported;
 
   /// Whether queue [nid]'s notifier was activated under push [target].
   bool notifierActive(String nid, String target) =>
-      _notifierBook.target == target && _notifierBook.nids.contains(nid);
+      _notifierRow.book.target == target &&
+      _notifierRow.book.nids.contains(nid);
 
   /// Records the notifiers of queues [nids] as active under [target], in one
   /// write. A different target on disk means the token changed: every other
   /// nid is stale and dropped. So is any nid no contact record holds any
   /// more (the queue is gone). False when nothing was written (closed,
   /// uncommitted, a newer build's row).
-  Future<bool> markNotifiers(Iterable<String> nids, String target) {
-    final kv = _kv;
-    final userId = _userId;
-    if (kv == null || userId == null) return Future.value(false);
-    final generation = _generation;
-    return _serial(
-      () => _lock(ContactStore.lockName(userId), () async {
-        if (_generation != generation) return false;
-        final key = ContactStore.notifiersKey(userId);
-        final current = _NotifierBook.decode(
-          (await ContactStore._readWhere(kv, (k) => k == key))[key],
-        );
-        if (current == null) return false;
+  Future<bool> markNotifiers(Iterable<String> nids, String target) =>
+      _updateBook(_notifierRow, (current) {
         final held = {
           for (final record in _records.values)
             for (final queue in record.queues) queue.nid,
         };
-        final next = _NotifierBook(
+        return _NotifierBook(
           target: target,
           nids: {
             if (current.target == target)
@@ -82,10 +72,5 @@ extension ContactStoreNotifiers on ContactStore {
             ...nids,
           },
         );
-        if (!await kv.setString(key, next.encode())) return false;
-        if (_generation == generation) _notifierBook = next;
-        return true;
-      }),
-    );
-  }
+      });
 }

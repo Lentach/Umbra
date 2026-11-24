@@ -163,13 +163,13 @@ extension MessagingBoxRelay on MessagingProvider {
         }
       }
       if (frames.isEmpty) return;
-      final answers = await Future.wait([
-        for (final (to, body) in frames)
-          outbox
-              .deliver(to, body, mode: BoxSendMode.quiet)
-              .catchError((Object _) => BoxSendOutcome.failed),
-      ]);
-      _noteBoxAnswers(own, frames, answers, peerFrames: 0);
+      final answers = await _deliverBoxFrames(
+        outbox,
+        own,
+        frames,
+        peerFrames: 0,
+        message: false,
+      );
       for (var i = 0; i < answers.length; i++) {
         final device = frames[i].$1.peerDeviceId;
         _e2eFlowLog('BOX_RELAY_SENT', {

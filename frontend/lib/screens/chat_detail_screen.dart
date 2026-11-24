@@ -73,6 +73,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   int _newMessagesCount = 0;
   int _lastMessageCount = 0;
   int _lastLinkPreviewCount = 0;
+
   /// (lxxxiv): the note instant whose durable eviction this screen already
   /// requested; stops repeated builds from re-requesting it.
   String? _dismissedNoteAt;
@@ -463,49 +464,43 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
 
     await Navigator.of(context).push(
       instantOpaqueRoute(
-        builder: (cardContext) => UserCardScreen(
-          data: UserCardVisualData.fromUser(
-            otherUser,
-            isSelf: false,
-            hasConversation: true,
-            conversationId: widget.conversationId,
-            mute: UserCardMute.fromConversation(
-              muted:
-                  _conversations.conversations
-                      .where(
-                        (conversation) =>
-                            conversation.id == widget.conversationId,
-                      )
-                      .firstOrNull
-                      ?.muted ??
-                  false,
-              mutedUntil: _conversations.conversations
-                  .where(
-                    (conversation) => conversation.id == widget.conversationId,
-                  )
-                  .firstOrNull
-                  ?.mutedUntil,
+        builder: (cardContext) {
+          // Resolved ONCE, still inside the builder so it is read at the same
+          // moment as before.
+          final conversation = _conversations.conversations
+              .where((conversation) => conversation.id == widget.conversationId)
+              .firstOrNull;
+          return UserCardScreen(
+            data: UserCardVisualData.fromUser(
+              otherUser,
+              isSelf: false,
+              hasConversation: true,
+              conversationId: widget.conversationId,
+              mute: UserCardMute.fromConversation(
+                muted: conversation?.muted ?? false,
+                mutedUntil: conversation?.mutedUntil,
+              ),
             ),
-          ),
-          onMessage: () {
-            Navigator.of(cardContext).pop();
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              _composerKey.currentState?.focusComposer();
-            });
-          },
-          onMuteChanged: (mute) {
-            _conversations.setConversationMute(
-              widget.conversationId,
-              switch (mute) {
-                UserCardMute.off => 'off',
-                UserCardMute.oneHour => '1h',
-                UserCardMute.eightHours => '8h',
-                UserCardMute.oneWeek => '1w',
-                UserCardMute.forever => 'forever',
-              },
-            );
-          },
-        ),
+            onMessage: () {
+              Navigator.of(cardContext).pop();
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                _composerKey.currentState?.focusComposer();
+              });
+            },
+            onMuteChanged: (mute) {
+              _conversations.setConversationMute(
+                widget.conversationId,
+                switch (mute) {
+                  UserCardMute.off => 'off',
+                  UserCardMute.oneHour => '1h',
+                  UserCardMute.eightHours => '8h',
+                  UserCardMute.oneWeek => '1w',
+                  UserCardMute.forever => 'forever',
+                },
+              );
+            },
+          );
+        },
       ),
     );
   }

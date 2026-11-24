@@ -95,15 +95,15 @@ class _AliveBook {
 /// every other row here; never fires [ContactStore.onChanged].
 extension ContactStoreSiblingAlive on ContactStore {
   /// A NEWER build wrote the row: it is never overwritten.
-  bool get siblingAliveUnsupported => _aliveUnsupported;
+  bool get siblingAliveUnsupported => _aliveRow.unsupported;
 
   /// What this install knows of sibling [deviceId]; null when nothing.
   SiblingPresence? siblingPresence(int deviceId) =>
-      _aliveBook.devices[deviceId];
+      _aliveRow.book.devices[deviceId];
 
   /// When sibling [deviceId] was last heard from (or first known here).
   DateTime? siblingHeardAt(int deviceId) =>
-      _aliveBook.devices[deviceId]?.heardAt;
+      _aliveRow.book.devices[deviceId]?.heardAt;
 
   /// Every sibling in [live] with no heard mark ([SiblingPresence]) is first
   /// known [now]; every entry outside [live] (revoked, or never ours) goes.
@@ -187,28 +187,8 @@ extension ContactStoreSiblingAlive on ContactStore {
     );
   });
 
-  /// Read-modify-write of the row under the account lock, from GROUND TRUTH.
-  /// [mutate] returns the book to keep; an unchanged encoding writes nothing.
-  /// False when nothing could be written (closed, uncommitted, a newer
-  /// build's row).
-  Future<bool> _updateAlive(_AliveBook Function(_AliveBook current) mutate) {
-    final kv = _kv;
-    final userId = _userId;
-    if (kv == null || userId == null) return Future.value(false);
-    final generation = _generation;
-    return _serial(
-      () => _lock(ContactStore.lockName(userId), () async {
-        if (_generation != generation) return false;
-        final key = ContactStore.siblingAliveKey(userId);
-        final raw = (await ContactStore._readWhere(kv, (k) => k == key))[key];
-        final current = _AliveBook.decode(raw);
-        if (current == null) return false;
-        final next = mutate(current);
-        final encoded = next.encode();
-        if (encoded != raw && !await kv.setString(key, encoded)) return false;
-        if (_generation == generation) _aliveBook = next;
-        return true;
-      }),
-    );
-  }
+  /// [ContactStore._updateBook] of the row: an unchanged encoding writes
+  /// nothing.
+  Future<bool> _updateAlive(_AliveBook Function(_AliveBook current) mutate) =>
+      _updateBook(_aliveRow, mutate);
 }
