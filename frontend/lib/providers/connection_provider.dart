@@ -64,7 +64,8 @@ class ConnectionProvider extends ChangeNotifier {
 
   /// When the last [ensureReconnectIfNeeded] that did work ran, and the socket
   /// claim it saw: the pair that lets a second report of the same resume be
-  /// dropped (CONN-12b).
+  /// dropped. [web-only: retire with §7] — only web reports one resume twice;
+  /// the guard itself runs everywhere.
   DateTime? _lastResumeCheckAt;
   bool? _lastResumeCheckClaimed;
 
@@ -1091,10 +1092,13 @@ class ConnectionProvider extends ChangeNotifier {
     // would queue a second real connect() behind the connect cooldown, against
     // a zombie one it would cost another getServerTime and restart the probe
     // window. Only a repeat that sees the SAME socket claim is dropped: a
-    // socket that died since the last run still reconnects at once. The stamp
-    // is written here only, so socket-death reconnects, the probe timeout and
-    // connect() are never throttled by it. clock.now() (package:clock), not
-    // DateTime.now(): fake_async patches the former.
+    // socket that died since the last run still reconnects at once. On EVERY
+    // platform, a genuine second resume within the cooldown whose claim is
+    // unchanged is treated as that same resume — the cost is a zombie socket
+    // noticed one resume (or socket.io's ping timeout) later.
+    // The stamp is written here only, so socket-death reconnects, the probe
+    // timeout and connect() are never throttled by it. clock.now()
+    // (package:clock), not DateTime.now(): fake_async patches the former.
     final now = clock.now();
     final last = _lastResumeCheckAt;
     if (last != null &&
