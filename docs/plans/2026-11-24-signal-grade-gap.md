@@ -20,10 +20,10 @@ Section 6 lists the decisions only the owner can make.
 
 ### 1.1 What runs today ✔
 
-- `libsignal_protocol_dart` `0.8.2+umbra.1`, the MixinNetwork pure-Dart port, vendored in `frontend/third_party/` with two local patches (`session_state.dart:30` deep copy of session state; `session_cipher.dart:178`). There is no PATCHES file; the patches are documented only by their in-code markers and decision row `metadata-privacy-decisions.md:271`.
+- `libsignal_protocol_dart` `0.8.2+umbra.1`, the MixinNetwork pure-Dart port, vendored in `frontend/third_party/` with two local patches (`session_state.dart:30` deep copy of session state; `session_cipher.dart:178`). Since 2026-11-24 the patches and the origin are recorded in `frontend/third_party/libsignal_protocol_dart/PATCHES.md` (§1.5).
 - About 4 100 lines of hand-written Dart (generated protobuf excluded). Its primitives come from `pointycastle`, `x25519`, `ed25519_edwards`: pure Dart packages whose READMEs make no constant-time or audit claim `[R§7]`.
 - Used: X3DH, Double Ratchet, XEdDSA signatures. Not used: sender keys (no groups), sealed sender (the box replaces it), the library's fingerprint module (no match in `frontend/lib`).
-- The same Dart code runs on Android and on web. Only storage differs (SQLCipher on native, AES-GCM-sealed IndexedDB/localStorage on web).
+- The same Dart code runs on Android and on web. Only storage differs (SQLCipher on native; on web AES-GCM-sealed rows in localStorage, with the unsealing key in the same localStorage, `signal_stores.dart:29-49`).
 - No post-quantum code anywhere.
 
 ### 1.2 What "official libsignal" means
@@ -96,7 +96,7 @@ Status of `2026-11-16-security-hardening.md`, re-checked today. That file's rows
 
 ### 2.3 Web-only (retire with the PWA)
 
-C4 (link previews through our server with the user's JWT), D7 (CSP is report-only, `security-headers.conf:138`), the C3 tail (CanvasKit fetches fonts from gstatic on every load), B4 on web (refresh tokens do not rotate), web key storage (keys sealed in the origin's own IndexedDB; XSS is out of scope of that design, `web-sig-sealing.md:342`).
+C4 (link previews through our server with the user's JWT), D7 (CSP is report-only, `security-headers.conf:138`), the C3 tail (CanvasKit fetches fonts from gstatic on every load), B4 on web (refresh tokens do not rotate), web key storage (keys sealed in localStorage with the unsealing key beside them; XSS is out of scope of that design, `web-sig-sealing.md:342`).
 
 ### 2.4 Found during this program, still open
 
@@ -112,8 +112,9 @@ There is no system-wide threat model. There are five partial ones:
 - `docs/proof/e2e-encryption-proof.md` (2026-09-14): claimed / not claimed, with commands. **It predates the box**: its "the server knows who talks to whom" paragraph describes the old path and now understates the product.
 - `docs/design/web-sig-sealing.md`, `docs/plans/2026-11-17-d2-box-flood.md`: their own scoped models.
 - No `SECURITY.md`, no disclosure address.
+- Found while writing the threat model: `multi-device.md` invariants I4 and I6 still describe server pushes and per-envelope routing that the box replaced (E126a(5), E50d/E50e). Today a pending reset reaches only the account's connected devices, and a revoked device stops receiving when friends process the signed list update. Not corrected in that file yet.
 
-### 3.2 Proposed threat model (one page, to be written as `docs/security/threat-model.md`)
+### 3.2 Proposed threat model (written 2026-11-24 as `docs/security/threat-model.md`, each row re-checked against the code; that file is now the current one)
 
 | Adversary | Can | Umbra's answer today | Gap |
 |---|---|---|---|
@@ -122,7 +123,7 @@ There is no system-wide threat model. There are five partial ones:
 | Honest-but-curious operator | Read DB, logs, memory | As above; no user ids in logs (CI-gated); box code cannot import account code (CI-gated) | IP ↔ queue correlation at the socket; login password is seen in clear |
 | **Malicious operator (active)** | Serve wrong key bundles, wrong device lists, replay, drop, **serve a modified web app** | DAK-signed device lists; B3 hold on changed identity; decision-37 gate on sibling/request queues | First contact (no verification, §2.1); E143g; the web client (§4.3); contact-backup unwrap |
 | Password thief | Log in | Linking needs possession + SAS (I3); reset is slow and loud (I4) | Reads the contact backup |
-| Revoked device | Still holds the account identity key | Stops receiving at revocation (I6); gate on sibling/request queues | **E143g** on normal queues |
+| Revoked device | Still holds the account identity key | Friends stop addressing it once they process the signed list update (E50d/E50e; the I6 wording predates the box); gate on sibling/request queues | **E143g** on normal queues; a friend that missed the update (decision 59) |
 | Device thief (unlocked / rooted) | Read local storage | SQLCipher, sealed caches, passcode | Out of scope beyond the passcode; state it |
 | Quantum adversary recording today | Open handshakes later | None | B6 |
 

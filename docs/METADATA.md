@@ -1,6 +1,6 @@
 # Metadata Stored by Fireplace
 
-This document describes what the Fireplace (Umbra) server stores and can observe, and why. It is meant for transparency and user trust. It reflects the code since 0.2.76, the release that removed the old message path (Phase 4 step 5). Every accepted residual is recorded in `docs/plans/metadata-privacy-decisions.md`, which is the authority.
+This document describes what the Fireplace (Umbra) server stores and can observe, and why. It is meant for transparency and user trust. It reflects the code since 0.2.76, the release that removed the old message path (Phase 4 step 5). Every accepted residual is recorded in `docs/plans/metadata-privacy-decisions.md`, which is the authority. Who can attack what, and what is out of scope: `docs/security/threat-model.md`.
 
 ## What the server cannot see
 
@@ -14,7 +14,7 @@ This document describes what the Fireplace (Umbra) server stores and can observe
 
 | Data | Stored in | Purpose | Retention / cleanup |
 |------|-----------|---------|---------------------|
-| Account | `users` | Username, tag, password hash, created and password-changed times | Until account deletion |
+| Account | `users` | Username, tag, the optional "about" text (up to 80 characters, readable, returned in search answers), password hash, created and password-changed times | Until account deletion |
 | Devices | `devices` | Which devices an account has (added/revoked times) and each device's public request-queue address (`requestSid`) | Until account deletion |
 | Public keys | `key_bundles`, `one_time_pre_keys`, `account_authorizations` | Public E2E key material and the signed device list; no private keys | Until account deletion |
 | Sessions | `refresh_tokens` | Login sessions, one row each. `expires_at` slides on every refresh, so it shows last activity to about a day. A native session's token rotates on every refresh (plan B4); the row keeps only the hashes of the current token and the one it replaced, so no per-refresh history | Until logout, revoke, reuse of an old token, expiry or account deletion |
@@ -31,7 +31,7 @@ This document describes what the Fireplace (Umbra) server stores and can observe
 
 ## What the server can still learn (accepted residuals)
 
-- **Internet addresses and timing.** Every connection shows an IP address and a time; box throttles are per IP. Someone running the server could try to correlate one person's send with another person's receive by time. Hiding that needs an anonymity network, which was dropped (decision R82).
+- **Internet addresses and timing.** Every connection shows an IP address and a time, and which queues that connection subscribes to; box throttles are per IP. Someone running the server could try to correlate one person's send with another person's receive by time. Hiding that needs an anonymity network, which was dropped (decision R82).
 - **Handle lookups.** "A looked up B": at an invite accept (decisions 53, 56), and at most once per 24 h for a friend who has no delivery address yet (decision 120).
 - **A device's request queue is tied to its account.** `devices.requestSid` is the same bytes as that queue's `sid` (the I2b exception, decision 1). The address is public by design: anyone who searches the handle gets it.
 - **One device's queues can be grouped.** Each normal inbound queue on a device registers a notifier on that device's single push token (E9). The server can therefore group one device's queues, which shows how many contacts it has and when each one receives a message, though not whose device it is. Request queues get no notifier (decision 2).
@@ -58,7 +58,7 @@ This document describes what the Fireplace (Umbra) server stores and can observe
 
 - **Box:** a blob lives until it is acked or 30 days pass; a queue lives until its owner deletes it or 90 idle days pass; media lives until its `expiresAt`.
 - **Secret notes:** one-shot; expired unread notes are purged every minute.
-- **Backups:** a nightly `backup-db.sh` dump (database plus media volume, GPG-encrypted) is kept 14 days on the VM. A copy goes to Cloudflare R2, pruned by a lifecycle rule set in the Cloudflare dashboard, not in this repo (on 2026-11-17 the oldest copy was from 2026-10-17: about 31-32 days). Deleted data, undelivered blobs and deleted accounts therefore survive in backups for that long. The pre-box tables dropped in 0.2.76 were kept in an encrypted archive (`step5-archive-20261106T153338Z`, on the VM and the owner's PC) until 2026-11-16, when both copies were deleted (decision 140). Offsite copies of the nightly backups taken before the drop expire under the Cloudflare rule (about 32 days, so by about 2026-12-08).
+- **Backups:** a nightly `backup-db.sh` dump (database plus media volume, GPG-encrypted) is kept 14 days on the VM. A copy goes to Cloudflare R2, pruned by a lifecycle rule set in the Cloudflare dashboard, not in this repo (on 2026-11-17 the oldest copy was from 2026-10-17: about 31-32 days). Deleted data and deleted accounts therefore survive in backups for that long. Since 2026-11-21 (decision 147) a backup leaves out waiting messages and media (`box_msgs`, `box_media`, the `box/` media folder); queue rows and push registrations are still in it. Copies made before that date hold undelivered blobs until the Cloudflare rule removes them. The pre-box tables dropped in 0.2.76 were kept in an encrypted archive (`step5-archive-20261106T153338Z`, on the VM and the owner's PC) until 2026-11-16, when both copies were deleted (decision 140). Offsite copies of the nightly backups taken before the drop expire under the Cloudflare rule (about 32 days, so by about 2026-12-08).
 - **Logging:** backend log strings carry no account ids or usernames (CI-guarded by `scripts/verify-no-user-logs.mjs`); no raw tokens, keys, ciphertext or message content. Docker keeps each service's log to 3 files of 10 MB (`docker-compose.prod.yml`).
 - **Web server logs:** nginx's access log is off for the app's host since 2026-09-20, and its error log records only `crit` faults (`infra/nginx/fireplace.conf`). Rotated access logs from 6–19 September 2026 (IP addresses and paths) had stayed on the VM because logrotate's `notifempty` never rotated the now-empty log; they were deleted on 2026-11-17 with the owner's OK, and the VM's `/etc/logrotate.d/nginx` now says `ifempty`, so rotated nginx logs (the error log's older `client:` lines too) age out after 14 days.
 - **Closed activity clocks (2026-09-20):** `devices.lastSeenAt`, `secret_notes.creatorId` and the every-connect re-stamp of `key_bundles.updatedAt` are gone. Still present and not presence-free: `refresh_tokens.expires_at`/`created_at`, `one_time_pre_keys.createdAt/used`, `devices.addedAt/revokedAt`, `users.createdAt/passwordChangedAt`, `box_notifiers.verifiedAt`, `box_queues.touchedDay` (day granularity), and the identity-reset and recovery timestamps.

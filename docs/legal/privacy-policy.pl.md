@@ -22,7 +22,7 @@ Ta osoba jest administratorem danych osobowych opisanych poniżej w rozumieniu R
 
 - Twoje wiadomości, zdjęcia, notatki głosowe, pliki, reakcje i potwierdzenia odczytu są **szyfrowane end-to-end** (protokół Signal). Czytać je mogą tylko urządzenia osób w rozmowie. My nie możemy.
 - **Nie** pytamy o numer telefonu, adres e-mail ani prawdziwe imię. Konto to nazwa użytkownika i hasło.
-- Serwer nie wie, z kim rozmawiasz. Wiadomości przechodzą przez anonimowe kolejki doręczeń, które nie wskazują żadnego konta ani nadawcy.
+- Serwer nie widzi, kto wysyła wiadomości do kogo. Wiadomości przechodzą przez anonimowe kolejki doręczeń, które nie wskazują żadnego konta ani nadawcy.
 - Lista kontaktów, czaty i blokady są przechowywane **na Twoich urządzeniach**, nie na naszym serwerze.
 - **Nie ma reklam, analityki, śledzenia ani usług zbierających raporty o awariach** i niczego nie sprzedajemy.
 - Niektórych rzeczy nie da się uniknąć: serwer widzi Twój adres IP, gdy jesteś połączony, a Google budzi Twój telefon, gdy przychodzi wiadomość. Oba przypadki opisujemy niżej.
@@ -30,7 +30,7 @@ Ta osoba jest administratorem danych osobowych opisanych poniżej w rozumieniu R
 ## 3. Czego serwer nie widzi
 
 - **Treści wiadomości.** Wszystko, co wysyłasz, jest szyfrowane na Twoim urządzeniu, zanim je opuści, w blokach o stałym rozmiarze 16 KiB, więc serwer nie widzi nawet długości wiadomości.
-- **Kto pisze do kogo.** Wiadomość trafia do anonimowej kolejki. Kolejka nie jest powiązana z żadnym kontem, a wysłanie nie ujawnia nadawcy.
+- **Kto pisze do kogo.** Wiadomość trafia do anonimowej kolejki. Kolejka nie jest powiązana z żadnym kontem, a wysłanie nie ujawnia nadawcy. Jeden wyjątek: zaproszenie do kontaktów trafia na adres należący do konta, do którego jest skierowane. Serwer widzi też, gdy jedno konto wyszukuje nazwę innego (na przykład gdy kogoś dodajesz), a wszystkie kolejki jednego urządzenia mają wspólny token powiadomień tego urządzenia, więc serwer może poznać, że należą do jednego (nienazwanego) urządzenia i kiedy każda dostaje wiadomość.
 - **Twoich kontaktów, czatów i blokad.** Są zapisane tylko na Twoich urządzeniach.
 - **Czy przeczytałeś wiadomość.** Potwierdzenia odczytu i doręczenia podróżują wewnątrz szyfrowania.
 - **Twojego zdjęcia profilowego.** Jest przesyłane zaszyfrowane, tak jak wiadomość.
@@ -39,10 +39,10 @@ Ta osoba jest administratorem danych osobowych opisanych poniżej w rozumieniu R
 
 | Co | Po co | Podstawa prawna (art. 6 ust. 1 RODO) | Jak długo |
 |---|---|---|---|
-| **Konto:** nazwa użytkownika, losowy 4-cyfrowy tag, jednokierunkowy skrót (hash) hasła, data założenia konta i ostatniej zmiany hasła | Żebyś mógł się zalogować i być znaleziony po nazwa#tag | lit. b (umowa) | Do usunięcia konta |
+| **Konto:** nazwa użytkownika, losowy 4-cyfrowy tag, krótki opis „o mnie”, jeśli go ustawisz (widoczny dla każdego, kto znajdzie Twoją nazwę), jednokierunkowy skrót (hash) hasła, data założenia konta i ostatniej zmiany hasła | Żebyś mógł się zalogować i być znaleziony po nazwa#tag | lit. b (umowa) | Do usunięcia konta |
 | **Urządzenia i klucze publiczne:** jakie urządzenia ma Twoje konto (kiedy dodane lub usunięte), ich publiczne klucze szyfrujące i podpisana lista Twoich urządzeń | Żeby urządzenia Twoich kontaktów mogły szyfrować do Twoich | lit. b (umowa) | Do usunięcia konta |
 | **Sesje logowania:** jeden zapis na zalogowane urządzenie, zawierający tylko skróty (hashe) jego bieżącego tokenu logowania. Każde odświeżenie przesuwa datę wygaśnięcia, więc widać, kiedy urządzenie było ostatnio aktywne, z dokładnością do około doby | Żebyś pozostał zalogowany i żeby zakończyć sesję, gdy ktoś użyje starego tokenu | lit. b (umowa); lit. f (bezpieczeństwo) | Do wylogowania, usunięcia urządzenia lub 365 dni bez użycia; albo do usunięcia konta |
-| **Dane odzyskiwania:** weryfikator wartości wyliczanej na Twoim urządzeniu z frazy odzyskiwania (sama fraza nigdy nie opuszcza urządzenia; klucz ustawiony w starszej wersji aplikacji, do 0.2.89, przechowywał weryfikator samej frazy, dopóki go nie wymienisz) i zapisy resetów tożsamości | Żebyś mógł odzyskać konto | lit. b (umowa) | Do usunięcia konta |
+| **Dane odzyskiwania:** jeśli ustawisz frazę odzyskiwania, zaszyfrowana tą frazą kopia klucza tożsamości konta i klucza podpisującego listę urządzeń oraz weryfikator wartości wyliczanej na Twoim urządzeniu z frazy (sama fraza nigdy nie opuszcza urządzenia). Wersja aplikacji do 0.2.89 wysyłała samą frazę na serwer przy każdym ustawieniu lub użyciu, a serwer przechowuje weryfikator tej frazy, dopóki nie ustawisz nowej. Do tego zapisy resetów tożsamości | Żebyś mógł odzyskać konto | lit. b (umowa) | Do usunięcia konta |
 | **Kolejki doręczeń:** losowe identyfikatory i klucz, niepowiązane z żadnym kontem | Do doręczania wiadomości | lit. b (umowa) | Do usunięcia kolejki przez Twoje urządzenie albo po 90 dniach nieużywania |
 | **Niedoręczone wiadomości:** zaszyfrowane bloki 16 KiB | Żeby przechować wiadomość, aż odbierze ją urządzenie odbiorcy | lit. b (umowa) | Usuwane zaraz po odebraniu, najpóźniej po 30 dniach |
 | **Załączniki:** zaszyfrowane pliki dopełnione do standardowych rozmiarów, więc serwer widzi tylko przedział rozmiaru | Do doręczania zdjęć, notatek głosowych, filmów i plików | lit. b (umowa) | 14 dni |
@@ -57,9 +57,9 @@ Stare **zdjęcia profilowe** zapisane na serwerze przed wersją 0.2.79 są przec
 
 ## 5. Adresy IP i logi
 
-- Każde połączenie pokazuje serwerowi Twój **adres IP** i czas. Używamy go tylko podczas obsługi żądania, na przykład do ograniczania liczby żądań z jednego adresu (ochrona przed nadużyciami). Nie jest zapisywany przy Twoim koncie.
+- Każde połączenie pokazuje serwerowi Twój **adres IP**, czas oraz to, które kolejki doręczeń to połączenie odczytuje. Używamy go tylko podczas obsługi żądania, na przykład do ograniczania liczby żądań z jednego adresu (ochrona przed nadużyciami). Nie jest zapisywany przy Twoim koncie. Po nieudanym logowaniu serwer trzyma w pamięci nazwę użytkownika razem z adresem najdłużej przez godzinę, żeby spowolnić zgadywanie haseł; nie zapisuje tego na dysku ani przy Twoim koncie.
 - **Log dostępu** naszego serwera WWW jest **wyłączony**: nie zapisuje, kto odwiedził którą stronę. Log błędów zapisuje tylko krytyczne awarie serwera.
-- Logi samej aplikacji nigdy nie zawierają nazw użytkowników ani numerów kont (sprawdzamy to automatycznie przed każdym wydaniem). Są nadpisywane po kilku megabajtach.
+- Logi samej aplikacji nigdy nie zawierają nazw użytkowników ani numerów kont (sprawdzamy to automatycznie przed każdym wydaniem). Są nadpisywane po 30 MB na usługę.
 - Osoba z dostępem do serwera mogłaby mimo to próbować dopasować czas wysłania przez jedną osobę do czasu odbioru przez inną. Ukrycie tego wymagałoby sieci anonimizującej, takiej jak Tor, której Umbra nie używa.
 
 Podstawa prawna: art. 6 ust. 1 lit. f RODO, nasz prawnie uzasadniony interes w zapewnieniu bezpieczeństwa i działania usługi.
@@ -73,12 +73,12 @@ Nie sprzedajemy ani nie udostępniamy Twoich danych. W działaniu Umbry uczestni
 - **Google (Firebase Cloud Messaging)**, tylko aplikacja na Androida: gdy przychodzi wiadomość, Google dostarcza telefonowi sygnał wybudzenia, który zawiera wyłącznie informację „nowa wiadomość”. Google widzi token powiadomień telefonu i to, że go obudzono, a nie to, kto do Ciebie napisał ani co.
 - **Usługi Web Push** (Google, Mozilla, Apple lub Microsoft, zależnie od przeglądarki), tylko wersja webowa: ta sama rola co wyżej; treść powiadomienia jest zaszyfrowana.
 - **Giphy**, tylko jeśli włączysz wyszukiwanie GIF-ów: Giphy widzi wtedy Twoje wyszukiwania, wczytywane podglądy, wybrany GIF i Twój adres IP. Wysłany GIF podróżuje zaszyfrowany; odbiorca nie łączy się z Giphy. Wyszukiwanie GIF-ów jest domyślnie wyłączone.
-- **Strony, do których wysyłasz linki**: gdy wysyłasz link, Twoje urządzenie pobiera stronę, żeby zbudować podgląd, więc ta strona widzi Twój adres IP. Odbiorca podglądu na razie również wczytuje jego obrazek bezpośrednio z tej strony (zmieniamy to). W wersji webowej stronę do podglądu pobiera nasz serwer zamiast Twojej przeglądarki.
+- **Strony, do których wysyłasz linki**: gdy wysyłasz link w aplikacji na Androida, Twoje urządzenie pobiera stronę, żeby zbudować podgląd, więc ta strona widzi Twój adres IP. Obrazek podglądu podróżuje wewnątrz zaszyfrowanej wiadomości; odbiorca nie łączy się z tą stroną. W wersji webowej stronę pobiera nasz serwer zamiast Twojej przeglądarki, więc nasz serwer widzi adres i to, które konto o niego poprosiło.
 - **Google Fonts**, tylko wersja webowa: przy uruchomieniu wersja webowa pobiera standardową czcionkę (Roboto) z serwera czcionek Google. Aplikacja na Androida ma wszystkie czcionki w sobie i niczego nie pobiera.
 
 ## 7. Kopie zapasowe
 
-Co noc serwer robi zaszyfrowaną kopię zapasową bazy danych i zaszyfrowanych załączników. Kopie są przechowywane **14 dni** na naszym serwerze i około **30 dni** w Cloudflare R2, a potem usuwane. Usunięte dane, w tym usunięte konto, mogą więc przetrwać w kopii najwyżej tak długo. Kopie zawierają tylko to, co opisuje punkt 4; Twoich wiadomości nie ma w nich w czytelnej postaci.
+Co noc serwer robi zaszyfrowaną kopię zapasową bazy danych i przechowywanych plików. Wiadomości i załączniki, które jeszcze czekają na doręczenie, nie trafiają do kopii (od 21 listopada 2026; starsze kopie zawierają je do czasu wygaśnięcia); identyfikatory kolejek doręczeń i tokeny powiadomień są w kopii. Kopie są przechowywane **14 dni** na naszym serwerze i około **miesiąca** w Cloudflare R2, a potem usuwane. Usunięte dane, w tym usunięte konto, mogą więc przetrwać w kopii najwyżej tak długo. Kopie zawierają tylko to, co opisuje punkt 4; Twoich wiadomości nie ma w nich w czytelnej postaci.
 
 ## 8. Co zostaje na Twoim urządzeniu
 

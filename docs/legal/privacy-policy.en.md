@@ -11,11 +11,11 @@ Every factual claim below is traced to code or a tracked doc; keep this table in
 | Contact backup: padded, 4 KiB buckets, password-derived wrap (plan B3 residual) | docs/METADATA.md "Contact backup" |
 | nginx access log off, error log at crit | /etc/nginx/sites-enabled/fireplace (infra/nginx/fireplace.conf) |
 | App logs carry no account ids/usernames; 10 MB x 3 rotation | scripts/verify-no-user-logs.mjs; docker-compose.prod.yml logging |
-| Backups: 14 d on the VM, Cloudflare R2 (~32 d lifecycle), GPG-encrypted | backup-db.sh; docs/METADATA.md; VM crontab (fireplace-r2) |
+| Backups: 14 d on the VM, Cloudflare R2 (~32 d lifecycle), GPG-encrypted; waiting messages and media left out (decision 147) | backup-db.sh; docs/METADATA.md; VM crontab (fireplace-r2) |
 | Server in Warsaw (OVH) | .omp/rules/production-vm-deploy.md |
 | FCM payload {type:'new_message'}; Web Push encrypted | docs/METADATA.md "Push providers" |
 | Giphy only after opt-in | docs/METADATA.md (C2, decision 141) |
-| Link previews: sender's device fetches; receiver loads image from the site (C1); web asks the server (C4) | frontend/lib/services/link_preview_service.dart; backend/src/link-preview |
+| Link previews: sender's device fetches; thumbnail travels inside the message, receiver contacts no site (C1, 0.2.89); web asks the server (C4) | frontend/lib/services/link_preview_service.dart; backend/src/link-preview |
 | Web only: Roboto from Google's font server | docs/METADATA.md (C3 note) |
 | No analytics/crash/ads SDKs | frontend/pubspec.yaml (firebase_core + firebase_messaging only) |
 | Account deletion: device tells friends + retires its queues, server deletes the account rows (FK cascade) | frontend/lib/providers/auth_provider.dart deleteAccount; backend/src/users |
@@ -42,7 +42,7 @@ That person is the data controller under the EU General Data Protection Regulati
 
 - Your messages, photos, voice notes, files, reactions and read receipts are **end-to-end encrypted** (Signal Protocol). Only the devices of the people in the conversation can read them. We cannot.
 - We do **not** ask for your phone number, email address or real name. An account is a username and a password.
-- The server does not know who you talk to. Messages pass through anonymous delivery queues that name no account and no sender.
+- The server does not see who sends messages to whom. Messages pass through anonymous delivery queues that name no account and no sender.
 - Your contact list, chats and blocks live **on your devices**, not on our server.
 - There are **no ads, no analytics, no tracking and no crash-reporting services**, and we sell nothing.
 - Some things are unavoidable: the server sees your IP address while you are connected, and Google wakes your phone when a message arrives. Both are explained below.
@@ -50,7 +50,7 @@ That person is the data controller under the EU General Data Protection Regulati
 ## 3. What the server cannot see
 
 - **Message content.** Everything you send is encrypted on your device before it leaves, inside fixed-size 16 KiB blocks, so the server cannot even see how long a message is.
-- **Who sends to whom.** A message is dropped into an anonymous queue. The queue is not linked to any account, and sending does not identify the sender.
+- **Who sends to whom.** A message is dropped into an anonymous queue. The queue is not linked to any account, and sending does not identify the sender. One exception: a contact request goes to an address that belongs to the account it is for. The server also sees when one account looks up another's username (for example when you add someone), and all the queues of one device share that device's push token, so the server can tell they belong to one unnamed device and when each receives a message.
 - **Your contacts, chats and blocks.** These are stored only on your devices.
 - **Whether you read a message.** Read and delivery receipts travel inside the encryption.
 - **Your profile photo.** It travels encrypted, like a message.
@@ -59,10 +59,10 @@ That person is the data controller under the EU General Data Protection Regulati
 
 | What | Why | Legal basis (GDPR art. 6(1)) | How long |
 |---|---|---|---|
-| **Account:** username, a random 4-digit tag, a one-way hash of your password, when the account was created and when the password last changed | To let you sign in and be found by your username#tag | (b) contract | Until you delete the account |
+| **Account:** username, a random 4-digit tag, your short "about" text if you set one (shown to anyone who finds your username), a one-way hash of your password, when the account was created and when the password last changed | To let you sign in and be found by your username#tag | (b) contract | Until you delete the account |
 | **Devices and public keys:** which devices your account has (when each was added or removed), their public encryption keys and the signed list of your devices | So your contacts' devices can encrypt to yours | (b) contract | Until you delete the account |
 | **Login sessions:** one record per signed-in device, holding only fingerprints (hashes) of its current login token. Each refresh moves the record's expiry date, so it shows when the device was last active, to about a day | To keep you signed in, and to end the session if an old token is reused | (b) contract; (f) security | Until you sign out, remove the device, or 365 days without use; or until you delete the account |
-| **Recovery data:** a verifier of a value your device derives from your recovery phrase (the phrase itself never leaves your device; a key set by an older app version, up to 0.2.89, stored a verifier of the phrase itself until you replace it) and records of identity resets | So you can recover your account | (b) contract | Until you delete the account |
+| **Recovery data:** if you set a recovery phrase, an encrypted copy of your account's identity key and device-signing key, locked by the phrase, and a verifier of a value your device derives from the phrase (the phrase itself never leaves your device). An app version up to 0.2.89 sent the phrase itself to the server each time it was set or used, and the server keeps a verifier of that phrase until you set a new one. Also: records of identity resets | So you can recover your account | (b) contract | Until you delete the account |
 | **Delivery queues:** random identifiers and a key, linked to no account | To deliver messages | (b) contract | Until your device deletes the queue, or after 90 days without use |
 | **Undelivered messages:** encrypted 16 KiB blocks | To hold a message until the recipient's device collects it | (b) contract | Deleted as soon as it is collected, otherwise after 30 days |
 | **Attachments:** encrypted files, padded to standard sizes so the server sees only a size band | To deliver photos, voice notes, videos and files | (b) contract | 14 days |
@@ -77,9 +77,9 @@ Old **profile photos** that were stored on the server before version 0.2.79 are 
 
 ## 5. IP addresses and logs
 
-- Every connection shows the server your **IP address** and the time. We use it only while the request is handled, for example to limit how many requests one address can make (anti-abuse). It is not stored with your account.
+- Every connection shows the server your **IP address**, the time, and which delivery queues that connection reads. We use it only while the request is handled, for example to limit how many requests one address can make (anti-abuse). It is not stored with your account. After a failed sign-in, the server keeps the username together with the address in memory for up to an hour, to slow down password guessing; it is never written to disk or stored with your account.
 - Our web server's **access log is switched off**: it does not record who visited which page. Its error log records only critical server faults.
-- The application's own logs never contain usernames or account numbers (this is checked automatically before every release). They are overwritten after a few megabytes.
+- The application's own logs never contain usernames or account numbers (this is checked automatically before every release). They are overwritten after 30 MB per service.
 - Someone with access to the server could still try to match the time one person sends with the time another receives. Hiding that would require an anonymity network such as Tor, which Umbra does not use.
 
 Legal basis: art. 6(1)(f), our legitimate interest in keeping the service secure and working.
@@ -93,12 +93,12 @@ We do not sell or share your data. These services are involved in running Umbra:
 - **Google (Firebase Cloud Messaging)**, Android app only: when a message arrives for your phone, Google delivers a wake-up signal that contains nothing but "new message". Google sees your phone's push token and that it was woken, not who wrote to you or what they wrote.
 - **Web Push services** (Google, Mozilla, Apple or Microsoft, depending on your browser), web version only: same role as above; the payload is encrypted.
 - **Giphy**, only if you switch on GIF search: Giphy then sees your GIF searches, the previews you load, the GIF you pick and your IP address. A GIF you send travels encrypted; the person who receives it never contacts Giphy. GIF search is off by default.
-- **Websites you link to**: when you send a link, your device fetches the page to build a preview, so that website sees your IP address. The person who receives the preview currently loads its image directly from that website too (we are changing this). In the web version, the preview page is fetched by our server instead of your browser.
+- **Websites you link to**: when you send a link in the Android app, your device fetches the page to build a preview, so that website sees your IP address. The preview's picture travels inside the encrypted message; the person who receives it never contacts that website. In the web version our server fetches the page instead of your browser, so our server sees the address and which account asked.
 - **Google Fonts**, web version only: the web version downloads a standard font (Roboto) from Google's font server when it loads. The Android app contains all its fonts and downloads none.
 
 ## 7. Backups
 
-Every night the server makes an encrypted backup of its database and the encrypted attachments. Backups are kept **14 days** on our server and about **30 days** in Cloudflare R2, and then deleted. Data you delete, including a deleted account, can therefore survive in a backup for up to that long. Backups contain only what is described in section 4; your messages are not in them in readable form.
+Every night the server makes an encrypted backup of its database and stored files. Messages and attachments still waiting for delivery are left out (since 21 November 2026; older copies hold them until they expire); the delivery queues' identifiers and push tokens are included. Backups are kept **14 days** on our server and about **a month** in Cloudflare R2, and then deleted. Data you delete, including a deleted account, can therefore survive in a backup for up to that long. Backups contain only what is described in section 4; your messages are not in them in readable form.
 
 ## 8. What stays on your device
 
