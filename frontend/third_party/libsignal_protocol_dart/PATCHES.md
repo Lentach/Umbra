@@ -20,8 +20,8 @@ Checked on 2026-11-24 by comparing git blob hashes: of the 98 files taken from
 upstream, 95 are byte-identical to the archive. The three that differ are the two
 patched files below and `pubspec.yaml`.
 
-To repeat the check: unpack the archive, then for each committed file compare
-`git rev-parse HEAD:<path>` with
+To repeat the check: unpack the archive, then for each file that has a
+counterpart in it compare `git rev-parse HEAD:<path>` with
 `git -c core.autocrlf=false hash-object --no-filters <archive file>`.
 
 ## 2. What differs from upstream
@@ -61,11 +61,17 @@ port against known answers.
 
 **Source of the vectors.** The X3DH and Double Ratchet specifications
 (`signal.org/docs/specifications/`) contain no test vectors. Current libsignal
-removed the classic protocol in v0.75.0. The vectors are therefore those of the
-reference implementation's own unit tests: `signalapp/libsignal-protocol-java`,
-commit `fde96d22004f32a391554e4991e4e1f0a14c2d50`, directory
-`tests/src/test/java/org/whispersystems/libsignal/`. The hex strings in the
-Dart test were compared by script with the byte arrays in the Java files.
+removed the classic protocol in v0.75.0. The vectors are therefore those of
+the classic implementations' own unit tests:
+
+- `signalapp/libsignal-protocol-java`, commit
+  `fde96d22004f32a391554e4991e4e1f0a14c2d50`, directory
+  `tests/src/test/java/org/whispersystems/libsignal/` (ten test methods);
+- `signalapp/libsignal` tag `v0.74.1` (`c9137edac15abde138e42b08a8c7ac6d7d43cccf`),
+  `rust/protocol/tests/ratchet.rs`, `test_ratcheting_session_as_alice` (one).
+
+The hex strings in the Dart test were compared by script with the byte arrays
+in the Java files.
 
 | Java test | What it pins | Result |
 |---|---|---|
@@ -74,8 +80,9 @@ Dart test were compared by script with the byte arrays in the Java files.
 | `ratchet/RatchetingSessionTest`: `testRatchetingSessionAsBob` | session setup from an X3DH key set, receiving side: first chain key | equal |
 | `ecc/Curve25519Test`: `testAgreement` | X25519 shared secret | equal |
 | `ecc/Curve25519Test`: `testSignature` | signature verification; each of 64 one-bit changes is rejected | equal |
-| `ratchet/RootKeyTest`: `testRootKeyDerivationV2` | DH ratchet step: next root key, next chain key | equal **with the reference's agreement plugged in** (below) |
-| `ratchet/RatchetingSessionTest`: `testRatchetingSessionAsAlice` | session setup, initiating side: first receiving chain key | equal **with the reference's agreement plugged in** (below) |
+| `ratchet/RootKeyTest`: `testRootKeyDerivationV2` | DH ratchet step: next root key, next chain key | equal **with the Java arithmetic plugged in** (below) |
+| `ratchet/RatchetingSessionTest`: `testRatchetingSessionAsAlice` | session setup, initiating side: first receiving chain key | equal **with the Java arithmetic plugged in** (below) |
+| libsignal v0.74.1 `test_ratcheting_session_as_alice` | the same keys, libsignal's expected value | equal, unaided |
 
 ### 3.1 One difference: private-key clamping
 
@@ -85,26 +92,28 @@ X25519 computed with the scalar exactly as given. This port's X25519
 (`package:x25519` 0.1.1) clamps the scalar on every call, so with its own
 agreement the two tests give other values.
 
-- The known-answer test therefore runs those two cases through
+- libsignal clamps too: `impl From<[u8; 32]> for PrivateKey` in
+  `rust/core/src/curve/curve25519.rs` (v0.74.1) calls `clamp_integer`. Its copy
+  of the Alice test carries the comment "This differs from the Java test and
+  needs investigation" and expects `ab9be50e…`, which is the value with the
+  key clamped, and the value this port gives.
+- The known-answer test runs the two Java cases through
   `Curve.agreementCalculator` with an unclamped ladder, which shows the port's
-  key derivation around the agreement matches the reference.
-- A third test pins the difference itself: the port's agreement on an
-  unclamped key equals the agreement on its clamped form.
-- Keys this port generates are clamped at creation (`Curve.generateKeyPair`,
-  `generateKeyPairFromPrivate`), and for a clamped key both give the same
-  result. `testAgreement` uses clamped keys and matches without help.
+  key derivation around the agreement matches the Java library.
+- One test pins the difference itself: the port's agreement on an unclamped
+  key equals the agreement on its clamped form.
+- For a clamped key all three implementations give the same result.
+  `testAgreement` uses clamped keys and matches without help.
 - Upstream's own port of `RootKeyTest` has these two assertions commented out
   with a `TODO` (`test/ratchet/root_key_test.dart` in the archive).
-- Umbra rebuilds a private key from stored bytes in three places:
-  `encryption_service.dart` (`adoptProvisionedIdentity`),
-  `device_authority_engine.dart` (`restoreDak`), `queue_seal.dart` (`sealPriv`).
-  All three re-load keys this port generated (`sealPriv` is minted by
-  `QueueSeal.mintKeyPair` → `Curve.generateKeyPair`); nothing in `frontend/lib`
-  sets `Curve.keyPairGenerator`.
-- Consequence today: none between Umbra clients, which all run this port. It
-  matters for any move to another library: a stored key that is not clamped
-  would give different secrets there unless that library also clamps on use.
-  Not checked for libsignal.
+- Every private key in `frontend/lib` is created by this port's generators
+  (`generateIdentityKeyPair`, `generatePreKeys`, `generateSignedPreKey`,
+  `Curve.generateKeyPair`), which clamp. The code builds a private key from
+  other bytes only to re-load a stored one (identity, pre-keys, session
+  records, the device-authority key, queue seal keys), and nothing sets
+  `Curve.keyPairGenerator` or `Curve.agreementCalculator`.
+- Consequence: none between Umbra clients, and none expected for a move to
+  libsignal, which clamps on load. Any other library must be checked.
 
 ### 3.2 Not covered
 

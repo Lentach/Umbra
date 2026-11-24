@@ -1,5 +1,5 @@
-// `optional` is a dependency of the vendored package, not ours; its parameter
-// classes cannot be built without it.
+// `convert` and `optional` are dependencies of the vendored package, not ours:
+// hex decoding, and the parameter classes cannot be built without `optional`.
 // ignore_for_file: depend_on_referenced_packages
 
 import 'dart:typed_data';
@@ -19,18 +19,19 @@ import 'package:optional/optional.dart';
 /// (`frontend/third_party/libsignal_protocol_dart`) against the reference
 /// implementation of the classic Signal protocol.
 ///
-/// Every input and expected value below is copied from the unit tests of
+/// Inputs and expected values are copied from the unit tests of
 /// `signalapp/libsignal-protocol-java` at commit `fde96d22` (directory
 /// `tests/src/test/java/org/whispersystems/libsignal/`); each group names its
 /// file and method. The X3DH and Double Ratchet specifications publish no test
-/// vectors, and libsignal dropped the classic protocol in v0.75.0, so the Java
-/// library's own vectors are the published reference.
+/// vectors, and libsignal dropped the classic protocol in v0.75.0.
 ///
 /// Two of the Java tests use private keys that are not clamped (RFC 7748 §5),
-/// and the reference multiplied by them as given; the port clamps every scalar
-/// before use. Those two tests therefore run the port with the reference's
-/// agreement plugged in ([_x25519AsGiven]), and the last group pins the
-/// difference itself. Keys the port generates are clamped, where the two agree.
+/// and the Java library multiplied by them as given. The port clamps every
+/// scalar before use, and so does libsignal: its own copy of the Alice test
+/// (v0.74.1, `rust/protocol/tests/ratchet.rs`) expects another value, which
+/// the port gives unaided. The two Java cases run with the Java arithmetic
+/// plugged in ([_x25519AsGiven]); the last group pins the difference itself.
+/// For a clamped key, which is every key the port generates, all three agree.
 /// Provenance and what these tests do NOT cover:
 /// `frontend/third_party/libsignal_protocol_dart/PATCHES.md`.
 Uint8List _h(String hexString) => Uint8List.fromList(hex.decode(hexString));
@@ -257,6 +258,9 @@ void main() {
     // `senderChain` in the Bob test and `receiverChain` in the Alice test.
     const firstChainKey =
         '9797caca53c989bbe229a40ca7727010eb2604fc14945d77958a0aeda088b44d';
+    // libsignal v0.74.1 `test_ratcheting_session_as_alice`: same keys, clamped.
+    const firstChainKeyLibsignal =
+        'ab9be50e5cb22a925446ab90ee5670545f4fd32902459ec274b6ad0ae5d6031a';
 
     test('testRatchetingSessionAsBob', () {
       final bobIdentityKey = IdentityKeyPair(
@@ -300,9 +304,7 @@ void main() {
       expect(hex.encode(session.getSenderChainKey().key), firstChainKey);
     });
 
-    // `aliceBasePrivate` is not clamped.
-    test('testRatchetingSessionAsAlice', () {
-      _useReferenceAgreement();
+    void checkAlice({required String receiverChain}) {
       final bobRatchetPublicKey = Curve.decodePoint(_h(bobRatchetPublic), 0);
       final bobIdentityKey = IdentityKey.fromBytes(_h(bobIdentityPublic), 0);
       final aliceIdentityKey = IdentityKeyPair(
@@ -335,8 +337,19 @@ void main() {
       expect(session.getRemoteIdentityKey(), bobIdentityKey);
       expect(
         hex.encode(session.getReceiverChainKey(bobRatchetPublicKey)!.key),
-        firstChainKey,
+        receiverChain,
       );
+    }
+
+    // `aliceBasePrivate` is not clamped.
+    test('testRatchetingSessionAsAlice', () {
+      _useReferenceAgreement();
+      checkAlice(receiverChain: firstChainKey);
+    });
+
+    test('test_ratcheting_session_as_alice (libsignal v0.74.1), with the '
+        "port's own agreement", () {
+      checkAlice(receiverChain: firstChainKeyLibsignal);
     });
   });
 
