@@ -1,12 +1,3 @@
-import {
-  SESSION_REBUILD_REQUEST_TTL_MS,
-  clearPendingSessionRebuildRequest,
-  errorMessage,
-  isPreKeyFetchRateLimited,
-  rememberSessionRebuildRequest,
-  socketData,
-  RegistrationLockNonce,
-} from './chat-key-exchange.util';
 import { Injectable, Logger } from '@nestjs/common';
 import { randomBytes } from 'crypto';
 import { Server, Socket } from 'socket.io';
@@ -40,6 +31,15 @@ import {
   ResetRosterResult,
   ResetRosterService,
 } from '../../key-bundles/reset-roster.service';
+import {
+  SESSION_REBUILD_REQUEST_TTL_MS,
+  clearPendingSessionRebuildRequest,
+  errorMessage,
+  isPreKeyFetchRateLimited,
+  rememberSessionRebuildRequest,
+  socketData,
+  RegistrationLockNonce,
+} from './chat-key-exchange.util';
 
 const PRE_KEY_LOW_THRESHOLD = 10;
 

@@ -13,7 +13,7 @@ export interface RegistrationLockNonce {
 }
 
 /** The per-socket bag the gateway populates once a session is authenticated. */
-export interface AuthenticatedSocketData {
+interface AuthenticatedSocketData {
   /**
    * `deviceId` comes from the JWT (Phase 1, spec §4). Absent on a token issued
    * before the claim existed — device 1 by definition (§8).
