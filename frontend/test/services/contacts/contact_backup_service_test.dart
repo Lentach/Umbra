@@ -1048,7 +1048,7 @@ void main() {
   // (auth_provider.dart:434), which nulls BOTH `_store` and
   // `store.onChanged`. Logging in again only calls `onSession`
   // (auth_provider.dart:838); `attach` is reachable ONLY from
-  // `ConnectionProvider.setProviders` (connection_provider.dart:150), which
+  // `ConnectionProvider.setProviders` (connection_provider.dart:158), which
   // runs once at widget wire-up. So a logout -> login inside one app instance
   // left the service holding no store at all: `uploadNow` bails on its
   // `store == null` guard and every mutation notifies nobody, freezing that
