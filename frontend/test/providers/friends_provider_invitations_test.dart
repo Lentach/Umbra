@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:fake_async/fake_async.dart';
 import 'package:fireplace/models/invitation_state.dart';
 import 'package:fireplace/models/user_model.dart';
 import 'package:fireplace/providers/friends_provider.dart';
@@ -343,6 +344,50 @@ void main() {
         await pumpEventQueue();
 
         expect(calls, 2);
+      });
+    });
+
+    // CONT-12: a UI search the server answered with an `error` is owed no
+    // answer; it must not stay at the head of the queue and take the next
+    // (empty) answer meant for a lookup.
+    group('a UI search that never gets its answer (CONT-12)', () {
+      test('is dropped after the lookup timeout, so a later empty answer '
+          'reaches the lookup that asked', () {
+        fakeAsync((async) {
+          final sent = <String>[];
+          final friends = provider()
+            ..setEmitCallback((event, data) => sent.add(event));
+          friends.searchUsers('ghost#0009');
+
+          // The server answered it with `error` instead: nothing arrives.
+          async.elapse(const Duration(seconds: 11));
+
+          List<Object?>? answer;
+          var done = false;
+          friends.lookupHandle('u2#0002').then((a) {
+            answer = a;
+            done = true;
+          });
+          async.flushMicrotasks();
+          friends.onSearchUsersResult(<dynamic>[]);
+          async.flushMicrotasks();
+
+          expect(done, isTrue, reason: 'the empty answer is the lookup\'s');
+          expect(answer, isEmpty);
+        });
+      });
+
+      test('an answered UI search leaves no timer behind', () {
+        fakeAsync((async) {
+          final friends = provider()..setEmitCallback((event, data) {});
+          friends.searchUsers('u2#0002');
+          friends.onSearchUsersResult([
+            {'id': 2, 'username': 'u2', 'tag': '0002'},
+          ]);
+
+          expect(async.nonPeriodicTimerCount, 0);
+          expect(friends.searchResults, hasLength(1));
+        });
       });
     });
   });

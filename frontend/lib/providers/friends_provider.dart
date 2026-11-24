@@ -17,6 +17,9 @@ import '../utils/message_ids.dart';
 /// Phase 4 step 5): the getters read it on each call, and a change to it is
 /// told to the screens by [onContactsChanged] or by the action that made it.
 class FriendsProvider extends ChangeNotifier {
+  /// How long a `searchUsers` is owed an answer.
+  static const _kSearchAnswerTimeout = Duration(seconds: 10);
+
   // ---------- State ----------
   final Map<int, InvitationActionStatus> _requestActions = {};
   final Map<int, InvitationActionStatus> _sendActions = {};
@@ -267,6 +270,7 @@ class FriendsProvider extends ChangeNotifier {
   void onSearchUsersResult(dynamic data) {
     final list = data as List<dynamic>;
     final waiter = _takeSearchWaiter(list);
+    waiter?.timeout?.cancel();
     if (waiter?.lookup != null) {
       waiter!.finish(List<Object?>.unmodifiable(list));
       return;
@@ -325,7 +329,14 @@ class FriendsProvider extends ChangeNotifier {
     notifyListeners();
     final emit = _emit;
     if (emit == null) return;
-    _searchWaiters.add(_SearchWaiter(_handleKey(handle)));
+    // A search the server fails answers with an `error` instead, so no
+    // answer may ever come: the waiter goes after the lookup timeout, or it
+    // would take the next empty answer meant for a lookup.
+    final waiter = _SearchWaiter(_handleKey(handle));
+    waiter.timeout = Timer(_kSearchAnswerTimeout, () {
+      _searchWaiters.remove(waiter);
+    });
+    _searchWaiters.add(waiter);
     emit('searchUsers', {'handle': handle});
   }
 
@@ -336,7 +347,7 @@ class FriendsProvider extends ChangeNotifier {
   /// listeners are never touched.
   Future<List<Object?>?> lookupHandle(
     String handle, {
-    Duration timeout = const Duration(seconds: 10),
+    Duration timeout = _kSearchAnswerTimeout,
   }) {
     final emit = _emit;
     if (emit == null) return Future.value();
