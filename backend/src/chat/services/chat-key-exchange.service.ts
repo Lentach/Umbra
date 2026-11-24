@@ -32,10 +32,10 @@ import {
   ResetRosterService,
 } from '../../key-bundles/reset-roster.service';
 import {
-  SESSION_REBUILD_REQUEST_TTL_MS,
   clearPendingSessionRebuildRequest,
   errorMessage,
   isPreKeyFetchRateLimited,
+  livePendingSessionRebuildRequesters,
   rememberSessionRebuildRequest,
   socketData,
   RegistrationLockNonce,
@@ -883,19 +883,11 @@ export class ChatKeyExchangeService {
   deliverPendingSessionRebuilds(client: Socket): void {
     const recipientId: number = client.data.user?.id;
     if (!recipientId) return;
-    const pending = this.pendingSessionRebuildsByRecipient.get(recipientId);
-    if (!pending) return;
-
-    const now = Date.now();
-    for (const [fromUserId, requestedAt] of pending.entries()) {
-      if (now - requestedAt > SESSION_REBUILD_REQUEST_TTL_MS) {
-        pending.delete(fromUserId);
-        continue;
-      }
+    for (const fromUserId of livePendingSessionRebuildRequesters(
+      this.pendingSessionRebuildsByRecipient,
+      recipientId,
+    )) {
       client.emit('sessionRebuildNeeded', { fromUserId });
-    }
-    if (pending.size === 0) {
-      this.pendingSessionRebuildsByRecipient.delete(recipientId);
     }
   }
 

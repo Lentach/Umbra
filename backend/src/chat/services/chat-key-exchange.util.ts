@@ -3,7 +3,7 @@ import { Socket } from 'socket.io';
 const PRE_KEY_FETCH_MIN_INTERVAL_MS = 750;
 const PRE_KEY_FETCH_MAP_TTL_MS = 10 * 60 * 1000;
 const PRE_KEY_FETCH_MAP_MAX_ENTRIES = 10000;
-export const SESSION_REBUILD_REQUEST_TTL_MS = 24 * 60 * 60 * 1000;
+const SESSION_REBUILD_REQUEST_TTL_MS = 24 * 60 * 60 * 1000;
 const SESSION_REBUILD_MAP_MAX_RECIPIENTS = 10000;
 
 /** Nonce issued to one authenticated socket session. */
@@ -111,6 +111,33 @@ export function clearPendingSessionRebuildRequest(
   if (pending.size === 0) {
     pendingSessionRebuildsByRecipient.delete(recipientId);
   }
+}
+
+/**
+ * Requesters still waiting on `recipientId`, in map order. Prunes the ones past
+ * the TTL on the way; the live ones STAY pending (they go only when cleared or
+ * expired), so every reconnect is told again until the recipient acts.
+ */
+export function livePendingSessionRebuildRequesters(
+  pendingSessionRebuildsByRecipient: Map<number, Map<number, number>>,
+  recipientId: number,
+): number[] {
+  const pending = pendingSessionRebuildsByRecipient.get(recipientId);
+  if (!pending) return [];
+
+  const now = Date.now();
+  const live: number[] = [];
+  for (const [requesterId, requestedAt] of pending.entries()) {
+    if (now - requestedAt > SESSION_REBUILD_REQUEST_TTL_MS) {
+      pending.delete(requesterId);
+      continue;
+    }
+    live.push(requesterId);
+  }
+  if (pending.size === 0) {
+    pendingSessionRebuildsByRecipient.delete(recipientId);
+  }
+  return live;
 }
 
 function cleanupPendingSessionRebuilds(
