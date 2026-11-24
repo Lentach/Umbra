@@ -97,7 +97,7 @@ Lint conventions are recorded in `frontend/analysis_options.yaml` (relative impo
 - `use_build_context_synchronously`: capture providers with `context.read<>()` before first `await`.
 - Fire-and-forget futures use `.ignore()`, not empty `catchError` hacks.
 - Use `showTopSnackBar()` and ARB keys; `ScaffoldMessenger` covers chat input and hardcoded English is a regression.
-- Native `MediaCryptoService` round-trip tests may require `flutter pub run webcrypto:setup`/CMake; size-guard tests skip gracefully.
+- The 13 real-crypto round-trip tests (`media_crypto_service`, `passcode_kdf`, `sealed_audio_codec`, `native_content_store`) need the native webcrypto library: `cd frontend && dart run webcrypto:setup` (cmake + a C compiler; the dev PC has no MSVC, so they SKIP here). CI builds it for the services leg and sets `REQUIRE_NATIVE_WEBCRYPTO=1`, where `test/support/native_webcrypto.dart` makes a missing library FAIL instead of skip. Counts in root `CLAUDE.md` are the CI numbers (library present); a local run without it shows 13 more skipped.
 
 ## 9. UI design quality (anti-slop)
 
