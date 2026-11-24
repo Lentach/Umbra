@@ -157,7 +157,7 @@ Flutter 3.44.6 (one source: `frontend/pubspec.yaml`, read by CI too); `pubspec.l
 - GitHub Actions are pinned by tag (`actions/checkout@v7`, `subosito/flutter-action@v2`), not by commit SHA.
 - `backend/Dockerfile` uses `node:22-alpine` with no digest.
 - No SBOM; the APK checksum is recorded in session notes, not published next to the download.
-- **CodeQL default setup scans only `actions`** ✔ (`gh api …/code-scanning/default-setup` → `["actions"]`): the TypeScript backend is not analysed. Turning on `javascript-typescript` is a setting, not a project.
+- **CodeQL default setup scans `actions` and `javascript-typescript`** since 2026-11-25 ✔ (`gh api …/code-scanning/default-setup`; before that only `actions`). First run on `021c329b`: 87 rules, 4 results, none in `backend/src` or `frontend/web`; all four are in test tooling (`scripts/verify-session-lock-probe.mjs`, `scripts/smoke/artillery-socket.mjs`) and were dismissed with a written reason. The default query suite is in use, not `security-extended`.
 - Dependabot: no open alerts today ✔; it does not watch `scripts/smoke`.
 
 ### 4.3 The web client is not verifiable, by nature
@@ -182,7 +182,7 @@ A PWA's code is whatever the server sends on the next load. `/version.json` name
 | `SECURITY.md` + disclosure address | Missing |
 | Licence | Missing (§1.2) |
 | Proof the crypto port matches the reference | Partly: key derivation, ratchet steps and session setup match the Java reference's vectors; no known answer for a complete message (§1.5) |
-| Static analysis on the server code | CodeQL covers workflow files only (§4.2) |
+| Static analysis on the server code | CodeQL default suite on TypeScript and JavaScript since 2026-11-25, no open alert (§4.2) |
 | Known issues list to hand over | This document §2 |
 
 Order that makes an audit worth its money: (1) `SECURITY.md`, licence, CodeQL for TypeScript: days. (2) Threat model + invariants table + protocol document: one to two weeks of writing, no code. (3) Known-answer tests for the port. (4) Decide §1.4. If the answer is "B6 soon", audit *after* B6, otherwise the audit covers a library about to be replaced; if "not soon", audit the protocol *use* (box, device lists, linking, recovery) now and exclude the ratchet internals. (5) Split the two encryption giants only with the audit scope agreed, since that is the "encryption layer redesign" this program was told not to touch.
