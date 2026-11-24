@@ -7,11 +7,13 @@ import 'package:fireplace/services/encryption/sealed_audio_codec.dart';
 
 import '../support/native_webcrypto.dart';
 
-/// Real AES-GCM via webcrypto: needs the native library on the host
-/// (`flutter pub run webcrypto:setup`). Same skip-gracefully convention as
-/// the MediaCryptoService tests. Header-only checks (kidOf/isSealed/hasMagic)
-/// run everywhere — they do no crypto.
+/// Real AES-GCM via webcrypto needs the native library (`dart run
+/// webcrypto:setup`). Without it these tests are SKIPPED on a dev machine and
+/// FAIL in CI (`REQUIRE_NATIVE_WEBCRYPTO=1`, see support/native_webcrypto.dart).
+/// Header-only checks (kidOf/isSealed/hasMagic) run everywhere — they do no
+/// crypto.
 bool? _webcryptoOk;
+Object? _webcryptoError;
 
 Future<bool> _ensureWebcryptoAvailable(Uint8List key) async {
   if (_webcryptoOk != null) return _webcryptoOk!;
@@ -22,7 +24,8 @@ Future<bool> _ensureWebcryptoAvailable(Uint8List key) async {
       plaintext: Uint8List.fromList([1]),
     );
     _webcryptoOk = true;
-  } catch (_) {
+  } catch (e) {
+    _webcryptoError = e;
     _webcryptoOk = false;
   }
   return _webcryptoOk!;
@@ -59,7 +62,7 @@ void main() {
   group('round-trip (real cipher)', () {
     test('seal/unseal, kid readable without key, multi-byte kid', () async {
       if (!await _ensureWebcryptoAvailable(key)) {
-        skipWithoutNativeWebcrypto();
+        skipWithoutNativeWebcrypto(_webcryptoError);
         return;
       }
       final audio = Uint8List.fromList(List.generate(4096, (i) => i % 251));
@@ -79,7 +82,7 @@ void main() {
     test('wrong key and tampered ciphertext both yield null, never throw',
         () async {
       if (!await _ensureWebcryptoAvailable(key)) {
-        skipWithoutNativeWebcrypto();
+        skipWithoutNativeWebcrypto(_webcryptoError);
         return;
       }
       final sealed = await SealedAudioCodec.seal(
@@ -98,7 +101,7 @@ void main() {
 
     test('plaintext that itself starts with FPAE still round-trips', () async {
       if (!await _ensureWebcryptoAvailable(key)) {
-        skipWithoutNativeWebcrypto();
+        skipWithoutNativeWebcrypto(_webcryptoError);
         return;
       }
       final tricky = Uint8List.fromList([
@@ -119,7 +122,7 @@ void main() {
     test('unseal of legacy plain bytes is null (never garbage audio)',
         () async {
       if (!await _ensureWebcryptoAvailable(key)) {
-        skipWithoutNativeWebcrypto();
+        skipWithoutNativeWebcrypto(_webcryptoError);
         return;
       }
       final plain = Uint8List.fromList(List.generate(128, (i) => i));

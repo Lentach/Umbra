@@ -501,8 +501,8 @@ void main() {
       final Uint8List? sealed;
       try {
         sealed = await cipher.seal(key, plain);
-      } catch (_) {
-        skipWithoutNativeWebcrypto();
+      } catch (e) {
+        skipWithoutNativeWebcrypto(e);
         return;
       }
       if (sealed == null) {

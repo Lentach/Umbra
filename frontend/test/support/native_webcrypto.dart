@@ -14,12 +14,18 @@ const requireNativeWebcryptoEnv = 'REQUIRE_NATIVE_WEBCRYPTO';
 /// [requireNativeWebcryptoEnv] is `1` the test FAILS instead, so in CI these
 /// tests can only pass or fail: a runner image that loses the library turns
 /// the leg red instead of quietly moving tests to "skipped".
-void skipWithoutNativeWebcrypto() {
+///
+/// Pass the exception the availability probe caught as [error]: with the
+/// library present a genuine crypto failure must not be reported as a missing
+/// library without showing the real cause.
+void skipWithoutNativeWebcrypto([Object? error]) {
+  final cause = error == null ? '' : ' Cause: $error';
   if (Platform.environment[requireNativeWebcryptoEnv] == '1') {
     fail(
       'webcrypto native unavailable, and $requireNativeWebcryptoEnv=1 forbids '
-      'skipping: run `dart run webcrypto:setup` in frontend/ before the tests.',
+      'skipping: run `dart run webcrypto:setup` in frontend/ before the '
+      'tests.$cause',
     );
   }
-  markTestSkipped('webcrypto native unavailable');
+  markTestSkipped('webcrypto native unavailable.$cause');
 }
