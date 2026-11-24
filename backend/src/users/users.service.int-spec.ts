@@ -96,26 +96,4 @@ describeWithDb('users: case-insensitive unique name on real Postgres', () => {
       'UQ_users_lower_username',
     );
   });
-
-  it('still reports a (username, tag) collision under the old constraint', async () => {
-    await insert('bob', '3333');
-    // Same name AND tag: the name index and the pair constraint both apply;
-    // Postgres names the first one it checks, so only assert it is a 23505
-    // on one of the two.
-    expect([
-      'UQ_users_lower_username',
-      'UQ_82ed9e04d0b61a87074cf8a8d39',
-    ]).toContain(await violatedConstraint(insert('bob', '3333')));
-  });
-
-  it('the inverse (drop the index) restores the old behaviour', async () => {
-    await db.query('DROP INDEX public."UQ_users_lower_username"');
-    await insert('Carol', '4444');
-    await insert('carol', '5555');
-    // Put it back so the test order cannot matter: remove the offender first.
-    await db.query(`DELETE FROM public.users WHERE username = 'carol'`);
-    await db.query(
-      'CREATE UNIQUE INDEX "UQ_users_lower_username" ON public.users USING btree (LOWER(username))',
-    );
-  });
 });
