@@ -239,5 +239,111 @@ void main() {
       friends.onConnect(false);
       expect(friends.acceptedOutcomeForPeer(2), isNull);
     });
+
+    // CONT-03: one box step per row. A second tap, or a tap after a
+    // reconnect gave the button back, must not start a second step.
+    group('a second tap while the box step runs (CONT-03)', () {
+      test('a second accept starts no second accept', () async {
+        final calls = <int>[];
+        final answer = Completer<FirstContactAccept>();
+        final friends = provider()
+          ..boxAcceptRequest = ((id) {
+            calls.add(id);
+            return answer.future;
+          });
+
+        friends
+          ..acceptFriendRequest(-10)
+          ..acceptFriendRequest(-10);
+        answer.complete(FirstContactAccept.accepted);
+        await pumpEventQueue();
+
+        expect(calls, [10]);
+        expect(friends.invitationActionFor(-10), isNull);
+        expect(friends.consumeInvitationFailure(), isNull);
+      });
+
+      test('a decline while the accept runs is ignored', () async {
+        var declines = 0;
+        final answer = Completer<FirstContactAccept>();
+        final friends = provider()
+          ..boxAcceptRequest = ((_) => answer.future)
+          ..boxDeclineRequest = ((_) async => declines++);
+
+        friends
+          ..acceptFriendRequest(-10)
+          ..rejectFriendRequest(-10);
+        answer.complete(FirstContactAccept.accepted);
+        await pumpEventQueue();
+
+        expect(declines, 0);
+      });
+
+      test('a second send to the same stranger starts no second send',
+          () async {
+        var sends = 0;
+        final answer = Completer<FirstContactSend>();
+        final friends = provider()
+          ..boxSendRequest = ((_) {
+            sends++;
+            return answer.future;
+          });
+        friends
+          ..searchUsers('u2#0002')
+          ..onSearchUsersResult([
+            {'id': 2, 'username': 'u2', 'tag': '0002'},
+          ])
+          ..sendFriendRequest(2)
+          ..sendFriendRequest(2);
+        answer.complete(FirstContactSend.sent);
+        await pumpEventQueue();
+
+        expect(sends, 1);
+        expect(friends.sendActionFor(2), isNull);
+      });
+
+      test('a tap after a reconnect joins the accept still running',
+          () async {
+        final calls = <int>[];
+        final answer = Completer<FirstContactAccept>();
+        final friends = provider()
+          ..boxAcceptRequest = ((id) {
+            calls.add(id);
+            return answer.future;
+          });
+        friends.acceptFriendRequest(-10);
+
+        friends
+          ..onConnect(true)
+          ..setCurrentUserId(1);
+        expect(friends.invitationActionFor(-10), isNull);
+        friends.acceptFriendRequest(-10);
+        expect(
+          friends.invitationActionFor(-10),
+          InvitationActionStatus.inFlight,
+        );
+        answer.complete(FirstContactAccept.accepted);
+        await pumpEventQueue();
+
+        expect(calls, [10]);
+        expect(friends.invitationActionFor(-10), isNull);
+      });
+
+      test('the next accept after the first ended starts again', () async {
+        var calls = 0;
+        final friends = provider()
+          ..boxAcceptRequest = ((_) async {
+            calls++;
+            return FirstContactAccept.failed;
+          });
+
+        friends.acceptFriendRequest(-10);
+        await pumpEventQueue();
+        friends.acceptFriendRequest(-10);
+        await pumpEventQueue();
+
+        expect(calls, 2);
+      });
+    });
   });
 }

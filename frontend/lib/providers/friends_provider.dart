@@ -20,6 +20,13 @@ class FriendsProvider extends ChangeNotifier {
   // ---------- State ----------
   final Map<int, InvitationActionStatus> _requestActions = {};
   final Map<int, InvitationActionStatus> _sendActions = {};
+
+  /// The box step each request row (accept or decline) and each stranger
+  /// (send) has running. [_requestActions] is what the row SHOWS and a
+  /// reconnect clears; these say a step is still under way, so a second tap
+  /// never starts a second one.
+  final Map<int, InvitationAction> _requestRunning = {};
+  final Set<int> _sendRunning = {};
   final Map<int, InvitationOutcome> _acceptedOutcomes = {};
   InvitationFailure? _lastInvitationFailure;
   PendingFriendAccepted? _pendingFriendAccepted;
@@ -408,12 +415,17 @@ class FriendsProvider extends ChangeNotifier {
   /// box; with no box wired or no raw search entry the send fails, as when
   /// the box cannot take it.
   void sendFriendRequest(int userId) {
+    // One send per stranger: a second tap joins the one running, even when a
+    // reconnect already gave the row its button back.
+    final joined = !_sendRunning.add(userId);
     _sendActions[userId] = InvitationActionStatus.inFlight;
     _armSendActionTimeout(userId);
     notifyListeners();
+    if (joined) return;
     final boxSend = boxSendRequest;
     final entry = searchEntryFor(userId);
     if (boxSend == null || entry == null) {
+      _sendRunning.remove(userId);
       _failSend(userId);
       return;
     }
@@ -434,6 +446,8 @@ class FriendsProvider extends ChangeNotifier {
         'error': e.runtimeType.toString(),
       });
       result = FirstContactSend.failed;
+    } finally {
+      _sendRunning.remove(userId);
     }
     if (!_isLiveFor(account)) return;
     switch (result) {
@@ -465,10 +479,22 @@ class FriendsProvider extends ChangeNotifier {
 
   /// Accepts the box request [requestId] (`-userId`).
   void acceptFriendRequest(int requestId) {
-    _requestActions[requestId] = InvitationActionStatus.inFlight;
-    _armRequestActionTimeout(requestId, InvitationAction.accept);
-    notifyListeners();
+    if (!_beginRequestAction(requestId, InvitationAction.accept)) return;
     unawaited(_acceptOverBox(requestId));
+  }
+
+  /// Marks [requestId]'s row in flight for [action]. False when this call
+  /// must not start the box step: the same action already runs (this tap
+  /// joins it, and the row shows it in flight again if a reconnect gave the
+  /// button back) or another one does (the tap is ignored).
+  bool _beginRequestAction(int requestId, InvitationAction action) {
+    final running = _requestRunning[requestId];
+    if (running != null && running != action) return false;
+    _requestRunning[requestId] = action;
+    _requestActions[requestId] = InvitationActionStatus.inFlight;
+    _armRequestActionTimeout(requestId, action);
+    notifyListeners();
+    return running == null;
   }
 
   /// The accept of box request [requestId] (`-userId`). Success is reported
@@ -486,6 +512,7 @@ class FriendsProvider extends ChangeNotifier {
         });
       }
     }
+    _requestRunning.remove(requestId);
     if (!_isLiveFor(account)) return;
     final held = _requestActions.containsKey(requestId);
     _clearRequestAction(requestId);
@@ -507,9 +534,7 @@ class FriendsProvider extends ChangeNotifier {
 
   /// Declines the box request [requestId] (`-userId`).
   void rejectFriendRequest(int requestId) {
-    _requestActions[requestId] = InvitationActionStatus.inFlight;
-    _armRequestActionTimeout(requestId, InvitationAction.decline);
-    notifyListeners();
+    if (!_beginRequestAction(requestId, InvitationAction.decline)) return;
     unawaited(_declineOverBox(requestId));
   }
 
@@ -529,6 +554,7 @@ class FriendsProvider extends ChangeNotifier {
         });
       }
     }
+    _requestRunning.remove(requestId);
     if (!_isLiveFor(account)) return;
     final held = _requestActions.containsKey(requestId);
     _clearRequestAction(requestId);
@@ -685,6 +711,8 @@ class FriendsProvider extends ChangeNotifier {
     _cancelAllInvitationActionTimers();
     _requestActions.clear();
     _sendActions.clear();
+    _requestRunning.clear();
+    _sendRunning.clear();
     _acceptedOutcomes.clear();
     _lastInvitationFailure = null;
     _pendingFriendAccepted = null;
