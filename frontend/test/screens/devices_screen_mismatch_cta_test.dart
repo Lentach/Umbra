@@ -26,6 +26,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:libsignal_protocol_dart/libsignal_protocol_dart.dart';
 import 'package:provider/provider.dart';
 
+import '../support/encryption_fakes.dart';
+
 class _FakeAuthProvider extends AuthProvider {
   @override
   UserModel? get currentUser => UserModel(id: 7, username: 'qa', tag: '0001');
@@ -45,8 +47,6 @@ class _FakeConnectionProvider extends ConnectionProvider {
     super.registerProvisioningSink(sink);
   }
 }
-
-class _FakeEncryptionProvider extends EncryptionProvider {}
 
 _FakeConnectionProvider _connection = _FakeConnectionProvider();
 
@@ -82,7 +82,7 @@ void main() {
   testWidgets('healthy: a genuine chain failure IS still rendered', (
     tester,
   ) async {
-    await tester.pumpWidget(_host(_FakeEncryptionProvider()));
+    await tester.pumpWidget(_host(FakeEncryptionProvider()));
     await tester.pumpAndSettle();
     final controller = _connection.sink!;
     controller.listState = DeviceListState.chainInvalid;
@@ -101,7 +101,7 @@ void main() {
       WidgetTester tester, {
       required bool? holdsDak,
     }) async {
-      await tester.pumpWidget(_host(_FakeEncryptionProvider()));
+      await tester.pumpWidget(_host(FakeEncryptionProvider()));
       await tester.pumpAndSettle();
       final controller = _connection.sink!;
       controller.listState = DeviceListState.enrolled;
@@ -166,7 +166,7 @@ void main() {
       );
 
       Future<void> pumpTombstones(WidgetTester tester) async {
-        await tester.pumpWidget(_host(_FakeEncryptionProvider()));
+        await tester.pumpWidget(_host(FakeEncryptionProvider()));
         await tester.pumpAndSettle();
         final controller = _connection.sink!;
         controller.listState = DeviceListState.enrolled;
