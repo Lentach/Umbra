@@ -99,14 +99,21 @@ class AttachmentHandler {
     if (conv == null) return false;
     final recipientId = convs.getOtherUserId(conv);
 
-    return messaging.sendVideoMessage(
-      videoBytes,
-      recipientId,
-      duration: durationSeconds,
-      width: width,
-      height: height,
-      thumbHash: thumbHash,
-    );
+    try {
+      return await messaging.sendVideoMessage(
+        videoBytes,
+        recipientId,
+        duration: durationSeconds,
+        width: width,
+        height: height,
+        thumbHash: thumbHash,
+      );
+    } on Object catch (e) {
+      if (!context.mounted) return false;
+      showTopSnackBar(context, AppLocalizations.of(context).uploadFailed);
+      debugPrint('AttachmentHandler.sendVideo error: $e');
+      return false;
+    }
   }
 
   // ── document sending ──────────────────────────────────────────────────────

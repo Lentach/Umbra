@@ -157,13 +157,13 @@ extension MessagingFirstContact on MessagingProvider {
       peer: userId,
     );
     if (!relayed) {
-      if (fresh) await link.retireFirstContact(userId);
+      if (fresh) await _retireUnansweredRequest(link, friends, userId);
       onBoxContactsChanged?.call();
       return FirstContactSend.failed;
     }
     final queue = await link.firstContactQueue(userId);
     if (queue == null) {
-      if (fresh) await link.retireFirstContact(userId);
+      if (fresh) await _retireUnansweredRequest(link, friends, userId);
       return FirstContactSend.failed;
     }
     final request = jsonEncode(
@@ -198,7 +198,7 @@ extension MessagingFirstContact on MessagingProvider {
     if (delivered == 0) {
       // Nothing reached the peer: the request did not happen. Our
       // siblings' copies lapse with the request (decision 54).
-      if (fresh) await link.retireFirstContact(userId);
+      if (fresh) await _retireUnansweredRequest(link, friends, userId);
       onBoxContactsChanged?.call();
       // The box is full (plan D2): the sender is told to try later.
       return busy ? FirstContactSend.busy : FirstContactSend.failed;
@@ -209,6 +209,21 @@ extension MessagingFirstContact on MessagingProvider {
     });
     onBoxContactsChanged?.call();
     return FirstContactSend.sent;
+  }
+
+  /// Undoes a request of ours that did not go out — unless the awaits of the
+  /// send let the account's crossing request in meanwhile: it is a friend
+  /// now (E15f) and the queue is its, not a leftover of the ask.
+  Future<void> _retireUnansweredRequest(
+    BoxFirstContactLink link,
+    BoxFriendLink friends,
+    int userId,
+  ) async {
+    await _crossingsInFlight[userId];
+    if (!_boxPending(friends.contactOf(userId), ContactState.pendingOut)) {
+      return;
+    }
+    await link.retireFirstContact(userId);
   }
 
   /// One claim-bearing PreKey frame for [device] (E15b): a FRESH session
@@ -453,6 +468,27 @@ extension MessagingFirstContact on MessagingProvider {
   /// request built counts as asked, so a crossing PreKey replaces it (item
   /// 5's rule, decision 49).
   Future<bool> _takeCrossedRequest(
+    BoxFirstContactLink link,
+    EncryptionProvider enc,
+    BoxInboxEntry entry,
+    String signal,
+  ) async {
+    // Registered before the first await: a send of ours failing meanwhile
+    // waits for this accept instead of retiring the queue it is making.
+    final user = entry.peerUserId;
+    final done = Completer<void>();
+    _crossingsInFlight[user] = done.future;
+    try {
+      return await _finishCrossedRequest(link, enc, entry, signal);
+    } finally {
+      if (identical(_crossingsInFlight[user], done.future)) {
+        _crossingsInFlight.remove(user)?.ignore();
+      }
+      done.complete();
+    }
+  }
+
+  Future<bool> _finishCrossedRequest(
     BoxFirstContactLink link,
     EncryptionProvider enc,
     BoxInboxEntry entry,

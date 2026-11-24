@@ -304,8 +304,8 @@ void main() {
         ..setEmitCallback((_, _) {})
         ..onE2EReady = () => ready++;
 
-      // Init runs at transport connect, before `socketReady`: no
-      // setOwnDeviceId yet.
+      // Init runs at `socketReady`; a server that sends no `deviceId` leaves
+      // the id unconfirmed: no setOwnDeviceId.
       await relogged.initializeE2E(ownUserId);
       await pumpEventQueue(times: 200);
 

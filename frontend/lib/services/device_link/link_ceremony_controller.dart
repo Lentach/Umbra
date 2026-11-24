@@ -270,6 +270,25 @@ class LinkCeremonyController extends ChangeNotifier
   Timer? _expiryTimer;
   bool _identityAdopted = false;
 
+  /// A ceremony epoch, bumped by every start and every abort. A
+  /// [_handleBlob] parked in its awaits compares it afterwards: a changed
+  /// epoch means the ceremony it belongs to is over.
+  int _ceremonyEpoch = 0;
+
+  /// The epoch a [_handleBlob] is running for, or null. A blob that arrives
+  /// while one is running for the SAME epoch is dropped — the step only
+  /// leaves `showSas` after the adopt and the passcode wrap return, so a
+  /// second delivery would run a second adopt beside the first (each one
+  /// wipes the account namespace). A legitimate `stale_version` re-stage
+  /// cannot arrive in that window: it answers our `provisioningComplete`,
+  /// which is the last thing a run does.
+  int? _blobRunEpoch;
+
+  /// Blob handlers run strictly one after another, across epochs too: an
+  /// abort-and-restart must not start the new ceremony's adopt while the old
+  /// run is still inside its own.
+  Future<void> _blobRuns = Future<void>.value();
+
   /// Issue #208: whether the current socket is authenticated, and whether
   /// the new-device `openProvisioning` may have reached no server handler —
   /// sent before `socketReady`, or still unanswered when the socket was
@@ -1035,6 +1054,7 @@ class LinkCeremonyController extends ChangeNotifier
     oobCode = null;
     _relayedEphPubP = null;
     _identityAdopted = false;
+    _ceremonyEpoch++;
     newDeviceStep = NewDeviceLinkStep.opening;
     notifyListeners();
     _openOwed = !_sessionReady;
@@ -1073,6 +1093,7 @@ class LinkCeremonyController extends ChangeNotifier
     newDeviceSas = null;
     newDeviceError = null;
     _identityAdopted = false;
+    _ceremonyEpoch++;
     newDeviceStep = NewDeviceLinkStep.awaitingHelloAck;
     notifyListeners();
     // The wire field stays `ephPubP` for v1 compatibility — it is simply
@@ -1270,10 +1291,38 @@ class LinkCeremonyController extends ChangeNotifier
             newDeviceStep != NewDeviceLinkStep.completing)) {
       return;
     }
-    unawaited(_handleBlob(blobB64, ephPubP));
+    if (_blobRunEpoch == _ceremonyEpoch) return;
+    _blobRunEpoch = _ceremonyEpoch;
+    final epoch = _ceremonyEpoch;
+    _blobRuns = _blobRuns
+        .then((_) => _handleBlob(blobB64, ephPubP, epoch))
+        .catchError((Object _) {});
   }
 
-  Future<void> _handleBlob(String blobB64, Uint8List ephPubP) async {
+  bool _ceremonyOver(int epoch) => _disposed || epoch != _ceremonyEpoch;
+
+  /// The ceremony ended (abort, restart or dispose) while an adopt was
+  /// parked, so the abort saw nothing adopted and skipped its discard. What
+  /// the adopt landed since is removed here. Handlers are serialised, so no
+  /// newer ceremony has adopted anything yet.
+  Future<void> _discardOrphanedAdopt() async {
+    try {
+      await _identity.discardProvisionedIdentity(userId);
+    } on Object catch (_) {
+      // Same as the abort path: the discard failing must not mask the abort.
+    }
+  }
+
+  Future<void> _handleBlob(
+    String blobB64,
+    Uint8List ephPubP,
+    int epoch,
+  ) async {
+    // Queued behind an older run; its ceremony may be over by now.
+    if (_ceremonyOver(epoch)) {
+      if (_blobRunEpoch == epoch) _blobRunEpoch = null;
+      return;
+    }
     try {
       final transcript = linkTranscript(
         provisioningId: _openProvisioningId!,
@@ -1305,18 +1354,32 @@ class LinkCeremonyController extends ChangeNotifier
         // is its authorized disposal.
         disposeStaleMaterial: _staleDisposalAuthorized?.call() ?? false,
       );
+      if (_ceremonyOver(epoch)) {
+        await _discardOrphanedAdopt();
+        return;
+      }
       // (lxxvi) clause 3: the adopt just landed RAW key material — with
       // wrapping ON a crash before the next unlock would leave it raw on a
       // "protected" device, so wrap it NOW (idempotent; no-op unwired).
       await PasscodeWrapHook.run();
+      if (_ceremonyOver(epoch)) {
+        await _discardOrphanedAdopt();
+        return;
+      }
       _identityAdopted = true;
       newDeviceStep = NewDeviceLinkStep.completing;
       notifyListeners();
       _emit('provisioningComplete', {'provisioningId': _openProvisioningId});
     } on LinkBlobException catch (e) {
-      await abortNewDevice(e.reason);
+      if (!_ceremonyOver(epoch)) await abortNewDevice(e.reason);
     } catch (_) {
-      await abortNewDevice('adopt_failed');
+      if (_ceremonyOver(epoch)) {
+        await _discardOrphanedAdopt();
+      } else {
+        await abortNewDevice('adopt_failed');
+      }
+    } finally {
+      if (_blobRunEpoch == epoch) _blobRunEpoch = null;
     }
   }
 
@@ -1402,6 +1465,7 @@ class LinkCeremonyController extends ChangeNotifier
   /// I1 abort hygiene: discard the adopted identity, every minted key, the
   /// stored dakPub and the assigned id — then reset the flow.
   Future<void> abortNewDevice(String reason) async {
+    _ceremonyEpoch++;
     _expiryTimer?.cancel();
     final id = _openProvisioningId;
     if (reason != 'expired' && reason != 'cancelled' && id != null) {

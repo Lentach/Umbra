@@ -2065,7 +2065,7 @@ class EncryptionProvider extends ChangeNotifier {
   /// skips re-initialization but still re-uploads the key bundle.
   ///
   /// Re-entrancy latch (review finding, 0.1.10): this is fired on every
-  /// socket connect, and the identity guard's server round-trip widened the
+  /// `socketReady`, and the identity guard's server round-trip widened the
   /// window in which a reconnect enters a second concurrent init — hanging
   /// on the shared bundle check or racing a double `_generateKeys()`.
   /// Concurrent calls for the same user share one run; a different user
@@ -2207,10 +2207,11 @@ class EncryptionProvider extends ChangeNotifier {
       // (lxiv) clause 2 gate: refuse E2E duty when the session's device id
       // contradicts the id this install's material was provisioned for —
       // placed before ANY publish so a mismatched install never uploads.
-      // Issue #208: the STORED session decides too, because this init runs
-      // at transport connect, before `socketReady` confirms the id — an
-      // unconfirmed stale install used to come up E2E-ready here and start
-      // the box on the queues of the device it used to be.
+      // Issue #208: the STORED session decides too, because a server that
+      // sends no `deviceId` in `socketReady` leaves the id unconfirmed when
+      // this init runs — an unconfirmed stale install used to come up
+      // E2E-ready here and start the box on the queues of the device it used
+      // to be.
       final previous = await _previousDeviceLifeIds(userId);
       _notePreviousDeviceLife(userId, previous);
       if (previous != null ||
@@ -3587,7 +3588,7 @@ class EncryptionProvider extends ChangeNotifier {
     // (lxiv) final-review P1: the confirmed own-device id is a PER-SOCKET
     // fact — the new socket's id is unknown until ITS socketReady, and after a
     // §6.2 rebind or §5.1 link reconnect it is guaranteed DIFFERENT. Carrying
-    // the old confirmation into the transport-connect init gate TOFU-stamped
+    // the old confirmation into the `socketReady` init gate TOFU-stamped
     // the just-cleared material slot with the STALE id, and the fresh id then
     // tripped the mismatch gate — stranding the exact device the ceremony had
     // just recovered. Unconfirmed is the documented-safe state between connect

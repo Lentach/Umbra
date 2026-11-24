@@ -228,6 +228,12 @@ class AuthProvider extends ChangeNotifier {
   bool _isError = false;
   Timer? _sessionRefreshTimer;
   Future<void>? _sessionRefreshInFlight;
+  int _sessionRefreshInFlightEpoch = 0;
+
+  /// Bumped when a session ends ([logout] start, [_clearLocalAuthState]). A
+  /// refresh that began under an older value belongs to a session the user
+  /// or the server already ended: its answer is dropped, never persisted.
+  int _sessionEpoch = 0;
   bool _isRestoringSession = true;
   String? _lastSessionEndReason;
   String? _recoverableUsername;
@@ -358,8 +364,11 @@ class AuthProvider extends ChangeNotifier {
   /// Installs the deviceId-bound session a §5.1 provisioning ceremony
   /// returned in `provisioningCompleted` (spec §12 item (iii)). Same storage
   /// path as login/refresh — a second token path would drift.
-  Future<void> adoptProvisionedSession(Map<String, dynamic> tokens) =>
-      _persistTokens(tokens);
+  Future<void> adoptProvisionedSession(Map<String, dynamic> tokens) {
+    // The old session's refresh still in flight must not overwrite it.
+    _sessionEpoch++;
+    return _persistTokens(tokens);
+  }
 
   Future<void> _silentRefresh() async {
     final r = _refreshToken;
@@ -370,16 +379,21 @@ class AuthProvider extends ChangeNotifier {
     // Decided once: every retry of [r] has to ask the same way, or a retry
     // of a token the server already replaced reads as reuse.
     final rotate = _rotateRefreshTokens && _refreshPersisted;
+    final epoch = _sessionEpoch;
     Object? lastTransient;
     for (var attempt = 0; attempt < _refreshMaxAttempts; attempt++) {
       if (attempt > 0) {
         await Future<void>.delayed(_refreshRetryBaseDelay * attempt);
+        if (epoch != _sessionEpoch) return;
       }
       try {
         final body = await _api.refreshSession(r, rotate: rotate);
+        if (epoch != _sessionEpoch) return;
         await _persistTokens(body);
         return;
       } on SessionRefreshInvalidException {
+        // A refusal of a session that already ended is not a second ending.
+        if (epoch != _sessionEpoch) return;
         rethrow;
       } on SessionRefreshTransientException catch (e) {
         lastTransient = e;
@@ -395,12 +409,16 @@ class AuthProvider extends ChangeNotifier {
 
   /// Single in-flight refresh for startup, resume, and parallel [ensureSessionReady].
   Future<void> _refreshSessionLocked() async {
-    if (_sessionRefreshInFlight != null) {
+    // A flight begun under an older session is dropped when it lands: a
+    // caller of this session must not wait on it.
+    if (_sessionRefreshInFlight != null &&
+        _sessionRefreshInFlightEpoch == _sessionEpoch) {
       return _sessionRefreshInFlight!;
     }
 
     final future = _silentRefresh();
     _sessionRefreshInFlight = future;
+    _sessionRefreshInFlightEpoch = _sessionEpoch;
     try {
       await future;
     } finally {
@@ -478,6 +496,7 @@ class AuthProvider extends ChangeNotifier {
     Object? error,
     bool wipeStoredTokens = true,
   }) async {
+    _sessionEpoch++;
     _logSessionEnd(reason, source: source, error: error);
     _cancelSessionRefreshTimer();
     _isRestoringSession = false;
@@ -968,6 +987,8 @@ class AuthProvider extends ChangeNotifier {
   }
 
   Future<void> logout() async {
+    _sessionEpoch++;
+    _cancelSessionRefreshTimer();
     if (_token != null) {
       await _pushService.unregister();
     }

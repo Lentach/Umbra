@@ -300,8 +300,10 @@ class ConnectionProvider extends ChangeNotifier {
       _contactStoreUnavailable != null && _contactStoreUnavailable != 'locked';
 
   /// The chat list's "try again" for [contactStoreFailed]. The E2E init of
-  /// this connect (run at transport connect) read the same store, so it
-  /// failed with it and is run again once the store is open. A tap while a
+  /// this connect (run at `socketReady`) read the same store, so it
+  /// failed with it and is run again once the store is open. Before
+  /// `socketReady` nothing is re-run: that event starts the init itself, and
+  /// one earlier would emit before the server finished authenticating. A tap while a
   /// retry runs joins it: a second open overtaking the first would clear
   /// the failure while the store is still closed.
   Future<void> retryContactStore() =>
@@ -315,7 +317,7 @@ class ConnectionProvider extends ChangeNotifier {
     await _reopenContactStore();
     final encryption = _encryptionProvider;
     if (_contactStore?.isOpen != true ||
-        !_isConnected ||
+        !_accountReady ||
         encryption == null ||
         encryption.isE2EReady) {
       return;
@@ -781,6 +783,11 @@ class ConnectionProvider extends ChangeNotifier {
       if (readyDeviceId is int) {
         _encryptionProvider?.setOwnDeviceId(readyDeviceId);
       }
+      // E2E init emits (`checkOwnKeyBundle`, `uploadKeyBundle`), and the server
+      // drops every such event until its auth lookups have set the socket's
+      // user — which is exactly what `socketReady` announces. Started at the
+      // transport connect it could lose that race and stay down all session.
+      _encryptionProvider?.initializeE2E(userId);
       _onSocketReady();
       _box?.accountReady(readyDeviceId is int ? readyDeviceId : null);
       _accountReady = true;
@@ -832,8 +839,6 @@ class ConnectionProvider extends ChangeNotifier {
     _isConnected = true;
     notifyListeners();
     _armSocketReadyWatchdog();
-
-    _encryptionProvider?.initializeE2E(userId);
 
     if (!_pushInitialized) {
       _pushInitialized = true;
@@ -1015,6 +1020,8 @@ class ConnectionProvider extends ChangeNotifier {
   // ---------- Disconnect ----------
 
   void disconnect({bool isLogout = false}) {
+    // A connect() parked on an await must not resume into a closed session.
+    _connectGeneration++;
     _intentionalDisconnect = true;
     _debouncedConnectTimer?.cancel();
     _resumeProbeTimer?.cancel();
@@ -1812,6 +1819,7 @@ class ConnectionProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    _connectGeneration++;
     _debouncedConnectTimer?.cancel();
     _plaintextSweepTimer?.cancel();
     _resumeProbeTimer?.cancel();
