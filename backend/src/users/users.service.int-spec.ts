@@ -41,12 +41,12 @@ describeWithDb('users: case-insensitive unique name on real Postgres', () => {
       (e: unknown) => e,
     );
     expect(error).toBeInstanceOf(QueryFailedError);
-    const driverError = (error as QueryFailedError).driverError as {
-      code: string;
-      constraint: string;
+    const driverError = (error as QueryFailedError).driverError as Error & {
+      code?: string;
+      constraint?: string;
     };
     expect(driverError.code).toBe('23505');
-    return driverError.constraint;
+    return driverError.constraint ?? '';
   }
 
   beforeAll(async () => {
