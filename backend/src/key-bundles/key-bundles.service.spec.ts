@@ -55,7 +55,6 @@ describe('KeyBundlesService', () => {
       findOne: jest.fn(),
       create: jest.fn(),
       save: jest.fn(),
-      upsert: jest.fn(),
       delete: jest.fn(),
       count: jest.fn(),
       query: jest.fn().mockResolvedValue([[], 0]),
@@ -783,7 +782,7 @@ describe('KeyBundlesService', () => {
       { keyId: 1, publicKey: 'pk-1' },
     ];
 
-    it('upserts on (userId,deviceId,keyId) and tags rows with the explicit identity', async () => {
+    it('writes the batch under the caller device and the explicit identity', async () => {
       // The tag must match what the account actually publishes — see the
       // refusal test below for why an unpublished tag is not key material the
       // account can ever serve.
@@ -792,7 +791,6 @@ describe('KeyBundlesService', () => {
         deviceId: 1,
         identityPublicKey: 'epoch-2-identity',
       });
-      otpRepo.upsert.mockResolvedValue({ raw: [] });
 
       await service.uploadOneTimePreKeys(5, keys, 'epoch-2-identity');
 
@@ -803,28 +801,13 @@ describe('KeyBundlesService', () => {
         order: { deviceId: 'ASC' },
       });
       expect(otpRepo.save).not.toHaveBeenCalled();
-      expect(otpRepo.upsert).toHaveBeenCalledWith(
-        [
-          {
-            userId: 5,
-            deviceId: 1,
-            keyId: 0,
-            publicKey: 'pk-0',
-            identityPublicKey: 'epoch-2-identity',
-            used: false,
-          },
-          {
-            userId: 5,
-            deviceId: 1,
-            keyId: 1,
-            publicKey: 'pk-1',
-            identityPublicKey: 'epoch-2-identity',
-            used: false,
-          },
-        ],
-        // keyId slots belong to a DEVICE: two devices may both hold keyId 0,
-        // and neither upload may overwrite the other's private half.
-        { conflictPaths: ['userId', 'deviceId', 'keyId'] },
+      // keyId slots belong to a DEVICE: two devices may both hold keyId 0,
+      // and neither upload may overwrite the other's private half. What the
+      // statement does on a conflict is proven on real Postgres
+      // (key-bundles.service.int-spec.ts).
+      expect(otpRepo.query).toHaveBeenCalledWith(
+        expect.stringContaining('ON CONFLICT ("userId", "deviceId", "keyId")'),
+        [5, 1, 'epoch-2-identity', [0, 1], ['pk-0', 'pk-1']],
       );
     });
 
@@ -860,7 +843,7 @@ describe('KeyBundlesService', () => {
       warnSpy.mockRestore();
 
       // Nothing written and nothing destroyed: the legitimate pool survives.
-      expect(otpRepo.upsert).not.toHaveBeenCalled();
+      expect(otpRepo.query).not.toHaveBeenCalled();
       expect(otpRepo.delete).not.toHaveBeenCalled();
       expect(otpRepo.createQueryBuilder).not.toHaveBeenCalled();
     });
@@ -874,11 +857,10 @@ describe('KeyBundlesService', () => {
         deviceId: 1,
         identityPublicKey: 'published-identity',
       });
-      otpRepo.upsert.mockResolvedValue({ raw: [] });
 
       await service.uploadOneTimePreKeys(5, keys, 'reminted-identity');
 
-      expect(otpRepo.upsert).toHaveBeenCalledTimes(1);
+      expect(otpRepo.query).toHaveBeenCalledTimes(1);
     });
 
     it('accepts a first upload that races its own key bundle (nothing published yet)', async () => {
@@ -887,11 +869,10 @@ describe('KeyBundlesService', () => {
       // no published identity there is no victim, and refusing here would
       // break every fresh registration.
       keyBundleRepo.findOne.mockResolvedValue(null);
-      otpRepo.upsert.mockResolvedValue({ raw: [] });
 
       await service.uploadOneTimePreKeys(5, keys, 'epoch-1-identity');
 
-      expect(otpRepo.upsert).toHaveBeenCalledTimes(1);
+      expect(otpRepo.query).toHaveBeenCalledTimes(1);
     });
 
     it('accepts an in-flight authorized rotation whose bundle upsert has not landed yet', async () => {
@@ -910,11 +891,10 @@ describe('KeyBundlesService', () => {
         deadlineAt: new Date(),
         shortened: false,
       });
-      otpRepo.upsert.mockResolvedValue({ raw: [] });
 
       await service.uploadOneTimePreKeys(5, keys, 'new-identity');
 
-      expect(otpRepo.upsert).toHaveBeenCalledTimes(1);
+      expect(otpRepo.query).toHaveBeenCalledTimes(1);
       // Reading the grant must never spend it — the bundle upload does that.
       expect(identityResetService.consumeCompletedReset).not.toHaveBeenCalled();
     });
@@ -938,7 +918,7 @@ describe('KeyBundlesService', () => {
         service.uploadOneTimePreKeys(5, keys, 'refused-identity'),
       ).rejects.toMatchObject({ message: 'identity_locked' });
 
-      expect(otpRepo.upsert).not.toHaveBeenCalled();
+      expect(otpRepo.query).not.toHaveBeenCalled();
     });
 
     // Amendment (lxiv) clause 1, OTP half: the bundle guard alone does not
@@ -958,7 +938,7 @@ describe('KeyBundlesService', () => {
         service.uploadOneTimePreKeys(5, keys, 'published-identity', 1, 99999),
       ).rejects.toMatchObject({ message: 'device_material_conflict' });
 
-      expect(otpRepo.upsert).not.toHaveBeenCalled();
+      expect(otpRepo.query).not.toHaveBeenCalled();
     });
 
     it('positive control: a matching registrationId install proof passes ((lxiv))', async () => {
@@ -968,7 +948,6 @@ describe('KeyBundlesService', () => {
         identityPublicKey: 'published-identity',
         registrationId: 12345,
       });
-      otpRepo.upsert.mockResolvedValue({ raw: [] });
 
       await service.uploadOneTimePreKeys(
         5,
@@ -978,7 +957,7 @@ describe('KeyBundlesService', () => {
         12345,
       );
 
-      expect(otpRepo.upsert).toHaveBeenCalledTimes(1);
+      expect(otpRepo.query).toHaveBeenCalledTimes(1);
     });
 
     it('positive control: an absent registrationId (pre-(lxiv) client) is accepted', async () => {
@@ -988,11 +967,10 @@ describe('KeyBundlesService', () => {
         identityPublicKey: 'published-identity',
         registrationId: 12345,
       });
-      otpRepo.upsert.mockResolvedValue({ raw: [] });
 
       await service.uploadOneTimePreKeys(5, keys, 'published-identity');
 
-      expect(otpRepo.upsert).toHaveBeenCalledTimes(1);
+      expect(otpRepo.query).toHaveBeenCalledTimes(1);
     });
 
     it('rejects untagged OTP uploads instead of inferring the current identity epoch', async () => {
@@ -1007,7 +985,7 @@ describe('KeyBundlesService', () => {
         },
       );
 
-      expect(otpRepo.upsert).not.toHaveBeenCalled();
+      expect(otpRepo.query).not.toHaveBeenCalled();
     });
 
     it('preserves existing valid current-epoch rows when rejecting a legacy upload', async () => {
@@ -1017,7 +995,7 @@ describe('KeyBundlesService', () => {
       await expect(service.uploadOneTimePreKeys(5, keys)).rejects.toThrow(
         'identity_epoch_required',
       );
-      expect(otpRepo.upsert).not.toHaveBeenCalled();
+      expect(otpRepo.query).not.toHaveBeenCalled();
       expect(otpRepo.delete).not.toHaveBeenCalled();
       expect(otpRepo.createQueryBuilder).not.toHaveBeenCalled();
     });

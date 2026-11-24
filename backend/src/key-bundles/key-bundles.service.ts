@@ -641,16 +641,27 @@ export class KeyBundlesService {
     // slots 0..N, so refresh this device's existing row rather than piling up
     // duplicates — and never touch the identically-numbered slot of another
     // device, which holds a different private half.
-    await this.otpRepo.upsert(
-      keys.map((k) => ({
+    //
+    // `used` survives when the SAME key comes again: the session that minted a
+    // batch uploads it at every reconnect, and the device already deleted the
+    // private half of a key that was served. Only a new key frees the slot.
+    await this.otpRepo.query(
+      `INSERT INTO one_time_pre_keys
+         ("userId", "deviceId", "keyId", "publicKey", "identityPublicKey", used)
+       SELECT $1, $2, k."keyId", k."publicKey", $3, false
+       FROM unnest($4::int[], $5::text[]) AS k("keyId", "publicKey")
+       ON CONFLICT ("userId", "deviceId", "keyId") DO UPDATE SET
+         used = one_time_pre_keys.used
+           AND one_time_pre_keys."publicKey" = EXCLUDED."publicKey",
+         "publicKey" = EXCLUDED."publicKey",
+         "identityPublicKey" = EXCLUDED."identityPublicKey"`,
+      [
         userId,
         deviceId,
-        keyId: k.keyId,
-        publicKey: k.publicKey,
         identityPublicKey,
-        used: false,
-      })),
-      { conflictPaths: ['userId', 'deviceId', 'keyId'] },
+        keys.map((k) => k.keyId),
+        keys.map((k) => k.publicKey),
+      ],
     );
     this.logger.debug(
       `Uploaded ${keys.length} one-time pre-keys deviceId=${deviceId}`,

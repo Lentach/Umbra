@@ -200,5 +200,47 @@ describeWithDb(
         [...served].sort((a, b) => a - b),
       );
     });
+
+    it('a key served once stays served when the device uploads the same batch again', async () => {
+      // The session that minted a batch uploads it again at every reconnect;
+      // the device deleted the private half of the key that was served.
+      const userId = await seedUser(2);
+      const batch = [
+        { keyId: 1, publicKey: 'otp-1' },
+        { keyId: 2, publicKey: 'otp-2' },
+      ];
+      expect((await service.fetchPreKeyBundle(userId))?.oneTimePreKeyId).toBe(
+        1,
+      );
+
+      await service.uploadOneTimePreKeys(userId, batch, IDENTITY);
+
+      expect((await service.fetchPreKeyBundle(userId))?.oneTimePreKeyId).toBe(
+        2,
+      );
+    });
+
+    it('a new key under a new identity makes a served slot servable', async () => {
+      // A regenerated identity reuses keyId slots with new key pairs.
+      const userId = await seedUser(2);
+      expect((await service.fetchPreKeyBundle(userId))?.oneTimePreKeyId).toBe(
+        1,
+      );
+      await db.query(
+        `UPDATE public.key_bundles SET "identityPublicKey" = 'ik-2'
+       WHERE "userId" = $1`,
+        [userId],
+      );
+
+      await service.uploadOneTimePreKeys(
+        userId,
+        [{ keyId: 1, publicKey: 'new-1' }],
+        'ik-2',
+      );
+
+      expect(
+        (await service.fetchPreKeyBundle(userId))?.oneTimePreKeyPublic,
+      ).toBe('new-1');
+    });
   },
 );
