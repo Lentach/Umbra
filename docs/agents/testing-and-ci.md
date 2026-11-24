@@ -9,14 +9,14 @@ a VOLATILE claim: re-measure before quoting.
 
 `*.int-spec.ts`, each on a fresh Postgres DB migrated 0001…latest; they FAIL in CI without their DB,
 never skip. Run: `cd backend && BOX_IT_DATABASE_URL=postgres://postgres:postgres@localhost:5433/postgres npm run test:int`
-— 77 tests, measured 2026-11-23 (box 58 over real sockets, first-contact device SQL 4, refresh-token rotation 13, one-time pre-key claim 2).
+— no count is kept here (nothing gates it): the live number is the `Tests:` line of that command, and the per-suite split is `fd -e int-spec.ts . backend/src` (each file's `it(` blocks).
 
 ## Full-stack E2E wire harness (`test_e2e`)
 
 Needs `docker-compose up` first; NOT in the fast lane (`test_e2e` is a sibling of `test/`).
-`cd frontend && flutter test test_e2e` — 47 passed / 16 skipped, MEASURED locally 2026-09-24 (the
-16 = the 9 pre-existing opt-ins + the 5 of the gated encryption proof + the 2 of the gated box round
-trip).
+`cd frontend && flutter test test_e2e` — no pass/skip count is kept here (nothing gates it): the live
+number is the runner's final line, and the skips are the five `--dart-define` gated groups (`ENCRYPTION_PROOF`,
+`BOX_PROBE`, `RESET_PROBE`, `ENROLLED_LOCK_PROBE`, `RESTORE_PROBE`; `grep -rn fromEnvironment frontend/test_e2e`).
 
 ### The SQL channel and `E2E_DB_CONTAINER`
 
@@ -31,7 +31,7 @@ dynamically).
 These spend the shared `/auth/register` bucket, so they are opt-in and run on the
 `e2e-isolated-probes` stack (CI job of the same name):
 
-- `encryption_proof_test.dart` — 5 tests, gated on `--dart-define=ENCRYPTION_PROOF=true`. Its 2
+- `encryption_proof_test.dart` — gated on `--dart-define=ENCRYPTION_PROOF=true`. Its 2
   registrations tipped the shared `/auth/register` bucket into a 429 on `f86a43de`. See
   `frontend/CLAUDE.md` §1.
 - `box_roundtrip_test.dart` (metadata-privacy PR1.3) — gated on `--dart-define=BOX_PROBE=true`.
