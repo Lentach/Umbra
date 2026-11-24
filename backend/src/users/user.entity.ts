@@ -4,10 +4,18 @@ import {
   Column,
   CreateDateColumn,
   Unique,
+  Index,
   OneToMany,
 } from 'typeorm';
 import { ProfilePhoto } from './profile-photo.entity';
 
+/**
+ * Prod truth is migration 0031: a case-insensitive unique name. TypeORM cannot
+ * express LOWER(username) here, and `synchronize` (everywhere but production)
+ * drops indexes the entity does not declare, so it is declared by name with
+ * `synchronize: false`, which leaves the migration's index alone.
+ */
+@Index('UQ_users_lower_username', { synchronize: false })
 @Entity('users')
 @Unique(['username', 'tag'])
 export class User {
