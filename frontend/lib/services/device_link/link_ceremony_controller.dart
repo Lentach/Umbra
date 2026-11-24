@@ -256,6 +256,13 @@ class LinkCeremonyController extends ChangeNotifier
   int _resignRetries = 0;
   bool _resignPending = false;
 
+  /// Requests this controller EMITTED and has no answer to yet: `enroll`,
+  /// `stage`, `revoke`, `rename`. A marker (`enrolling`, the `staging` step,
+  /// `revokingDeviceId`, `renamingDeviceId`) that is set while its request is
+  /// still being built is not in it, so [onSessionLost] never frees a marker
+  /// whose own handler is still running.
+  final Set<String> _awaitingAnswer = <String>{};
+
   // ---------- New-device flow ----------
 
   NewDeviceLinkStep newDeviceStep = NewDeviceLinkStep.idle;
@@ -453,6 +460,32 @@ class LinkCeremonyController extends ChangeNotifier
         _openProvisioningId == null) {
       _openOwed = true;
     }
+    // A request sent on the socket that just went has no answer coming, and
+    // these markers are cleared only by one. Fail them with the code the
+    // server's own refusal would have carried, so the screen offers a retry.
+    var changed = false;
+    if (_awaitingAnswer.remove('enroll') && enrolling) {
+      enrolling = false;
+      enrollError = 'enroll_failed';
+      changed = true;
+    }
+    if (_awaitingAnswer.remove('stage') &&
+        primaryStep == PrimaryLinkStep.staging) {
+      primaryError = 'stage_failed';
+      primaryStep = PrimaryLinkStep.failed;
+      changed = true;
+    }
+    if (_awaitingAnswer.remove('revoke') && revokingDeviceId != null) {
+      revokingDeviceId = null;
+      revokeError = 'revoke_failed';
+      changed = true;
+    }
+    if (_awaitingAnswer.remove('rename') && renamingDeviceId != null) {
+      renamingDeviceId = null;
+      renameError = 'rename_failed';
+      changed = true;
+    }
+    if (changed) notifyListeners();
   }
 
   // ---------- Enable linking (primary enrollment) ----------
@@ -507,6 +540,7 @@ class LinkCeremonyController extends ChangeNotifier
         reuseHeldDak: true,
       );
       _emit('enrollDeviceAuthority', payload);
+      _awaitingAnswer.add('enroll');
     } catch (e) {
       enrollError = 'enroll_failed';
       enrolling = false;
@@ -517,6 +551,7 @@ class LinkCeremonyController extends ChangeNotifier
   @override
   void onDeviceAuthorityEnrolled(dynamic data) {
     enrolling = false;
+    _awaitingAnswer.remove('enroll');
     if (data is Map && data['success'] == true) {
       enrollError = null;
       refreshDeviceList();
@@ -800,6 +835,7 @@ class LinkCeremonyController extends ChangeNotifier
         'listCanonical': signed['listCanonical'],
         'listSignature': signed['listSignature'],
       });
+      _awaitingAnswer.add('stage');
     } catch (e) {
       if (over()) return;
       primaryError = 'stage_failed';
@@ -872,6 +908,7 @@ class LinkCeremonyController extends ChangeNotifier
         'listCanonical': signed['listCanonical'],
         'listSignature': signed['listSignature'],
       });
+      _awaitingAnswer.add('revoke');
     } catch (e) {
       revokingDeviceId = null;
       revokeError = 'sign_failed';
@@ -883,6 +920,7 @@ class LinkCeremonyController extends ChangeNotifier
   void onDeviceRevocationCompleted(dynamic data) {
     if (revokingDeviceId == null) return;
     revokingDeviceId = null;
+    _awaitingAnswer.remove('revoke');
     if (data is Map && data['success'] == true) {
       revokeError = null;
       // The server broadcasts `deviceListChanged` to the account, which lands
@@ -978,6 +1016,7 @@ class LinkCeremonyController extends ChangeNotifier
         'listCanonical': signed['listCanonical'],
         'listSignature': signed['listSignature'],
       });
+      _awaitingAnswer.add('rename');
     } catch (e) {
       renamingDeviceId = null;
       renameError = 'sign_failed';
@@ -992,6 +1031,7 @@ class LinkCeremonyController extends ChangeNotifier
     // belongs to it finds nothing in flight here and is left alone.
     if (renamingDeviceId == null) return;
     renamingDeviceId = null;
+    _awaitingAnswer.remove('rename');
     if (data is Map && data['success'] == true) {
       renameError = null;
       refreshDeviceList();
@@ -1004,6 +1044,7 @@ class LinkCeremonyController extends ChangeNotifier
   @override
   void onProvisionDeviceAck(dynamic data) {
     if (primaryStep != PrimaryLinkStep.staging) return;
+    _awaitingAnswer.remove('stage');
     if (data is Map && data['success'] == true) {
       primaryStep = PrimaryLinkStep.waitingForDevice;
       notifyListeners();
@@ -1050,6 +1091,7 @@ class LinkCeremonyController extends ChangeNotifier
     _primaryProvisioningId = null;
     _resignRetries = 0;
     _resignPending = false;
+    _awaitingAnswer.remove('stage');
   }
 
   // ---------- New-device flow ----------
