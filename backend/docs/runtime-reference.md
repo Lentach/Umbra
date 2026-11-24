@@ -16,6 +16,8 @@ The box has NO account on its path: it imports nothing from `auth/`, `users/`, `
 
 **Ceiling early warning (#204, plan D2 O1).** The 10-minute `BoxReaper` sweep reads `box_totals` and `BoxCeilingMonitor` (`box-ceiling-monitor.ts`) logs `[box] ceiling <msgCount|mediaBytes>=… <openBand|ceiling>=… (N%) a->b`: WARN when a total reaches 50 % of its OPEN band (`BOX_OPEN_*_CEILING`) or of the whole ceiling, ERROR from 80 %, one INFO line on recovery. Then `BoxAlert` (`box-alert.ts`) GETs `BOX_ALERT_URL` (fine) or `<url>/fail` (any total at WARN, or the totals row missing): one bit, no body, the URL never logged; a failed ping logs `[box] alarm ping failed (…)` once per streak. **Operator purge (plan D2 O2):** `node dist/box/box-purge.cli.js` (dry run unless `--execute`) → `BoxService.purgeStaleBacklogs`; runbook `.omp/rules/production-vm-deploy.md` "Box flood". Once per level change per process (a restart re-logs a still-high level). Totals only, never an id; deliberately NOT on `/health`, `/version` or any route (waiting count is traffic metadata).
 
+**Sweep isolation (0.2.96).** Each sweep step and each expired file is isolated: one undeletable file no longer stops queue reaping or the ping. A sweep in which any step or file failed pings `<url>/fail`; the file's row stays and is retried every sweep, so the alarm keeps failing until it is cleared. A sweep that starts while another runs is skipped (`[box] sweep skipped`). Logs carry step names, counts and errno codes only.
+
 ## Chat service map (§2)
 
 `chat-key-exchange`, `chat-search`, `chat-device-list`, `chat-device-revocation`, `chat-provisioning`. The old-path services (`chat-message`, `chat-friend-request`, `chat-conversation`, `chat-block`, `chat-reaction`, `chat-reaction-key`, `chat-validation`, `chat-link-preview`) were removed in Phase 4 step 5; `POST /messages/link-preview` lives in `src/link-preview/` (`LinkPreviewModule`).
@@ -43,7 +45,7 @@ The box has NO account on its path: it imports nothing from `auth/`, `users/`, `
 | `WEB_PUSH_VAPID_PUBLIC_KEY`, `WEB_PUSH_VAPID_PRIVATE_KEY`, `WEB_PUSH_VAPID_SUBJECT` | Web Push for the box wake-up push only. Public key must match frontend build. |
 | `APP_VERSION`, `GIT_COMMIT`, `BUILD_TIME` | `/version`; set by deploy script. |
 | `BOX_ENABLED` | `true` registers the box module (dev compose; prod pins `'true'` since step B, 2026-09-30). |
-| `BOX_ALERT_URL` | Optional https healthchecks.io check URL: the box reaper pings it every 10 min, `/fail` while the box is ≥ 50 % full (plan D2 O1, decision 147). Unset = off. A secret: `.env` only. |
+| `BOX_ALERT_URL` | Optional https healthchecks.io check URL: the box reaper pings it every 10 min, `/fail` while the box is ≥ 50 % full or when a sweep step or file failed (plan D2 O1, decision 147). Unset = off. A secret: `.env` only. |
 
 ## Presence on disconnect (§6)
 

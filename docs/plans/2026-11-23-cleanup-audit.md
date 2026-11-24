@@ -76,7 +76,7 @@ Each batch = one owner OK, one release, driven on Android emulator + test phone 
 
 Release B (drop of old tables/files) is due on or after 2026-12-08 and rides whichever batch is open then.
 
-**Status:** batch 1a shipped as 0.2.94 on 2026-11-23 (PR #276, `c073bdfc`). Batch 1b shipped as 0.2.95 on 2026-11-24 (PR #277, `6c37b151`; `.cursor/session-summaries/2026-11-24-cleanup-batch-1b.md`): CONN-01, CONN-06, CONT-01, CONT-02, CONT-05, BOX-01, UI-05/06/07 fixed; BOX-02 parked (EC-12). Next: 1c.
+**Status:** batch 1a shipped as 0.2.94 on 2026-11-23 (PR #276, `c073bdfc`). Batch 1b shipped as 0.2.95 on 2026-11-24 (PR #277, `6c37b151`; `.cursor/session-summaries/2026-11-24-cleanup-batch-1b.md`): CONN-01, CONN-06, CONT-01, CONT-02, CONT-05, BOX-01, UI-05/06/07 fixed; BOX-02 parked (EC-12). Batch 1c (0.2.96): BOX-03 (sibling), BOX-04/05/06, BOX-17, CONN-02/03/05/17, CONT-03/06/07/08/09/10/11/12, UI-08/10/11, WEB-01/02/05, BE-03/05/06/08/20/29, ENC-03/05/06/08/11 fixed; parked and accepted costs in EC-13, EC-14. Next: batch 2.
 
 ## 6. Engineering calls (E-rows, no owner action)
 
@@ -94,6 +94,8 @@ Release B (drop of old tables/files) is due on or after 2026-12-08 and rides whi
 | EC-10 | Android per-chat mute while closed needs fetch-then-notify (wake-up carries nothing, the phone decrypts, then decides). Listed for after the freeze; not built in this program. |
 | EC-11 | (Batch 1b, CONN-06.) E2E init starts at `socketReady`, not at transport connect. Cost accepted: a link that connects but never turns ready runs no E2E init, so stored messages stay unread until the next good connect, the same as an offline start. Running init twice (once local, once after ready) was rejected as a larger change than the finding. |
 | EC-12 | (Batch 1b.) BOX-02 parked: every subscribe is ordered after the store write that makes the queue visible to `_ownerOf`, so the ack-and-drop window cannot open. |
+| EC-13 | (Batch 1c.) Parked, no code: BOX-03 friend half (releasing the latch after a refused send would widen decision 70's one-lookup bound: owner call), BOX-07 (the row's fix is what decision 68 built and 70 reverted), BOX-09 (owed frames need a new persisted key: after the freeze), BOX-18 (the wipe error is already caught and logged; the real gap, no retry of a failed wipe, needs a persisted marker), CONN-04 (no deterministic red test for the library's own reconnection; `disableReconnection()` needs a device drive first), CONT-04 (the claimed orphan row does not exist; the remaining drop needs a two-device sender to show), CONT-11 second half (`clear()` during an upload), WEB-03 and WEB-04 (need a session generation / a cross-tab KEK signal, more than the lock channel), ENC-04 (whole-set writers need lock + reload + merge with removal semantics: Phase 3 report). |
+| EC-14 | (Batch 1c.) Costs accepted with the fixes: BE-06 a junk bearer still gets the 4 MiB parse; BOX-17 `internal` retries every minute with no cap (under the server's 30 / 15 min throttle); ENC-08 a wipe waits for session work already queued; ENC-06 a caller that joins a rebuild in flight fails with that rebuild's error; ENC-05 the account anchor is read from storage on each call on web; WEB-05 only the padlock tap is announced, not auto-lock or logout; `kvWrite` in `web-push-sw.js` is left without callers (web-only code is not deleted); CONT-12 a UI search unanswered for 10 s ends as "not found". |
 
 ## 7. Gaps in this audit
 
