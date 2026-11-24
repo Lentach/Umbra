@@ -1019,6 +1019,28 @@ void main() {
     );
 
     test(
+      'an edit NO device took still reverts when the socket reconnected '
+      'while its frames were in flight',
+      () async {
+        final msg = await mine('typo');
+        final slow = outbox.gate = Completer<void>();
+        provider.editMessage(msg.id, 'fixed');
+        await pump();
+        expect(row(msg.id)!.content, 'fixed');
+
+        provider.onConnect(true);
+        outbox.refuse.addAll([1, 2, 3]);
+        slow.complete();
+        await pump();
+
+        expect(failures, [BoxActionFailure.edit]);
+        expect(row(msg.id)!.content, 'typo');
+        expect(row(msg.id)!.editedAt, isNull);
+        expect((await recordOf(msg.id))?['content'], 'typo');
+      },
+    );
+
+    test(
       'pinning a box message sends a pin frame and shows it; an unpin takes '
       'it off (decision 45)',
       () async {
