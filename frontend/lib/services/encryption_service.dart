@@ -1701,7 +1701,7 @@ class EncryptionService {
     return deletedAll;
   }
 
-  /// ENC-08: lets every session mutation already in flight finish before a
+  /// Lets every session mutation already in flight finish before a
   /// wipe lists the store. One that stored after the listing would resurrect
   /// a record of the life being wiped, and the wipe would still report PROVEN.
   /// Waits only on work queued BEFORE this call; the tails never fail
@@ -3300,7 +3300,7 @@ class EncryptionService {
     int? disappearAfterSeconds,
     WireKey? wire,
   }) {
-    // ENC-11: the guards below read the held record and the write lands one
+    // The guards below read the held record and the write lands one
     // or more awaits later (the Android store commits to its view only after
     // the seal + put), so two saves of one id used to each guard against a
     // record the other had not yet written. One chain per id, in call order;

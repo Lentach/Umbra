@@ -37,7 +37,7 @@ class BoxPushNids {
 
   /// Writes and [clear] land in the order they were asked. One tail for every
   /// instance: the table is one record, and the account that is leaving has an
-  /// instance of its own with writes possibly still queued (WEB-02). [web-only: retire with §7]
+  /// instance of its own with writes possibly still queued. [web-only: retire with §7]
   static Future<void> _tail = Future<void>.value();
 
   /// What [clear] runs; a test substitutes it to see the order.

@@ -24,7 +24,7 @@ import 'queue_keys.dart';
 import 'queue_seal.dart';
 
 /// How long a request-queue publish the server failed waits before it is
-/// sent again (BOX-17). The event is throttled at 30 / 15 min.
+/// sent again. The event is throttled at 30 / 15 min.
 const Duration kRequestQueueRetry = Duration(minutes: 1);
 
 /// One account session's link to the box (metadata-privacy PR3.1 slice (a)):
@@ -565,7 +565,7 @@ class BoxSession
     _e2eReady = false;
     _inFlight = null;
     _retry?.cancel();
-    // The sibling re-key guard ends with the connect (BOX-03): a sibling
+    // The sibling re-key guard ends with the connect: a sibling
     // that loses its session again on a later one is re-keyed again.
     // [_friendRekeyed] stays: decision 70 bounds what a forged frame can
     // time to one bundle fetch per friend device per session.
@@ -829,7 +829,7 @@ class BoxSession
         frame != null &&
         await deliver(to, frame.encode()) == BoxSendOutcome.taken;
     // A re-key that did not leave is owed still: the next loss makes it
-    // again (BOX-03).
+    // again.
     if (!sent) _rekeyed.remove(deviceId);
     E2eDiagLog.add('BOX_SIBLING_REKEYED', {'device': deviceId, 'sent': sent});
   }
@@ -1008,7 +1008,7 @@ class BoxSession
     final ensured = await _keys.ensureInbound(userId);
     if (ensured is! InboundQueueCreated || _disposed) {
       // No queue to hand, and no bundle was fetched yet (decision 70's
-      // bound is intact): the next loss asks again (BOX-03).
+      // bound is intact): the next loss asks again.
       _friendRekeyed.remove(key);
       return;
     }

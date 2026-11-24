@@ -577,7 +577,7 @@ class SecureIdentityKeyStore extends IdentityKeyStore {
   /// — far worse than the defect being fixed.
   Future<IdentityKey?> getAccountIdentity(String name) async {
     final key = _accountKey(name);
-    // ENC-05 [web-only: retire with §7]: always read the store, never serve
+    // [web-only: retire with §7]: always read the store, never serve
     // the memo. The anchor moves on a human acknowledgement, possibly in a
     // sibling tab; this engine's memo kept the OLD key, so buildSession
     // compared the peer's new bundle to a stale anchor and every send failed
@@ -681,7 +681,7 @@ class SecureIdentityKeyStore extends IdentityKeyStore {
   /// awaiting human acknowledgement (amendment (xlvi)).
   String _pendingKey(String name) => '${_p}pending_account_identity_$name';
 
-  /// Tail of the in-flight pending-slot mutations per peer name (ENC-03).
+  /// Tail of the in-flight pending-slot mutations per peer name.
   /// The slot has four writers — the decrypt's candidate write, a staged
   /// server key, the promote and the adopt — and the promote/adopt each
   /// read, write the anchor, then delete the slot across awaits. A candidate

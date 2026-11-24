@@ -162,7 +162,7 @@ class PasscodeProvider extends ChangeNotifier {
   final E2eLockRevoker _revoker;
 
   /// [web-only: retire with §7] Tells the other tabs of this origin that the
-  /// user locked here, and hears them (WEB-05). No-op off-web.
+  /// user locked here, and hears them. No-op off-web.
   late final LockSignal _lockSignal;
 
   /// Web-only in-place process restart. See [_lock] step 3.

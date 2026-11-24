@@ -1,5 +1,5 @@
 /// One tab telling the others of the same origin that the user locked the
-/// passcode (WEB-05). [web-only: retire with §7]
+/// passcode. [web-only: retire with §7]
 ///
 /// The lock revokes keys held in RAM, and RAM is per tab: without a signal a
 /// second tab (or an installed PWA beside a browser tab) keeps its keys and

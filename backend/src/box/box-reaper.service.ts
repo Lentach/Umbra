@@ -44,7 +44,7 @@ export class BoxReaper {
   ) {}
 
   /**
-   * Each step, and each file, fails on its own (BE-03): one undeletable file
+   * Each step, and each file, fails on its own: one undeletable file
    * or one failed query must not stop the steps after it, least of all the
    * alarm ping, and a sweep that could not finish its work pings `/fail`.
    * A sweep that starts while the previous one still runs does nothing.

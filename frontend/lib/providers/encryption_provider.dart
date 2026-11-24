@@ -394,7 +394,7 @@ class EncryptionProvider extends ChangeNotifier {
       'needsRebuild': needsRebuild,
     });
     if (hasSession && !needsRebuild) {
-      // ENC-06: the force-rebuild mark was consumed by the caller whose
+      // The force-rebuild mark was consumed by the caller whose
       // rebuild is still in flight, so this caller sees a session and no
       // intent. That session is the one being replaced: wait for the rebuild
       // instead of handing it back.
@@ -421,7 +421,7 @@ class EncryptionProvider extends ChangeNotifier {
     // as a fetched one. None held: the session cannot be built — never a
     // fetch.
     if (isBoxOnlyPeer?.call(recipientId) ?? false) {
-      // Same single flight as the fetch path (ENC-06): a second caller
+      // Same single flight as the fetch path: a second caller
       // during a forced rebuild joins it instead of sealing on the old session.
       final inFlight = _sessionBuilds[addressKey];
       final build = inFlight ?? _buildServedSession(recipientId, deviceId);

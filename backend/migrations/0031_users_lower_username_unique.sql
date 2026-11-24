@@ -1,4 +1,4 @@
--- BE-05: a nickname is unique case-insensitively, and the database says so.
+-- A nickname is unique case-insensitively, and the database says so.
 --
 -- `UsersService.create` checked the name with `LOWER(username)` and then
 -- inserted. The only constraint was UNIQUE (username, tag), so two
