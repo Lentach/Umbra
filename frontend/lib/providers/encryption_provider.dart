@@ -3693,6 +3693,10 @@ class EncryptionProvider extends ChangeNotifier {
     // answered for.
     _identityUploadLocked = false;
     _identityCheckUnavailable = false;
+    // One-time pre-keys still waiting for their bundle's ack belong to the
+    // account that minted them. Left standing, the next account's ack would
+    // release them on its socket and into its pool on the server.
+    _dropStashedOneTimePreKeyUpload('account_change');
     _deviceListCache.clear();
     _forgetFriendLookups();
     // The phrase/backup flags are per ACCOUNT too: left standing, user A's
