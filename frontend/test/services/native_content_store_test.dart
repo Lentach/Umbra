@@ -216,7 +216,7 @@ void main() {
       final retired =
           jsonDecode(store!.getString('e2e_7_retired_v1')!) as List;
       expect(retired, containsAll([41, 42]));
-      // Also persisted, so the provider's one-shot loadRetiredIds sees it.
+      // Also persisted, so a later session reads it back.
       final dbRetired = jsonDecode(db.rows['e2e_7_retired_v1']!.text!) as List;
       expect(dbRetired, containsAll([41, 42]));
       // Rows kept (bytes recoverable if the key ever reappears), but not

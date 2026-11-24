@@ -133,8 +133,6 @@ class EncryptionProvider extends ChangeNotifier {
   /// DuplicateMessageException (session already advanced by live messages).
   final Map<int, MessageModel> _decryptedContentCache = {};
 
-  String? _error;
-
   /// Callback to emit socket events. Set by [ConnectionProvider] via [setEmitCallback].
   void Function(String event, dynamic data)? _emit;
 
@@ -161,9 +159,6 @@ class EncryptionProvider extends ChangeNotifier {
 
   /// Whether the E2E encryption layer has been initialized for the current user.
   bool get isE2EReady => _e2eInitialized;
-
-  /// Last error from encryption operations, if any.
-  String? get error => _error;
 
   /// Whether more one-time pre-keys are currently being generated.
   bool get isGeneratingMoreKeys => _generatingMoreKeys;
@@ -287,8 +282,7 @@ class EncryptionProvider extends ChangeNotifier {
         plaintext,
         deviceId: deviceId,
       );
-    } catch (e) {
-      _error = 'Encryption failed: $e';
+    } catch (_) {
       notifyListeners();
       rethrow;
     }
@@ -315,8 +309,7 @@ class EncryptionProvider extends ChangeNotifier {
         messageId: messageId,
         deviceId: deviceId,
       );
-    } catch (e) {
-      _error = 'Decryption failed: $e';
+    } catch (_) {
       notifyListeners();
       rethrow;
     }
@@ -3547,7 +3540,6 @@ class EncryptionProvider extends ChangeNotifier {
   /// re-running initialize() which can cause transient mobile storage errors
   /// (CLAUDE.md gotcha: `_initializeE2E()` skips when `_e2eInitialized = true`).
   void onConnect(bool isReconnect) {
-    _error = null;
     // (lxiv) final-review P1: the confirmed own-device id is a PER-SOCKET
     // fact — the new socket's id is unknown until ITS socketReady, and after a
     // §6.2 rebind or §5.1 link reconnect it is guaranteed DIFFERENT. Carrying
@@ -3605,7 +3597,6 @@ class EncryptionProvider extends ChangeNotifier {
   void clearAll() {
     _e2eInitialized = false;
     _generatingMoreKeys = false;
-    _error = null;
     _currentUserId = null;
     _decryptedContentCache.clear();
     _forceSessionRebuild.clear();
