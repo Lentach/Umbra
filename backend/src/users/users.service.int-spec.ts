@@ -31,7 +31,9 @@ describeWithDb('users: case-insensitive unique name on real Postgres', () => {
       [username, tag],
     );
 
-  async function violatedConstraint(promise: Promise<unknown>): Promise<string> {
+  async function violatedConstraint(
+    promise: Promise<unknown>,
+  ): Promise<string> {
     const error: unknown = await promise.then(
       () => {
         throw new Error('expected a unique violation');
