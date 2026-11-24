@@ -25,6 +25,11 @@ import { UploadOneTimePreKeysDto } from '../dto/upload-one-time-pre-keys.dto';
 import { FetchPreKeyBundleDto } from '../dto/fetch-pre-key-bundle.dto';
 import { RequestSessionRebuildDto } from '../dto/request-session-rebuild.dto';
 import { deviceRoom, socketsForDevice, userRoom } from '../utils/user-room';
+import {
+  RegistrationLockNonce,
+  errorMessage,
+  socketData,
+} from '../utils/socket-data';
 import { JwtService } from '@nestjs/jwt';
 import { UsersService } from '../../users/users.service';
 import {
@@ -33,12 +38,9 @@ import {
 } from '../../key-bundles/reset-roster.service';
 import {
   clearPendingSessionRebuildRequest,
-  errorMessage,
   isPreKeyFetchRateLimited,
   livePendingSessionRebuildRequesters,
   rememberSessionRebuildRequest,
-  socketData,
-  RegistrationLockNonce,
 } from './chat-key-exchange.util';
 
 const PRE_KEY_LOW_THRESHOLD = 10;
