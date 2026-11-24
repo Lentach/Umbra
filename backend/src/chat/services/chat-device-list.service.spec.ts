@@ -38,12 +38,6 @@ describe('ChatDeviceListService.handleGetDeviceList (own roster only)', () => {
     listCanonical: 'canonical-bytes',
   };
 
-  /** The same row as it appears ON THE WIRE: the date becomes signed ms. */
-  const authorizationProjection = {
-    ...authorizationRow,
-    enrollmentCreatedAt: authorizationRow.enrollmentCreatedAt.getTime(),
-  };
-
   beforeEach(async () => {
     getAuthorization = jest.fn().mockResolvedValue(authorizationRow);
     // The ordinary account owes no replacement enrollment, so the (xlv)
@@ -186,93 +180,5 @@ describe('ChatDeviceListService.handleGetDeviceList (own roster only)', () => {
       'deviceList',
       expect.objectContaining({ userId: REQUESTER }),
     );
-  });
-
-  // --- getDeviceLists: the same own-id rule, applied to each user of a batch --
-  // The batch verb may never become a way around the per-user rule above.
-  describe('getDeviceLists (batch)', () => {
-    const getMany = (data: unknown) =>
-      service.handleGetDeviceLists(client as Socket, data);
-
-    it('serves only the caller out of a batch and stays silent on the rest', async () => {
-      await getMany({ userIds: [TARGET, REQUESTER, 11] });
-
-      expect(emit.mock.calls).toEqual([
-        [
-          'deviceList',
-          { userId: REQUESTER, authorization: authorizationProjection },
-        ],
-      ]);
-      expect(getAuthorization).not.toHaveBeenCalledWith(TARGET);
-      expect(getAuthorization).not.toHaveBeenCalledWith(11);
-    });
-
-    it('stays silent for the caller who owes a replacement enrollment', async () => {
-      pendingReplacementVersion.mockResolvedValue(4);
-
-      await getMany({ userIds: [REQUESTER, TARGET] });
-
-      expect(emit).not.toHaveBeenCalled();
-    });
-
-    it('does not throw when the own roster fails to load', async () => {
-      getAuthorization.mockRejectedValue(new Error('db down'));
-
-      await expect(
-        getMany({ userIds: [REQUESTER, TARGET] }),
-      ).resolves.toBeUndefined();
-
-      expect(emit).not.toHaveBeenCalled();
-    });
-
-    it('accepts a full batch of 256 users', async () => {
-      const userIds = [
-        REQUESTER,
-        ...Array.from({ length: 255 }, (_, i) => i + 100),
-      ];
-
-      await getMany({ userIds });
-
-      expect(emit.mock.calls).toEqual([
-        [
-          'deviceList',
-          { userId: REQUESTER, authorization: authorizationProjection },
-        ],
-      ]);
-    });
-
-    it.each([
-      ['a user named twice', { userIds: [TARGET, REQUESTER, TARGET] }],
-      [
-        'more than 256 users',
-        { userIds: Array.from({ length: 257 }, (_, i) => i + 100) },
-      ],
-      ['no users', { userIds: [] }],
-      ['user id 0', { userIds: [REQUESTER, 0] }],
-      ['a user id above 2^31-1', { userIds: [2147483648] }],
-      ['a fractional user id', { userIds: [9.5] }],
-      ['a user id as a string', { userIds: ['9'] }],
-      ['userIds that is not an array', { userIds: TARGET }],
-      ['no payload', null],
-    ])(
-      'refuses a batch with %s whole, in silence, touching nothing',
-      async (_label, data) => {
-        await getMany(data);
-
-        expect(emit).not.toHaveBeenCalled();
-        expect(getAuthorization).not.toHaveBeenCalled();
-      },
-    );
-
-    it('accepts the largest user id, 2^31-1', async () => {
-      client = { data: { user: { id: 2147483647 } }, emit };
-
-      await getMany({ userIds: [2147483647] });
-
-      expect(emit).toHaveBeenCalledWith(
-        'deviceList',
-        expect.objectContaining({ userId: 2147483647 }),
-      );
-    });
   });
 });

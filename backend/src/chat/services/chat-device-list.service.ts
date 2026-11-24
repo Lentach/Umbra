@@ -7,7 +7,6 @@ import {
 import {
   EnrollDeviceAuthorityDto,
   GetDeviceListDto,
-  GetDeviceListsDto,
   UpdateDeviceListDto,
 } from '../dto/device-list.dto';
 import { validateDto } from '../utils/dto.validator';
@@ -149,51 +148,9 @@ export class ChatDeviceListService {
   }
 
   /**
-   * `getDeviceLists { userIds }` (metadata-privacy item 5, E20a): one request
-   * for several users at once. Each user named gets EXACTLY the
-   * [handleGetDeviceList] treatment — the same own-id rule, the same
-   * replacement-owed refusal, the same `deviceList` answer — so a batch can
-   * never reach a roster a single request could not. A refused user stays
-   * silent while the others are served; an invalid batch (empty, over 256, a
-   * duplicate, an id outside 1..2³¹−1) is refused whole, in silence.
-   *
-   * Users are served one after another, not in parallel: 256 users in
-   * parallel would hold the connection pool against every other request.
-   * One user's failure does not silence the rest.
-   */
-  async handleGetDeviceLists(client: Socket, data: unknown): Promise<void> {
-    const requesterId = socketUserId(client);
-    if (!requesterId) return;
-    let dto: GetDeviceListsDto;
-    try {
-      dto = validateDto(GetDeviceListsDto, data);
-    } catch {
-      this.logger.warn(`[device-list] batch REFUSED reason=invalid_payload`);
-      return;
-    }
-    let failed = 0;
-    let firstFailure = '';
-    for (const userId of dto.userIds) {
-      try {
-        await this.serveDeviceList(client, requesterId, userId);
-      } catch (error) {
-        if (failed === 0) {
-          firstFailure = error instanceof Error ? error.message : String(error);
-        }
-        failed++;
-      }
-    }
-    if (failed > 0) {
-      this.logger.error(
-        `getDeviceLists failed for ${failed} of ${dto.userIds.length}: ${firstFailure}`,
-      );
-    }
-  }
-
-  /**
-   * The per-user rule both verbs share: emit `deviceList` for [userId] when
+   * The per-user rule: emit `deviceList` for [userId] when
    * it is the caller's own and the account owes no replacement enrollment,
-   * else nothing. Throws on a lookup failure; each caller decides what a
+   * else nothing. Throws on a lookup failure; the caller decides what a
    * failure silences.
    */
   private async serveDeviceList(
