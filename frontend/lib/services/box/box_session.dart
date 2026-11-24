@@ -804,11 +804,13 @@ class BoxSession
       // No self-queue address for it yet (crossing first sessions): the
       // re-key goes through its request queue instead, or neither side
       // could ever answer the other's refused handoff.
-      final sent = await _swap.rekeyViaRequest(deviceId);
-      if (sent) _rekeyAsked[deviceId] = _now();
+      final route = await _swap.rekeyViaRequest(deviceId);
+      if (route == SiblingRekeyRoute.sent) _rekeyAsked[deviceId] = _now();
+      // Owed stays latched: the answer that names the address hands off.
+      if (route == SiblingRekeyRoute.failed) _rekeyed.remove(deviceId);
       E2eDiagLog.add('BOX_SIBLING_REKEYED', {
         'device': deviceId,
-        'sent': sent,
+        'sent': route == SiblingRekeyRoute.sent,
         'via': 'request',
       });
       return;
