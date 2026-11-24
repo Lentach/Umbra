@@ -533,9 +533,10 @@ class SecureIdentityKeyStore extends IdentityKeyStore {
   /// compare and — since the write below is now conditional — strictly cheaper
   /// than the unconditional write this code used to do per message.
   ///
-  /// Engine-local by design: a sibling tab writing a peer key is not observed
-  /// here, which can only cost a duplicate warning, never trust of a key this
-  /// engine did not itself verify against storage on first contact.
+  /// Engine-local by design for the per-DEVICE rows: a sibling tab writing a
+  /// peer key is not observed here, which can only cost a duplicate warning.
+  /// The ACCOUNT anchor is NOT served from here ([getAccountIdentity] reads
+  /// the store): a stale anchor is not a duplicate warning, it fails sends.
   final Map<String, IdentityKey> _trustedMemo = {};
 
   @override
@@ -575,8 +576,12 @@ class SecureIdentityKeyStore extends IdentityKeyStore {
   /// — far worse than the defect being fixed.
   Future<IdentityKey?> getAccountIdentity(String name) async {
     final key = _accountKey(name);
-    final memo = _trustedMemo[key];
-    if (memo != null) return memo;
+    // ENC-05 [web-only: retire with §7]: always read the store, never serve
+    // the memo. The anchor moves on a human acknowledgement, possibly in a
+    // sibling tab; this engine's memo kept the OLD key, so buildSession
+    // compared the peer's new bundle to a stale anchor and every send failed
+    // closed until a reload. Callers are the gates and the mismatch path, not
+    // the per-message check ([isTrustedIdentity] reads the per-device row).
     final stored = await _storage.read(key: key);
     if (stored != null) {
       final identity = IdentityKey.fromBytes(base64Decode(stored), 0);
@@ -657,9 +662,12 @@ class SecureIdentityKeyStore extends IdentityKeyStore {
       // user may well acknowledge after a restart, and an in-memory candidate
       // would leave that acknowledgement with nothing to promote — the peer
       // would stay unverifiable with no way left to say so.
-      await _storage.write(
-        key: _pendingKey(address.getName()),
-        value: encodedOf(identityKey),
+      await _serializePending(
+        address.getName(),
+        () => _storage.write(
+          key: _pendingKey(address.getName()),
+          value: encodedOf(identityKey),
+        ),
       );
       onIdentityChanged?.call(address);
     }
@@ -671,6 +679,27 @@ class SecureIdentityKeyStore extends IdentityKeyStore {
   /// An identity seen for a peer ACCOUNT that differs from its pinned anchor,
   /// awaiting human acknowledgement (amendment (xlvi)).
   String _pendingKey(String name) => '${_p}pending_account_identity_$name';
+
+  /// Tail of the in-flight pending-slot mutations per peer name (ENC-03).
+  /// The slot has four writers — the decrypt's candidate write, a staged
+  /// server key, the promote and the adopt — and the promote/adopt each
+  /// read, write the anchor, then delete the slot across awaits. A candidate
+  /// written in that window was erased by a delete that never saw it. One
+  /// chain per name, in call order, this engine only (another web tab is a
+  /// separate heap). Leaf work only: nothing queued here may await another
+  /// queued method for the same name.
+  final Map<String, Future<void>> _pendingTails = {};
+
+  Future<T> _serializePending<T>(String name, Future<T> Function() action) {
+    final tail = _pendingTails[name] ?? Future<void>.value();
+    final result = tail.then((_) => action());
+    final next = result.then<void>((_) {}, onError: (Object _) {});
+    _pendingTails[name] = next;
+    next.whenComplete(() {
+      if (identical(_pendingTails[name], next)) _pendingTails.remove(name);
+    }).ignore();
+    return result;
+  }
 
   /// The user acknowledged [name]'s identity change, so the account anchor may
   /// now advance to the key that triggered it.
@@ -694,7 +723,7 @@ class SecureIdentityKeyStore extends IdentityKeyStore {
   Future<bool> promotePendingAccountIdentity(
     String name, {
     String? expectedIdentityBase64,
-  }) async {
+  }) => _serializePending(name, () async {
     final pendingKey = _pendingKey(name);
     final stored = await _storage.read(key: pendingKey);
     if (stored == null) return false;
@@ -708,7 +737,7 @@ class SecureIdentityKeyStore extends IdentityKeyStore {
     _trustedMemo[key] = identity;
     await _storage.delete(key: pendingKey);
     return true;
-  }
+  });
 
   /// The identity awaiting acknowledgement for [name], or null when none is
   /// held.
@@ -738,12 +767,10 @@ class SecureIdentityKeyStore extends IdentityKeyStore {
   Future<void> stagePendingAccountIdentity(
     String name,
     IdentityKey identity,
-  ) async {
-    await _storage.write(
-      key: _pendingKey(name),
-      value: encodedOf(identity),
-    );
-  }
+  ) => _serializePending(
+    name,
+    () => _storage.write(key: _pendingKey(name), value: encodedOf(identity)),
+  );
 
   /// The user compared [identity] against [name]'s own copy out of band and
   /// accepted it. Pins it as the account anchor.
@@ -779,7 +806,7 @@ class SecureIdentityKeyStore extends IdentityKeyStore {
     String name,
     IdentityKey identity, {
     required String? expectedPendingBase64,
-  }) async {
+  }) => _serializePending(name, () async {
     final key = _accountKey(name);
     await _storage.write(key: key, value: encodedOf(identity));
     _trustedMemo[key] = identity;
@@ -795,7 +822,7 @@ class SecureIdentityKeyStore extends IdentityKeyStore {
     if (stored != expectedPendingBase64) return false;
     await _storage.delete(key: pendingKey);
     return true;
-  }
+  });
 
   bool _sameIdentity(IdentityKey a, IdentityKey b) {
     final x = a.serialize();

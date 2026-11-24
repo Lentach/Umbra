@@ -433,6 +433,87 @@ void main() {
     );
 
     test(
+      'ENC-06: a second ensureSession during a forced rebuild waits for it',
+      () async {
+        // Fail-before: caller A consumed the force-rebuild mark, so caller B
+        // (arriving while A's bundle fetch was unanswered) read
+        // needsRebuild:false on hasSession:true and returned at once — its
+        // caller then encrypts on the very session the rebuild replaces.
+        FlutterSecureStorage.setMockInitialValues({});
+        SharedPreferences.setMockInitialValues({});
+        const peerUserId = 2;
+
+        final peerIdentity = generateIdentityKeyPair();
+        final peerSignedPreKey = generateSignedPreKey(peerIdentity, 0);
+        final peerOtp = generatePreKeys(0, 1).single;
+        final peerBundle = <String, dynamic>{
+          'registrationId': generateRegistrationId(false),
+          'identityPublicKey': base64Encode(
+            peerIdentity.getPublicKey().serialize(),
+          ),
+          'signedPreKeyId': 0,
+          'signedPreKeyPublic': base64Encode(
+            peerSignedPreKey.getKeyPair().publicKey.serialize(),
+          ),
+          'signedPreKeySignature': base64Encode(peerSignedPreKey.signature),
+          'oneTimePreKeyId': peerOtp.id,
+          'oneTimePreKeyPublic': base64Encode(
+            peerOtp.getKeyPair().publicKey.serialize(),
+          ),
+        };
+
+        final provider = EncryptionProvider();
+        var fetches = 0;
+        var answerFetches = true;
+        void answer() => provider.onPreKeyBundleResponse({
+          'userId': peerUserId,
+          'bundle': peerBundle,
+        });
+        provider.setEmitCallback((event, data) {
+          if (event == 'checkOwnKeyBundle') {
+            provider.onOwnKeyBundleStatus({'exists': false});
+          } else if (event == 'fetchPreKeyBundle') {
+            fetches++;
+            if (answerFetches) scheduleMicrotask(answer);
+          }
+        });
+        await provider.initializeE2E(1);
+
+        // A session exists.
+        await provider.ensureSession(peerUserId);
+        expect(fetches, 1);
+
+        // The rebuild's bundle fetch stays unanswered: the build is in flight.
+        answerFetches = false;
+        provider.markSessionRebuild(peerUserId);
+        var firstDone = false;
+        var secondDone = false;
+        final first = provider
+            .ensureSession(peerUserId)
+            .then((_) => firstDone = true);
+        await pumpEventQueue();
+        expect(fetches, 2, reason: 'the first caller started the rebuild');
+        final second = provider
+            .ensureSession(peerUserId)
+            .then((_) => secondDone = true);
+        await pumpEventQueue();
+
+        expect(firstDone, isFalse);
+        expect(
+          secondDone,
+          isFalse,
+          reason: 'the second caller must not get the old session back '
+              'while its rebuild is in flight',
+        );
+
+        answer();
+        await Future.wait([first, second]);
+        expect(fetches, 2, reason: 'the second caller joined, it did not fetch');
+        expect(provider.needsSessionRebuild(peerUserId), isFalse);
+      },
+    );
+
+    test(
       "sessionRebuildNeeded also drops the sender's cached device list",
       () async {
         // Peer wedged after a phrase restore, 2026-09-22: the peer's bundle
