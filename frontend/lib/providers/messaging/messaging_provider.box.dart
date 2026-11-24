@@ -2666,6 +2666,10 @@ extension MessagingBox on MessagingProvider {
         _markMessageFailed(tempId, 'Could not send. Try again.');
         return false;
       }
+      // Signed out, or switched to another account, while the frames were in
+      // flight: local ids restart at the same base per account, so nothing of
+      // this send may land in the next session's rows, cache or retries.
+      if (_currentUserId != ownUserId) return true;
       if (owedPeers.isNotEmpty || owedSiblings.isNotEmpty) {
         _oweBoxFrames(
           'msg|${route.conversationId}|$sendToken',

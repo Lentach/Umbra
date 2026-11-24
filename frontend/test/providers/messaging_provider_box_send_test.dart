@@ -2359,6 +2359,34 @@ void main() {
       expect(await unsentKeys(), isEmpty);
     });
 
+    test('a send that finishes after a sign-out and another sign-in leaves '
+        "the next account's rows and cache untouched", () async {
+      bob([1]);
+      final hold = outbox.hold = Completer<void>();
+      provider.sendMessage('old account words');
+      await pump();
+      expect(outbox.delivered, isNotEmpty, reason: 'the frames are in flight');
+
+      provider
+        ..clearAll()
+        ..setCurrentUserId(9)
+        ..setToken('tok9')
+        ..onConnect(false);
+      outbox.hold = null;
+      hold.complete();
+      await pump(80);
+
+      expect(
+        provider.messages.where((m) => m.content == 'old account words'),
+        isEmpty,
+      );
+      expect(
+        encryption.getCachedDecryption(kFirstLocalMessageId + 40),
+        isNull,
+        reason: "the old account's plaintext is not in the RAM cache",
+      );
+    });
+
     test('one a peer device took but whose own copy could not be stored '
         'stays kept: after a restart it is red, not gone', () async {
       bob([1]);
