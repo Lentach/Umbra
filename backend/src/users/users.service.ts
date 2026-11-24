@@ -12,7 +12,6 @@ import { hashPassword, verifyPassword } from '../auth/password-hash';
 import { User } from './user.entity';
 import { ProfilePhoto } from './profile-photo.entity';
 import { LocalStorageService } from '../media/local-storage.service';
-import { KeyBundlesService } from '../key-bundles/key-bundles.service';
 import { RefreshTokensService } from '../auth/refresh-tokens.service';
 
 /** Postgres unique-violation SQLSTATE. */
@@ -52,7 +51,6 @@ export class UsersService {
     @InjectRepository(ProfilePhoto)
     private profilePhotoRepo: Repository<ProfilePhoto>,
     private storageService: LocalStorageService,
-    private keyBundlesService: KeyBundlesService,
     private refreshTokensService: RefreshTokensService,
   ) {}
 
@@ -262,10 +260,8 @@ export class UsersService {
     // tables are gone (Phase 4 step 5), so this is one statement.
     await this.usersRepo.remove(user);
 
-    // Only after the account is durably gone do we run the irreversible external
-    // cleanup: the key-bundle purge (idempotent backstop to the FK cascade
-    // above) and avatar unlinks. A failure here cannot resurrect the account.
-    await this.keyBundlesService.deleteByUserId(userId);
+    // Only after the account is durably gone do we run the irreversible
+    // avatar unlinks. A failure here cannot resurrect the account.
     await Promise.all(
       [...storageKeys].map((storageKey) =>
         this.storageService.deleteAvatar(storageKey),

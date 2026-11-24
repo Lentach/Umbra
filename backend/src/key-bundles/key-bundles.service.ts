@@ -760,10 +760,4 @@ export class KeyBundlesService {
       },
     });
   }
-
-  async deleteByUserId(userId: number): Promise<void> {
-    await this.otpRepo.delete({ userId });
-    await this.keyBundleRepo.delete({ userId });
-    this.logger.log(`Deleted all key data`);
-  }
 }

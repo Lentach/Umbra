@@ -25,7 +25,6 @@ describe('UsersService passwords (plan D4: bcrypt → Argon2id)', () => {
       mockRepo as never,
       {} as never,
       {} as never,
-      {} as never,
       mockRefreshTokens as never,
     );
   });
