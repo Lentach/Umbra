@@ -371,6 +371,18 @@ void main() {
         });
       });
 
+      test('ends with an empty result, so the screen stops searching', () {
+        fakeAsync((async) {
+          final friends = provider()..setEmitCallback((event, data) {});
+          friends.searchUsers('ghost#0009');
+          expect(friends.searchResults, isNull);
+
+          async.elapse(const Duration(seconds: 11));
+
+          expect(friends.searchResults, isEmpty);
+        });
+      });
+
       test('an answered UI search leaves no timer behind', () {
         fakeAsync((async) {
           final friends = provider()

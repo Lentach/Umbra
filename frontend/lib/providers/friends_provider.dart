@@ -51,6 +51,9 @@ class FriendsProvider extends ChangeNotifier {
   /// [onSearchUsersResult] for how an answer is attributed).
   final List<_SearchWaiter> _searchWaiters = [];
 
+  /// The newest UI search's waiter.
+  _SearchWaiter? _uiSearch;
+
   /// Set by [dispose]; an awaited box step must not notify afterwards.
   bool _disposed = false;
 
@@ -335,7 +338,14 @@ class FriendsProvider extends ChangeNotifier {
     final waiter = _SearchWaiter(_handleKey(handle));
     waiter.timeout = Timer(_kSearchAnswerTimeout, () {
       _searchWaiters.remove(waiter);
+      // The screen's spinner ends on a result: publish an empty one, unless
+      // a newer search already replaced this one.
+      if (identical(_uiSearch, waiter) && _searchResults == null) {
+        _searchResults = const [];
+        notifyListeners();
+      }
     });
+    _uiSearch = waiter;
     _searchWaiters.add(waiter);
     emit('searchUsers', {'handle': handle});
   }
@@ -523,8 +533,8 @@ class FriendsProvider extends ChangeNotifier {
         });
       }
     }
-    _requestRunning.remove(requestId);
     if (!_isLiveFor(account)) return;
+    _requestRunning.remove(requestId);
     final held = _requestActions.containsKey(requestId);
     _clearRequestAction(requestId);
     final reason = switch (result) {
@@ -565,8 +575,8 @@ class FriendsProvider extends ChangeNotifier {
         });
       }
     }
-    _requestRunning.remove(requestId);
     if (!_isLiveFor(account)) return;
+    _requestRunning.remove(requestId);
     final held = _requestActions.containsKey(requestId);
     _clearRequestAction(requestId);
     if (!declined && held) {
