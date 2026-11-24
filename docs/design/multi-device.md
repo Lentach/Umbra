@@ -1560,7 +1560,7 @@ that is the designed outcome).
     (`encryption_provider.dart:423-428`); the accept gate withholds the recovering device's rows
     BEFORE Signal runs, because the escape hatch covers only `originDeviceId == 1`
     (`messaging_provider.decrypt.dart:146-162`), so `isTrustedIdentity` never records a candidate;
-    `peerIdentityChanged` is a live room emit only (`chat-key-exchange.service.ts:439-441`), so an
+    `peerIdentityChanged` is NOT sent to peers at all (the "no `peerIdentityChanged` to peers" comment, `chat-key-exchange.service.ts:422`, decisions 115/116), so an
     offline peer never learns; and BOTH (xlvii) doors are gated on the warning set that therefore
     stays empty (`encryption_service.dart:280`, `encryption_provider.dart:2041`). **This is the
     THIRD variant of the T10/T11 defect** — a completed reset leaving a conversation unreachable —
@@ -2021,7 +2021,7 @@ that is the designed outcome).
     `listCanonical`, `listSignature` — with no guard at all (`chat-message.service.ts:211-245`,
     emitted at `:362-378` and again on the edit path at `:1062-1078`). `pendingReplacementVersion` has
     exactly two production call sites, `chat-device-list.service.ts:168` and
-    `chat-key-exchange.service.ts:328`; it is never consulted on the send path. So F3's loss is NOT
+    `chat-key-exchange.service.ts:318`; it is never consulted on the send path. So F3's loss is NOT
     closed: the peer verifies the orphaned roster under its PRE-RESET anchor — successfully, because
     that enrollment was signed by the very key it pinned, which is (l)'s own premise — adopts the dead
     roster, and re-sends into it. Where the surviving roster's only live entry is device 1 the
