@@ -7,11 +7,10 @@
 #
 # This file runs the backend from a BUILT image (NODE_ENV=production):
 #   - CORS is restricted to ALLOWED_ORIGINS
-#   - media URLs are built from MEDIA_BASE_URL
 #   - TypeORM synchronize is OFF (schema changes need manual SQL — see backend/CLAUDE.md)
 #
 # Required keys in ~/fireplace/.env (compose interpolates them; deploy aborts if missing):
-#   ALLOWED_ORIGINS, MEDIA_BASE_URL, JWT_SECRET,
+#   ALLOWED_ORIGINS, JWT_SECRET,
 #   WEB_PUSH_VAPID_PUBLIC_KEY, WEB_PUSH_VAPID_PRIVATE_KEY
 # Set by deploy-backend.sh:  APP_VERSION, GIT_COMMIT, BUILD_TIME
 # Optional:  FIREBASE_SERVICE_ACCOUNT, WEB_PUSH_VAPID_SUBJECT, DB_USER/DB_PASS/DB_NAME
@@ -77,7 +76,6 @@ services:
       # If exposed, rotate after sticky refresh deploy; refresh tokens survive it.
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in ~/fireplace/.env}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:?set ALLOWED_ORIGINS in ~/fireplace/.env (e.g. https://fireplace.ignorelist.com)}
-      MEDIA_BASE_URL: ${MEDIA_BASE_URL:?set MEDIA_BASE_URL in ~/fireplace/.env (e.g. https://fireplace.ignorelist.com)}
       MEDIA_DIR: /app/media
       # The box is ON in production since step B (decision 75, 2026-09-30).
       # One-way: a pair already on the box never falls back to the server, so
@@ -94,10 +92,6 @@ services:
       WEB_PUSH_VAPID_PUBLIC_KEY: ${WEB_PUSH_VAPID_PUBLIC_KEY:?set WEB_PUSH_VAPID_PUBLIC_KEY in ~/fireplace/.env}
       WEB_PUSH_VAPID_PRIVATE_KEY: ${WEB_PUSH_VAPID_PRIVATE_KEY:?set WEB_PUSH_VAPID_PRIVATE_KEY in ~/fireplace/.env}
       WEB_PUSH_VAPID_SUBJECT: ${WEB_PUSH_VAPID_SUBJECT:-mailto:admin@example.com}
-      # Landing contact form: Web Push ping target (optional; unset = store-only)
-      CONTACT_NOTIFY_USER_ID: ${CONTACT_NOTIFY_USER_ID:-}
-      # Landing contact form: secret key guarding /contact/inbox (hex, >=32 chars)
-      CONTACT_INBOX_KEY: ${CONTACT_INBOX_KEY:-}
       APP_VERSION: ${APP_VERSION:-0.0.1}
       GIT_COMMIT: ${GIT_COMMIT:-unknown}
       BUILD_TIME: ${BUILD_TIME:-}

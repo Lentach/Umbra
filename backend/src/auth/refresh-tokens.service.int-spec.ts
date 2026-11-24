@@ -184,7 +184,14 @@ describeWithDb('RefreshTokensService rotation on real Postgres', () => {
         return typeof value === 'function' ? value.bind(target) : value;
       },
     });
-    const config = { get: () => undefined } as unknown as ConfigService;
+    // Its own secret, as before: this service used to fall back to the dev
+    // default, which never equalled the one `service` is built with.
+    const config = {
+      get: (key: string) =>
+        key === 'JWT_SECRET'
+          ? 'integration-secret-held-0123456789abcdef'
+          : undefined,
+    } as unknown as ConfigService;
     return { held, service: new RefreshTokensService(racing, config) };
   }
 

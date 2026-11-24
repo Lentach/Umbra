@@ -1131,34 +1131,6 @@ describe('KeyBundlesService', () => {
     });
   });
 
-  describe('deleteByUserId', () => {
-    it('deletes all OTPs and key bundles for the user', async () => {
-      otpRepo.delete.mockResolvedValue({ affected: 10 });
-      keyBundleRepo.delete.mockResolvedValue({ affected: 1 });
-
-      await service.deleteByUserId(5);
-
-      expect(otpRepo.delete).toHaveBeenCalledWith({ userId: 5 });
-      expect(keyBundleRepo.delete).toHaveBeenCalledWith({ userId: 5 });
-    });
-
-    it('deletes OTPs before key bundles', async () => {
-      const callOrder: string[] = [];
-      otpRepo.delete.mockImplementation(async () => {
-        callOrder.push('otp');
-        return { affected: 0 };
-      });
-      keyBundleRepo.delete.mockImplementation(async () => {
-        callOrder.push('keyBundle');
-        return { affected: 0 };
-      });
-
-      await service.deleteByUserId(5);
-
-      expect(callOrder).toEqual(['otp', 'keyBundle']);
-    });
-  });
-
   describe('purgeDeviceMaterial (§5.5 revocation, falsification 12)', () => {
     it('deletes the bundle and OTPs of EXACTLY one device', async () => {
       keyBundleRepo.delete.mockResolvedValue({ affected: 1 });

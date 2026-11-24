@@ -1,7 +1,7 @@
 // Glyph sheet (not part of `flutter test`).
 //
 // Run: flutter run -d web-server --web-port 8098 \
-//        -t test/preview/console_glyph_sheet.dart
+//        -t tool/preview/console_glyph_sheet.dart
 // Params: ?theme=cosmic|blue|dark|light|teal
 //
 // Renders the Settings console glyph set big enough to judge the drawing,

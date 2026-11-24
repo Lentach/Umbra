@@ -78,47 +78,10 @@ class SocketService {
     _socket?.emit('uploadOneTimePreKeys', {'keys': keys});
   }
 
-  void fetchPreKeyBundle(int userId, {int deviceId = 1}) {
-    // deviceId omitted for 1 — the server default, and an older server's DTO
-    // predates the field (rollout order is server first).
-    _socket?.emit('fetchPreKeyBundle', {
-      'userId': userId,
-      if (deviceId != 1) 'deviceId': deviceId,
-    });
-  }
-
-  void requestSessionRebuild(int recipientId) {
-    _socket?.emit('requestSessionRebuild', {'recipientId': recipientId});
-  }
-
-  // ========== Device list + §5.1 provisioning ceremony (Phase 2 T3) ==========
+  // ========== Device list (Phase 2 T3) ==========
 
   void enrollDeviceAuthority(Map<String, dynamic> payload) {
     _socket?.emit('enrollDeviceAuthority', payload);
-  }
-
-  void openProvisioning() {
-    _socket?.emit('openProvisioning', <String, dynamic>{});
-  }
-
-  void provisioningHello(Map<String, dynamic> payload) {
-    _socket?.emit('provisioningHello', payload);
-  }
-
-  void provisionDevice(Map<String, dynamic> payload) {
-    _socket?.emit('provisionDevice', payload);
-  }
-
-  void fetchProvisioningBlob(Map<String, dynamic> payload) {
-    _socket?.emit('fetchProvisioningBlob', payload);
-  }
-
-  void provisioningComplete(Map<String, dynamic> payload) {
-    _socket?.emit('provisioningComplete', payload);
-  }
-
-  void cancelProvisioning(Map<String, dynamic> payload) {
-    _socket?.emit('cancelProvisioning', payload);
   }
 
   void disconnect() {

@@ -930,25 +930,20 @@ class ConnectionProvider extends ChangeNotifier {
     _conversationsProvider?.repostActiveConversationToSw();
   }
 
-  /// Refresh the retired ids, drain the purge backlog, then sweep.
+  /// Drain the purge backlog, then sweep.
   ///
   /// This runs UNAWAITED alongside the other connect work, so it orders
-  /// itself against nothing else. The load that actually precedes every
-  /// decrypt is the awaited one in `EncryptionProvider.initializeE2E`, which
-  /// completes before the ready flag flips; decrypting requires E2E to be
-  /// ready, so by then the set is populated. The call here is a cross-tab
-  /// REFRESH: another same-origin engine may have retired ids since.
+  /// itself against nothing else.
   ///
   /// Order within this method still matters:
-  ///   1. refresh retired ids before the sweep can add more of them;
-  ///   2. the backlog next, so a delete interrupted by a tab close or a refused
-  ///      write finishes now instead of leaving plaintext behind for good;
-  ///   3. the sweep, once the clock is known fresh.
+  ///   1. the backlog first, so a delete interrupted by a tab close or a
+  ///      refused write finishes now instead of leaving plaintext behind for
+  ///      good;
+  ///   2. the sweep, once the clock is known fresh.
   Future<void> _runLocalPlaintextMaintenance() async {
     final encryption = _encryptionProvider;
     if (encryption == null) return;
     try {
-      await encryption.loadRetiredIds();
       await encryption.drainPurgeBacklog();
       await encryption.sweepDestroyablePlaintext();
     } catch (_) {
@@ -1046,8 +1041,6 @@ class ConnectionProvider extends ChangeNotifier {
 
     // Notify sub-providers
     _encryptionProvider?.onDisconnect();
-    _friendsProvider?.onDisconnect();
-    _conversationsProvider?.onDisconnect();
     _messagingProvider?.onDisconnect();
 
     // Socket cleanup

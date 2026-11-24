@@ -49,7 +49,7 @@ waits for `(healthy)` → curls `/version` + `/health` → on a healthy deploy o
 cache older than 72h (it otherwise grows with every deploy: ~10 GB in five weeks by 2026-11-08; a prune
 failure never fails the deploy).
 
-Preflight aborts if `~/fireplace/.env` is missing any of: `ALLOWED_ORIGINS`, `MEDIA_BASE_URL`,
+Preflight aborts if `~/fireplace/.env` is missing any of: `ALLOWED_ORIGINS`,
 `JWT_SECRET`, `WEB_PUSH_VAPID_PUBLIC_KEY`, `WEB_PUSH_VAPID_PRIVATE_KEY` (compose also fails fast
 via `${VAR:?}`). This is intentional — see NODE_ENV note below.
 
@@ -127,7 +127,7 @@ matter are the ones no anonymous load touches. Serve the real bundle behind the 
    stack (`:3100`/`:5533`) may both be live in other sessions:
    `docker compose -p fireplace-csp --env-file <own> -f docker-compose.prod.yml -f <override> up -d`
    with `NODE_ENV: development` (TypeORM creates the schema in a fresh volume), `ALLOWED_ORIGINS`
-   and `MEDIA_BASE_URL` set to the nginx origin, and `build: !reset null` + `image:` to reuse an
+   set to the nginx origin, and `build: !reset null` + `image:` to reuse an
    already-built backend image instead of rebuilding.
 2. Build the bundle in a THROWAWAY WORKTREE (`git worktree add`), never the shared checkout — a
    concurrent `flutter test` and your `flutter build web` fight over `.dart_tool`/`build/`.
@@ -210,7 +210,7 @@ all of `/contact*`. Fastify + SQLite + web-push, one Docker container.
 ## NODE_ENV / .env / DB caveats
 
 - **`docker-compose.prod.yml` runs `NODE_ENV=production`:** CORS is restricted to `ALLOWED_ORIGINS`
-  (must include `https://fireplace.ignorelist.com`); media URLs use `MEDIA_BASE_URL`; **TypeORM
+  (must include `https://fireplace.ignorelist.com`); **TypeORM
   `synchronize` is OFF** — schema changes ship as numbered SQL files in `backend/migrations/`,
   applied automatically at backend boot (tracked in `schema_migrations`; a failed migration keeps
   the container unhealthy and fails the deploy). The dev compose (`NODE_ENV=development`) also
@@ -367,7 +367,7 @@ Media and `.env` restore are manual.
 |---|---|
 | DB | `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASS`, `DB_NAME` |
 | Auth/CORS | `JWT_SECRET` (>=32 chars, generated once and persisted — do NOT rotate during normal deploys or host moves; if exposed, rotate only after sticky-session refresh is deployed, since valid refresh tokens mint new access JWTs without re-login), `ALLOWED_ORIGINS` |
-| Media | `MEDIA_BASE_URL`, `MEDIA_DIR`, `MEDIA_X_ACCEL_REDIRECT` |
+| Media | `MEDIA_DIR`, `MEDIA_X_ACCEL_REDIRECT` |
 | Push (box wake-up only) | `FIREBASE_SERVICE_ACCOUNT`, `WEB_PUSH_VAPID_PUBLIC_KEY`, `WEB_PUSH_VAPID_PRIVATE_KEY`, `WEB_PUSH_VAPID_SUBJECT` |
 | Frontend dart-defines | `BASE_URL`, `GIPHY_API_KEY`, `WEB_PUSH_VAPID_PUBLIC_KEY`, `GIT_COMMIT`, `BUILD_TIME` |
 | Deploy metadata | `APP_VERSION`, `GIT_COMMIT`, `BUILD_TIME` |

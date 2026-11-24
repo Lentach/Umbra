@@ -1,5 +1,5 @@
 // Throwaway visual harness for the invitation surfaces (not part of flutter test).
-// Run: flutter run -d web-server -t test/preview/invitations_preview.dart
+// Run: flutter run -d web-server -t tool/preview/invitations_preview.dart
 // Query parameters:
 //   ?theme=cosmic|blue|dark|light|teal
 //   &view=inbox|picker|picker-empty|header
@@ -16,7 +16,7 @@ import 'package:fireplace/services/box/box_first_contact.dart';
 import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/widgets/chat_honeycomb_picker.dart';
 
-import '../support/contact_seed.dart';
+import '../../test/support/contact_seed.dart';
 import 'package:fireplace/widgets/glass/glass_top_bar.dart';
 import 'package:fireplace/widgets/hex_avatar.dart';
 import 'package:fireplace/widgets/ping_effect_overlay.dart';

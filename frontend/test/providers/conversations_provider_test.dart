@@ -147,7 +147,6 @@ void main() {
       expect(provider.pendingOpenConversationId, isNull);
       expect(provider.pendingNotificationConversationId, isNull);
       expect(provider.hasLoadedConversations, isFalse);
-      expect(provider.errorMessage, isNull);
     });
 
     test('hydrateFromStore with a closed store still counts as loaded', () {
@@ -203,7 +202,6 @@ void main() {
 
         expect(provider.conversations, isNotEmpty);
         expect(provider.activeConversationId, 10);
-        expect(provider.errorMessage, isNull);
       },
     );
 

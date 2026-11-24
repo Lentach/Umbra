@@ -32,17 +32,15 @@ fi
 missing=()
 # JWT_SECRET must come from ~/fireplace/.env; deploy only checks presence and
 # never generates/rotates it. Rotate exposed secrets manually after deploying sticky refresh.
-for key in ALLOWED_ORIGINS MEDIA_BASE_URL JWT_SECRET \
+for key in ALLOWED_ORIGINS JWT_SECRET \
            WEB_PUSH_VAPID_PUBLIC_KEY WEB_PUSH_VAPID_PRIVATE_KEY; do
   grep -qE "^${key}=" "$ENV_FILE" || missing+=("$key")
 done
 if (( ${#missing[@]} > 0 )); then
   {
     echo "ERROR: missing required keys in $ENV_FILE: ${missing[*]}"
-    echo "NODE_ENV=production restricts CORS to ALLOWED_ORIGINS and builds media URLs"
-    echo "from MEDIA_BASE_URL, so these MUST be set. Example:"
+    echo "NODE_ENV=production restricts CORS to ALLOWED_ORIGINS, so it MUST be set. Example:"
     echo "  ALLOWED_ORIGINS=https://fireplace.ignorelist.com"
-    echo "  MEDIA_BASE_URL=https://fireplace.ignorelist.com"
   } >&2
   exit 1
 fi

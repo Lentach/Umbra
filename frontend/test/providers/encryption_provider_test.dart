@@ -127,10 +127,7 @@ void main() {
         // ordered deletion (the 2026-08-02 dump's exact ambiguity).
         await provider.saveDecryptedContent(1101, {'content': 'doomed'});
         await provider.flushDecryptedLedger();
-        expect(provider.wasDecryptedBefore(1101), isFalse,
-            reason: 'in-memory ledger fills via loadDecryptedLedger');
-        await provider.loadDecryptedLedger();
-        expect(provider.wasDecryptedBefore(1101), isTrue);
+        expect((await provider.diagStorageSets()).ledger, contains(1101));
 
         final result = await provider.purgeLocalPlaintext([1101]);
 
@@ -141,31 +138,9 @@ void main() {
         // which did confirm: the record must be gone and the entry dropped.
         expect(await provider.getDecryptedContent(1101), isNull);
         expect(result.removed, 1);
-        expect(provider.wasDecryptedBefore(1101), isFalse,
-            reason: 'RAM ledger must drop the id in the same session');
         final sets = await provider.diagStorageSets();
         expect(sets.ledger, isNot(contains(1101)),
             reason: 'persisted ledger must drop the id');
-      },
-    );
-
-    test(
-      'the wipe mirrors wiped ids into the in-memory retired set',
-      () async {
-        // Fail-before: markRetired persists to DISK only. In the SAME session
-        // isRetired() read the stale RAM set, missed every wiped id, and the
-        // ledger gate reported the user's own wipe as LEDGER_RECORD_LOST
-        // (five false alarms in the 2026-08-02 field dump).
-        await provider.saveDecryptedContent(1102, {'content': 'wiped'});
-        await provider.flushDecryptedLedger();
-        await provider.loadDecryptedLedger();
-
-        final result = await provider.clearLocalDecryptedContentCache();
-
-        expect(result.wipedIds, contains(1102));
-        expect(provider.isRetired(1102), isTrue,
-            reason: 'same-session retired check must already cover the wipe');
-        expect(provider.wasDecryptedBefore(1102), isFalse);
       },
     );
   });

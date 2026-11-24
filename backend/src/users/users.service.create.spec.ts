@@ -35,7 +35,6 @@ describe('UsersService.create (BE-05: a lost registration race is never a 500)',
       {} as never,
       {} as never,
       {} as never,
-      {} as never,
     );
     jest.spyOn(service, 'findByUsernameAndTag').mockResolvedValue(null);
   });

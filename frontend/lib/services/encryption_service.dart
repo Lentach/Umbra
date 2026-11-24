@@ -3729,11 +3729,7 @@ class EncryptionService {
         'failed': failed.length,
       });
     }
-    return LocalHistoryWipeResult(
-      removed: removed,
-      failedKeys: failed,
-      wipedIds: wiped,
-    );
+    return LocalHistoryWipeResult(removed: removed, failedKeys: failed);
   }
 
   /// Permanently destroy the persisted plaintext for [ids].
@@ -4745,8 +4741,8 @@ class EncryptionService {
   //    the one decrypt that would have worked;
   //  * a load failure, a miss, or an evicted entry degrades to the OLD
   //    behaviour (attempt the decrypt) — never to a false "unavailable";
-  //  * an edit drops the entry through [forgetDecrypted], because an edited
-  //    row carries NEW ciphertext that genuinely has not been decrypted.
+  //  * deliberate destruction drops the entries through
+  //    [forgetDecryptedMany].
   //
   // Cap tracks the record store, it is not an independent guess: the store
   // holds `_decryptedContentCacheLimit` (2000) and anything evicted past that
@@ -4885,42 +4881,16 @@ class EncryptionService {
     }
   }
 
-  /// Drop [id] because its ciphertext changed — an edit replaces the payload
-  /// under the same message id, so the new one has never been decrypted and
-  /// MUST be allowed through. Without this an edited message would render
-  /// "no longer stored" forever.
-  Future<void> forgetDecrypted(int id) async {
-    final userId = _userId;
-    if (userId == null) return;
-    await _sessionCrossContextLock('fireplace-e2e-ledger-$userId', () async {
-      try {
-        final prefs = await _sharedPrefs;
-        await _reloadPrefsForCrossContext(prefs);
-        // Inside the lock: a pre-lock removal races a flush that snapshotted
-        // its batch earlier and writes the id straight back in.
-        _pendingLedgerIds.remove(id);
-        // This is the ONE ledger operation whose failure is destructive — a
-        // surviving entry for replaced ciphertext hides the edit or retires it.
-        // So: read authoritatively (getString serves the clobberable cache, the
-        // exact 2026-07-29 mechanism), and write UNCONDITIONALLY. The old
-        // `if (!current.remove(id)) return;` skipped the write whenever the read
-        // came back short, which is precisely when the entry survives.
-        final current = await _readLedgerAuthoritative(prefs, userId);
-        current.remove(id);
-        final sorted = current.toList()..sort();
-        await prefs.setString(_ledgerKey(userId), jsonEncode(sorted));
-      } catch (_) {}
-    });
-  }
-
   /// Drop every id in [ids] from the ledger, one lock and one write.
   ///
   /// For DELIBERATE destruction (expiry sweep, delete purges, the full wipe):
   /// a purged record whose ledger entry survives makes the next served copy of
   /// that row read as UNEXPECTED loss — `LEDGER_RECORD_LOST` plus a permanent
   /// retire — turning an ordered deletion into a false alarm (the 2026-08-02
-  /// dump carried exactly this ambiguity). Same authoritative-read /
-  /// unconditional-write discipline as [forgetDecrypted].
+  /// dump carried exactly this ambiguity). Reads authoritatively (getString
+  /// serves the clobberable cache, the exact 2026-07-29 mechanism) and writes
+  /// UNCONDITIONALLY: a write skipped on a short read is precisely when the
+  /// entry survives.
   Future<void> forgetDecryptedMany(Iterable<int> ids) async {
     final userId = _userId;
     final drop = ids.toSet();
@@ -4929,6 +4899,8 @@ class EncryptionService {
       try {
         final prefs = await _sharedPrefs;
         await _reloadPrefsForCrossContext(prefs);
+        // Inside the lock: a pre-lock removal races a flush that snapshotted
+        // its batch earlier and writes the ids straight back in.
         _pendingLedgerIds.removeAll(drop);
         final current = await _readLedgerAuthoritative(prefs, userId);
         current.removeAll(drop);
@@ -5714,7 +5686,6 @@ class LocalHistoryWipeResult {
   const LocalHistoryWipeResult({
     required this.removed,
     required this.failedKeys,
-    this.wipedIds = const <int>{},
   });
 
   /// Records confirmed removed and confirmed committed.
@@ -5722,12 +5693,6 @@ class LocalHistoryWipeResult {
 
   /// Keys — or `<prefix>*` markers — whose plaintext may still be on disk.
   final Set<String> failedKeys;
-
-  /// Message ids whose record this wipe destroyed AND retired. The provider
-  /// mirrors these into its in-memory retired set: `markRetired` persists to
-  /// disk only, and a same-session history pass reading the stale RAM set was
-  /// how a deliberate wipe could masquerade as `LEDGER_RECORD_LOST`.
-  final Set<int> wipedIds;
 
   /// Only this licenses telling the user their history is gone.
   bool get isComplete => failedKeys.isEmpty;

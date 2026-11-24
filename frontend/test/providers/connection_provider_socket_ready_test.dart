@@ -91,9 +91,6 @@ class _RecordingEncryption extends EncryptionProvider {
   final calls = <String>[];
 
   @override
-  Future<void> loadRetiredIds() async => calls.add('loadRetiredIds');
-
-  @override
   Future<void> drainPurgeBacklog() async => calls.add('drainPurgeBacklog');
 
   @override
@@ -286,11 +283,9 @@ void main() {
       expect(estimated, isNotNull);
       expect(estimated!.isBefore(serverTime), isFalse);
 
-      // Order is load-bearing: retired ids must be loaded before anything can
-      // try to decrypt a row whose plaintext was already destroyed, and the
-      // backlog must drain before the sweep adds more work.
+      // Order is load-bearing: the backlog must drain before the sweep adds
+      // more work.
       expect(encryption.calls, [
-        'loadRetiredIds',
         'drainPurgeBacklog',
         'sweepDestroyablePlaintext',
       ]);

@@ -121,19 +121,6 @@ void main() {
     expect(await service.decryptedLedgerIds(), isNot(contains(18600)));
   });
 
-  test('an edit forgets the id so new ciphertext can be decrypted', () async {
-    // An edit puts NEW ciphertext under the SAME id. Leaving the entry would
-    // veto a payload that has genuinely never been decrypted, and the edit
-    // would render "no longer stored" forever.
-    await service.saveDecryptedContent(18601, {'content': 'before edit'});
-    await service.flushDecryptedLedger();
-    expect(await service.decryptedLedgerIds(), contains(18601));
-
-    await service.forgetDecrypted(18601);
-
-    expect(await service.decryptedLedgerIds(), isNot(contains(18601)));
-  });
-
   test('recordExists distinguishes present from definitely absent', () async {
     await service.saveDecryptedContent(18602, {'content': 'here'});
 
@@ -254,10 +241,10 @@ void main() {
 
     test('runs once, then leaves the ledger alone', () async {
       // The marker stops a whole-store re-enumeration at every launch, and
-      // stops a later backfill resurrecting an id that an edit forgot.
+      // stops a later backfill resurrecting an id that was forgotten.
       await service.saveDecryptedContent(18703, {'content': 'seeded'});
       await service.flushDecryptedLedger();
-      await service.forgetDecrypted(18703);
+      await service.forgetDecryptedMany([18703]);
 
       await service.backfillLedgerFromStore();
 
@@ -280,18 +267,16 @@ void main() {
       expect(ledger, isNot(contains(18902)));
     });
 
-    test('the full wipe reports wiped ids and forgets their ledger entries',
+    test('the full wipe retires wiped ids and forgets their ledger entries',
         () async {
-      // Fail-before (memory-sync half lives in the provider test): the wipe
-      // used to leave ledger entries for records it destroyed, so a row the
-      // server still served re-read as UNEXPECTED loss — LEDGER_RECORD_LOST
-      // for a deletion the user ordered.
+      // Fail-before: the wipe used to leave ledger entries for records it
+      // destroyed, so a row the server still served re-read as UNEXPECTED
+      // loss — LEDGER_RECORD_LOST for a deletion the user ordered.
       await service.saveDecryptedContent(18910, {'content': 'wiped'});
       await service.flushDecryptedLedger();
 
-      final result = await service.clearDecryptedContentCache();
+      await service.clearDecryptedContentCache();
 
-      expect(result.wipedIds, contains(18910));
       expect(await service.decryptedLedgerIds(), isNot(contains(18910)));
       expect(await service.retiredMessageIds(), contains(18910));
     });

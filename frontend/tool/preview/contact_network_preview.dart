@@ -1,9 +1,11 @@
 // Throwaway visual harness for ContactNetworkView (not part of flutter test).
-// Run: flutter run -d web-server -t test/preview/contact_network_preview.dart
+// Run: flutter run -d web-server -t tool/preview/contact_network_preview.dart
 // Query parameters: ?theme=cosmic|blue|dark|light|teal&count=0|1|3|8|15|25|40
 // Optional: &textScale=1.6&reduceMotion=1&avatars=1&pending=N&invites=N
 // screen=1: renders the REAL ContactsScreen (seeded providers) so the
 // search bar and both view modes are reviewable without a backend.
+// ignore_for_file: invalid_use_of_visible_for_testing_member
+// (the harness seeds providers through their @visibleForTesting seams)
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -22,7 +24,7 @@ import 'package:fireplace/widgets/console_glyphs.dart';
 import 'package:fireplace/widgets/glass/glass_bottom_nav.dart';
 import 'package:fireplace/widgets/main_tab_screen_header.dart';
 
-import '../support/contact_seed.dart';
+import '../../test/support/contact_seed.dart';
 
 void main() => runApp(const ContactNetworkPreviewApp());
 

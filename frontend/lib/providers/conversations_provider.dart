@@ -43,8 +43,6 @@ class ConversationsProvider extends ChangeNotifier {
   /// Open this conversation from a notification tap (consumed by [MainShell], not socket flows).
   int? _pendingNotificationConversationId;
 
-  String? _errorMessage;
-
   /// App/window foreground: gates the hidden-arrival card and tells the push
   /// SW whether a chat is open.
   bool _clientVisible = true;
@@ -404,7 +402,6 @@ class ConversationsProvider extends ChangeNotifier {
 
   int? get activeConversationId => _activeConversationId;
   int? get currentUserId => _currentUserId;
-  String? get errorMessage => _errorMessage;
   Map<int, MessageModel> get lastMessages => _lastMessages;
   int? get pendingOpenConversationId => _pendingOpenConversationId;
   int? get pendingNotificationConversationId =>
@@ -818,11 +815,6 @@ class ConversationsProvider extends ChangeNotifier {
     }
   }
 
-  void clearError() {
-    _errorMessage = null;
-    notifyListeners();
-  }
-
   // ---------- Inter-Provider Interface ----------
 
   /// Set the current user ID (called during connect).
@@ -952,21 +944,14 @@ class ConversationsProvider extends ChangeNotifier {
       _prePinState.clear();
       _pendingOpenConversationId = null;
       _pendingNotificationConversationId = null;
-      _errorMessage = null;
       _clientVisible = true;
       _hydrated = false;
     } else {
       // Reconnect (same user): keep conversations and active chat to avoid flicker.
       _pendingOpenConversationId = null;
-      _errorMessage = null;
     }
     notifyListeners();
     _postActiveConversationToSw();
-  }
-
-  /// Called on socket disconnect. Minimal cleanup.
-  void onDisconnect() {
-    // Minimal — state preserved for potential reconnect.
   }
 
   /// Full reset — called on logout or user switch.
@@ -984,7 +969,6 @@ class ConversationsProvider extends ChangeNotifier {
     _prePinState.clear();
     _pendingOpenConversationId = null;
     _pendingNotificationConversationId = null;
-    _errorMessage = null;
     _clientVisible = true;
     _hydrated = false;
     // Clear all push notifications on logout.

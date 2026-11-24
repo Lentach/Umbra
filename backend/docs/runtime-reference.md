@@ -39,7 +39,7 @@ The box has NO account on its path: it imports nothing from `auth/`, `users/`, `
 | `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASS`, `DB_NAME` | Postgres; prod DB name is `chatdb`. |
 | `JWT_SECRET` | Required; validation requires at least 32 chars. Generate once, persist in the VM `.env` and encrypted backups, and copy the current valid value during host moves. Do not regenerate on normal deploy/recreate. If exposed, rotate after sticky-session refresh is deployed: `/auth/refresh` uses the opaque refresh-token hash, not the old access JWT signature, so valid sessions can silently obtain new access JWTs. It also keys refresh-token rotation (plan B4, `RefreshTokensService.successorOf`): after a change, a session caught between a rotation and its retry gets its successor derived again under the new value; every other session is unaffected, except a native install whose store refused its newest token (its next refresh presents a token the server no longer knows and it must sign in again). |
 | `ALLOWED_ORIGINS` | Required in prod. |
-| `MEDIA_BASE_URL`, `MEDIA_DIR` | Self-hosted media URLs and filesystem root. |
+| `MEDIA_DIR` | Filesystem root of self-hosted media. |
 | `MEDIA_X_ACCEL_REDIRECT` | Use only when nginx has matching internal media route. |
 | `FIREBASE_SERVICE_ACCOUNT` | Optional FCM for the box wake-up push only; absent means FCM disabled. |
 | `WEB_PUSH_VAPID_PUBLIC_KEY`, `WEB_PUSH_VAPID_PRIVATE_KEY`, `WEB_PUSH_VAPID_SUBJECT` | Web Push for the box wake-up push only. Public key must match frontend build. |
@@ -58,7 +58,7 @@ Source of truth is `chat.gateway.ts` (`@Throttle` per handler); this is an orien
 - Key-exchange, identity-reset/recovery, device-list/revocation and provisioning events carry explicit limits (10–60/15min; `getDeviceList` 300/15min; `searchUsers` 100/15min; `setRequestQueue` / `getOwnRequestQueues` 30/15min); `fetchPreKeyBundle` / `checkOwnKeyBundle` use the guard's global default (100/15min).
 - `uploadKeyBundle` is the only handler without a `WsThrottlerGuard`.
 - Per TARGET, not per caller: `searchUsers` spends at most 5 one-time pre-keys per target device per hour, whoever searches (`SEARCH_OTP_BUDGET` in `chat-search.service.ts`, plan B5); past it the bundle carries no OTP. In-memory per process. A slot that spent nothing (empty pool) is refunded. The table holds 10k live devices; when full, a new target is served without an OTP (fail-closed) and no entry is evicted, so the bound never resets a budget.
-- `getMessages` stays only as a compatibility answer (an empty `messageHistory`, 300/15min). The other old chat events (`sendMessage`, friends/blocks/reactions/…) have NO handler and no throttle row: an unknown event is unanswered silence. Their `WsThrottlerGuard` refusal-answer entries went with them.
+- The old chat events (`sendMessage`, friends/blocks/reactions/…) have NO handler and no throttle row: an unknown event is unanswered silence. Their `WsThrottlerGuard` refusal-answer entries went with them.
 
 ## WsThrottlerGuard tracker (§6)
 
