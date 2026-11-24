@@ -1,7 +1,8 @@
 part of '../chat_detail_screen.dart';
 
 // These members belong to the State class and only live in a part file for
-// size; `setState` is protected on State and unreachable from an extension.
+// size; the analyzer honours `@protected` only inside a State subclass's own
+// members, so the `setState` calls below warn although they run on this State.
 // ignore_for_file: invalid_use_of_protected_member
 
 /// List, scroll and message-area members of [_ChatDetailScreenState]: revealing a
