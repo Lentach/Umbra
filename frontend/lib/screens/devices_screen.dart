@@ -29,7 +29,7 @@ class DevicesScreen extends StatefulWidget {
   /// A device the user already chose to remove elsewhere — the chat list's
   /// 30-day question (decision 101 B), whose dialog is the confirmation —
   /// revoked once the verified list is here, through the same
-  /// [LinkCeremonyController.revokeDevice] this screen's own confirm runs, so
+  /// [LinkCeremonyDevices.revokeDevice] this screen's own confirm runs, so
   /// the outcome shows where it always does.
   final int? revokeDeviceId;
 
@@ -156,7 +156,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
   }
 
   /// (lxxviii) clause 4: "Włącz łączenie" = (web: warning dialog, already
-  /// confirmed by the caller) → [LinkCeremonyController.mintDak] (no server
+  /// confirmed by the caller) → [LinkCeremonyDevices.mintDak] (no server
   /// call, idempotent) → MANDATORY [RecoveryKeyScreen] (the phrase + the
   /// sealed identity backup upload) → ONLY THEN [enableLinking], which
   /// enrols. Backing out of the phrase screen — or its upload failing —
