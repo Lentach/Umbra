@@ -416,7 +416,15 @@ class ConnectionProvider extends ChangeNotifier {
         final wait = AppConstants.reconnectConnectCooldown - since;
         _debouncedConnectTimer?.cancel();
         _debouncedConnectTimer = Timer(wait, () {
-          connect(userId, token, baseUrl);
+          // A JWT refresh inside the cooldown lands in the reconnect manager,
+          // not in this closure: read it at fire time, but only for the same
+          // account (another account's call brings its own token).
+          final newest = _reconnectManager.tokenForReconnect;
+          connect(
+            userId,
+            userId == _currentUserId && newest != null ? newest : token,
+            baseUrl,
+          );
         });
         return;
       }

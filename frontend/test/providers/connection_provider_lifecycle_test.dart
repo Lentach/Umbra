@@ -429,6 +429,40 @@ void main() {
     });
   });
 
+  // CONN-02. Mutation: pass the captured `token` from the debounce timer.
+  group('a connect() the cooldown deferred', () {
+    test('opens with the token a refresh brought while it waited', () {
+      fakeAsync((async) {
+        unawaited(connection.connect(1, 'old', _url));
+        async.flushMicrotasks();
+        unawaited(connection.connect(1, 'old', _url));
+        async.flushMicrotasks();
+        expect(socket.connectTokens, ['old'], reason: 'deferred');
+
+        connection.applyRefreshedAccessToken('fresh');
+        async.elapse(AppConstants.reconnectConnectCooldown);
+
+        expect(socket.connectTokens, ['old', 'fresh']);
+        connection.disconnect(isLogout: true);
+      });
+    });
+
+    // The control: with no refresh since, the caller's token is the newest.
+    test('opens with its own token when nothing was refreshed since', () {
+      fakeAsync((async) {
+        unawaited(connection.connect(1, 'old', _url));
+        async.flushMicrotasks();
+        unawaited(connection.connect(2, 'other', _url));
+        async.flushMicrotasks();
+
+        async.elapse(AppConstants.reconnectConnectCooldown);
+
+        expect(socket.connectTokens, ['old', 'other']);
+        connection.disconnect(isLogout: true);
+      });
+    });
+  });
+
   // MC-09. Mutation: drop `_reconnectManager.resetAttempts()` from
   // `_onSocketReady`.
   test('a session that turned ready starts its reconnect count over: every '
