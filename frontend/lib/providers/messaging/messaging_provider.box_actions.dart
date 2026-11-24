@@ -874,10 +874,24 @@ extension MessagingBoxActions on MessagingProvider {
       sentAt: at,
       content: content,
     );
-    final ours = identical(_pendingEdits[original.id], original);
+    // `onConnect` clears `_pendingEdits` while the frames are in flight: the
+    // entry is then gone, but the row still shows THIS edit (same time and
+    // text), so it is still ours to settle. A newer edit of the row changes
+    // `editedAt`, and owns it.
+    final parked = _pendingEdits[original.id];
+    final shown = messageById(original.id);
+    final ours =
+        identical(parked, original) ||
+        (parked == null &&
+            shown != null &&
+            shown.editedAt == at &&
+            shown.content == content);
     if (!sent) {
       // A newer edit of this row is in flight: it owns the row now.
-      if (ours) _revertPendingEdit(original.id);
+      if (ours) {
+        _pendingEdits[original.id] = original;
+        _revertPendingEdit(original.id);
+      }
       _boxActionFailed(BoxActionFailure.edit);
       return;
     }
