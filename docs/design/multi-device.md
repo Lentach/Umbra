@@ -1605,9 +1605,9 @@ that is the designed outcome).
   - **F2 (P1, VERIFIED) — one server-chosen field destroys the primary's DAK private key.** ANY
     inbound `keyBundleUploaded` carrying integer `deviceId` + `nextListVersion` triggers
     `_reenrollAfterReset` with no latch and no proof a replacement is owed
-    (`connection_provider.dart:934-944`). It mints a fresh DAK and `DakStore.persistArmed`
-    OVERWRITES the existing record (`dak_store.dart:106`, keyed only by userId) and is awaited at
-    `connection_provider.dart:877` — BEFORE `enrollDeviceAuthority` at :887. When the server then
+    (`connection/connection_provider.events.dart:34-44`). It mints a fresh DAK and writes it through `DakStore.persistPendingArmed`
+    (`dak_store.dart:147`), which promotes into `persistArmed` (`:166` → `:106`) and OVERWRITES the existing record, keyed only by userId. It is awaited at
+    `connection/connection_provider.reset_rebind.dart:212` — BEFORE `enrollDeviceAuthority` at `reset_rebind.dart:222`. When the server then
     answers `already_enrolled`, nothing is restored: the real DAK private half is gone, every later
     `revokeDevice`/`provisionDevice` dies on `invalid_list_signature`, and the only exit is a 72 h
     §6.2 reset. `persistArmed`'s own docstring disciplines the write-before-emit ordering but never

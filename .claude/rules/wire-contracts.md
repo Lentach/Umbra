@@ -6,7 +6,9 @@ paths:
   - "backend/src/auth/**"
   - "frontend/lib/services/socket_service.dart"
   - "frontend/lib/providers/connection_provider.dart"
+  - "frontend/lib/providers/connection/**"
   - "frontend/lib/providers/messaging_provider.dart"
+  - "frontend/lib/providers/messaging/**"
 ---
 # Wire contracts
 
