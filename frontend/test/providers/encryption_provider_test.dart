@@ -584,8 +584,9 @@ void main() {
         await provider.initializeE2E(1);
         await provider.ensureSession(peerUserId);
 
-        storage.parked = Completer<void>();
-        storage.armed = true;
+        storage
+          ..parked = Completer<void>()
+          ..armed = true;
         provider.markSessionRebuild(peerUserId);
         var secondDone = false;
         final first = provider.ensureSession(peerUserId);

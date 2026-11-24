@@ -373,8 +373,9 @@ void main() {
 
       test('ends with an empty result, so the screen stops searching', () {
         fakeAsync((async) {
-          final friends = provider()..setEmitCallback((event, data) {});
-          friends.searchUsers('ghost#0009');
+          final friends = provider()
+            ..setEmitCallback((event, data) {})
+            ..searchUsers('ghost#0009');
           expect(friends.searchResults, isNull);
 
           async.elapse(const Duration(seconds: 11));

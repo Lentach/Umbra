@@ -205,8 +205,9 @@ void main() {
       final kv = _CommitAfterAwaitKv(await service.contentKv);
       service.debugSetContentKv(kv);
       final release = Completer<void>();
-      kv.hold = release;
-      kv.parked = Completer<void>();
+      kv
+        ..hold = release
+        ..parked = Completer<void>();
       final first = service.saveDecryptedContent(3001, {'content': 'one'});
       await kv.parked!.future;
       final queued = service.saveDecryptedContent(3001, {'content': 'two'});
