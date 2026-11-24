@@ -76,7 +76,7 @@ Each batch = one owner OK, one release, driven on Android emulator + test phone 
 
 Release B (drop of old tables/files) is due on or after 2026-12-08 and rides whichever batch is open then.
 
-**Status:** batch 1a shipped as 0.2.94 on 2026-11-23 (PR #276, `c073bdfc`; `.cursor/session-summaries/2026-11-23-cleanup-batch-1a.md`). Next: 1b.
+**Status:** batch 1a shipped as 0.2.94 on 2026-11-23 (PR #276, `c073bdfc`). Batch 1b shipped as 0.2.95 on 2026-11-24 (PR #277, `6c37b151`; `.cursor/session-summaries/2026-11-24-cleanup-batch-1b.md`): CONN-01, CONN-06, CONT-01, CONT-02, CONT-05, BOX-01, UI-05/06/07 fixed; BOX-02 parked (EC-12). Next: 1c.
 
 ## 6. Engineering calls (E-rows, no owner action)
 
