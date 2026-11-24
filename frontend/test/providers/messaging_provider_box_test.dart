@@ -1058,7 +1058,7 @@ void main() {
         final row = await receive();
         await encryption.store.saveDecryptedContent(
           700,
-          {'content': 'old path, read-mode'},
+          {'content': 'pre-box record, read-mode'},
           conversationId: 10,
           createdAt: sentAt,
           disappearAfterSeconds: 60,
