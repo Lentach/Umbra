@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
+
 import '../contacts/contact_record.dart';
 import '../contacts/contact_store.dart';
 import 'box_push_nids_stub.dart'
@@ -33,12 +35,23 @@ class BoxPushNids {
   /// The last table handed to the sink and not known to have failed.
   Map<String, int>? _written;
 
-  /// Writes land in the order they were asked.
-  Future<void> _tail = Future<void>.value();
+  /// Writes and [clear] land in the order they were asked. One tail for every
+  /// instance: the table is one record, and the account that is leaving has an
+  /// instance of its own with writes possibly still queued (WEB-02).
+  static Future<void> _tail = Future<void>.value();
+
+  /// What [clear] runs; a test substitutes it to see the order.
+  @visibleForTesting
+  static Future<void> Function() clearSink = clearBoxPushNids;
 
   /// Removes the table (and the worker's wake-up counts): logout and account
-  /// switch, so another account is never shown this one's chats.
-  static Future<void> clear() => clearBoxPushNids();
+  /// switch, so another account is never shown this one's chats. Queued by
+  /// [sync] writes land first, so none of them can bring the table back.
+  static Future<void> clear() {
+    final done = _tail.then((_) => clearSink());
+    _tail = done.then<void>((_) {}, onError: (_) {});
+    return done;
+  }
 
   /// The table [records] imply.
   static Map<String, int> tableOf(Iterable<ContactRecord> records) => {
