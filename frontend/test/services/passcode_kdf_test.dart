@@ -4,6 +4,8 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fireplace/services/passcode_kdf.dart';
 
+import '../support/native_webcrypto.dart';
+
 /// Real PBKDF2 needs the webcrypto native library on the host
 /// (`flutter pub run webcrypto:setup`, cmake on Windows). Same
 /// skip-gracefully convention as the MediaCryptoService / SealedAudioCodec
@@ -71,7 +73,7 @@ void main() {
   group('Pbkdf2PasscodeKdf', () {
     test('matches the published PBKDF2-HMAC-SHA256 test vector', () async {
       if (!await _ensureWebcryptoAvailable()) {
-        markTestSkipped('webcrypto native unavailable');
+        skipWithoutNativeWebcrypto();
         return;
       }
       // Independent source of truth (widely published SHA-256 PBKDF2 vector):
@@ -92,7 +94,7 @@ void main() {
     test('is deterministic for the same passcode, salt and iterations',
         () async {
       if (!await _ensureWebcryptoAvailable()) {
-        markTestSkipped('webcrypto native unavailable');
+        skipWithoutNativeWebcrypto();
         return;
       }
       final salt = generatePasscodeSalt();
@@ -106,7 +108,7 @@ void main() {
     test('a different passcode under the same salt derives different bytes',
         () async {
       if (!await _ensureWebcryptoAvailable()) {
-        markTestSkipped('webcrypto native unavailable');
+        skipWithoutNativeWebcrypto();
         return;
       }
       final salt = generatePasscodeSalt();
@@ -120,7 +122,7 @@ void main() {
     test('the same passcode under a different salt derives different bytes',
         () async {
       if (!await _ensureWebcryptoAvailable()) {
-        markTestSkipped('webcrypto native unavailable');
+        skipWithoutNativeWebcrypto();
         return;
       }
       final a = await const Pbkdf2PasscodeKdf().derive(

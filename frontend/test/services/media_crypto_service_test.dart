@@ -3,6 +3,8 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fireplace/services/media_crypto_service.dart';
 
+import '../support/native_webcrypto.dart';
+
 /// `flutter pub run webcrypto:setup` (requires cmake on Windows) must succeed
 /// for native webcrypto; otherwise encrypt throws. Skip round-trip tests gracefully.
 bool? _webcryptoOk;
@@ -24,7 +26,7 @@ void main() {
   group('MediaCryptoService', () {
     test('encrypt produces ciphertext different from input', () async {
       if (!await _ensureWebcryptoAvailable()) {
-        markTestSkipped('webcrypto native unavailable');
+        skipWithoutNativeWebcrypto();
         return;
       }
       final input = Uint8List.fromList(List.generate(100, (i) => i));
@@ -36,7 +38,7 @@ void main() {
 
     test('decrypt restores original bytes', () async {
       if (!await _ensureWebcryptoAvailable()) {
-        markTestSkipped('webcrypto native unavailable');
+        skipWithoutNativeWebcrypto();
         return;
       }
       final input = Uint8List.fromList([1, 2, 3, 4, 5, 6, 7, 8]);
@@ -51,7 +53,7 @@ void main() {
 
     test('each encrypt call produces unique key and IV', () async {
       if (!await _ensureWebcryptoAvailable()) {
-        markTestSkipped('webcrypto native unavailable');
+        skipWithoutNativeWebcrypto();
         return;
       }
       final input = Uint8List.fromList([42, 43, 44]);
@@ -63,7 +65,7 @@ void main() {
 
     test('decrypt with wrong key throws', () async {
       if (!await _ensureWebcryptoAvailable()) {
-        markTestSkipped('webcrypto native unavailable');
+        skipWithoutNativeWebcrypto();
         return;
       }
       final input = Uint8List.fromList([1, 2, 3]);

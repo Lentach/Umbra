@@ -5,6 +5,8 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:fireplace/services/encryption/sealed_audio_codec.dart';
 
+import '../support/native_webcrypto.dart';
+
 /// Real AES-GCM via webcrypto: needs the native library on the host
 /// (`flutter pub run webcrypto:setup`). Same skip-gracefully convention as
 /// the MediaCryptoService tests. Header-only checks (kidOf/isSealed/hasMagic)
@@ -57,7 +59,7 @@ void main() {
   group('round-trip (real cipher)', () {
     test('seal/unseal, kid readable without key, multi-byte kid', () async {
       if (!await _ensureWebcryptoAvailable(key)) {
-        markTestSkipped('webcrypto native unavailable');
+        skipWithoutNativeWebcrypto();
         return;
       }
       final audio = Uint8List.fromList(List.generate(4096, (i) => i % 251));
@@ -77,7 +79,7 @@ void main() {
     test('wrong key and tampered ciphertext both yield null, never throw',
         () async {
       if (!await _ensureWebcryptoAvailable(key)) {
-        markTestSkipped('webcrypto native unavailable');
+        skipWithoutNativeWebcrypto();
         return;
       }
       final sealed = await SealedAudioCodec.seal(
@@ -96,7 +98,7 @@ void main() {
 
     test('plaintext that itself starts with FPAE still round-trips', () async {
       if (!await _ensureWebcryptoAvailable(key)) {
-        markTestSkipped('webcrypto native unavailable');
+        skipWithoutNativeWebcrypto();
         return;
       }
       final tricky = Uint8List.fromList([
@@ -117,7 +119,7 @@ void main() {
     test('unseal of legacy plain bytes is null (never garbage audio)',
         () async {
       if (!await _ensureWebcryptoAvailable(key)) {
-        markTestSkipped('webcrypto native unavailable');
+        skipWithoutNativeWebcrypto();
         return;
       }
       final plain = Uint8List.fromList(List.generate(128, (i) => i));

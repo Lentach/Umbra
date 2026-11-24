@@ -106,7 +106,9 @@ if (expected.tests !== actual.tests || expected.skipped !== actual.skipped) {
   console.error(
     `CLAUDE.md drift: documented ${expected.tests} tests / ${expected.skipped} skipped, ` +
       `flutter has ${actual.tests} tests / ${actual.skipped} skipped.\n` +
-      `Update the Tests line in CLAUDE.md (and re-run).`,
+      `Update the Tests line in CLAUDE.md (and re-run).\n` +
+      `The documented counts assume the native webcrypto library is present (CI builds it); ` +
+      `without it 13 real-crypto tests skip, so a local run shows 13 more skipped.`,
   );
   process.exit(1);
 }
