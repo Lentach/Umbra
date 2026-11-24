@@ -23,6 +23,10 @@ import 'box_wire.dart';
 import 'queue_keys.dart';
 import 'queue_seal.dart';
 
+/// How long a request-queue publish the server failed waits before it is
+/// sent again (BOX-17). The event is throttled at 30 / 15 min.
+const Duration kRequestQueueRetry = Duration(minutes: 1);
+
 /// One account session's link to the box (metadata-privacy PR3.1 slice (a)):
 /// owns the [BoxClient] and keeps this device's REQUEST queue published on
 /// the account socket (`setRequestQueue`, wire.md "First contact").
@@ -37,7 +41,8 @@ import 'queue_seal.dart';
 /// server overwrites the same value; the event is throttled at 30 / 15 min).
 /// A new device id — a §6.2 reset re-homes the account — or a replaced queue
 /// publishes again; a refused or unanswered publish is re-sent on the next
-/// ready, a rate-limited one after `retryAfterMs`.
+/// ready, a rate-limited one after `retryAfterMs`, one the server failed
+/// after [kRequestQueueRetry].
 ///
 /// It also RECEIVES (slice (b)): once the box is ready and the store is
 /// open, every contact's inbound queue is subscribed, and its [BoxInbox]
@@ -580,11 +585,19 @@ class BoxSession
       if (first) onBoxReady?.call();
       return;
     }
+    final error = data['error'];
     final retryMs = data['retryAfterMs'];
-    if (data['error'] == 'rate_limited' && retryMs is int) {
-      _retry?.cancel();
-      _retry = Timer(Duration(milliseconds: retryMs), _publish);
-    }
+    // `invalid_payload` and `unknown_device` are verdicts on this very
+    // publish: the same one would be refused again, so it waits for the next
+    // ready. Anything else (`internal`) is the server's own failure.
+    if (error == 'invalid_payload' || error == 'unknown_device') return;
+    _retry?.cancel();
+    _retry = Timer(
+      error == 'rate_limited' && retryMs is int
+          ? Duration(milliseconds: retryMs)
+          : kRequestQueueRetry,
+      _publish,
+    );
   }
 
   @override

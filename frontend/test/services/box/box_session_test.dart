@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:clock/clock.dart';
+import 'package:fake_async/fake_async.dart';
 import 'package:fireplace/services/box/box_device_pause.dart';
 
 import 'package:fireplace/services/box/box_client.dart';
@@ -194,6 +195,64 @@ void main() {
     await accountReady(2);
     expect(published, hasLength(2));
   });
+
+  // Mutation (BOX-17): `onRequestQueueSet` re-arms only on `rate_limited`:
+  // one failed write leaves the request queue unpublished for the connect.
+  test(
+    'a publish the server failed (internal, or a code this build does not '
+    'know) is sent again after kRequestQueueRetry, with no reconnect',
+    () async {
+      await boxUp('S1');
+      await accountReady(2);
+      fakeAsync((async) {
+        session.onRequestQueueSet({'success': false, 'error': 'internal'});
+        async.elapse(kRequestQueueRetry - const Duration(milliseconds: 1));
+        expect(published, hasLength(1), reason: 'not before the wait');
+        async.elapse(const Duration(milliseconds: 1));
+        expect(published, hasLength(2));
+
+        session.onRequestQueueSet({'success': false, 'error': 'later_code'});
+        async.elapse(kRequestQueueRetry);
+        expect(published, hasLength(3));
+
+        session.onRequestQueueSet({'success': true});
+        async.elapse(kRequestQueueRetry);
+        expect(published, hasLength(3), reason: 'accepted: nothing owed');
+        expect(session.onBox, isTrue);
+      });
+    },
+  );
+
+  test(
+    'a publish the server refused for good (invalid_payload, unknown_device) '
+    'is not repeated on a timer: the same publish would be refused again',
+    () async {
+      await boxUp('S1');
+      await accountReady(2);
+      fakeAsync((async) {
+        for (final error in ['invalid_payload', 'unknown_device']) {
+          session.onRequestQueueSet({'success': false, 'error': error});
+          async.elapse(kRequestQueueRetry * 2);
+        }
+        expect(published, hasLength(1));
+      });
+    },
+  );
+
+  test(
+    'a failed publish owed a retry is dropped with the account socket',
+    () async {
+      await boxUp('S1');
+      await accountReady(2);
+      fakeAsync((async) {
+        session
+          ..onRequestQueueSet({'success': false, 'error': 'internal'})
+          ..accountLost();
+        async.elapse(kRequestQueueRetry);
+        expect(published, hasLength(1));
+      });
+    },
+  );
 
   test('a rate-limited publish is sent again after retryAfterMs', () async {
     await boxUp('S1');
