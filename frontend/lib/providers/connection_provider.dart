@@ -62,6 +62,12 @@ class ConnectionProvider extends ChangeNotifier {
   int _serverResponseCounter = 0;
   Timer? _resumeProbeTimer;
 
+  /// When the last [ensureReconnectIfNeeded] that did work ran, and the socket
+  /// claim it saw: the pair that lets a second report of the same resume be
+  /// dropped (CONN-12b).
+  DateTime? _lastResumeCheckAt;
+  bool? _lastResumeCheckClaimed;
+
   /// A transport connect that never reaches `socketReady` is invisible: the
   /// socket stays "connected", so no `disconnect` event fires and no reconnect
   /// is ever scheduled, while every authenticated fetch is gated behind ready.
@@ -1033,6 +1039,7 @@ class ConnectionProvider extends ChangeNotifier {
     // A connect() parked on an await must not resume into a closed session.
     _connectGeneration++;
     _intentionalDisconnect = true;
+    _lastResumeCheckAt = null;
     _debouncedConnectTimer?.cancel();
     _resumeProbeTimer?.cancel();
     _socketReadyWatchdog?.cancel();
@@ -1079,10 +1086,32 @@ class ConnectionProvider extends ChangeNotifier {
 
   void ensureReconnectIfNeeded() {
     final claimsConnected = _socketService.isConnected;
+    // On web ONE resume reaches this method twice (tab visibility and the app
+    // lifecycle). The second run is the same resume: against a dead socket it
+    // would queue a second real connect() behind the connect cooldown, against
+    // a zombie one it would cost another getServerTime and restart the probe
+    // window. Only a repeat that sees the SAME socket claim is dropped: a
+    // socket that died since the last run still reconnects at once. The stamp
+    // is written here only, so socket-death reconnects, the probe timeout and
+    // connect() are never throttled by it. clock.now() (package:clock), not
+    // DateTime.now(): fake_async patches the former.
+    final now = clock.now();
+    final last = _lastResumeCheckAt;
+    if (last != null &&
+        _lastResumeCheckClaimed == claimsConnected &&
+        now.difference(last) < AppConstants.reconnectConnectCooldown) {
+      // Its own marker: RESUME_CHECK must only ever mean a check happened.
+      E2eDiagLog.add('RESUME_CHECK_SKIPPED', {
+        'socketConnected': claimsConnected,
+      });
+      return;
+    }
     E2eDiagLog.add('RESUME_CHECK', {'socketConnected': claimsConnected});
     if (_currentUserId == null || _reconnectManager.tokenForReconnect == null) {
       return;
     }
+    _lastResumeCheckAt = now;
+    _lastResumeCheckClaimed = claimsConnected;
     // The box socket is its own transport and gets nothing from the account
     // socket's probe below: suspended in the background (an iOS PWA above
     // all), it can be dead while it still reports connected, until

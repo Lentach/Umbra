@@ -549,5 +549,73 @@ void main() {
         expect(sock.connectCalls, 1, reason: 'no forced reconnect');
       });
     });
+
+    // CONN-12b: on web one resume reaches `ensureReconnectIfNeeded` twice
+    // (tab visibility AND the app lifecycle). The second call is the same
+    // resume, not a second one.
+    test('one resume reported twice probes a connected socket once', () {
+      fakeAsync((fake) {
+        final sock = _ProbeSocketService();
+        final provider = ConnectionProvider(socketService: sock);
+        provider.setIdentityForTest(1, 'tok');
+        sock.connectedClaim = true;
+
+        provider.ensureReconnectIfNeeded();
+        provider.ensureReconnectIfNeeded();
+
+        expect(sock.getServerTimeCalls, 1);
+        fake.elapse(const Duration(seconds: 7)); // drain the probe timer
+      });
+    });
+
+    test('one resume reported twice connects a dead socket once', () {
+      fakeAsync((fake) {
+        final sock = _ProbeSocketService();
+        final provider = ConnectionProvider(socketService: sock);
+        provider.setIdentityForTest(1, 'tok');
+        sock.connectedClaim = false;
+
+        provider.ensureReconnectIfNeeded();
+        provider.ensureReconnectIfNeeded();
+        fake
+          ..elapse(const Duration(seconds: 5)) // past the connect cooldown
+          ..flushMicrotasks();
+
+        expect(sock.connectCalls, 1);
+      });
+    });
+
+    test('a second resume after the cooldown is checked again', () {
+      fakeAsync((fake) {
+        final sock = _ProbeSocketService();
+        final provider = ConnectionProvider(socketService: sock);
+        provider.setIdentityForTest(1, 'tok');
+        sock.connectedClaim = true;
+
+        provider.ensureReconnectIfNeeded();
+        fake.elapse(const Duration(seconds: 2)); // exactly the cooldown
+        provider.ensureReconnectIfNeeded();
+
+        expect(sock.getServerTimeCalls, 2);
+        fake.elapse(const Duration(seconds: 7));
+      });
+    });
+
+    test('a socket that died since the last check is reconnected at once', () {
+      fakeAsync((fake) {
+        final sock = _ProbeSocketService();
+        final provider = ConnectionProvider(socketService: sock);
+        provider.setIdentityForTest(1, 'tok');
+        sock.connectedClaim = true;
+        provider.ensureReconnectIfNeeded();
+
+        sock.connectedClaim = false; // died inside the cooldown
+        provider.ensureReconnectIfNeeded();
+        fake.flushMicrotasks();
+
+        expect(sock.connectCalls, 1);
+        fake.elapse(const Duration(seconds: 7));
+      });
+    });
   });
 }
