@@ -50,12 +50,6 @@ class PlaybackController extends StatefulWidget {
     this.playerFactory,
   });
 
-  /// Destroy every cached voice note.
-  ///
-  /// Delegates to [AudioCacheStore], which owns the filename convention —
-  /// including the legacy `.m4a` names that a purge must not miss.
-  static Future<int> clearAudioCache() => AudioCacheStore.clear();
-
   @override
   State<PlaybackController> createState() => _PlaybackControllerState();
 }

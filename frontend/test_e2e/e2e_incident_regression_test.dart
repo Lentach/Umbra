@@ -8,7 +8,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:fireplace/services/encryption_service.dart';
-import 'package:fireplace/widgets/audio/playback_controller.dart';
+import 'package:fireplace/services/audio_cache_store.dart';
 import 'package:fireplace/utils/e2e_envelope.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -252,7 +252,7 @@ void main() {
               const MethodChannel('plugins.flutter.io/path_provider'),
               (call) async => Directory.systemTemp.path,
             );
-        await PlaybackController.clearAudioCache();
+        await AudioCacheStore.clear();
 
         final reloaded = EncryptionService();
         await reloaded.initialize(92002, checkServerIdentity: () async => const ServerIdentityGuard(exists: false));
