@@ -1,6 +1,6 @@
 // Throwaway visual harness for the user card rework (dev-only, NOT part of
 // the test suite; run:
-//   flutter run -d web-server -t test/preview/user_card_preview.dart
+//   flutter run -d web-server -t tool/preview/user_card_preview.dart
 // ?theme=blue|dark|light|teal picks the theme; ?variant=self|other|noPhoto;
 // ?style=panels|frosted|aurora picks the round-2 body style.
 import 'package:flutter/material.dart';

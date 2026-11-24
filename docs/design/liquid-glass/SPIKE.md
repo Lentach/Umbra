@@ -57,7 +57,7 @@ Verified by running on web release:
 
 ## Final chat-scroll re-check — REAL ChatDetailScreen, web RELEASE (2026-07-11)
 
-Harness: `test/preview/glass_preview.dart?bench=1` (real screen + providers, 48 seeded rows, `ScrollableState.animateTo` 3 down/up sweeps, FrameTiming, result beaconed to the static-server log). Headful run in the system default browser (launched via Start-Process; Chrome and Edge are both installed — exact browser NOT recorded), Win11 desktop GPU — vsync-real, unlike headless. Recording starts only after a 3 s warm-up delay and covers exactly the 6 s of scripted sweeps (26/504 frames over 16.7 ms total-span; 6/504 over 33.4 ms).
+Harness: `tool/preview/glass_preview.dart?bench=1` (real screen + providers, 48 seeded rows, `ScrollableState.animateTo` 3 down/up sweeps, FrameTiming, result beaconed to the static-server log). Headful run in the system default browser (launched via Start-Process; Chrome and Edge are both installed — exact browser NOT recorded), Win11 desktop GPU — vsync-real, unlike headless. Recording starts only after a 3 s warm-up delay and covers exactly the 6 s of scripted sweeps (26/504 frames over 16.7 ms total-span; 6/504 over 33.4 ms).
 
 | metric | value |
 |---|---|
