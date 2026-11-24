@@ -404,8 +404,8 @@ void main() {
     b.other = a;
     await wire(a);
     await wire(b);
-    // The old path: a wrote to b, b answered — an established session each
-    // way, and no window open on either side.
+    // Sessions already established: a wrote to b, b answered — an established
+    // session each way, and no window open on either side.
     final first = (await a.reader.encryptForFriend(5, 3, '{"t":"x"}'))!;
     await b.enc.encryptionService.decrypt(1, first.signalCiphertext);
     final reply = (await b.reader.encryptForFriend(1, 1, '{"t":"y"}'))!;

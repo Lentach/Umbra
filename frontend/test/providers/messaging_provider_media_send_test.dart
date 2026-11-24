@@ -222,8 +222,8 @@ void main() {
   });
 
   // Opening a chat reads this device's records and nothing else (decision
-  // 99): a message of the old path is neither fetched nor shown, whatever
-  // plaintext of it is still on disk.
+  // 99): a record stored under a pre-box (server) id is neither fetched nor
+  // shown, whatever plaintext of it is still on disk.
   group('opening a chat (history)', () {
     Future<void> store(int id, String text, {required String wire}) =>
         h.encryption.store.saveDecryptedContent(
@@ -234,9 +234,9 @@ void main() {
           wire: (senderId: 2, wireId: wire),
         );
 
-    test('a chat shows its box messages and never a stored old-path record, '
-        'and asks the server for nothing', () async {
-      await store(77, 'old path', wire: 'wire-old');
+    test('a chat shows its box messages and never a record stored under a '
+        'pre-box id, and emits nothing on the account socket', () async {
+      await store(77, 'pre-box record', wire: 'wire-old');
       await store(kFirstLocalMessageId + 1, 'over the box', wire: 'wire-box');
 
       h.provider.getMessages(10);

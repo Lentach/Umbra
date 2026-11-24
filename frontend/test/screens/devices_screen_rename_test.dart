@@ -23,6 +23,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:libsignal_protocol_dart/libsignal_protocol_dart.dart';
 import 'package:provider/provider.dart';
 
+import '../support/encryption_fakes.dart';
+
 class _FakeAuthProvider extends AuthProvider {
   @override
   UserModel? get currentUser => UserModel(id: 7, username: 'qa', tag: '0001');
@@ -46,8 +48,6 @@ class _FakeConnectionProvider extends ConnectionProvider {
   }
 }
 
-class _FakeEncryptionProvider extends EncryptionProvider {}
-
 _FakeConnectionProvider _connection = _FakeConnectionProvider();
 
 Widget _host() {
@@ -57,7 +57,7 @@ Widget _host() {
       ChangeNotifierProvider<AuthProvider>(create: (_) => _FakeAuthProvider()),
       ChangeNotifierProvider<ConnectionProvider>.value(value: _connection),
       ChangeNotifierProvider<EncryptionProvider>.value(
-        value: _FakeEncryptionProvider(),
+        value: FakeEncryptionProvider(),
       ),
     ],
     child: MaterialApp(
