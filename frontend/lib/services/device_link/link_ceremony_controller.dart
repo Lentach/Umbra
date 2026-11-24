@@ -736,8 +736,16 @@ class LinkCeremonyController extends ChangeNotifier
       notifyListeners();
       return;
     }
+    // The identity read parks this stage: a cancel, a restart or a dispose may
+    // land meanwhile, and what it answers belongs to the ceremony that asked.
+    bool over() =>
+        _disposed ||
+        primaryStep != PrimaryLinkStep.staging ||
+        _primaryProvisioningId != provisioningId ||
+        !identical(_ephP, eph);
     try {
       final identity = await _identity.ownIdentityKeyPair();
+      if (over()) return;
       final transcript = linkTranscript(
         provisioningId: provisioningId,
         ephPubN: ephPubN,
@@ -793,6 +801,7 @@ class LinkCeremonyController extends ChangeNotifier
         'listSignature': signed['listSignature'],
       });
     } catch (e) {
+      if (over()) return;
       primaryError = 'stage_failed';
       primaryStep = PrimaryLinkStep.failed;
       notifyListeners();
