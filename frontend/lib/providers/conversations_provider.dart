@@ -142,7 +142,8 @@ class ConversationsProvider extends ChangeNotifier {
       for (final r in store.all)
         if (r.state == ContactState.friend &&
             r.chatId != null &&
-            !r.settings.chatHidden)
+            !r.settings.chatHidden &&
+            !_hiding.contains(r.chatId))
           r,
     ];
     final held = {for (final c in _conversations) c.id: c};
@@ -200,23 +201,36 @@ class ConversationsProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Store write for one settled conversation event: finds the peer by
-  /// legacy id in the CURRENT list and rewrites the settings half of the
-  /// record. Membership is never changed here — that is the friends path.
+  /// Store write for one settled conversation event: finds the peer by chat
+  /// id in the store (a chat deleted on this device is not in the shown
+  /// list, and its record still takes the write) and rewrites the settings
+  /// half of the record. Membership is never changed here — that is the
+  /// friends path. [onSettled] runs once the write ended (at once when there
+  /// is nothing to write), then [onRefused] when the store did not keep it.
   void _storeSettings(
     int conversationId,
-    ContactSettings Function(ContactSettings current) mutate,
-  ) {
+    ContactSettings Function(ContactSettings current) mutate, {
+    void Function()? onRefused,
+    void Function()? onSettled,
+  }) {
     final store = _store;
-    if (store == null) return;
-    final index = _conversations.indexWhere((c) => c.id == conversationId);
-    if (index == -1) return;
-    final peerId = getOtherUserId(_conversations[index]);
+    final peer = store?.all
+        .where((r) => r.chatId == conversationId)
+        .firstOrNull;
+    if (store == null || peer == null) {
+      onSettled?.call();
+      return;
+    }
     unawaited(
-      store.update(
-        peerId,
-        (record) => record?.copyWith(settings: mutate(record.settings)),
-      ),
+      store
+          .update(
+            peer.userId,
+            (record) => record?.copyWith(settings: mutate(record.settings)),
+          )
+          .then((kept) {
+            onSettled?.call();
+            if (!kept) onRefused?.call();
+          }),
     );
   }
 
@@ -605,6 +619,9 @@ class ConversationsProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Chats [deleteConversation] removed whose hide write has not ended.
+  final Set<int> _hiding = {};
+
   /// Removes the chat locally immediately: this device's row and history go,
   /// the friendship stays, and the row is kept out of the list
   /// ([ContactSettings.chatHidden]) until it is revealed ([revealChat]).
@@ -613,7 +630,16 @@ class ConversationsProvider extends ChangeNotifier {
   /// [onDismissed]; otherwise the tile stays in the tree while the dismiss
   /// animation completes and the widget can rebuild with a stuck red background.
   void deleteConversation(int conversationId) {
-    _storeSettings(conversationId, (s) => s.copyWith(chatHidden: true));
+    // Until the hide is written the store still lists the chat, so a rebuild
+    // in that window must not bring it back as an empty row.
+    _hiding.add(conversationId);
+    _storeSettings(
+      conversationId,
+      (s) => s.copyWith(chatHidden: true),
+      onSettled: () => _hiding.remove(conversationId),
+      // Not kept: the chat is not hidden after all, so it shows again.
+      onRefused: refreshChats,
+    );
     _removeConversationById(conversationId);
     notifyListeners();
   }
@@ -728,6 +754,20 @@ class ConversationsProvider extends ChangeNotifier {
         mutedUntil: mutedUntil,
         clearMutedUntil: mutedUntil == null,
       ),
+      // Not kept: the row goes back to what it showed, unless a later mute
+      // already replaced this one.
+      onRefused: () {
+        final at = _conversations.indexWhere((c) => c.id == conversationId);
+        if (at == -1) return;
+        final row = _conversations[at];
+        if (row.muted != muted || row.mutedUntil != mutedUntil) return;
+        _conversations[at] = row.copyWith(
+          muted: old.muted,
+          mutedUntil: old.mutedUntil,
+          clearMutedUntil: old.mutedUntil == null,
+        );
+        notifyListeners();
+      },
     );
     notifyListeners();
   }

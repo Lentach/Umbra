@@ -29,6 +29,69 @@ class _RecordingPushSwChannel implements PushSwChannel {
   }
 }
 
+/// [inner] whose next [refuseWrites] record writes are refused: a commit that did
+/// not land, as a full disk or a failed seal answers.
+class _RefusingKv implements ContentKv {
+  _RefusingKv(this.inner);
+
+  final ContentKv inner;
+  int refuseWrites = 0;
+
+  /// While set, a record write waits for it: a commit still in flight.
+  Completer<void>? hold;
+
+  @override
+  Future<void> reload() => inner.reload();
+
+  @override
+  Future<Map<String, Object>?> authoritativeSnapshot() =>
+      inner.authoritativeSnapshot();
+
+  @override
+  String? getString(String key) => inner.getString(key);
+
+  @override
+  int? getInt(String key) => inner.getInt(key);
+
+  @override
+  bool containsKey(String key) => inner.containsKey(key);
+
+  @override
+  Set<String> getKeys() => inner.getKeys();
+
+  @override
+  Future<bool> setString(String key, String value) async {
+    await hold?.future;
+    if (refuseWrites > 0) {
+      refuseWrites--;
+      return false;
+    }
+    return inner.setString(key, value);
+  }
+
+  @override
+  Future<bool> setInt(String key, int value) => inner.setInt(key, value);
+
+  @override
+  Future<bool> remove(String key) => inner.remove(key);
+}
+
+/// An open contact store over [kv] for account 1, holding [records].
+Future<ContactStore> _storeOver(
+  ContentKv kv,
+  List<ContactRecord> records,
+) async {
+  final store = ContactStore(
+    open: () async => kv,
+    selfProfile: () => UserModel(id: 1, username: 'alice', tag: '0001'),
+    lock: <T>(_, action) => action(),
+    accepts: (_) => true,
+  );
+  await store.open(1);
+  await putContacts(store, records);
+  return store;
+}
+
 Map<String, dynamic> _conv(
   int id, {
   int unread = 0,
@@ -878,6 +941,131 @@ void main() {
       await Future<void>.delayed(Duration.zero);
 
       expect(attempts, [kWakeUpMutedForever, kWakeUpMutedForever]);
+    });
+  });
+
+  // CONT-09: a setting is written to the peer's record whether or not the
+  // chat is in the shown list, and a write the store refused is not left
+  // standing on the screen.
+  group('ConversationsProvider settings write-through (CONT-09)', () {
+    test('a pin for a chat deleted here is kept on its record: the next '
+        'session reads it once the chat shows again', () async {
+      final store = await openContactStore([
+        contactRecord(
+          2,
+          'bob',
+          ContactState.friend,
+          box: true,
+          settings: const ContactSettings(chatHidden: true),
+        ),
+      ]);
+      final chatId = store.byUserId(2)!.chatId!;
+      final chats = conversationsOver(store);
+      expect(chats.conversations, isEmpty, reason: 'the chat is hidden');
+
+      chats.applyBoxPin(
+        chatId,
+        BoxPin(at: DateTime.utc(2026, 2), senderId: 2, wireId: 'w7'),
+      );
+      await store.settled;
+
+      final next = conversationsOver(store)..startConversation(2);
+      await store.settled;
+      expect(next.conversations.map((c) => c.id), [chatId]);
+      expect(next.boxPinOf(chatId)?.wireId, 'w7');
+    });
+
+    test('a mute the store refused is taken back off the row', () async {
+      SharedPreferences.setMockInitialValues({});
+      final kv = _RefusingKv(await PrefsContentKv.open());
+      final store = await _storeOver(kv, [
+        contactRecord(2, 'bob', ContactState.friend, box: true),
+      ]);
+      final chats = conversationsOver(store);
+      final chatId = chats.conversations.single.id;
+      var notified = 0;
+      chats.addListener(() => notified++);
+
+      kv.refuseWrites = 1;
+      chats.setConversationMute(chatId, 'forever');
+      expect(chats.conversations.single.muted, isTrue);
+      final before = notified;
+      await store.settled;
+      await Future<void>.delayed(Duration.zero);
+
+      expect(store.byUserId(2)!.settings.muted, isFalse);
+      expect(chats.conversations.single.muted, isFalse);
+      expect(notified, greaterThan(before));
+    });
+
+    test('a refused mute does not undo a later one that was kept', () async {
+      SharedPreferences.setMockInitialValues({});
+      final kv = _RefusingKv(await PrefsContentKv.open());
+      final store = await _storeOver(kv, [
+        contactRecord(2, 'bob', ContactState.friend, box: true),
+      ]);
+      final chats = conversationsOver(store);
+      final chatId = chats.conversations.single.id;
+
+      kv.refuseWrites = 1;
+      chats.setConversationMute(chatId, 'forever');
+      // The second tap is queued behind the first write; only the first is
+      // refused.
+      chats.setConversationMute(chatId, '1h');
+      await store.settled;
+      await Future<void>.delayed(Duration.zero);
+
+      expect(chats.conversations.single.muted, isTrue);
+      expect(chats.conversations.single.mutedUntil, isNotNull);
+    });
+  });
+
+  // CONT-08: a chat deleted here stays out of the list while its hide write
+  // is still queued; another chat's refresh in that window must not bring it
+  // back as an empty row.
+  group('ConversationsProvider delete vs a rebuild (CONT-08)', () {
+    test('a refresh while the hide is still being written keeps the chat '
+        'out', () async {
+      SharedPreferences.setMockInitialValues({});
+      final kv = _RefusingKv(await PrefsContentKv.open());
+      final store = await _storeOver(kv, [
+        contactRecord(2, 'bob', ContactState.friend, box: true),
+        contactRecord(3, 'carol', ContactState.friend, box: true),
+      ]);
+      final chats = conversationsOver(store);
+      final bob = store.byUserId(2)!.chatId!;
+      final carol = store.byUserId(3)!.chatId!;
+      expect(chats.conversations.map((c) => c.id), unorderedEquals([bob, carol]));
+
+      kv.hold = Completer<void>();
+      chats.deleteConversation(bob);
+      chats.refreshChats();
+      expect(chats.conversations.map((c) => c.id), [carol]);
+
+      kv.hold!.complete();
+      await store.settled;
+      await Future<void>.delayed(Duration.zero);
+      chats.refreshChats();
+      expect(chats.conversations.map((c) => c.id), [carol]);
+      expect(store.byUserId(2)!.settings.chatHidden, isTrue);
+    });
+
+    test('a hide the store refused brings the chat back', () async {
+      SharedPreferences.setMockInitialValues({});
+      final kv = _RefusingKv(await PrefsContentKv.open());
+      final store = await _storeOver(kv, [
+        contactRecord(2, 'bob', ContactState.friend, box: true),
+      ]);
+      final chats = conversationsOver(store);
+      final bob = chats.conversations.single.id;
+
+      kv.refuseWrites = 1;
+      chats.deleteConversation(bob);
+      expect(chats.conversations, isEmpty);
+      await store.settled;
+      await Future<void>.delayed(Duration.zero);
+
+      expect(chats.conversations.map((c) => c.id), [bob]);
     });
   });
 }
