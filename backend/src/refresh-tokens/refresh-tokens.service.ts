@@ -5,7 +5,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { EntityManager, LessThan, Repository } from 'typeorm';
 import { createHash, createHmac, randomBytes, randomUUID } from 'crypto';
 import { RefreshToken } from './refresh-token.entity';
-import { resolveJwtSecret } from './jwt-secret';
+import { resolveJwtSecret } from '../auth/jwt-secret';
 
 const REFRESH_TOKEN_BYTE_LENGTH = 48;
 /**

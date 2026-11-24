@@ -9,7 +9,7 @@ import {
 } from './login-backoff.service';
 import { verifyDummyPasswords } from './password-hash';
 import { UsersService } from '../users/users.service';
-import { RefreshTokensService } from './refresh-tokens.service';
+import { RefreshTokensService } from '../refresh-tokens/refresh-tokens.service';
 import { User } from '../users/user.entity';
 import { DevicesService } from '../key-bundles/devices.service';
 import { IdentityResetService } from '../key-bundles/identity-reset.service';

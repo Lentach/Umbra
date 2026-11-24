@@ -4,7 +4,7 @@ import { User } from './user.entity';
 import { ProfilePhoto } from './profile-photo.entity';
 import { UsersService } from './users.service';
 import { UsersController } from './users.controller';
-import { RefreshTokensModule } from '../auth/refresh-tokens.module';
+import { RefreshTokensModule } from '../refresh-tokens/refresh-tokens.module';
 
 @Module({
   imports: [
