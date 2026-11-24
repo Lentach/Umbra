@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
  * Invariant I1 of the metadata-privacy design: no account credential on the
- * message path. Nothing under `backend/src/box/` may reach `auth/`, `users/`
- * or `chat/` — not directly and not through anything it imports.
+ * message path. Nothing under `backend/src/box/` may reach `auth/`, `auth-core/`,
+ * `refresh-tokens/`, `users/` or `chat/` — not directly and not through anything it imports.
  *
  * TRANSITIVE on purpose: the obvious leak is one hop away. `box/` importing
  * `push-notifications/` looks harmless, but that module resolves tokens
@@ -24,7 +24,7 @@ import { dirname, join, relative, resolve, sep } from 'path';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const srcRoot = join(root, 'backend', 'src');
-const FORBIDDEN = ['auth', 'users', 'chat'];
+const FORBIDDEN = ['auth', 'auth-core', 'refresh-tokens', 'users', 'chat'];
 
 const SPECIFIER =
   /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|\bimport\s+)['"]([^'"]+)['"]/g;
@@ -144,5 +144,7 @@ if (process.argv.includes('--self-test')) {
     for (const chain of chains) console.error(`  ${chain.join(' -> ')}`);
     process.exit(1);
   }
-  console.log('OK: backend/src/box imports nothing from auth/, users/ or chat/');
+  console.log(
+    'OK: backend/src/box imports nothing from auth/, auth-core/, refresh-tokens/, users/ or chat/',
+  );
 }

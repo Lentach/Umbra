@@ -5,6 +5,8 @@ paths:
   - "backend/src/**/dto/**"
   - "backend/src/key-bundles/**"
   - "backend/src/auth/**"
+  - "backend/src/auth-core/**"
+  - "backend/src/refresh-tokens/**"
   - "frontend/lib/services/socket_service.dart"
   - "frontend/lib/providers/connection_provider.dart"
   - "frontend/lib/providers/connection/**"

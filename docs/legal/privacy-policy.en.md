@@ -6,7 +6,7 @@ Every factual claim below is traced to code or a tracked doc; keep this table in
 | Claim | Source |
 |---|---|
 | Stored tables, purposes, retention | docs/METADATA.md "What the server stores" |
-| Sessions: hashes only, 365-day sliding expiry, rotation | backend/src/auth/refresh-tokens.service.ts (REFRESH_TOKEN_TTL_DAYS) |
+| Sessions: hashes only, 365-day sliding expiry, rotation | backend/src/refresh-tokens/refresh-tokens.service.ts (REFRESH_TOKEN_TTL_DAYS) |
 | Blobs 30 d, queues 90 idle days, media 14 d | docs/METADATA.md "Retention and logging" |
 | Contact backup: padded, 4 KiB buckets, password-derived wrap (plan B3 residual) | docs/METADATA.md "Contact backup" |
 | nginx access log off, error log at crit | /etc/nginx/sites-enabled/fireplace (infra/nginx/fireplace.conf) |

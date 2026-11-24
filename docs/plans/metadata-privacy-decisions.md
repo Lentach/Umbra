@@ -147,7 +147,7 @@ The owner said at G5 "I don't know these answers, decide for me": 64–69 are th
 
 Numbered 76–84 on `feat/metadata-privacy`; master numbered its 10-01 PWA-notification decisions 76–81 first and shipped them, so these carry an `R` (plan Review) since the 0.2.62 merge, and their engineering rows are `ER76a`/`ER81a`.
 
-Asked after step B, against prod: only 2 of 117 accounts had a `contact_backups` row, because the row is minted only when a password is typed (`contact_backup_service.dart:523-527`) and refresh sessions slide for 365 days (`refresh-tokens.service.ts:9`), so O1's recommended condition would never fill by itself.
+Asked after step B, against prod: only 2 of 117 accounts had a `contact_backups` row, because the row is minted only when a password is typed (`contact_backup_service.dart:523-527`) and refresh sessions slide for 365 days (`refresh-tokens/refresh-tokens.service.ts:9`), so O1's recommended condition would never fill by itself.
 
 | Id | Date | Decision | Class | Status |
 |---|---|---|---|---|
