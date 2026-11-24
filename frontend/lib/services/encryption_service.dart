@@ -1669,6 +1669,7 @@ class EncryptionService {
   /// one row may still exist, and the caller MUST NOT mint over a row it
   /// could not see or could not remove.
   Future<bool> _wipeSignalMaterial(String p) async {
+    await _drainSessionOps();
     final Map<String, String> all;
     try {
       all = await _storage.readAll();
@@ -1699,6 +1700,14 @@ class EncryptionService {
     return deletedAll;
   }
 
+  /// ENC-08: lets every session mutation already in flight finish before a
+  /// wipe lists the store. One that stored after the listing would resurrect
+  /// a record of the life being wiped, and the wipe would still report PROVEN.
+  /// Waits only on work queued BEFORE this call; the tails never fail
+  /// ([_runSessionSerialized] swallows errors into them).
+  Future<void> _drainSessionOps() =>
+      Future.wait(_sessionTails.values.toList());
+
   /// Issue #208: deletes EVERY row of [userId]'s `e2e_<uid>_` namespace this
   /// service holds — Signal material, the material stamp, the content store
   /// (box queues, sibling book, request queue, journal, sealed history) — so
@@ -1717,6 +1726,7 @@ class EncryptionService {
   /// a wipe that stops part-way still reads as a previous life on the next
   /// start instead of passing for a healthy device.
   Future<bool> _wipeAccountNamespace(int userId) async {
+    await _drainSessionOps();
     final p = 'e2e_${userId}_';
     final stampKey = _materialDeviceKey(userId);
     final kept = {
