@@ -48,10 +48,6 @@ export class EnvironmentVariables {
   @IsNotEmpty({ message: 'ALLOWED_ORIGINS is required in production' })
   ALLOWED_ORIGINS?: string;
 
-  @IsOptional()
-  @IsString()
-  MEDIA_BASE_URL?: string;
-
   /**
    * `true` registers the box (`/box` namespace, `/box/media`); unset or
    * `false` leaves it out. Any other value fails boot, so a `1` or `yes`

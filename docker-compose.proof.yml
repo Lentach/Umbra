@@ -34,4 +34,3 @@ services:
     # whole transcript.
     environment:
       ALLOWED_ORIGINS: 'http://localhost:3100,http://127.0.0.1:3100'
-      MEDIA_BASE_URL: 'http://localhost:3100'
