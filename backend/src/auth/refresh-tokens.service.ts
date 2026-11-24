@@ -265,7 +265,7 @@ export class RefreshTokensService {
    * their 365 days are up. The expiry is the ONLY predicate: a revoked
    * device's row that has not expired stays. A count, never an id, is logged.
    */
-  @Cron(CronExpression.EVERY_DAY_AT_4AM)
+  @Cron(CronExpression.EVERY_DAY_AT_4AM, { timeZone: 'UTC' })
   async deleteExpired(): Promise<number> {
     try {
       const result = await this.refreshRepo.delete({
