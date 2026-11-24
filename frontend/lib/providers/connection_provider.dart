@@ -1046,8 +1046,6 @@ class ConnectionProvider extends ChangeNotifier {
 
     // Notify sub-providers
     _encryptionProvider?.onDisconnect();
-    _friendsProvider?.onDisconnect();
-    _conversationsProvider?.onDisconnect();
     _messagingProvider?.onDisconnect();
 
     // Socket cleanup

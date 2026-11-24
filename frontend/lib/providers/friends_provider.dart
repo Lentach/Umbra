@@ -722,11 +722,6 @@ class FriendsProvider extends ChangeNotifier {
     _currentUserId = userId;
   }
 
-  /// Called on socket disconnect. Minimal cleanup.
-  void onDisconnect() {
-    // No state cleared on disconnect — reconnect will restore
-  }
-
   /// Full reset of all state.
   void clearAll() {
     _cancelAllInvitationActionTimers();
