@@ -3311,6 +3311,7 @@ class EncryptionService {
     final tail = _decryptedSaveTails[chainKey] ?? Future<void>.value();
     final run = tail.then(
       (_) => _saveDecryptedContent(
+        userId,
         id,
         data,
         conversationId: conversationId,
@@ -3333,6 +3334,7 @@ class EncryptionService {
   final Map<String, Future<void>> _decryptedSaveTails = {};
 
   Future<void> _saveDecryptedContent(
+    int userId,
     int id,
     Map<String, dynamic> data, {
     int? conversationId,
@@ -3341,8 +3343,9 @@ class EncryptionService {
     int? disappearAfterSeconds,
     WireKey? wire,
   }) async {
-    final userId = _userId;
-    if (userId == null) return;
+    // Queued behind another save, this can run after a sign-out and sign-in:
+    // the account it was called for is gone, so it writes nothing.
+    if (_userId != userId) return;
     try {
       final prefs = await _sharedPrefs;
       final key = _decryptedContentKey(userId, id);

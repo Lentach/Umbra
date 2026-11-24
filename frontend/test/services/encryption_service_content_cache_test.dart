@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:libsignal_protocol_dart/libsignal_protocol_dart.dart';
@@ -15,8 +16,18 @@ class _CommitAfterAwaitKv implements ContentKv {
 
   final ContentKv _inner;
 
+  /// When set, the next write parks here until it completes.
+  Completer<void>? hold;
+  Completer<void>? parked;
+
   @override
   Future<bool> setString(String key, String value) async {
+    final gate = hold;
+    if (gate != null) {
+      hold = null;
+      parked!.complete();
+      await gate.future;
+    }
     await Future<void>.delayed(Duration.zero);
     return _inner.setString(key, value);
   }
@@ -185,6 +196,31 @@ void main() {
       expect(result!['mediaKey'], 'KEYbase64');
       expect(result['mediaIv'], 'IVbase64');
       expect(result['content'], isNot('[Decryption failed]'));
+    });
+
+    test('ENC-11: a save queued before a sign-out never lands under the next '
+        'account', () async {
+      // Fail-before: the queued save re-read _userId when it finally ran and
+      // wrote account 42's plaintext under account 99.
+      final kv = _CommitAfterAwaitKv(await service.contentKv);
+      service.debugSetContentKv(kv);
+      final release = Completer<void>();
+      kv.hold = release;
+      kv.parked = Completer<void>();
+      final first = service.saveDecryptedContent(3001, {'content': 'one'});
+      await kv.parked!.future;
+      final queued = service.saveDecryptedContent(3001, {'content': 'two'});
+
+      await service.initialize(
+        99,
+        checkServerIdentity: () async =>
+            const ServerIdentityGuard(exists: false),
+      );
+      release.complete();
+      await Future.wait([first, queued]);
+
+      expect(await service.getDecryptedContent(3001), isNull,
+          reason: 'account 99 must not hold account 42 plaintext');
     });
 
     test('a keyed write still updates an existing keyed entry', () async {
