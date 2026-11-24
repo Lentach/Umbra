@@ -421,31 +421,26 @@ class EncryptionProvider extends ChangeNotifier {
     // as a fetched one. None held: the session cannot be built — never a
     // fetch.
     if (isBoxOnlyPeer?.call(recipientId) ?? false) {
+      // Same single flight as the fetch path (ENC-06): a second caller
+      // during a forced rebuild joins it instead of sealing on the old session.
+      final inFlight = _sessionBuilds[addressKey];
+      final build = inFlight ?? _buildServedSession(recipientId, deviceId);
+      if (inFlight == null) {
+        _sessionBuilds[addressKey] = build;
+        build
+            .whenComplete(
+              () => _sessionBuilds.removeWhere(
+                (key, running) => key == addressKey && identical(running, build),
+              ),
+            )
+            .ignore();
+      }
       try {
-        final bundle = servedBundleFor?.call(recipientId, deviceId);
-        if (bundle == null) {
-          throw StateError(
-            'no served bundle for box peer $recipientId device $deviceId',
-          );
-        }
-        await _encryptionService.buildSession(
-          recipientId,
-          bundle,
-          deviceId: deviceId,
-          expectedIdentityBase64: await _accountIdentityAnchor(
-            recipientId,
-            skipDeviceId: deviceId,
-          ),
-        );
+        await build;
       } catch (_) {
         if (needsRebuild) _forceSessionRebuild.add(addressKey);
         rethrow;
       }
-      _e2eFlowLog('SESSION_BUILT_SERVED', {
-        'recipientId': recipientId,
-        'deviceId': deviceId,
-      });
-      await _encryptionService.clearSessionRebuild(recipientId, deviceId);
       return;
     }
 
@@ -476,6 +471,31 @@ class EncryptionProvider extends ChangeNotifier {
       if (needsRebuild) _forceSessionRebuild.add(addressKey);
       rethrow;
     }
+  }
+
+  /// The served-bundle half of [ensureSession] for a box-only peer, run once
+  /// per address at a time ([_sessionBuilds]).
+  Future<void> _buildServedSession(int recipientId, int deviceId) async {
+    final bundle = servedBundleFor?.call(recipientId, deviceId);
+    if (bundle == null) {
+      throw StateError(
+        'no served bundle for box peer $recipientId device $deviceId',
+      );
+    }
+    await _encryptionService.buildSession(
+      recipientId,
+      bundle,
+      deviceId: deviceId,
+      expectedIdentityBase64: await _accountIdentityAnchor(
+        recipientId,
+        skipDeviceId: deviceId,
+      ),
+    );
+    _e2eFlowLog('SESSION_BUILT_SERVED', {
+      'recipientId': recipientId,
+      'deviceId': deviceId,
+    });
+    await _encryptionService.clearSessionRebuild(recipientId, deviceId);
   }
 
   /// The fetch-and-build half of [ensureSession], run once per address at a

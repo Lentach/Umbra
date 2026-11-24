@@ -9,7 +9,37 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
+import 'package:fireplace/services/encryption/signal_stores.dart';
 import 'package:fireplace/utils/e2e_persistent_diag.dart';
+
+/// In-memory [DualStorage] whose armed `session_` write parks until released.
+class _GatedSessionStorage extends DualStorage {
+  _GatedSessionStorage() : super(const FlutterSecureStorage());
+
+  final Map<String, String> store = {};
+  bool armed = false;
+  Completer<void>? parked;
+  final Completer<void> released = Completer<void>();
+
+  @override
+  Future<void> write({required String key, required String value}) async {
+    if (armed && key.contains('session_')) {
+      armed = false;
+      parked!.complete();
+      await released.future;
+    }
+    store[key] = value;
+  }
+
+  @override
+  Future<String?> read({required String key}) async => store[key];
+
+  @override
+  Future<void> delete({required String key}) async => store.remove(key);
+
+  @override
+  Future<Map<String, String>> readAll() async => Map.of(store);
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -509,6 +539,69 @@ void main() {
         answer();
         await Future.wait([first, second]);
         expect(fetches, 2, reason: 'the second caller joined, it did not fetch');
+        expect(provider.needsSessionRebuild(peerUserId), isFalse);
+      },
+    );
+
+    test(
+      'ENC-06: a second ensureSession during a forced rebuild of a box friend '
+      'waits for it',
+      () async {
+        // Fail-before: the served-bundle branch never joined a single flight,
+        // so the second caller returned on the old session at once.
+        FlutterSecureStorage.setMockInitialValues({});
+        SharedPreferences.setMockInitialValues({});
+        const peerUserId = 2;
+        final peerIdentity = generateIdentityKeyPair();
+        final peerSigned = generateSignedPreKey(peerIdentity, 0);
+        final peerOtp = generatePreKeys(0, 1).single;
+        final bundle = <String, dynamic>{
+          'registrationId': generateRegistrationId(false),
+          'identityPublicKey': base64Encode(
+            peerIdentity.getPublicKey().serialize(),
+          ),
+          'signedPreKeyId': 0,
+          'signedPreKeyPublic': base64Encode(
+            peerSigned.getKeyPair().publicKey.serialize(),
+          ),
+          'signedPreKeySignature': base64Encode(peerSigned.signature),
+          'oneTimePreKeyId': peerOtp.id,
+          'oneTimePreKeyPublic': base64Encode(
+            peerOtp.getKeyPair().publicKey.serialize(),
+          ),
+        };
+        final storage = _GatedSessionStorage();
+        final provider = EncryptionProvider();
+        provider.encryptionService.debugSetDualStorage(storage);
+        provider
+          ..isBoxOnlyPeer = ((_) => true)
+          ..servedBundleFor = ((_, _) => bundle)
+          ..setEmitCallback((event, data) {
+            if (event == 'checkOwnKeyBundle') {
+              provider.onOwnKeyBundleStatus({'exists': false});
+            }
+          });
+        await provider.initializeE2E(1);
+        await provider.ensureSession(peerUserId);
+
+        storage.parked = Completer<void>();
+        storage.armed = true;
+        provider.markSessionRebuild(peerUserId);
+        var secondDone = false;
+        final first = provider.ensureSession(peerUserId);
+        await storage.parked!.future;
+        final second = provider
+            .ensureSession(peerUserId)
+            .then((_) => secondDone = true);
+        await pumpEventQueue();
+        expect(
+          secondDone,
+          isFalse,
+          reason: 'the rebuild is still storing its session',
+        );
+
+        storage.released.complete();
+        await Future.wait([first, second]);
         expect(provider.needsSessionRebuild(peerUserId), isFalse);
       },
     );
