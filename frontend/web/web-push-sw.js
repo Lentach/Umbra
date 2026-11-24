@@ -20,7 +20,7 @@
 // scope controls no page, so no navigation triggers an update check, and
 // WebKit does not soft-update after a push the way Chrome does — the page
 // calls `registration.update()` instead (web_push_bridge_web.dart).
-const SW_VERSION = 5;
+const SW_VERSION = 6;
 
 // A new copy takes over as soon as it is installed. This worker controls no
 // page (scope `/web-push-scope/`), so there is no page state to hand over.
@@ -193,14 +193,13 @@ function asRecord(v) {
   return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
 }
 
-function readWake() {
-  return kvRead(BOX_WAKE_KEY).then(function (raw) {
-    var w = asRecord(raw);
-    return {
-      base: typeof w.base === 'number' && w.base > 0 ? w.base : 0,
-      waiting: asRecord(w.waiting),
-    };
-  });
+// The `box-wake` object as stored, with anything unreadable made empty.
+function normalizeWake(raw) {
+  var w = asRecord(raw);
+  return {
+    base: typeof w.base === 'number' && w.base > 0 ? w.base : 0,
+    waiting: asRecord(w.waiting),
+  };
 }
 
 function waitingTotal(waiting) {
@@ -211,11 +210,17 @@ function waitingTotal(waiting) {
   return total;
 }
 
+// [web-only: retire with §7] Every writer of `box-wake` goes through
+// `kvUpdate` (one transaction, a pure `change`): two pushes, or a push and a
+// page total, that overlap would otherwise each write back what they read
+// before the other landed.
+
 // The base a wake-up adds to, from an old-path push's server total.
 function setWakeBase(total) {
-  return readWake().then(function (wake) {
+  return kvUpdate(BOX_WAKE_KEY, function (cur) {
+    var wake = normalizeWake(cur);
     wake.base = total > 0 ? total : 0;
-    return kvWrite(BOX_WAKE_KEY, wake);
+    return wake;
   });
 }
 
@@ -225,7 +230,9 @@ function setWakeBase(total) {
 function applyPageTotal(total) {
   return Promise.all([
     setBadgeFromSW(total),
-    kvWrite(BOX_WAKE_KEY, { base: total > 0 ? total : 0, waiting: {} }),
+    kvUpdate(BOX_WAKE_KEY, function () {
+      return { base: total > 0 ? total : 0, waiting: {} };
+    }),
     total <= 0
       ? closeNotificationsForTag(GENERIC_CARD_TAG)
       : Promise.resolve(),
@@ -235,18 +242,20 @@ function applyPageTotal(total) {
 // The page read chat [convId] without a total to hand: forget its waiting
 // counts only.
 function dropWaitingForChat(convId) {
-  return Promise.all([kvRead(BOX_NIDS_KEY), readWake()])
-    .then(function (r) {
-      var nids = asRecord(r[0]);
-      var wake = r[1];
-      var changed = false;
-      Object.keys(wake.waiting).forEach(function (nid) {
-        if (nids[nid] === convId) {
-          delete wake.waiting[nid];
-          changed = true;
-        }
+  return kvRead(BOX_NIDS_KEY)
+    .then(function (raw) {
+      var nids = asRecord(raw);
+      return kvUpdate(BOX_WAKE_KEY, function (cur) {
+        var wake = normalizeWake(cur);
+        var changed = false;
+        Object.keys(wake.waiting).forEach(function (nid) {
+          if (nids[nid] === convId) {
+            delete wake.waiting[nid];
+            changed = true;
+          }
+        });
+        return changed ? wake : undefined;
       });
-      return changed ? kvWrite(BOX_WAKE_KEY, wake) : undefined;
     })
     .catch(function () {});
 }
@@ -444,29 +453,33 @@ function handleBoxWakeUp(payload) {
   var count = typeof payload.c === 'number' && payload.c >= 1
     ? Math.floor(payload.c)
     : 1;
-  return Promise.all([kvRead(BOX_NIDS_KEY), readWake(), isAnyPageVisible()])
+  return Promise.all([kvRead(BOX_NIDS_KEY), isAnyPageVisible()])
     .then(function (r) {
       var nids = asRecord(r[0]);
-      var wake = r[1];
       var convId = typeof nids[nid] === 'number' ? nids[nid] : null;
-      wake.waiting[nid] = count;
-      var chatCount = count;
-      if (convId != null) {
-        chatCount = 0;
-        Object.keys(wake.waiting).forEach(function (other) {
-          if (nids[other] === convId && typeof wake.waiting[other] === 'number') {
-            chatCount += wake.waiting[other];
-          }
-        });
-      }
-      var message = {
-        type: 'new_message',
-        unreadCount: chatCount,
-        unreadTotal: wake.base + waitingTotal(wake.waiting),
-      };
-      if (convId != null) message.conversationId = convId;
-      return kvWrite(BOX_WAKE_KEY, wake).then(function () {
-        return { message: message, onScreen: r[2] };
+      var message = null;
+      return kvUpdate(BOX_WAKE_KEY, function (cur) {
+        var wake = normalizeWake(cur);
+        wake.waiting[nid] = count;
+        var chatCount = count;
+        if (convId != null) {
+          chatCount = 0;
+          Object.keys(wake.waiting).forEach(function (other) {
+            if (nids[other] === convId && typeof wake.waiting[other] === 'number') {
+              chatCount += wake.waiting[other];
+            }
+          });
+        }
+        message = {
+          type: 'new_message',
+          unreadCount: chatCount,
+          unreadTotal: wake.base + waitingTotal(wake.waiting),
+        };
+        if (convId != null) message.conversationId = convId;
+        return wake;
+      }).then(function () {
+        if (message == null) throw new Error('box-wake not updated');
+        return { message: message, onScreen: r[1] };
       });
     })
     .catch(function () {

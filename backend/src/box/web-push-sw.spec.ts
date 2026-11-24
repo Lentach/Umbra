@@ -362,6 +362,37 @@ describe('web-push-sw.js', () => {
 
       expect(sw.shown).toEqual([]);
     });
+
+    // WEB-01: both handlers are started before either has read `box-wake`.
+    it('two wake-ups that overlap both keep their count', async () => {
+      const sw = makeWorker({ store: NIDS });
+
+      await Promise.all([
+        sw.push({ type: 'new_message', n: 'NID_A', c: 3 }),
+        sw.push({ type: 'new_message', n: 'NID_B', c: 2 }),
+      ]);
+
+      expect(sw.kv.get('box-wake')).toEqual({
+        base: 0,
+        waiting: { NID_A: 3, NID_B: 2 },
+      });
+      expect(Math.max(...sw.badge)).toBe(5);
+    });
+
+    it('a chat read while a wake-up for another chat is being handled stays read', async () => {
+      const sw = makeWorker({ store: NIDS });
+      await sw.push({ type: 'new_message', n: 'NID_A', c: 3 });
+
+      await Promise.all([
+        sw.message({ type: 'close-conv', conversationId: 42 }),
+        sw.push({ type: 'new_message', n: 'NID_B', c: 2 }),
+      ]);
+
+      expect(sw.kv.get('box-wake')).toEqual({
+        base: 0,
+        waiting: { NID_B: 2 },
+      });
+    });
   });
 
   describe('reading clears (decision 77, work item D)', () => {
