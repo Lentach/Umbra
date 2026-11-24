@@ -146,7 +146,7 @@ the first round relocated from the border to the bus. Log out is marked by its t
 title alone, and the bus terminates at it with an end cap.
 
 Renders of the shipped result: `bus-cosmic-top.webp`, `bus-cosmic-session.webp`,
-`bus-light-top.webp`, `bus-light-session.webp`. Harness: `test/preview/settings_preview.dart`.
+`bus-light-top.webp`, `bus-light-session.webp`. Harness: `tool/preview/settings_preview.dart`.
 
 ### Open: one trunk vs a literal fan
 
@@ -184,7 +184,7 @@ owner had already approved, which is a stronger guarantee than hand-unpicking th
 bus-lighting test. The 3px lit left edge on marked rows is back, since the bus is no longer
 there to carry the warning.
 
-**Kept deliberately:** `test/preview/settings_preview.dart` (the harness mounts the real screen
+**Kept deliberately:** `tool/preview/settings_preview.dart` (the harness mounts the real screen
 and is useful for every future round), all the renders in this folder, and this document. The
 bus renders (`bus-*.webp`, `spine-*.webp`) stay as the record of what was tried.
 

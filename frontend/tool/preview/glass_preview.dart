@@ -1,7 +1,9 @@
 // Throwaway visual harness for the Liquid Glass chrome (dev-only, NOT part
-// of the test suite; run: flutter run -d web-server -t test/preview/glass_preview.dart).
+// of the test suite; run: flutter run -d web-server -t tool/preview/glass_preview.dart).
 // Hosts the real MainTabScreenHeader + GlassBottomNav + ConversationTile over
 // fake data; ?theme=blue|dark|light|teal picks the theme.
+// ignore_for_file: invalid_use_of_visible_for_testing_member
+// (the harness seeds providers through their @visibleForTesting seams)
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ui' show FramePhase, FrameTiming;
@@ -32,8 +34,8 @@ import 'publish_stub.dart' if (dart.library.js_interop) 'publish_web.dart';
 import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/services/contacts/contact_record.dart';
 
-import '../support/chat_seed.dart';
-import '../support/contact_seed.dart';
+import '../../test/support/chat_seed.dart';
+import '../../test/support/contact_seed.dart';
 import 'package:fireplace/models/user_model.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
 import 'package:fireplace/widgets/conversation_tile.dart';

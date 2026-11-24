@@ -2,11 +2,13 @@
 // Sibling of contact_network_preview.dart / glass_preview.dart.
 //
 // Run: flutter run -d web-server --web-port 8097 \
-//        -t test/preview/settings_preview.dart
+//        -t tool/preview/settings_preview.dart
 // Params: ?theme=cosmic|blue|dark|light|teal&locale=en|pl&textScale=1.6
 //
 // Mounts the REAL screen against seeded providers, so the console rows, the
 // local-node core and the bus are reviewable without a backend.
+// ignore_for_file: invalid_use_of_visible_for_testing_member
+// (the harness seeds providers through their @visibleForTesting seams)
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
