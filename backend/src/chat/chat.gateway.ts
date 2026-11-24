@@ -213,40 +213,6 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     client.emit('serverTime', { serverTime: new Date().toISOString() });
   }
 
-  /**
-   * Compatibility answer for clients older than 0.2.76. Phase 4 step 5 dropped
-   * the server history, but a 0.2.75 web page or 0.2.74 APK opening a chat that
-   * has a server conversation id still emits `getMessages` and shows the
-   * chat's stored box messages only from its `messageHistory` handler: with no
-   * answer the chat opened empty. An empty page is what the old server sent for
-   * a chat the caller was not in, and the client path it takes is the one box
-   * chats run on every open (merge the local records). It reads and writes
-   * nothing. A box chat's local id (2^48 + peer, decision 52) is never asked by
-   * those clients and stays unanswered, as before.
-   */
-  @UseGuards(WsThrottlerGuard)
-  @Throttle({ default: { limit: 300, ttl: 900000 } })
-  @SubscribeMessage('getMessages')
-  handleGetMessages(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: unknown,
-  ) {
-    // socket.io types `data` as `any`; handleConnection sets `user` on auth.
-    const socketData = client.data as { user?: { id?: number } } | undefined;
-    if (!socketData?.user?.id) return;
-    const conversationId = (data as { conversationId?: unknown } | null)
-      ?.conversationId;
-    if (
-      typeof conversationId !== 'number' ||
-      !Number.isInteger(conversationId) ||
-      conversationId < 1 ||
-      conversationId > 2147483647
-    ) {
-      return;
-    }
-    client.emit('messageHistory', { conversationId, messages: [] });
-  }
-
   // ========== KEY EXCHANGE HANDLERS (E2E Encryption) ==========
 
   @SubscribeMessage('uploadKeyBundle')
@@ -419,21 +385,6 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() data: unknown,
   ) {
     return this.chatDeviceListService.handleGetDeviceList(client, data);
-  }
-
-  /**
-   * `getDeviceList` for up to 256 users at once (metadata-privacy item 5,
-   * E20a): each served user answers the same `deviceList` event. Its own
-   * bucket, so covering every friend at connect never drains the fetch tier.
-   */
-  @UseGuards(WsThrottlerGuard)
-  @Throttle({ default: { limit: 60, ttl: 900000 } })
-  @SubscribeMessage('getDeviceLists')
-  async handleGetDeviceLists(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: unknown,
-  ) {
-    return this.chatDeviceListService.handleGetDeviceLists(client, data);
   }
 
   /**

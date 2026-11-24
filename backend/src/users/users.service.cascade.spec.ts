@@ -25,9 +25,6 @@ describe('UsersService.deleteAccount – cascade', () => {
     find: jest.fn().mockResolvedValue([]),
   };
   const mockStorage = { deleteAvatar: jest.fn() };
-  const mockKeyBundles = {
-    deleteByUserId: jest.fn().mockResolvedValue(undefined),
-  };
   const mockRefreshTokens = {
     revokeAllForUser: jest.fn().mockResolvedValue(undefined),
   };
@@ -41,26 +38,8 @@ describe('UsersService.deleteAccount – cascade', () => {
       mockRepo as any,
       mockProfilePhotoRepo as unknown as never,
       mockStorage as any,
-      mockKeyBundles as any,
       mockRefreshTokens as any,
     );
-  });
-
-  it('purges key bundles AFTER the user row is removed (post-commit backstop to the FK cascade)', async () => {
-    (bcrypt.compare as jest.Mock).mockResolvedValue(true);
-    mockRepo.findOne.mockResolvedValue(mockUser);
-
-    await service.deleteAccount(7, 'correct-password');
-
-    expect(mockKeyBundles.deleteByUserId).toHaveBeenCalledWith(7);
-    expect(mockRepo.remove).toHaveBeenCalledWith(mockUser);
-    // Irreversible external cleanup must run only once the account is durably
-    // gone: the user row (and its ON DELETE CASCADE side rows) goes first,
-    // then the idempotent explicit purge runs as a backstop. A regression that
-    // destroys key bundles BEFORE the removal re-opens the zombie window.
-    expect(
-      mockKeyBundles.deleteByUserId.mock.invocationCallOrder[0],
-    ).toBeGreaterThan(mockRepo.remove.mock.invocationCallOrder[0]);
   });
 
   it('rejects with UnauthorizedException when password is wrong', async () => {
@@ -74,7 +53,6 @@ describe('UsersService.deleteAccount – cascade', () => {
     // A wrong password must abort before any destructive work fires.
     expect(mockRefreshTokens.revokeAllForUser).not.toHaveBeenCalled();
     expect(mockRepo.remove).not.toHaveBeenCalled();
-    expect(mockKeyBundles.deleteByUserId).not.toHaveBeenCalled();
     expect(mockStorage.deleteAvatar).not.toHaveBeenCalled();
   });
 
@@ -118,6 +96,5 @@ describe('UsersService.deleteAccount – cascade', () => {
     // Nothing irreversible happened: no keys or avatars were destroyed, so the
     // account is fully intact rather than a half-deleted zombie.
     expect(mockStorage.deleteAvatar).not.toHaveBeenCalled();
-    expect(mockKeyBundles.deleteByUserId).not.toHaveBeenCalled();
   });
 });
