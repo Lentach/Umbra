@@ -3,7 +3,7 @@ import {
   Controller, Post, Get, Body, Param, Res, UseGuards,
 } from '@nestjs/common';
 import { IsString, IsNotEmpty, IsInt, MaxLength } from 'class-validator';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { JwtAuthGuard } from '../auth-core/jwt-auth.guard';
 import { SecretNotesService } from './secret-notes.service';
 import type { Response } from 'express';
 import { randomBytes } from 'crypto';

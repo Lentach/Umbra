@@ -13,7 +13,7 @@ import {
   PASSWORD_MIN_LENGTH,
   PASSWORD_REGEX,
   PASSWORD_REGEX_MESSAGE,
-} from '../password.constants';
+} from '../../auth-core/password.constants';
 
 /**
  * `POST /auth/recover` — the recovery phrase as a credential (multi-device

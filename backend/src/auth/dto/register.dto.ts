@@ -3,7 +3,7 @@ import {
   PASSWORD_MIN_LENGTH,
   PASSWORD_REGEX,
   PASSWORD_REGEX_MESSAGE,
-} from '../password.constants';
+} from '../../auth-core/password.constants';
 
 export class RegisterDto {
   @IsString()

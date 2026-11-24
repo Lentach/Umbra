@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { hashPassword, verifyPassword } from '../auth/password-hash';
+import { hashPassword, verifyPassword } from '../auth-core/password-hash';
 import { User } from './user.entity';
 import { ProfilePhoto } from './profile-photo.entity';
 import { LocalStorageService } from '../media/local-storage.service';

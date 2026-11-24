@@ -9,7 +9,7 @@ import {
   PASSWORD_MIN_LENGTH,
   PASSWORD_REGEX,
   PASSWORD_REGEX_MESSAGE,
-} from '../../auth/password.constants';
+} from '../../auth-core/password.constants';
 
 export class ResetPasswordDto {
   @IsString()

@@ -2,7 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 import { validateDto } from '../chat/utils/dto.validator';
 import { RegisterDto } from './dto/register.dto';
 import { ResetPasswordDto } from '../users/dto/user.dto';
-import { PASSWORD_MIN_LENGTH, PASSWORD_REGEX_MESSAGE } from './password.constants';
+import { PASSWORD_MIN_LENGTH, PASSWORD_REGEX_MESSAGE } from '../auth-core/password.constants';
 
 // Shared cases run against both DTOs that enforce the password policy
 const VALID_PASSWORDS = [
