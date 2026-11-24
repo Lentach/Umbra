@@ -393,7 +393,15 @@ class EncryptionProvider extends ChangeNotifier {
       'hasSession': hasSession,
       'needsRebuild': needsRebuild,
     });
-    if (hasSession && !needsRebuild) return;
+    if (hasSession && !needsRebuild) {
+      // ENC-06: the force-rebuild mark was consumed by the caller whose
+      // rebuild is still in flight, so this caller sees a session and no
+      // intent. That session is the one being replaced: wait for the rebuild
+      // instead of handing it back.
+      final rebuilding = _sessionBuilds[addressKey];
+      if (rebuilding != null) await rebuilding;
+      return;
+    }
 
     // Rebuild = build OVER the existing record, never delete it first.
     // libsignal's processPreKeyBundle archives the current ratchet state
