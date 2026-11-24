@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:fireplace/services/box/box_push_nids.dart';
 import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/services/contacts/contact_store.dart';
@@ -131,6 +133,34 @@ void main() {
       expect(written, [
         {'a': 40},
       ]);
+    });
+
+    // WEB-02: logout clears the table while the old account's write waits.
+    test('a clear lands after a write that was asked before it', () async {
+      final events = <String>[];
+      final gate = Completer<void>();
+      final slow = BoxPushNids(
+        store: store,
+        sink: (table) async {
+          await gate.future;
+          events.add('write');
+        },
+      );
+      final realClear = BoxPushNids.clearSink;
+      addTearDown(() => BoxPushNids.clearSink = realClear);
+      BoxPushNids.clearSink = () async => events.add('clear');
+      await store.update(
+        2,
+        (_) => _record(2, queues: [_queue('a')], conversationId: 40),
+      );
+
+      slow.sync();
+      final cleared = BoxPushNids.clear();
+      await settle();
+      gate.complete();
+      await cleared;
+
+      expect(events, ['write', 'clear']);
     });
 
     test('writes nothing while the store is closed', () async {
