@@ -169,7 +169,8 @@ describe('KeyBundlesService', () => {
       expect(warnSpy).toHaveBeenCalledWith(
         // `via` names the authorization: a RESET is the moment the §6.2 roster
         // teardown runs, a signature is a plain rotation (amendment (xxviii)).
-        '[identity-churn] deviceId=1 via=reset oldIdentityPrefix=old-identity newIdentityPrefix=new-identity',
+        // BE-20 / decision 150: no key prefix, a stable per-account fingerprint.
+        '[identity-churn] deviceId=1 via=reset',
       );
       // Phase 0a: the churn is durable — a full audit row, not just a log line.
       expect(auditRepo.insert).toHaveBeenCalledTimes(1);
@@ -442,9 +443,13 @@ describe('KeyBundlesService', () => {
       expect(keyBundleRepo.upsert).not.toHaveBeenCalled();
       expect(purgeBuilder.execute).not.toHaveBeenCalled();
       expect(auditRepo.insert).not.toHaveBeenCalled();
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('[identity-lock] REFUSED'),
-      );
+      // BE-20 / decision 150: the reason and the device stay, no key prefix.
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const lockWarning = String(warnSpy.mock.calls[0][0]);
+      expect(lockWarning).toContain('[identity-lock] REFUSED');
+      expect(lockWarning).toContain('deviceId=1');
+      expect(lockWarning).not.toContain(STORED.slice(0, 12));
+      expect(lockWarning).not.toContain(REPLACEMENT.slice(0, 12));
       warnSpy.mockRestore();
     });
 
@@ -731,9 +736,12 @@ describe('KeyBundlesService', () => {
       expect(keyBundleRepo.upsert).not.toHaveBeenCalled();
       expect(purgeBuilder.execute).not.toHaveBeenCalled();
       expect(auditRepo.insert).not.toHaveBeenCalled();
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('[identity-restore] REFUSED'),
-      );
+      // BE-20 / decision 150: the reason and the device stay, no key prefix.
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const restoreWarning = String(warnSpy.mock.calls[0][0]);
+      expect(restoreWarning).toContain('[identity-restore] REFUSED');
+      expect(restoreWarning).toContain('deviceId=1');
+      expect(restoreWarning).not.toContain(STORED_IDENTITY.slice(0, 12));
       warnSpy.mockRestore();
     });
 
@@ -836,9 +844,20 @@ describe('KeyBundlesService', () => {
         identityPublicKey: 'published-identity',
       });
 
+      const warnSpy = jest
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => undefined);
+
       await expect(
         service.uploadOneTimePreKeys(5, keys, 'refused-identity'),
       ).rejects.toMatchObject({ message: 'identity_locked' });
+      // BE-20 / decision 150: the reason and the device stay, no key prefix.
+      const otpWarning = String(warnSpy.mock.calls[0][0]);
+      expect(otpWarning).toContain('[identity-lock] REFUSED');
+      expect(otpWarning).toContain('deviceId=1');
+      expect(otpWarning).not.toContain('published-id');
+      expect(otpWarning).not.toContain('refused-iden');
+      warnSpy.mockRestore();
 
       // Nothing written and nothing destroyed: the legitimate pool survives.
       expect(otpRepo.upsert).not.toHaveBeenCalled();
