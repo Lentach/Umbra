@@ -183,3 +183,21 @@ describe('BoxReaper sweep isolation (BE-03)', () => {
     expect(f.alert.report.mock.calls).toEqual([[false], [false]]);
   });
 });
+
+describe('BoxReaper synchronous throws (BE-03 review)', () => {
+  it('a throwing delivery.forget or ceiling check still reaches the alarm ping', async () => {
+    const f = sweepSetup();
+    f.box.reapQueues.mockResolvedValue(['rid-1']);
+    f.delivery.forget.mockImplementation(() => {
+      throw new Error('boom');
+    });
+    f.box.totals.mockResolvedValue({ msgCount: 0, mediaBytes: 0 });
+    jest.spyOn(f.reaper['ceiling'], 'check').mockImplementation(() => {
+      throw new Error('boom');
+    });
+
+    await f.reaper.sweep();
+
+    expect(f.alert.report.mock.calls).toEqual([[true]]);
+  });
+});

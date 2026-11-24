@@ -1,4 +1,5 @@
 import 'package:fireplace/l10n/app_localizations.dart';
+import 'package:fireplace/l10n/app_localizations_en.dart';
 import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/providers/auth_provider.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
@@ -136,13 +137,23 @@ void main() {
       for (var t = 0; t < 400; t += 50) {
         await tester.pump(const Duration(milliseconds: 50));
       }
+      final scrolling = tester
+          .state<ScrollableState>(
+            find.descendant(
+              of: find.byType(ListView),
+              matching: find.byType(Scrollable),
+            ),
+          )
+          .position
+          .isScrollingNotifier;
+      expect(scrolling.value, isTrue, reason: 'first scroll still in flight');
       await tester.tap(find.byType(PinnedMessageBanner));
 
       for (var i = 0; i < 30; i++) {
         await tester.pump(const Duration(milliseconds: 50));
       }
 
-      expect(find.text('Message is no longer available'), findsNothing);
+      expect(find.text(AppLocalizationsEn().snackbarPinnedMessageUnavailable), findsNothing);
       expect(find.byKey(const ValueKey(1000)), findsOneWidget);
       final row = tester.getRect(find.byKey(const ValueKey(1000)));
       expect(row.top, greaterThanOrEqualTo(0));

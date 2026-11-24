@@ -113,7 +113,11 @@ export class BoxReaper {
       this.box.reapQueues(new Date()),
     );
     const queuesGone = reaped === FAILED ? 0 : reaped.length;
-    if (reaped !== FAILED) for (const rid of reaped) this.delivery.forget(rid);
+    if (reaped !== FAILED) {
+      await attempt('forget', async () => {
+        for (const rid of reaped) this.delivery.forget(rid);
+      });
+    }
     // Counts only: never an id, never an address.
     this.logger.debug(`[box] sweep media=${mediaGone} queues=${queuesGone}`);
     const totals = await attempt('totals', () => this.box.totals());
@@ -127,8 +131,13 @@ export class BoxReaper {
           );
         }
       }
-      alarming =
-        totals === null || this.ceiling.check(totals, this.logger) || failed;
+      const over =
+        totals === null
+          ? true
+          : await attempt('ceiling', async () =>
+              this.ceiling.check(totals, this.logger),
+            );
+      alarming = over === FAILED || over || failed;
       this.totalsMissing = totals === null;
     }
     await attempt('alarm', () => this.alert.report(alarming));
