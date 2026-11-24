@@ -23,6 +23,10 @@ import 'box_wire.dart';
 import 'queue_keys.dart';
 import 'queue_seal.dart';
 
+/// How long a request-queue publish the server failed waits before it is
+/// sent again (BOX-17). The event is throttled at 30 / 15 min.
+const Duration kRequestQueueRetry = Duration(minutes: 1);
+
 /// One account session's link to the box (metadata-privacy PR3.1 slice (a)):
 /// owns the [BoxClient] and keeps this device's REQUEST queue published on
 /// the account socket (`setRequestQueue`, wire.md "First contact").
@@ -37,7 +41,8 @@ import 'queue_seal.dart';
 /// server overwrites the same value; the event is throttled at 30 / 15 min).
 /// A new device id — a §6.2 reset re-homes the account — or a replaced queue
 /// publishes again; a refused or unanswered publish is re-sent on the next
-/// ready, a rate-limited one after `retryAfterMs`.
+/// ready, a rate-limited one after `retryAfterMs`, one the server failed
+/// after [kRequestQueueRetry].
 ///
 /// It also RECEIVES (slice (b)): once the box is ready and the store is
 /// open, every contact's inbound queue is subscribed, and its [BoxInbox]
@@ -129,7 +134,9 @@ class BoxSession
   late final BoxFriendHandoff _friends;
 
   /// Friend devices re-keyed this session ([rekeyFriend]), as `user:device`:
-  /// once each.
+  /// once each, whether or not the re-key left (decision 70: a forged frame
+  /// times one bundle fetch per friend device per session). Only a re-key
+  /// that had no queue to hand, so fetched nothing, is not kept.
   final Set<String> _friendRekeyed = {};
 
   /// When this device started a session with a friend's device it has not
@@ -146,7 +153,8 @@ class BoxSession
   /// names no address for is given up, never looped on.
   final Set<String> _friendAddressAsked = {};
 
-  /// Siblings re-keyed this session ([rekeySibling]): once each.
+  /// Siblings re-keyed this account connect ([rekeySibling]): once each; a
+  /// re-key that did not leave over the self-queue is not kept.
   final Set<int> _rekeyed = {};
 
   /// What each friend device last said about relaying (`rl`, decision 101
@@ -557,6 +565,11 @@ class BoxSession
     _e2eReady = false;
     _inFlight = null;
     _retry?.cancel();
+    // The sibling re-key guard ends with the connect (BOX-03): a sibling
+    // that loses its session again on a later one is re-keyed again.
+    // [_friendRekeyed] stays: decision 70 bounds what a forged frame can
+    // time to one bundle fetch per friend device per session.
+    _rekeyed.clear();
     _swap.accountLost();
     _friends.accountLost();
   }
@@ -572,11 +585,19 @@ class BoxSession
       if (first) onBoxReady?.call();
       return;
     }
+    final error = data['error'];
     final retryMs = data['retryAfterMs'];
-    if (data['error'] == 'rate_limited' && retryMs is int) {
-      _retry?.cancel();
-      _retry = Timer(Duration(milliseconds: retryMs), _publish);
-    }
+    // `invalid_payload` and `unknown_device` are verdicts on this very
+    // publish: the same one would be refused again, so it waits for the next
+    // ready. Anything else (`internal`) is the server's own failure.
+    if (error == 'invalid_payload' || error == 'unknown_device') return;
+    _retry?.cancel();
+    _retry = Timer(
+      error == 'rate_limited' && retryMs is int
+          ? Duration(milliseconds: retryMs)
+          : kRequestQueueRetry,
+      _publish,
+    );
   }
 
   @override
@@ -783,11 +804,13 @@ class BoxSession
       // No self-queue address for it yet (crossing first sessions): the
       // re-key goes through its request queue instead, or neither side
       // could ever answer the other's refused handoff.
-      final sent = await _swap.rekeyViaRequest(deviceId);
-      if (sent) _rekeyAsked[deviceId] = _now();
+      final route = await _swap.rekeyViaRequest(deviceId);
+      if (route == SiblingRekeyRoute.sent) _rekeyAsked[deviceId] = _now();
+      // Owed stays latched: the answer that names the address hands off.
+      if (route == SiblingRekeyRoute.failed) _rekeyed.remove(deviceId);
       E2eDiagLog.add('BOX_SIBLING_REKEYED', {
         'device': deviceId,
-        'sent': sent,
+        'sent': route == SiblingRekeyRoute.sent,
         'via': 'request',
       });
       return;
@@ -805,6 +828,9 @@ class BoxSession
     final sent =
         frame != null &&
         await deliver(to, frame.encode()) == BoxSendOutcome.taken;
+    // A re-key that did not leave is owed still: the next loss makes it
+    // again (BOX-03).
+    if (!sent) _rekeyed.remove(deviceId);
     E2eDiagLog.add('BOX_SIBLING_REKEYED', {'device': deviceId, 'sent': sent});
   }
 
@@ -980,7 +1006,12 @@ class BoxSession
     }
     _friendRekeyed.add(key);
     final ensured = await _keys.ensureInbound(userId);
-    if (ensured is! InboundQueueCreated || _disposed) return;
+    if (ensured is! InboundQueueCreated || _disposed) {
+      // No queue to hand, and no bundle was fetched yet (decision 70's
+      // bound is intact): the next loss asks again (BOX-03).
+      _friendRekeyed.remove(key);
+      return;
+    }
     final queue = ensured.queue;
     // The fresh session counts as asked (`friendSessionStarted`, set by the
     // encrypt side): two devices that re-key each other at once read each
