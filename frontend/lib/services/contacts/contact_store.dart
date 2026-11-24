@@ -139,14 +139,44 @@ class ContactStore {
   bool _selfMigrated = false;
   ContactQueue? _requestQueue;
   bool _requestQueueUnsupported = false;
-  _SiblingBook _siblingBook = _SiblingBook.empty;
-  bool _siblingsUnsupported = false;
-  _NotifierBook _notifierBook = _NotifierBook.empty;
-  bool _notifiersUnsupported = false;
-  _AliveBook _aliveBook = _AliveBook.empty;
-  bool _aliveUnsupported = false;
-  _LookupBook _lookupBook = _LookupBook.empty;
-  bool _lookupsUnsupported = false;
+
+  /// The one-row books ([_BookRow]), each in its own part file. [open] loads
+  /// and [close] resets every one in [_bookRows], in this order.
+  final _siblingRow = _BookRow<_SiblingBook>(
+    key: siblingsKey,
+    empty: _SiblingBook.empty,
+    decode: _SiblingBook.decode,
+    encode: (book) => jsonEncode(book.toJson()),
+    write: _BookWrite.whenEncodingDiffers,
+  );
+  final _notifierRow = _BookRow<_NotifierBook>(
+    key: notifiersKey,
+    empty: _NotifierBook.empty,
+    decode: _NotifierBook.decode,
+    encode: (book) => book.encode(),
+    write: _BookWrite.always,
+  );
+  final _aliveRow = _BookRow<_AliveBook>(
+    key: siblingAliveKey,
+    empty: _AliveBook.empty,
+    decode: _AliveBook.decode,
+    encode: (book) => book.encode(),
+    write: _BookWrite.whenEncodingDiffers,
+  );
+  final _lookupRow = _BookRow<_LookupBook>(
+    key: friendLookupKey,
+    empty: _LookupBook.empty,
+    decode: _LookupBook.decode,
+    encode: (book) => book.encode(),
+    write: _BookWrite.unlessSameBook,
+  );
+  late final List<_BookRow<Object>> _bookRows = [
+    _siblingRow,
+    _notifierRow,
+    _aliveRow,
+    _lookupRow,
+  ];
+
   int _undetermined = 0;
 
   /// The box delivery journal ([BoxInboxEntry]), keyed `rid.id`.
@@ -220,10 +250,7 @@ class ContactStore {
         (key) =>
             key.startsWith(keyPrefix(userId)) ||
             key == requestQueueKey(userId) ||
-            key == siblingsKey(userId) ||
-            key == notifiersKey(userId) ||
-            key == siblingAliveKey(userId) ||
-            key == friendLookupKey(userId) ||
+            _bookRows.any((row) => key == row.key(userId)) ||
             key.startsWith(_inboxPrefix(userId)),
       );
     } on Object {
@@ -235,12 +262,9 @@ class ContactStore {
     var undetermined = 0;
     final loaded = <int, ContactRecord>{};
     final request = _decodeRequest(rows.remove(requestQueueKey(userId)));
-    final siblingBook = _SiblingBook.decode(rows.remove(siblingsKey(userId)));
-    final notifierBook = _NotifierBook.decode(
-      rows.remove(notifiersKey(userId)),
-    );
-    final aliveBook = _AliveBook.decode(rows.remove(siblingAliveKey(userId)));
-    final lookupBook = _LookupBook.decode(rows.remove(friendLookupKey(userId)));
+    final books = [
+      for (final row in _bookRows) row.loader(rows.remove(row.key(userId))),
+    ];
     final inbox = _takeInbox(rows, userId);
     _DecodedSelf? selfRow;
     for (final entry in rows.entries) {
@@ -278,14 +302,9 @@ class ContactStore {
     _selfMigrated = selfRow?.migrated ?? false;
     _requestQueue = request.queue;
     _requestQueueUnsupported = request.unsupported;
-    _siblingBook = siblingBook ?? _SiblingBook.empty;
-    _siblingsUnsupported = siblingBook == null;
-    _notifierBook = notifierBook ?? _NotifierBook.empty;
-    _notifiersUnsupported = notifierBook == null;
-    _aliveBook = aliveBook ?? _AliveBook.empty;
-    _aliveUnsupported = aliveBook == null;
-    _lookupBook = lookupBook ?? _LookupBook.empty;
-    _lookupsUnsupported = lookupBook == null;
+    for (final adopt in books) {
+      adopt();
+    }
     _undetermined = undetermined;
     _inbox
       ..clear()
@@ -328,14 +347,9 @@ class ContactStore {
     _selfMigrated = false;
     _requestQueue = null;
     _requestQueueUnsupported = false;
-    _siblingBook = _SiblingBook.empty;
-    _siblingsUnsupported = false;
-    _notifierBook = _NotifierBook.empty;
-    _notifiersUnsupported = false;
-    _aliveBook = _AliveBook.empty;
-    _aliveUnsupported = false;
-    _lookupBook = _LookupBook.empty;
-    _lookupsUnsupported = false;
+    for (final row in _bookRows) {
+      row.reset();
+    }
     _undetermined = 0;
     _records.clear();
     _inbox.clear();
@@ -609,6 +623,50 @@ class ContactStore {
     );
   }
 
+  /// Read-modify-write of one book row under the account lock, from GROUND
+  /// TRUTH. [mutate] returns the book to keep, or null to refuse (the RAM
+  /// view then takes what is on disk). False when nothing could be written:
+  /// closed, uncommitted, or — telling [onRefused] — a newer build's row or
+  /// a refusing [mutate]. Whether a kept book is written is the row's
+  /// [_BookWrite]. Never fires [onChanged]: no backup carries a book.
+  Future<bool> _updateBook<T extends Object>(
+    _BookRow<T> row,
+    T? Function(T current) mutate, {
+    void Function()? onRefused,
+  }) {
+    final kv = _kv;
+    final userId = _userId;
+    if (kv == null || userId == null) return Future.value(false);
+    final generation = _generation;
+    return _serial(
+      () => _lock(lockName(userId), () async {
+        if (_generation != generation) return false;
+        final key = row.key(userId);
+        final raw = (await _readWhere(kv, (k) => k == key))[key];
+        final current = row.decode(raw);
+        if (current == null) {
+          onRefused?.call();
+          return false;
+        }
+        final next = mutate(current);
+        if (next == null) {
+          onRefused?.call();
+          if (_generation == generation) row.book = current;
+          return false;
+        }
+        final write = switch (row.write) {
+          _BookWrite.always => true,
+          _BookWrite.whenEncodingDiffers => row.encode(next) != raw,
+          _BookWrite.unlessSameBook =>
+            !identical(next, current) && row.encode(next) != raw,
+        };
+        if (write && !await kv.setString(key, row.encode(next))) return false;
+        if (_generation == generation) row.book = next;
+        return true;
+      }),
+    );
+  }
+
   /// In-process serialization: the native lock runner is a pass-through, and
   /// two overlapping list events (friends + conversations at connect) must not
   /// interleave their read-then-write on the same rows. A mutation that
@@ -773,4 +831,60 @@ class _Decoded {
 
   final ContactRecord? record;
   final bool unsupported;
+}
+
+/// When [ContactStore._updateBook] writes the book its mutate kept. The three
+/// differ only when the row on disk is not already that book's encoding.
+enum _BookWrite {
+  /// Every time, an identical encoding included (the notifier book).
+  always,
+
+  /// Unless the row already holds exactly this encoding: an absent or
+  /// unreadable row is written even when the mutate changed nothing.
+  whenEncodingDiffers,
+
+  /// [whenEncodingDiffers], and never when the mutate handed back the very
+  /// book it was given: an absent or unreadable row then stays as it is.
+  unlessSameBook,
+}
+
+/// One single-row "book" of the store: a row outside
+/// [ContactStore.keyPrefix] that holds one versioned JSON value, with its RAM
+/// view. [decode] answers null for a NEWER build's row — off limits, never
+/// overwritten, [unsupported] after [ContactStore.open] — and [empty] for an
+/// absent or unreadable one, which is replaceable.
+class _BookRow<T extends Object> {
+  _BookRow({
+    required this.key,
+    required this.empty,
+    required this.decode,
+    required this.encode,
+    required this.write,
+  }) : book = empty;
+
+  final String Function(int userId) key;
+  final T empty;
+  final T? Function(Object? raw) decode;
+  final String Function(T book) encode;
+  final _BookWrite write;
+
+  /// The book as last read or written.
+  T book;
+
+  /// A NEWER build wrote the row found at open.
+  bool unsupported = false;
+
+  /// Decodes [raw] now; the returned call makes it the RAM view.
+  void Function() loader(Object? raw) {
+    final decoded = decode(raw);
+    return () {
+      book = decoded ?? empty;
+      unsupported = decoded == null;
+    };
+  }
+
+  void reset() {
+    book = empty;
+    unsupported = false;
+  }
 }
