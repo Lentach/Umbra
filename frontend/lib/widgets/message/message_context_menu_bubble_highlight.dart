@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../utils/message_display_text.dart';
 import '../../models/message_model.dart';
 import '../../theme/rpg_theme.dart';
+import '../../utils/format_clock.dart';
 import '../../utils/jumbo_emoji.dart';
 import 'message_bubble_inline_time.dart';
 
@@ -297,13 +298,6 @@ class _VoiceBubbleHighlight extends StatelessWidget {
   final Color bubbleColor;
   final bool isDark;
 
-  String _formatDuration(int? seconds) {
-    final total = seconds ?? 0;
-    final minutes = total ~/ 60;
-    final secs = total % 60;
-    return '$minutes:${secs.toString().padLeft(2, '0')}';
-  }
-
   @override
   Widget build(BuildContext context) {
     final iconColor = isMine && !isDark && themePreference == 'light'
@@ -326,7 +320,7 @@ class _VoiceBubbleHighlight extends StatelessWidget {
         ),
         const SizedBox(width: 8),
         Text(
-          _formatDuration(message.mediaDuration),
+          formatClock(message.mediaDuration ?? 0),
           style: RpgTheme.bodyFont(fontSize: 10, color: metaColor),
         ),
       ],

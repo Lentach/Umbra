@@ -8,6 +8,7 @@ import '../../providers/settings_provider.dart';
 import '../../providers/encryption_provider.dart';
 import '../../utils/reply_preview_helper.dart';
 import '../../theme/rpg_theme.dart';
+import '../../utils/format_clock.dart';
 import '../../utils/message_expiry.dart';
 import '../audio/playback_controller.dart';
 import '../audio/waveform_display.dart';
@@ -36,12 +37,6 @@ class VoiceMessageContent extends StatelessWidget {
   });
 
   // ── helpers ──────────────────────────────────────────────────────────────
-
-  String _formatDuration(Duration d) {
-    final minutes = d.inMinutes;
-    final seconds = d.inSeconds % 60;
-    return '$minutes:${seconds.toString().padLeft(2, '0')}';
-  }
 
   bool _isExpired() => isMessageExpired(message);
 
@@ -322,7 +317,7 @@ class VoiceMessageContent extends StatelessWidget {
 
                                   // Position / total duration
                                   Text(
-                                    '${_formatDuration(position)}/${_formatDuration(duration)}',
+                                    '${formatClock(position.inSeconds)}/${formatClock(duration.inSeconds)}',
                                     style: RpgTheme.bodyFont(
                                       fontSize: 10,
                                       color: metaColor,
