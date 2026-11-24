@@ -463,6 +463,33 @@ void main() {
     });
   });
 
+  // CONN-05. Mutation: drop `_resumeProbeTimer?.cancel()` from `connect()`.
+  test('a resume probe armed before a fresh connect does not replace the '
+      'healthy socket that connect opened', () {
+    fakeAsync((async) {
+      unawaited(connection.connect(1, 'token', _url));
+      async.flushMicrotasks();
+      socket
+        ..transportConnect()
+        ..serve('socketReady');
+      connection.ensureReconnectIfNeeded(); // arms the 6 s probe
+      async.elapse(const Duration(seconds: 3));
+
+      // The socket died; the reconnect completes inside the probe window.
+      unawaited(connection.connect(1, 'token', _url));
+      async.flushMicrotasks();
+      socket
+        ..transportConnect()
+        ..serve('socketReady');
+      final opened = socket.connectTokens.length;
+
+      async.elapse(const Duration(seconds: 7));
+
+      expect(socket.connectTokens, hasLength(opened));
+      connection.disconnect(isLogout: true);
+    });
+  });
+
   // MC-09. Mutation: drop `_reconnectManager.resetAttempts()` from
   // `_onSocketReady`.
   test('a session that turned ready starts its reconnect count over: every '

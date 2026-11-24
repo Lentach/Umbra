@@ -433,8 +433,10 @@ class ConnectionProvider extends ChangeNotifier {
     _lastConnectStartedAt = now;
     final generation = ++_connectGeneration;
 
-    // 1. Cancel any pending reconnect timer
+    // 1. Cancel any pending reconnect timer, and the resume probe: it judges
+    // the socket it was armed on, which this connect is about to replace.
     _reconnectManager.cancel();
+    _resumeProbeTimer?.cancel();
     _intentionalDisconnect = false;
     _reconnectManager.tokenForReconnect = token;
 
