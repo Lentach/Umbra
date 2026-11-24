@@ -54,3 +54,132 @@ describe('BoxReaper ceiling check', () => {
     expect(alert.report.mock.calls).toEqual([[false], [true], [true], [false]]);
   });
 });
+
+/** BE-03: one failing step or file must not stop the rest of the sweep. */
+function sweepSetup() {
+  const box = {
+    deleteExpiredMessages: jest.fn().mockResolvedValue(undefined),
+    expiredMedia: jest.fn().mockResolvedValue([]),
+    deleteMedia: jest.fn().mockResolvedValue(undefined),
+    reapQueues: jest.fn().mockResolvedValue([]),
+    totals: jest.fn().mockResolvedValue({ msgCount: 0, mediaBytes: 0 }),
+  };
+  const store = { remove: jest.fn().mockResolvedValue(undefined) };
+  const delivery = { forget: jest.fn() };
+  const alert = { report: jest.fn().mockResolvedValue(undefined) };
+  const reaper = new BoxReaper(
+    box as never,
+    store as never,
+    delivery as never,
+    alert as never,
+  );
+  const logger = reaper['logger'] as unknown as Record<string, jest.Mock>;
+  const logged: string[] = [];
+  for (const level of ['error', 'warn', 'log', 'debug']) {
+    jest.spyOn(logger as never, level as never).mockImplementation(((
+      ...args: unknown[]
+    ) => {
+      logged.push(args.map(String).join(' '));
+    }) as never);
+  }
+  return { reaper, box, store, delivery, alert, logged };
+}
+
+function errno(code: string, path: string): NodeJS.ErrnoException {
+  const error: NodeJS.ErrnoException = new Error(
+    `${code}: operation failed, unlink '${path}'`,
+  );
+  error.code = code;
+  error.path = path;
+  return error;
+}
+
+describe('BoxReaper sweep isolation (BE-03)', () => {
+  it('one undeletable file keeps its row, and the other file, the queues and the alarm ping still go', async () => {
+    const f = sweepSetup();
+    f.box.expiredMedia.mockResolvedValue([
+      { id: 'm1', path: 'stuck-file.bin' },
+      { id: 'm2', path: 'fine-file.bin' },
+    ]);
+    f.store.remove.mockImplementation((path: string) =>
+      path === 'stuck-file.bin'
+        ? Promise.reject(errno('EACCES', '/app/media/box/stuck-file.bin'))
+        : Promise.resolve(),
+    );
+    f.box.reapQueues.mockResolvedValue(['rid-1']);
+
+    await f.reaper.sweep();
+
+    expect(f.store.remove.mock.calls).toEqual([
+      ['stuck-file.bin'],
+      ['fine-file.bin'],
+    ]);
+    // File first, then row: the row of the file that stayed is kept.
+    expect(f.box.deleteMedia.mock.calls).toEqual([[['m2']]]);
+    expect(f.box.reapQueues.mock.calls).toHaveLength(1);
+    expect(f.delivery.forget.mock.calls).toEqual([['rid-1']]);
+    // A sweep that could not finish its work is an alarm, not a silent pass.
+    expect(f.alert.report.mock.calls).toEqual([[true]]);
+  });
+
+  it('a failing step is logged by step name and errno code only, never a path or an id', async () => {
+    const f = sweepSetup();
+    f.box.expiredMedia.mockResolvedValue([
+      { id: 'm1', path: 'stuck-file.bin' },
+    ]);
+    f.store.remove.mockRejectedValue(
+      errno('EACCES', '/app/media/box/stuck-file.bin'),
+    );
+
+    await f.reaper.sweep();
+
+    const all = f.logged.join('\n');
+    expect(all).toContain('EACCES');
+    expect(all).not.toContain('stuck-file');
+    expect(all).not.toContain('m1');
+  });
+
+  it.each(['deleteExpiredMessages', 'expiredMedia', 'reapQueues', 'totals'])(
+    'a rejecting %s does not stop the later steps or the alarm ping',
+    async (step) => {
+      const f = sweepSetup();
+      f.box[step as keyof typeof f.box].mockRejectedValue(new Error('db down'));
+
+      await f.reaper.sweep();
+
+      for (const [name, fn] of Object.entries(f.box)) {
+        if (name === step || name === 'deleteMedia') continue;
+        expect([name, fn.mock.calls.length]).toEqual([name, 1]);
+      }
+      expect(f.alert.report.mock.calls).toEqual([[true]]);
+    },
+  );
+
+  it('a rejecting alarm ping does not make the sweep reject', async () => {
+    const f = sweepSetup();
+    f.alert.report.mockRejectedValue(new Error('ping failed'));
+    await expect(f.reaper.sweep()).resolves.toBeUndefined();
+  });
+
+  it('a sweep that starts while the previous one still runs does nothing; the next one runs again', async () => {
+    const f = sweepSetup();
+    let release!: () => void;
+    f.box.deleteExpiredMessages.mockReturnValueOnce(
+      new Promise<void>((resolve) => (release = resolve)),
+    );
+
+    const first = f.reaper.sweep();
+    await f.reaper.sweep();
+    expect(f.box.deleteExpiredMessages.mock.calls).toHaveLength(1);
+    expect(f.box.expiredMedia.mock.calls).toHaveLength(0);
+    expect(f.alert.report.mock.calls).toHaveLength(0);
+
+    release();
+    await first;
+    expect(f.alert.report.mock.calls).toEqual([[false]]);
+
+    await f.reaper.sweep();
+    expect(f.box.deleteExpiredMessages.mock.calls).toHaveLength(2);
+    expect(f.alert.report.mock.calls).toEqual([[false], [false]]);
+  });
+});
