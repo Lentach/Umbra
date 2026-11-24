@@ -67,7 +67,7 @@ export class BoxReaper {
     let failed = false;
     const attempt = async <T>(
       step: string,
-      run: () => Promise<T>,
+      run: () => Promise<T> | T,
     ): Promise<T | typeof FAILED> => {
       try {
         return await run();
@@ -114,7 +114,7 @@ export class BoxReaper {
     );
     const queuesGone = reaped === FAILED ? 0 : reaped.length;
     if (reaped !== FAILED) {
-      await attempt('forget', async () => {
+      await attempt('forget', () => {
         for (const rid of reaped) this.delivery.forget(rid);
       });
     }
@@ -134,7 +134,7 @@ export class BoxReaper {
       const over =
         totals === null
           ? true
-          : await attempt('ceiling', async () =>
+          : await attempt('ceiling', () =>
               this.ceiling.check(totals, this.logger),
             );
       alarming = over === FAILED || over || failed;
