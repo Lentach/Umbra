@@ -208,7 +208,7 @@ export class KeyBundlesService {
           // replacement attempt on an ENROLLED account is exactly the event
           // this lock exists to stop.
           this.logger.warn(
-            `[identity-lock] REFUSED unauthorized identity replacement deviceId=${deviceId} storedPrefix=${existingBundle.identityPublicKey.slice(0, 12)} attemptedPrefix=${data.identityPublicKey.slice(0, 12)}`,
+            `[identity-lock] REFUSED unauthorized identity replacement deviceId=${deviceId}`,
           );
           throw new IdentityLockedError();
         }
@@ -219,7 +219,7 @@ export class KeyBundlesService {
         authorizedBy = 'unlocked';
       }
       this.logger.warn(
-        `[identity-churn] deviceId=${deviceId} via=${authorizedBy} oldIdentityPrefix=${existingBundle.identityPublicKey.slice(0, 12)} newIdentityPrefix=${data.identityPublicKey.slice(0, 12)}`,
+        `[identity-churn] deviceId=${deviceId} via=${authorizedBy}`,
       );
     }
     // Amendment (lxxviii) clause 2 — restore proof, valid ONLY when the
@@ -246,7 +246,7 @@ export class KeyBundlesService {
       });
       if (!proofValid) {
         this.logger.warn(
-          `[identity-restore] REFUSED invalid restore proof deviceId=${deviceId} storedPrefix=${existingBundle.identityPublicKey.slice(0, 12)}`,
+          `[identity-restore] REFUSED invalid restore proof deviceId=${deviceId}`,
         );
         throw new IdentityRestoreRefusedError();
       }
@@ -608,7 +608,7 @@ export class KeyBundlesService {
       // for no gain.
       if (reset?.status !== 'completed' && (await this.isEnrolled(userId))) {
         this.logger.warn(
-          `[identity-lock] REFUSED one-time pre-keys under an unpublished identity deviceId=${deviceId} publishedPrefix=${published.identityPublicKey.slice(0, 12)} attemptedPrefix=${identityPublicKey.slice(0, 12)}`,
+          `[identity-lock] REFUSED one-time pre-keys under an unpublished identity deviceId=${deviceId}`,
         );
         throw new IdentityLockedError();
       }

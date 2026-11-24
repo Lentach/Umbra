@@ -15,6 +15,33 @@ import { LocalStorageService } from '../media/local-storage.service';
 import { KeyBundlesService } from '../key-bundles/key-bundles.service';
 import { RefreshTokensService } from '../auth/refresh-tokens.service';
 
+/** Postgres unique-violation SQLSTATE. */
+const PG_UNIQUE_VIOLATION = '23505';
+/** Migration 0031: unique `LOWER(username)`. */
+const LOWER_USERNAME_INDEX = 'UQ_users_lower_username';
+
+/**
+ * The violated constraint's name when `error` is a Postgres 23505 (TypeORM
+ * wraps the driver error as `driverError`), else null.
+ */
+function uniqueViolationConstraint(error: unknown): string | null {
+  if (typeof error !== 'object' || error === null) return null;
+  const driverError: unknown =
+    'driverError' in error ? error.driverError : error;
+  if (
+    typeof driverError === 'object' &&
+    driverError !== null &&
+    'code' in driverError &&
+    driverError.code === PG_UNIQUE_VIOLATION
+  ) {
+    return 'constraint' in driverError &&
+      typeof driverError.constraint === 'string'
+      ? driverError.constraint
+      : '';
+  }
+  return null;
+}
+
 @Injectable()
 export class UsersService {
   private readonly auditLogger = new Logger('Audit');
@@ -42,7 +69,18 @@ export class UsersService {
       const existing = await this.findByUsernameAndTag(username, tag);
       if (!existing) {
         const user = this.usersRepo.create({ password: hash, username, tag });
-        return this.usersRepo.save(user);
+        try {
+          return await this.usersRepo.save(user);
+        } catch (error) {
+          // A concurrent registration won between the checks and the insert.
+          const constraint = uniqueViolationConstraint(error);
+          if (constraint === LOWER_USERNAME_INDEX) {
+            // Same answer as the check above: no new "does this name exist" oracle.
+            throw new ConflictException('nickname is already taken');
+          }
+          if (constraint !== null) continue; // (username, tag) taken: draw the tag again
+          throw error;
+        }
       }
     }
     throw new ConflictException(
