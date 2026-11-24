@@ -6,404 +6,61 @@ import 'dart:typed_data';
 import 'package:clock/clock.dart';
 import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
-import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/services/box/box_frame.dart';
 import 'package:fireplace/services/box/box_media_fetcher.dart';
 import 'package:fireplace/services/box/box_media_store.dart';
 import 'package:fireplace/services/box/box_media_frame.dart';
-import 'package:fireplace/services/box/box_outbox.dart';
 import 'package:fireplace/services/box/box_wire.dart';
 import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/services/contacts/contact_store.dart';
-import 'package:fireplace/services/device_list/device_list_cache.dart';
-import 'package:fireplace/services/device_list/device_list_canonical.dart';
+import '../support/box_send_harness.dart';
 import '../support/chat_seed.dart';
-import 'package:fireplace/services/encryption_service.dart';
-import 'package:fireplace/services/media_crypto_service.dart';
 import 'package:fireplace/utils/message_ids.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-
-/// The real plaintext store; Signal and the device-list round trip are
-/// faked. A "ciphertext" is `3:` + base64(the plaintext), so a frame the
-/// box was handed can be read back.
-class _SendEncryption extends EncryptionProvider {
-  _SendEncryption(this.store) : super(service: store);
-
-  final EncryptionService store;
-
-  /// Verified lists this client holds, by user id; absent = not enrolled
-  /// (single device 1).
-  final Map<int, VerifiedDeviceList> lists = {};
-
-  /// What a forced fetch finds on the server, when it differs from [lists].
-  final Map<int, VerifiedDeviceList> served = {};
-
-  /// Every lookup that reaches the server — forced, or a list not held —
-  /// by user id.
-  final List<int> forcedFetches = [];
-
-  /// Every `getVerifiedDeviceList` call, forced or not — a cache miss would
-  /// fetch in the real provider.
-  final List<int> fetches = [];
-
-  /// Users whose list cannot be verified (the fetch fails closed).
-  final Set<int> unverifiable = {};
-
-  /// When set, every forced fetch waits for it: a lookup still in flight.
-  Completer<void>? fetchHold;
-
-  /// Per-user holds, taking precedence over [fetchHold].
-  final Map<int, Completer<void>> holdFor = {};
-
-  /// Peer devices whose Signal message comes out longer than one frame.
-  final Set<int> oversize = {};
-
-  final List<(int, int)> encryptCalls = [];
-
-  @override
-  bool get isE2EReady => true;
-
-  @override
-  bool get hadIdentityReset => false;
-
-  @override
-  int get ownDeviceId => 1;
-
-  @override
-  VerifiedDeviceList? cachedDeviceList(int userId) => lists[userId];
-
-  @override
-  Future<VerifiedDeviceList> getVerifiedDeviceList(
-    int userId, {
-    bool forceRefresh = false,
-    bool batched = false,
-    Duration timeout = const Duration(seconds: 10),
-  }) async {
-    fetches.add(userId);
-    // The real provider asks the server when forced AND when it holds
-    // nothing (decision 51: a held peer list is kept across connects).
-    final lookup = forceRefresh || !lists.containsKey(userId);
-    if (lookup) {
-      forcedFetches.add(userId);
-      await (holdFor[userId] ?? fetchHold)?.future;
-    }
-    if (unverifiable.contains(userId)) throw StateError('chain refused');
-    if (lookup) {
-      // Like the real cache: a verified answer is held, a non-enrolled one
-      // included.
-      lists[userId] =
-          served[userId] ??
-          lists[userId] ??
-          const VerifiedDeviceList.notEnrolled();
-    }
-    return lists[userId] ?? const VerifiedDeviceList.notEnrolled();
-  }
-
-  /// Signal sessions this device holds, as (user, device).
-  final Set<(int, int)> sessions = {};
-
-  /// Every pre-key bundle fetch the real [ensureSession] would emit on the
-  /// account socket, as (user, device).
-  final List<(int, int)> bundleFetches = [];
-
-  /// Addresses whose bundle fetch fails (no bundle, a timeout).
-  final Set<(int, int)> unbuildable = {};
-
-  /// Per-address holds on a bundle fetch still in flight.
-  final Map<(int, int), Completer<void>> buildHold = {};
-
-  @override
-  Future<bool> hasSessionWith(int peerUserId, {int deviceId = 1}) async =>
-      sessions.contains((peerUserId, deviceId));
-
-  /// The real one's contract: a session with no rebuild pending returns at
-  /// once; anything else fetches the bundle and builds, and a failed build
-  /// leaves the rebuild pending.
-  @override
-  Future<void> ensureSession(int recipientId, {int deviceId = 1}) async {
-    final address = (recipientId, deviceId);
-    final rebuild = needsSessionRebuild(recipientId, deviceId: deviceId);
-    clearSessionRebuild(recipientId, deviceId: deviceId);
-    if (sessions.contains(address) && !rebuild) return;
-    bundleFetches.add(address);
-    await buildHold[address]?.future;
-    if (unbuildable.contains(address)) {
-      if (rebuild) markSessionRebuild(recipientId, deviceId: deviceId);
-      throw StateError('Recipient has no key bundle');
-    }
-    sessions.add(address);
-  }
-
-  @override
-  Future<String> encrypt(
-    int recipientId,
-    String plaintext, {
-    int deviceId = 1,
-  }) async {
-    encryptCalls.add((recipientId, deviceId));
-    final bytes = oversize.contains(deviceId)
-        ? Uint8List(BoxFrame.maxSignalBytes + 1)
-        : utf8.encode(plaintext);
-    return '3:${base64Encode(bytes)}';
-  }
-
-  /// When set, a stored record cannot be proven (a write the store
-  /// swallowed).
-  bool recordsUnproven = false;
-
-  /// While set, `recordExists` waits for it: a store write in flight.
-  Completer<void>? recordHold;
-
-  @override
-  Future<bool?> recordExists(int messageId) async {
-    await recordHold?.future;
-    return recordsUnproven ? false : super.recordExists(messageId);
-  }
-
-  @override
-  Future<void> saveDecryptedContent(
-    int messageId,
-    Map<String, dynamic> data, {
-    int? conversationId,
-    DateTime? createdAt,
-    DateTime? expiresAt,
-    int? disappearAfterSeconds,
-    WireKey? wire,
-  }) async {
-    if (recordsUnproven) return;
-    await super.saveDecryptedContent(
-      messageId,
-      data,
-      conversationId: conversationId,
-      createdAt: createdAt,
-      expiresAt: expiresAt,
-      disappearAfterSeconds: disappearAfterSeconds,
-      wire: wire,
-    );
-  }
-}
-
-class _Outbox implements BoxOutbox {
-  final Map<int, Map<int, ContactOutbound>> addresses = {};
-
-  /// Our own other devices' self-queue addresses, by device id.
-  final Map<int, ContactOutbound> siblings = {};
-
-  /// Peer devices whose `send` the box refuses.
-  final Set<int> refuse = {};
-
-  /// Devices whose queue is full (`queue_full`).
-  final Set<int> full = {};
-
-  /// Every frame handed over, with its address.
-  final List<(ContactOutbound, BoxFrame)> delivered = [];
-
-  /// How each frame was kept, by sid, in send order (decision 61).
-  final List<(String, BoxSendMode?)> modes = [];
-
-  bool noLocalId = false;
-
-  /// When set, every `send` waits for it: a box that has not answered yet.
-  Completer<void>? hold;
-  int _next = kFirstLocalMessageId + 40;
-
-  /// What the box's media route holds, by base64url id.
-  final Map<String, Uint8List> media = {};
-
-  /// Every `POST /box/media`, with the queue it was charged to.
-  final List<(ContactOutbound, Uint8List)> uploads = [];
-
-  /// When set, the media route answers this instead of storing the body.
-  BoxResult<BoxMediaRef>? uploadAnswer;
-
-  /// When set, every `POST /box/media` waits for it: an upload in flight.
-  Completer<void>? uploadHold;
-
-  @override
-  Map<int, ContactOutbound> addressesFor(int peerUserId) =>
-      addresses[peerUserId] ?? const {};
-
-  @override
-  Map<int, ContactOutbound> siblingAddresses() => siblings;
-
-  @override
-  Iterable<int> coveredPeers() => [
-    for (final MapEntry(:key, :value) in addresses.entries)
-      if (value.isNotEmpty) key,
-  ];
-
-  @override
-  Future<BoxSendOutcome> deliver(
-    ContactOutbound to,
-    Uint8List body, {
-    BoxSendMode? mode,
-  }) async {
-    delivered.add((to, BoxFrame.decode(body)!));
-    modes.add((to.sid, mode));
-    await hold?.future;
-    if (full.contains(to.peerDeviceId)) return BoxSendOutcome.full;
-    return refuse.contains(to.peerDeviceId)
-        ? BoxSendOutcome.failed
-        : BoxSendOutcome.taken;
-  }
-
-  @override
-  Future<int?> nextLocalId() async => noLocalId ? null : _next++;
-
-  /// Every `DELETE /box/media`, with the secret it presented.
-  final List<(Uint8List, Uint8List)> deletes = [];
-
-  /// When set, a delete never completes until it does.
-  Completer<void>? deleteHold;
-
-  @override
-  Future<BoxResult<void>> deleteMedia(Uint8List id, Uint8List secret) async {
-    deletes.add((id, secret));
-    await deleteHold?.future;
-    return const BoxOk(null);
-  }
-
-  @override
-  Future<BoxResult<BoxMediaRef>> uploadMedia(
-    ContactOutbound to,
-    Uint8List framed,
-  ) async {
-    uploads.add((to, framed));
-    await uploadHold?.future;
-    final answer = uploadAnswer;
-    if (answer != null) return answer;
-    final id = Uint8List(kBoxMediaIdBytes)..[0] = media.length + 1;
-    media[boxB64(id)] = framed;
-    return BoxOk(
-      BoxMediaRef(
-        id: id,
-        bucket: 'd14',
-        expiresAt: DateTime.utc(2026, 10, 10),
-        deleteSecret: Uint8List(kBoxMediaDeleteSecretBytes)
-          ..fillRange(0, kBoxMediaDeleteSecretBytes, 0x5a + id[0]),
-      ),
-    );
-  }
-
-  @override
-  Future<BoxResult<Uint8List>> downloadMedia(Uint8List id) async {
-    final body = media[boxB64(id)];
-    return body == null ? const BoxRefused(BoxCode.notFound) : BoxOk(body);
-  }
-}
-
-ContactOutbound _address(int device) => ContactOutbound(
-  peerDeviceId: device,
-  sid: 'sid-$device',
-  sealPub: 'seal-$device',
-);
-
-/// Media crypto, faked: a "ciphertext" is the plaintext reversed plus a
-/// 16-byte tag, under a fresh key and IV per encrypt, so a re-encryption
-/// shows.
-class _MediaCrypto extends MediaCryptoService {
-  /// Every plaintext encrypted for the box path.
-  final List<Uint8List> encrypted = [];
-
-  @override
-  Future<EncryptedMedia> encrypt(Uint8List bytes) async {
-    encrypted.add(bytes);
-    final n = encrypted.length;
-    return EncryptedMedia(
-      ciphertext: Uint8List.fromList([
-        ...bytes.reversed,
-        ...List.filled(16, n),
-      ]),
-      keyBase64: base64Encode(List.filled(32, n)),
-      ivBase64: base64Encode(List.filled(12, n)),
-    );
-  }
-}
-
-VerifiedDeviceList _enrolled(List<int> live, {List<int> revoked = const []}) =>
-    VerifiedDeviceList.enrolled(
-      version: 3,
-      listHash: 'H' * 44,
-      devices: [
-        for (final id in [...live, ...revoked]..sort())
-          DeviceListEntry(
-            deviceId: id,
-            platform: 'test',
-            addedAtMs: 0,
-            revokedAtMs: revoked.contains(id) ? 1 : null,
-          ),
-      ],
-    );
-
-Map<String, dynamic> _conv({int? timer}) => {
-  'id': 10,
-  'userOne': {'id': 1, 'username': 'alice', 'tag': '0001'},
-  'userTwo': {'id': 2, 'username': 'bob', 'tag': '0002'},
-  'createdAt': '2026-01-01T00:00:00.000Z',
-  'disappearingTimer': timer,
-  'unreadCount': 0,
-  'lastMessage': null,
-};
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  late BoxSendHarness h;
   late MessagingProvider provider;
   late ConversationsProvider conversations;
-  late _SendEncryption encryption;
-  late _Outbox outbox;
+  late ScriptedSendEncryption encryption;
+  late ScriptedSendOutbox outbox;
   late List<String> emitted;
-  late _MediaCrypto mediaUpload;
+  late ReversingMediaCrypto mediaUpload;
   late MemoryBoxMediaStore mediaStore;
 
-  MessagingProvider newProvider() => MessagingProvider()
-    ..setConversationsProvider(conversations)
-    ..setEncryptionProvider(encryption)
-    ..setCurrentUserId(1)
-    ..setToken('tok')
-    ..setIncomingMessageSoundEnabledForTest(false)
-    ..onConnect(false)
-    ..setActiveConversationIdForTest(10)
-    ..setEmitCallback((event, data) => emitted.add(event))
-    ..boxOutbox = outbox
+  /// The app started again on the same device: a new provider over the
+  /// same fakes and the same media store.
+  MessagingProvider newProvider() => h.provider = h.newProvider()
     ..boxMedia = BoxMediaFetcher(
       store: mediaStore,
       download: (id) async => const BoxRefused(BoxCode.notFound),
-    )
-    ..setMediaCryptoForTest(mediaUpload);
+    );
 
   Future<void> setUpWith({int? timer}) async {
-    FlutterSecureStorage.setMockInitialValues({});
-    SharedPreferences.setMockInitialValues({});
-    final service = EncryptionService();
-    await service.initialize(
-      1,
-      checkServerIdentity: () async => const ServerIdentityGuard(exists: false),
+    outbox = ScriptedSendOutbox();
+    h = await BoxSendHarness.create(
+      timer: timer,
+      encryption: (store) => encryption = ScriptedSendEncryption(store),
+      outbox: outbox,
     );
-    // Box-ready a moment ago: a held peer list is kept (decision 51).
-    await service.markBoxListsReady(DateTime.now().millisecondsSinceEpoch);
-    encryption = _SendEncryption(service);
-    conversations = ConversationsProvider()..setCurrentUserId(1);
-    seedConversations(conversations, [_conv(timer: timer)]);
-    conversations.openConversation(10);
+    conversations = h.conversations;
+    mediaUpload = h.crypto;
+    emitted = h.emitted;
     mediaStore = MemoryBoxMediaStore();
-    outbox = _Outbox();
-    mediaUpload = _MediaCrypto();
-    emitted = [];
-    provider = newProvider();
+    provider = h.provider
+      ..boxMedia = BoxMediaFetcher(
+        store: mediaStore,
+        download: (id) async => const BoxRefused(BoxCode.notFound),
+      );
   }
 
   setUp(setUpWith);
 
-  Future<void> pump([int turns = 40]) async {
-    for (var i = 0; i < turns; i++) {
-      await Future<void>.delayed(Duration.zero);
-    }
-  }
+  Future<void> pump([int turns = 40]) => h.pump(turns);
 
   /// Bob (2) on devices [live]; every one of [addressed] handed us a queue.
   /// [connected]: the connect's list refresh has run since (E2E ready).
@@ -417,14 +74,14 @@ void main() {
     bool connected = true,
     bool held = true,
   }) {
-    final list = _enrolled(live, revoked: revoked);
+    final list = enrolledList(live, revoked: revoked);
     if (held) {
       encryption.lists[2] = list;
     } else {
       encryption.served[2] = list;
     }
     outbox.addresses[2] = {
-      for (final d in addressed ?? live) d: _address(d),
+      for (final d in addressed ?? live) d: boxAddress(d),
     };
     if (connected) provider.refreshBoxDeviceLists();
   }
@@ -519,7 +176,7 @@ void main() {
     'whole message (decision 16): nothing is split, nothing goes to the server',
     () async {
       bob([1]);
-      encryption.lists[1] = _enrolled([1, 3, 4]);
+      encryption.lists[1] = enrolledList([1, 3, 4]);
       outbox.siblings[3] = selfQueueOf(3);
       final row = await send('siblings');
 
@@ -536,7 +193,7 @@ void main() {
     '(E5)',
     () async {
       bob([1, 2]);
-      encryption.lists[1] = _enrolled([1, 3, 4], revoked: [5]);
+      encryption.lists[1] = enrolledList([1, 3, 4], revoked: [5]);
       outbox.siblings.addAll({
         for (final d in [3, 4, 5]) d: selfQueueOf(d),
       });
@@ -576,7 +233,7 @@ void main() {
     '(decision 93, E93a)',
     () async {
       bob([1]);
-      encryption.lists[1] = _enrolled([1, 3]);
+      encryption.lists[1] = enrolledList([1, 3]);
       outbox
         ..siblings[3] = selfQueueOf(3)
         ..refuse.add(3);
@@ -631,7 +288,7 @@ void main() {
     '(decision 91: no card without a message)',
     () async {
       bob([1, 2]);
-      encryption.lists[1] = _enrolled([1, 3]);
+      encryption.lists[1] = enrolledList([1, 3]);
       outbox
         ..siblings[3] = selfQueueOf(3)
         ..refuse.addAll([2, 3]);
@@ -664,7 +321,7 @@ void main() {
       var now = DateTime.now();
       await withClock(Clock(() => now), () async {
         bob([1, 2]);
-        encryption.lists[1] = _enrolled([1, 3]);
+        encryption.lists[1] = enrolledList([1, 3]);
         outbox
           ..siblings[3] = selfQueueOf(3)
           ..full.addAll([2, 3]);
@@ -720,7 +377,7 @@ void main() {
     'one claiming to be it on the public request queue does not (E93a)',
     () async {
       bob([1, 2]);
-      encryption.lists[1] = _enrolled([1, 3]);
+      encryption.lists[1] = enrolledList([1, 3]);
       outbox
         ..siblings[3] = selfQueueOf(3)
         ..full.addAll([2, 3]);
@@ -773,7 +430,7 @@ void main() {
     'our own devices took (decision 93)',
     () async {
       bob([1, 2]);
-      encryption.lists[1] = _enrolled([1, 3]);
+      encryption.lists[1] = enrolledList([1, 3]);
       outbox
         ..siblings[3] = selfQueueOf(3)
         ..refuse.add(1)
@@ -791,13 +448,13 @@ void main() {
 
   test(
     'a friend whose every device is paused fails the next send with NOTHING '
-    'sealed — not to it, not as a sent copy — and never the old path; a '
+    'sealed — not to it, not as a sent copy — and nothing delivered; a '
     'retry once the probe is due goes to it (E93a)',
     () async {
       var now = DateTime.now();
       await withClock(Clock(() => now), () async {
         bob([1]);
-        encryption.lists[1] = _enrolled([1, 3]);
+        encryption.lists[1] = enrolledList([1, 3]);
         outbox
           ..siblings[3] = selfQueueOf(3)
           ..full.add(1);
@@ -855,8 +512,8 @@ void main() {
 
   test(
     'a covered peer whose list the connect could not verify FAILS the row '
-    'with no lookup of its own — never the old path, whose emit a web socket '
-    'buffers offline and replays as a server row (decision 21)',
+    'with no lookup of its own and nothing delivered; a retry fetches '
+    'nothing until the next refresh (decision 21)',
     () async {
       encryption.unverifiable.add(2);
       bob([1], held: false);
@@ -942,7 +599,7 @@ void main() {
 
   test(
     'a retry whose box route is gone stays failed and never reaches the '
-    'server: device 1 may already hold it, and the old path cannot dedup',
+    'server (no sendMessage): device 1 may already hold the message',
     () async {
       bob([1, 2]);
       outbox.refuse.addAll([1, 2]);
@@ -999,7 +656,7 @@ void main() {
 
   /// Our other device 3, with a self-queue: every box send makes a copy.
   void withSibling() {
-    encryption.lists[1] = _enrolled([1, 3]);
+    encryption.lists[1] = enrolledList([1, 3]);
     outbox.siblings[3] = selfQueueOf(3);
   }
 
@@ -1255,7 +912,7 @@ void main() {
     () async {
       bob([1]);
       await pump();
-      encryption.served[2] = _enrolled([1, 2]);
+      encryption.served[2] = enrolledList([1, 2]);
       await send('one');
       await send('two');
       expect(encryption.forcedFetches, [1]);
@@ -1279,7 +936,7 @@ void main() {
       await send('both');
       expect(outbox.delivered, hasLength(2));
 
-      encryption.lists[2] = _enrolled([1], revoked: [2]);
+      encryption.lists[2] = enrolledList([1], revoked: [2]);
       outbox.delivered.clear();
       await send('only one');
       expect([for (final (to, _) in outbox.delivered) to.peerDeviceId], [1]);
@@ -1294,7 +951,7 @@ void main() {
       bob([1]);
       await pump();
       encryption.lists.remove(2);
-      encryption.served[2] = _enrolled([1]);
+      encryption.served[2] = enrolledList([1]);
       provider.onDeviceListInvalidated(2);
       await send('after a rebuild request');
 
@@ -1484,7 +1141,7 @@ void main() {
         expect(row.deliveryStatus, MessageDeliveryStatus.failed);
       }
 
-      seedConversations(conversations, [_conv(timer: 3600)]);
+      seedConversations(conversations, [boxSendConversation(timer: 3600)]);
       outbox.refuse.clear();
       for (final row in [text, ping, reply]) {
         outbox.delivered.clear();
@@ -1510,7 +1167,7 @@ void main() {
       encryption
         ..sessions.addAll({(2, 1), (2, 4), (1, 3)})
         ..markSessionRebuild(2, deviceId: 4)
-        ..lists[1] = _enrolled([1, 3, 4, 6], revoked: [7]);
+        ..lists[1] = enrolledList([1, 3, 4, 6], revoked: [7]);
       outbox.siblings.addAll({
         for (final d in [3, 4, 7]) d: selfQueueOf(d),
       });
@@ -1621,7 +1278,7 @@ void main() {
   );
 
   test(
-    'a pre-build that failed fails the send (never the old path, never a '
+    'a pre-build that failed fails the send (nothing delivered, never a '
     'fetch of its own), and so does a retry before the next pass; the pass '
     'builds it and the retry goes through',
     () async {
@@ -1840,7 +1497,7 @@ void main() {
 
     test(
       'a refused upload (quota_exceeded, rate_limited) or no answer fails the '
-      'row for a retry: no frame, nothing on the old path (decisions 19, 31)',
+      'row for a retry: no frame, nothing emitted to the server (decisions 19, 31)',
       () async {
         bob([1]);
         for (final answer in <BoxResult<BoxMediaRef>>[
@@ -1900,7 +1557,7 @@ void main() {
         expect(failed.mediaUrl, startsWith('box:'));
         final first = envelopeOf(outbox.delivered.first.$2);
 
-        seedConversations(conversations, [_conv(timer: 3600)]);
+        seedConversations(conversations, [boxSendConversation(timer: 3600)]);
         outbox
           ..refuse.clear()
           ..delivered.clear();
@@ -1963,7 +1620,7 @@ void main() {
         final failed = rowOf(MessageType.image);
         expect(failed.disappearAfterSeconds, 30);
 
-        seedConversations(conversations, [_conv(timer: 3600)]);
+        seedConversations(conversations, [boxSendConversation(timer: 3600)]);
         outbox.uploadAnswer = null;
         final hold = outbox.uploadHold = Completer<void>();
         final retry = provider.retryFailedMessage(failed.tempId!);
@@ -1984,7 +1641,7 @@ void main() {
     test(
       'an uploaded attachment whose route is gone at the retry stays failed '
       'and never reaches the server, even when no frame went out before: the '
-      'old path cannot name a box id (decision 25)',
+      'server send cannot name a box id (decision 25)',
       () async {
         bob([1, 2]);
         outbox.noLocalId = true;
@@ -2230,8 +1887,8 @@ void main() {
       expect(rowOf(stuck.tempId!).deliveryStatus, MessageDeliveryStatus.failed);
     });
 
-    test('its retry after a restart re-seals under the SAME wire id and never '
-        'takes the old path', () async {
+    test('its retry after a restart re-seals under the SAME wire id and '
+        'delivers exactly one frame', () async {
       bob([1]);
       outbox.refuse.add(1);
       final failed = await send('same wire');
