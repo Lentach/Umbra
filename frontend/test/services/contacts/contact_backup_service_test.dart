@@ -1104,7 +1104,8 @@ void main() {
 
   // A page reload / app relaunch resumes from the stored refresh token, so
   // `AuthProvider` calls `onSession` with NO password
-  // (`_resolveContactBackup`, auth_provider.dart). That is the session shape a PWA spends most of
+  // (`_loadSavedToken`, auth/auth_provider.session.dart, through
+  // `_resolveContactBackup`). That is the session shape a PWA spends most of
   // its life in — on the 2026-09-22 drive every session after the first was
   // one of these. If it cannot publish, the backup only ever tracks the graph
   // immediately after a password login and silently misses everything else.
