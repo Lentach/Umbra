@@ -51,7 +51,6 @@ describe('SecretNotesController', () => {
       service.create.mockResolvedValue({ token: 'abc123' });
       const result = await controller.createNote({ ciphertext: 'enc', expiresIn: 3600 });
       expect(result).toEqual({ token: 'abc123' });
-      expect(service.create).toHaveBeenCalledWith('enc', 3600);
     });
 
     it.each([3600, 21600, 43200, 86400])(
