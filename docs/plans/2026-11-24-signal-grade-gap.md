@@ -59,8 +59,14 @@ A browser cannot load an FFI library. And because libsignal rejects the classic 
 ### 1.5 A cheaper first step
 
 B6 is months. Two things give most of the audit value sooner and are not thrown away by B6:
-- write `third_party/libsignal_protocol_dart/PATCHES.md` (what was changed, why, the test that proves each patch), and pin the upstream commit the vendored tree came from;
+- write `frontend/third_party/libsignal_protocol_dart/PATCHES.md` (what was changed, why, the test that proves each patch), and pin the upstream commit the vendored tree came from;
 - add known-answer tests that run the port against published test vectors for X3DH and the Double Ratchet (the classic protocol is gone from current libsignal `[R§4]`, so the vectors must come from the specifications or from a libsignal tag before v0.75.0; finding them is the first task). Today nothing proves the port agrees with the reference; they are also the only way to show an auditor that the port implements the classic protocol correctly. (They are not an acceptance test for B6: libsignal no longer speaks the classic protocol.)
+
+**Done 2026-11-24** (`frontend/third_party/libsignal_protocol_dart/PATCHES.md`; `frontend/test/services/encryption/libsignal_known_answer_test.dart`, 12 tests):
+- Origin pinned: pub.dev archive 0.8.2 (SHA-256 in the file) = upstream commit `9f093cfb`. 95 of the 98 vendored files are byte-identical to it; the other three are the two patched files and `pubspec.yaml`. Each patch fails its test when undone.
+- The specifications publish no test vectors. The vectors used are the unit-test vectors of `signalapp/libsignal-protocol-java` (commit `fde96d22`): HKDF, the symmetric ratchet step, the DH ratchet step, session setup from an X3DH key set on both sides, X25519 agreement, signature verification. All match.
+- **One difference found:** the port clamps every X25519 private key before use; the Java vectors were computed with the key as given. Two of the ten Java test methods use unclamped keys and match only with the Java arithmetic plugged in. libsignal clamps as the port does (`rust/core/src/curve/curve25519.rs`, v0.74.1), and its own copy of one of those tests expects the value the port gives; that vector is the twelfth test. No effect between Umbra clients, and none expected for B6: every private key in `frontend/lib` comes from the port's generators, which clamp.
+- Still not proven: a complete message (wire format, AES-CBC, MAC) against the reference, session setup with a one-time pre-key, the DH ratchet step under the v3 KDF. No published vector exists for these (PATCHES.md §3.2).
 
 ## 2. Remaining hardening items
 
@@ -174,7 +180,7 @@ A PWA's code is whatever the server sends on the next load. `/version.json` name
 | A stable target | Feature freeze holds; the wire still changes in security fixes |
 | `SECURITY.md` + disclosure address | Missing |
 | Licence | Missing (§1.2) |
-| Proof the crypto port matches the reference | Missing (§1.5) |
+| Proof the crypto port matches the reference | Partly: key derivation, ratchet steps and session setup match the Java reference's vectors; no known answer for a complete message (§1.5) |
 | Static analysis on the server code | CodeQL covers workflow files only (§4.2) |
 | Known issues list to hand over | This document §2 |
 
