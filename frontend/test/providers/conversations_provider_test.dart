@@ -1008,10 +1008,11 @@ void main() {
       final chatId = chats.conversations.single.id;
 
       kv.refuseWrites = 1;
-      chats.setConversationMute(chatId, 'forever');
-      // The second tap is queued behind the first write; only the first is
-      // refused.
-      chats.setConversationMute(chatId, '1h');
+      chats
+        ..setConversationMute(chatId, 'forever')
+        // The second tap is queued behind the first write; only the first is
+        // refused.
+        ..setConversationMute(chatId, '1h');
       await store.settled;
       await Future<void>.delayed(Duration.zero);
 
@@ -1038,8 +1039,9 @@ void main() {
       expect(chats.conversations.map((c) => c.id), unorderedEquals([bob, carol]));
 
       kv.hold = Completer<void>();
-      chats.deleteConversation(bob);
-      chats.refreshChats();
+      chats
+        ..deleteConversation(bob)
+        ..refreshChats();
       expect(chats.conversations.map((c) => c.id), [carol]);
 
       kv.hold!.complete();

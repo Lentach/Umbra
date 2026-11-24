@@ -56,7 +56,7 @@ void main() {
       DualStorage(const FlutterSecureStorage()),
       'test_',
     );
-    final address = SignalProtocolAddress('peer', 1);
+    const address = SignalProtocolAddress('peer', 1);
     final first = generateIdentityKeyPair().getPublicKey();
     final second = generateIdentityKeyPair().getPublicKey();
     await tabA.saveIdentity(address, first);
@@ -84,7 +84,7 @@ void main() {
       'the acknowledged one is not erased by that delete', () async {
     final storage = _HoldPendingDeleteStorage();
     final store = SecureIdentityKeyStore(storage, 'test_');
-    final address = SignalProtocolAddress('peer', 1);
+    const address = SignalProtocolAddress('peer', 1);
     final pinned = generateIdentityKeyPair().getPublicKey();
     final shown = generateIdentityKeyPair().getPublicKey();
     final arriving = generateIdentityKeyPair().getPublicKey();

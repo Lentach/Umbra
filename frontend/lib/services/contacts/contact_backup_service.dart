@@ -121,7 +121,7 @@ class ContactBackupService {
   /// Completes when the write now holding [_uploading] ends. A wrap write
   /// waits on it ([_commit] `waitForUpload`) instead of reading the upload
   /// in flight as its own failure.
-  Completer<void>? _uploadDone;
+  late Completer<void> _uploadDone;
 
   /// Set only when the server ANSWERED that this account has no row (a 404).
   /// Defaults false, so an unresolved or failed session reads as "unknown"
@@ -874,7 +874,7 @@ class ContactBackupService {
     bool waitForUpload = false,
   }) async {
     while (waitForUpload && _uploading) {
-      await _uploadDone!.future;
+      await _uploadDone.future;
     }
     final token = _token;
     final ckId = _ckId;

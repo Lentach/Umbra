@@ -91,12 +91,12 @@ void main() {
           createdAtMs: 1755600000000,
         ),
       ),
-    );
-    // A verified two-device list, the way the screen holds it.
-    controller.onDeviceList({
-      'userId': _userId,
-      'authorization': authorization,
-    });
+    )
+      // A verified two-device list, the way the screen holds it.
+      ..onDeviceList({
+        'userId': _userId,
+        'authorization': authorization,
+      });
     await pumpEventQueue();
     controller.verifiedList = const DeviceList(
       userId: _userId,

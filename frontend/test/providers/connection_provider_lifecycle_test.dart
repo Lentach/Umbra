@@ -453,9 +453,9 @@ void main() {
         unawaited(connection.connect(1, 'old', _url));
         async.flushMicrotasks();
         unawaited(connection.connect(2, 'other', _url));
-        async.flushMicrotasks();
-
-        async.elapse(AppConstants.reconnectConnectCooldown);
+        async
+          ..flushMicrotasks()
+          ..elapse(AppConstants.reconnectConnectCooldown);
 
         expect(socket.connectTokens, ['old', 'other']);
         connection.disconnect(isLogout: true);

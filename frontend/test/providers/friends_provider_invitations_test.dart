@@ -251,9 +251,7 @@ void main() {
           ..boxAcceptRequest = ((id) {
             calls.add(id);
             return answer.future;
-          });
-
-        friends
+          })
           ..acceptFriendRequest(-10)
           ..acceptFriendRequest(-10);
         answer.complete(FirstContactAccept.accepted);
@@ -267,11 +265,9 @@ void main() {
       test('a decline while the accept runs is ignored', () async {
         var declines = 0;
         final answer = Completer<FirstContactAccept>();
-        final friends = provider()
+        provider()
           ..boxAcceptRequest = ((_) => answer.future)
-          ..boxDeclineRequest = ((_) async => declines++);
-
-        friends
+          ..boxDeclineRequest = ((_) async => declines++)
           ..acceptFriendRequest(-10)
           ..rejectFriendRequest(-10);
         answer.complete(FirstContactAccept.accepted);
@@ -288,8 +284,7 @@ void main() {
           ..boxSendRequest = ((_) {
             sends++;
             return answer.future;
-          });
-        friends
+          })
           ..searchUsers('u2#0002')
           ..onSearchUsersResult([
             {'id': 2, 'username': 'u2', 'tag': '0002'},
@@ -311,10 +306,8 @@ void main() {
           ..boxAcceptRequest = ((id) {
             calls.add(id);
             return answer.future;
-          });
-        friends.acceptFriendRequest(-10);
-
-        friends
+          })
+          ..acceptFriendRequest(-10)
           ..onConnect(true)
           ..setCurrentUserId(1);
         expect(friends.invitationActionFor(-10), isNull);
@@ -336,9 +329,8 @@ void main() {
           ..boxAcceptRequest = ((_) async {
             calls++;
             return FirstContactAccept.failed;
-          });
-
-        friends.acceptFriendRequest(-10);
+          })
+          ..acceptFriendRequest(-10);
         await pumpEventQueue();
         friends.acceptFriendRequest(-10);
         await pumpEventQueue();
@@ -356,34 +348,37 @@ void main() {
         fakeAsync((async) {
           final sent = <String>[];
           final friends = provider()
-            ..setEmitCallback((event, data) => sent.add(event));
-          friends.searchUsers('ghost#0009');
+            ..setEmitCallback((event, data) => sent.add(event))
+            ..searchUsers('ghost#0009');
 
           // The server answered it with `error` instead: nothing arrives.
           async.elapse(const Duration(seconds: 11));
 
           List<Object?>? answer;
           var done = false;
-          friends.lookupHandle('u2#0002').then((a) {
-            answer = a;
-            done = true;
-          });
+          unawaited(
+            friends.lookupHandle('u2#0002').then((a) {
+              answer = a;
+              done = true;
+            }),
+          );
           async.flushMicrotasks();
           friends.onSearchUsersResult(<dynamic>[]);
           async.flushMicrotasks();
 
-          expect(done, isTrue, reason: 'the empty answer is the lookup\'s');
+          expect(done, isTrue, reason: "the empty answer is the lookup's");
           expect(answer, isEmpty);
         });
       });
 
       test('an answered UI search leaves no timer behind', () {
         fakeAsync((async) {
-          final friends = provider()..setEmitCallback((event, data) {});
-          friends.searchUsers('u2#0002');
-          friends.onSearchUsersResult([
-            {'id': 2, 'username': 'u2', 'tag': '0002'},
-          ]);
+          final friends = provider()
+            ..setEmitCallback((event, data) {})
+            ..searchUsers('u2#0002')
+            ..onSearchUsersResult([
+              {'id': 2, 'username': 'u2', 'tag': '0002'},
+            ]);
 
           expect(async.nonPeriodicTimerCount, 0);
           expect(friends.searchResults, hasLength(1));

@@ -109,10 +109,10 @@ void main() {
           createdAtMs: 1755600000000,
         ),
       ),
-    );
-    // The verified own list is in hand, so the stage goes straight to the
-    // identity read.
-    controller.onDeviceList({'userId': _userId, 'authorization': authorization});
+    )
+      // The verified own list is in hand, so the stage goes straight to the
+      // identity read.
+      ..onDeviceList({'userId': _userId, 'authorization': authorization});
     await pumpEventQueue();
     expect(controller.verifiedList, isNotNull);
   });

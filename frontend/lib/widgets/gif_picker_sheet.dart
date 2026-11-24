@@ -71,7 +71,7 @@ class GifPickerSheet extends StatefulWidget {
 }
 
 class _GifPickerSheetState extends State<GifPickerSheet> {
-  late final _gifService = widget.service ?? GifService();
+  late final GifService _gifService = widget.service ?? GifService();
   final _searchController = TextEditingController();
   final _scrollController = ScrollController();
   List<GifModel> _gifs = [];

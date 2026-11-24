@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -696,7 +697,9 @@ class SecureIdentityKeyStore extends IdentityKeyStore {
     final next = result.then<void>((_) {}, onError: (Object _) {});
     _pendingTails[name] = next;
     next.whenComplete(() {
-      if (identical(_pendingTails[name], next)) _pendingTails.remove(name);
+      if (identical(_pendingTails[name], next)) {
+        unawaited(_pendingTails.remove(name));
+      }
     }).ignore();
     return result;
   }

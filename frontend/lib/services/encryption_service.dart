@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -3322,7 +3323,7 @@ class EncryptionService {
     _decryptedSaveTails[chainKey] = run;
     return run.whenComplete(() {
       if (identical(_decryptedSaveTails[chainKey], run)) {
-        _decryptedSaveTails.remove(chainKey);
+        unawaited(_decryptedSaveTails.remove(chainKey));
       }
     });
   }

@@ -73,16 +73,16 @@ Future<MessagingProvider> _pumpChatDetail(WidgetTester tester) async {
   seedConversations(conversations, [_conversationJson()]);
   conversations.openConversation(10, notify: false);
 
-  final messaging = MessagingProvider();
-  messaging.setIncomingMessageSoundEnabledForTest(false);
-  messaging.setConversationsProvider(conversations);
-  messaging.setCurrentUserId(1);
-  messaging.setToken('tok');
-  messaging.setEmitCallback((event, data) {});
-  messaging.onConnect(false);
-  messaging.setActiveConversationIdForTest(10);
-  messaging.seedCacheForTest(10, _initialMessages());
-  messaging.loadCachedMessages(10);
+  final messaging = MessagingProvider()
+    ..setIncomingMessageSoundEnabledForTest(false)
+    ..setConversationsProvider(conversations)
+    ..setCurrentUserId(1)
+    ..setToken('tok')
+    ..setEmitCallback((event, data) {})
+    ..onConnect(false)
+    ..setActiveConversationIdForTest(10)
+    ..seedCacheForTest(10, _initialMessages())
+    ..loadCachedMessages(10);
 
   final auth = AuthProvider()..setAccessTokenForTest(_currentUserJwt);
 
