@@ -875,6 +875,77 @@ void main() {
       expect(a.session.awaitingRekeyFrom(3), isFalse);
     });
 
+    // Mutation (BOX-03): `rekeySibling` keeps `_rekeyed` when no handoff
+    // could be built: the sibling is never re-keyed again this process.
+    test(
+      'a re-key whose handoff could not be built is made again by the next '
+      'one',
+      () async {
+        await linked();
+        final before = box.sent.length;
+        a.encryptFails = true;
+        await a.session.rekeySibling(3);
+        expect(box.sent, hasLength(before));
+
+        a.encryptFails = false;
+        await a.session.rekeySibling(3);
+        await settle();
+
+        expect(a.freshFor, [3]);
+        expect(
+          box.sent.sublist(before),
+          contains(b.store.selfQueue!.sid),
+          reason: 'the second re-key left',
+        );
+      },
+    );
+
+    // Mutation (BOX-03): `rekeySibling` keeps `_rekeyed` when the box
+    // refused the send.
+    test(
+      'a re-key the box did not take is made again by the next one',
+      () async {
+        await linked();
+        final route = box.sockets.respond;
+        var refuse = true;
+        box.sockets.respond = (socket, f) => refuse && f.event == 'send'
+            ? {'ok': false, 'code': 'queue_full'}
+            : route!(socket, f);
+        await a.session.rekeySibling(3);
+        expect(a.freshFor, [3]);
+
+        refuse = false;
+        final before = box.sent.length;
+        await a.session.rekeySibling(3);
+        await settle();
+
+        expect(a.freshFor, [3, 3]);
+        expect(box.sent.sublist(before), contains(b.store.selfQueue!.sid));
+      },
+    );
+
+    // Mutation (BOX-03): `accountLost` keeps `_rekeyed`: a sibling re-keyed
+    // once is never re-keyed again, however many connects later it loses
+    // its session.
+    test(
+      'the once-per-session guard ends with the account connection: a '
+      'sibling re-keyed before a reconnect is re-keyed again after it',
+      () async {
+        await linked();
+        await a.session.rekeySibling(3);
+        expect(a.freshFor, [3]);
+
+        a.session
+          ..accountLost()
+          ..accountReady(2)
+          ..e2eReady();
+        await settle();
+        await a.session.rekeySibling(3);
+
+        expect(a.freshFor, [3, 3]);
+      },
+    );
+
     test(
       'the mark is cleared once that sibling answers, and a second loss in '
       'the same session re-keys nothing (the once-per-session guard)',

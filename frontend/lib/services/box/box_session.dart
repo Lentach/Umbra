@@ -129,7 +129,9 @@ class BoxSession
   late final BoxFriendHandoff _friends;
 
   /// Friend devices re-keyed this session ([rekeyFriend]), as `user:device`:
-  /// once each.
+  /// once each, whether or not the re-key left (decision 70: a forged frame
+  /// times one bundle fetch per friend device per session). Only a re-key
+  /// that had no queue to hand, so fetched nothing, is not kept.
   final Set<String> _friendRekeyed = {};
 
   /// When this device started a session with a friend's device it has not
@@ -146,7 +148,8 @@ class BoxSession
   /// names no address for is given up, never looped on.
   final Set<String> _friendAddressAsked = {};
 
-  /// Siblings re-keyed this session ([rekeySibling]): once each.
+  /// Siblings re-keyed this account connect ([rekeySibling]): once each; a
+  /// re-key that did not leave over the self-queue is not kept.
   final Set<int> _rekeyed = {};
 
   /// What each friend device last said about relaying (`rl`, decision 101
@@ -557,6 +560,11 @@ class BoxSession
     _e2eReady = false;
     _inFlight = null;
     _retry?.cancel();
+    // The sibling re-key guard ends with the connect (BOX-03): a sibling
+    // that loses its session again on a later one is re-keyed again.
+    // [_friendRekeyed] stays: decision 70 bounds what a forged frame can
+    // time to one bundle fetch per friend device per session.
+    _rekeyed.clear();
     _swap.accountLost();
     _friends.accountLost();
   }
@@ -805,6 +813,9 @@ class BoxSession
     final sent =
         frame != null &&
         await deliver(to, frame.encode()) == BoxSendOutcome.taken;
+    // A re-key that did not leave is owed still: the next loss makes it
+    // again (BOX-03).
+    if (!sent) _rekeyed.remove(deviceId);
     E2eDiagLog.add('BOX_SIBLING_REKEYED', {'device': deviceId, 'sent': sent});
   }
 
@@ -980,7 +991,12 @@ class BoxSession
     }
     _friendRekeyed.add(key);
     final ensured = await _keys.ensureInbound(userId);
-    if (ensured is! InboundQueueCreated || _disposed) return;
+    if (ensured is! InboundQueueCreated || _disposed) {
+      // No queue to hand, and no bundle was fetched yet (decision 70's
+      // bound is intact): the next loss asks again (BOX-03).
+      _friendRekeyed.remove(key);
+      return;
+    }
     final queue = ensured.queue;
     // The fresh session counts as asked (`friendSessionStarted`, set by the
     // encrypt side): two devices that re-key each other at once read each
