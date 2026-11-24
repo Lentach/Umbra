@@ -232,7 +232,7 @@ level. Two independent emit paths cover the two process shapes:
 | a LATER one (FCM-woken, cold start) | `noSession` / `badMac` | `_retryDecryptForPeers` → `_requestSessionRebuildForPeer` → durable `SESSION_RESET` (`:1149-1168`, `:467-491`) |
 
 Backend relays it as `sessionRebuildNeeded {fromUserId}` **and remembers it**, replaying to a
-recipient that connects later (`chat-key-exchange.service.ts:1090-1103`, `:1021`) — so an offline
+recipient that connects later (`deliverPendingSessionRebuilds`, `chat-key-exchange.service.ts:885-892`; remembered at `:909` via `rememberSessionRebuildRequest`, defined with `livePendingSessionRebuildRequesters` in `chat-key-exchange.util.ts:57,89`) — so an offline
 peer still gets it. Observed rows:
 
 ```
