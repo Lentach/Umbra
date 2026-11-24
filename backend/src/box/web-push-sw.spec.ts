@@ -363,7 +363,7 @@ describe('web-push-sw.js', () => {
       expect(sw.shown).toEqual([]);
     });
 
-    // WEB-01: both handlers are started before either has read `box-wake`.
+    // WEB-01 [web-only: retire with §7]: both handlers are started before either has read `box-wake`.
     it('two wake-ups that overlap both keep their count', async () => {
       const sw = makeWorker({ store: NIDS });
 
@@ -379,6 +379,7 @@ describe('web-push-sw.js', () => {
       expect(Math.max(...sw.badge)).toBe(5);
     });
 
+    // WEB-01 [web-only: retire with §7]: a page read racing a push.
     it('a chat read while a wake-up for another chat is being handled stays read', async () => {
       const sw = makeWorker({ store: NIDS });
       await sw.push({ type: 'new_message', n: 'NID_A', c: 3 });

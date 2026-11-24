@@ -135,7 +135,7 @@ void main() {
       ]);
     });
 
-    // WEB-02: logout clears the table while the old account's write waits.
+    // WEB-02 [web-only: retire with §7]: logout clears the table while the old account's write waits.
     test('a clear lands after a write that was asked before it', () async {
       final events = <String>[];
       final gate = Completer<void>();

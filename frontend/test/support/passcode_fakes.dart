@@ -181,7 +181,7 @@ class FakeContentSealer implements ContentSealer {
 
 /// Stands in for one `BroadcastChannel` name shared by several tabs: a message
 /// reaches every OTHER opener, never the one that posted it, and carries no
-/// payload (like the real signal).
+/// payload (like the real signal). [web-only: retire with §7]
 class FakeLockSignalHub {
   final List<void Function()> _listeners = <void Function()>[];
   int announcements = 0;
