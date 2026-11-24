@@ -13,12 +13,12 @@ End-to-end encrypted messenger built with Flutter and NestJS.
 - **Real-time messaging** — Socket.IO with delivery receipts (SENDING -> SENT -> DELIVERED -> READ)
 - **Message types** — Text, Voice, Image, GIF (Giphy, opt-in), File attachments, Ping
 - **Disappearing messages** — configurable timer per conversation (default 24h)
-- **Friend system** — Discord-style username#tag, friend requests, block/unblock
+- **Friends** — Discord-style username#tag; friend requests, friends and blocks live on the devices (contact store), not on the server
 - **Reactions** — 6-emoji reaction picker, max one per user per message
 - **Link previews** — OG metadata fetch with SSRF protection
-- **Voice messages** — hold-to-record, waveform display, playback speed 1x/1.5x/2x
+- **Voice messages** — tap to start, tap to stop; waveform display, playback speed 1x/1.5x/2x
 - **Anti-Quantum Notes** — one-time self-destructing encrypted notes (shareable link)
-- **3 themes** — Light, Dark (Wire-style), Blue (Telegram-style)
+- **5 themes** — Light (Hot Stone), Teal, Dark (Wire gray), Blue (Telegram dark), Cosmic
 - **Polish / English** — full localization via Flutter l10n
 - **Push notifications** — Dual channel: FCM (native Android/iOS) + standards-based Web Push VAPID (PWA)
 - **Web + Mobile** — Flutter web + Android/iOS from single codebase
@@ -34,8 +34,8 @@ End-to-end encrypted messenger built with Flutter and NestJS.
 | Database | PostgreSQL 16 |
 | Real-time | Socket.IO 4 |
 | Auth | JWT (HS256) |
-| Encryption | Signal Protocol (libsignal_protocol_dart 0.7.4) |
-| Media storage | Cloudinary |
+| Encryption | Signal Protocol (libsignal_protocol_dart 0.8.2, vendored under `frontend/third_party/`) |
+| Media storage | Self-hosted volume (`MEDIA_DIR`, `/app/media`) |
 | Push | FCM (native) + Web Push VAPID (PWA), content-free box wake-ups only |
 | Containerization | Docker + Docker Compose |
 | Production | OVH VPS (Ubuntu 24.04) + Nginx + Let's Encrypt |
@@ -82,11 +82,7 @@ Set in docker-compose.yml or a .env file:
     DB_PASS=postgres
     DB_NAME=chatdb
     JWT_SECRET=your-secret-at-least-32-chars
-
-    # Cloudinary (required for media)
-    CLOUDINARY_CLOUD_NAME=your-cloud
-    CLOUDINARY_API_KEY=your-key
-    CLOUDINARY_API_SECRET=your-secret
+    MEDIA_DIR=/app/media                     # self-hosted media volume
 
     # Optional
     FIREBASE_SERVICE_ACCOUNT=...             # Box wake-up push, native (JSON string)
@@ -106,7 +102,7 @@ For web subscribe flow, pass the same public key to Flutter:
 
 ### Frontend Providers
 
-State management uses 7 ChangeNotifier providers, orchestrated by ConnectionProvider:
+State management uses 8 ChangeNotifier providers, orchestrated by ConnectionProvider:
 
 | Provider | Responsibility |
 |---|---|
@@ -116,7 +112,8 @@ State management uses 7 ChangeNotifier providers, orchestrated by ConnectionProv
 | FriendsProvider | Friends list, friend requests, block/unblock, search |
 | EncryptionProvider | Signal key management, session establishment |
 | AuthProvider | Login, logout, JWT, current user |
-| SettingsProvider | Theme (light/dark/blue), locale (pl/en) |
+| SettingsProvider | Theme (light/teal/dark/blue/cosmic), locale (pl/en) |
+| PasscodeProvider | App-level Passcode Lock |
 
 ### Backend Services
 
@@ -136,7 +133,7 @@ All message content is encrypted client-side before leaving the device. The serv
 
 - **Protocol:** Signal (X3DH key agreement + Double Ratchet for forward secrecy)
 - **Scope:** All message types — text, ping, voice URLs, image URLs, GIF URLs, file names
-- **Media files** on Cloudinary are **not** encrypted — only the URLs are hidden inside the E2E envelope
+- **Media files** are AES-GCM encrypted on the device before upload; the key and IV travel inside the E2E envelope and the server stores ciphertext only
 - **Storage:** Keys in flutter_secure_storage + SharedPreferences (DualStorage for web reliability)
 - **Key exchange:** 20 one-time pre-keys uploaded at login; auto-replenish when < 10 remain
 - **No plaintext fallback:** if encryption fails, message is marked failed
@@ -145,13 +142,15 @@ All message content is encrypted client-side before leaving the device. The serv
 
 ## Running Tests
 
-Backend (152 unit tests, no DB required):
+The expected test counts are CI-gated in root `CLAUDE.md` §3, so they are not repeated here.
+
+Backend (unit tests, no DB required):
 
     cd backend && npm test
 
-Frontend (61 widget tests):
+Frontend:
 
-    cd frontend && flutter test
+    cd frontend && flutter analyze --no-fatal-infos && flutter test
 
 ---
 
@@ -172,14 +171,14 @@ Frontend (61 widget tests):
     |       +-- mappers/             # Payload serialization
     +-- frontend/lib/
         +-- models/            # UserModel, ConversationModel, MessageModel, ...
-        +-- providers/         # 7 ChangeNotifier providers
+        +-- providers/         # 8 ChangeNotifier providers
         +-- services/          # SocketService, ApiService, EncryptionService, ...
         +-- screens/           # Auth, MainShell, Conversations, Chat, Contacts, ...
         +-- widgets/
         |   +-- message/       # ChatMessageBubble + per-type content widgets
         |   +-- input/         # ChatInputBar, RecordingController, AttachmentHandler
         |   +-- audio/         # PlaybackController, WaveformDisplay
-        +-- theme/             # FireplaceColors ThemeExtension (3 themes)
+        +-- theme/             # FireplaceColors ThemeExtension (5 themes)
         +-- l10n/              # Polish + English ARB files
 
 ---
