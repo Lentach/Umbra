@@ -411,7 +411,7 @@ void main() {
         provider.sendMessage('hi');
         await pump();
 
-        expect(emitted, isNot(contains('sendMessage')));
+        expect(emitted, isEmpty);
         expect(
           outbox.delivered.map((d) => d.$1.sid),
           unorderedEquals(['sid-1', 'self-3']),
@@ -465,7 +465,7 @@ void main() {
         await pump();
 
         expect(outbox.delivered, isEmpty);
-        expect(emitted, isNot(contains('sendMessage')));
+        expect(emitted, isEmpty);
         expect(
           provider.messages.last.deliveryStatus,
           MessageDeliveryStatus.failed,

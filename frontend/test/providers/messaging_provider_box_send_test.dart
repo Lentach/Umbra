@@ -103,7 +103,7 @@ void main() {
       bob([1, 2]);
       final row = await send('hi over the box');
 
-      expect(emitted, isNot(contains('sendMessage')));
+      expect(emitted, isEmpty);
       expect(
         outbox.delivered.map((d) => d.$1.sid),
         unorderedEquals(['sid-1', 'sid-2']),
@@ -159,7 +159,7 @@ void main() {
       final row = await send('mixed');
 
       expect(outbox.delivered, isEmpty);
-      expect(emitted, isNot(contains('sendMessage')));
+      expect(emitted, isEmpty);
       expect(row.deliveryStatus, MessageDeliveryStatus.failed);
       expect(isLocalMessageId(row.id), isFalse);
     },
@@ -181,7 +181,7 @@ void main() {
       final row = await send('siblings');
 
       expect(outbox.delivered, isEmpty);
-      expect(emitted, isNot(contains('sendMessage')));
+      expect(emitted, isEmpty);
       expect(row.deliveryStatus, MessageDeliveryStatus.failed);
     },
   );
@@ -199,7 +199,7 @@ void main() {
       });
       final row = await send('to bob, seen on my phone');
 
-      expect(emitted, isNot(contains('sendMessage')));
+      expect(emitted, isEmpty);
       expect(row.deliveryStatus, MessageDeliveryStatus.sent);
       expect(
         outbox.delivered.map((d) => d.$1.sid),
@@ -240,7 +240,7 @@ void main() {
       final row = await send('half sent');
 
       expect(row.deliveryStatus, MessageDeliveryStatus.sent);
-      expect(emitted, isNot(contains('sendMessage')));
+      expect(emitted, isEmpty);
       expect(await encryption.store.localMessageRecords(10), hasLength(1));
 
       outbox
@@ -469,7 +469,7 @@ void main() {
         expect(row.deliveryStatus, MessageDeliveryStatus.failed);
         expect(encryption.encryptCalls, isEmpty, reason: 'no chain step');
         expect(outbox.delivered, isEmpty);
-        expect(emitted, isNot(contains('sendMessage')));
+        expect(emitted, isEmpty);
 
         now = now.add(const Duration(hours: 1));
         outbox.full.clear();
@@ -494,7 +494,7 @@ void main() {
       await send('live only');
 
       expect(outbox.delivered.map((d) => d.$1.peerDeviceId), [1]);
-      expect(emitted, isNot(contains('sendMessage')));
+      expect(emitted, isEmpty);
     },
   );
 
@@ -505,7 +505,7 @@ void main() {
       final row = await send('to whom');
 
       expect(outbox.delivered, isEmpty);
-      expect(emitted, isNot(contains('sendMessage')));
+      expect(emitted, isEmpty);
       expect(row.deliveryStatus, MessageDeliveryStatus.failed);
     },
   );
@@ -521,7 +521,7 @@ void main() {
 
       expect(row.deliveryStatus, MessageDeliveryStatus.failed);
       expect(outbox.delivered, isEmpty);
-      expect(emitted, isNot(contains('sendMessage')));
+      expect(emitted, isEmpty);
       expect(encryption.forcedFetches, [1, 2], reason: 'the connect only');
 
       encryption.unverifiable.clear();
@@ -539,6 +539,31 @@ void main() {
   );
 
   test(
+    'a text after a reconnect, before the connect has looked the lists up '
+    'again, is refused although the device still holds both lists and the '
+    'sessions: the row fails, nothing is delivered, and once the connect has '
+    'looked them up the retry goes out (decision 21)',
+    () async {
+      bob([1, 2]);
+      await pump(); // the lists are looked up and the sessions pre-built
+
+      // The account socket reconnects: every lookup of the last connect goes,
+      // the held lists and the pre-built sessions stay.
+      provider.onConnect(true);
+      final row = await send('held, not verified this connect');
+
+      expect(row.deliveryStatus, MessageDeliveryStatus.failed);
+      expect(outbox.delivered, isEmpty);
+      expect(emitted, isEmpty);
+
+      provider.refreshBoxDeviceLists();
+      await provider.retryFailedMessage(row.tempId!);
+      await pump();
+      expect(outbox.delivered, hasLength(2), reason: 'the control');
+    },
+  );
+
+  test(
     'a box refusal on EVERY peer device fails the row (retry), stores '
     'nothing, and the retry carries the SAME wire id',
     () async {
@@ -547,7 +572,7 @@ void main() {
       final failed = await send('try again');
 
       expect(failed.deliveryStatus, MessageDeliveryStatus.failed);
-      expect(emitted, isNot(contains('sendMessage')));
+      expect(emitted, isEmpty);
       final firstWire = envelopeOf(outbox.delivered.first.$2)['msgId'];
 
       outbox
@@ -609,7 +634,7 @@ void main() {
       await provider.retryFailedMessage(failed.tempId!);
       await pump();
 
-      expect(emitted, isNot(contains('sendMessage')));
+      expect(emitted, isEmpty);
       expect(
         provider.messages
             .singleWhere((m) => m.tempId == failed.tempId)
@@ -629,7 +654,7 @@ void main() {
 
       expect(row.deliveryStatus, MessageDeliveryStatus.failed);
       expect(outbox.delivered, isEmpty);
-      expect(emitted, isNot(contains('sendMessage')));
+      expect(emitted, isEmpty);
     },
   );
 
@@ -671,7 +696,7 @@ void main() {
       withSibling();
       final row = await send('vanishing');
 
-      expect(emitted, isNot(contains('sendMessage')));
+      expect(emitted, isEmpty);
       expect(
         outbox.delivered.map((d) => d.$1.sid),
         unorderedEquals(['sid-1', 'self-3']),
@@ -719,7 +744,7 @@ void main() {
       provider.setReplyingTo(original);
       final reply = await send('re: that');
 
-      expect(emitted, isNot(contains('sendMessage')));
+      expect(emitted, isEmpty);
       expect(outbox.delivered, hasLength(2));
       for (final (to, frame) in outbox.delivered) {
         expect(envelopeOf(frame)['re'], {
@@ -834,7 +859,7 @@ void main() {
         envelopeOf(outbox.delivered.single.$2)['re'],
         containsPair('w', 'wire-00000005'),
       );
-      expect(emitted, isNot(contains('sendMessage')));
+      expect(emitted, isEmpty);
     },
   );
 
@@ -847,7 +872,7 @@ void main() {
       final row = await send('re: no route');
 
       expect(outbox.delivered, isEmpty);
-      expect(emitted, isNot(contains('sendMessage')));
+      expect(emitted, isEmpty);
       expect(row.deliveryStatus, MessageDeliveryStatus.failed);
     },
   );
@@ -861,7 +886,7 @@ void main() {
       await pump();
 
       expect(outbox.delivered, isEmpty);
-      expect(emitted, isNot(contains('sendMessage')));
+      expect(emitted, isEmpty);
       expect(
         provider.messages.last.deliveryStatus,
         MessageDeliveryStatus.failed,
@@ -900,7 +925,7 @@ void main() {
       expect(row.deliveryStatus, MessageDeliveryStatus.failed);
       expect(encryption.forcedFetches, isEmpty);
       expect(outbox.delivered, isEmpty);
-      expect(emitted, isNot(contains('sendMessage')));
+      expect(emitted, isEmpty);
     },
   );
 
@@ -924,7 +949,7 @@ void main() {
       await send('three');
       expect(encryption.forcedFetches, [1, 1]);
       expect(outbox.delivered, hasLength(3));
-      expect(emitted, isNot(contains('sendMessage')));
+      expect(emitted, isEmpty);
     },
   );
 
@@ -970,7 +995,7 @@ void main() {
 
       expect(row.deliveryStatus, MessageDeliveryStatus.failed);
       expect(encryption.fetches, [1, 2]);
-      expect(emitted, isNot(contains('sendMessage')));
+      expect(emitted, isEmpty);
     },
   );
 
@@ -1051,7 +1076,7 @@ void main() {
       await pump();
 
       expect(outbox.delivered, isEmpty);
-      expect(emitted, isNot(contains('sendMessage')));
+      expect(emitted, isEmpty);
       expect(
         provider.messages.last.deliveryStatus,
         MessageDeliveryStatus.failed,
@@ -1073,7 +1098,7 @@ void main() {
       await pump();
 
       expect(outbox.delivered, isEmpty);
-      expect(emitted, isNot(contains('sendMessage')));
+      expect(emitted, isEmpty);
     },
   );
 
@@ -1089,7 +1114,7 @@ void main() {
     await pump();
 
     expect(outbox.delivered, isEmpty);
-    expect(emitted, isNot(contains('sendMessage')));
+    expect(emitted, isEmpty);
   });
 
   test(
@@ -1103,7 +1128,7 @@ void main() {
       provider.sendPing(2);
       await pump();
 
-      expect(emitted, isNot(contains('sendMessage')));
+      expect(emitted, isEmpty);
       expect(outbox.delivered, hasLength(2));
       for (final (to, frame) in outbox.delivered) {
         final envelope = envelopeOf(frame);
@@ -1218,7 +1243,7 @@ void main() {
 
       expect(row.deliveryStatus, MessageDeliveryStatus.failed);
       expect(outbox.delivered, isEmpty);
-      expect(emitted, isNot(contains('sendMessage')));
+      expect(emitted, isEmpty);
       expect(encryption.bundleFetches, [
         (2, 1),
         (2, 2),
@@ -1254,7 +1279,7 @@ void main() {
 
       expect(row.deliveryStatus, MessageDeliveryStatus.failed);
       expect(outbox.delivered, isEmpty);
-      expect(emitted, isNot(contains('sendMessage')));
+      expect(emitted, isEmpty);
       expect(encryption.bundleFetches, [(2, 1)]);
     },
   );
@@ -1287,7 +1312,7 @@ void main() {
       final row = await send('no bundle yet');
 
       expect(row.deliveryStatus, MessageDeliveryStatus.failed);
-      expect(emitted, isNot(contains('sendMessage')));
+      expect(emitted, isEmpty);
       expect(encryption.bundleFetches, [(2, 1)]);
 
       encryption.unbuildable.clear();
@@ -1417,7 +1442,7 @@ void main() {
         withSibling();
         expect(await sendImage(), isTrue);
 
-        expect(emitted, isNot(contains('sendMessage')));
+        expect(emitted, isEmpty);
         expect(mediaUpload.encrypted, hasLength(1));
         final (to, framed) = outbox.uploads.single;
         expect(to.sid, 'sid-1', reason: 'the first live peer target pays');
@@ -1475,7 +1500,7 @@ void main() {
         );
         await pump();
 
-        expect(emitted, isNot(contains('sendMessage')));
+        expect(emitted, isEmpty);
         expect(outbox.uploads.map((u) => u.$1.sid), ['sid-1', 'sid-1']);
         final [voice, file] = [
           for (final (_, frame) in outbox.delivered) envelopeOf(frame),
@@ -1517,7 +1542,7 @@ void main() {
         }
         expect(outbox.uploads, hasLength(3));
         expect(outbox.delivered, isEmpty);
-        expect(emitted, isNot(contains('sendMessage')));
+        expect(emitted, isEmpty);
       },
     );
 
@@ -1539,7 +1564,7 @@ void main() {
         }
         expect(outbox.uploads, isEmpty);
         expect(outbox.delivered, isEmpty);
-        expect(emitted, isNot(contains('sendMessage')));
+        expect(emitted, isEmpty);
       },
     );
 
@@ -1578,7 +1603,7 @@ void main() {
         expect(sent.deliveryStatus, MessageDeliveryStatus.sent);
         expect(sent.mediaUrl, failed.mediaUrl);
         expect(sent.disappearAfterSeconds, 30);
-        expect(emitted, isNot(contains('sendMessage')));
+        expect(emitted, isEmpty);
       },
     );
 
@@ -1605,7 +1630,7 @@ void main() {
         final sent = rowOf(MessageType.image);
         expect(sent.deliveryStatus, MessageDeliveryStatus.sent);
         expect(sent.mediaUrl, 'box:${outbox.media.keys.single}');
-        expect(emitted, isNot(contains('sendMessage')));
+        expect(emitted, isEmpty);
       },
     );
 
@@ -1634,7 +1659,7 @@ void main() {
 
         final envelope = envelopeOf(outbox.delivered.single.$2);
         expect(envelope, containsPair('ttl', 30));
-        expect(emitted, isNot(contains('sendMessage')));
+        expect(emitted, isEmpty);
       },
     );
 
@@ -1662,7 +1687,7 @@ void main() {
         );
         expect(outbox.uploads, hasLength(1));
         expect(outbox.delivered, isEmpty);
-        expect(emitted, isNot(contains('sendMessage')));
+        expect(emitted, isEmpty);
       },
     );
 
@@ -1693,7 +1718,7 @@ void main() {
           'x': 'the original words',
         });
         expect(envelope, containsPair('ttl', 30));
-        expect(emitted, isNot(contains('sendMessage')));
+        expect(emitted, isEmpty);
       },
     );
 
@@ -1715,7 +1740,7 @@ void main() {
         expect(outbox.delivered, isEmpty, reason: 'never without its quote');
         expect(ok, isFalse);
         expect(outbox.uploads, isEmpty);
-        expect(emitted, isNot(contains('sendMessage')));
+        expect(emitted, isEmpty);
       },
     );
 
@@ -1763,7 +1788,7 @@ void main() {
           expect(sent.deliveryStatus, MessageDeliveryStatus.sent);
           expect(sent.mediaUrl, startsWith('box:'));
         }
-        expect(emitted, isNot(contains('sendMessage')));
+        expect(emitted, isEmpty);
       },
     );
 

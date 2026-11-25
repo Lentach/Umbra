@@ -11,6 +11,7 @@ import '../../models/message_model.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/box/box_media_url.dart';
 import '../../utils/e2e_persistent_diag.dart';
+import '../../utils/format_clock.dart';
 import 'box_media_source.dart';
 import 'inline_video_arbiter.dart';
 import 'media_preview_frame.dart';
@@ -525,12 +526,7 @@ class _InlineVideoStage extends StatelessWidget {
   }
 }
 
-String _formatSeconds(int seconds) {
-  final clamped = seconds < 0 ? 0 : seconds;
-  final minutes = clamped ~/ 60;
-  final remainder = clamped % 60;
-  return '$minutes:${remainder.toString().padLeft(2, '0')}';
-}
+String _formatSeconds(int seconds) => formatClock(seconds < 0 ? 0 : seconds);
 
 /// Static play affordance over the media frame — scrim + glyph, the same
 /// theme-independent overlay treatment as the bubble's media time chip.

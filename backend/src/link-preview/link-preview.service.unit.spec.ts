@@ -31,12 +31,6 @@ describe('LinkPreviewService – SSRF blocking', () => {
     'http://169.254.169.254/latest/meta-data/', // AWS IMDS
     'http://169.254.169.254/computeMetadata/v1/', // GCP IMDS
     'http://169.254.0.1/', // IPv4 link-local
-    'http://[fe80::1]/', // IPv6 link-local
-    'http://[fc00::1]/', // IPv6 ULA
-    'http://[::1]/', // IPv6 loopback
-    'http://[::]/', // IPv6 unspecified
-    'http://[::ffff:127.0.0.1]/', // IPv4-mapped IPv6 loopback
-    'http://[::ffff:169.254.169.254]/', // IPv4-mapped IPv6 metadata
     'http://10.0.0.1/', // RFC-1918
     'http://192.168.1.1/', // RFC-1918
     'http://127.0.0.1/', // loopback
@@ -55,6 +49,39 @@ describe('LinkPreviewService – SSRF blocking', () => {
     const result = await service.fetchPreview(url);
     expect(result).toBeNull();
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  // An IPv6 literal in message text never reaches the fetch: the URL regex in
+  // `fetchPreview` stops at `[`, so those entries guard nothing. A redirect
+  // Location is where one really arrives; each is driven through a hop, and
+  // the IPv6 rule in `isPrivateIp` (after the bracket strip) must refuse the
+  // second fetch.
+  const blockedV6 = [
+    'http://[fe80::1]/', // IPv6 link-local
+    'http://[fc00::1]/', // IPv6 ULA
+    'http://[::1]/', // IPv6 loopback
+    'http://[::]/', // IPv6 unspecified
+    'http://[::ffff:127.0.0.1]/', // IPv4-mapped IPv6 loopback
+    'http://[::ffff:169.254.169.254]/', // IPv4-mapped IPv6 metadata
+  ];
+
+  test.each(blockedV6)('refuses a redirect to %s', async (url) => {
+    fetchImpl.mockReset();
+    fetchImpl.mockResolvedValueOnce({
+      status: 302,
+      ok: false,
+      headers: {
+        get: (h: string) => (h.toLowerCase() === 'location' ? url : null),
+      },
+      body: null,
+    });
+
+    const result = await service.fetchPreview('https://evil.example.com/go');
+
+    expect(result).toBeNull();
+    expect(fetchImpl.mock.calls.map((call: unknown[]) => call[0])).toEqual([
+      'https://evil.example.com/go',
+    ]);
   });
 
   it('allows a public HTTPS URL', async () => {
