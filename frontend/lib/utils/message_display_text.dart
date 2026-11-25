@@ -2,7 +2,6 @@ import 'package:flutter/widgets.dart';
 
 import '../l10n/app_localizations.dart';
 import '../models/message_model.dart';
-import 'anti_quantum_note_link.dart';
 import '../providers/messaging_provider.dart'
     show
         kDecryptionFailedLabel,
@@ -10,6 +9,7 @@ import '../providers/messaging_provider.dart'
         kEncryptionNotInitializedLabel,
         kNotLinkedYetMessageLabel,
         kRetiredMessageLabel;
+import 'anti_quantum_note_link.dart';
 
 /// The localized sentence for a row whose CONTENT is an internal sentinel, or
 /// null when the row carries real content that must not be touched.
