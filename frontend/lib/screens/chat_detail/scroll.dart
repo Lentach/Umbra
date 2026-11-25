@@ -123,7 +123,11 @@ extension _ChatDetailScroll on _ChatDetailScreenState {
     );
     return PinnedMessageBanner(
       previewText: previewText,
-      senderLabel: previewModel.senderUsername.isNotEmpty
+      // An own row carries no username: without the id check the fallback
+      // put the PEER's name on the reader's own pinned message.
+      senderLabel: previewModel.senderId == convs.currentUserId
+          ? l10n.senderYou
+          : previewModel.senderUsername.isNotEmpty
           ? previewModel.senderUsername
           : convs.getOtherUserUsername(conv),
       onTap: () => _scrollToMessageId(conv.pinnedMessageId!),

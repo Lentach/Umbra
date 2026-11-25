@@ -64,5 +64,10 @@ void main() {
     await tester.pumpWidget(_wrap(_quote(senderId: null), currentUserId: 1));
     expect(find.text(l10n.unknown), findsOneWidget);
     expect(find.text(l10n.senderYou), findsNothing);
+
+    // Nobody signed in yet and no sender id: null equals null, still not You.
+    await tester.pumpWidget(_wrap(_quote(senderId: null)));
+    expect(find.text(l10n.unknown), findsOneWidget);
+    expect(find.text(l10n.senderYou), findsNothing);
   });
 }
