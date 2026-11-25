@@ -557,4 +557,42 @@ void main() {
       expect(find.text(l10n.invitationAccepted), findsNothing);
     },
   );
+
+  // A2-CON-3: each search spends the target's one-time pre-keys.
+  testWidgets('Enter while a search is running starts no second search',
+      (tester) async {
+    final friends = FriendsProvider();
+    final searches = <Object?>[];
+    friends.setEmitCallback((event, data) {
+      if (event == 'searchUsers') searches.add(data);
+    });
+    await _pumpInvitations(tester, friends);
+
+    final field = find.byKey(const Key('invitation-handle-field'));
+    await tester.enterText(field, 'bob#0002');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
+    expect(searches, hasLength(1));
+    expect(
+      find.byKey(const Key('invitation-search-progress')),
+      findsOneWidget,
+    );
+
+    // Enter again, then retype another handle and press Enter mid-search.
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.enterText(field, 'cat#0003');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
+    expect(searches, hasLength(1));
+
+    // Once the answer lands the field searches again.
+    friends.onSearchUsersResult([_user(2, 'bob')]);
+    await tester.pump();
+    await tester.enterText(field, 'cat#0003');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
+    expect(searches, hasLength(2));
+    // The second search's lookup timeout must not outlive the test.
+    await tester.pump(const Duration(seconds: 11));
+  });
 }
