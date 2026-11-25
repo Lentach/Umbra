@@ -393,7 +393,9 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
                     onAvatarTap: _openMyProfile,
                     visible: _selectedIndex == 0,
                   ),
-                  const ContactsScreen(),
+                  ContactsScreen(
+                    onShowChats: () => setState(() => _selectedIndex = 0),
+                  ),
                   const SettingsScreen(),
                 ],
               ),

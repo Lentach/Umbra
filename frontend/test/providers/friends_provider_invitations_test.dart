@@ -281,14 +281,13 @@ void main() {
         expect(friends.acceptedOutcomeForPeer(2), isNotNull);
       });
 
-      test('the peer\'s goodbye drops it, and only theirs', () async {
+      test("the peer's goodbye drops it, and only theirs", () async {
         await put(2, ContactState.friend);
         await put(3, ContactState.friend);
         final friends = provider()
           ..onBoxFriendshipMade(2, outgoing: false)
-          ..onBoxFriendshipMade(3, outgoing: false);
-
-        friends.onBoxFriendshipEnded(2);
+          ..onBoxFriendshipMade(3, outgoing: false)
+          ..onBoxFriendshipEnded(2);
 
         expect(friends.acceptedOutcomeForPeer(2), isNull);
         expect(friends.acceptedOutcomeForPeer(3), isNotNull);
