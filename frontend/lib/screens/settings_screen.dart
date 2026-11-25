@@ -156,7 +156,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  /// A delete runs for seconds (password check, up to 10 s of goodbyes, the
+  /// DELETE): a second tap must not start a second one.
+  bool _deletingAccount = false;
+
   Future<void> _showDeleteAccountDialog() async {
+    if (_deletingAccount) return;
     final password = await showDialog<String>(
       context: context,
       builder: (context) => const DeleteAccountDialog(),
@@ -164,6 +169,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     if (password == null || !mounted) return;
 
+    _deletingAccount = true;
     try {
       final auth = context.read<AuthProvider>();
       final enc = context.read<EncryptionProvider>();
@@ -176,8 +182,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         password,
         beforeDelete: messaging.goodbyeToBoxFriends,
       );
-      await enc.clearEncryptionKeys();
+      // The connection closes FIRST: goodbye work that outlived its budget
+      // would otherwise reach the box and the store while the wipe runs.
       conn.disconnect(isLogout: true);
+      await enc.clearEncryptionKeys();
 
       if (mounted) {
         Navigator.of(context).popUntil((route) => route.isFirst);
@@ -190,6 +198,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           backgroundColor: Theme.of(context).colorScheme.error,
         );
       }
+    } finally {
+      _deletingAccount = false;
     }
   }
 
