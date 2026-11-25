@@ -9,6 +9,7 @@ import 'package:video_player/video_player.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/message_model.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/messaging_provider.dart';
 import '../../theme/rpg_theme.dart';
 import '../message_date_separator.dart';
 import 'box_media_source.dart';
@@ -88,6 +89,17 @@ class _VideoFullscreenView extends StatefulWidget {
 class _VideoFullscreenViewState extends State<_VideoFullscreenView>
     with SingleTickerProviderStateMixin {
   VideoPlaybackSession? _session;
+  late final MessagingProvider _messaging;
+
+  /// True when [VideoFullscreenView.message] is a row of the open chat, so
+  /// its going (deleted, expired) means something. A message the chat does
+  /// not hold (a standalone open) is never watched, as the photo gallery's
+  /// `_standalone`.
+  late final bool _tracked;
+
+  /// Set once the message went: the player is released and the pop is on its
+  /// way; nothing of the clip may be painted or played any more.
+  bool _gone = false;
   bool _loading = true;
   VideoStageError? _error;
   bool _playing = false;
@@ -106,11 +118,38 @@ class _VideoFullscreenViewState extends State<_VideoFullscreenView>
       ..addListener(
         () => setState(() => _dragDy = _slideTween.evaluate(_slide)),
       );
+    _messaging = context.read<MessagingProvider>();
+    _tracked = _isInChat();
+    if (_tracked) _messaging.addListener(_onMessagesChanged);
     _load();
+  }
+
+  bool _isInChat() {
+    final tempId = widget.message.tempId;
+    return _messaging.messages.any(
+      (m) =>
+          m.id == widget.message.id || (tempId != null && m.tempId == tempId),
+    );
+  }
+
+  /// The clip on screen was deleted or expired: never keep playing it (the
+  /// photo viewer's rule, `FullscreenImageViewer.didUpdateWidget`). The
+  /// decrypted copy is released NOW, not after the exit transition. A sent
+  /// row replacing its optimistic one keeps its `tempId`, so it stays.
+  void _onMessagesChanged() {
+    if (_gone || !mounted || _isInChat()) return;
+    _gone = true;
+    _hideTimer?.cancel();
+    _controller?.removeListener(_onControllerTick);
+    _session?.dispose();
+    _session = null;
+    setState(() => _playing = false);
+    Navigator.of(context).pop();
   }
 
   @override
   void dispose() {
+    if (_tracked) _messaging.removeListener(_onMessagesChanged);
     _hideTimer?.cancel();
     _slide.dispose();
     _controller?.removeListener(_onControllerTick);
@@ -164,6 +203,8 @@ class _VideoFullscreenViewState extends State<_VideoFullscreenView>
       session.dispose();
       return;
     }
+    // The message went while the clip loaded: the session is already freed.
+    if (_gone) return;
     if (failure != null) {
       setState(() {
         _loading = false;
@@ -471,6 +512,7 @@ class _VideoFullscreenViewState extends State<_VideoFullscreenView>
   }
 
   Widget _buildStage() {
+    if (_gone) return const SizedBox.shrink();
     if (_loading) {
       return const Center(
         child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
