@@ -234,6 +234,7 @@ export class IdentityResetService {
   async requestReset(
     userId: number,
     credential?: RecoveryCredential,
+    plaintextPhraseSent = false,
   ): Promise<RequestResetResult> {
     const existing = await this.resetRepo.findOne({
       where: { userId, status: 'pending' },
@@ -311,6 +312,21 @@ export class IdentityResetService {
       return await this.dataSource.transaction(async (manager) => {
         let shortened = false;
         let phraseTooNew = false;
+        // Plan B7 tail (0.2.104): a plaintext phrase (a client up to 0.2.89)
+        // is refused where a credential would have been examined, after every
+        // earlier answer. Only the fact that one was sent arrives here: the
+        // value is never passed on, so it cannot reach argon2 or a log.
+        if (plaintextPhraseSent) {
+          this.logger.warn(
+            `[identity-reset] request refused: plaintext phrase`,
+          );
+          return {
+            status: 'invalid_phrase' as const,
+            deadlineAt: null,
+            shortened: false,
+            phraseTooNew: false,
+          };
+        }
         if (credential != null && credential.value.length > 0) {
           const outcome = await this.spendRecoveryPhrase(
             manager.getRepository(RecoveryKey),

@@ -603,21 +603,12 @@ export class ChatKeyExchangeService {
 
     try {
       const dto = validateDto(ResetIdentityRequestDto, data);
-      if (dto.recoveryPhrase != null) {
-        // Plan B7 tail (0.2.104): the plaintext field of clients up to 0.2.89
-        // is answered as a wrong phrase and goes no further: no verify, no
-        // counted attempt, no ceremony. The value is not logged.
-        this.logger.warn(`resetIdentityRequest refused plaintext phrase`);
-        client.emit('identityResetStatus', {
-          status: 'invalid_phrase',
-          shortened: false,
-          phraseTooNew: false,
-        });
-        return;
-      }
       const result = await this.identityResetService.requestReset(
         userId,
         recoveryCredentialOf(dto.recoveryAuth),
+        // Value-less: the plaintext phrase of a client up to 0.2.89 is refused
+        // inside the ceremony, after its own earlier answers (0.2.104).
+        dto.recoveryPhrase != null,
       );
       client.emit('identityResetStatus', {
         status: result.status,
