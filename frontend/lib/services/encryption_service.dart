@@ -171,6 +171,12 @@ class EncryptionService {
   /// account did not change underneath it before destroying anything.
   int? get activeUserId => _userId;
 
+  /// True when a pass that started for [forUser] is running while another
+  /// account (or none) is current. Local message ids restart at the same base
+  /// for every account, so a destructive call must refuse rather than act on
+  /// the new account's rows. A null [forUser] is an unpinned caller.
+  bool _staleAccount(int? forUser) => forUser != null && forUser != _userId;
+
   /// The plaintext-record store behind every cache/purge/retention path here.
   /// [ContentKv] mirrors the SharedPreferences surface exactly; see its doc
   /// for what each backend guarantees. Kept behind the historical
@@ -3792,11 +3798,14 @@ class EncryptionService {
   /// removing it only appends another record, so it is not attempted here.
   /// Unrecoverability comes from rotating the at-rest content key after a
   /// purge — residue is then ciphertext under a key that no longer exists.
-  Future<PlaintextPurgeResult> removeDecryptedContent(Iterable<int> ids) async {
+  Future<PlaintextPurgeResult> removeDecryptedContent(
+    Iterable<int> ids, {
+    int? forUser,
+  }) async {
     final userId = _userId;
     final wanted = ids.toSet();
     if (wanted.isEmpty) return const PlaintextPurgeResult.empty();
-    if (userId == null) {
+    if (userId == null || _staleAccount(forUser)) {
       return PlaintextPurgeResult(removed: 0, failedIds: wanted);
     }
 
@@ -4720,9 +4729,9 @@ class EncryptionService {
 
   /// Record that [ids] were retired by retention. Locked for the same reason
   /// the purge backlog is: one key, every same-origin PWA engine.
-  Future<void> markRetired(Iterable<int> ids) async {
+  Future<void> markRetired(Iterable<int> ids, {int? forUser}) async {
     final userId = _userId;
-    if (userId == null) return;
+    if (userId == null || _staleAccount(forUser)) return;
     final incoming = ids.toSet();
     if (incoming.isEmpty) return;
     await _sessionCrossContextLock('fireplace-e2e-retired-$userId', () async {
@@ -4926,10 +4935,10 @@ class EncryptionService {
   /// serves the clobberable cache, the exact 2026-07-29 mechanism) and writes
   /// UNCONDITIONALLY: a write skipped on a short read is precisely when the
   /// entry survives.
-  Future<void> forgetDecryptedMany(Iterable<int> ids) async {
+  Future<void> forgetDecryptedMany(Iterable<int> ids, {int? forUser}) async {
     final userId = _userId;
     final drop = ids.toSet();
-    if (userId == null || drop.isEmpty) return;
+    if (userId == null || drop.isEmpty || _staleAccount(forUser)) return;
     await _sessionCrossContextLock('fireplace-e2e-ledger-$userId', () async {
       try {
         final prefs = await _sharedPrefs;
@@ -5150,9 +5159,12 @@ class EncryptionService {
   /// absent key succeeds. A false here means the OUTGOING plaintext is still
   /// readable, so it must reach the caller's result rather than being
   /// swallowed; that is the whole reason this is not `Future<void>`.
-  Future<bool> removePendingSendRecord(String ciphertext) async {
+  Future<bool> removePendingSendRecord(
+    String ciphertext, {
+    int? forUser,
+  }) async {
     final userId = _userId;
-    if (userId == null) return false;
+    if (userId == null || _staleAccount(forUser)) return false;
     try {
       final prefs = await _sharedPrefs;
       final key = _pendingSendRecordKey(userId, ciphertext);
@@ -5199,10 +5211,11 @@ class EncryptionService {
   /// promise is that plaintext eventually dies.
   Future<bool> enqueuePurge(
     Iterable<int> ids,
-    Iterable<String> ciphertexts,
-  ) async {
+    Iterable<String> ciphertexts, {
+    int? forUser,
+  }) async {
     final userId = _userId;
-    if (userId == null) return false;
+    if (userId == null || _staleAccount(forUser)) return false;
     final newIds = ids.toSet();
     final newCiphertexts = ciphertexts.toSet();
     if (newIds.isEmpty && newCiphertexts.isEmpty) return true;
@@ -5257,9 +5270,13 @@ class EncryptionService {
   }
 
   /// Everything still owed a purge. Drained at startup and after `socketReady`.
-  Future<({Set<int> ids, Set<String> ciphertexts})> purgeBacklog() async {
+  Future<({Set<int> ids, Set<String> ciphertexts})> purgeBacklog({
+    int? forUser,
+  }) async {
     final userId = _userId;
-    if (userId == null) return (ids: <int>{}, ciphertexts: <String>{});
+    if (userId == null || _staleAccount(forUser)) {
+      return (ids: <int>{}, ciphertexts: <String>{});
+    }
     try {
       final prefs = await _sharedPrefs;
       await _reloadPrefsForCrossContext(prefs);
@@ -5343,10 +5360,11 @@ class EncryptionService {
   /// thing that will bring the failure back for another attempt.
   Future<void> resolvePurged(
     Iterable<int> ids,
-    Iterable<String> ciphertexts,
-  ) async {
+    Iterable<String> ciphertexts, {
+    int? forUser,
+  }) async {
     final userId = _userId;
-    if (userId == null) return;
+    if (userId == null || _staleAccount(forUser)) return;
     await _sessionCrossContextLock(_purgeBacklogLockName(userId), () async {
       try {
         final prefs = await _sharedPrefs;
@@ -5435,6 +5453,13 @@ class EncryptionService {
   /// Clear all E2E encryption keys for this user from storage.
   /// Uses selective deletion (not deleteAll) to avoid wiping non-E2E data.
   ///
+  /// Every stage runs even when an earlier one fails: a Signal store that
+  /// cannot be listed or one key that refuses to delete must not leave the
+  /// stored messages and the in-RAM account state behind. A failure is
+  /// recorded as `KEY_WIPE_INCOMPLETE` (stage names, counts and error type
+  /// names only). A Signal-store failure is rethrown after the reset, as
+  /// before; a content-store failure never was thrown and still is not.
+  ///
   /// Deliberately does NOT clear the per-account in-RAM collections (peer
   /// warnings, key-change notes, refusals, rebuild intents, device-list pins):
   /// `initialize` drops them when the account CHANGES ((lxxxiv) rider) —
@@ -5442,15 +5467,31 @@ class EncryptionService {
   /// A new per-account collection belongs on that list, not here.
   Future<void> clearAllKeys() async {
     final userId = _userId;
+    Object? signalError;
+    StackTrace? signalStack;
     if (userId != null) {
       final prefix = 'e2e_${userId}_';
-      // DualStorage.readAll() merges both storages
-      final all = await _storage.readAll();
-      final keysToDelete = all.keys.where((k) => k.startsWith(prefix)).toList();
-      for (final key in keysToDelete) {
-        await _storage.delete(key: key);
+      var signalLeft = 0;
+      try {
+        // DualStorage.readAll() merges both storages
+        final all = await _storage.readAll();
+        final keysToDelete = all.keys
+            .where((k) => k.startsWith(prefix))
+            .toList();
+        for (final key in keysToDelete) {
+          try {
+            await _storage.delete(key: key);
+          } on Object catch (e, st) {
+            signalLeft++;
+            if (signalError == null) (signalError, signalStack) = (e, st);
+          }
+        }
+      } on Object catch (e, st) {
+        if (signalError == null) (signalError, signalStack) = (e, st);
       }
       // SharedPreferences: clear decrypted content cache entries
+      var contentLeft = 0;
+      Object? contentError;
       try {
         final prefs = await _sharedPrefs;
         await _reloadPrefsForCrossContext(prefs);
@@ -5459,9 +5500,30 @@ class EncryptionService {
             .where((k) => k.startsWith(prefix))
             .toList();
         for (final key in spKeysToDelete) {
-          await prefs.remove(key);
+          try {
+            if (!await prefs.remove(key)) contentLeft++;
+          } on Object catch (e) {
+            contentLeft++;
+            contentError ??= e;
+          }
         }
-      } catch (_) {}
+      } on Object catch (e) {
+        contentError ??= e;
+      }
+      if (signalError != null || contentError != null || contentLeft > 0) {
+        E2ePersistentDiag.record('KEY_WIPE_INCOMPLETE', {
+          if (signalError != null)
+            'signal': {
+              'error': signalError.runtimeType.toString(),
+              'left': signalLeft,
+            },
+          if (contentError != null || contentLeft > 0)
+            'content': {
+              'error': contentError?.runtimeType.toString() ?? 'refused',
+              'left': contentLeft,
+            },
+        });
+      }
     }
     _initialized = false;
     needsKeyUpload = false;
@@ -5471,6 +5533,8 @@ class EncryptionService {
     _prefsOpening = null;
     _storage.clearPrefsCache();
     debugPrint('[EncryptionService] All encryption keys cleared');
+    final rethrown = signalError;
+    if (rethrown != null) Error.throwWithStackTrace(rethrown, signalStack!);
   }
 
   /// Mid-session passcode re-lock: drop every piece of key material and
