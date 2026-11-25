@@ -203,6 +203,8 @@
   "recoveryKeyLegacyTitle": "Replace your recovery key",
   "recoveryKeyLegacyBody": "Your recovery key was set by an older version and must be replaced.",
   "recoveryKeyLegacyDismiss": "Not now",
+  "recoveryKeyLegacyDialogBody": "Your recovery key was set in an older version of the app. That version sent the 12 words to the server, so they are no longer safe to rely on. The old words no longer recover your password. Setting a new key takes a minute.",
+  "recoveryKeyLegacyReplaceNow": "Replace now",
   "authForgotPassword": "Forgot password",
   "@authForgotPassword": {"description": "Link under the sign-in form that opens the recover-with-phrase form."},
   "authNewPasswordHint": "New password",

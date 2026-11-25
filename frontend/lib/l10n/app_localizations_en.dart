@@ -544,6 +544,13 @@ class AppLocalizationsEn extends AppLocalizations {
   String get recoveryKeyLegacyDismiss => 'Not now';
 
   @override
+  String get recoveryKeyLegacyDialogBody =>
+      'Your recovery key was set in an older version of the app. That version sent the 12 words to the server, so they are no longer safe to rely on. The old words no longer recover your password. Setting a new key takes a minute.';
+
+  @override
+  String get recoveryKeyLegacyReplaceNow => 'Replace now';
+
+  @override
   String get authForgotPassword => 'Forgot password';
 
   @override
