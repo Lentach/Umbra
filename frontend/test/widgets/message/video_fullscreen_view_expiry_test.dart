@@ -9,8 +9,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
 const _kChat = 10;
-const _kOpen = ValueKey('open_video');
-const _kClose = ValueKey('video_fullscreen_close');
+const Key _kOpen = ValueKey('open_video');
+const Key _kClose = ValueKey('video_fullscreen_close');
 
 MessageModel _video({DateTime? expiresAt, String? tempId}) => MessageModel(
   id: kFirstLocalMessageId + 7,
@@ -139,7 +139,6 @@ void main() {
       senderId: 2,
       senderUsername: 'bob',
       conversationId: _kChat,
-      deliveryStatus: MessageDeliveryStatus.sent,
       messageType: MessageType.video,
       createdAt: DateTime.now(),
       mediaUrl: 'https://example.com/media/msgs/v.bin',

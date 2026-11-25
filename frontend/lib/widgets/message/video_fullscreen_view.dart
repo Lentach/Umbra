@@ -91,7 +91,7 @@ class _VideoFullscreenViewState extends State<_VideoFullscreenView>
   VideoPlaybackSession? _session;
   late final MessagingProvider _messaging;
 
-  /// True when [VideoFullscreenView.message] is a row of the open chat, so
+  /// True when `widget.message` is a row of the open chat, so
   /// its going (deleted, expired) means something. A message the chat does
   /// not hold (a standalone open) is never watched, as the photo gallery's
   /// `_standalone`.
