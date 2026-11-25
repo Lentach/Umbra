@@ -112,6 +112,16 @@ export class AuthService {
     credential: RecoveryCredential,
     newPassword: string,
   ) {
+    if (credential.kind === 'phrase') {
+      // Plan B7 tail: a plaintext phrase is never verified, whatever the row.
+      // One verify on a CONSTANT keeps the cost of a wrong phrase; the value
+      // is not hashed, stored or logged, and no attempt is counted.
+      await argon2
+        .verify(TIMING_SAFE_DUMMY_VERIFIER, 'plaintext-phrase-refused')
+        .catch(() => false);
+      this.auditLogger.log(`recoverPassword refused reason=plaintext_phrase`);
+      throw new UnauthorizedException('Invalid credentials');
+    }
     const user = await this.resolveIdentifier(identifier);
     if (!user) {
       // Constant-time guard, as login's twin: no per-account counter

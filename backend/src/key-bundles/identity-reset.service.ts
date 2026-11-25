@@ -457,6 +457,8 @@ export class IdentityResetService {
     userId: number,
     credential: RecoveryCredential,
   ): Promise<RecoveryVerdict> {
+    // Plan B7 tail: a plaintext phrase is never verified (see verifyAgainstRow).
+    if (credential.kind === 'phrase') return 'invalid_phrase';
     const row = await this.recoveryRepo.findOne({ where: { userId } });
     if (!row) {
       await argon2
@@ -485,6 +487,10 @@ export class IdentityResetService {
     row: RecoveryKey,
     credential: RecoveryCredential,
   ): Promise<RecoveryVerdict> {
+    // Plan B7 tail (0.2.104): the plaintext phrase of clients up to 0.2.89 is
+    // refused before anything else: never handed to argon2, never counted, no
+    // lockout change, whatever the row's kind and its real verifier.
+    if (credential.kind === 'phrase') return 'invalid_phrase';
     if (row.lockedUntil != null && row.lockedUntil.getTime() > Date.now()) {
       return 'locked';
     }
@@ -656,6 +662,10 @@ export class IdentityResetService {
     credential: RecoveryCredential,
     backup?: IdentityBackupInput,
   ): Promise<boolean> {
+    // Plan B7 tail: no path creates a `phrase_v1` row any more.
+    if (credential.kind === 'phrase') {
+      throw new Error('a plaintext recovery phrase is never stored');
+    }
     const verifierHash = await argon2.hash(
       credential.value,
       RECOVERY_ARGON2_OPTIONS,

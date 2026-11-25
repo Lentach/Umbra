@@ -784,9 +784,10 @@ describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', (
         service.verifyRecoveryPhrase(7, auth(authSecret)),
       ).resolves.toBe('locked');
       recoveryRepo.findOne.mockResolvedValue(v1({ lockedUntil }));
+      // The plaintext phrase is refused outright, locked or not (no lockout change).
       await expect(
         service.verifyRecoveryPhrase(7, plain(phrase)),
-      ).resolves.toBe('locked');
+      ).resolves.toBe('invalid_phrase');
       await expect(
         service.verifyRecoveryPhrase(7, auth(authSecret)),
       ).resolves.toBe('locked');

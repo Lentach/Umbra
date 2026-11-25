@@ -603,6 +603,18 @@ export class ChatKeyExchangeService {
 
     try {
       const dto = validateDto(ResetIdentityRequestDto, data);
+      if (dto.recoveryPhrase != null) {
+        // Plan B7 tail (0.2.104): the plaintext field of clients up to 0.2.89
+        // is answered as a wrong phrase and goes no further: no verify, no
+        // counted attempt, no ceremony. The value is not logged.
+        this.logger.warn(`resetIdentityRequest refused plaintext phrase`);
+        client.emit('identityResetStatus', {
+          status: 'invalid_phrase',
+          shortened: false,
+          phraseTooNew: false,
+        });
+        return;
+      }
       const result = await this.identityResetService.requestReset(
         userId,
         recoveryCredentialOf(dto.recoveryAuth, dto.recoveryPhrase),
@@ -694,8 +706,8 @@ export class ChatKeyExchangeService {
    * Enrolls or replaces the account's recovery key (§6.2.1). The phrase is
    * generated and shown on the client and (plan B7) never leaves it: the client
    * sends `authSecret`, an HKDF output, and the server keeps only a memory-hard
-   * verifier of that. A legacy client's plaintext `phrase` is still accepted
-   * and stored as a `phrase_v1` verifier.
+   * verifier of that. A legacy client's plaintext `phrase` (up to 0.2.89) is
+   * refused with a failed ack and nothing is stored (plan B7 tail, 0.2.104).
    *
    * Enrolment is LOUD (amendment (xlii)). I4 says the recovery key shortens
    * the reset delay but is never silent — yet the step that DETERMINES that
@@ -717,6 +729,11 @@ export class ChatKeyExchangeService {
 
     try {
       const dto = validateDto(SetRecoveryKeyDto, data);
+      if (dto.phrase != null) {
+        this.logger.warn(`setRecoveryKey refused plaintext phrase`);
+        client.emit('recoveryKeySet', { success: false });
+        return;
+      }
       const replaced = await this.identityResetService.setRecoveryKey(
         userId,
         // Validated exactly-one-of by SetRecoveryKeyDto.
