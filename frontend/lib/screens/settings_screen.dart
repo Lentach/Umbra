@@ -182,8 +182,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         password,
         beforeDelete: messaging.goodbyeToBoxFriends,
       );
-      await enc.clearEncryptionKeys();
+      // The connection closes FIRST: goodbye work that outlived its budget
+      // would otherwise reach the box and the store while the wipe runs.
       conn.disconnect(isLogout: true);
+      await enc.clearEncryptionKeys();
 
       if (mounted) {
         Navigator.of(context).popUntil((route) => route.isFirst);
