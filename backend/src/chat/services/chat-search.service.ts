@@ -9,14 +9,10 @@ import {
   PreKeyBundleResponse,
 } from '../../key-bundles/key-bundles.service';
 import { validateDto } from '../utils/dto.validator';
+import { socketData } from '../utils/socket-data';
 import { SearchUsersDto, SetRequestQueueDto } from '../dto/chat.dto';
 import { deviceAuthorizationPayload } from '../mappers/device-authorization.mapper';
 import { ChatKeyExchangeService } from './chat-key-exchange.service';
-
-/** What `ChatGateway.handleConnection` writes to `Socket.data`. */
-interface AuthenticatedSocketData {
-  user?: { id: number; deviceId?: number };
-}
 
 /**
  * Plan B5: how many one-time pre-keys searches may spend per TARGET device per
@@ -28,12 +24,6 @@ interface AuthenticatedSocketData {
 export const SEARCH_OTP_BUDGET = 5;
 export const SEARCH_OTP_WINDOW_MS = 60 * 60 * 1000;
 const SEARCH_OTP_MAP_MAX_ENTRIES = 10000;
-
-function socketUser(client: Socket): AuthenticatedSocketData['user'] {
-  // socket.io types `Socket.data` as `any`; the gateway is its only writer.
-  const data = client.data as AuthenticatedSocketData;
-  return data.user;
-}
 
 /**
  * First contact (metadata-privacy PR3.2, design §4.4).
@@ -69,7 +59,7 @@ export class ChatSearchService {
     data: unknown,
     server: Server,
   ): Promise<void> {
-    const currentUserId = socketUser(client)?.id;
+    const currentUserId = socketData(client).user?.id;
     if (!currentUserId) return;
 
     try {
@@ -219,7 +209,7 @@ export class ChatSearchService {
    * `invalid_payload`, `unknown_device` (no live row), `internal`.
    */
   async handleSetRequestQueue(client: Socket, data: unknown): Promise<void> {
-    const user = socketUser(client);
+    const user = socketData(client).user;
     if (!user) return;
 
     let dto: SetRequestQueueDto;
@@ -265,7 +255,7 @@ export class ChatSearchService {
    * until that device publishes; refusals `internal`, `rate_limited`.
    */
   async handleGetOwnRequestQueues(client: Socket): Promise<void> {
-    const user = socketUser(client);
+    const user = socketData(client).user;
     if (!user) return;
     const callerDeviceId = user.deviceId ?? DEFAULT_DEVICE_ID;
     try {
