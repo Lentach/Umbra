@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:fireplace/l10n/app_localizations.dart';
 import 'package:fireplace/models/user_model.dart';
 import 'package:fireplace/providers/auth_provider.dart';
@@ -68,7 +70,7 @@ late AppLocalizations _l10n;
 void _legacy(EncryptionProvider enc, {bool? value = true}) {
   enc.onOwnKeyBundleStatus({
     'exists': true,
-    if (value != null) 'recoveryKeyLegacy': value,
+    'recoveryKeyLegacy': ?value,
   });
 }
 
@@ -230,8 +232,7 @@ void main() {
     _legacy(enc);
     await tester.pumpAndSettle();
 
-    final navigator = tester.state<NavigatorState>(find.byType(Navigator));
-    navigator.pop();
+    tester.state<NavigatorState>(find.byType(Navigator)).pop();
     await tester.pumpAndSettle();
 
     expect(_title, findsNothing);
@@ -246,7 +247,7 @@ void main() {
     tester,
   ) async {
     final first = EncryptionProvider();
-    await _pump(tester, enc: first, passcode: await _passcode(), userId: 7);
+    await _pump(tester, enc: first, passcode: await _passcode());
     _legacy(first);
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(_later));
@@ -264,7 +265,7 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     // Back to account 7 with a fresh provider: already asked this run.
     final again = EncryptionProvider();
-    await _pump(tester, enc: again, passcode: await _passcode(), userId: 7);
+    await _pump(tester, enc: again, passcode: await _passcode());
     _legacy(again);
     await tester.pumpAndSettle();
     expect(_title, findsNothing);
@@ -353,8 +354,10 @@ void main() {
     final enc = EncryptionProvider();
     await _pump(tester, enc: enc, passcode: await _passcode());
     final context = tester.element(find.byType(ConversationsScreen));
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => const RecoveryKeyScreen()),
+    unawaited(
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => const RecoveryKeyScreen()),
+      ),
     );
     await tester.pumpAndSettle();
 
