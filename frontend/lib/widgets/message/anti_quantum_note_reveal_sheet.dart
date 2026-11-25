@@ -6,6 +6,7 @@ import 'package:webcrypto/webcrypto.dart';
 
 import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
+import '../../services/api_exception.dart';
 import '../../services/api_service.dart';
 import '../../theme/rpg_theme.dart';
 import '../../utils/anti_quantum_note_link.dart';
@@ -75,7 +76,9 @@ Future<NoteRevealOutcome> revealAntiQuantumNote(
 }
 
 /// Opens the in-app one-time reveal surface for an own-origin Anti-Quantum
-/// Note. Closing it at ANY point simply returns to the chat — that is the
+/// Note. Once the reveal is decrypting it cannot be closed (the note is burned
+/// and this screen holds the only copy of its text); in every other phase,
+/// closing simply returns to the chat — that is the
 /// whole point of revealing in-app instead of launching a browser tab.
 Future<void> showAntiQuantumNoteRevealSheet(
   BuildContext context, {
@@ -91,7 +94,10 @@ Future<void> showAntiQuantumNoteRevealSheet(
 }
 
 /// State machine: `confirm` (burn warning — NEVER auto-reveals) → `revealing`
-/// → `revealed` | `destroyed` | `expired` | `corrupt` | `networkError`.
+/// → `revealed` | `destroyed` | `expired` | `corrupt` | `networkError` |
+/// `serverError` | `rateLimited` | `maybeBurned` (a retry found the note gone
+/// after an earlier attempt whose outcome is unknown, so it must not claim
+/// someone else read it).
 /// A link whose fragment key fails the 32-byte pre-flight opens straight in
 /// `invalidLink` (nothing was burned); a link whose `e=` clock already ran
 /// out opens straight in `expired` (the server would 404 anyway — no reason
@@ -122,6 +128,8 @@ enum _Phase {
   corrupt,
   invalidLink,
   networkError,
+  serverError,
+  rateLimited,
   maybeBurned,
 }
 
@@ -130,8 +138,8 @@ class _AntiQuantumNoteRevealSheetState
   late _Phase _phase;
   String? _plaintext;
 
-  /// An attempt threw (timeout, dropped response): the server may have
-  /// deleted the note before the answer was lost.
+  /// An attempt threw (timeout, dropped response, a 5xx answer): the server
+  /// may have deleted the note before the answer was lost or failed.
   bool _attemptOutcomeUnknown = false;
 
   @override
@@ -192,10 +200,20 @@ class _AntiQuantumNoteRevealSheetState
             _phase = _Phase.corrupt;
         }
       });
-    } on Object {
+    } on Object catch (e) {
       if (!mounted) return;
+      // The server's throttler answers 429 BEFORE the reveal handler runs, so
+      // that attempt cannot have burned the note. Any other answer (a gateway
+      // 502/504 can follow the DELETE) and any lost answer leave it unknown.
+      if (e is ApiException && e.statusCode == 429) {
+        setState(() => _phase = _Phase.rateLimited);
+        return;
+      }
       _attemptOutcomeUnknown = true;
-      setState(() => _phase = _Phase.networkError);
+      setState(
+        () => _phase =
+            e is ApiException ? _Phase.serverError : _Phase.networkError,
+      );
     }
   }
 
@@ -266,6 +284,26 @@ class _AntiQuantumNoteRevealSheetState
                     .antiQuantumNoteRevealInvalidLinkTitle,
                 body: AppLocalizations.of(context)
                     .antiQuantumNoteRevealInvalidLinkBody,
+              ),
+            _Phase.serverError => _buildTerminal(
+                context,
+                key: const Key('note-reveal-server-error'),
+                icon: Icons.cloud_off,
+                title: AppLocalizations.of(context)
+                    .antiQuantumNoteRevealServerErrorTitle,
+                body: AppLocalizations.of(context)
+                    .antiQuantumNoteRevealServerErrorBody,
+                retry: true,
+              ),
+            _Phase.rateLimited => _buildTerminal(
+                context,
+                key: const Key('note-reveal-rate-limited'),
+                icon: Icons.hourglass_top,
+                title: AppLocalizations.of(context)
+                    .antiQuantumNoteRevealBusyTitle,
+                body: AppLocalizations.of(context)
+                    .antiQuantumNoteRevealBusyBody,
+                retry: true,
               ),
             _Phase.networkError => _buildTerminal(
                 context,

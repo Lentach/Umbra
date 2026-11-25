@@ -1379,6 +1379,20 @@ class AppLocalizationsPl extends AppLocalizations {
       'Połączenie zerwało się, zanim dotarła odpowiedź serwera. Ta próba mogła już zniszczyć notatkę. Spróbuj ponownie, aby się dowiedzieć.';
 
   @override
+  String get antiQuantumNoteRevealServerErrorTitle => 'Błąd serwera';
+
+  @override
+  String get antiQuantumNoteRevealServerErrorBody =>
+      'Serwer odpowiedział błędem. Ta próba mogła już zniszczyć notatkę. Spróbuj ponownie, aby się dowiedzieć.';
+
+  @override
+  String get antiQuantumNoteRevealBusyTitle => 'Serwer jest zajęty';
+
+  @override
+  String get antiQuantumNoteRevealBusyBody =>
+      'Serwer dostaje teraz zbyt wiele żądań. Ta próba nie zniszczyła notatki. Odczekaj chwilę i spróbuj ponownie.';
+
+  @override
   String get antiQuantumNoteRevealMaybeBurnedTitle =>
       'Notatka mogła zostać zniszczona';
 

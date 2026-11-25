@@ -1354,6 +1354,20 @@ class AppLocalizationsEn extends AppLocalizations {
       'The connection broke before the server\'s answer arrived. The note may already have been destroyed by this attempt. Try again to find out.';
 
   @override
+  String get antiQuantumNoteRevealServerErrorTitle => 'Server error';
+
+  @override
+  String get antiQuantumNoteRevealServerErrorBody =>
+      'The server answered with an error. The note may already have been destroyed by this attempt. Try again to find out.';
+
+  @override
+  String get antiQuantumNoteRevealBusyTitle => 'Server busy';
+
+  @override
+  String get antiQuantumNoteRevealBusyBody =>
+      'The server is getting too many requests right now. This attempt did not destroy the note. Wait a moment and try again.';
+
+  @override
   String get antiQuantumNoteRevealMaybeBurnedTitle => 'Note may be destroyed';
 
   @override
