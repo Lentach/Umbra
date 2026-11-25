@@ -9,10 +9,7 @@ import {
   KeyBundlesService,
   PreKeyBundleResponse,
 } from '../../key-bundles/key-bundles.service';
-import {
-  IdentityResetService,
-  recoveryCredentialOf,
-} from '../../key-bundles/identity-reset.service';
+import { IdentityResetService } from '../../key-bundles/identity-reset.service';
 import { DevicesService } from '../../key-bundles/devices.service';
 import { DeviceListService } from '../../key-bundles/device-list.service';
 import { validateDto } from '../utils/dto.validator';
@@ -605,7 +602,10 @@ export class ChatKeyExchangeService {
       const dto = validateDto(ResetIdentityRequestDto, data);
       const result = await this.identityResetService.requestReset(
         userId,
-        recoveryCredentialOf(dto.recoveryAuth, dto.recoveryPhrase),
+        dto.recoveryAuth,
+        // Value-less: the plaintext phrase of a client up to 0.2.89 is refused
+        // inside the ceremony, after its own earlier answers (0.2.104).
+        dto.recoveryPhrase != null,
       );
       client.emit('identityResetStatus', {
         status: result.status,
@@ -694,8 +694,8 @@ export class ChatKeyExchangeService {
    * Enrolls or replaces the account's recovery key (§6.2.1). The phrase is
    * generated and shown on the client and (plan B7) never leaves it: the client
    * sends `authSecret`, an HKDF output, and the server keeps only a memory-hard
-   * verifier of that. A legacy client's plaintext `phrase` is still accepted
-   * and stored as a `phrase_v1` verifier.
+   * verifier of that. A legacy client's plaintext `phrase` (up to 0.2.89) is
+   * refused with a failed ack and nothing is stored (plan B7 tail, 0.2.104).
    *
    * Enrolment is LOUD (amendment (xlii)). I4 says the recovery key shortens
    * the reset delay but is never silent — yet the step that DETERMINES that
@@ -717,12 +717,18 @@ export class ChatKeyExchangeService {
 
     try {
       const dto = validateDto(SetRecoveryKeyDto, data);
+      if (dto.phrase != null) {
+        this.logger.warn(`setRecoveryKey refused plaintext phrase`);
+        client.emit('recoveryKeySet', { success: false });
+        return;
+      }
       const replaced = await this.identityResetService.setRecoveryKey(
         userId,
         // Validated exactly-one-of by SetRecoveryKeyDto.
-        recoveryCredentialOf(dto.authSecret, dto.phrase)!,
+        dto.authSecret!,
         // (lxxviii) clause 1: verifier and sealed blob land atomically.
-        dto.backup,
+        // Required with an authSecret by SetRecoveryKeyDto.
+        dto.backup!,
       );
       client.emit('recoveryKeySet', { success: true });
       this.notifyRecoveryKeyEnrolled(userId, replaced, server);

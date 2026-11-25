@@ -1588,10 +1588,10 @@ describe('ChatKeyExchangeService', () => {
       });
     });
 
-    it('passes a recovery phrase through and still rings every bell', async () => {
+    // Plan B7: a client sends only the derived secret, which reaches the
+    // service as an `auth` credential, never as the phrase.
+    it('passes recoveryAuth through as an auth credential and still rings every bell', async () => {
       const deadlineAt = new Date(Date.now() + 1000);
-      const phrase =
-        'legal winner thank year wave sausage worth useful legal winner thank yellow';
       identityResetService.requestReset.mockResolvedValue({
         status: 'pending',
         deadlineAt,
@@ -1600,15 +1600,16 @@ describe('ChatKeyExchangeService', () => {
 
       await service.handleResetIdentityRequest(
         mockClient as Socket,
-        { recoveryPhrase: phrase },
+        { recoveryAuth: authSecret },
         mockServer as Server,
       );
       await new Promise((resolve) => setImmediate(resolve));
 
-      expect(identityResetService.requestReset).toHaveBeenCalledWith(1, {
-        kind: 'phrase',
-        value: phrase,
-      });
+      expect(identityResetService.requestReset).toHaveBeenCalledWith(
+        1,
+        authSecret,
+        false,
+      );
       // Shortened shortens the delay; it never silences the notifications.
       expect(mockServer.emit).toHaveBeenCalledWith(
         'identityResetPending',
@@ -1616,24 +1617,37 @@ describe('ChatKeyExchangeService', () => {
       );
     });
 
-    // Plan B7: a new client sends only the derived secret, which reaches the
-    // service as an `auth` credential, never as the phrase.
-    it('passes recoveryAuth through as an auth credential', async () => {
+    // Plan B7 tail (0.2.104): the plaintext field of clients up to 0.2.89
+    // reaches the service only as a value-less marker, so the ceremony's own
+    // preconditions keep their precedence and the value is never passed on.
+    it('tells the service a plaintext phrase was sent without handing it the phrase', async () => {
       identityResetService.requestReset.mockResolvedValue({
         status: 'invalid_phrase',
         deadlineAt: null,
         shortened: false,
+        phraseTooNew: false,
       });
 
       await service.handleResetIdentityRequest(
         mockClient as Socket,
-        { recoveryAuth: authSecret },
+        {
+          recoveryPhrase:
+            'legal winner thank year wave sausage worth useful legal winner thank yellow',
+        },
         mockServer as Server,
       );
+      await new Promise((resolve) => setImmediate(resolve));
 
-      expect(identityResetService.requestReset).toHaveBeenCalledWith(1, {
-        kind: 'auth',
-        value: authSecret,
+      expect(identityResetService.requestReset).toHaveBeenCalledWith(
+        1,
+        undefined,
+        true,
+      );
+      expect(mockClient.emit).toHaveBeenCalledWith('identityResetStatus', {
+        status: 'invalid_phrase',
+        deadlineAt: undefined,
+        shortened: false,
+        phraseTooNew: false,
       });
     });
 
@@ -1758,23 +1772,46 @@ describe('ChatKeyExchangeService', () => {
   describe('handleSetRecoveryKey', () => {
     const phrase =
       'legal winner thank year wave sausage worth useful legal winner thank yellow';
+    const authSecret = Buffer.alloc(32, 1).toString('base64');
+    const v2Backup = {
+      blob: 'c2VhbGVkLWJsb2I=',
+      salt: 'c2FsdC1zaXh0ZWVuLWI=',
+      iterations: 0,
+      version: 2,
+    };
 
-    it('stores the phrase verifier and confirms', async () => {
-      await service.handleSetRecoveryKey(
-        mockClient as Socket,
-        { phrase },
-        mockServer as Server,
-      );
+    // Plan B7 tail (0.2.104): the plaintext field of clients up to 0.2.89 is
+    // refused; whatever is stored stays as it was.
+    it.each([
+      ['alone', {}],
+      [
+        'with a version-1 backup',
+        {
+          backup: {
+            blob: 'c2VhbGVkLWJsb2I=',
+            salt: 'c2FsdC1zaXh0ZWVuLWI=',
+            iterations: 600000,
+            version: 1,
+          },
+        },
+      ],
+      ['with a version-2 backup', { backup: v2Backup }],
+    ])(
+      'refuses a legacy plaintext phrase %s and stores nothing',
+      async (_name, extra) => {
+        await service.handleSetRecoveryKey(
+          mockClient as Socket,
+          { phrase, ...extra },
+          mockServer as Server,
+        );
+        await new Promise((resolve) => setImmediate(resolve));
 
-      expect(identityResetService.setRecoveryKey).toHaveBeenCalledWith(
-        1,
-        { kind: 'phrase', value: phrase },
-        undefined,
-      );
-      expect(mockClient.emit).toHaveBeenCalledWith('recoveryKeySet', {
-        success: true,
-      });
-    });
+        expect(identityResetService.setRecoveryKey).not.toHaveBeenCalled();
+        expect(mockClient.emit).toHaveBeenCalledWith('recoveryKeySet', {
+          success: false,
+        });
+      },
+    );
 
     it('reports failure without leaking the reason', async () => {
       identityResetService.setRecoveryKey.mockRejectedValue(
@@ -1783,65 +1820,25 @@ describe('ChatKeyExchangeService', () => {
 
       await service.handleSetRecoveryKey(
         mockClient as Socket,
-        { phrase },
+        { authSecret, backup: v2Backup },
         mockServer as Server,
       );
 
-      expect(mockClient.emit).toHaveBeenCalledWith('recoveryKeySet', {
-        success: false,
-      });
-    });
-
-    it('rejects a too-short phrase', async () => {
-      await service.handleSetRecoveryKey(
-        mockClient as Socket,
-        { phrase: 'short' },
-        mockServer as Server,
-      );
-
-      expect(identityResetService.setRecoveryKey).not.toHaveBeenCalled();
       expect(mockClient.emit).toHaveBeenCalledWith('recoveryKeySet', {
         success: false,
       });
     });
 
     // Amendment (lxxviii) clause 1: the sealed blob rides the enrolment.
-    const backup = {
-      blob: 'c2VhbGVkLWJsb2I=',
-      salt: 'c2FsdC1zaXh0ZWVuLWI=',
-      iterations: 600000,
-      version: 1,
-    };
-
-    it('passes the sealed backup through to the atomic enrolment write', async () => {
-      await service.handleSetRecoveryKey(
-        mockClient as Socket,
-        { phrase, backup },
-        mockServer as Server,
-      );
-
-      expect(identityResetService.setRecoveryKey).toHaveBeenCalledWith(
-        1,
-        { kind: 'phrase', value: phrase },
-        expect.objectContaining(backup),
-      );
-      expect(mockClient.emit).toHaveBeenCalledWith('recoveryKeySet', {
-        success: true,
-      });
-    });
-
     it.each([
-      ['iterations below the floor', { ...backup, iterations: 99999 }],
-      ['iterations above the cap', { ...backup, iterations: 2000001 }],
-      ['an oversized blob', { ...backup, blob: 'A'.repeat(16385) }],
-      ['a non-base64 salt', { ...backup, salt: 'not base64 at all!!' }],
-      ['an unknown blob version', { ...backup, version: 3 }],
-      ['version 2 with PBKDF iterations', { ...backup, version: 2 }],
-      ['version 1 with zero iterations', { ...backup, iterations: 0 }],
+      ['an oversized blob', { ...v2Backup, blob: 'A'.repeat(16385) }],
+      ['a non-base64 salt', { ...v2Backup, salt: 'not base64 at all!!' }],
+      ['an unknown blob version', { ...v2Backup, version: 3 }],
+      ['version 2 with PBKDF iterations', { ...v2Backup, iterations: 600000 }],
     ])('refuses %s without writing anything', async (_name, badBackup) => {
       await service.handleSetRecoveryKey(
         mockClient as Socket,
-        { phrase, backup: badBackup },
+        { authSecret, backup: badBackup },
         mockServer as Server,
       );
 
@@ -1850,16 +1847,6 @@ describe('ChatKeyExchangeService', () => {
         success: false,
       });
     });
-  });
-
-  describe('handleSetRecoveryKey — plan B7 authSecret', () => {
-    const authSecret = Buffer.alloc(32, 1).toString('base64');
-    const v2Backup = {
-      blob: 'c2VhbGVkLWJsb2I=',
-      salt: 'c2FsdC1zaXh0ZWVuLWI=',
-      iterations: 0,
-      version: 2,
-    };
 
     it('stores an auth credential with a version-2 backup', async () => {
       await service.handleSetRecoveryKey(
@@ -1870,7 +1857,7 @@ describe('ChatKeyExchangeService', () => {
 
       expect(identityResetService.setRecoveryKey).toHaveBeenCalledWith(
         1,
-        { kind: 'auth', value: authSecret },
+        authSecret,
         expect.objectContaining(v2Backup),
       );
       expect(mockClient.emit).toHaveBeenCalledWith('recoveryKeySet', {

@@ -26,6 +26,7 @@ import 'package:libsignal_protocol_dart/libsignal_protocol_dart.dart';
 import 'package:fireplace/services/api_service.dart';
 import 'package:fireplace/services/device_link/identity_backup.dart';
 import 'package:fireplace/services/encryption_service.dart';
+import 'package:fireplace/services/recovery_phrase.dart';
 import 'package:fireplace/services/socket_service.dart';
 import 'package:fireplace/utils/e2e_envelope.dart';
 
@@ -475,12 +476,18 @@ class E2eClient {
   }
 
   /// Starts a reset ceremony (§6.2) and returns the server's status answer.
+  /// [recoveryPhrase] is sent the way the app sends it (plan B7): only the
+  /// derived `recoveryAuth`, never the phrase. [legacyPlaintextPhrase] is the
+  /// field of clients up to 0.2.89, which the server refuses since 0.2.104.
   Future<Map<String, dynamic>> requestIdentityReset({
     String? recoveryPhrase,
+    String? legacyPlaintextPhrase,
   }) async {
     events.discard('identityResetStatus');
     socketService.socket!.emit('resetIdentityRequest', <String, dynamic>{
-      'recoveryPhrase': ?recoveryPhrase,
+      if (recoveryPhrase != null)
+        'recoveryAuth': RecoveryPhrase.deriveAuthSecret(recoveryPhrase),
+      'recoveryPhrase': ?legacyPlaintextPhrase,
     });
     final payload = await events.next(
       'identityResetStatus',
@@ -500,22 +507,41 @@ class E2eClient {
     return (payload as Map)['cancelled'] == true;
   }
 
-  /// Enrols a recovery phrase (§6.2.1), optionally with the (lxxviii) sealed
-  /// identity backup that turns the phrase into a real key backup.
+  /// Enrols a recovery phrase (§6.2.1) the way the app does since plan B7:
+  /// only the derived `authSecret` is sent, with a version-2 sealed identity
+  /// backup (the server requires one beside an authSecret). [backup] is the
+  /// (lxxviii) backup that turns the phrase into a real key backup; without
+  /// it an opaque placeholder blob rides along (the server cannot open it).
   Future<bool> setRecoveryKey(
     String phrase, {
     Map<String, dynamic>? backup,
   }) async {
-    events.discard('recoveryKeySet');
-    socketService.socket!.emit('setRecoveryKey', {
-      'phrase': phrase,
-      'backup': ?backup,
+    return _emitSetRecoveryKey(<String, dynamic>{
+      'authSecret': RecoveryPhrase.deriveAuthSecret(phrase),
+      'backup': backup ?? _placeholderV2Backup,
     });
-    final payload = await events.next(
+  }
+
+  /// The enrolment of clients up to 0.2.89: the plaintext phrase itself. The
+  /// server refuses it since 0.2.104 (failed ack, nothing stored).
+  Future<bool> setRecoveryKeyLegacyPlaintext(String phrase) =>
+      _emitSetRecoveryKey(<String, dynamic>{'phrase': phrase});
+
+  static const Map<String, dynamic> _placeholderV2Backup = <String, dynamic>{
+    'blob': 'c2VhbGVkLWJsb2I=',
+    'salt': 'c2FsdC1zaXh0ZWVuLWI=',
+    'iterations': 0,
+    'version': 2,
+  };
+
+  Future<bool> _emitSetRecoveryKey(Map<String, dynamic> payload) async {
+    events.discard('recoveryKeySet');
+    socketService.socket!.emit('setRecoveryKey', payload);
+    final answer = await events.next(
       'recoveryKeySet',
       reason: '$label recovery key answer',
     );
-    return (payload as Map)['success'] == true;
+    return (answer as Map)['success'] == true;
   }
 
   /// Fetches the (lxxviii) sealed identity backup. The blob is useless

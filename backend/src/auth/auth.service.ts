@@ -18,7 +18,6 @@ import {
 import { DevicesService } from '../key-bundles/devices.service';
 import {
   IdentityResetService,
-  RecoveryCredential,
   TIMING_SAFE_DUMMY_VERIFIER,
 } from '../key-bundles/identity-reset.service';
 import { DEFAULT_DEVICE_ID } from '../key-bundles/key-bundles.service';
@@ -95,6 +94,20 @@ export class AuthService {
   }
 
   /**
+   * Plan B7 tail (0.2.104): the legacy plaintext phrase of clients up to
+   * 0.2.89 is never verified, whatever the row. One verify on a CONSTANT keeps
+   * the cost of a wrong phrase; the value is not hashed, stored or logged, and
+   * no attempt is counted. Answers like a wrong phrase: 401.
+   */
+  async refusePlaintextPhrase(): Promise<never> {
+    await argon2
+      .verify(TIMING_SAFE_DUMMY_VERIFIER, 'plaintext-phrase-refused')
+      .catch(() => false);
+    this.auditLogger.log(`recoverPassword refused reason=plaintext_phrase`);
+    throw new UnauthorizedException('Invalid credentials');
+  }
+
+  /**
    * The recovery phrase as a credential (spec §12 amendment (lxxxii) clause
    * 2): a correct phrase sets a new password, drops every session, and
    * answers with login tokens — the door proved ownership, so a second
@@ -109,7 +122,7 @@ export class AuthService {
    */
   async recoverPassword(
     identifier: string,
-    credential: RecoveryCredential,
+    authSecret: string,
     newPassword: string,
   ) {
     const user = await this.resolveIdentifier(identifier);
@@ -117,14 +130,14 @@ export class AuthService {
       // Constant-time guard, as login's twin: no per-account counter
       // exists to spend, but the verify itself must cost the same.
       await argon2
-        .verify(TIMING_SAFE_DUMMY_VERIFIER, credential.value)
+        .verify(TIMING_SAFE_DUMMY_VERIFIER, authSecret)
         .catch(() => false);
       this.auditLogger.log(`recoverPassword failed reason=unknown_account`);
       throw new UnauthorizedException('Invalid credentials');
     }
     const verdict = await this.identityResetService.verifyRecoveryPhrase(
       user.id,
-      credential,
+      authSecret,
     );
     if (verdict === 'legacy_recovery_key') {
       // The stored key predates plan B7 and cannot check an authSecret. Answered

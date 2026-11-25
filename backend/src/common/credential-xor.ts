@@ -8,9 +8,10 @@ import {
 export const AUTH_SECRET_PATTERN = /^[A-Za-z0-9+/]{43}=$/;
 
 /**
- * Plan B7: a recovery credential travels as EITHER the legacy plaintext
- * `phrase` field OR the client-derived `authSecret`, never both and (where
- * `required`) never neither. Put on the `authSecret`-style field; the other
+ * Plan B7: the `authSecret`-style field and the legacy plaintext `phrase`
+ * field (declared only so it can be refused) are never both present and,
+ * where `required`, never both absent. Put on the `authSecret`-style field;
+ * the other
  * field keeps its own `@IsOptional()` rules.
  *
  * It must be a custom validator: `@IsOptional()` skips every other decorator
