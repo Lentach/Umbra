@@ -26,9 +26,9 @@ import {
  * clients send `recoveryAuth` (the HKDF-derived authSecret) and NEVER the
  * phrase; `recoveryPhrase` is the legacy plaintext field of clients up to
  * 0.2.89, declared ONLY so it is refused (`invalid_phrase`, nothing verified
- * or counted; plan B7 tail, 0.2.104). At most one
- * of the two. Both are bounded in length so a hostile payload cannot turn the
- * memory-hard verifier into a denial-of-service lever.
+ * or counted; plan B7 tail, 0.2.104). At most one of the two.
+ * `recoveryAuth` is pinned to 44 base64 characters; `recoveryPhrase` is
+ * bounded so an oversized payload fails validation before the refusal.
  */
 export class ResetIdentityRequestDto {
   @IsOptional()

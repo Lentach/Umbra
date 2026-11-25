@@ -79,8 +79,9 @@ These are decisions, not oversights. The table in §4 refers to them as
   item 1.
 - **Recovery phrase set on an app up to 0.2.89.** Those versions sent the
   phrase to the server each time it was set or used. Since 0.2.104 the server
-  refuses such a phrase and never stores or verifies one. An operator who
-  kept it earlier can open that
+  refuses such a phrase: it no longer verifies one or stores a new one, and
+  the old verifier stays until the account sets a new phrase. An operator who
+  kept the phrase earlier can open that
   account's recovery backup (the account's identity key and the key that
   signs its device list) and the phrase lock of its contact backup. The
   account is safe only after it sets a new phrase on a current app. Phrases
