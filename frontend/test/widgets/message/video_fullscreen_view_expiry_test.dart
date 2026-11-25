@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:fireplace/l10n/app_localizations.dart';
 import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/providers/auth_provider.dart';
@@ -11,6 +13,8 @@ import 'package:provider/provider.dart';
 const _kChat = 10;
 const Key _kOpen = ValueKey('open_video');
 const Key _kClose = ValueKey('video_fullscreen_close');
+const Key _kHome = ValueKey('home_page');
+const Key _kChatPage = ValueKey('chat_page');
 
 MessageModel _video({DateTime? expiresAt, String? tempId}) => MessageModel(
   id: kFirstLocalMessageId + 7,
@@ -37,8 +41,9 @@ MessageModel _text(int n) => MessageModel(
 );
 
 /// Opens the fullscreen player for [message] over a chat page that holds
-/// [rows]. Providers sit ABOVE MaterialApp: the player is a dialog on the
-/// root navigator.
+/// [rows]. The chat page is a route pushed over the app's first page, as in
+/// the app, so a pop too many shows. Providers sit ABOVE MaterialApp: the
+/// player is a dialog on the root navigator.
 Future<MessagingProvider> _open(
   WidgetTester tester,
   MessageModel message,
@@ -58,18 +63,29 @@ Future<MessagingProvider> _open(
         localizationsDelegates: AppLocalizations.localizationsDelegates,
         supportedLocales: AppLocalizations.supportedLocales,
         locale: const Locale('en'),
-        home: Scaffold(
-          body: Builder(
-            builder: (context) => TextButton(
-              key: _kOpen,
-              onPressed: () => showVideoFullscreen(context, message),
-              child: const SizedBox(width: 40, height: 40),
-            ),
-          ),
-        ),
+        home: const Scaffold(key: _kHome),
       ),
     ),
   );
+  unawaited(
+    tester
+        .state<NavigatorState>(find.byType(Navigator))
+        .push(
+          MaterialPageRoute<void>(
+            builder: (_) => Scaffold(
+              key: _kChatPage,
+              body: Builder(
+                builder: (context) => TextButton(
+                  key: _kOpen,
+                  onPressed: () => showVideoFullscreen(context, message),
+                  child: const SizedBox(width: 40, height: 40),
+                ),
+              ),
+            ),
+          ),
+        ),
+  );
+  await tester.pumpAndSettle();
   await tester.tap(find.byKey(_kOpen));
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 300));
@@ -152,5 +168,55 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
 
     expect(find.byKey(_kClose), findsOneWidget);
+  });
+
+  testWidgets('closing the player just before its message is deleted leaves '
+      'the chat on screen', (tester) async {
+    final message = _video();
+    final messaging = await _open(tester, message, [message, _text(8)]);
+
+    await tester.tap(find.byKey(_kClose));
+    // Inside the dialog's exit transition: the view is still mounted.
+    await tester.pump(const Duration(milliseconds: 40));
+    messaging.deleteMessage(message.id, forEveryone: false);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(_kClose), findsNothing);
+    expect(find.byKey(_kChatPage), findsOneWidget);
+  });
+
+  testWidgets('a message deleted while the player slides away under a swipe '
+      'leaves the chat on screen', (tester) async {
+    final message = _video();
+    final messaging = await _open(tester, message, [message, _text(8)]);
+
+    // A fast swipe down: the stage slides off for 80 ms before it pops, a
+    // shorter time than the dialog's own exit.
+    await tester.fling(find.byType(Dialog), const Offset(0, 300), 4000);
+    messaging.deleteMessage(message.id, forEveryone: false);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(_kClose), findsNothing);
+    expect(find.byKey(_kChatPage), findsOneWidget);
+  });
+
+  testWidgets('the decrypted copy is released the moment its message goes, '
+      'not after the exit transition', (tester) async {
+    final message = _video();
+    final messaging = await _open(tester, message, [message]);
+    final finder = find.byWidgetPredicate(
+      (w) => w.runtimeType.toString() == '_VideoFullscreenView',
+    );
+    // ignore: avoid_dynamic_calls
+    bool holds() => (tester.state(finder) as dynamic).holdsSessionForTest as bool;
+    expect(holds(), isTrue);
+
+    messaging.deleteMessage(message.id, forEveryone: false);
+    // One frame: the dialog is still on its way out, so the view is mounted.
+    await tester.pump();
+
+    expect(finder, findsOneWidget);
+    expect(holds(), isFalse);
+    await tester.pumpAndSettle();
   });
 }

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:fireplace/l10n/app_localizations.dart';
@@ -7,6 +8,7 @@ import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/providers/settings_provider.dart';
 import 'package:fireplace/services/box/box_wire.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
+import 'package:fireplace/utils/message_ids.dart';
 import 'package:fireplace/widgets/message/chat_message_bubble.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -117,6 +119,103 @@ void main() {
       hasLength(1),
       reason: 'the retry is the same row, not a second bubble',
     );
+  });
+
+  /// A note whose recording could not be read: it failed before its
+  /// encrypted file was held, so the first Retry branch (held bytes) is not
+  /// the one that runs.
+  Future<String> sendVoiceWithoutFile(WidgetTester tester) async {
+    final path = '${recording.parent.path}/later.m4a';
+    await tester.runAsync(() async {
+      await h.provider.sendVoiceMessage(
+        recipientId: 2,
+        duration: 7,
+        conversationId: 10,
+        localAudioPath: path,
+      );
+      await h.pump();
+    });
+    expect(voiceRow().deliveryStatus, MessageDeliveryStatus.failed);
+    return path;
+  }
+
+  Future<void> retryAndWait(WidgetTester tester, String tempId) async {
+    unawaited(h.provider.retryFailedMessage(tempId));
+    for (var i = 0; i < 100; i++) {
+      if (voiceRow().deliveryStatus != MessageDeliveryStatus.sending) break;
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 20)),
+      );
+      await tester.pump();
+    }
+  }
+
+  List<MessageModel> voiceRows() => [
+    for (final m in h.provider.messages)
+      if (m.messageType == MessageType.voice) m,
+  ];
+
+  testWidgets('Retry on a note whose recording is on disk again sends the '
+      'same row', (tester) async {
+    final path = await sendVoiceWithoutFile(tester);
+    final tempId = voiceRow().tempId!;
+    File(path).writeAsBytesSync([1, 2, 3, 4]);
+
+    await retryAndWait(tester, tempId);
+
+    expect(voiceRows(), hasLength(1), reason: 'one row, not a second bubble');
+    expect(voiceRows().single.tempId, tempId);
+    expect(voiceRows().single.deliveryStatus, MessageDeliveryStatus.sent);
+    expect(outbox.delivered, hasLength(1));
+  });
+
+  testWidgets('Retry on a note whose recording is gone fails the same row '
+      'again', (tester) async {
+    await sendVoiceWithoutFile(tester);
+    final tempId = voiceRow().tempId!;
+
+    await retryAndWait(tester, tempId);
+    await retryAndWait(tester, tempId);
+
+    expect(voiceRows(), hasLength(1), reason: 'never a second row');
+    expect(voiceRows().single.tempId, tempId);
+    expect(voiceRows().single.deliveryStatus, MessageDeliveryStatus.failed);
+    expect(outbox.delivered, isEmpty);
+  });
+
+  testWidgets('Retry keeps the note on its own reply target and leaves the '
+      "composer's reply alone", (tester) async {
+    final quoted = MessageModel(
+      id: kFirstLocalMessageId + 1,
+      content: 'first',
+      senderId: 2,
+      senderUsername: 'bob',
+      conversationId: 10,
+      createdAt: DateTime.now().subtract(const Duration(minutes: 5)),
+    );
+    final other = MessageModel(
+      id: kFirstLocalMessageId + 2,
+      content: 'second',
+      senderId: 2,
+      senderUsername: 'bob',
+      conversationId: 10,
+      createdAt: DateTime.now().subtract(const Duration(minutes: 4)),
+    );
+    h.provider.seedMessagesForTest(10, [quoted, other]);
+    h.provider.setReplyingTo(quoted);
+    final path = await sendVoiceWithoutFile(tester);
+    final row = voiceRow();
+    expect(row.replyToMessageId, quoted.id);
+    expect(h.provider.replyingToMessage, isNull);
+    File(path).writeAsBytesSync([1, 2, 3, 4]);
+
+    // The user has since begun a reply to another message.
+    h.provider.setReplyingTo(other);
+    await retryAndWait(tester, row.tempId!);
+
+    expect(h.provider.replyingToMessage?.id, other.id);
+    expect(voiceRows(), hasLength(1));
+    expect(voiceRows().single.replyTo?.id, quoted.id);
   });
 
   testWidgets('a failed voice note refused for a changed key says so, as '

@@ -461,6 +461,15 @@ extension MessagingBoxSend on MessagingProvider {
       // Another account signed in while the record was being stored.
       if (_currentUserId != ownUserId) return true;
       _addMessageToState(sent);
+      // As a received message does ([_showBoxMessage]): a warm cache of the
+      // chat on screen takes the sent row, or a resume (`loadCachedMessages`)
+      // would drop the bubble until the records are read again, and close
+      // the fullscreen player of a clip just sent.
+      final viewing = _effectiveActiveConversationId ?? _openConversationId;
+      if (sent.conversationId == viewing &&
+          _conversationCache.containsKey(sent.conversationId)) {
+        _updateCache(sent.conversationId);
+      }
       return true;
     } finally {
       _boxInFlight.remove(tempId);
