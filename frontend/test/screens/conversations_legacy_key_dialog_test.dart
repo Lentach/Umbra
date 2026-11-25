@@ -14,7 +14,9 @@ import 'package:fireplace/screens/conversations_screen.dart';
 import 'package:fireplace/screens/recovery_key_screen.dart';
 import 'package:fireplace/services/passcode_store.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
+import 'package:fireplace/utils/app_route_observer.dart';
 import 'package:fireplace/widgets/dialogs/legacy_recovery_key_dialog.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
@@ -50,6 +52,30 @@ class _FakeAuthProvider extends AuthProvider {
   Future<void> get contactBackupReady async {}
 }
 
+/// The three conditions `AuthGate` hides the shell behind (device-link gate,
+/// the "cannot ask the server" state, the boot screen).
+class _GatedEncryption extends EncryptionProvider {
+  bool needsLink = false;
+  bool checkUnavailable = false;
+  bool awaitingVerdict = false;
+
+  @override
+  bool get needsDeviceLink => needsLink;
+
+  @override
+  bool get identityCheckUnavailable => checkUnavailable;
+
+  @override
+  bool get awaitingIdentityVerdict => awaitingVerdict;
+
+  void lift() {
+    needsLink = false;
+    checkUnavailable = false;
+    awaitingVerdict = false;
+    notifyListeners();
+  }
+}
+
 class _FakeConnectionProvider extends ConnectionProvider {
   @override
   Future<void> connect(
@@ -80,6 +106,7 @@ Future<void> _pump(
   required PasscodeProvider passcode,
   int userId = 7,
   bool awaitsPassword = false,
+  ValueListenable<bool>? visible,
 }) async {
   await tester.pumpWidget(
     MultiProvider(
@@ -109,9 +136,16 @@ Future<void> _pump(
         localizationsDelegates: AppLocalizations.localizationsDelegates,
         supportedLocales: AppLocalizations.supportedLocales,
         locale: const Locale('en'),
-        home: const MediaQuery(
-          data: MediaQueryData(size: Size(400, 800), disableAnimations: true),
-          child: ConversationsScreen(),
+        navigatorObservers: [appRouteObserver],
+        home: MediaQuery(
+          data: const MediaQueryData(
+            size: Size(400, 800),
+            disableAnimations: true,
+          ),
+          child: ValueListenableBuilder<bool>(
+            valueListenable: visible ?? ValueNotifier<bool>(true),
+            builder: (_, shown, _) => ConversationsScreen(visible: shown),
+          ),
         ),
       ),
     ),
@@ -121,14 +155,14 @@ Future<void> _pump(
   await tester.pumpAndSettle();
 }
 
-Future<PasscodeProvider> _passcode() async {
+Future<PasscodeProvider> _passcode({bool initialize = true}) async {
   final passcode = PasscodeProvider(
     store: MemoryPasscodeStore(),
     kdf: FakePasscodeKdf(),
   );
   // The app reads the credential at start; until then the state is `unknown`
   // and the chat list is covered.
-  await passcode.initialize();
+  if (initialize) await passcode.initialize();
   return passcode;
 }
 
@@ -232,7 +266,8 @@ void main() {
     _legacy(enc);
     await tester.pumpAndSettle();
 
-    tester.state<NavigatorState>(find.byType(Navigator)).pop();
+    // The Android back button.
+    await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
 
     expect(_title, findsNothing);
@@ -284,7 +319,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(_title, findsNothing);
 
-    enc.onRecoveryKeySet({'success': true}); // replaced from another device
+    _legacy(enc, value: false); // replaced elsewhere: the next status says so
     await passcode.unlock('123456');
     await tester.pumpAndSettle();
 
@@ -365,5 +400,122 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(_title, findsNothing);
+  });
+
+  testWidgets('waits for the passcode to be read at cold start (unknown)', (
+    tester,
+  ) async {
+    final passcode = await _passcode(initialize: false);
+    final enc = EncryptionProvider();
+    _legacy(enc);
+    await _pump(tester, enc: enc, passcode: passcode);
+    expect(_title, findsNothing);
+
+    await passcode.initialize();
+    await tester.pumpAndSettle();
+    expect(_title, findsOneWidget);
+  });
+
+  for (final (name, arm) in <(String, void Function(_GatedEncryption))>[
+    ('the device-link gate', (e) => e.needsLink = true),
+    ('the identity check being unavailable', (e) => e.checkUnavailable = true),
+    ('the boot screen', (e) => e.awaitingVerdict = true),
+  ]) {
+    testWidgets('does not open behind $name; asks on the chat list once it '
+        'lifts', (tester) async {
+      final enc = _GatedEncryption();
+      arm(enc);
+      await _pump(tester, enc: enc, passcode: await _passcode());
+
+      _legacy(enc);
+      await tester.pumpAndSettle();
+      expect(_title, findsNothing);
+
+      enc.lift();
+      await tester.pumpAndSettle();
+      expect(_title, findsOneWidget);
+    });
+  }
+
+  testWidgets('asks when a pushed screen pops (a chat opened from a '
+      'notification)', (tester) async {
+    final enc = EncryptionProvider();
+    await _pump(tester, enc: enc, passcode: await _passcode());
+    final context = tester.element(find.byType(ConversationsScreen));
+    unawaited(
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => const Scaffold()),
+      ),
+    );
+    await tester.pumpAndSettle();
+    _legacy(enc);
+    await tester.pumpAndSettle();
+    expect(_title, findsNothing);
+
+    Navigator.of(context).pop();
+    await tester.pumpAndSettle();
+    expect(_title, findsOneWidget);
+  });
+
+  testWidgets('does not open over another tab; asks when the list is shown '
+      'again', (tester) async {
+    final visible = ValueNotifier<bool>(false);
+    final enc = EncryptionProvider();
+    await _pump(
+      tester,
+      enc: enc,
+      passcode: await _passcode(),
+      visible: visible,
+    );
+    _legacy(enc);
+    await tester.pumpAndSettle();
+    expect(_title, findsNothing);
+
+    visible.value = true;
+    await tester.pumpAndSettle();
+    expect(_title, findsOneWidget);
+  });
+
+  testWidgets('the contact-backup sheet follows the dialog, and its Later '
+      'counts exactly one (decision 95)', (tester) async {
+    final enc = EncryptionProvider();
+    _legacy(enc);
+    await _pump(
+      tester,
+      enc: enc,
+      passcode: await _passcode(),
+      awaitsPassword: true,
+    );
+    expect(_title, findsOneWidget);
+    expect(find.byKey(_backupSheet), findsNothing);
+
+    await tester.tap(find.byKey(_later));
+    await tester.pumpAndSettle();
+    expect(find.byKey(_backupSheet), findsOneWidget);
+
+    await tester.tap(find.byKey(_backupLater));
+    await tester.pumpAndSettle();
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getInt('contact_backup_laters_7'), 1);
+  });
+
+  testWidgets('after Replace now, the sheet follows once the key screen '
+      'closes', (tester) async {
+    final enc = EncryptionProvider();
+    _legacy(enc);
+    await _pump(
+      tester,
+      enc: enc,
+      passcode: await _passcode(),
+      awaitsPassword: true,
+    );
+    await tester.tap(find.byKey(_replace));
+    await tester.pumpAndSettle();
+    expect(find.byType(RecoveryKeyScreen), findsOneWidget);
+    expect(find.byKey(_backupSheet), findsNothing);
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.byKey(_backupSheet), findsOneWidget);
   });
 }

@@ -43,7 +43,14 @@ import 'recovery_key_screen.dart';
 class ConversationsScreen extends StatefulWidget {
   final VoidCallback? onAvatarTap;
 
-  const ConversationsScreen({super.key, this.onAvatarTap});
+  /// False while another bottom tab is showing (the list stays mounted).
+  final bool visible;
+
+  const ConversationsScreen({
+    super.key,
+    this.onAvatarTap,
+    this.visible = true,
+  });
 
   @override
   State<ConversationsScreen> createState() => _ConversationsScreenState();
