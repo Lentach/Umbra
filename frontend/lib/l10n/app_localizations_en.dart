@@ -1350,8 +1350,15 @@ class AppLocalizationsEn extends AppLocalizations {
   String get antiQuantumNoteRevealNetworkErrorTitle => 'No connection';
 
   @override
-  String get antiQuantumNoteRevealNetworkErrorBody =>
-      'The server could not be reached. Check your connection and try again.';
+  String get antiQuantumNoteRevealUnknownOutcomeBody =>
+      'The connection broke before the server\'s answer arrived. The note may already have been destroyed by this attempt. Try again to find out.';
+
+  @override
+  String get antiQuantumNoteRevealMaybeBurnedTitle => 'Note may be destroyed';
+
+  @override
+  String get antiQuantumNoteRevealMaybeBurnedBody =>
+      'Your earlier attempt may have destroyed this note before its answer reached you. It cannot be read again.';
 
   @override
   String get privacyAntiQuantumNoteTitle => 'Anti-Quantum Notes';

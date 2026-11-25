@@ -122,12 +122,17 @@ enum _Phase {
   corrupt,
   invalidLink,
   networkError,
+  maybeBurned,
 }
 
 class _AntiQuantumNoteRevealSheetState
     extends State<AntiQuantumNoteRevealSheet> {
   late _Phase _phase;
   String? _plaintext;
+
+  /// An attempt threw (timeout, dropped response): the server may have
+  /// deleted the note before the answer was lost.
+  bool _attemptOutcomeUnknown = false;
 
   @override
   void initState() {
@@ -175,13 +180,21 @@ class _AntiQuantumNoteRevealSheetState
           case NoteRevealGone():
             // Re-check the clock AFTER the await: gone past the clock is
             // expiry, gone before it means someone already read the note.
-            _phase = _clockDead ? _Phase.expired : _Phase.destroyed;
+            // An earlier attempt that threw may itself have burned the note
+            // (the response was lost), so "gone" is then not proof that
+            // someone else read it.
+            _phase = _clockDead
+                ? _Phase.expired
+                : _attemptOutcomeUnknown
+                    ? _Phase.maybeBurned
+                    : _Phase.destroyed;
           case NoteRevealCorrupt():
             _phase = _Phase.corrupt;
         }
       });
     } on Object {
       if (!mounted) return;
+      _attemptOutcomeUnknown = true;
       setState(() => _phase = _Phase.networkError);
     }
   }
@@ -261,8 +274,17 @@ class _AntiQuantumNoteRevealSheetState
                 title: AppLocalizations.of(context)
                     .antiQuantumNoteRevealNetworkErrorTitle,
                 body: AppLocalizations.of(context)
-                    .antiQuantumNoteRevealNetworkErrorBody,
+                    .antiQuantumNoteRevealUnknownOutcomeBody,
                 retry: true,
+              ),
+            _Phase.maybeBurned => _buildTerminal(
+                context,
+                key: const Key('note-reveal-maybe-burned'),
+                icon: Icons.help_outline,
+                title: AppLocalizations.of(context)
+                    .antiQuantumNoteRevealMaybeBurnedTitle,
+                body: AppLocalizations.of(context)
+                    .antiQuantumNoteRevealMaybeBurnedBody,
               ),
           },
         ),

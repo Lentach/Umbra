@@ -9,6 +9,8 @@ import 'package:fireplace/widgets/message/anti_quantum_note_reveal_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../../support/l10n.dart';
+
 const _hex = '0123456789abcdef0123456789abcdef';
 final _key = base64Url.encode(Uint8List.fromList(List.filled(32, 7)));
 
@@ -359,6 +361,68 @@ void main() {
       final gate = await openRevealing(tester);
       await tester.fling(find.byKey(_loadingKey), const Offset(0, 400), 2000);
       await expectStillShowsNote(tester, gate);
+    });
+  });
+
+  group('an attempt whose outcome is unknown', () {
+    testWidgets('says the note may already be destroyed, not just "no server"', (
+      tester,
+    ) async {
+      await _openSheet(
+        tester,
+        link: _link(expiryMs: _futureMs()),
+        attempt: () async => throw TimeoutException('lost response'),
+      );
+      await tester.tap(find.byKey(_revealKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(_networkKey), findsOneWidget);
+      expect(
+        find.text(l10n.antiQuantumNoteRevealUnknownOutcomeBody),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('a retry that finds the note gone does NOT claim someone else '
+        'read it', (tester) async {
+      var attempts = 0;
+      await _openSheet(
+        tester,
+        link: _link(expiryMs: _futureMs()),
+        attempt: () async {
+          attempts++;
+          // The first POST burned the note; only its answer was lost.
+          if (attempts == 1) throw TimeoutException('lost response');
+          return const NoteRevealGone();
+        },
+      );
+      await tester.tap(find.byKey(_revealKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(_retryKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(_destroyedKey), findsNothing);
+      expect(find.text(l10n.antiQuantumNoteRevealDestroyedBody), findsNothing);
+      expect(find.byKey(const Key('note-reveal-maybe-burned')), findsOneWidget);
+      expect(
+        find.text(l10n.antiQuantumNoteRevealMaybeBurnedBody),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('a note gone on the first attempt still reads "already read"', (
+      tester,
+    ) async {
+      await _openSheet(
+        tester,
+        link: _link(expiryMs: _futureMs()),
+        attempt: () async => const NoteRevealGone(),
+      );
+      await tester.tap(find.byKey(_revealKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(_destroyedKey), findsOneWidget);
+      expect(find.byKey(const Key('note-reveal-maybe-burned')), findsNothing);
     });
   });
 }
