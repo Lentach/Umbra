@@ -277,8 +277,6 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       return;
     }
     await _openContactBackupSheet();
-    // Whatever was open on top is gone: the legacy-key dialog may be due.
-    _maybeAskToReplaceLegacyKey();
   }
 
   /// Any exit without a saved backup counts one "Later" (decision 95).
