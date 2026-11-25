@@ -90,6 +90,9 @@ void main() {
   const accountB = 43;
   // The same local id in both accounts: the collision the audit names.
   const sharedId = kFirstLocalMessageId + 1;
+  // What B itself owes: a DIFFERENT id, so an obligation of A's that leaks
+  // into B's backlog shows.
+  const otherId = kFirstLocalMessageId + 2;
   const fresh = ServerIdentityGuard(exists: false);
 
   late EncryptionService service;
@@ -116,7 +119,7 @@ void main() {
     // B holds a LIVE record under the same id and one owed purge of its own.
     await switchTo(accountB);
     await service.saveDecryptedContent(sharedId, {'content': 'B keeps this'});
-    await service.enqueuePurge({sharedId}, const <String>{});
+    await service.enqueuePurge({otherId}, const <String>{});
     await switchTo(accountA);
   });
 
@@ -125,17 +128,18 @@ void main() {
     E2eDiagLog.clear();
   });
 
-  Future<void> expectBUntouched({required bool backlogKept}) async {
+  Future<void> expectBUntouched({Set<int> owes = const {otherId}}) async {
     expect(service.activeUserId, accountB);
     expect(
       (await service.getDecryptedContent(sharedId))?['content'],
       'B keeps this',
       reason: "account A's pass must not delete account B's record",
     );
-    final owed = await service.purgeBacklog();
-    if (backlogKept) {
-      expect(owed.ids, {sharedId}, reason: "B's own owed purge is still owed");
-    }
+    expect(
+      (await service.purgeBacklog()).ids,
+      owes,
+      reason: "B's backlog holds what B owes, nothing of A's",
+    );
   }
 
   group('a purge pass pinned to the account it started under', () {
@@ -153,7 +157,7 @@ void main() {
       kv.release();
       await sweep;
 
-      await expectBUntouched(backlogKept: true);
+      await expectBUntouched();
     });
 
     test('sweep: a switch between choosing the ids and writing them down',
@@ -172,7 +176,7 @@ void main() {
       kv.release();
       await sweep;
 
-      await expectBUntouched(backlogKept: true);
+      await expectBUntouched();
     });
 
     test('drain: a switch while a record is read before it is destroyed',
@@ -194,7 +198,7 @@ void main() {
       kv.release();
       await drain;
 
-      await expectBUntouched(backlogKept: true);
+      await expectBUntouched();
     });
 
     test('drain: a switch while the record is being removed', () async {
@@ -216,7 +220,26 @@ void main() {
       kv.release();
       await drain;
 
-      await expectBUntouched(backlogKept: true);
+      await expectBUntouched();
+    });
+  });
+
+  group('clearing a chat pinned to the account that cleared it', () {
+    test('a switch while the chat\'s messages are being listed', () async {
+      await service.saveDecryptedContent(
+        sharedId,
+        {'content': 'A cleared this'},
+        conversationId: 5,
+      );
+      final parked = kv.arm((op, key) => op == 'snapshot');
+      final purge = provider.purgeConversations([5]);
+      await parked;
+
+      await switchTo(accountB);
+      kv.release();
+      await purge;
+
+      await expectBUntouched();
     });
   });
 }

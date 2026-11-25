@@ -1586,11 +1586,17 @@ class EncryptionProvider extends ChangeNotifier {
   Future<PlaintextPurgeResult> purgeConversations(
     Iterable<int> conversationIds,
   ) async {
+    // The account the user cleared the chat under: the scan below awaits a
+    // store read, and a sign-in of another account in that gap must not turn
+    // these ids into that account's obligation (local ids restart at the same
+    // base for every account).
+    final account = _encryptionService.activeUserId;
+    if (account == null) return const PlaintextPurgeResult.empty();
     final ids = await _encryptionService.messageIdsForConversations(
       conversationIds,
     );
     if (ids.isEmpty) return const PlaintextPurgeResult.empty();
-    return purgeLocalPlaintext(ids);
+    return purgeLocalPlaintext(ids, account: account);
   }
 
   /// True when the previous sweep found nothing to destroy. The sweep ticks
