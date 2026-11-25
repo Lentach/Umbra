@@ -5472,6 +5472,9 @@ class EncryptionService {
     if (userId != null) {
       final prefix = 'e2e_${userId}_';
       var signalLeft = 0;
+      // False once the Signal keys could not even be listed: then nothing was
+      // counted, and "0 left" would be a claim the wipe cannot back.
+      var signalListed = true;
       try {
         // DualStorage.readAll() merges both storages
         final all = await _storage.readAll();
@@ -5487,6 +5490,7 @@ class EncryptionService {
           }
         }
       } on Object catch (e, st) {
+        signalListed = false;
         if (signalError == null) (signalError, signalStack) = (e, st);
       }
       // SharedPreferences: clear decrypted content cache entries
@@ -5515,7 +5519,7 @@ class EncryptionService {
           if (signalError != null)
             'signal': {
               'error': signalError.runtimeType.toString(),
-              'left': signalLeft,
+              if (signalListed) 'left': signalLeft,
             },
           if (contentError != null || contentLeft > 0)
             'content': {

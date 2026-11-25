@@ -124,6 +124,9 @@ void main() {
       expect(service.isInitialized, isFalse);
       expect(wipeDiag(), hasLength(1));
       expect(wipeDiag().single, contains('signal'));
+      // Nothing was counted: the keys were never listed, so "0 left" would
+      // claim a wipe that did not happen.
+      expect(wipeDiag().single, isNot(contains('left')));
     });
 
     test('one key that refuses to delete does not keep the others, the '
@@ -139,6 +142,7 @@ void main() {
       expect(service.activeUserId, isNull);
       expect(service.isInitialized, isFalse);
       expect(wipeDiag(), hasLength(1));
+      expect(wipeDiag().single, contains('left: 1'));
     });
 
     test('messages the store refuses to remove are recorded, not passed off '
