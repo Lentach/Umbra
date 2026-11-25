@@ -111,7 +111,7 @@ There is no system-wide threat model. There are five partial ones:
 - `docs/METADATA.md`: what the server sees, honestly listed.
 - `docs/proof/e2e-encryption-proof.md` (2026-09-14): claimed / not claimed, with commands. **It predates the box**: its "the server knows who talks to whom" paragraph describes the old path and now understates the product.
 - `docs/design/web-sig-sealing.md`, `docs/plans/2026-11-17-d2-box-flood.md`: their own scoped models.
-- No `SECURITY.md`, no disclosure address.
+- `SECURITY.md` with a disclosure address exists since 2026-11-25 (it was missing when this was written).
 - Found while writing the threat model: `multi-device.md` invariants I4 and I6 still describe server pushes and per-envelope routing that the box replaced (E126a(5), E50d/E50e). Today a pending reset reaches only the account's connected devices, and a revoked device stops receiving when friends process the signed list update. Not corrected in that file yet.
 
 ### 3.2 Proposed threat model (written 2026-11-24 as `docs/security/threat-model.md`, each row re-checked against the code; that file is now the current one)
@@ -179,7 +179,7 @@ A PWA's code is whatever the server sends on the next load. `/version.json` name
 | Threat model and invariants | §3: to be written |
 | A scoped, readable code base | `encryption_service.dart` 5 768 lines, `encryption_provider.dart` 4 052, `services/encryption/` 6 212, `services/box/` 8 289, `messaging_provider.box.dart` 2 890 (before the batch 4b split), vendored library ~4 100: about 31 000 lines in scope. The first two files were deliberately excluded from this cleanup program |
 | A stable target | Feature freeze holds; the wire still changes in security fixes |
-| `SECURITY.md` + disclosure address | Missing |
+| `SECURITY.md` + disclosure address | Done 2026-11-25 (`SECURITY.md`) |
 | Licence | Missing (§1.2) |
 | Proof the crypto port matches the reference | Partly: key derivation, ratchet steps and session setup match the Java reference's vectors; no known answer for a complete message (§1.5) |
 | Static analysis on the server code | CodeQL default suite on TypeScript and JavaScript since 2026-11-25, no open alert (§4.2) |
@@ -207,7 +207,7 @@ Order that makes an audit worth its money: (1) `SECURITY.md`, licence, CodeQL fo
 - **Q5:** A lawyer first, before the Play listing. No licence file is added until then.
 - **Q6:** Full audit after B6; none now.
 - **Q7:** Yes: §4.4 step 1 (CI-built APK and a published checksum).
-- **Q8:** Yes to all three: CodeQL for TypeScript; `SECURITY.md` (contact address not given yet: still owed); B7 legacy-row count, re-enrol prompt, then removal of the legacy server branch.
+- **Q8:** Yes to all three: CodeQL for TypeScript; `SECURITY.md` (address given 2026-11-25, file added); B7 legacy-row count, re-enrol prompt, then removal of the legacy server branch.
 
 ## 7. Parked, not started (cleanup program §7)
 
