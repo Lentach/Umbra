@@ -678,6 +678,13 @@ describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', (
       );
     });
 
+    it('the dummy hash costs what a real verifier costs (same argon2 parameters)', () => {
+      const { memoryCost, timeCost, parallelism } = RECOVERY_ARGON2_OPTIONS;
+      expect(TIMING_SAFE_DUMMY_VERIFIER).toContain(
+        `$argon2id$v=19$m=${memoryCost},p=${parallelism},t=${timeCost}$`,
+      );
+    });
+
     it('no phrase enrolled reads exactly like a wrong phrase, and COSTS the same', async () => {
       recoveryRepo.findOne.mockResolvedValue(null);
 
