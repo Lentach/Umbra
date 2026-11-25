@@ -313,6 +313,8 @@ class ConversationsProvider extends ChangeNotifier {
 
   bool Function()? _lockUp;
 
+  bool Function()? get lockUp => _lockUp;
+
   /// A show that was asked for while the lock was up and not yet reported to
   /// [onClientVisible]; the next [setClientVisible]`(true)` (the unlock)
   /// reports it.

@@ -165,7 +165,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   Future<void> _lockVerdictOnForeground() async {
     try {
       await context.read<PasscodeProvider>().evaluateOnForeground();
-    } catch (e) {
+    } on Object catch (e) {
       E2eDiagLog.add('PASSCODE_FOREGROUND_FAIL', {
         'errorType': e.runtimeType.toString(),
       });
