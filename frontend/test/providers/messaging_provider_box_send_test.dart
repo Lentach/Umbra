@@ -539,6 +539,31 @@ void main() {
   );
 
   test(
+    'a text after a reconnect, before the connect has looked the lists up '
+    'again, is refused although the device still holds both lists and the '
+    'sessions: the row fails, nothing is delivered, and once the connect has '
+    'looked them up the retry goes out (decision 21)',
+    () async {
+      bob([1, 2]);
+      await pump(); // the lists are looked up and the sessions pre-built
+
+      // The account socket reconnects: every lookup of the last connect goes,
+      // the held lists and the pre-built sessions stay.
+      provider.onConnect(true);
+      final row = await send('held, not verified this connect');
+
+      expect(row.deliveryStatus, MessageDeliveryStatus.failed);
+      expect(outbox.delivered, isEmpty);
+      expect(emitted, isEmpty);
+
+      provider.refreshBoxDeviceLists();
+      await provider.retryFailedMessage(row.tempId!);
+      await pump();
+      expect(outbox.delivered, hasLength(2), reason: 'the control');
+    },
+  );
+
+  test(
     'a box refusal on EVERY peer device fails the row (retry), stores '
     'nothing, and the retry carries the SAME wire id',
     () async {
