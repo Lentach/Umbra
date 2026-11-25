@@ -5435,6 +5435,13 @@ class EncryptionService {
   /// Clear all E2E encryption keys for this user from storage.
   /// Uses selective deletion (not deleteAll) to avoid wiping non-E2E data.
   ///
+  /// Every stage runs even when an earlier one fails: a Signal store that
+  /// cannot be listed or one key that refuses to delete must not leave the
+  /// stored messages and the in-RAM account state behind. A failure is
+  /// recorded as `KEY_WIPE_INCOMPLETE` (stage names, counts and error type
+  /// names only). A Signal-store failure is rethrown after the reset, as
+  /// before; a content-store failure never was thrown and still is not.
+  ///
   /// Deliberately does NOT clear the per-account in-RAM collections (peer
   /// warnings, key-change notes, refusals, rebuild intents, device-list pins):
   /// `initialize` drops them when the account CHANGES ((lxxxiv) rider) —
@@ -5442,15 +5449,30 @@ class EncryptionService {
   /// A new per-account collection belongs on that list, not here.
   Future<void> clearAllKeys() async {
     final userId = _userId;
+    Object? signalError;
     if (userId != null) {
       final prefix = 'e2e_${userId}_';
-      // DualStorage.readAll() merges both storages
-      final all = await _storage.readAll();
-      final keysToDelete = all.keys.where((k) => k.startsWith(prefix)).toList();
-      for (final key in keysToDelete) {
-        await _storage.delete(key: key);
+      var signalLeft = 0;
+      try {
+        // DualStorage.readAll() merges both storages
+        final all = await _storage.readAll();
+        final keysToDelete = all.keys
+            .where((k) => k.startsWith(prefix))
+            .toList();
+        for (final key in keysToDelete) {
+          try {
+            await _storage.delete(key: key);
+          } on Object catch (e) {
+            signalLeft++;
+            signalError ??= e;
+          }
+        }
+      } on Object catch (e) {
+        signalError ??= e;
       }
       // SharedPreferences: clear decrypted content cache entries
+      var contentLeft = 0;
+      Object? contentError;
       try {
         final prefs = await _sharedPrefs;
         await _reloadPrefsForCrossContext(prefs);
@@ -5459,9 +5481,30 @@ class EncryptionService {
             .where((k) => k.startsWith(prefix))
             .toList();
         for (final key in spKeysToDelete) {
-          await prefs.remove(key);
+          try {
+            if (!await prefs.remove(key)) contentLeft++;
+          } on Object catch (e) {
+            contentLeft++;
+            contentError ??= e;
+          }
         }
-      } catch (_) {}
+      } on Object catch (e) {
+        contentError ??= e;
+      }
+      if (signalError != null || contentError != null || contentLeft > 0) {
+        E2ePersistentDiag.record('KEY_WIPE_INCOMPLETE', {
+          if (signalError != null)
+            'signal': {
+              'error': signalError.runtimeType.toString(),
+              'left': signalLeft,
+            },
+          if (contentError != null || contentLeft > 0)
+            'content': {
+              'error': contentError?.runtimeType.toString() ?? 'refused',
+              'left': contentLeft,
+            },
+        });
+      }
     }
     _initialized = false;
     needsKeyUpload = false;
@@ -5471,6 +5514,8 @@ class EncryptionService {
     _prefsOpening = null;
     _storage.clearPrefsCache();
     debugPrint('[EncryptionService] All encryption keys cleared');
+    final rethrown = signalError;
+    if (rethrown != null) throw rethrown;
   }
 
   /// Mid-session passcode re-lock: drop every piece of key material and
