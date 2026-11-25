@@ -146,6 +146,10 @@ class _AntiQuantumNoteRevealSheetState
   }
 
   Future<void> _reveal() async {
+    // The old "Reveal & destroy" / "Try again" button stays tappable for the
+    // 220 ms cross-fade; a second POST would find the note already burned by
+    // the first and replace its text with "already read".
+    if (_phase == _Phase.revealing) return;
     setState(() => _phase = _Phase.revealing);
     final attempt = widget.attempt ??
         () => revealAntiQuantumNote(

@@ -270,4 +270,38 @@ void main() {
     expect(find.byKey(_plaintextKey), findsNothing);
     expect(find.text('Open note'), findsOneWidget);
   });
+
+  testWidgets('a second tap while the reveal runs sends no second destructive '
+      'request, and the first answer is what the reader sees', (tester) async {
+    var attempts = 0;
+    final first = Completer<NoteRevealOutcome>();
+    await _openSheet(
+      tester,
+      link: _link(expiryMs: _futureMs()),
+      attempt: () {
+        attempts++;
+        // The server deletes on the first reveal, so a second one is "gone".
+        return attempts == 1
+            ? first.future
+            : Future.value(const NoteRevealGone());
+      },
+    );
+
+    final button = tester.getCenter(find.byKey(_revealKey));
+    await tester.tapAt(button);
+    await tester.pump();
+    // Inside the 220 ms cross-fade the old button is still on screen.
+    await tester.pump(const Duration(milliseconds: 60));
+    await tester.tapAt(button);
+    await tester.pump();
+
+    first.complete(const NoteRevealed('read me once'));
+    await tester.pumpAndSettle();
+
+    expect(attempts, 1);
+    expect(find.byKey(_destroyedKey), findsNothing);
+    final selectable =
+        tester.widget<SelectableText>(find.byKey(_plaintextKey));
+    expect(selectable.data, 'read me once');
+  });
 }
