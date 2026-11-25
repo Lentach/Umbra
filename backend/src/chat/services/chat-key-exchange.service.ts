@@ -727,7 +727,8 @@ export class ChatKeyExchangeService {
         // Validated exactly-one-of by SetRecoveryKeyDto.
         dto.authSecret!,
         // (lxxviii) clause 1: verifier and sealed blob land atomically.
-        dto.backup,
+        // Required with an authSecret by SetRecoveryKeyDto.
+        dto.backup!,
       );
       client.emit('recoveryKeySet', { success: true });
       this.notifyRecoveryKeyEnrolled(userId, replaced, server);

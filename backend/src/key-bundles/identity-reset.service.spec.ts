@@ -109,6 +109,14 @@ function rowArg(mock: jest.Mock, callIndex = 0): Record<string, unknown> {
   return calls[callIndex][0];
 }
 
+/** A version-2 sealed backup: every enrolment carries one (authSecret rule). */
+const enrolmentBackup = {
+  blob: 'c2VhbGVkLWJsb2I=',
+  salt: 'c2FsdC1zaXh0ZWVuLWI=',
+  iterations: 0,
+  version: 2,
+};
+
 describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', () => {
   let service: IdentityResetService;
   let resetRepo: Record<string, jest.Mock>;
@@ -778,7 +786,7 @@ describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', (
     });
 
     it('setRecoveryKey(auth) stores an auth_v2 verifier of the authSecret', async () => {
-      await service.setRecoveryKey(7, authSecret);
+      await service.setRecoveryKey(7, authSecret, enrolmentBackup);
       const row = rowArg(recoveryRepo.insert);
       expect(row.verifierKind).toBe('auth_v2');
       expect(await argon2.verify(row.verifierHash as string, authSecret)).toBe(
@@ -788,7 +796,7 @@ describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', (
 
     it('replacing a legacy row with an auth credential flips its kind in the same update', async () => {
       recoveryRepo.findOne.mockResolvedValue(v1());
-      await service.setRecoveryKey(7, authSecret);
+      await service.setRecoveryKey(7, authSecret, enrolmentBackup);
       expect(recoveryRepo.update).toHaveBeenCalledWith(
         { id: 3 },
         expect.objectContaining({ verifierKind: 'auth_v2' }),
@@ -994,7 +1002,7 @@ describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', (
       'legal winner thank year wave sausage worth useful legal winner thank yellow';
 
     it('stores a memory-hard verifier, never the phrase and never a fast hash', async () => {
-      await service.setRecoveryKey(7, phrase);
+      await service.setRecoveryKey(7, phrase, enrolmentBackup);
 
       const stored = rowArg(recoveryRepo.insert).verifierHash as string;
       // A fast hash (or the phrase itself) fails every one of these.
@@ -1005,7 +1013,7 @@ describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', (
     });
 
     it('pins the parameters the verifier is stored with', async () => {
-      await service.setRecoveryKey(7, phrase);
+      await service.setRecoveryKey(7, phrase, enrolmentBackup);
 
       const stored = rowArg(recoveryRepo.insert).verifierHash as string;
       // PHC encodes the cost parameters; drifting below them silently weakens
@@ -1016,8 +1024,8 @@ describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', (
     });
 
     it('produces a different verifier each time (salted)', async () => {
-      await service.setRecoveryKey(7, phrase);
-      await service.setRecoveryKey(7, phrase);
+      await service.setRecoveryKey(7, phrase, enrolmentBackup);
+      await service.setRecoveryKey(7, phrase, enrolmentBackup);
 
       expect(rowArg(recoveryRepo.insert, 0).verifierHash).not.toEqual(
         rowArg(recoveryRepo.insert, 1).verifierHash,
@@ -1027,7 +1035,7 @@ describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', (
     it('replacing a phrase clears the spent and lockout state', async () => {
       recoveryRepo.findOne.mockResolvedValue({ id: 3, userId: 7 });
 
-      await service.setRecoveryKey(7, phrase);
+      await service.setRecoveryKey(7, phrase, enrolmentBackup);
 
       expect(recoveryRepo.update).toHaveBeenCalledWith(
         { id: 3 },
@@ -1054,7 +1062,7 @@ describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', (
       });
 
       const before = Date.now();
-      await service.setRecoveryKey(7, phrase);
+      await service.setRecoveryKey(7, phrase, enrolmentBackup);
 
       // `rowArg` reads the FIRST argument; an update's patch is the second.
       const calls = recoveryRepo.update.mock.calls as Array<
@@ -1069,10 +1077,14 @@ describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', (
       // The caller words the notification from this, so a replacement is not
       // announced as a first enrollment.
       recoveryRepo.findOne.mockResolvedValue(null);
-      await expect(service.setRecoveryKey(7, phrase)).resolves.toBe(false);
+      await expect(
+        service.setRecoveryKey(7, phrase, enrolmentBackup),
+      ).resolves.toBe(false);
 
       recoveryRepo.findOne.mockResolvedValue({ id: 3, userId: 7 });
-      await expect(service.setRecoveryKey(7, phrase)).resolves.toBe(true);
+      await expect(
+        service.setRecoveryKey(7, phrase, enrolmentBackup),
+      ).resolves.toBe(true);
     });
   });
 
@@ -1117,17 +1129,6 @@ describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', (
           backupVersion: backup.version,
         }),
       );
-    });
-
-    it('an enrolment WITHOUT a backup never touches the stored blob (older client)', async () => {
-      recoveryRepo.findOne.mockResolvedValue({ id: 3, userId: 7 });
-
-      await service.setRecoveryKey(7, phrase);
-
-      const calls = recoveryRepo.update.mock.calls as Array<
-        [unknown, Record<string, unknown>]
-      >;
-      expect('backupBlob' in calls[0][1]).toBe(false);
     });
   });
 

@@ -11,6 +11,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import {
@@ -153,10 +154,11 @@ export class SetRecoveryKeyDto {
 
   /**
    * The sealed identity backup, written with the verifier in one transaction
-   * ((lxxviii) clause 1). Optional: an older client enrols the phrase alone
-   * and the previously stored backup (if any) is left untouched.
+   * ((lxxviii) clause 1). Required whenever `authSecret` is sent (a version-2
+   * blob, see `AuthSecretNeedsV2Backup`); the legacy plaintext `phrase` is
+   * refused before the backup is looked at, so it is not validated then.
    */
-  @IsOptional()
+  @ValidateIf((o: SetRecoveryKeyDto) => o.authSecret != null)
   @ValidateNested()
   @Type(() => RecoveryBackupDto)
   backup?: RecoveryBackupDto;

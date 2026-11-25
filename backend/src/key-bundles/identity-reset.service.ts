@@ -631,29 +631,27 @@ export class IdentityResetService {
    * Returns whether this was a replacement, so the caller can word the
    * notification correctly.
    *
-   * `backup` (amendment (lxxviii) clause 1) is the phrase-sealed identity
-   * blob. Verifier and blob land in ONE statement — atomic by construction —
-   * so a crash can never leave a blob sealed under a phrase whose verifier
-   * was not stored (or vice versa). Absent means an older client: the phrase
-   * is replaced and any stored blob is left untouched.
+   * `backup` (amendment (lxxviii) clause 1) is the sealed identity blob; every
+   * enrolment carries one (an `authSecret` needs a version-2 backup). Verifier
+   * and blob land in ONE statement — atomic by construction — so a crash can
+   * never leave a blob sealed under a secret whose verifier was not stored (or
+   * vice versa).
    */
   async setRecoveryKey(
     userId: number,
     authSecret: string,
-    backup?: IdentityBackupInput,
+    backup: IdentityBackupInput,
   ): Promise<boolean> {
     // Plan B7 tail: no path creates a `phrase_v1` row any more.
     const verifierHash = await argon2.hash(authSecret, RECOVERY_ARGON2_OPTIONS);
     const verifierKind: RecoveryVerifierKind = 'auth_v2';
-    const backupColumns = backup
-      ? {
-          backupBlob: backup.blob,
-          backupSalt: backup.salt,
-          backupIterations: backup.iterations,
-          backupVersion: backup.version,
-          backupUpdatedAt: new Date(),
-        }
-      : {};
+    const backupColumns = {
+      backupBlob: backup.blob,
+      backupSalt: backup.salt,
+      backupIterations: backup.iterations,
+      backupVersion: backup.version,
+      backupUpdatedAt: new Date(),
+    };
     const existing = await this.recoveryRepo.findOne({ where: { userId } });
     if (existing) {
       await this.recoveryRepo.update(
