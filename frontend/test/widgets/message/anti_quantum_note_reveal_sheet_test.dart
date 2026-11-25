@@ -304,4 +304,61 @@ void main() {
         tester.widget<SelectableText>(find.byKey(_plaintextKey));
     expect(selectable.data, 'read me once');
   });
+
+  group('while decrypting the burned note cannot be closed away', () {
+    Future<Completer<NoteRevealOutcome>> openRevealing(
+      WidgetTester tester,
+    ) async {
+      final gate = Completer<NoteRevealOutcome>();
+      await _openSheet(
+        tester,
+        link: _link(expiryMs: _futureMs()),
+        attempt: () => gate.future,
+      );
+      await tester.tap(find.byKey(_revealKey));
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.byKey(_loadingKey), findsOneWidget);
+      return gate;
+    }
+
+    Future<void> expectStillShowsNote(
+      WidgetTester tester,
+      Completer<NoteRevealOutcome> gate,
+    ) async {
+      // The spinner never settles: pump a fixed span, not pumpAndSettle.
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(find.byKey(_loadingKey), findsOneWidget);
+      gate.complete(const NoteRevealed('burned and shown'));
+      await tester.pumpAndSettle();
+      final selectable =
+          tester.widget<SelectableText>(find.byKey(_plaintextKey));
+      expect(selectable.data, 'burned and shown');
+    }
+
+    testWidgets('the X is not offered', (tester) async {
+      final gate = await openRevealing(tester);
+      expect(find.byKey(const Key('note-reveal-close')), findsNothing);
+      gate.complete(const NoteRevealed('x'));
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('a tap outside keeps the sheet', (tester) async {
+      final gate = await openRevealing(tester);
+      await tester.tapAt(const Offset(20, 20));
+      await expectStillShowsNote(tester, gate);
+    });
+
+    testWidgets('the back button keeps the sheet', (tester) async {
+      final gate = await openRevealing(tester);
+      await tester.binding.handlePopRoute();
+      await expectStillShowsNote(tester, gate);
+    });
+
+    testWidgets('a swipe down keeps the sheet', (tester) async {
+      final gate = await openRevealing(tester);
+      await tester.fling(find.byKey(_loadingKey), const Offset(0, 400), 2000);
+      await expectStillShowsNote(tester, gate);
+    });
+  });
 }

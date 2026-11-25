@@ -85,6 +85,7 @@ Future<void> showAntiQuantumNoteRevealSheet(
   return showGlassSheet<void>(
     context,
     isScrollControlled: true,
+    enableDrag: false,
     builder: (_) => AntiQuantumNoteRevealSheet(link: link, attempt: attempt),
   );
 }
@@ -145,6 +146,13 @@ class _AntiQuantumNoteRevealSheetState
     return expiresAt != null && !expiresAt.isAfter(DateTime.now());
   }
 
+  /// The ONE close. The outgoing confirm child stays on screen (and tappable)
+  /// for the 220 ms cross-fade, so its Cancel/X must not pop mid-reveal.
+  void _close() {
+    if (_phase == _Phase.revealing) return;
+    Navigator.of(context).pop();
+  }
+
   Future<void> _reveal() async {
     // The old "Reveal & destroy" / "Try again" button stays tappable for the
     // 220 ms cross-fade; a second POST would find the note already burned by
@@ -181,7 +189,12 @@ class _AntiQuantumNoteRevealSheetState
   @override
   Widget build(BuildContext context) {
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    return Padding(
+    return PopScope(
+      // The reveal POST has burned (or is burning) the note; closing now would
+      // throw the only copy of its text away. Back and a barrier tap both
+      // route through here; the swipe is off in [showAntiQuantumNoteRevealSheet].
+      canPop: _phase != _Phase.revealing,
+      child: Padding(
       padding: EdgeInsets.only(
         left: 16,
         right: 16,
@@ -254,7 +267,7 @@ class _AntiQuantumNoteRevealSheetState
           },
         ),
       ),
-    );
+    ));
   }
 
   Widget _header(BuildContext context) {
@@ -273,13 +286,14 @@ class _AntiQuantumNoteRevealSheetState
             ),
           ),
         ),
-        IconButton(
-          key: const Key('note-reveal-close'),
-          icon: const Icon(Icons.close, size: 20),
-          tooltip: MaterialLocalizations.of(context).closeButtonTooltip,
-          onPressed: () => Navigator.of(context).pop(),
-          color: fc.mutedText,
-        ),
+        if (_phase != _Phase.revealing)
+          IconButton(
+            key: const Key('note-reveal-close'),
+            icon: const Icon(Icons.close, size: 20),
+            tooltip: MaterialLocalizations.of(context).closeButtonTooltip,
+            onPressed: _close,
+            color: fc.mutedText,
+          ),
       ],
     );
   }
@@ -334,7 +348,7 @@ class _AntiQuantumNoteRevealSheetState
             Expanded(
               child: OutlinedButton(
                 key: const Key('note-reveal-cancel'),
-                onPressed: () => Navigator.of(context).pop(),
+                onPressed: _close,
                 style: OutlinedButton.styleFrom(
                   foregroundColor: fc.mutedText,
                   side: BorderSide(color: fc.borderColor),
@@ -469,7 +483,7 @@ class _AntiQuantumNoteRevealSheetState
         SizedBox(
           width: double.infinity,
           child: OutlinedButton(
-            onPressed: () => Navigator.of(context).pop(),
+            onPressed: _close,
             style: OutlinedButton.styleFrom(
               foregroundColor: colorScheme.onSurface,
               side: BorderSide(color: fc.borderColor),
@@ -542,7 +556,7 @@ class _AntiQuantumNoteRevealSheetState
           children: [
             Expanded(
               child: OutlinedButton(
-                onPressed: () => Navigator.of(context).pop(),
+                onPressed: _close,
                 style: OutlinedButton.styleFrom(
                   foregroundColor: colorScheme.onSurface,
                   side: BorderSide(color: fc.borderColor),
