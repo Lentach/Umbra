@@ -97,8 +97,18 @@ if ($Tag) {
   if ($LASTEXITCODE -ne 0) { Fail "git fetch failed." }
   git merge-base --is-ancestor "$Tag^{commit}" origin/master
   if ($LASTEXITCODE -ne 0) { Fail "Tag $Tag is not a commit on origin/master." }
-  $who = gh api "repos/$Repo/releases/tags/$Tag" --jq '[.author.login] + [.assets[] | select(.name | test("-unsigned[.]apk([.]sha256)?$")) | .uploader.login] | unique | join(",")'
-  if ($LASTEXITCODE -ne 0 -or $who -ne 'github-actions[bot]') {
+  # Parsed here, not with `gh --jq`: Windows PowerShell drops the double
+  # quotes of a jq string on the way to a native program (MEASURED on the
+  # first real run, 2026-11-25: jq parse error, check failed closed).
+  $relJson = gh api "repos/$Repo/releases/tags/$Tag" | Out-String
+  if ($LASTEXITCODE -ne 0) { Fail "Could not read release $Tag from GitHub." }
+  $rel = $relJson | ConvertFrom-Json
+  $unsignedAssets = @($rel.assets | Where-Object { $_.name -match '-unsigned\.apk(\.sha256)?$' })
+  if ($unsignedAssets.Count -ne 2) {
+    Fail "Release $Tag must hold exactly the unsigned APK and its .sha256 (found $($unsignedAssets.Count) such assets)."
+  }
+  $who = (@($rel.author.login) + @($unsignedAssets | ForEach-Object { $_.uploader.login }) | Sort-Object -Unique) -join ','
+  if ($who -ne 'github-actions[bot]') {
     Fail "Release $Tag or its unsigned assets were not made by the release workflow (made by: $who)."
   }
   Write-Host "Tag is on origin/master; release and assets made by $who."
