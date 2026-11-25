@@ -7,12 +7,14 @@ import 'package:fireplace/services/device_link/identity_backup.dart';
 import 'package:fireplace/services/encryption_service.dart';
 import 'package:fireplace/services/recovery_phrase.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../support/l10n.dart' as support;
 import '../support/passcode_fakes.dart';
 
 /// A codec whose `seal` waits for the test, so the "saving" window can be held
@@ -376,5 +378,123 @@ void main() {
       isNot(contains('setRecoveryKey')),
       reason: 'a phrase the user can no longer see must not replace theirs',
     );
+  });
+
+  /// A system clipboard behind the platform channel. `text` is what a paste
+  /// would give; null models an empty clipboard.
+  String? clipboardText;
+
+  void mockClipboard(WidgetTester tester) {
+    clipboardText = null;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        switch (call.method) {
+          case 'Clipboard.setData':
+            clipboardText = (call.arguments as Map)['text'] as String?;
+            return null;
+          case 'Clipboard.getData':
+            return clipboardText == null
+                ? null
+                : <String, dynamic>{'text': clipboardText};
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+  }
+
+  /// Generates the phrase and taps Copy; returns the words, still on the
+  /// words step.
+  Future<List<String>> generateAndCopy(WidgetTester tester) async {
+    await tester.tap(find.text(support.l10n.recoveryKeyGenerateAction));
+    await tester.pumpAndSettle();
+    final words = tester
+        .widget<SelectableText>(find.byType(SelectableText))
+        .data!
+        .split(RegExp(r'\s+'));
+    await tester.tap(find.text(support.l10n.recoveryKeyCopyAction));
+    await tester.pump();
+    expect(clipboardText, words.join(' '), reason: 'Copy fills the clipboard');
+    await tester.pump(const Duration(seconds: 3));
+    return words;
+  }
+
+  testWidgets('A2-AUTH-02: a saved phrase is wiped from the clipboard once '
+      'enrolment succeeds', (tester) async {
+    mockClipboard(tester);
+    final results = <bool?>[];
+    await pumpScreen(tester, results: results, onEmit: (event, data) {
+      if (event == 'setRecoveryKey') {
+        provider.onRecoveryKeySet(const {'success': true});
+      }
+    });
+    final words = await generateAndCopy(tester);
+
+    await tester.tap(find.text(support.l10n.recoveryKeySavedAction));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('recovery-key-confirm-field')),
+      words[promptedIndex(tester)],
+    );
+    await tester.tap(find.byKey(const Key('recovery-key-confirm-action')));
+    for (var i = 0; i < 5 && emitted.isEmpty; i++) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(results, [true]);
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
+
+    expect(
+      clipboardText ?? '',
+      isEmpty,
+      reason: 'the 12 words must not outlive the enrolment in the clipboard',
+    );
+  });
+
+  testWidgets('A2-AUTH-02: leaving the screen wipes the copied phrase',
+      (tester) async {
+    mockClipboard(tester);
+    await pumpScreen(tester, results: <bool?>[]);
+    await generateAndCopy(tester);
+
+    await tester.tap(find.byIcon(Icons.arrow_back));
+    await tester.pumpAndSettle();
+    expect(find.byType(RecoveryKeyScreen), findsNothing);
+
+    expect(clipboardText ?? '', isEmpty);
+  });
+
+  testWidgets('A2-AUTH-02: something the user copied since is left alone',
+      (tester) async {
+    mockClipboard(tester);
+    await pumpScreen(tester, results: <bool?>[]);
+    await generateAndCopy(tester);
+    clipboardText = 'a shopping list';
+
+    await tester.tap(find.byIcon(Icons.arrow_back));
+    await tester.pumpAndSettle();
+
+    expect(clipboardText, 'a shopping list');
+  });
+
+  testWidgets('A2-AUTH-02: a clipboard the screen never filled is not touched',
+      (tester) async {
+    mockClipboard(tester);
+    clipboardText = 'unrelated';
+    await pumpScreen(tester, results: <bool?>[]);
+    await tester.tap(find.text(support.l10n.recoveryKeyGenerateAction));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.arrow_back));
+    await tester.pumpAndSettle();
+
+    expect(clipboardText, 'unrelated');
   });
 }
