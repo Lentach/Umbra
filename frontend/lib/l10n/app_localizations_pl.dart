@@ -551,7 +551,7 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get recoveryKeyLegacyDialogBody =>
-      'Twój klucz odzyskiwania został ustawiony w starszej wersji aplikacji. Tamta wersja wysyłała 12 słów na serwer, więc nie można już na nich bezpiecznie polegać. Stare słowa nie odzyskują już hasła. Ustawienie nowego klucza zajmie minutę.';
+      'Twój klucz odzyskiwania został ustawiony w starszej wersji aplikacji, która wysyłała 12 słów na serwer, więc mogą nie być już tajne. Dopóki go nie wymienisz, nie zresetujesz nim zapomnianego hasła. Dostaniesz 12 nowych słów do zapisania. To zajmie chwilę.';
 
   @override
   String get recoveryKeyLegacyReplaceNow => 'Wymień teraz';

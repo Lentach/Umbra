@@ -1037,10 +1037,10 @@ abstract class AppLocalizations {
   /// Plan B7: body of the dialog shown once per app start to an account whose recovery key is legacy.
   ///
   /// In pl, this message translates to:
-  /// **'Twój klucz odzyskiwania został ustawiony w starszej wersji aplikacji. Tamta wersja wysyłała 12 słów na serwer, więc nie można już na nich bezpiecznie polegać. Stare słowa nie odzyskują już hasła. Ustawienie nowego klucza zajmie minutę.'**
+  /// **'Twój klucz odzyskiwania został ustawiony w starszej wersji aplikacji, która wysyłała 12 słów na serwer, więc mogą nie być już tajne. Dopóki go nie wymienisz, nie zresetujesz nim zapomnianego hasła. Dostaniesz 12 nowych słów do zapisania. To zajmie chwilę.'**
   String get recoveryKeyLegacyDialogBody;
 
-  /// No description provided for @recoveryKeyLegacyReplaceNow.
+  /// Plan B7: the dialog's button that opens the recovery key screen.
   ///
   /// In pl, this message translates to:
   /// **'Wymień teraz'**
