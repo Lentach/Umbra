@@ -1607,7 +1607,7 @@ describe('ChatKeyExchangeService', () => {
 
       expect(identityResetService.requestReset).toHaveBeenCalledWith(
         1,
-        { kind: 'auth', value: authSecret },
+        authSecret,
         false,
       );
       // Shortened shortens the delay; it never silences the notifications.
@@ -1857,7 +1857,7 @@ describe('ChatKeyExchangeService', () => {
 
       expect(identityResetService.setRecoveryKey).toHaveBeenCalledWith(
         1,
-        { kind: 'auth', value: authSecret },
+        authSecret,
         expect.objectContaining(v2Backup),
       );
       expect(mockClient.emit).toHaveBeenCalledWith('recoveryKeySet', {

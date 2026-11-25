@@ -14,7 +14,6 @@ import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshBodyDto } from './dto/refresh-body.dto';
 import { RecoverPasswordDto } from './dto/recover-password.dto';
-import { recoveryCredentialOf } from '../key-bundles/identity-reset.service';
 
 @Controller('auth')
 export class AuthController {
@@ -48,9 +47,12 @@ export class AuthController {
   @Throttle({ default: { limit: 5, ttl: 900000 } })
   @Post('recover')
   recover(@Body() dto: RecoverPasswordDto) {
+    // The DTO declares the legacy plaintext `phrase` only so it can be refused.
+    if (dto.phrase != null) return this.authService.refusePlaintextPhrase();
+    // Exactly one of the two is present (CredentialXor), so this is set.
     return this.authService.recoverPassword(
       dto.identifier,
-      recoveryCredentialOf(dto.authSecret),
+      dto.authSecret!,
       dto.newPassword,
     );
   }

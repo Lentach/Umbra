@@ -9,10 +9,7 @@ import {
   KeyBundlesService,
   PreKeyBundleResponse,
 } from '../../key-bundles/key-bundles.service';
-import {
-  IdentityResetService,
-  recoveryCredentialOf,
-} from '../../key-bundles/identity-reset.service';
+import { IdentityResetService } from '../../key-bundles/identity-reset.service';
 import { DevicesService } from '../../key-bundles/devices.service';
 import { DeviceListService } from '../../key-bundles/device-list.service';
 import { validateDto } from '../utils/dto.validator';
@@ -605,7 +602,7 @@ export class ChatKeyExchangeService {
       const dto = validateDto(ResetIdentityRequestDto, data);
       const result = await this.identityResetService.requestReset(
         userId,
-        recoveryCredentialOf(dto.recoveryAuth),
+        dto.recoveryAuth,
         // Value-less: the plaintext phrase of a client up to 0.2.89 is refused
         // inside the ceremony, after its own earlier answers (0.2.104).
         dto.recoveryPhrase != null,
@@ -728,7 +725,7 @@ export class ChatKeyExchangeService {
       const replaced = await this.identityResetService.setRecoveryKey(
         userId,
         // Validated exactly-one-of by SetRecoveryKeyDto.
-        recoveryCredentialOf(dto.authSecret)!,
+        dto.authSecret!,
         // (lxxviii) clause 1: verifier and sealed blob land atomically.
         dto.backup,
       );

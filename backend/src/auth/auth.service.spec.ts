@@ -417,7 +417,7 @@ describe('AuthService', () => {
       identityResetService.verifyRecoveryPhrase.mockResolvedValue('accepted');
       await service.recoverPassword(
         'testuser#0427',
-        { kind: 'auth', value: Buffer.alloc(32, 1).toString('base64') },
+        Buffer.alloc(32, 1).toString('base64'),
         'NewPass1x',
       );
 
@@ -474,12 +474,7 @@ describe('AuthService', () => {
 
   // Amendment (lxxxii) clause 2 — the recovery phrase as a credential.
   describe('recoverPassword', () => {
-    // What the controller hands over for a legacy plaintext phrase: no credential.
-    const legacy = undefined;
-    const v2 = {
-      kind: 'auth',
-      value: Buffer.alloc(32, 1).toString('base64'),
-    } as const;
+    const v2 = Buffer.alloc(32, 1).toString('base64');
 
     it('a correct phrase sets the password and answers with login tokens', async () => {
       usersService.findByUsernameAndTag.mockResolvedValue(mockUser as User);
@@ -554,7 +549,7 @@ describe('AuthService', () => {
       // "no such user" must cost the same verify as a wrong phrase, or the
       // door enumerates usernames by response time.
       expect(argon2.verify).toHaveBeenCalledTimes(1);
-      expect(argon2.verify).toHaveBeenCalledWith(expect.any(String), v2.value);
+      expect(argon2.verify).toHaveBeenCalledWith(expect.any(String), v2);
       // ...but no account's failure counter is touched.
       expect(identityResetService.verifyRecoveryPhrase).not.toHaveBeenCalled();
       expect(usersService.setPassword).not.toHaveBeenCalled();
@@ -581,7 +576,7 @@ describe('AuthService', () => {
       await expect(
         service.recoverPassword(
           'testuser#0427',
-          { kind: 'auth', value: Buffer.alloc(32, 2).toString('base64') },
+          Buffer.alloc(32, 2).toString('base64'),
           'NewPass1x',
         ),
       ).rejects.toThrow('Invalid credentials');
@@ -604,9 +599,10 @@ describe('AuthService', () => {
       usersService.findByUsernameAndTag.mockResolvedValue(mockUser as User);
       identityResetService.verifyRecoveryPhrase.mockResolvedValue('accepted');
 
-      await expect(
-        service.recoverPassword('testuser#0427', legacy, 'NewPass1x'),
-      ).rejects.toMatchObject({ status: 401, message: 'Invalid credentials' });
+      await expect(service.refusePlaintextPhrase()).rejects.toMatchObject({
+        status: 401,
+        message: 'Invalid credentials',
+      });
 
       expect(argon2.verify).toHaveBeenCalledTimes(1);
     });

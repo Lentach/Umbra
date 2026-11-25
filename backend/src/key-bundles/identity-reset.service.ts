@@ -114,21 +114,6 @@ export const RECOVERY_ARGON2_OPTIONS: argon2.HashOptions = {
 export const TIMING_SAFE_DUMMY_VERIFIER =
   '$argon2id$v=19$m=19456,p=1,t=2$w2BrHORjqgyeXxt8gHZoKg$cJ92sbtx0cBRD/dsML6P5/sN5qKUBQNSM3Et6pDD5T0';
 
-/**
- * A recovery credential as presented: the client-derived authSecret (plan B7;
- * the phrase never leaves the device). A legacy plaintext phrase is never a
- * credential — every door refuses it before this type is built.
- */
-export type RecoveryCredential = { kind: 'auth'; value: string };
-
-/** The credential a DTO carries, or none when no authSecret was sent. */
-export function recoveryCredentialOf(
-  authSecret: string | undefined,
-): RecoveryCredential | undefined {
-  if (authSecret != null) return { kind: 'auth', value: authSecret };
-  return undefined;
-}
-
 /** Why a recovery credential did not open a door (plus the happy path). */
 export type RecoveryVerdict =
   | 'accepted'
@@ -233,7 +218,7 @@ export class IdentityResetService {
    */
   async requestReset(
     userId: number,
-    credential?: RecoveryCredential,
+    authSecret?: string,
     plaintextPhraseSent = false,
   ): Promise<RequestResetResult> {
     const existing = await this.resetRepo.findOne({
@@ -327,11 +312,11 @@ export class IdentityResetService {
             phraseTooNew: false,
           };
         }
-        if (credential != null && credential.value.length > 0) {
+        if (authSecret != null && authSecret.length > 0) {
           const outcome = await this.spendRecoveryPhrase(
             manager.getRepository(RecoveryKey),
             userId,
-            credential,
+            authSecret,
           );
           // `too_new` is the ONLY non-accepted outcome that still starts a
           // ceremony (amendment (xlii)): the phrase was right but cannot buy
@@ -413,7 +398,7 @@ export class IdentityResetService {
   private async spendRecoveryPhrase(
     recoveryRepo: Repository<RecoveryKey>,
     userId: number,
-    credential: RecoveryCredential,
+    authSecret: string,
   ): Promise<Exclude<RecoveryVerdict, 'accepted'> | 'accepted' | 'too_new'> {
     const row = await recoveryRepo.findOne({ where: { userId } });
     // No phrase enrolled, or already spent: same answer either way, so the
@@ -423,7 +408,7 @@ export class IdentityResetService {
     // only by a caller already authenticated AS the account, who can read the
     // enrolment state from their own settings screen anyway.
     if (!row || row.usedAt != null) return 'invalid_phrase';
-    const verdict = await this.verifyAgainstRow(recoveryRepo, row, credential);
+    const verdict = await this.verifyAgainstRow(recoveryRepo, row, authSecret);
     if (verdict !== 'accepted') return verdict;
 
     // The phrase is correct. It may still be too YOUNG to buy the shortcut
@@ -459,16 +444,16 @@ export class IdentityResetService {
    */
   async verifyRecoveryPhrase(
     userId: number,
-    credential: RecoveryCredential,
+    authSecret: string,
   ): Promise<RecoveryVerdict> {
     const row = await this.recoveryRepo.findOne({ where: { userId } });
     if (!row) {
       await argon2
-        .verify(TIMING_SAFE_DUMMY_VERIFIER, credential.value)
+        .verify(TIMING_SAFE_DUMMY_VERIFIER, authSecret)
         .catch(() => false);
       return 'invalid_phrase';
     }
-    return this.verifyAgainstRow(this.recoveryRepo, row, credential);
+    return this.verifyAgainstRow(this.recoveryRepo, row, authSecret);
   }
 
   /**
@@ -485,7 +470,7 @@ export class IdentityResetService {
   private async verifyAgainstRow(
     recoveryRepo: Repository<RecoveryKey>,
     row: RecoveryKey,
-    credential: RecoveryCredential,
+    authSecret: string,
   ): Promise<RecoveryVerdict> {
     if (row.lockedUntil != null && row.lockedUntil.getTime() > Date.now()) {
       return 'locked';
@@ -493,13 +478,13 @@ export class IdentityResetService {
 
     if (row.verifierKind !== 'auth_v2') {
       await argon2
-        .verify(TIMING_SAFE_DUMMY_VERIFIER, credential.value)
+        .verify(TIMING_SAFE_DUMMY_VERIFIER, authSecret)
         .catch(() => false);
       return 'legacy_recovery_key';
     }
 
     const valid = await argon2
-      .verify(row.verifierHash, credential.value)
+      .verify(row.verifierHash, authSecret)
       .catch((error: unknown) => {
         // A malformed stored hash must never authorize anything.
         this.logger.error(
@@ -654,14 +639,11 @@ export class IdentityResetService {
    */
   async setRecoveryKey(
     userId: number,
-    credential: RecoveryCredential,
+    authSecret: string,
     backup?: IdentityBackupInput,
   ): Promise<boolean> {
     // Plan B7 tail: no path creates a `phrase_v1` row any more.
-    const verifierHash = await argon2.hash(
-      credential.value,
-      RECOVERY_ARGON2_OPTIONS,
-    );
+    const verifierHash = await argon2.hash(authSecret, RECOVERY_ARGON2_OPTIONS);
     const verifierKind: RecoveryVerifierKind = 'auth_v2';
     const backupColumns = backup
       ? {
