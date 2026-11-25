@@ -595,4 +595,40 @@ void main() {
     // The second search's lookup timeout must not outlive the test.
     await tester.pump(const Duration(seconds: 11));
   });
+
+  // A reconnect abandons the search's waiter and its timer: no answer and no
+  // timeout will ever come, so the screen must not wait for one.
+  testWidgets('a reconnect during a search ends the spinner and Enter '
+      'searches again', (tester) async {
+    final friends = FriendsProvider();
+    final searches = <Object?>[];
+    friends.setEmitCallback((event, data) {
+      if (event == 'searchUsers') searches.add(data);
+    });
+    await _pumpInvitations(tester, friends);
+
+    final field = find.byKey(const Key('invitation-handle-field'));
+    await tester.enterText(field, 'bob#0002');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
+    expect(searches, hasLength(1));
+    expect(
+      find.byKey(const Key('invitation-search-progress')),
+      findsOneWidget,
+    );
+
+    friends.onConnect(true);
+    await tester.pump(const Duration(seconds: 11));
+    expect(find.byKey(const Key('invitation-search-progress')), findsNothing);
+
+    await tester.enterText(field, 'bob#0002');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
+    expect(searches, hasLength(2));
+    expect(
+      find.byKey(const Key('invitation-search-progress')),
+      findsOneWidget,
+    );
+    await tester.pump(const Duration(seconds: 11));
+  });
 }
