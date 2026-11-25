@@ -1990,11 +1990,18 @@ class EncryptionProvider extends ChangeNotifier {
     while (true) {
       final inFlight = _e2eInitInFlight;
       if (inFlight == null) break;
-      if (_currentUserId == userId) return inFlight;
+      if (_currentUserId == userId) {
+        await inFlight;
+        // A run superseded by a revoke ends without initializing; the caller
+        // asked for E2E to be up, so start a fresh one.
+        if (_e2eInitInFlightEpoch == _initEpoch) return;
+        continue;
+      }
       await inFlight;
     }
     final run = _initializeE2EInner(userId);
     _e2eInitInFlight = run;
+    _e2eInitInFlightEpoch = _initEpoch;
     try {
       await run;
     } finally {
@@ -2004,11 +2011,21 @@ class EncryptionProvider extends ChangeNotifier {
 
   Future<void>? _e2eInitInFlight;
 
+  /// Bumped by every teardown an init in flight must not survive.
+  int _initEpoch = 0;
+  int _e2eInitInFlightEpoch = 0;
+
   /// CLAUDE.md gotcha: skips `_encryptionService.initialize()` when
   /// `_e2eInitialized = true` (reconnect path) to prevent transient
   /// mobile storage errors from setting `_e2eInitialized = false`.
   /// Never throws — every failure mode is caught and logged inside.
   Future<void> _initializeE2EInner(int userId) async {
+    final epoch = _initEpoch;
+    // True once the account changed or the stores were revoked under this run
+    // ([clearAll], [onConnect] fresh, [revokeForPasscodeLock]): a superseded
+    // run sets no flag and emits nothing, so it cannot mark the next account
+    // ready or publish this one's bundle on the next account's socket.
+    bool superseded() => epoch != _initEpoch;
     _currentUserId = userId;
     _e2eFlowLog('E2E_INIT_START', {'alreadyInitialized': _e2eInitialized});
     try {
@@ -2016,6 +2033,7 @@ class EncryptionProvider extends ChangeNotifier {
       // predates any write. Once per run; touches no key material, so it is
       // safe while locked.
       await _recordBootMarkersOnce();
+      if (superseded()) return;
       // Phase 2: wait for the passcode unlock before the FIRST key read. The
       // markers above are safe while locked (they touch no key material), but
       // `initialize` reads the identity, and on a wrapped device that read is
@@ -2028,6 +2046,7 @@ class EncryptionProvider extends ChangeNotifier {
         _e2eFlowLog('E2E_INIT_AWAIT_UNLOCK', const {});
         await PasscodeUnlockGate.instance.waitUntilOpen();
       }
+      if (superseded()) return;
       if (!_e2eInitialized) {
         // Rebuild the UI when a peer's identity key changes so the warning can
         // appear without waiting for the next message.
@@ -2039,12 +2058,14 @@ class EncryptionProvider extends ChangeNotifier {
           userId,
           checkServerIdentity: _checkServerIdentity,
         );
+        if (superseded()) return;
         _identityIncomplete = false;
         _setIdentityCheckUnavailable(false);
         // Seed the decrypt ledger BEFORE flipping the ready flag: decrypting
         // requires E2E to be ready, so nothing can start while this await is
         // outstanding.
         await loadDecryptedLedger();
+        if (superseded()) return;
         // Rebuild intents recorded by a PREVIOUS process (amendment (xlviii)
         // clause 1). Seeded before the flag flips, for the same reason as the
         // two loads above: a send that wins the race would otherwise reuse a
@@ -2080,6 +2101,7 @@ class EncryptionProvider extends ChangeNotifier {
             // Looked up from the server at the next connect instead.
           }
         }
+        if (superseded()) return;
         // Off the box past the TTL (or never stamped) at start: every box
         // peer is owed one server answer this process (E50c).
         _boxGapSince = null;
@@ -2115,10 +2137,13 @@ class EncryptionProvider extends ChangeNotifier {
       // E2E-ready here and start the box on the queues of the device it used
       // to be.
       final previous = await _previousDeviceLifeIds(userId);
-      _notePreviousDeviceLife(userId, previous);
-      if (previous != null ||
+      final mismatched =
+          previous != null ||
           _ownDeviceIdConfirmed &&
-              !await _encryptionService.confirmMaterialDeviceId(_ownDeviceId)) {
+              !await _encryptionService.confirmMaterialDeviceId(_ownDeviceId);
+      if (superseded()) return;
+      _notePreviousDeviceLife(userId, previous);
+      if (mismatched) {
         _deviceMaterialMismatch = true;
         _e2eInitialized = false;
         // The stored session's id when the previous life decided: before
@@ -2162,6 +2187,7 @@ class EncryptionProvider extends ChangeNotifier {
       } else {
         // Always re-upload key bundle so server has our keys (e.g. after DB restart).
         final keyBundle = await _encryptionService.getKeyBundleForReupload();
+        if (superseded()) return;
         if (keyBundle != null) {
           _emit?.call('uploadKeyBundle', keyBundle);
           debugPrint('[E2E] Re-uploaded key bundle on connect');
@@ -2173,6 +2199,7 @@ class EncryptionProvider extends ChangeNotifier {
         }
       }
     } on E2eIdentityCheckUnavailableException {
+      if (superseded()) return;
       // UNKNOWN is transient by contract: the server could not be asked
       // whether this account already has a bundle, so neither generating keys
       // nor declaring the identity damaged is safe. E2E stays down for this
@@ -2186,6 +2213,7 @@ class EncryptionProvider extends ChangeNotifier {
       // shows a spinner + retry instead of a keyless shell.
       _setIdentityCheckUnavailable(true);
     } on E2eIdentityIncompleteException catch (e) {
+      if (superseded()) return;
       // NOT a transient failure and NOT recoverable by retrying: the account
       // already published an identity this install does not hold, and we
       // refused to mint over it. Surface it so the UI can explain and offer
@@ -2198,6 +2226,7 @@ class EncryptionProvider extends ChangeNotifier {
       _e2eFlowLog('E2E_INIT_IDENTITY_INCOMPLETE', {});
       notifyListeners();
     } catch (e) {
+      if (superseded()) return;
       debugPrint('[E2E] Initialization failed: $e');
       // Only clear the flag if we hadn't initialized yet; don't undo a working
       // reconnect just because the re-upload attempt threw.
@@ -2205,7 +2234,7 @@ class EncryptionProvider extends ChangeNotifier {
       _setIdentityCheckUnavailable(false);
       _e2eFlowLog('E2E_INIT_FAIL', {'error': e.toString()});
     } finally {
-      if (_e2eInitialized) {
+      if (_e2eInitialized && !superseded()) {
         onE2EReady?.call();
       }
     }
@@ -3356,10 +3385,19 @@ class EncryptionProvider extends ChangeNotifier {
       if (!await _encryptionService.disposeMismatchedMaterialForReset(
         _ownDeviceId,
         // Issue #208: the disposal wipes the store the contact store reads.
-        beforeWipe: prepareFreshDeviceLife,
+        // It waits on a cross-tab lock first; by then the account may have
+        // changed, and the disposal would wipe the NEW account's namespace
+        // and retire its queues. Throwing refuses the wipe.
+        beforeWipe: () async {
+          if (_currentUserId != userId) {
+            throw StateError('account changed during the reset disposal');
+          }
+          await prepareFreshDeviceLife();
+        },
       )) {
         return;
       }
+      if (_currentUserId != userId) return;
       _deviceMaterialMismatch = false;
     }
     // The guard re-asks the server, which still reports `completed` while
@@ -3508,6 +3546,7 @@ class EncryptionProvider extends ChangeNotifier {
       _identityUploadLocked = false;
       // The keyless gate belongs to the account that hit it, not the next.
       _identityIncomplete = false;
+      _initEpoch++;
       _currentUserId = null;
       // (lxxx) clause 7: a restore left `failed` under the previous account
       // must not gate the next one. The §6.2 rebind is a reconnect of the
@@ -3543,6 +3582,7 @@ class EncryptionProvider extends ChangeNotifier {
   /// Full reset — clears all E2E state. Used on logout / account switch.
   /// Does NOT clear persisted keys (use [EncryptionService.clearAllKeys] for that).
   void clearAll() {
+    _initEpoch++;
     _e2eInitialized = false;
     _generatingMoreKeys = false;
     _currentUserId = null;
@@ -3615,6 +3655,7 @@ class EncryptionProvider extends ChangeNotifier {
   /// persisting a permanent `[Decryption failed]` over a readable row.
   Future<void> revokeForPasscodeLock() async {
     _e2eFlowLog('E2E_REVOKE_LOCK', {'wasInitialized': _e2eInitialized});
+    _initEpoch++;
     _e2eInitialized = false;
     _generatingMoreKeys = false;
     _decryptedContentCache.clear();
