@@ -3560,6 +3560,8 @@ class EncryptionProvider extends ChangeNotifier {
       // identity, so a lock left standing by the previous account must never
       // reach the next one's ceremony.
       _identityUploadLocked = false;
+      // The keyless gate belongs to the account that hit it, not the next.
+      _identityIncomplete = false;
       _currentUserId = null;
       // (lxxx) clause 7: a restore left `failed` under the previous account
       // must not gate the next one. The §6.2 rebind is a reconnect of the
@@ -3614,6 +3616,7 @@ class EncryptionProvider extends ChangeNotifier {
     // a disposal authorization. It must not outlive the account it was
     // answered for.
     _identityUploadLocked = false;
+    _identityIncomplete = false;
     _identityCheckUnavailable = false;
     // One-time pre-keys still waiting for their bundle's ack belong to the
     // account that minted them. Left standing, the next account's ack would
