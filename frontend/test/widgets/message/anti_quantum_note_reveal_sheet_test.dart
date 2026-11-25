@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:fireplace/l10n/app_localizations.dart';
+import 'package:fireplace/services/api_exception.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
 import 'package:fireplace/utils/anti_quantum_note_link.dart';
 import 'package:fireplace/widgets/message/anti_quantum_note_reveal_sheet.dart';
@@ -361,6 +362,87 @@ void main() {
       final gate = await openRevealing(tester);
       await tester.fling(find.byKey(_loadingKey), const Offset(0, 400), 2000);
       await expectStillShowsNote(tester, gate);
+    });
+
+    testWidgets('the old Cancel, still on screen while the views cross-fade, '
+        'keeps the sheet', (tester) async {
+      final gate = Completer<NoteRevealOutcome>();
+      await _openSheet(
+        tester,
+        link: _link(expiryMs: _futureMs()),
+        attempt: () => gate.future,
+      );
+      await tester.tap(find.byKey(_revealKey));
+      await tester.pump();
+      // Inside the 220 ms cross-fade the confirm view is still tappable.
+      await tester.pump(const Duration(milliseconds: 60));
+      await tester.tap(find.byKey(_cancelKey));
+      await expectStillShowsNote(tester, gate);
+    });
+  });
+
+  group('a server answer that is an error', () {
+    testWidgets('a 5xx does not claim the connection broke, and stays '
+        'unknown-outcome', (tester) async {
+      var attempts = 0;
+      await _openSheet(
+        tester,
+        link: _link(expiryMs: _futureMs()),
+        attempt: () async {
+          attempts++;
+          if (attempts == 1) {
+            throw const ApiException(statusCode: 503, message: 'down');
+          }
+          return const NoteRevealGone();
+        },
+      );
+      await tester.tap(find.byKey(_revealKey));
+      await tester.pumpAndSettle();
+
+      expect(find.text(l10n.antiQuantumNoteRevealServerErrorTitle),
+          findsOneWidget);
+      expect(find.text(l10n.antiQuantumNoteRevealServerErrorBody),
+          findsOneWidget);
+      expect(find.text(l10n.antiQuantumNoteRevealNetworkErrorTitle),
+          findsNothing);
+      expect(find.text(l10n.antiQuantumNoteRevealUnknownOutcomeBody),
+          findsNothing);
+      expect(find.byKey(_retryKey), findsOneWidget);
+
+      // A gateway 5xx can follow the delete: a later "gone" is not proof that
+      // someone else read it.
+      await tester.tap(find.byKey(_retryKey));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('note-reveal-maybe-burned')), findsOneWidget);
+    });
+
+    testWidgets('a 429 says the note was NOT destroyed, and a later "gone" '
+        'still reads "already read"', (tester) async {
+      var attempts = 0;
+      await _openSheet(
+        tester,
+        link: _link(expiryMs: _futureMs()),
+        attempt: () async {
+          attempts++;
+          if (attempts == 1) {
+            throw const ApiException(statusCode: 429, message: 'slow down');
+          }
+          return const NoteRevealGone();
+        },
+      );
+      await tester.tap(find.byKey(_revealKey));
+      await tester.pumpAndSettle();
+
+      expect(find.text(l10n.antiQuantumNoteRevealBusyTitle), findsOneWidget);
+      expect(find.text(l10n.antiQuantumNoteRevealBusyBody), findsOneWidget);
+      expect(find.text(l10n.antiQuantumNoteRevealUnknownOutcomeBody),
+          findsNothing);
+      expect(find.byKey(_retryKey), findsOneWidget);
+
+      await tester.tap(find.byKey(_retryKey));
+      await tester.pumpAndSettle();
+      expect(find.byKey(_destroyedKey), findsOneWidget);
+      expect(find.byKey(const Key('note-reveal-maybe-burned')), findsNothing);
     });
   });
 

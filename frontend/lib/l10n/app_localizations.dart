@@ -2366,6 +2366,30 @@ abstract class AppLocalizations {
   /// **'Połączenie zerwało się, zanim dotarła odpowiedź serwera. Ta próba mogła już zniszczyć notatkę. Spróbuj ponownie, aby się dowiedzieć.'**
   String get antiQuantumNoteRevealUnknownOutcomeBody;
 
+  /// No description provided for @antiQuantumNoteRevealServerErrorTitle.
+  ///
+  /// In pl, this message translates to:
+  /// **'Błąd serwera'**
+  String get antiQuantumNoteRevealServerErrorTitle;
+
+  /// No description provided for @antiQuantumNoteRevealServerErrorBody.
+  ///
+  /// In pl, this message translates to:
+  /// **'Serwer odpowiedział błędem. Ta próba mogła już zniszczyć notatkę. Spróbuj ponownie, aby się dowiedzieć.'**
+  String get antiQuantumNoteRevealServerErrorBody;
+
+  /// No description provided for @antiQuantumNoteRevealBusyTitle.
+  ///
+  /// In pl, this message translates to:
+  /// **'Serwer jest zajęty'**
+  String get antiQuantumNoteRevealBusyTitle;
+
+  /// No description provided for @antiQuantumNoteRevealBusyBody.
+  ///
+  /// In pl, this message translates to:
+  /// **'Serwer dostaje teraz zbyt wiele żądań. Ta próba nie zniszczyła notatki. Odczekaj chwilę i spróbuj ponownie.'**
+  String get antiQuantumNoteRevealBusyBody;
+
   /// No description provided for @antiQuantumNoteRevealMaybeBurnedTitle.
   ///
   /// In pl, this message translates to:
