@@ -42,6 +42,14 @@ These spend the shared `/auth/register` bucket, so they are opt-in and run on th
 Origin-wide Web Lock probe: `node scripts/verify-session-lock-probe.mjs` (also the `session-lock`
 CI job).
 
+## Release APK workflow (`.github/workflows/release-apk.yml`)
+
+- `build` ("Build unsigned release APK") — on a `v<version>` tag, and on a pull request that touches
+  the Android project, the pubspec files or the APK scripts: gate self-tests, unsigned release build,
+  no-signature gate, 16KB gate, SHA-256, workflow artifact.
+- `release` ("Publish the GitHub release") — tags only; on a pull request its row reads `skipped`,
+  which is not a failure. Signing is offline: `sign-ci-apk.ps1` (`docs/runbooks/android-release.md`).
+
 ## CI jobs (`.github/workflows/ci.yml`)
 
 - `backend` — impact self-test, jest, backend count verifier, box import-graph checker

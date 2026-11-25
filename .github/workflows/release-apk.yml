@@ -1,0 +1,209 @@
+name: Release APK
+
+# Builds the UNSIGNED release APK from a version tag and publishes it, with its
+# SHA-256, in the GitHub release for that tag (gap report §4.4 step 1, owner
+# decision 2026-11-25).
+#
+# Signing stays offline: there is no keystore and no signing password in this
+# repository's secrets. The owner signs the published file on the PC with
+# `sign-ci-apk.ps1`; `scripts/verify-apk-signed-matches-unsigned.mjs`
+# proves the signed file is this build plus a signature, byte for byte. An
+# unsigned APK cannot be installed on any device.
+#
+# NOT yet true (gap report §4.4 steps 2-3): a second build of the same tag is
+# not promised to be byte-identical, and the runner image, the actions and
+# Gradle are not pinned by digest.
+#
+# The pull_request trigger re-runs the build when the Android project, its
+# dependencies or these scripts change (Dart-only changes under frontend/lib are
+# not covered); it uploads a workflow artifact and never makes a release.
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+  pull_request:
+    paths:
+      - '.github/workflows/release-apk.yml'
+      - 'frontend/android/**'
+      - 'frontend/patch_webcrypto_16k.ps1'
+      - 'frontend/pubspec.yaml'
+      - 'frontend/pubspec.lock'
+      - 'scripts/verify-apk-16k.mjs'
+      - 'scripts/verify-apk-16k.selftest.mjs'
+      - 'scripts/verify-apk-signed-matches-unsigned.mjs'
+      - 'scripts/verify-apk-signed-matches-unsigned.selftest.mjs'
+      - 'sign-ci-apk.ps1'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  # Same default as build-android.ps1 (-BaseUrl); change both together.
+  BASE_URL: https://fireplace.ignorelist.com
+
+jobs:
+  build:
+    name: Build unsigned release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      sha256: ${{ steps.checksum.outputs.sha256 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Full history: the tag must be checked against master below.
+          fetch-depth: 0
+
+      # Before anything is built: the checks below must be able to fail.
+      - name: Self-test the APK gates
+        run: node scripts/verify-apk-16k.selftest.mjs && node scripts/verify-apk-signed-matches-unsigned.selftest.mjs
+
+      - name: Read version; a tag must match pubspec and be on master
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          ver=$(sed -n 's/^version:[[:space:]]*//p' frontend/pubspec.yaml | tr -d '\r')
+          if ! [[ "$ver" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "::error::pubspec version '$ver' is not plain MAJOR.MINOR.PATCH"; exit 1
+          fi
+          code=$(( BASH_REMATCH[1] * 1000000 + BASH_REMATCH[2] * 10000 + BASH_REMATCH[3] ))
+          if [[ "$REF_TYPE" == "tag" ]]; then
+            if [[ "$REF_NAME" != "v$ver" ]]; then
+              echo "::error::tag $REF_NAME does not match pubspec version $ver"; exit 1
+            fi
+            git fetch --quiet origin master
+            if ! git merge-base --is-ancestor HEAD origin/master; then
+              echo "::error::tag $REF_NAME is not a commit on master"; exit 1
+            fi
+          fi
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse --short=8 HEAD)" >> "$GITHUB_OUTPUT"
+          # The commit's own time, not "now": the same tag gives the same value.
+          echo "build_time=$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Use the runner's JDK 17
+        run: echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version-file: frontend/pubspec.yaml
+          cache: true
+
+      - name: Install Flutter dependencies
+        working-directory: frontend
+        run: flutter pub get
+
+      # Same pub-cache patch as build-android.ps1; the gate below checks the
+      # built file, so a patch that did not apply fails the job.
+      - name: Apply the webcrypto 16KB patch
+        working-directory: frontend
+        shell: pwsh
+        run: ./patch_webcrypto_16k.ps1
+
+      - name: Build the unsigned release APK
+        working-directory: frontend
+        env:
+          # Client-side key that ends up inside every APK. Empty on a pull
+          # request from a fork: the build still works, without GIF search.
+          GIPHY_API_KEY: ${{ secrets.GIPHY_API_KEY }}
+          VERSION_CODE: ${{ steps.version.outputs.code }}
+          COMMIT: ${{ steps.version.outputs.commit }}
+          BUILD_TIME: ${{ steps.version.outputs.build_time }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE}" == "tag" && -z "$GIPHY_API_KEY" ]]; then
+            echo "::error::GIPHY_API_KEY secret is missing: a release build would ship without GIF search"; exit 1
+          fi
+          flutter build apk --release --build-number="$VERSION_CODE" \
+            --android-project-arg=umbraUnsignedRelease=true \
+            --dart-define=BASE_URL="$BASE_URL" \
+            --dart-define=GIT_COMMIT="$COMMIT" \
+            --dart-define=BUILD_TIME="$BUILD_TIME" \
+            --dart-define=GIPHY_API_KEY="$GIPHY_API_KEY"
+
+      - name: Gate - the APK carries no signature
+        run: |
+          set -euo pipefail
+          apk=frontend/build/app/outputs/flutter-apk/app-release.apk
+          test -f "$apk"
+          apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          # apksigner must reject the file for THIS reason, not because it could
+          # not run (MEASURED, build-tools 36.0.0, on an unsigned build).
+          if out=$("$apksigner" verify "$apk" 2>&1); then
+            echo "::error::the CI build is signed; it must be unsigned"; exit 1
+          fi
+          if ! grep -q 'Missing META-INF/MANIFEST.MF' <<<"$out"; then
+            echo "::error::apksigner failed for another reason: $out"; exit 1
+          fi
+
+      - name: Gate - 16KB ELF alignment
+        run: node scripts/verify-apk-16k.mjs frontend/build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Name the file and compute its SHA-256
+        id: checksum
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir out
+          cp frontend/build/app/outputs/flutter-apk/app-release.apk "out/umbra-$VERSION-unsigned.apk"
+          cd out
+          sha256sum "umbra-$VERSION-unsigned.apk" | tee "umbra-$VERSION-unsigned.apk.sha256"
+          echo "sha256=$(cut -d' ' -f1 "umbra-$VERSION-unsigned.apk.sha256")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the APK and its checksum
+        uses: actions/upload-artifact@v4
+        with:
+          name: umbra-unsigned-apk
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish the GitHub release
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download the APK and its checksum
+        uses: actions/download-artifact@v4
+        with:
+          name: umbra-unsigned-apk
+          path: out
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.build.outputs.version }}
+          SHA256: ${{ needs.build.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          (cd out && sha256sum -c "umbra-$VERSION-unsigned.apk.sha256")
+          {
+            echo "Umbra $VERSION for Android."
+            echo
+            echo "\`umbra-$VERSION-unsigned.apk\` is the build made by this repository's workflow from tag \`$TAG\` (commit \`$GITHUB_SHA\`). It is not signed and cannot be installed."
+            echo
+            echo "SHA-256 of the unsigned build: \`$SHA256\`"
+            echo
+            echo "The APK offered for download by the app's server is this file plus the release signature. \`umbra-$VERSION.apk.sha256\`, added here after signing, is its checksum. To check that the two are the same build: \`node scripts/verify-apk-signed-matches-unsigned.mjs umbra-$VERSION.apk umbra-$VERSION-unsigned.apk\`."
+          } > notes.md
+          gh release create "$TAG" --verify-tag --title "Umbra $VERSION" --notes-file notes.md \
+            "out/umbra-$VERSION-unsigned.apk" "out/umbra-$VERSION-unsigned.apk.sha256"

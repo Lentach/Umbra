@@ -16,6 +16,17 @@ if (keyPropertiesFile.exists()) {
     keyProperties.load(FileInputStream(keyPropertiesFile))
 }
 
+// OPT-IN, off by default: `-PumbraUnsignedRelease=true` (CI passes
+// `--android-project-arg=umbraUnsignedRelease=true`) packages the release APK with NO
+// signature at all, even when key.properties exists. `.github/workflows/
+// release-apk.yml` builds that file from a tag; the owner signs it offline
+// (`sign-ci-apk.ps1`), so the keystore never reaches CI. An unsigned
+// APK cannot be installed, so it cannot be mistaken for a shippable one. The
+// App Bundle refuses the property (gate below): Play gets a signed bundle
+// from the PC.
+val unsignedRelease =
+    project.findProperty("umbraUnsignedRelease")?.toString() == "true"
+
 // HARD GATE (execution-time): a release build without a real keystore must FAIL
 // LOUDLY, never silently fall back to debug signing (a debug-signed "release"
 // looks shippable but is not: Play rejects it and its signature can't ever be
@@ -28,8 +39,15 @@ if (keyPropertiesFile.exists()) {
 // packageReleaseBundle = AAB.
 tasks.matching { it.name == "packageRelease" || it.name == "packageReleaseBundle" }
     .configureEach {
+        val isApk = name == "packageRelease"
         doFirst {
-            if (!keyPropertiesFile.exists()) {
+            if (unsignedRelease && !isApk) {
+                throw GradleException(
+                    "umbraUnsignedRelease applies to the APK only; " +
+                    "build the App Bundle without it."
+                )
+            }
+            if (!keyPropertiesFile.exists() && !(unsignedRelease && isApk)) {
                 throw GradleException(
                     "Release packaging requested but android/key.properties is missing. " +
                     "Create the release keystore first — see docs/runbooks/android-release.md " +
@@ -51,7 +69,8 @@ android {
         // every release build and is a known Windows flake source (lint-cache
         // jar locks, e.g. :file_picker:lintVitalAnalyzeRelease FileSystemException
         // 2026-07-29). We don't gate releases on lint; the release gates are the
-        // signing/16KB checks in build-android.ps1.
+        // signing/16KB checks in build-android.ps1, sign-ci-apk.ps1 and
+        // .github/workflows/release-apk.yml.
         checkReleaseBuilds = false
     }
 
@@ -94,13 +113,14 @@ android {
 
     buildTypes {
         release {
-            // The execution-time gate above throws whenever a release artifact
-            // is PACKAGED without a keystore. Defense in depth: with no
-            // keystore the signingConfig is NULL, so even a path the task-name
-            // filter missed yields an inert UNSIGNED apk (also rejected by the
-            // apksigner gate in build-android.ps1) — NEVER a debug-signed one
+            // The execution-time gate above throws when a release artifact is
+            // packaged without a keystore, except the APK when
+            // `umbraUnsignedRelease` is set (see top). signingConfig is NULL
+            // with no keystore or with that property, so a path the task
+            // filter missed yields an inert UNSIGNED apk (rejected by the
+            // apksigner gate in build-android.ps1), never a debug-signed one
             // that looks shippable.
-            signingConfig = if (keyPropertiesFile.exists()) {
+            signingConfig = if (keyPropertiesFile.exists() && !unsignedRelease) {
                 signingConfigs.getByName("release")
             } else {
                 null

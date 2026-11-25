@@ -6,7 +6,8 @@
 //
 // WHY THIS EXISTS: the webcrypto linker fix is applied by patching the pub
 // cache (frontend/patch_webcrypto_16k.ps1). That patch is silently dropped by
-// `flutter pub cache repair`, an SDK upgrade, or any non-Windows build. The
+// `flutter pub cache repair`, an SDK upgrade, or any build that skips the
+// script (the Linux CI build runs it through pwsh: release-apk.yml). The
 // patch MECHANISM may change freely — this check inspects the built artifact,
 // so a broken APK can never ship regardless of how the patch was (not) applied.
 //
