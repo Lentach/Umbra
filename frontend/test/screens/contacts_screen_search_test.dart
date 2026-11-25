@@ -15,6 +15,7 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../support/contact_seed.dart';
+import '../support/l10n.dart';
 
 /// AuthProvider fake: only [currentUser] matters to the Contacts tab.
 class _FakeAuthProvider extends AuthProvider {
@@ -89,13 +90,13 @@ void main() {
     await tester.pumpWidget(await _host(tester, friendNames: names));
     await tester.pumpAndSettle();
 
-    expect(find.text('Contacts'), findsOneWidget);
+    expect(find.text(l10n.contacts), findsOneWidget);
     expect(find.byType(TextField), findsNothing);
 
     await _openSearch(tester);
 
     expect(find.byType(TextField), findsOneWidget);
-    expect(find.text('Contacts'), findsNothing);
+    expect(find.text(l10n.contacts), findsNothing);
     // The view toggle keeps its slot so a query survives a view switch.
     expect(find.byIcon(Icons.format_list_bulleted), findsOneWidget);
   });
@@ -160,13 +161,13 @@ void main() {
     await _openSearch(tester);
     await tester.enterText(find.byType(TextField), 'zzz');
     await tester.pumpAndSettle();
-    expect(find.text('No matching contacts'), findsOneWidget);
+    expect(find.text(l10n.contactsSearchNoResults), findsOneWidget);
 
     await tester.tap(find.byIcon(Icons.close));
     await tester.pumpAndSettle();
 
     expect(find.byType(TextField), findsNothing);
-    expect(find.text('Contacts'), findsOneWidget);
+    expect(find.text(l10n.contacts), findsOneWidget);
     for (final name in names) {
       expect(find.text(name), findsOneWidget);
     }
@@ -194,7 +195,7 @@ void main() {
 
     expect(find.byIcon(Icons.search), findsNothing);
     expect(find.byType(TextField), findsNothing);
-    expect(find.text('No contacts yet'), findsOneWidget);
+    expect(find.text(l10n.noContactsYet), findsOneWidget);
   });
 
   testWidgets('the view choice survives leaving and reopening the tab', (

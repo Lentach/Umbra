@@ -8,6 +8,7 @@ import 'package:fireplace/theme/rpg_theme.dart';
 import 'package:fireplace/utils/passcode_autolock.dart';
 import 'package:provider/provider.dart';
 
+import '../support/l10n.dart';
 import '../support/passcode_fakes.dart';
 
 Widget _host(PasscodeProvider passcode) => ChangeNotifierProvider.value(
@@ -56,7 +57,7 @@ void main() {
       // must be told the escape hatch DESTROYS local data, and must not be
       // promised the account-password bypass this screen advertised until
       // 2026-09-04.
-      expect(find.textContaining('erasing this app'), findsOneWidget);
+      expect(find.text(l10n.passcodeNote), findsOneWidget);
       expect(
         find.textContaining('sign back in with your account password'),
         findsNothing,
@@ -76,7 +77,7 @@ void main() {
       expect(find.byKey(const Key('passcode-dot-empty-5')), findsOneWidget);
 
       await _type(tester, '123456');
-      expect(find.text('Re-enter passcode'), findsOneWidget);
+      expect(find.text(l10n.passcodeRepeatTitle), findsOneWidget);
 
       await _type(tester, '123456');
 
@@ -95,7 +96,7 @@ void main() {
       await _type(tester, '123456');
       await _type(tester, '654321');
 
-      expect(find.text('The codes did not match. Start again.'), findsOneWidget);
+      expect(find.text(l10n.passcodeMismatch), findsOneWidget);
       expect(passcode.isEnabled, isFalse);
       expect(store.credentialWrites, 0);
     });
@@ -149,7 +150,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(passcode.autoLockSeconds, 3600);
-      expect(find.text('After 1 hour'), findsOneWidget);
+      expect(find.text(l10n.passcodeAutoLockHour), findsOneWidget);
     });
 
     testWidgets('turning the lock off requires the current code', (tester) async {
@@ -208,7 +209,7 @@ void main() {
       // Positive assertion first: absence of the wrong-code string alone
       // would also pass on a BLANK error, which pins nothing.
       expect(find.textContaining('Too many attempts'), findsOneWidget);
-      expect(find.text('Wrong passcode. Try again.'), findsNothing);
+      expect(find.text(l10n.passcodeWrong), findsNothing);
       expect(passcode.isEnabled, isTrue, reason: 'cooldown must still gate');
     });
 

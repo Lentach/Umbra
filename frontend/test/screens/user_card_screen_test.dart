@@ -18,6 +18,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../support/l10n.dart';
+
 /// AuthProvider fake: applies profile mutations in memory so the card's
 /// live-data path (self cards watch the provider) can be exercised without
 /// network. The rework's contract under test: actions apply IN PLACE and the
@@ -186,9 +188,9 @@ Future<void> _scrollToBody(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
-const _unreadableMessage = "Couldn't read that photo. Pick another one.";
-const _noRouteMessage = "The connection isn't ready yet. Try again in a moment.";
-const _failedMessage = "Couldn't update your photo. Try again.";
+String get _unreadableMessage => l10n.userCardPhotoUnreadable;
+String get _noRouteMessage => l10n.userCardPhotoNoRoute;
+String get _failedMessage => l10n.userCardPhotoFailed;
 
 void main() {
   setUp(() {
@@ -209,25 +211,23 @@ void main() {
   ) async {
     await tester.pumpWidget(_wrap(contact));
 
-    await tester.tap(find.text('Remove contact'));
+    await tester.tap(find.text(l10n.userCardRemoveContact));
     await tester.pumpAndSettle();
-    expect(find.text('Remove Friend?'), findsOneWidget);
+    expect(find.text(l10n.removeFriendTitle), findsOneWidget);
     expect(
-      find.text(
-        'Remove alice from your contacts? This will delete all conversation history.',
-      ),
+      find.text(l10n.removeFriendConfirm('alice')),
       findsOneWidget,
     );
 
-    await tester.tap(find.text('Cancel'));
+    await tester.tap(find.text(l10n.cancel));
     await tester.pumpAndSettle();
-    expect(find.text('Remove Friend?'), findsNothing);
+    expect(find.text(l10n.removeFriendTitle), findsNothing);
 
-    await tester.tap(find.text('Block'));
+    await tester.tap(find.text(l10n.block));
     await tester.pumpAndSettle();
-    expect(find.text('Block alice#0042?'), findsOneWidget);
+    expect(find.text(l10n.userCardBlockTitle('alice#0042')), findsOneWidget);
     expect(
-      find.text('You will no longer be able to message this contact.'),
+      find.text(l10n.userCardBlockConfirm),
       findsOneWidget,
     );
   });
@@ -420,7 +420,7 @@ void main() {
         const Offset(0, -400),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Edit About'));
+      await tester.tap(find.text(l10n.userCardEditAbout));
       await tester.pumpAndSettle();
       expect(find.byType(EditAboutScreen), findsOneWidget);
 
@@ -458,9 +458,9 @@ void main() {
     ) async {
       await pumpSelf(tester);
 
-      expect(find.text('Set photo'), findsOneWidget);
-      expect(find.text('Change photo'), findsNothing);
-      expect(find.text('Remove photo'), findsNothing);
+      expect(find.text(l10n.userCardAddPhoto), findsOneWidget);
+      expect(find.text(l10n.userCardChangePhoto), findsNothing);
+      expect(find.text(l10n.userCardDeletePhoto), findsNothing);
     });
 
     testWidgets('with a photo the card offers to change or remove it', (
@@ -470,9 +470,9 @@ void main() {
       // account still HAS a photo.
       await pumpSelf(tester, avatar: _photo());
 
-      expect(find.text('Change photo'), findsOneWidget);
-      expect(find.text('Remove photo'), findsOneWidget);
-      expect(find.text('Set photo'), findsNothing);
+      expect(find.text(l10n.userCardChangePhoto), findsOneWidget);
+      expect(find.text(l10n.userCardDeletePhoto), findsOneWidget);
+      expect(find.text(l10n.userCardAddPhoto), findsNothing);
     });
 
     testWidgets('a removed photo offers to set one again, not the legacy one', (
@@ -484,8 +484,8 @@ void main() {
         legacyUrl: 'https://example.test/old.jpg',
       );
 
-      expect(find.text('Set photo'), findsOneWidget);
-      expect(find.text('Remove photo'), findsNothing);
+      expect(find.text(l10n.userCardAddPhoto), findsOneWidget);
+      expect(find.text(l10n.userCardDeletePhoto), findsNothing);
     });
 
     testWidgets('a legacy-photo account can change or remove its photo', (
@@ -493,8 +493,8 @@ void main() {
     ) async {
       await pumpSelf(tester, legacyUrl: 'https://example.test/old.jpg');
 
-      expect(find.text('Change photo'), findsOneWidget);
-      expect(find.text('Remove photo'), findsOneWidget);
+      expect(find.text(l10n.userCardChangePhoto), findsOneWidget);
+      expect(find.text(l10n.userCardDeletePhoto), findsOneWidget);
     });
 
     testWidgets(
@@ -503,7 +503,7 @@ void main() {
       (tester) async {
         final (auth, actions) = await pumpSelf(tester);
 
-        await tester.tap(find.text('Set photo'));
+        await tester.tap(find.text(l10n.userCardAddPhoto));
         await tester.pumpAndSettle();
 
         expect(actions.setCalls, hasLength(1));
@@ -511,8 +511,8 @@ void main() {
         expect(auth.currentUser!.avatar?.hasPhoto, isTrue);
         // The card stays and re-derives from the account, silently.
         expect(find.byType(UserCardScreen), findsOneWidget);
-        expect(find.text('Change photo'), findsOneWidget);
-        expect(find.text('Set photo'), findsNothing);
+        expect(find.text(l10n.userCardChangePhoto), findsOneWidget);
+        expect(find.text(l10n.userCardAddPhoto), findsNothing);
         expect(find.text(_failedMessage), findsNothing);
       },
     );
@@ -521,11 +521,11 @@ void main() {
       final (_, actions) = await pumpSelf(tester);
       actions.picked = null;
 
-      await tester.tap(find.text('Set photo'));
+      await tester.tap(find.text(l10n.userCardAddPhoto));
       await tester.pumpAndSettle();
 
       expect(actions.setCalls, isEmpty);
-      expect(find.text('Set photo'), findsOneWidget);
+      expect(find.text(l10n.userCardAddPhoto), findsOneWidget);
     });
 
     for (final (outcome, message) in [
@@ -545,11 +545,11 @@ void main() {
         final (_, actions) = await pumpSelf(tester);
         actions.setOutcome = outcome;
 
-        await tester.tap(find.text('Set photo'));
+        await tester.tap(find.text(l10n.userCardAddPhoto));
         await tester.pumpAndSettle();
 
         expect(find.text(message), findsOneWidget);
-        expect(find.text('Set photo'), findsOneWidget);
+        expect(find.text(l10n.userCardAddPhoto), findsOneWidget);
         expect(find.byType(UserCardScreen), findsOneWidget);
         // Let the toast's timer run out.
         await tester.pump(const Duration(seconds: 3));
@@ -562,7 +562,7 @@ void main() {
       final (_, actions) = await pumpSelf(tester);
       actions.setThrows = StateError('boom');
 
-      await tester.tap(find.text('Set photo'));
+      await tester.tap(find.text(l10n.userCardAddPhoto));
       await tester.pumpAndSettle();
 
       expect(find.text(_failedMessage), findsOneWidget);
@@ -575,30 +575,30 @@ void main() {
     ) async {
       final (auth, actions) = await pumpSelf(tester, avatar: _photo());
 
-      await tester.tap(find.text('Remove photo'));
+      await tester.tap(find.text(l10n.userCardDeletePhoto));
       await tester.pumpAndSettle();
-      expect(find.text('Delete photo?'), findsOneWidget);
+      expect(find.text(l10n.userCardDeletePhotoTitle), findsOneWidget);
       expect(
-        find.text('This permanently deletes this profile photo.'),
+        find.text(l10n.userCardDeletePhotoConfirm),
         findsOneWidget,
       );
       expect(actions.removeCalls, 0);
 
-      await tester.tap(find.text('Cancel'));
+      await tester.tap(find.text(l10n.cancel));
       await tester.pumpAndSettle();
       expect(actions.removeCalls, 0);
-      expect(find.text('Remove photo'), findsOneWidget);
+      expect(find.text(l10n.userCardDeletePhoto), findsOneWidget);
 
-      await tester.tap(find.text('Remove photo'));
+      await tester.tap(find.text(l10n.userCardDeletePhoto));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Delete'));
+      await tester.tap(find.text(l10n.delete));
       await tester.pumpAndSettle();
 
       expect(actions.removeCalls, 1);
       expect(auth.currentUser!.avatar?.isCleared, isTrue);
       expect(find.byType(UserCardScreen), findsOneWidget);
-      expect(find.text('Set photo'), findsOneWidget);
-      expect(find.text('Remove photo'), findsNothing);
+      expect(find.text(l10n.userCardAddPhoto), findsOneWidget);
+      expect(find.text(l10n.userCardDeletePhoto), findsNothing);
     });
 
     testWidgets('a failed removal says so and keeps the photo', (
@@ -607,13 +607,13 @@ void main() {
       final (_, actions) = await pumpSelf(tester, avatar: _photo());
       actions.removeOutcome = ProfilePhotoOutcome.failed;
 
-      await tester.tap(find.text('Remove photo'));
+      await tester.tap(find.text(l10n.userCardDeletePhoto));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Delete'));
+      await tester.tap(find.text(l10n.delete));
       await tester.pumpAndSettle();
 
       expect(find.text(_failedMessage), findsOneWidget);
-      expect(find.text('Change photo'), findsOneWidget);
+      expect(find.text(l10n.userCardChangePhoto), findsOneWidget);
       await tester.pump(const Duration(seconds: 3));
     });
   });

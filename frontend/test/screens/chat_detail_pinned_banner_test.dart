@@ -11,6 +11,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
+import '../support/l10n.dart';
+
 ConversationModel _conversationWithPinnedPreview({
   required int conversationId,
   required int pinnedMessageId,
@@ -236,6 +238,6 @@ void main() {
     );
 
     expect(find.text('Pinner sees this'), findsOneWidget);
-    expect(find.text('Encrypted message'), findsNothing);
+    expect(find.text(l10n.encryptedMessage), findsNothing);
   });
 }

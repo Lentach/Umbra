@@ -16,6 +16,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../support/l10n.dart';
 import '../support/passcode_fakes.dart';
 
 /// Decision 94: the contact-backup ask never blocks the app. The sheet opens
@@ -160,7 +161,7 @@ void main() {
     await tester.enterText(find.byKey(_password), 'wrong');
     await tester.tap(find.byKey(_confirm));
     await tester.pumpAndSettle();
-    expect(find.text('Wrong password.'), findsOneWidget);
+    expect(find.text(l10n.authStatusWrongPassword), findsOneWidget);
 
     await tester.tap(find.byKey(_later));
     await tester.pumpAndSettle();

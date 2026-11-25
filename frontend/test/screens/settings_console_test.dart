@@ -18,6 +18,7 @@ import 'package:url_launcher_platform_interface/url_launcher_platform_interface.
 import 'package:provider/provider.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
+import '../support/l10n.dart';
 import '../support/passcode_fakes.dart';
 
 Widget _host({
@@ -119,7 +120,7 @@ void main() {
       // The SAME widget the Contacts honeycomb core uses. If Settings ever
       // grows its own copy, the two drift and the tabs stop matching.
       expect(find.byType(LocalNodeCore), findsOneWidget);
-      expect(find.text('LOCAL NODE'), findsOneWidget);
+      expect(find.text(l10n.contactNetworkLocalNode), findsOneWidget);
     });
 
     testWidgets('every section caption is upper-cased by the widget', (
@@ -132,15 +133,18 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(
           theme: RpgTheme.themeDataLight,
-          home: const Scaffold(
-            body: SettingsSectionCaption(label: 'Privacy & Safety'),
+          home: Scaffold(
+            body: SettingsSectionCaption(label: l10n.privacySafetyTitle),
           ),
         ),
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('PRIVACY & SAFETY'), findsOneWidget);
-      expect(find.text('Privacy & Safety'), findsNothing);
+      expect(
+        find.text(l10n.privacySafetyTitle.toUpperCase()),
+        findsOneWidget,
+      );
+      expect(find.text(l10n.privacySafetyTitle), findsNothing);
     });
 
     testWidgets('the Appearance row previews the theme without clipping it', (
@@ -208,13 +212,13 @@ void main() {
       // The row IS the affordance. A chevron on every row was the Material
       // settings-list tell we removed.
       expect(find.byIcon(Icons.chevron_right), findsNothing);
-      expect(find.text('PREFERENCES'), findsOneWidget);
-      expect(find.text('SECURITY'), findsOneWidget);
+      expect(find.text(l10n.settingsSectionPreferences), findsOneWidget);
+      expect(find.text(l10n.settingsSectionSecurity), findsOneWidget);
 
       // The ListView is lazy, so SESSION is not an element until it scrolls in.
       await tester.drag(find.byType(ListView), const Offset(0, -420));
       await tester.pumpAndSettle();
-      expect(find.text('SESSION'), findsOneWidget);
+      expect(find.text(l10n.settingsSectionSession), findsOneWidget);
       expect(find.byIcon(Icons.chevron_right), findsNothing);
     });
 
@@ -281,7 +285,7 @@ void main() {
       // Not just "no overflow": a starved Expanded can wrap instead of
       // overflowing, which is the one-letter-per-line failure this test is
       // named for. Pin that the title still gets a usable line.
-      expect(tester.getSize(find.text('Language')).width, greaterThan(80));
+      expect(tester.getSize(find.text(l10n.language)).width, greaterThan(80));
     });
   });
 
@@ -351,10 +355,10 @@ void main() {
 
       final listView = tester.widget<ListView>(find.byType(ListView).first);
       expect(listView.physics, isA<ClampingScrollPhysics>());
-      expect(find.text('Appearance'), findsOneWidget);
+      expect(find.text(l10n.appearance), findsOneWidget);
       expect(find.byType(AppearancePreview), findsOneWidget);
-      expect(find.text('Theme'), findsNothing);
-      expect(find.text('Chat background'), findsNothing);
+      expect(find.text(l10n.theme), findsNothing);
+      expect(find.text(l10n.settingsChatBackground), findsNothing);
       expect(find.text('Starfield background'), findsNothing);
     });
 
@@ -378,7 +382,7 @@ void main() {
       await tester.drag(find.byType(ListView), const Offset(0, -100));
       await tester.pump();
 
-      expect(find.text('About'), findsOneWidget);
+      expect(find.text(l10n.settingsAboutFireplace), findsOneWidget);
       expect(tester.widget<InkWell>(link).onTap, isNotNull);
       await tester.tap(link);
       await tester.pump();
