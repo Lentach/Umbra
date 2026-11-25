@@ -128,6 +128,6 @@ Release B (drop of old tables/files) is due on or after 2026-12-08 and rides whi
 | O-14 | (11-25.) Batched device-list verb removed in 0.2.97 (BE-12) | Removal confirmed. |
 | O-15 | (11-25.) Tests that find widgets by English text (TD-07) | Fix all, the composer test file included. |
 | O-16 | (11-25.) Leftovers found by reviews (header-line test, send routing guard test, IPv6 link-preview entries, assertions that cannot fail, `chat-search.service.ts` duplicate helper, UI-23) | Do them as one small batch. |
-| O-17 | (11-25.) Feature freeze | Stays on until O-12..O-16 are done; asked again then. |
+| O-17 | (11-25.) Feature freeze | Stays on until O-12..O-16 are done; asked again then. Asked after batch 6 shipped as 0.2.105: **the freeze is over** (owner, 2026-11-25). |
 
 Effect on the batches: 1a loses F-001 and gains F-002 (small fix) and F-003; 1b gains UI-05/06/07; 1c gains WEB-05, BE-05, BE-20, BE-29; batch 2 gains the `getMessages` shim.
