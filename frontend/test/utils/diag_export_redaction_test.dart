@@ -36,6 +36,8 @@ void main() {
       ownUserId: 4711,
     );
     expect(out, contains('peerIds: [peer#A, peer#B, peer#A]'));
+    // Device ids too: a rebuilt address is a device of a peer.
+    expect(out, contains('rebuiltAddresses: [dev#1, dev#2]'));
     expect(out, isNot(contains('8123')));
     expect(out, isNot(contains('9001')));
   });
@@ -94,5 +96,55 @@ void main() {
     expect(out, contains('tempId: temp_1760000000000_3_me'));
     expect(out, contains('error: box peer peer#A: lookup spent'));
     expect(out, contains('prefix: e2e_me_'));
+  });
+
+  // Production ids are 2-3 digits; the error text of a failed decrypt or a
+  // failed init names them without a person word next to them.
+  group('ids in error text with short production ids', () {
+    const noSession =
+        '10:00:00 DECRYPT_SKIP | {reason: NoSessionException - No session for: 48:3}';
+    const pins =
+        '10:00:01 E2E_INIT_FAIL | {error: device-list pins for 62 are malformed}';
+
+    test('a missing session names the peer and the device', () {
+      final out = redactDiagForExport(const [], const [noSession]);
+      expect(out, contains('No session for: peer#A:dev#1'));
+      expect(out, isNot(contains('48')));
+      expect(out, isNot(contains(':3')));
+    });
+
+    test('the same peer named on another line is the same placeholder', () {
+      final out = redactDiagForExport(const [], const [
+        '10:00:00 BOX_FRIEND_NOT_LIVE | {peer: 48, device: 3}',
+        noSession,
+      ]);
+      expect(out, contains('peer: peer#A, device: dev#1'));
+      expect(out, contains('No session for: peer#A:dev#1'));
+    });
+
+    test('pins of a user name the person, own id is me', () {
+      var out = redactDiagForExport(const [], const [pins]);
+      expect(out, contains('pins for peer#A are malformed'));
+      expect(out, isNot(contains('62')));
+
+      out = redactDiagForExport(const [], const [pins], ownUserId: 62);
+      expect(out, contains('pins for me are malformed'));
+
+      out = redactDiagForExport(const [], const [
+        '10:00:00 SOCKET_CONNECT | {userId: 62}',
+        pins,
+      ], ownUserId: 62);
+      expect(out, contains('pins for me are malformed'));
+    });
+
+    test('a bare id already named elsewhere is redacted at any length, '
+        'a version number is not touched', () {
+      final out = redactDiagForExport(const [], const [
+        '10:00:00 BOX_FRIEND_NOT_LIVE | {peer: 48, version: 0.48.1}',
+        '10:00:01 X | {error: gave up on 48 after retry}',
+      ]);
+      expect(out, contains('error: gave up on peer#A after retry'));
+      expect(out, contains('version: 0.48.1'));
+    });
   });
 }

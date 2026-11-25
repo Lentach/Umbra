@@ -17,10 +17,12 @@
 /// `contact` (a person), `conv` (a conversation) or `device` (a device) is an
 /// id, whatever call site added it. Timestamps, step names, counts, versions,
 /// platform names and error text stay readable; error text only loses ids it
-/// states next to a person word (`peer 42`) or a 3+ digit id already seen.
+/// states next to a person word (`peer 42`), as a libsignal address or after
+/// `pins for`, or any whole number equal to an id already seen.
 ///
-/// Limits, on purpose: a short bare number in free text (`failed 7 times`) is
-/// left alone — it cannot be told from a count — and a key that names none of
+/// Limits, on purpose: a bare number in free text (`failed 7 times`) is
+/// left alone unless it equals an id seen in this copy — it cannot be told
+/// from a count otherwise — and a key that names none of
 /// the words above is not redacted.
 String redactDiagForExport(
   List<String> durable,
@@ -46,6 +48,9 @@ final RegExp _personWordNumber = RegExp(
   r'\b((?:peer|user|sender|recipient|friend|account|contact)\w*[\s:=#]*)(\d+)\b',
   caseSensitive: false,
 );
+/// `SignalProtocolAddress.toString()` in a libsignal error: `for: <peer>:<device>`.
+final RegExp _signalAddress = RegExp(r'\bfor: (\d+):(\d+)\b');
+final RegExp _pinsFor = RegExp(r'\b(pins for )(\d+)\b', caseSensitive: false);
 final RegExp _convWordNumber = RegExp(
   r'\b(conv\w*[\s:=#]*)(\d+)\b',
   caseSensitive: false,
@@ -54,7 +59,9 @@ final RegExp _convWordNumber = RegExp(
 _IdKind? _kindOfKey(String key) {
   final k = key.toLowerCase();
   if (k.contains('conv')) return _IdKind.conversation;
-  if (k.contains('device') || k == 'gone') return _IdKind.device;
+  if (k.contains('device') || k.contains('address') || k == 'gone') {
+    return _IdKind.device;
+  }
   for (final word in const [
     'user',
     'peer',
@@ -174,13 +181,25 @@ class _Redactor {
     return '${pair.key}: ${_freeText(value)}';
   }
 
-  /// Ids inside free text (an error message, a storage prefix): only those
-  /// stated next to a person/conversation word, inside `e2e_<id>_`, or a
-  /// 3+ digit id already named.
+  /// Ids inside free text (an error message, a storage prefix): those stated
+  /// next to a person/conversation word, inside `e2e_<id>_`, as a libsignal
+  /// address (`for: <peer>:<device>`), after `pins for`, and any standalone
+  /// integer equal to a person or conversation id already named in this copy
+  /// (production ids are 2-3 digits, so the length proves nothing).
   String _freeText(String text) {
     var out = text.replaceAllMapped(
       _storagePrefix,
       (m) => 'e2e_${_name(_IdKind.person, int.parse(m.group(1)!))}_',
+    );
+    out = out.replaceAllMapped(
+      _signalAddress,
+      (m) =>
+          'for: ${_name(_IdKind.person, int.parse(m.group(1)!))}'
+          ':${_name(_IdKind.device, int.parse(m.group(2)!))}',
+    );
+    out = out.replaceAllMapped(
+      _pinsFor,
+      (m) => '${m.group(1)}${_name(_IdKind.person, int.parse(m.group(2)!))}',
     );
     out = out.replaceAllMapped(
       _convWordNumber,
@@ -193,19 +212,18 @@ class _Redactor {
     );
     for (final kind in [_IdKind.person, _IdKind.conversation]) {
       for (final entry in _names[kind]!.entries) {
-        if (entry.key.toString().length < 3) continue;
-        out = out.replaceAll(
-          RegExp('(?<![\\w#])${entry.key}(?![\\w])'),
-          entry.value,
-        );
+        out = out.replaceAll(_standalone(entry.key), entry.value);
       }
     }
     final own = ownUserId;
-    if (own != null && own.toString().length >= 3) {
-      out = out.replaceAll(RegExp('(?<![\\w#])$own(?![\\w])'), 'me');
-    }
+    if (own != null) out = out.replaceAll(_standalone(own), 'me');
     return out;
   }
+
+  /// [id] as a whole number: not inside a word, a placeholder (`#`), a version
+  /// or a decimal (`0.48.1`), nor a negative sentinel.
+  static RegExp _standalone(int id) =>
+      RegExp('(?<![\\w#.\\-])$id(?![\\w])(?!\\.\\d)');
 }
 
 class _Pair {
