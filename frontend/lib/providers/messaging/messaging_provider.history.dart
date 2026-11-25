@@ -90,9 +90,14 @@ extension MessagingHistory on MessagingProvider {
   }
 
   /// Makes [rows] — those of [conversationId] — the open chat's rows, oldest
-  /// first, without the ones deleted here or expired.
+  /// first, without the ones deleted here or expired. A reply target picked
+  /// in another chat is dropped: the composer is shared across chats on the
+  /// desktop split view and must not show or quote it here.
   void _installChat(int conversationId, Iterable<MessageModel> rows) {
     _openConversationId = conversationId;
+    if (_replyingToMessage?.conversationId != conversationId) {
+      _replyingToMessage = null;
+    }
     final now = DateTime.now();
     _messages = [
       for (final m in rows)
