@@ -218,10 +218,10 @@ void main() {
     test('an edit of a message the open chat does not hold leaves edit mode '
         'instead of sticking', () async {
       final mine = await send('typo');
-      provider.beginEditMessage(mine);
-      provider.clearMessages();
-
-      provider.editMessage(mine.id, 'fixed');
+      provider
+        ..beginEditMessage(mine)
+        ..clearMessages()
+        ..editMessage(mine.id, 'fixed');
 
       expect(provider.editingMessage, isNull);
     });

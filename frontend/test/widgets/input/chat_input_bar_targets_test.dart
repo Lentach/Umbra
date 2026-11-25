@@ -48,8 +48,8 @@ void main() {
     messaging = MessagingProvider()
       ..setConversationsProvider(conversations)
       ..setCurrentUserId(1)
-      ..setIncomingMessageSoundEnabledForTest(false);
-    messaging.seedMessagesForTest(10, [ours(1, 10, 'typo')]);
+      ..setIncomingMessageSoundEnabledForTest(false)
+      ..seedMessagesForTest(10, [ours(1, 10, 'typo')]);
     final key = GlobalKey<ChatInputBarState>();
     await tester.pumpWidget(
       MaterialApp(

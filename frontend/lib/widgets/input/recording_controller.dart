@@ -140,6 +140,12 @@ class RecordingControllerState extends State<RecordingController>
   /// all reachable as discrete taps in the same frame.
   bool _isStopping = false;
 
+  /// The chat the running recording started in. The composer is shared
+  /// across chats on the desktop split view, so the open chat can change
+  /// under a recording: the note, its 120 s auto-send and the "recording…"
+  /// signal all belong to THIS chat, never to the one open when they fire.
+  int? _recordingConversationId;
+
   // ── decorative animation (dot pulse + timer rebuild + waveform sweep) ──
   late final AnimationController _waveformController;
 
@@ -160,10 +166,31 @@ class RecordingControllerState extends State<RecordingController>
   void _cacheProvidersFromContext() {
     try {
       _messagingProvider ??= context.read<MessagingProvider>();
-      _conversationsProvider ??= context.read<ConversationsProvider>();
+      if (_conversationsProvider == null) {
+        _conversationsProvider = context.read<ConversationsProvider>();
+        _conversationsProvider!.addListener(_onConversationsChanged);
+      }
     } on ProviderNotFoundException {
       // RecordingController unit tests may omit the provider tree.
     }
+  }
+
+  /// The open chat is no longer the one this recording started in.
+  bool get _recordingLeftItsChat =>
+      _isRecording &&
+      !_isStopping &&
+      _conversationsProvider?.activeConversationId != _recordingConversationId;
+
+  /// A recording is DISCARDED, not sent, when the open chat changes: the
+  /// provider sends into the open chat, and a note for another chat would
+  /// land in this chat's list. [cancelRecording] stops the signal for the
+  /// original chat and tells the user. Deferred a microtask: this runs inside
+  /// the provider's notification.
+  void _onConversationsChanged() {
+    if (!_recordingLeftItsChat) return;
+    scheduleMicrotask(() {
+      if (mounted && _recordingLeftItsChat) unawaited(cancelRecording());
+    });
   }
 
   @override
@@ -178,6 +205,7 @@ class RecordingControllerState extends State<RecordingController>
 
   @override
   void dispose() {
+    _conversationsProvider?.removeListener(_onConversationsChanged);
     _waveformController.dispose();
     _recordingTimer?.cancel();
     _recordingTimer = null;
@@ -270,12 +298,14 @@ class RecordingControllerState extends State<RecordingController>
   }
 
   /// Through [MessagingProvider.sendRecordingVoiceIndicator], which sends
-  /// nothing to a box-covered peer (decision 33, like typing).
+  /// nothing to a box-covered peer (decision 33, like typing). Always to the
+  /// chat the recording started in, so "stopped" reaches the chat that was
+  /// told "recording…".
   void _emitRecordingVoiceToRecipient(bool isRecording) {
     final convs = _conversationsProvider;
     final messaging = _messagingProvider;
     if (convs == null || messaging == null) return;
-    final convId = convs.activeConversationId;
+    final convId = _recordingConversationId;
     if (convId == null) return;
     final conv = convs.getConversationById(convId);
     if (conv == null) return;
@@ -398,6 +428,7 @@ class RecordingControllerState extends State<RecordingController>
 
       _recordingStartTime = DateTime.now();
       messaging.setIsRecordingVoice(true);
+      _recordingConversationId = _conversationsProvider?.activeConversationId;
       _emitRecordingVoiceToRecipient(true);
       _waveformController.repeat();
 
@@ -442,6 +473,13 @@ class RecordingControllerState extends State<RecordingController>
   Future<void> stopAndSend() async {
     if (!_isRecording || _isStopping) return;
     if (_audioRecorder == null && !testSkipHardware) return;
+    // The open chat changed under the recording (the 120 s timer, or a tap
+    // that beat the switch's own discard): never send it to the chat now
+    // open.
+    if (_recordingLeftItsChat) {
+      await cancelRecording();
+      return;
+    }
     _isStopping = true;
 
     final l10n = AppLocalizations.of(context);
@@ -450,9 +488,10 @@ class RecordingControllerState extends State<RecordingController>
     _emitRecordingVoiceToRecipient(false);
     final onVoiceSent = widget.onVoiceSent;
     final onRecordingStateChanged = widget.onRecordingStateChanged;
-    // ChatDetailScreen.dispose clears activeConversationId, so a send that
-    // outlives the screen has to carry the id captured here.
-    final conversationId = _conversationsProvider?.activeConversationId;
+    // The chat the recording started in: ChatDetailScreen.dispose clears
+    // activeConversationId, so a send that outlives the screen has to carry
+    // the id captured here.
+    final conversationId = _recordingConversationId;
     _recordingTimer?.cancel();
     _recordingTimer = null;
     if (_waveformController.isAnimating) _waveformController.stop();
@@ -714,6 +753,7 @@ class RecordingControllerState extends State<RecordingController>
   @visibleForTesting
   void simulateRecordingForTest({Duration elapsed = Duration.zero}) {
     _recordingStartTime = DateTime.now().subtract(elapsed);
+    _recordingConversationId = _conversationsProvider?.activeConversationId;
     setState(() => _isRecording = true);
     widget.onRecordingStateChanged(true);
   }
