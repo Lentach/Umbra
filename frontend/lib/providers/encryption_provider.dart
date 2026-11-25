@@ -4016,13 +4016,20 @@ class EncryptionProvider extends ChangeNotifier {
   }
 
   /// Clear all E2E encryption keys. Call on account deletion only.
+  ///
+  /// The provider's own state resets even when the wipe throws: the service
+  /// forgets the account regardless, so a provider still reporting
+  /// [isE2EReady] would work for an account nobody holds.
   Future<void> clearEncryptionKeys() async {
     _e2eFlowLog('CACHE_CLEAR', {'scope': 'allE2EKeys'});
-    await _encryptionService.clearAllKeys();
-    _e2eInitialized = false;
-    _pendingPreKeyFetches.clear();
-    _sessionBuilds.clear();
-    _pendingIdentityProbes.clear();
+    try {
+      await _encryptionService.clearAllKeys();
+    } finally {
+      _e2eInitialized = false;
+      _pendingPreKeyFetches.clear();
+      _sessionBuilds.clear();
+      _pendingIdentityProbes.clear();
+    }
   }
 
   @override
