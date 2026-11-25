@@ -1,6 +1,7 @@
 import 'package:fireplace/l10n/app_localizations.dart';
 import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/providers/auth_provider.dart';
+import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/utils/reply_preview_helper.dart';
 import 'package:fireplace/widgets/message/media_preview_frame.dart';
 import 'package:fireplace/widgets/message/message_content_factory.dart';
@@ -44,6 +45,10 @@ Future<void> _pumpBubble(WidgetTester tester, MessageModel message) {
       providers: [
         ChangeNotifierProvider<AuthProvider>.value(
           value: AuthProvider()..setAccessTokenForTest('tok'),
+        ),
+        // The fullscreen player watches its message's row, like the gallery.
+        ChangeNotifierProvider<MessagingProvider>.value(
+          value: MessagingProvider(),
         ),
       ],
       child: MaterialApp(

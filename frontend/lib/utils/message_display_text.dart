@@ -9,6 +9,7 @@ import '../providers/messaging_provider.dart'
         kEncryptionNotInitializedLabel,
         kNotLinkedYetMessageLabel,
         kRetiredMessageLabel;
+import 'anti_quantum_note_link.dart';
 
 /// The localized sentence for a row whose CONTENT is an internal sentinel, or
 /// null when the row carries real content that must not be touched.
@@ -114,6 +115,16 @@ String messageDisplayContent(
   if (message.content.isNotEmpty) return message.content;
   return AppLocalizations.of(context).unsupportedMessageType;
 }
+
+/// What a TEXT row that is an own-origin Anti-Quantum Note link is called where
+/// the chat bubble draws the card instead of the text, or null for any other
+/// row. The link carries the token and the decryption key, so a surface that
+/// replicates the bubble (the long-press preview) must draw this label, never
+/// the URL. Same gate as the bubble's card (`isOwnOriginNoteUrl`).
+String? noteLinkLabel(BuildContext context, MessageModel message) =>
+    isOwnOriginNoteUrl(message.content)
+    ? AppLocalizations.of(context).antiQuantumNoteTitle
+    : null;
 
 /// The one-line PREVIEW text for a row whose content is an internal sentinel,
 /// or null when the row carries real content.

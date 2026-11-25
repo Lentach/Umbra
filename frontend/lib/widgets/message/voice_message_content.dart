@@ -19,6 +19,7 @@ import 'message_context_menu_overlay.dart';
 import 'reaction_tap.dart';
 import 'message_context_menu_bubble_highlight.dart';
 import 'context_menu_bubble_anchor.dart';
+import 'failed_send_retry.dart';
 import 'reaction_chips_row.dart';
 import 'reply_quote_card.dart';
 
@@ -30,10 +31,14 @@ class VoiceMessageContent extends StatelessWidget {
   final MessageModel message;
   final bool isMine;
 
+  /// See [FailedSendRetry.peerRefusedIdentity].
+  final bool peerRefusedIdentity;
+
   const VoiceMessageContent({
     super.key,
     required this.message,
     required this.isMine,
+    this.peerRefusedIdentity = false,
   });
 
   // ── helpers ──────────────────────────────────────────────────────────────
@@ -187,6 +192,9 @@ class VoiceMessageContent extends StatelessWidget {
       isMine: isMine,
       themePreference: themePreference,
     );
+    final textColor = isMine && themePreference == 'teal'
+        ? Colors.white
+        : (isDark ? RpgTheme.textColor : RpgTheme.textColorLight);
     final currentUserId = context.read<AuthProvider>().currentUser?.id;
     final messaging = context.read<MessagingProvider>();
 
@@ -389,6 +397,13 @@ class VoiceMessageContent extends StatelessWidget {
                                       ),
                                   ],
                                 ),
+                              ),
+                              FailedSendRetry(
+                                message: message,
+                                isMine: isMine,
+                                textColor: textColor,
+                                maxWidth: MediaQuery.of(context).size.width * 0.6,
+                                peerRefusedIdentity: peerRefusedIdentity,
                               ),
                             ],
                           );

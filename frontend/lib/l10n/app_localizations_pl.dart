@@ -1200,6 +1200,12 @@ class AppLocalizationsPl extends AppLocalizations {
   String get newPassword => 'Nowe hasło';
 
   @override
+  String get repeatNewPassword => 'Powtórz nowe hasło';
+
+  @override
+  String get passwordsDoNotMatch => 'Hasła nie są takie same';
+
+  @override
   String get passwordRequired => 'Hasło jest wymagane';
 
   @override
@@ -1375,8 +1381,30 @@ class AppLocalizationsPl extends AppLocalizations {
   String get antiQuantumNoteRevealNetworkErrorTitle => 'Brak połączenia';
 
   @override
-  String get antiQuantumNoteRevealNetworkErrorBody =>
-      'Nie udało się połączyć z serwerem. Sprawdź połączenie i spróbuj ponownie.';
+  String get antiQuantumNoteRevealUnknownOutcomeBody =>
+      'Połączenie zerwało się, zanim dotarła odpowiedź serwera. Ta próba mogła już zniszczyć notatkę. Spróbuj ponownie, aby się dowiedzieć.';
+
+  @override
+  String get antiQuantumNoteRevealServerErrorTitle => 'Błąd serwera';
+
+  @override
+  String get antiQuantumNoteRevealServerErrorBody =>
+      'Serwer odpowiedział błędem. Ta próba mogła już zniszczyć notatkę. Spróbuj ponownie, aby się dowiedzieć.';
+
+  @override
+  String get antiQuantumNoteRevealBusyTitle => 'Serwer jest zajęty';
+
+  @override
+  String get antiQuantumNoteRevealBusyBody =>
+      'Serwer dostaje teraz zbyt wiele żądań. Ta próba nie zniszczyła notatki. Odczekaj chwilę i spróbuj ponownie.';
+
+  @override
+  String get antiQuantumNoteRevealMaybeBurnedTitle =>
+      'Notatka mogła zostać zniszczona';
+
+  @override
+  String get antiQuantumNoteRevealMaybeBurnedBody =>
+      'Twoja wcześniejsza próba mogła zniszczyć tę notatkę, zanim odpowiedź do Ciebie dotarła. Nie da się jej odczytać ponownie.';
 
   @override
   String get privacyAntiQuantumNoteTitle => 'Notatki antykwantowe';

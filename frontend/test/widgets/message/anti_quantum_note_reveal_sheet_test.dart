@@ -3,11 +3,14 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:fireplace/l10n/app_localizations.dart';
+import 'package:fireplace/services/api_exception.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
 import 'package:fireplace/utils/anti_quantum_note_link.dart';
 import 'package:fireplace/widgets/message/anti_quantum_note_reveal_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import '../../support/l10n.dart';
 
 const _hex = '0123456789abcdef0123456789abcdef';
 final _key = base64Url.encode(Uint8List.fromList(List.filled(32, 7)));
@@ -269,5 +272,239 @@ void main() {
 
     expect(find.byKey(_plaintextKey), findsNothing);
     expect(find.text('Open note'), findsOneWidget);
+  });
+
+  testWidgets('a second tap while the reveal runs sends no second destructive '
+      'request, and the first answer is what the reader sees', (tester) async {
+    var attempts = 0;
+    final first = Completer<NoteRevealOutcome>();
+    await _openSheet(
+      tester,
+      link: _link(expiryMs: _futureMs()),
+      attempt: () {
+        attempts++;
+        // The server deletes on the first reveal, so a second one is "gone".
+        return attempts == 1
+            ? first.future
+            : Future.value(const NoteRevealGone());
+      },
+    );
+
+    final button = tester.getCenter(find.byKey(_revealKey));
+    await tester.tapAt(button);
+    await tester.pump();
+    // Inside the 220 ms cross-fade the old button is still on screen.
+    await tester.pump(const Duration(milliseconds: 60));
+    await tester.tapAt(button);
+    await tester.pump();
+
+    first.complete(const NoteRevealed('read me once'));
+    await tester.pumpAndSettle();
+
+    expect(attempts, 1);
+    expect(find.byKey(_destroyedKey), findsNothing);
+    final selectable =
+        tester.widget<SelectableText>(find.byKey(_plaintextKey));
+    expect(selectable.data, 'read me once');
+  });
+
+  group('while decrypting the burned note cannot be closed away', () {
+    Future<Completer<NoteRevealOutcome>> openRevealing(
+      WidgetTester tester,
+    ) async {
+      final gate = Completer<NoteRevealOutcome>();
+      await _openSheet(
+        tester,
+        link: _link(expiryMs: _futureMs()),
+        attempt: () => gate.future,
+      );
+      await tester.tap(find.byKey(_revealKey));
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.byKey(_loadingKey), findsOneWidget);
+      return gate;
+    }
+
+    Future<void> expectStillShowsNote(
+      WidgetTester tester,
+      Completer<NoteRevealOutcome> gate,
+    ) async {
+      // The spinner never settles: pump a fixed span, not pumpAndSettle.
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(find.byKey(_loadingKey), findsOneWidget);
+      gate.complete(const NoteRevealed('burned and shown'));
+      await tester.pumpAndSettle();
+      final selectable =
+          tester.widget<SelectableText>(find.byKey(_plaintextKey));
+      expect(selectable.data, 'burned and shown');
+    }
+
+    testWidgets('the X is not offered', (tester) async {
+      final gate = await openRevealing(tester);
+      expect(find.byKey(const Key('note-reveal-close')), findsNothing);
+      gate.complete(const NoteRevealed('x'));
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('a tap outside keeps the sheet', (tester) async {
+      final gate = await openRevealing(tester);
+      await tester.tapAt(const Offset(20, 20));
+      await expectStillShowsNote(tester, gate);
+    });
+
+    testWidgets('the back button keeps the sheet', (tester) async {
+      final gate = await openRevealing(tester);
+      await tester.binding.handlePopRoute();
+      await expectStillShowsNote(tester, gate);
+    });
+
+    testWidgets('a swipe down keeps the sheet', (tester) async {
+      final gate = await openRevealing(tester);
+      await tester.fling(find.byKey(_loadingKey), const Offset(0, 400), 2000);
+      await expectStillShowsNote(tester, gate);
+    });
+
+    testWidgets('the old Cancel, still on screen while the views cross-fade, '
+        'keeps the sheet', (tester) async {
+      final gate = Completer<NoteRevealOutcome>();
+      await _openSheet(
+        tester,
+        link: _link(expiryMs: _futureMs()),
+        attempt: () => gate.future,
+      );
+      await tester.tap(find.byKey(_revealKey));
+      await tester.pump();
+      // Inside the 220 ms cross-fade the confirm view is still tappable.
+      await tester.pump(const Duration(milliseconds: 60));
+      await tester.tap(find.byKey(_cancelKey));
+      await expectStillShowsNote(tester, gate);
+    });
+  });
+
+  group('a server answer that is an error', () {
+    testWidgets('a 5xx does not claim the connection broke, and stays '
+        'unknown-outcome', (tester) async {
+      var attempts = 0;
+      await _openSheet(
+        tester,
+        link: _link(expiryMs: _futureMs()),
+        attempt: () async {
+          attempts++;
+          if (attempts == 1) {
+            throw const ApiException(statusCode: 503, message: 'down');
+          }
+          return const NoteRevealGone();
+        },
+      );
+      await tester.tap(find.byKey(_revealKey));
+      await tester.pumpAndSettle();
+
+      expect(find.text(l10n.antiQuantumNoteRevealServerErrorTitle),
+          findsOneWidget);
+      expect(find.text(l10n.antiQuantumNoteRevealServerErrorBody),
+          findsOneWidget);
+      expect(find.text(l10n.antiQuantumNoteRevealNetworkErrorTitle),
+          findsNothing);
+      expect(find.text(l10n.antiQuantumNoteRevealUnknownOutcomeBody),
+          findsNothing);
+      expect(find.byKey(_retryKey), findsOneWidget);
+
+      // A gateway 5xx can follow the delete: a later "gone" is not proof that
+      // someone else read it.
+      await tester.tap(find.byKey(_retryKey));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('note-reveal-maybe-burned')), findsOneWidget);
+    });
+
+    testWidgets('a 429 says the note was NOT destroyed, and a later "gone" '
+        'still reads "already read"', (tester) async {
+      var attempts = 0;
+      await _openSheet(
+        tester,
+        link: _link(expiryMs: _futureMs()),
+        attempt: () async {
+          attempts++;
+          if (attempts == 1) {
+            throw const ApiException(statusCode: 429, message: 'slow down');
+          }
+          return const NoteRevealGone();
+        },
+      );
+      await tester.tap(find.byKey(_revealKey));
+      await tester.pumpAndSettle();
+
+      expect(find.text(l10n.antiQuantumNoteRevealBusyTitle), findsOneWidget);
+      expect(find.text(l10n.antiQuantumNoteRevealBusyBody), findsOneWidget);
+      expect(find.text(l10n.antiQuantumNoteRevealUnknownOutcomeBody),
+          findsNothing);
+      expect(find.byKey(_retryKey), findsOneWidget);
+
+      await tester.tap(find.byKey(_retryKey));
+      await tester.pumpAndSettle();
+      expect(find.byKey(_destroyedKey), findsOneWidget);
+      expect(find.byKey(const Key('note-reveal-maybe-burned')), findsNothing);
+    });
+  });
+
+  group('an attempt whose outcome is unknown', () {
+    testWidgets('says the note may already be destroyed, not just "no server"', (
+      tester,
+    ) async {
+      await _openSheet(
+        tester,
+        link: _link(expiryMs: _futureMs()),
+        attempt: () async => throw TimeoutException('lost response'),
+      );
+      await tester.tap(find.byKey(_revealKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(_networkKey), findsOneWidget);
+      expect(
+        find.text(l10n.antiQuantumNoteRevealUnknownOutcomeBody),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('a retry that finds the note gone does NOT claim someone else '
+        'read it', (tester) async {
+      var attempts = 0;
+      await _openSheet(
+        tester,
+        link: _link(expiryMs: _futureMs()),
+        attempt: () async {
+          attempts++;
+          // The first POST burned the note; only its answer was lost.
+          if (attempts == 1) throw TimeoutException('lost response');
+          return const NoteRevealGone();
+        },
+      );
+      await tester.tap(find.byKey(_revealKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(_retryKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(_destroyedKey), findsNothing);
+      expect(find.text(l10n.antiQuantumNoteRevealDestroyedBody), findsNothing);
+      expect(find.byKey(const Key('note-reveal-maybe-burned')), findsOneWidget);
+      expect(
+        find.text(l10n.antiQuantumNoteRevealMaybeBurnedBody),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('a note gone on the first attempt still reads "already read"', (
+      tester,
+    ) async {
+      await _openSheet(
+        tester,
+        link: _link(expiryMs: _futureMs()),
+        attempt: () async => const NoteRevealGone(),
+      );
+      await tester.tap(find.byKey(_revealKey));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(_destroyedKey), findsOneWidget);
+      expect(find.byKey(const Key('note-reveal-maybe-burned')), findsNothing);
+    });
   });
 }

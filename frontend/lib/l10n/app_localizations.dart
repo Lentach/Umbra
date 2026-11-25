@@ -2036,6 +2036,18 @@ abstract class AppLocalizations {
   /// **'Nowe hasło'**
   String get newPassword;
 
+  /// No description provided for @repeatNewPassword.
+  ///
+  /// In pl, this message translates to:
+  /// **'Powtórz nowe hasło'**
+  String get repeatNewPassword;
+
+  /// No description provided for @passwordsDoNotMatch.
+  ///
+  /// In pl, this message translates to:
+  /// **'Hasła nie są takie same'**
+  String get passwordsDoNotMatch;
+
   /// No description provided for @passwordRequired.
   ///
   /// In pl, this message translates to:
@@ -2348,11 +2360,47 @@ abstract class AppLocalizations {
   /// **'Brak połączenia'**
   String get antiQuantumNoteRevealNetworkErrorTitle;
 
-  /// No description provided for @antiQuantumNoteRevealNetworkErrorBody.
+  /// No description provided for @antiQuantumNoteRevealUnknownOutcomeBody.
   ///
   /// In pl, this message translates to:
-  /// **'Nie udało się połączyć z serwerem. Sprawdź połączenie i spróbuj ponownie.'**
-  String get antiQuantumNoteRevealNetworkErrorBody;
+  /// **'Połączenie zerwało się, zanim dotarła odpowiedź serwera. Ta próba mogła już zniszczyć notatkę. Spróbuj ponownie, aby się dowiedzieć.'**
+  String get antiQuantumNoteRevealUnknownOutcomeBody;
+
+  /// No description provided for @antiQuantumNoteRevealServerErrorTitle.
+  ///
+  /// In pl, this message translates to:
+  /// **'Błąd serwera'**
+  String get antiQuantumNoteRevealServerErrorTitle;
+
+  /// No description provided for @antiQuantumNoteRevealServerErrorBody.
+  ///
+  /// In pl, this message translates to:
+  /// **'Serwer odpowiedział błędem. Ta próba mogła już zniszczyć notatkę. Spróbuj ponownie, aby się dowiedzieć.'**
+  String get antiQuantumNoteRevealServerErrorBody;
+
+  /// No description provided for @antiQuantumNoteRevealBusyTitle.
+  ///
+  /// In pl, this message translates to:
+  /// **'Serwer jest zajęty'**
+  String get antiQuantumNoteRevealBusyTitle;
+
+  /// No description provided for @antiQuantumNoteRevealBusyBody.
+  ///
+  /// In pl, this message translates to:
+  /// **'Serwer dostaje teraz zbyt wiele żądań. Ta próba nie zniszczyła notatki. Odczekaj chwilę i spróbuj ponownie.'**
+  String get antiQuantumNoteRevealBusyBody;
+
+  /// No description provided for @antiQuantumNoteRevealMaybeBurnedTitle.
+  ///
+  /// In pl, this message translates to:
+  /// **'Notatka mogła zostać zniszczona'**
+  String get antiQuantumNoteRevealMaybeBurnedTitle;
+
+  /// No description provided for @antiQuantumNoteRevealMaybeBurnedBody.
+  ///
+  /// In pl, this message translates to:
+  /// **'Twoja wcześniejsza próba mogła zniszczyć tę notatkę, zanim odpowiedź do Ciebie dotarła. Nie da się jej odczytać ponownie.'**
+  String get antiQuantumNoteRevealMaybeBurnedBody;
 
   /// No description provided for @privacyAntiQuantumNoteTitle.
   ///

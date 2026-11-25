@@ -353,15 +353,20 @@ class ApiService {
   /// from [baseUrl] (a production link opened in a dev build).
   ///
   /// Returns null when the note is gone (already read or expired — the server
-  /// answers 404 for both); throws on transport/other HTTP failures so callers
-  /// can show a network state DISTINCT from "destroyed".
+  /// answers 404 for both); throws on transport failures and, as an
+  /// [ApiException] that keeps the status, on any other HTTP answer (5xx and
+  /// 429 included) so callers can show a state DISTINCT from "destroyed".
   Future<String?> revealSecretNote(String noteToken, {String? origin}) async {
     final response = await _httpClient
         .post(Uri.parse('${origin ?? baseUrl}/note/$noteToken/reveal'))
         .timeout(_kDefaultTimeout);
     if (response.statusCode == 404) return null;
     if (response.statusCode != 200 && response.statusCode != 201) {
-      throw Exception('Note reveal failed: ${response.statusCode}');
+      throw ApiException(
+        statusCode: response.statusCode,
+        message: 'Note reveal failed: ${response.statusCode}',
+        endpoint: 'POST /note/<token>/reveal',
+      );
     }
     final data = jsonDecode(response.body) as Map<String, dynamic>;
     return data['ciphertext'] as String;

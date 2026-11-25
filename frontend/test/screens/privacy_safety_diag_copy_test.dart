@@ -54,9 +54,10 @@ void main() {
     tester.view.physicalSize = const Size(800, 6000);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
+    // Four digits or more: a shorter id also matches the clock in each line.
     E2eDiagLog.add('SOCKET_CONNECT', {'userId': 4711});
     E2eDiagLog.add('SOCKET_READY', {'activeConvId': 990077});
-    E2eDiagLog.add('BOX_FRIEND_NOT_LIVE', {'peer': 8123, 'device': 31});
+    E2eDiagLog.add('BOX_FRIEND_NOT_LIVE', {'peer': 8123, 'device': 6502});
     E2ePersistentDiag.record('DECRYPT_FAIL', {
       'senderId': 8123,
       'msgId': 12,
@@ -93,7 +94,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(copied, isNotNull);
-    for (final id in ['4711', '990077', '8123', '31']) {
+    for (final id in ['4711', '990077', '8123', '6502']) {
       expect(copied, isNot(contains(id)), reason: 'id $id was copied');
     }
     expect(copied, contains('userId: me'));

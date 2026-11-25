@@ -36,8 +36,9 @@ extension MessagingSend on MessagingProvider {
     // Use conversation disappearing timer if expiresIn not provided
     final effectiveExpiresIn =
         expiresIn ?? _conversationsProvider!.conversationDisappearingTimer;
-    final effectiveReplyToId = replyToMessageId ?? _replyingToMessage?.id;
-    final replyPreview = _buildReplyPreviewFromReplyingTo();
+    final effectiveReplyToId =
+        replyToMessageId ?? _replyTargetIn(activeConversationId)?.id;
+    final replyPreview = _buildReplyPreviewFromReplyingTo(activeConversationId);
 
     // Generate unique tempId for optimistic message matching
     final tempId = _newTempId();
@@ -121,7 +122,7 @@ extension MessagingSend on MessagingProvider {
     final effectiveExpiresIn =
         _conversationsProvider!.conversationDisappearingTimer;
     final tempId = _newTempId();
-    final effectiveReplyToId = _replyingToMessage?.id;
+    final effectiveReplyToId = _replyTargetIn(activeConversationId)?.id;
 
     _messages.add(
       _buildOptimisticMediaMessage(
@@ -205,7 +206,7 @@ extension MessagingSend on MessagingProvider {
     }
 
     final tempId = _newTempId();
-    final effectiveReplyToId = _replyingToMessage?.id;
+    final effectiveReplyToId = _replyTargetIn(effectiveConvId)?.id;
     // Get disappearing timer from conversation (null-safe: stale conv id must
     // not throw mid-send, same reasoning as sendMessage).
     final conversations = _conversationsProvider!.conversations;
@@ -289,7 +290,7 @@ extension MessagingSend on MessagingProvider {
     final effectiveExpiresIn =
         _conversationsProvider!.conversationDisappearingTimer;
     final tempId = _newTempId();
-    final effectiveReplyToId = _replyingToMessage?.id;
+    final effectiveReplyToId = _replyTargetIn(activeConversationId)?.id;
 
     _messages.add(
       _buildOptimisticMediaMessage(
@@ -359,7 +360,7 @@ extension MessagingSend on MessagingProvider {
     final effectiveExpiresIn =
         _conversationsProvider!.conversationDisappearingTimer;
     final tempId = _newTempId();
-    final effectiveReplyToId = _replyingToMessage?.id;
+    final effectiveReplyToId = _replyTargetIn(activeConversationId)?.id;
     // 1. Optimistic message
     _messages.add(
       _buildOptimisticMediaMessage(
@@ -427,7 +428,7 @@ extension MessagingSend on MessagingProvider {
     final effectiveExpiresIn =
         _conversationsProvider!.conversationDisappearingTimer;
     final tempId = _newTempId();
-    final effectiveReplyToId = _replyingToMessage?.id;
+    final effectiveReplyToId = _replyTargetIn(activeConversationId)?.id;
     _messages.add(
       _buildOptimisticMediaMessage(
         tempId: tempId,
@@ -637,12 +638,27 @@ extension MessagingSend on MessagingProvider {
           deliveryStatus: MessageDeliveryStatus.sending,
         );
         notifyListeners();
-        await sendVoiceMessage(
-          recipientId: recipientId,
-          localAudioPath: url,
-          duration: message.mediaDuration ?? 0,
-          conversationId: message.conversationId,
-        );
+        // The SAME row goes again: its tempId, quote and timer as it was
+        // sent, never the composer's current reply, and never a second row.
+        try {
+          final rawBytes = await file_utils.readFileBytes(url);
+          if (rawBytes.length > MediaCryptoService.maxBytes) {
+            throw Exception('Voice file too large');
+          }
+          await _sendMediaOverBox(
+            recipientId: recipientId,
+            tempId: tempId,
+            messageType: 'VOICE',
+            bytes: Uint8List.fromList(rawBytes),
+            recording: url,
+            effectiveExpiresIn: message.disappearAfterSeconds,
+            effectiveReplyToId: message.replyToMessageId,
+            mediaDuration: message.mediaDuration,
+          );
+        } on Object catch (e) {
+          debugPrint('[MessagingProvider] Voice retry failed: $e');
+          _markMessageFailed(tempId, 'Failed to send voice message');
+        }
       }
       return;
     }

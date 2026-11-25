@@ -151,6 +151,26 @@ void main() {
     expect(await service.check(), isNull);
   });
 
+  // `/version` is untrusted input and the banner tells the user to install
+  // what the link serves: only https on the app's own host may be offered.
+  for (final (label, url) in [
+    ('plain http', 'http://example.invalid/umbra.apk'),
+    ('another host', 'https://evil.invalid/umbra.apk'),
+    ('a lookalike host', 'https://example.invalid.evil.invalid/umbra.apk'),
+    ('a custom scheme', 'intent://example.invalid/umbra.apk#Intent;end'),
+    ('no scheme at all', 'example.invalid/umbra.apk'),
+  ]) {
+    test('offers nothing when the download url is $label', () async {
+      final service = build(
+        serving(
+          payload({'versionCode': 20050, 'versionName': '0.2.50', 'url': url}),
+        ),
+      );
+
+      expect(await service.check(), isNull);
+    });
+  }
+
   test('rejects a non-200 answer', () async {
     final service = build(
       serving(

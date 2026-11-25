@@ -14,11 +14,16 @@ Future<T?> showGlassSheet<T>(
   /// Spec §7 per-surface fallback: media-dense sheets (large grids) render
   /// on the opaque surface — a near-fully-covered backdrop blur buys nothing.
   bool opaque = false,
+
+  /// `false` for a sheet that must not be swiped away (a pop from the drag
+  /// bypasses `PopScope`).
+  bool enableDrag = true,
   required WidgetBuilder builder,
 }) {
   return showModalBottomSheet<T>(
     context: context,
     isScrollControlled: isScrollControlled,
+    enableDrag: enableDrag,
     backgroundColor: Colors.transparent,
     builder: (ctx) => GlassSurface(
       borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),

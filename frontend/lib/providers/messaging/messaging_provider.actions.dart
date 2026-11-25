@@ -76,9 +76,15 @@ extension MessagingActions on MessagingProvider {
     if (activeConversationId == null) return;
 
     final idx = _messages.indexWhere((m) => m.id == messageId);
-    if (idx == -1) return;
+    if (idx == -1) {
+      // The open chat does not hold it (the target came from another chat):
+      // leave edit mode, or every later send would be swallowed by it.
+      cancelEditMessage();
+      return;
+    }
     final original = _messages[idx];
-    if (original.senderId != _currentUserId ||
+    if (original.conversationId != activeConversationId ||
+        original.senderId != _currentUserId ||
         !isLocalMessageId(messageId) ||
         original.wireId == null ||
         original.messageType != MessageType.text ||

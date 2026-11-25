@@ -6,6 +6,7 @@ import 'package:webcrypto/webcrypto.dart';
 
 import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
+import '../../services/api_exception.dart';
 import '../../services/api_service.dart';
 import '../../theme/rpg_theme.dart';
 import '../../utils/anti_quantum_note_link.dart';
@@ -75,7 +76,9 @@ Future<NoteRevealOutcome> revealAntiQuantumNote(
 }
 
 /// Opens the in-app one-time reveal surface for an own-origin Anti-Quantum
-/// Note. Closing it at ANY point simply returns to the chat — that is the
+/// Note. Once the reveal is decrypting it cannot be closed (the note is burned
+/// and this screen holds the only copy of its text); in every other phase,
+/// closing simply returns to the chat — that is the
 /// whole point of revealing in-app instead of launching a browser tab.
 Future<void> showAntiQuantumNoteRevealSheet(
   BuildContext context, {
@@ -85,12 +88,16 @@ Future<void> showAntiQuantumNoteRevealSheet(
   return showGlassSheet<void>(
     context,
     isScrollControlled: true,
+    enableDrag: false,
     builder: (_) => AntiQuantumNoteRevealSheet(link: link, attempt: attempt),
   );
 }
 
 /// State machine: `confirm` (burn warning — NEVER auto-reveals) → `revealing`
-/// → `revealed` | `destroyed` | `expired` | `corrupt` | `networkError`.
+/// → `revealed` | `destroyed` | `expired` | `corrupt` | `networkError` |
+/// `serverError` | `rateLimited` | `maybeBurned` (a retry found the note gone
+/// after an earlier attempt whose outcome is unknown, so it must not claim
+/// someone else read it).
 /// A link whose fragment key fails the 32-byte pre-flight opens straight in
 /// `invalidLink` (nothing was burned); a link whose `e=` clock already ran
 /// out opens straight in `expired` (the server would 404 anyway — no reason
@@ -121,12 +128,19 @@ enum _Phase {
   corrupt,
   invalidLink,
   networkError,
+  serverError,
+  rateLimited,
+  maybeBurned,
 }
 
 class _AntiQuantumNoteRevealSheetState
     extends State<AntiQuantumNoteRevealSheet> {
   late _Phase _phase;
   String? _plaintext;
+
+  /// An attempt threw (timeout, dropped response, a 5xx answer): the server
+  /// may have deleted the note before the answer was lost or failed.
+  bool _attemptOutcomeUnknown = false;
 
   @override
   void initState() {
@@ -145,7 +159,18 @@ class _AntiQuantumNoteRevealSheetState
     return expiresAt != null && !expiresAt.isAfter(DateTime.now());
   }
 
+  /// The ONE close. The outgoing confirm child stays on screen (and tappable)
+  /// for the 220 ms cross-fade, so its Cancel/X must not pop mid-reveal.
+  void _close() {
+    if (_phase == _Phase.revealing) return;
+    Navigator.of(context).pop();
+  }
+
   Future<void> _reveal() async {
+    // The old "Reveal & destroy" / "Try again" button stays tappable for the
+    // 220 ms cross-fade; a second POST would find the note already burned by
+    // the first and replace its text with "already read".
+    if (_phase == _Phase.revealing) return;
     setState(() => _phase = _Phase.revealing);
     final attempt = widget.attempt ??
         () => revealAntiQuantumNote(
@@ -163,21 +188,44 @@ class _AntiQuantumNoteRevealSheetState
           case NoteRevealGone():
             // Re-check the clock AFTER the await: gone past the clock is
             // expiry, gone before it means someone already read the note.
-            _phase = _clockDead ? _Phase.expired : _Phase.destroyed;
+            // An earlier attempt that threw may itself have burned the note
+            // (the response was lost), so "gone" is then not proof that
+            // someone else read it.
+            _phase = _clockDead
+                ? _Phase.expired
+                : _attemptOutcomeUnknown
+                    ? _Phase.maybeBurned
+                    : _Phase.destroyed;
           case NoteRevealCorrupt():
             _phase = _Phase.corrupt;
         }
       });
-    } on Object {
+    } on Object catch (e) {
       if (!mounted) return;
-      setState(() => _phase = _Phase.networkError);
+      // The server's throttler answers 429 BEFORE the reveal handler runs, so
+      // that attempt cannot have burned the note. Any other answer (a gateway
+      // 502/504 can follow the DELETE) and any lost answer leave it unknown.
+      if (e is ApiException && e.statusCode == 429) {
+        setState(() => _phase = _Phase.rateLimited);
+        return;
+      }
+      _attemptOutcomeUnknown = true;
+      setState(
+        () => _phase =
+            e is ApiException ? _Phase.serverError : _Phase.networkError,
+      );
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    return Padding(
+    return PopScope(
+      // The reveal POST has burned (or is burning) the note; closing now would
+      // throw the only copy of its text away. Back and a barrier tap both
+      // route through here; the swipe is off in [showAntiQuantumNoteRevealSheet].
+      canPop: _phase != _Phase.revealing,
+      child: Padding(
       padding: EdgeInsets.only(
         left: 16,
         right: 16,
@@ -237,6 +285,26 @@ class _AntiQuantumNoteRevealSheetState
                 body: AppLocalizations.of(context)
                     .antiQuantumNoteRevealInvalidLinkBody,
               ),
+            _Phase.serverError => _buildTerminal(
+                context,
+                key: const Key('note-reveal-server-error'),
+                icon: Icons.cloud_off,
+                title: AppLocalizations.of(context)
+                    .antiQuantumNoteRevealServerErrorTitle,
+                body: AppLocalizations.of(context)
+                    .antiQuantumNoteRevealServerErrorBody,
+                retry: true,
+              ),
+            _Phase.rateLimited => _buildTerminal(
+                context,
+                key: const Key('note-reveal-rate-limited'),
+                icon: Icons.hourglass_top,
+                title: AppLocalizations.of(context)
+                    .antiQuantumNoteRevealBusyTitle,
+                body: AppLocalizations.of(context)
+                    .antiQuantumNoteRevealBusyBody,
+                retry: true,
+              ),
             _Phase.networkError => _buildTerminal(
                 context,
                 key: const Key('note-reveal-network-error'),
@@ -244,13 +312,22 @@ class _AntiQuantumNoteRevealSheetState
                 title: AppLocalizations.of(context)
                     .antiQuantumNoteRevealNetworkErrorTitle,
                 body: AppLocalizations.of(context)
-                    .antiQuantumNoteRevealNetworkErrorBody,
+                    .antiQuantumNoteRevealUnknownOutcomeBody,
                 retry: true,
+              ),
+            _Phase.maybeBurned => _buildTerminal(
+                context,
+                key: const Key('note-reveal-maybe-burned'),
+                icon: Icons.help_outline,
+                title: AppLocalizations.of(context)
+                    .antiQuantumNoteRevealMaybeBurnedTitle,
+                body: AppLocalizations.of(context)
+                    .antiQuantumNoteRevealMaybeBurnedBody,
               ),
           },
         ),
       ),
-    );
+    ));
   }
 
   Widget _header(BuildContext context) {
@@ -269,13 +346,14 @@ class _AntiQuantumNoteRevealSheetState
             ),
           ),
         ),
-        IconButton(
-          key: const Key('note-reveal-close'),
-          icon: const Icon(Icons.close, size: 20),
-          tooltip: MaterialLocalizations.of(context).closeButtonTooltip,
-          onPressed: () => Navigator.of(context).pop(),
-          color: fc.mutedText,
-        ),
+        if (_phase != _Phase.revealing)
+          IconButton(
+            key: const Key('note-reveal-close'),
+            icon: const Icon(Icons.close, size: 20),
+            tooltip: MaterialLocalizations.of(context).closeButtonTooltip,
+            onPressed: _close,
+            color: fc.mutedText,
+          ),
       ],
     );
   }
@@ -330,7 +408,7 @@ class _AntiQuantumNoteRevealSheetState
             Expanded(
               child: OutlinedButton(
                 key: const Key('note-reveal-cancel'),
-                onPressed: () => Navigator.of(context).pop(),
+                onPressed: _close,
                 style: OutlinedButton.styleFrom(
                   foregroundColor: fc.mutedText,
                   side: BorderSide(color: fc.borderColor),
@@ -465,7 +543,7 @@ class _AntiQuantumNoteRevealSheetState
         SizedBox(
           width: double.infinity,
           child: OutlinedButton(
-            onPressed: () => Navigator.of(context).pop(),
+            onPressed: _close,
             style: OutlinedButton.styleFrom(
               foregroundColor: colorScheme.onSurface,
               side: BorderSide(color: fc.borderColor),
@@ -538,7 +616,7 @@ class _AntiQuantumNoteRevealSheetState
           children: [
             Expanded(
               child: OutlinedButton(
-                onPressed: () => Navigator.of(context).pop(),
+                onPressed: _close,
                 style: OutlinedButton.styleFrom(
                   foregroundColor: colorScheme.onSurface,
                   side: BorderSide(color: fc.borderColor),

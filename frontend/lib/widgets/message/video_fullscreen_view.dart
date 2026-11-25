@@ -9,6 +9,7 @@ import 'package:video_player/video_player.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/message_model.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/messaging_provider.dart';
 import '../../theme/rpg_theme.dart';
 import '../message_date_separator.dart';
 import 'box_media_source.dart';
@@ -88,6 +89,22 @@ class _VideoFullscreenView extends StatefulWidget {
 class _VideoFullscreenViewState extends State<_VideoFullscreenView>
     with SingleTickerProviderStateMixin {
   VideoPlaybackSession? _session;
+  late final MessagingProvider _messaging;
+
+  /// True when `widget.message` is a row of the open chat, so
+  /// its going (deleted, expired) means something. A message the chat does
+  /// not hold (a standalone open) is never watched, as the photo gallery's
+  /// `_standalone`.
+  late final bool _tracked;
+
+  /// Set once the message went: the player is released and the pop is on its
+  /// way; nothing of the clip may be painted or played any more.
+  bool _gone = false;
+
+  /// Set when the dialog was popped (chevron, system back, swipe): its exit
+  /// transition is running and the view is still mounted, but a second pop
+  /// from here would close the chat underneath.
+  bool _popped = false;
   bool _loading = true;
   VideoStageError? _error;
   bool _playing = false;
@@ -99,6 +116,10 @@ class _VideoFullscreenViewState extends State<_VideoFullscreenView>
 
   bool get _ready => _session?.isReady ?? false;
 
+  /// Test-only: whether the decrypted copy of the clip is still held.
+  @visibleForTesting
+  bool get holdsSessionForTest => _session != null;
+
   @override
   void initState() {
     super.initState();
@@ -106,11 +127,42 @@ class _VideoFullscreenViewState extends State<_VideoFullscreenView>
       ..addListener(
         () => setState(() => _dragDy = _slideTween.evaluate(_slide)),
       );
+    _messaging = context.read<MessagingProvider>();
+    _tracked = _isInChat();
+    if (_tracked) _messaging.addListener(_onMessagesChanged);
     _load();
+  }
+
+  bool _isInChat() {
+    final tempId = widget.message.tempId;
+    return _messaging.messages.any(
+      (m) =>
+          m.id == widget.message.id || (tempId != null && m.tempId == tempId),
+    );
+  }
+
+  /// The clip on screen was deleted or expired: never keep playing it (the
+  /// photo viewer's rule, `FullscreenImageViewer.didUpdateWidget`). The
+  /// decrypted copy is released NOW, not after the exit transition. A sent
+  /// row replacing its optimistic one keeps its `tempId`, so it stays.
+  void _onMessagesChanged() {
+    if (_gone || _popped || !mounted || _isInChat()) return;
+    _gone = true;
+    _hideTimer?.cancel();
+    _controller?.removeListener(_onControllerTick);
+    _session?.dispose();
+    _session = null;
+    setState(() => _playing = false);
+    // Only the player's own route may be popped here: a pop already under
+    // way (or another route on top) leaves the chat page alone.
+    if (ModalRoute.of(context)?.isCurrent ?? false) {
+      Navigator.of(context).pop();
+    }
   }
 
   @override
   void dispose() {
+    if (_tracked) _messaging.removeListener(_onMessagesChanged);
     _hideTimer?.cancel();
     _slide.dispose();
     _controller?.removeListener(_onControllerTick);
@@ -125,6 +177,7 @@ class _VideoFullscreenViewState extends State<_VideoFullscreenView>
   /// handoff position instead (measured on the emulator: 27.4 s → 21.7 s).
   void _onPopInvoked(bool didPop, Object? _) {
     if (!didPop) return;
+    _popped = true;
     final controller = _controller;
     if (controller != null && controller.value.isInitialized) {
       widget.onLastPosition(controller.value.position);
@@ -164,6 +217,8 @@ class _VideoFullscreenViewState extends State<_VideoFullscreenView>
       session.dispose();
       return;
     }
+    // The message went while the clip loaded: the session is already freed.
+    if (_gone) return;
     if (failure != null) {
       setState(() {
         _loading = false;
@@ -269,7 +324,7 @@ class _VideoFullscreenViewState extends State<_VideoFullscreenView>
       1,
       curve: dismiss ? Curves.easeIn : Curves.easeOutCubic,
     );
-    if (!mounted) return;
+    if (!mounted || _gone || _popped) return;
     if (dismiss) {
       Navigator.pop(context);
     } else if (_controller?.value.isPlaying ?? false) {
@@ -471,6 +526,7 @@ class _VideoFullscreenViewState extends State<_VideoFullscreenView>
   }
 
   Widget _buildStage() {
+    if (_gone) return const SizedBox.shrink();
     if (_loading) {
       return const Center(
         child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
