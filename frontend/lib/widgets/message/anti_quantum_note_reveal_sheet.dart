@@ -85,6 +85,7 @@ Future<void> showAntiQuantumNoteRevealSheet(
   return showGlassSheet<void>(
     context,
     isScrollControlled: true,
+    enableDrag: false,
     builder: (_) => AntiQuantumNoteRevealSheet(link: link, attempt: attempt),
   );
 }
@@ -121,12 +122,17 @@ enum _Phase {
   corrupt,
   invalidLink,
   networkError,
+  maybeBurned,
 }
 
 class _AntiQuantumNoteRevealSheetState
     extends State<AntiQuantumNoteRevealSheet> {
   late _Phase _phase;
   String? _plaintext;
+
+  /// An attempt threw (timeout, dropped response): the server may have
+  /// deleted the note before the answer was lost.
+  bool _attemptOutcomeUnknown = false;
 
   @override
   void initState() {
@@ -145,7 +151,18 @@ class _AntiQuantumNoteRevealSheetState
     return expiresAt != null && !expiresAt.isAfter(DateTime.now());
   }
 
+  /// The ONE close. The outgoing confirm child stays on screen (and tappable)
+  /// for the 220 ms cross-fade, so its Cancel/X must not pop mid-reveal.
+  void _close() {
+    if (_phase == _Phase.revealing) return;
+    Navigator.of(context).pop();
+  }
+
   Future<void> _reveal() async {
+    // The old "Reveal & destroy" / "Try again" button stays tappable for the
+    // 220 ms cross-fade; a second POST would find the note already burned by
+    // the first and replace its text with "already read".
+    if (_phase == _Phase.revealing) return;
     setState(() => _phase = _Phase.revealing);
     final attempt = widget.attempt ??
         () => revealAntiQuantumNote(
@@ -163,13 +180,21 @@ class _AntiQuantumNoteRevealSheetState
           case NoteRevealGone():
             // Re-check the clock AFTER the await: gone past the clock is
             // expiry, gone before it means someone already read the note.
-            _phase = _clockDead ? _Phase.expired : _Phase.destroyed;
+            // An earlier attempt that threw may itself have burned the note
+            // (the response was lost), so "gone" is then not proof that
+            // someone else read it.
+            _phase = _clockDead
+                ? _Phase.expired
+                : _attemptOutcomeUnknown
+                    ? _Phase.maybeBurned
+                    : _Phase.destroyed;
           case NoteRevealCorrupt():
             _phase = _Phase.corrupt;
         }
       });
     } on Object {
       if (!mounted) return;
+      _attemptOutcomeUnknown = true;
       setState(() => _phase = _Phase.networkError);
     }
   }
@@ -177,7 +202,12 @@ class _AntiQuantumNoteRevealSheetState
   @override
   Widget build(BuildContext context) {
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    return Padding(
+    return PopScope(
+      // The reveal POST has burned (or is burning) the note; closing now would
+      // throw the only copy of its text away. Back and a barrier tap both
+      // route through here; the swipe is off in [showAntiQuantumNoteRevealSheet].
+      canPop: _phase != _Phase.revealing,
+      child: Padding(
       padding: EdgeInsets.only(
         left: 16,
         right: 16,
@@ -244,13 +274,22 @@ class _AntiQuantumNoteRevealSheetState
                 title: AppLocalizations.of(context)
                     .antiQuantumNoteRevealNetworkErrorTitle,
                 body: AppLocalizations.of(context)
-                    .antiQuantumNoteRevealNetworkErrorBody,
+                    .antiQuantumNoteRevealUnknownOutcomeBody,
                 retry: true,
+              ),
+            _Phase.maybeBurned => _buildTerminal(
+                context,
+                key: const Key('note-reveal-maybe-burned'),
+                icon: Icons.help_outline,
+                title: AppLocalizations.of(context)
+                    .antiQuantumNoteRevealMaybeBurnedTitle,
+                body: AppLocalizations.of(context)
+                    .antiQuantumNoteRevealMaybeBurnedBody,
               ),
           },
         ),
       ),
-    );
+    ));
   }
 
   Widget _header(BuildContext context) {
@@ -269,13 +308,14 @@ class _AntiQuantumNoteRevealSheetState
             ),
           ),
         ),
-        IconButton(
-          key: const Key('note-reveal-close'),
-          icon: const Icon(Icons.close, size: 20),
-          tooltip: MaterialLocalizations.of(context).closeButtonTooltip,
-          onPressed: () => Navigator.of(context).pop(),
-          color: fc.mutedText,
-        ),
+        if (_phase != _Phase.revealing)
+          IconButton(
+            key: const Key('note-reveal-close'),
+            icon: const Icon(Icons.close, size: 20),
+            tooltip: MaterialLocalizations.of(context).closeButtonTooltip,
+            onPressed: _close,
+            color: fc.mutedText,
+          ),
       ],
     );
   }
@@ -330,7 +370,7 @@ class _AntiQuantumNoteRevealSheetState
             Expanded(
               child: OutlinedButton(
                 key: const Key('note-reveal-cancel'),
-                onPressed: () => Navigator.of(context).pop(),
+                onPressed: _close,
                 style: OutlinedButton.styleFrom(
                   foregroundColor: fc.mutedText,
                   side: BorderSide(color: fc.borderColor),
@@ -465,7 +505,7 @@ class _AntiQuantumNoteRevealSheetState
         SizedBox(
           width: double.infinity,
           child: OutlinedButton(
-            onPressed: () => Navigator.of(context).pop(),
+            onPressed: _close,
             style: OutlinedButton.styleFrom(
               foregroundColor: colorScheme.onSurface,
               side: BorderSide(color: fc.borderColor),
@@ -538,7 +578,7 @@ class _AntiQuantumNoteRevealSheetState
           children: [
             Expanded(
               child: OutlinedButton(
-                onPressed: () => Navigator.of(context).pop(),
+                onPressed: _close,
                 style: OutlinedButton.styleFrom(
                   foregroundColor: colorScheme.onSurface,
                   side: BorderSide(color: fc.borderColor),

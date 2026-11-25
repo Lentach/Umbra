@@ -1375,8 +1375,16 @@ class AppLocalizationsPl extends AppLocalizations {
   String get antiQuantumNoteRevealNetworkErrorTitle => 'Brak połączenia';
 
   @override
-  String get antiQuantumNoteRevealNetworkErrorBody =>
-      'Nie udało się połączyć z serwerem. Sprawdź połączenie i spróbuj ponownie.';
+  String get antiQuantumNoteRevealUnknownOutcomeBody =>
+      'Połączenie zerwało się, zanim dotarła odpowiedź serwera. Ta próba mogła już zniszczyć notatkę. Spróbuj ponownie, aby się dowiedzieć.';
+
+  @override
+  String get antiQuantumNoteRevealMaybeBurnedTitle =>
+      'Notatka mogła zostać zniszczona';
+
+  @override
+  String get antiQuantumNoteRevealMaybeBurnedBody =>
+      'Twoja wcześniejsza próba mogła zniszczyć tę notatkę, zanim odpowiedź do Ciebie dotarła. Nie da się jej odczytać ponownie.';
 
   @override
   String get privacyAntiQuantumNoteTitle => 'Notatki antykwantowe';

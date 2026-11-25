@@ -2348,11 +2348,23 @@ abstract class AppLocalizations {
   /// **'Brak połączenia'**
   String get antiQuantumNoteRevealNetworkErrorTitle;
 
-  /// No description provided for @antiQuantumNoteRevealNetworkErrorBody.
+  /// No description provided for @antiQuantumNoteRevealUnknownOutcomeBody.
   ///
   /// In pl, this message translates to:
-  /// **'Nie udało się połączyć z serwerem. Sprawdź połączenie i spróbuj ponownie.'**
-  String get antiQuantumNoteRevealNetworkErrorBody;
+  /// **'Połączenie zerwało się, zanim dotarła odpowiedź serwera. Ta próba mogła już zniszczyć notatkę. Spróbuj ponownie, aby się dowiedzieć.'**
+  String get antiQuantumNoteRevealUnknownOutcomeBody;
+
+  /// No description provided for @antiQuantumNoteRevealMaybeBurnedTitle.
+  ///
+  /// In pl, this message translates to:
+  /// **'Notatka mogła zostać zniszczona'**
+  String get antiQuantumNoteRevealMaybeBurnedTitle;
+
+  /// No description provided for @antiQuantumNoteRevealMaybeBurnedBody.
+  ///
+  /// In pl, this message translates to:
+  /// **'Twoja wcześniejsza próba mogła zniszczyć tę notatkę, zanim odpowiedź do Ciebie dotarła. Nie da się jej odczytać ponownie.'**
+  String get antiQuantumNoteRevealMaybeBurnedBody;
 
   /// No description provided for @privacyAntiQuantumNoteTitle.
   ///
