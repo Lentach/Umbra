@@ -641,8 +641,16 @@ class MessagingProvider extends ChangeNotifier {
     }
   }
 
-  ReplyToPreview? _buildReplyPreviewFromReplyingTo() {
+  /// The reply target, only when it was picked in [conversationId]. A message
+  /// of another chat is never quoted: the envelope would carry its snippet,
+  /// sender and wire id to someone who was not in that conversation.
+  MessageModel? _replyTargetIn(int conversationId) {
     final rt = _replyingToMessage;
+    return rt != null && rt.conversationId == conversationId ? rt : null;
+  }
+
+  ReplyToPreview? _buildReplyPreviewFromReplyingTo(int conversationId) {
+    final rt = _replyTargetIn(conversationId);
     if (rt == null) return null;
     const labels = kReplyPreviewLabels;
     return ReplyToPreview(
@@ -709,7 +717,7 @@ class MessagingProvider extends ChangeNotifier {
       expiresAt: null,
       tempId: tempId,
       replyToMessageId: effectiveReplyToId,
-      replyTo: _buildReplyPreviewFromReplyingTo(),
+      replyTo: _buildReplyPreviewFromReplyingTo(conversationId),
     );
   }
 
