@@ -21,8 +21,8 @@ import '../support/l10n.dart';
 const _currentUserJwt =
     'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOjEsInVzZXJuYW1lIjoiYWxpY2UiLCJ0YWciOiIwMDAxIiwiZXhwIjo5OTk5OTk5OTl9.abc';
 
-final _typingLine = l10n.typing;
-final _recordingLine = l10n.recordingVoice;
+final String _typingLine = l10n.typing;
+final String _recordingLine = l10n.recordingVoice;
 
 /// The peer's typing / recording state is box-fed and has no public setter, so
 /// the screen reads it from here. The members are class members, so the
