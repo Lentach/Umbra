@@ -1,10 +1,14 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/services/box/box_frame.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../support/box_send_harness.dart';
 import '../support/chat_seed.dart';
@@ -173,6 +177,71 @@ void main() {
       expect(optimistic.replyTo, isNull);
       await sending;
       await h.pump();
+    });
+
+    /// [send] starts in Carol's chat while Bob's message is still the held
+    /// reply target: the [type] row quotes nothing and is not failed.
+    Future<void> expectQuotesNothing(
+      MessageType type,
+      Future<void> Function() send,
+    ) async {
+      provider.setReplyingTo(fromBob());
+      activeOnly(11);
+
+      final sending = send();
+      final optimistic = provider.messages.last;
+      expect(optimistic.messageType, type);
+      expect(optimistic.conversationId, 11);
+      expect(optimistic.replyToMessageId, isNull);
+      expect(optimistic.replyTo, isNull);
+      await sending;
+      await h.pump();
+
+      final row = provider.messages.lastWhere((m) => m.messageType == type);
+      expect(row.replyToMessageId, isNull);
+      expect(row.deliveryStatus, isNot(MessageDeliveryStatus.failed));
+    }
+
+    test('a photo never quotes a message of another chat', () async {
+      await expectQuotesNothing(
+        MessageType.image,
+        () => provider.sendImageMessage(
+          XFile.fromData(
+            Uint8List.fromList(List<int>.generate(2000, (i) => i % 251)),
+            name: 'a.jpg',
+          ),
+          3,
+        ),
+      );
+    });
+
+    test('a GIF never quotes a message of another chat', () async {
+      await expectQuotesNothing(
+        MessageType.gif,
+        () => http.runWithClient(
+          () => provider.sendGif('https://giphy.test/a.gif', 3),
+          () => MockClient((_) async => http.Response.bytes([1, 2, 3], 200)),
+        ),
+      );
+    });
+
+    test('a file never quotes a message of another chat', () async {
+      await expectQuotesNothing(
+        MessageType.file,
+        () => provider.sendFileMessage(
+          [5, 6, 7],
+          'plan.pdf',
+          'application/pdf',
+          3,
+        ),
+      );
+    });
+
+    test('a video never quotes a message of another chat', () async {
+      await expectQuotesNothing(
+        MessageType.video,
+        () => provider.sendVideoMessage(List<int>.filled(64, 7), 3),
+      );
     });
   });
 
