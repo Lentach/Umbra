@@ -217,4 +217,4 @@ Order that makes an audit worth its money: (1) `SECURITY.md`, licence, CodeQL fo
 - **O7 / O6 of plan D2:** O7 accepted, not built; O6 deferred (decision 145).
 - **E143g:** §2.2.
 - **Release B** (avatar file deletion, with TD-13): due on or after 2026-12-08.
-- **Owner-owed from the cleanup batches:** BE-12 confirmation; UI-16 and UI-17; the composer split; TD-07 (tests bound to English UI strings); the two composer comments of TD-15.
+- **Owner-owed from the cleanup batches:** BE-12 confirmation; UI-17; TD-07 (tests bound to English UI strings). UI-16, the composer split and the composer comments of TD-15 were done in batch 6 (0.2.105).

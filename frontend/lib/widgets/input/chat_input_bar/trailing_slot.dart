@@ -123,9 +123,12 @@ mixin _ComposerTrailingSlot on _ComposerSend {
   }
 }
 
-/// Tap-only trailing send, a plain [Listener] rather than an [IconButton]: an
-/// [IconButton] here would win the gesture arena and block the mic beneath it
-/// ([RecordingController] is tap-to-toggle, not hold-to-record).
+/// Tap-only trailing send: a raw, opaque [Listener] over the full 48x48 slot,
+/// so it never enters the gesture arena (an [IconButton] would, and could win
+/// it against the mic beneath; see `frontend/docs/composer-media.md`). It
+/// calls [onTap] on a pointer-up within 300 ms and 18 px of the down.
+/// [RecordingController] is tap-to-toggle, not hold-to-record; this widget
+/// predates that and keeps its shape on purpose (behaviour change: repro first).
 class _ComposerTapSendOverlay extends StatefulWidget {
   const _ComposerTapSendOverlay({
     required this.enabled,

@@ -280,7 +280,7 @@ class ChatInputBarState extends State<ChatInputBar>
     final isCompactLayout =
         mediaQuery.size.width < AppConstants.layoutBreakpointDesktop;
     // Phone / narrow PWA: keep trailing mic off the physical right edge so OS back-swipe
-    // and browser edge gestures are less likely to steal the long-press.
+    // and browser edge gestures are less likely to steal a touch on it.
     const trailingGestureBufferDp = 14.0;
     final trailingGestureBuffer = isCompactLayout
         ? trailingGestureBufferDp

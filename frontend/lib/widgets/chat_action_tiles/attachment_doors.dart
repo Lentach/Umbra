@@ -1,8 +1,9 @@
 part of '../chat_action_tiles.dart';
 
-/// The paperclip: the per-platform door sheets and pickers. Nothing here is
-/// passed as a callback, so an extension is safe (a tear-off of an extension
-/// method is a new closure each time).
+/// The paperclip: the per-platform door sheets and pickers. No instance member
+/// here is passed as a callback (the two torn-off pickers are static), so an
+/// extension is safe (a tear-off of an extension instance method is a new
+/// closure each time).
 extension _ChatActionAttachmentDoors on ChatActionTiles {
   static String _dotAccept(List<String> extensions) =>
       extensions.map((e) => '.$e').join(',');
