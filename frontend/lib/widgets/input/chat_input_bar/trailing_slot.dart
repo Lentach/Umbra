@@ -16,9 +16,9 @@ mixin _ComposerTrailingSlot on _ComposerSend {
             (value.text.trim().isNotEmpty || _attachment.staged != null);
         final showVoiceSend = _isRecording && !_isSendingVoice;
 
-        // ExcludeFocus on the whole trailing slot (mic + send overlay) so long-press
-        // never steals focus from the text field. RecordingController does not add a
-        // second ExcludeFocus — one ancestor is enough.
+        // ExcludeFocus on the whole trailing slot (mic + send overlay) so a tap
+        // on either never steals focus from the text field. RecordingController
+        // does not add a second ExcludeFocus — one ancestor is enough.
         return ExcludeFocus(
           child: SizedBox(
             width: 48,
@@ -123,8 +123,9 @@ mixin _ComposerTrailingSlot on _ComposerSend {
   }
 }
 
-/// Tap-only trailing send so [RecordingController]'s long-press reaches the mic below.
-/// [IconButton] would win the gesture arena and block hold-to-record when draft text is visible.
+/// Tap-only trailing send, a plain [Listener] rather than an [IconButton]: an
+/// [IconButton] here would win the gesture arena and block the mic beneath it
+/// ([RecordingController] is tap-to-toggle, not hold-to-record).
 class _ComposerTapSendOverlay extends StatefulWidget {
   const _ComposerTapSendOverlay({
     required this.enabled,
