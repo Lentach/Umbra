@@ -1623,6 +1623,10 @@ class EncryptionProvider extends ChangeNotifier {
   Future<void> sweepDestroyablePlaintext() async {
     final serverNow = ServerClock.instance.estimatedNow;
     if (serverNow == null) return;
+    // The account this pass belongs to: a login of another account while it
+    // runs must not let it act on that account's rows.
+    final account = _encryptionService.activeUserId;
+    if (account == null) return;
 
     final due = await _encryptionService.destroyableMessageIds(
       serverNow: serverNow,
@@ -1641,9 +1645,12 @@ class EncryptionProvider extends ChangeNotifier {
     // server still serves, so losing the marking would turn a deliberate state
     // into an undecryptable "[Decryption failed]" the user reads as corruption.
     if (due.retired.isNotEmpty) {
-      await _encryptionService.markRetired(due.retired);
+      await _encryptionService.markRetired(due.retired, forUser: account);
     }
-    final result = await purgeLocalPlaintext({...due.expired, ...due.retired});
+    final result = await purgeLocalPlaintext({
+      ...due.expired,
+      ...due.retired,
+    }, account: account);
     final condemned = [...due.expired, ...due.retired]..sort();
     _e2eFlowLog('PLAINTEXT_SWEEP', {
       'expired': due.expired.length,
@@ -1787,20 +1794,27 @@ class EncryptionProvider extends ChangeNotifier {
   /// cache is dropped FIRST so no in-flight reader can re-persist a purged id
   /// from memory while the disk work is still running.
   Future<PlaintextPurgeResult> purgeLocalPlaintext(
-    Iterable<int> messageIds,
-  ) async {
+    Iterable<int> messageIds, {
+    int? account,
+  }) async {
     final ids = messageIds.toSet();
     const cts = <String>{};
+    // Pinned to the account current NOW unless the caller started earlier.
+    final pinned = account ?? _encryptionService.activeUserId;
 
     // Write the obligation down FIRST. Everything below can be interrupted by
     // a tab close or a refused commit, and once the row is gone from memory
     // nothing else would ever come looking for its residue. The backlog is
     // what makes this at-least-once.
-    final recorded = await _encryptionService.enqueuePurge(ids, cts);
+    final recorded = await _encryptionService.enqueuePurge(
+      ids,
+      cts,
+      forUser: pinned,
+    );
 
-    final result = await _runPurge(ids, cts);
+    final result = await _runPurge(ids, cts, account: pinned);
     if (result.isComplete) {
-      await _encryptionService.resolvePurged(ids, cts);
+      await _encryptionService.resolvePurged(ids, cts, forUser: pinned);
     } else if (!recorded) {
       // Worst case, and worth separating from an ordinary failure: the purge
       // did not finish AND the obligation was never written down, so nothing
@@ -1827,24 +1841,42 @@ class EncryptionProvider extends ChangeNotifier {
     // Nothing writes pending-send records any more; the ones an older build
     // left hold outgoing plaintext, so the old 72 h TTL still applies to them.
     await _encryptionService.prunePendingSendRecords();
-    final backlog = await _encryptionService.purgeBacklog();
+    final account = _encryptionService.activeUserId;
+    final backlog = await _encryptionService.purgeBacklog(forUser: account);
     if (backlog.ids.isEmpty && backlog.ciphertexts.isEmpty) return;
-    final result = await _runPurge(backlog.ids, backlog.ciphertexts);
+    final result = await _runPurge(
+      backlog.ids,
+      backlog.ciphertexts,
+      account: account,
+    );
     final settledIds = backlog.ids.difference(result.failedIds);
     final settledCiphertexts = backlog.ciphertexts.difference(
       result.failedCiphertexts,
     );
-    await _encryptionService.resolvePurged(settledIds, settledCiphertexts);
+    await _encryptionService.resolvePurged(
+      settledIds,
+      settledCiphertexts,
+      forUser: account,
+    );
     _e2eFlowLog('PURGE_BACKLOG_DRAINED', {
       'owed': backlog.ids.length,
       'settled': settledIds.length,
     });
   }
 
+  /// True once the account a long-running pass started under is no longer the
+  /// current one (a null [account] is an unpinned pass).
+  bool _accountMoved(int? account) =>
+      account != null && _encryptionService.activeUserId != account;
+
+  /// [account] is the account the pass started under. Every destructive step
+  /// re-checks it: local ids restart at the same base for every account, so a
+  /// pass that kept going after a switch would destroy the new account's rows.
   Future<PlaintextPurgeResult> _runPurge(
     Set<int> ids,
-    Set<String> ciphertexts,
-  ) async {
+    Set<String> ciphertexts, {
+    required int? account,
+  }) async {
     for (final id in ids) {
       _decryptedContentCache.remove(id);
     }
@@ -1865,19 +1897,32 @@ class EncryptionProvider extends ChangeNotifier {
 
     final failedCiphertexts = <String>{};
     for (final ciphertext in ciphertexts) {
-      if (!await _encryptionService.removePendingSendRecord(ciphertext)) {
+      if (!await _encryptionService.removePendingSendRecord(
+        ciphertext,
+        forUser: account,
+      )) {
         failedCiphertexts.add(ciphertext);
       }
     }
 
-    final disk = await _encryptionService.removeDecryptedContent(ids);
+    final disk = await _encryptionService.removeDecryptedContent(
+      ids,
+      forUser: account,
+    );
 
     // Voice notes are cached on native (sealed; older builds' plain copies
     // until the launch pass seals them), keyed by the same message id.
     // Purging them here rather than at the call sites means no caller can
     // destroy a message's text and leave its audio behind — and that
     // directory is swept into iCloud / Android auto-backup.
-    final failedAudio = await AudioCacheStore.remove(ids);
+    // The audio cache is not keyed by account, so it must not run once the
+    // account has moved on; the ids stay owed and the next sign-in of the
+    // original account finishes them.
+    final moved = _accountMoved(account);
+    if (moved) {
+      _e2eFlowLog('PURGE_ACCOUNT_SWITCHED', {'owed': ids.length});
+    }
+    final failedAudio = moved ? ids : await AudioCacheStore.remove(ids);
 
     // Ledger hygiene for DELIBERATE destruction: an id purged on purpose must
     // not read as unexpected loss when the server briefly serves the row
@@ -1887,7 +1932,7 @@ class EncryptionProvider extends ChangeNotifier {
     // text record, and audio failures already fail the purge result.
     final settled = ids.difference(disk.failedIds);
     if (settled.isNotEmpty) {
-      await _encryptionService.forgetDecryptedMany(settled);
+      await _encryptionService.forgetDecryptedMany(settled, forUser: account);
     }
     final released = [
       for (final MapEntry(key: id, value: url) in boxMedia.entries)
