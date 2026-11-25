@@ -88,7 +88,7 @@ Lint conventions are recorded in `frontend/analysis_options.yaml` (relative impo
 
 ## 7. Composer, media, and platform gotchas
 
-**Moved to `frontend/docs/composer-media.md` (2026-09-10) — read it BEFORE touching `chat_input_bar*`, `composer*`, `chat_action_tiles.dart`, `web_file_input.dart`, attachment/picker code, `**/media*`, `**/video*`, `**/voice*`, `**/image*`, the iOS viewport pin, or anything keyboard-adjacent in the chat screen. **The 2026-08-19 composer rule lives here: nothing ships in the composer without a green repro AND the owner's explicit OK.****
+**Moved to `frontend/docs/composer-media.md` (2026-09-10) — read it BEFORE touching `chat_input_bar*`, `composer*`, `chat_action_tiles*`, `web_file_input.dart`, attachment/picker code, `**/media*`, `**/video*`, `**/voice*`, `**/image*`, the iOS viewport pin, or anything keyboard-adjacent in the chat screen. **The 2026-08-19 composer rule lives here: nothing ships in the composer without a green repro AND the owner's explicit OK.****
 
 ## 8. Tests and localization
 

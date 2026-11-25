@@ -9,8 +9,8 @@ import '../hex_avatar.dart';
 ///
 /// PAINT ONLY — it carries no gesture recognizer and no semantics. The 48x48
 /// `_ComposerTapSendOverlay` stacked above it owns the hit region, tooltip and
-/// semantics, because an [IconButton] here would win the gesture arena and
-/// block hold-to-record on the mic beneath.
+/// semantics; its doc comment says why it is a raw `Listener` (the mic beneath
+/// is tap-to-toggle, not hold-to-record).
 ///
 /// The glyph color comes from [RpgTheme.readableOn], never a hardcoded white:
 /// three of the five themes have a pale accent (`cosmic` #8FD8FF, `blue`

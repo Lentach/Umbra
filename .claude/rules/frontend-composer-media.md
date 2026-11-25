@@ -1,8 +1,10 @@
 ---
 paths:
-  - "frontend/lib/widgets/chat_input_bar*"
-  - "frontend/lib/widgets/composer*"
+  - "frontend/lib/widgets/input/chat_input_bar*"
+  - "frontend/lib/widgets/input/chat_input_bar/**"
+  - "frontend/lib/widgets/input/composer*"
   - "frontend/lib/widgets/chat_action_tiles.dart"
+  - "frontend/lib/widgets/chat_action_tiles/**"
   - "frontend/lib/utils/web_file_input.dart"
   - "frontend/lib/widgets/message/**"
   - "frontend/lib/services/media*"
