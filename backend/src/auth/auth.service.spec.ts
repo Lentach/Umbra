@@ -417,7 +417,7 @@ describe('AuthService', () => {
       identityResetService.verifyRecoveryPhrase.mockResolvedValue('accepted');
       await service.recoverPassword(
         'testuser#0427',
-        { kind: 'phrase', value: 'a b c' },
+        { kind: 'auth', value: Buffer.alloc(32, 1).toString('base64') },
         'NewPass1x',
       );
 
@@ -488,13 +488,13 @@ describe('AuthService', () => {
 
       const result = await service.recoverPassword(
         'testuser#0427',
-        legacy,
+        v2,
         'NewPass1x',
       );
 
       expect(identityResetService.verifyRecoveryPhrase).toHaveBeenCalledWith(
         1,
-        legacy,
+        v2,
       );
       expect(usersService.setPassword).toHaveBeenCalledWith(1, 'NewPass1x');
       expect(devicesService.resolveLoginDeviceId).toHaveBeenCalledWith(1);
@@ -533,7 +533,7 @@ describe('AuthService', () => {
       });
 
       try {
-        await service.recoverPassword('testuser#0427', legacy, 'NewPass1x');
+        await service.recoverPassword('testuser#0427', v2, 'NewPass1x');
       } finally {
         timerSpy.mockRestore();
         nowSpy.mockRestore();
@@ -568,7 +568,7 @@ describe('AuthService', () => {
       );
 
       await expect(
-        service.recoverPassword('testuser#0427', legacy, 'NewPass1x'),
+        service.recoverPassword('testuser#0427', v2, 'NewPass1x'),
       ).rejects.toThrow(UnauthorizedException);
       expect(argon2.verify).not.toHaveBeenCalled();
     });
@@ -582,7 +582,7 @@ describe('AuthService', () => {
       await expect(
         service.recoverPassword(
           'testuser#0427',
-          { kind: 'phrase', value: 'wrong' },
+          { kind: 'auth', value: Buffer.alloc(32, 2).toString('base64') },
           'NewPass1x',
         ),
       ).rejects.toThrow('Invalid credentials');
@@ -594,8 +594,27 @@ describe('AuthService', () => {
       identityResetService.verifyRecoveryPhrase.mockResolvedValue('locked');
 
       await expect(
-        service.recoverPassword('testuser#0427', legacy, 'NewPass1x'),
+        service.recoverPassword('testuser#0427', v2, 'NewPass1x'),
       ).rejects.toMatchObject({ status: 423 });
+      expect(usersService.setPassword).not.toHaveBeenCalled();
+    });
+
+    // Plan B7 tail (0.2.104): the plaintext phrase of clients up to 0.2.89 is
+    // never verified, whatever row it would match.
+    it('a legacy plaintext phrase is refused like a wrong one: 401, one dummy verify on a constant, no verifier asked, no attempt spent', async () => {
+      usersService.findByUsernameAndTag.mockResolvedValue(mockUser as User);
+      identityResetService.verifyRecoveryPhrase.mockResolvedValue('accepted');
+
+      await expect(
+        service.recoverPassword('testuser#0427', legacy, 'NewPass1x'),
+      ).rejects.toMatchObject({ status: 401, message: 'Invalid credentials' });
+
+      expect(identityResetService.verifyRecoveryPhrase).not.toHaveBeenCalled();
+      expect(argon2.verify).toHaveBeenCalledTimes(1);
+      expect(argon2.verify).not.toHaveBeenCalledWith(
+        expect.any(String),
+        phrase,
+      );
       expect(usersService.setPassword).not.toHaveBeenCalled();
     });
 

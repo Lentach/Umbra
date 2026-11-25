@@ -19,12 +19,16 @@ describe('RecoverPasswordDto (plan B7)', () => {
     expect(out.phrase).toBeUndefined();
   });
 
-  it('still accepts the legacy plaintext phrase of clients up to 0.2.89', async () => {
+  // The DTO still DECLARES `phrase` so the whitelist cannot strip it into a
+  // "neither credential" 400: the refusal (401, the answer of a wrong phrase)
+  // is the service's, and nothing here may verify or keep the value.
+  it('lets a legacy plaintext phrase through the pipe only so the service can refuse it', async () => {
     const out = (await pipe.transform(
       { ...base, phrase: 'abandon ability able' },
       meta,
     )) as RecoverPasswordDto;
     expect(out.phrase).toBe('abandon ability able');
+    expect(out.authSecret).toBeUndefined();
   });
 
   it.each([
