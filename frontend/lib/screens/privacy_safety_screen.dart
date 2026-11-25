@@ -15,6 +15,7 @@ import '../services/backup/history_backup.dart';
 import '../services/backup/history_backup_service.dart';
 import '../services/contacts/contact_store.dart';
 import '../theme/rpg_theme.dart';
+import '../utils/diag_export_redaction.dart';
 import '../utils/e2e_diag_log.dart';
 import '../utils/e2e_persistent_diag.dart';
 import '../widgets/dialogs/backup_passphrase_dialog.dart';
@@ -729,11 +730,13 @@ class _PrivacySafetyScreenState extends State<PrivacySafetyScreen> {
               children: [
                 TextButton(
                   onPressed: () async {
-                    final all =
-                        '== DURABLE FAILURES (survives restart) ==\n'
-                        '${E2ePersistentDiag.entries.join('\n')}\n\n'
-                        '== LIVE LOG ==\n'
-                        '${E2eDiagLog.entries.join('\n')}';
+                    // Pasted into bug reports: no account, chat or device id
+                    // of anyone leaves the device (the panel itself shows all).
+                    final all = redactDiagForExport(
+                      E2ePersistentDiag.entries,
+                      E2eDiagLog.entries,
+                      ownUserId: context.read<AuthProvider>().currentUser?.id,
+                    );
                     await Clipboard.setData(ClipboardData(text: all));
                     if (!context.mounted) return;
                     showTopSnackBar(context, 'Log copied to clipboard');
