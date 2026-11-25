@@ -88,7 +88,7 @@ void main() {
   test('an answer that never came drops the phrase', () {
     fakeAsync((async) {
       provider.setRecoveryKey(first);
-      async.elapse(const Duration(seconds: 7));
+      async.elapse(const Duration(seconds: 11));
       provider.onRecoveryKeySet(ok);
       expect(
         announced,
@@ -96,6 +96,24 @@ void main() {
         reason: 'the screen already told the user the phrase was not saved',
       );
     });
+  });
+
+  // The screen polls 60 x 100 ms for the answer after the same emit: a
+  // success in its last instants is shown as saved, so it must still count.
+  test("an answer in the screen's last instants still counts", () {
+    fakeAsync((async) {
+      provider.setRecoveryKey(first);
+      async.elapse(const Duration(milliseconds: 6300));
+      provider.onRecoveryKeySet(ok);
+      expect(announced, [first]);
+    });
+  });
+
+  test('a passcode re-lock drops a phrase the server has not confirmed', () async {
+    provider.setRecoveryKey(first);
+    await provider.revokeForPasscodeLock();
+    provider.onRecoveryKeySet(ok);
+    expect(announced, isEmpty);
   });
 
   test("a newer phrase is not dropped by the older one's timeout", () {

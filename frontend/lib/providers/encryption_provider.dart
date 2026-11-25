@@ -3013,8 +3013,10 @@ class EncryptionProvider extends ChangeNotifier {
   String? _pendingRecoveryPhrase;
   Timer? _pendingRecoveryPhraseTimer;
 
-  /// As long as the enrolment screen waits for the answer.
-  static const Duration _pendingRecoveryPhraseWindow = Duration(seconds: 6);
+  /// Must exceed the enrolment screen's wait for the answer (60 x 100 ms
+  /// after the same emit, plus timer drift): a success in the screen's last
+  /// instants is shown as saved, so the phrase must still be here for it.
+  static const Duration _pendingRecoveryPhraseWindow = Duration(seconds: 10);
 
   void _dropPendingRecoveryPhrase() {
     _pendingRecoveryPhraseTimer?.cancel();
@@ -3689,6 +3691,8 @@ class EncryptionProvider extends ChangeNotifier {
     _decryptedContentCache.clear();
     _forceSessionRebuild.clear();
     _cancelPendingFetches();
+    // The phrase must not outlive the lock, nor wrap the backup after it.
+    _dropPendingRecoveryPhrase();
     onPasscodeLockRevoke?.call();
     await _encryptionService.revokeForPasscodeLock();
     notifyListeners();
