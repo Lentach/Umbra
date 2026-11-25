@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:fireplace/l10n/app_localizations.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/screens/recovery_key_screen.dart';
@@ -12,6 +14,24 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../support/passcode_fakes.dart';
+
+/// A codec whose `seal` waits for the test, so the "saving" window can be held
+/// open while the user (or the app) tries to leave.
+class _GatedCodec extends IdentityBackupCodec {
+  _GatedCodec()
+    : super(kdf: FakePasscodeKdf(), sealer: FakeContentSealer());
+
+  final Completer<void> gate = Completer<void>();
+
+  @override
+  Future<SealedIdentityBackup> seal(
+    IdentityBackupPayload payload,
+    String phrase,
+  ) async {
+    await gate.future;
+    return super.seal(payload, phrase);
+  }
+}
 
 /// The (lxxviii) clause-4 enrolment screen: words → one-random-word confirm
 /// → export + seal + `setRecoveryKey {phrase, backup}` → pop(true) ONLY on
@@ -29,6 +49,7 @@ void main() {
     void Function(String event, dynamic data)? onEmit,
     bool e2eReady = true,
     bool deferrable = false,
+    IdentityBackupCodec? codec,
   }) async {
     FlutterSecureStorage.setMockInitialValues({});
     SharedPreferences.setMockInitialValues({});
@@ -66,10 +87,12 @@ void main() {
                       MaterialPageRoute(
                         builder: (_) => RecoveryKeyScreen(
                           deferrable: deferrable,
-                          codec: IdentityBackupCodec(
-                            kdf: FakePasscodeKdf(),
-                            sealer: FakeContentSealer(),
-                          ),
+                          codec:
+                              codec ??
+                              IdentityBackupCodec(
+                                kdf: FakePasscodeKdf(),
+                                sealer: FakeContentSealer(),
+                              ),
                         ),
                       ),
                     );
@@ -255,5 +278,103 @@ void main() {
     await tester.pumpAndSettle();
     expect(results, [false]);
     expect(emitted, isEmpty, reason: 'declining uploads nothing');
+  });
+
+  /// Walks to confirm, types the right word and taps confirm, then pumps
+  /// until the screen is "saving" (spinner up) with the seal still gated.
+  Future<List<String>> startSavingWithGatedSeal(WidgetTester tester) async {
+    final words = await walkToConfirm(tester);
+    await tester.enterText(
+      find.byKey(const Key('recovery-key-confirm-field')),
+      words[promptedIndex(tester)],
+    );
+    await tester.tap(find.byKey(const Key('recovery-key-confirm-action')));
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    return words;
+  }
+
+  /// Opens the seal gate and lets the export + emit run.
+  Future<void> finishSave(WidgetTester tester, _GatedCodec codec) async {
+    codec.gate.complete();
+    for (var i = 0; i < 5 && emitted.isEmpty; i++) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+  }
+
+  void answerSuccess(String event, dynamic data) {
+    if (event == 'setRecoveryKey') {
+      provider.onRecoveryKeySet(const {'success': true});
+    }
+  }
+
+  testWidgets('A2-AUTH-03: the back arrow does nothing while the phrase is '
+      'being saved', (tester) async {
+    final codec = _GatedCodec();
+    final results = <bool?>[];
+    await pumpScreen(
+      tester,
+      results: results,
+      codec: codec,
+      onEmit: answerSuccess,
+    );
+    await startSavingWithGatedSeal(tester);
+
+    await tester.tap(find.byIcon(Icons.arrow_back));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byType(RecoveryKeyScreen), findsOneWidget,
+        reason: 'leaving mid-save hides the outcome from the user');
+    expect(results, isEmpty);
+
+    await finishSave(tester, codec);
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pumpAndSettle();
+    expect(results, [true], reason: 'the save still lands and pops true');
+    await tester.pump(const Duration(seconds: 3));
+  });
+
+  testWidgets('A2-AUTH-03: system back does nothing while the phrase is '
+      'being saved', (tester) async {
+    final codec = _GatedCodec();
+    final results = <bool?>[];
+    await pumpScreen(
+      tester,
+      results: results,
+      codec: codec,
+      onEmit: answerSuccess,
+    );
+    await startSavingWithGatedSeal(tester);
+
+    await tester.binding.handlePopRoute();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byType(RecoveryKeyScreen), findsOneWidget);
+    expect(results, isEmpty);
+
+    await finishSave(tester, codec);
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pumpAndSettle();
+    expect(results, [true]);
+    await tester.pump(const Duration(seconds: 3));
+  });
+
+  testWidgets('A2-AUTH-03: a screen closed during the seal never sends the '
+      'phrase to the server', (tester) async {
+    final codec = _GatedCodec();
+    final results = <bool?>[];
+    await pumpScreen(tester, results: results, codec: codec);
+    await startSavingWithGatedSeal(tester);
+
+    // The app closes the route under it (not a user back tap).
+    tester.state<NavigatorState>(find.byType(Navigator).last).pop();
+    await tester.pumpAndSettle();
+    expect(find.byType(RecoveryKeyScreen), findsNothing);
+
+    await finishSave(tester, codec);
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(
+      emitted.map((e) => e.$1),
+      isNot(contains('setRecoveryKey')),
+      reason: 'a phrase the user can no longer see must not replace theirs',
+    );
   });
 }

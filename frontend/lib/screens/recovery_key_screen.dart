@@ -107,6 +107,9 @@ class _RecoveryKeyScreenState extends State<RecoveryKeyScreen> {
       final payload = await encryption.encryptionService
           .exportIdentityForBackup();
       final sealed = await _codec.seal(payload, phrase);
+      // Left during the seal (the route was closed under us): the user can no
+      // longer see this phrase, so it must not replace the one they hold.
+      if (!mounted) return;
       encryption.setRecoveryKey(phrase, backup: sealed);
     } catch (_) {
       // Nothing reached the server; the phrase on screen enrolled nothing.
@@ -168,14 +171,14 @@ class _RecoveryKeyScreenState extends State<RecoveryKeyScreen> {
     // words on screen, no hint which one counts.
     final replacesExisting = encryption.hasRecoveryPhrase == true;
 
-    return Scaffold(
+    final scaffold = Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor,
       extendBodyBehindAppBar: true,
       appBar: GlassTopBar(
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           tooltip: MaterialLocalizations.of(context).backButtonTooltip,
-          onPressed: () => Navigator.of(context).pop(),
+          onPressed: _saving ? null : () => Navigator.of(context).pop(),
         ),
         title: Text(
           l10n.recoveryKeyTitle,
@@ -239,6 +242,9 @@ class _RecoveryKeyScreenState extends State<RecoveryKeyScreen> {
         ),
       ),
     );
+    // While the phrase is being saved, leaving would hide the outcome (and a
+    // late success would enrol words the user never saw confirmed).
+    return PopScope(canPop: !_saving, child: scaffold);
   }
 
   List<Widget> _wordsStep(BuildContext context, List<String> words) {
