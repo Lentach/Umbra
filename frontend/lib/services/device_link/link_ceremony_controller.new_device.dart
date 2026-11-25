@@ -86,16 +86,23 @@ extension LinkCeremonyNewDevice on LinkCeremonyController {
     _ceremonyEpoch++;
     newDeviceStep = NewDeviceLinkStep.awaitingHelloAck;
     notifyListeners();
-    // The wire field stays `ephPubP` for v1 compatibility — it is simply
-    // "the hello party's ephemeral", filling the N slot in this flow.
-    // `platform` is (lxxx) clause 3: in the FLIPPED direction this hello is
-    // the only channel that carries this device's label to the primary, and
-    // without it every device linked that way landed as `unknown`.
+    _helloOwed = !_sessionReady;
+    _sendHello();
+    return null;
+  }
+
+  /// The wire field stays `ephPubP` for v1 compatibility — it is simply
+  /// "the hello party's ephemeral", filling the N slot in this flow.
+  /// `platform` is (lxxx) clause 3: in the FLIPPED direction this hello is
+  /// the only channel that carries this device's label to the primary, and
+  /// without it every device linked that way landed as `unknown`. Built from
+  /// the ceremony's own fields, so a re-send at `socketReady` is identical to
+  /// the first (the server pins the first ephemeral).
+  void _sendHello() {
     _emit('provisioningHello', {
-      'provisioningId': code.provisioningId,
+      'provisioningId': _openProvisioningId,
       'ephPubP': base64Encode(_ephPubNBytes!),
       'platform': _platform,
     });
-    return null;
   }
 }

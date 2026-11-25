@@ -169,6 +169,13 @@ class LinkCeremonyController extends ChangeNotifier
   bool _sessionReady = false;
   bool _openOwed = false;
 
+  /// The same debt for the flipped flow's `provisioningHello` (A2-DEV-01): a
+  /// hello sent before `socketReady` is dropped by the server WITHOUT an
+  /// answer, and the step it leaves behind has no timer. Owed from the send
+  /// on a session that is not ready, or when the socket is lost while the
+  /// ack is still out; paid, with the same ephemeral, at [onSessionReady].
+  bool _helloOwed = false;
+
   // ---------- Devices list ----------
 
   bool _disposed = false;
@@ -235,9 +242,15 @@ class LinkCeremonyController extends ChangeNotifier
         _openOwed &&
         newDeviceStep == NewDeviceLinkStep.opening &&
         _openProvisioningId == null;
+    final resendHello =
+        _helloOwed &&
+        newDeviceStep == NewDeviceLinkStep.awaitingHelloAck &&
+        _openProvisioningId != null;
     _sessionReady = true;
     _openOwed = false;
+    _helloOwed = false;
     if (resend) _emit('openProvisioning', {'role': 'new'});
+    if (resendHello) _sendHello();
   }
 
   @override
@@ -246,6 +259,9 @@ class LinkCeremonyController extends ChangeNotifier
     if (newDeviceStep == NewDeviceLinkStep.opening &&
         _openProvisioningId == null) {
       _openOwed = true;
+    }
+    if (newDeviceStep == NewDeviceLinkStep.awaitingHelloAck) {
+      _helloOwed = true;
     }
     // A request sent on the socket that just went has no answer coming, and
     // these markers are cleared only by one. Fail them with the code the
