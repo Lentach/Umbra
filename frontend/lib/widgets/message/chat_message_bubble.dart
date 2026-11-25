@@ -19,6 +19,7 @@ import 'message_context_menu_overlay.dart';
 import 'reaction_tap.dart';
 import 'message_context_menu_bubble_highlight.dart';
 import 'context_menu_bubble_anchor.dart';
+import 'failed_send_retry.dart';
 import 'message_bubble_inline_time.dart';
 import 'message_content_factory.dart';
 import 'voice_message_content.dart';
@@ -69,44 +70,6 @@ class ChatMessageBubble extends StatelessWidget {
       messagesForLookup: messaging.messages,
     );
   }
-
-  Widget? _buildRetryButton(BuildContext context) {
-    if (!isMine || message.deliveryStatus != MessageDeliveryStatus.failed) {
-      return null;
-    }
-    return TextButton.icon(
-      onPressed: () {
-        final messaging = Provider.of<MessagingProvider>(
-          context,
-          listen: false,
-        );
-        if (message.tempId != null) {
-          messaging.retryFailedMessage(message.tempId!);
-        }
-      },
-      icon: const Icon(Icons.refresh, size: 16),
-      label: Text(AppLocalizations.of(context).messageRetrySend),
-      style: TextButton.styleFrom(
-        foregroundColor: Theme.of(context).colorScheme.error,
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      ),
-    );
-  }
-
-  /// True when THIS row may tell the user their peer's keys changed.
-  ///
-  /// Two conditions, and both are load-bearing:
-  ///  * the row's own last send attempt was refused by the account-anchor gate
-  ///    (`AccountIdentityMismatch`, recorded per tempId by the send path) — so
-  ///    a timeout or an "Image too large" bounce in the same chat is not
-  ///    explained away as a key change;
-  ///  * the ceremony is STILL outstanding ([peerRefusedIdentity]) — once the
-  ///    user has compared fingerprints the remedy really is just "Retry", and
-  ///    repeating the instruction would send them back through a ceremony they
-  ///    already completed.
-  bool _mayNameTheRefusal(BuildContext context) =>
-      peerRefusedIdentity &&
-      context.read<MessagingProvider>().sendRefusedForIdentity(message.tempId);
 
   void _openContextMenu(BuildContext context) {
     final messaging = context.read<MessagingProvider>();
@@ -198,43 +161,12 @@ class ChatMessageBubble extends StatelessWidget {
           // an alpha that would disagree with it on the white-on-teal bubbles.
           themePreference: context.read<SettingsProvider>().themePreference,
         ),
-        Builder(
-          builder: (ctx) {
-            final retryBtn = _buildRetryButton(ctx);
-            if (retryBtn == null) return const SizedBox.shrink();
-            // "Retry" alone is a trap here: while the anchor is stale every
-            // attempt fails the same way, so the row has to name the remedy.
-            final refused = _mayNameTheRefusal(ctx);
-            return Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: isMine
-                  ? CrossAxisAlignment.end
-                  : CrossAxisAlignment.start,
-              children: [
-                const SizedBox(height: 4),
-                if (refused)
-                  ConstrainedBox(
-                    constraints: BoxConstraints(maxWidth: contentAreaWidth),
-                    child: Text(
-                      AppLocalizations.of(ctx).messageSendBlockedKeysChanged,
-                      textAlign: isMine ? TextAlign.end : TextAlign.start,
-                      // The bubble's OWN text color, not `colorScheme.error`:
-                      // painted on the sent-bubble fill, error red lands on a
-                      // saturated blue in the blue/cosmic themes and a whole
-                      // wrapped paragraph of it is unreadable (seen, §9 loop).
-                      // The red retry button right below still carries the
-                      // error signal; weight carries the emphasis here.
-                      style: RpgTheme.bodyFont(
-                        fontSize: 12,
-                        color: textColor,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                retryBtn,
-              ],
-            );
-          },
+        FailedSendRetry(
+          message: message,
+          isMine: isMine,
+          textColor: textColor,
+          maxWidth: contentAreaWidth,
+          peerRefusedIdentity: peerRefusedIdentity,
         ),
       ],
     );
@@ -246,7 +178,11 @@ class ChatMessageBubble extends StatelessWidget {
     // same factual placeholder as retired text instead of opening its decoder.
     if (message.messageType == MessageType.voice &&
         message.content != kRetiredMessageLabel) {
-      return VoiceMessageContent(message: message, isMine: isMine);
+      return VoiceMessageContent(
+        message: message,
+        isMine: isMine,
+        peerRefusedIdentity: peerRefusedIdentity,
+      );
     }
 
     final isDark = RpgTheme.isDark(context);
