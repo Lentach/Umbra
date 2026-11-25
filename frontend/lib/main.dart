@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 import 'fcm_background_stub.dart'
     if (dart.library.io) 'services/android_fcm_local_notifications.dart'
     as fcm_background;
+import 'utils/app_route_observer.dart';
 import 'utils/notify_conv_param_stub.dart'
     if (dart.library.html) 'utils/notify_conv_param_web.dart';
 import 'utils/link_fragment_stub.dart'
@@ -234,7 +235,7 @@ class _FireplaceAppState extends State<FireplaceApp> {
             localizationsDelegates: const [
               ...AppLocalizations.localizationsDelegates,
             ],
-            navigatorObservers: [_gateGuard!],
+            navigatorObservers: [_gateGuard!, appRouteObserver],
             home: const AuthGate(),
           );
         },

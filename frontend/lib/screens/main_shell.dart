@@ -389,7 +389,10 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
               child: IndexedStack(
                 index: _selectedIndex,
                 children: [
-                  ConversationsScreen(onAvatarTap: _openMyProfile),
+                  ConversationsScreen(
+                    onAvatarTap: _openMyProfile,
+                    visible: _selectedIndex == 0,
+                  ),
                   const ContactsScreen(),
                   const SettingsScreen(),
                 ],
