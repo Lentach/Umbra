@@ -362,6 +362,22 @@ void main() {
       await tester.fling(find.byKey(_loadingKey), const Offset(0, 400), 2000);
       await expectStillShowsNote(tester, gate);
     });
+
+    testWidgets('the old Cancel, still on screen while the views cross-fade, '
+        'keeps the sheet', (tester) async {
+      final gate = Completer<NoteRevealOutcome>();
+      await _openSheet(
+        tester,
+        link: _link(expiryMs: _futureMs()),
+        attempt: () => gate.future,
+      );
+      await tester.tap(find.byKey(_revealKey));
+      await tester.pump();
+      // Inside the 220 ms cross-fade the confirm view is still tappable.
+      await tester.pump(const Duration(milliseconds: 60));
+      await tester.tap(find.byKey(_cancelKey));
+      await expectStillShowsNote(tester, gate);
+    });
   });
 
   group('an attempt whose outcome is unknown', () {
