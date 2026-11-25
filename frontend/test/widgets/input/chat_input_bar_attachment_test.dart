@@ -30,6 +30,7 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../support/chat_seed.dart';
+import '../../support/l10n.dart';
 
 /// 1x1 transparent PNG so Image.memory decodes without errors.
 final kTinyPng = Uint8List.fromList(const [
@@ -497,7 +498,7 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('Image is too large (max 20 MB)'), findsOneWidget);
+    expect(find.text(l10n.snackbarPastedImageTooLarge), findsOneWidget);
     expect(
       find.byKey(const ValueKey('composer_attachment_thumb')),
       findsNothing,
@@ -517,7 +518,7 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text("This image type can't be pasted"), findsOneWidget);
+    expect(find.text(l10n.snackbarPastedImageUnsupported), findsOneWidget);
     expect(
       find.byKey(const ValueKey('composer_attachment_thumb')),
       findsNothing,
@@ -584,7 +585,7 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text("Couldn't read the pasted image"), findsOneWidget);
+    expect(find.text(l10n.snackbarPastedImageUnavailable), findsOneWidget);
     expect(
       find.byKey(const ValueKey('composer_attachment_thumb')),
       findsNothing,
@@ -658,7 +659,7 @@ void main() {
       // maxBytes + 1 is 20.000001 MB; the toast names the actual size so the
       // user learns WHY the clip failed, not just that a limit exists.
       expect(
-        find.text('Video is too large (20.0 MB, max 20 MB)'),
+        find.text(l10n.videoTooLarge('20.0')),
         findsOneWidget,
       );
       expect(h.emitted, isEmpty);
@@ -711,7 +712,7 @@ void main() {
       await tester.pump();
 
       expect(
-        find.text('Video is too large (20.0 MB, max 20 MB)'),
+        find.text(l10n.videoTooLarge('20.0')),
         findsOneWidget,
       );
       expect(h.emitted, isEmpty);
@@ -730,7 +731,7 @@ void main() {
       await tester.pump();
 
       // The last gate before an IMMEDIATE, unconfirmed send.
-      expect(find.text('Unsupported video format (MP4 only)'), findsOneWidget);
+      expect(find.text(l10n.videoUnsupportedFormat), findsOneWidget);
       expect(h.emitted, isEmpty);
       await tester.pump(const Duration(seconds: 3));
     });
@@ -802,10 +803,7 @@ void main() {
 
       expect(h.emitted, List.filled(kMaxFilesPerPick, 'IMAGE'));
       expect(
-        find.text(
-          'Up to $kMaxFilesPerPick files at a time — sending the first '
-          '$kMaxFilesPerPick',
-        ),
+        find.text(l10n.attachmentPickLimit(kMaxFilesPerPick)),
         findsOneWidget,
       );
       await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
@@ -835,7 +833,7 @@ void main() {
 
       expect(h.emitted, ['IMAGE']);
       expect(
-        find.text('Some files were not sent — you left the chat'),
+        find.text(l10n.attachmentBatchInterrupted),
         findsOneWidget,
       );
       await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
@@ -873,7 +871,7 @@ void main() {
 
       expect(h.emitted, isEmpty);
       expect(
-        find.text('Some files were not sent — you left the chat'),
+        find.text(l10n.attachmentBatchInterrupted),
         findsOneWidget,
       );
       await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
@@ -904,7 +902,7 @@ void main() {
 
       expect(h.emitted, isEmpty);
       expect(
-        find.text('Some files were not sent — you left the chat'),
+        find.text(l10n.attachmentBatchInterrupted),
         findsOneWidget,
       );
       await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
@@ -923,7 +921,7 @@ void main() {
 
       expect(h.emitted, isEmpty);
       expect(
-        find.text('Some files were not sent — you left the chat'),
+        find.text(l10n.attachmentBatchInterrupted),
         findsOneWidget,
       );
       await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
@@ -943,7 +941,7 @@ void main() {
       await tester.pump();
 
       expect(h.emitted, ['IMAGE']);
-      expect(find.text('Unsupported file type'), findsOneWidget);
+      expect(find.text(l10n.attachmentUnsupportedFileType), findsOneWidget);
       await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
     });
 
@@ -969,7 +967,7 @@ void main() {
       await tester.pump();
 
       expect(h.emitted, ['IMAGE']);
-      expect(find.text('Upload failed'), findsOneWidget);
+      expect(find.text(l10n.uploadFailed), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
     });
@@ -1135,7 +1133,7 @@ void main() {
 
     expect(h.emitted, ['IMAGE']);
     expect(
-      find.text('Some files were not sent — you left the chat'),
+      find.text(l10n.attachmentBatchInterrupted),
       findsOneWidget,
     );
     await tester.pump(const Duration(seconds: 3)); // flush snackbar timer

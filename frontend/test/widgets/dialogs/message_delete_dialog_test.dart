@@ -5,6 +5,8 @@ import 'package:fireplace/utils/message_ids.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../../support/l10n.dart';
+
 void main() {
   Widget wrap({
     required bool isMine,
@@ -39,23 +41,23 @@ void main() {
     await tester.pumpWidget(wrap(isMine: false, messageId: 42));
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
-    expect(find.text('Delete for me'), findsOneWidget);
-    expect(find.text('Delete for everyone'), findsNothing);
+    expect(find.text(l10n.messageDeleteForMe), findsOneWidget);
+    expect(find.text(l10n.messageDeleteForEveryone), findsNothing);
   });
 
   testWidgets('own persisted message shows both options', (tester) async {
     await tester.pumpWidget(wrap(isMine: true, messageId: 42));
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
-    expect(find.text('Delete for me'), findsOneWidget);
-    expect(find.text('Delete for everyone'), findsOneWidget);
+    expect(find.text(l10n.messageDeleteForMe), findsOneWidget);
+    expect(find.text(l10n.messageDeleteForEveryone), findsOneWidget);
   });
 
   testWidgets('own optimistic temp id hides delete for everyone', (tester) async {
     await tester.pumpWidget(wrap(isMine: true, messageId: -1));
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
-    expect(find.text('Delete for everyone'), findsNothing);
+    expect(find.text(l10n.messageDeleteForEveryone), findsNothing);
   });
 
   testWidgets(
@@ -71,8 +73,8 @@ void main() {
       );
       await tester.tap(find.text('open'));
       await tester.pumpAndSettle();
-      expect(find.text('Delete for everyone'), findsOneWidget);
-      await tester.tap(find.text('Delete for me'));
+      expect(find.text(l10n.messageDeleteForEveryone), findsOneWidget);
+      await tester.tap(find.text(l10n.messageDeleteForMe));
       await tester.pumpAndSettle();
 
       await tester.pumpWidget(
@@ -80,7 +82,7 @@ void main() {
       );
       await tester.tap(find.text('open'));
       await tester.pumpAndSettle();
-      expect(find.text('Delete for everyone'), findsNothing);
+      expect(find.text(l10n.messageDeleteForEveryone), findsNothing);
     },
   );
 
@@ -97,14 +99,14 @@ void main() {
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Delete for everyone'));
+    await tester.tap(find.text(l10n.messageDeleteForEveryone));
     await tester.pumpAndSettle();
 
     expect(everyoneFired, isTrue);
     expect(meFired, isFalse);
     // Dialog dismissed: its buttons are gone.
-    expect(find.text('Delete for me'), findsNothing);
-    expect(find.text('Delete for everyone'), findsNothing);
+    expect(find.text(l10n.messageDeleteForMe), findsNothing);
+    expect(find.text(l10n.messageDeleteForEveryone), findsNothing);
   });
 
   testWidgets('tapping delete for me fires callback and dismisses',
@@ -120,12 +122,12 @@ void main() {
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Delete for me'));
+    await tester.tap(find.text(l10n.messageDeleteForMe));
     await tester.pumpAndSettle();
 
     expect(meFired, isTrue);
     expect(everyoneFired, isFalse);
-    expect(find.text('Delete for me'), findsNothing);
-    expect(find.text('Delete for everyone'), findsNothing);
+    expect(find.text(l10n.messageDeleteForMe), findsNothing);
+    expect(find.text(l10n.messageDeleteForEveryone), findsNothing);
   });
 }
