@@ -100,7 +100,7 @@ class _InvitationsScreenState extends State<InvitationsScreen> {
 
   void _search() {
     final handle = _handleController.text.trim();
-    if (handle.isEmpty) return;
+    if (handle.isEmpty || _searching) return;
 
     setState(() => _searching = true);
     final friends = context.read<FriendsProvider>();
