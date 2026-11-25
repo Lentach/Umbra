@@ -981,32 +981,15 @@ class SecureSessionStore extends SessionStore {
       // TEMP storage-durability probe: a THROWN write (quota exceeded, private
       // mode, evicted origin) means the ratchet state never persisted — the
       // session will be absent on the next start. Rethrow: behaviour unchanged.
-      // (An immediate read-back would NOT catch non-persistence: SharedPreferences
-      // serves the in-memory value even when the localStorage flush silently
-      // dropped. The cross-reload SESSION_INVENTORY is the real durability test.)
+      // (An immediate read-back would NOT catch non-persistence:
+      // SharedPreferences serves the in-memory value even when the
+      // localStorage flush silently dropped.)
       E2eDiagLog.add('SESSION_STORE_WRITE_FAIL', {
         'peerId': address.getName(),
         'err': e.runtimeType.toString(),
       });
       rethrow;
     }
-  }
-
-  /// TEMP storage-durability probe: peer ids that currently have a persisted
-  /// session on disk. Captured at every E2E init — a peer present one start and
-  /// gone the next, with NO matching SESSION_STORE_DELETE in between, is storage
-  /// eviction (not code). No key material is read, only the key names.
-  Future<List<String>> inventoryPeerIds() async {
-    final all = await _storage.readAll();
-    final prefix = '${_p}session_';
-    final ids = <String>[];
-    for (final key in all.keys) {
-      if (!key.startsWith(prefix)) continue;
-      final rest = key.substring(prefix.length); // "<peerId>_<deviceId>"
-      final cut = rest.lastIndexOf('_');
-      ids.add(cut > 0 ? rest.substring(0, cut) : rest);
-    }
-    return ids;
   }
 
   @override

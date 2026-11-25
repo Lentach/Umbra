@@ -26,7 +26,6 @@ import '../utils/e2e_diag_log.dart';
 import '../utils/e2e_persistent_diag.dart';
 import '../utils/message_expiry.dart' show kExpiryPurgeGrace;
 import '../utils/message_ids.dart';
-import '../utils/storage_persist.dart';
 import '../utils/boot_markers.dart';
 
 /// E114m: the shortest gap between two lookups of one friend's list that a
@@ -1927,20 +1926,7 @@ class EncryptionProvider extends ChangeNotifier {
     _sessionBuilds.removeWhere((key, _) => key.$1 == recipientId);
   }
 
-  // ---------- TEMP storage-durability probes (remove after root cause) ----------
-
-  /// Logged once per app run.
-  static bool _persistProbed = false;
-
-  Future<void> _logSessionInventory() async {
-    try {
-      final peers = await _encryptionService.sessionInventoryPeerIds();
-      _e2eFlowLog('SESSION_INVENTORY', {
-        'count': peers.length,
-        'peerIds': peers,
-      });
-    } catch (_) {}
-  }
+  // ---------- Boot-marker forensics (kept: see _recordBootMarkersOnce) ----------
 
   /// Logged once per app run.
   static bool _bootMarkersProbed = false;
@@ -1988,39 +1974,6 @@ class EncryptionProvider extends ChangeNotifier {
     } catch (_) {}
   }
 
-  Future<void> _probeStoragePersistenceOnce() async {
-    if (_persistProbed) return;
-    _persistProbed = true;
-    try {
-      final r = await requestPersistentStorage();
-      final supported = r['supported'] ?? false;
-      final granted = r['granted'] ?? false;
-      // Quota telemetry: the app used to be completely blind to how full the
-      // bucket was (nothing ever called estimate()). Diagnostic only.
-      final estimate = await storageEstimate();
-      _e2eFlowLog('STORAGE_PERSIST', {
-        'supported': supported,
-        'granted': granted,
-        if (estimate != null) 'usage': estimate['usage'],
-        if (estimate != null) 'quota': estimate['quota'],
-      });
-      // A denied grant is the one storage fact that can end in unrecoverable
-      // Signal key loss: iOS evicts a non-persistent origin and there is no
-      // key recovery. The in-memory ring rotates long before any field dump is
-      // taken, so the evidence has to be durable. Deduped, or the cap-80 log
-      // would re-burn a slot every boot; eviction re-arms it by design.
-      // Web only — the native stub always answers {supported:false} and native
-      // keys live in secure storage, not a browser origin.
-      if (kIsWeb && !granted) {
-        E2ePersistentDiag.recordDeduped(
-          'STORAGE_PERSIST_DENIED',
-          {'supported': supported, 'granted': granted},
-          matchAll: ['{supported: $supported,'],
-        );
-      }
-    } catch (_) {}
-  }
-
   // ---------- E2E Initialization ----------
 
   /// Initialize E2E encryption for the current user. On fresh connect,
@@ -2059,20 +2012,18 @@ class EncryptionProvider extends ChangeNotifier {
     _currentUserId = userId;
     _e2eFlowLog('E2E_INIT_START', {'alreadyInitialized': _e2eInitialized});
     try {
-      // Forensics + persistence BEFORE the keystore is created: every prior
-      // `granted: true` reading was post-loss, and the ordering defect (probe
-      // after initialize) is exactly what kept the persistence premise
-      // unverifiable in the field. Both are once-per-run.
+      // Boot-marker forensics BEFORE the keystore is created, so the evidence
+      // predates any write. Once per run; touches no key material, so it is
+      // safe while locked.
       await _recordBootMarkersOnce();
-      await _probeStoragePersistenceOnce();
       // Phase 2: wait for the passcode unlock before the FIRST key read. The
-      // markers and the persistence probe above are safe while locked (they
-      // touch no key material), but `initialize` reads the identity, and on a
-      // wrapped device that read is undecryptable until the vault opens. The
-      // valve is open by default, so a device without a passcode is
-      // unchanged, and an already-initialised session never waits — a
-      // reconnect while the UI is locked must still do its housekeeping
-      // instead of parking on a user who may be away for hours.
+      // markers above are safe while locked (they touch no key material), but
+      // `initialize` reads the identity, and on a wrapped device that read is
+      // undecryptable until the vault opens. The valve is open by default, so
+      // a device without a passcode is unchanged, and an already-initialised
+      // session never waits — a reconnect while the UI is locked must still do
+      // its housekeeping instead of parking on a user who may be away for
+      // hours.
       if (!_e2eInitialized && !PasscodeUnlockGate.instance.isOpen) {
         _e2eFlowLog('E2E_INIT_AWAIT_UNLOCK', const {});
         await PasscodeUnlockGate.instance.waitUntilOpen();
@@ -2154,11 +2105,6 @@ class EncryptionProvider extends ChangeNotifier {
         _e2eFlowLog('E2E_RECONNECT_SKIP_INIT', {});
         _setIdentityCheckUnavailable(false);
       }
-
-      // TEMP storage-durability probe — snapshot which sessions survived to
-      // this start (compare across reloads). Remove with the rest of the
-      // SESSION_* probes.
-      await _logSessionInventory();
 
       // (lxiv) clause 2 gate: refuse E2E duty when the session's device id
       // contradicts the id this install's material was provisioned for —

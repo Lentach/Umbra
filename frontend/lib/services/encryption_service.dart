@@ -291,8 +291,8 @@ class EncryptionService {
 
   /// Test-only seam: wrap the session store used by SessionCipher /
   /// SessionBuilder (e.g. to hold a storeSession mid-flight and force a
-  /// lost-update interleave). Diagnostics ([sessionInventoryPeerIds]) keep
-  /// reading the real [_sessionStore].
+  /// lost-update interleave). Diagnostics keep reading the real
+  /// [_sessionStore].
   @visibleForTesting
   void debugWrapSessionStore(SessionStore Function(SessionStore inner) wrap) {
     _cipherSessionStore = wrap(_cipherSessionStore);
@@ -2294,13 +2294,6 @@ class EncryptionService {
         'deviceId=$deviceId (broken session reset)',
       );
     });
-  }
-
-  /// TEMP storage-durability probe: peer ids with a persisted Signal session.
-  /// Drives the SESSION_INVENTORY diag event (see [SecureSessionStore.inventoryPeerIds]).
-  Future<List<String>> sessionInventoryPeerIds() async {
-    if (!_initialized) return const [];
-    return _sessionStore.inventoryPeerIds();
   }
 
   /// Build a session with the given user from their pre-key bundle.

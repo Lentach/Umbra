@@ -14,7 +14,3 @@ import 'storage_persist_stub.dart'
 /// clearing site data.
 Future<Map<String, bool>> requestPersistentStorage() =>
     impl.requestPersistentStorage();
-
-/// Reports the browser's usage/quota estimate for this origin, or null when
-/// unsupported. Diagnostic only. No-op off web.
-Future<Map<String, num>?> storageEstimate() => impl.storageEstimate();
