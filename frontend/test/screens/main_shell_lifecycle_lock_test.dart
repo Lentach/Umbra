@@ -69,8 +69,15 @@ class _Passcode extends PasscodeProvider {
   @override
   Future<void> noteBackgrounded() async => calls.add('noteBackgrounded');
 
+  /// What the verdict does after it was asked for: the real one reads the
+  /// Keystore first and locks only afterwards.
+  Future<void> Function()? onEvaluate;
+
   @override
-  Future<void> evaluateOnForeground() async => calls.add('evaluateOnForeground');
+  Future<void> evaluateOnForeground() async {
+    calls.add('evaluateOnForeground');
+    await onEvaluate?.call();
+  }
 
   void setLock(PasscodeLockState next) {
     _fake = next;
@@ -206,5 +213,65 @@ void main() {
 
     expect(conversations.isClientVisible, isFalse);
     expect(shownCalls, 0);
+  });
+
+  // B1: the verdict is asynchronous (a store read), the session check is not.
+  testWidgets('a resume whose lock lands a moment later (the store read) does '
+      'not count as visible in between; the unlock does', (tester) async {
+    await pumpShell(tester);
+    await lifecycle(tester, AppLifecycleState.paused);
+    passcode.onEvaluate = () async {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      passcode.setLock(PasscodeLockState.locked);
+    };
+    await lifecycle(tester, AppLifecycleState.resumed);
+
+    expect(shownCalls, 0, reason: 'shown before the lock verdict');
+    expect(conversations.isClientVisible, isFalse);
+
+    await tester.pump(const Duration(milliseconds: 10));
+    await tester.pump();
+    expect(passcode.isLocked, isTrue);
+    expect(conversations.isClientVisible, isFalse);
+    expect(shownCalls, 0);
+
+    passcode.setLock(PasscodeLockState.unlocked);
+    await tester.pump();
+    await tester.pump();
+    expect(conversations.isClientVisible, isTrue);
+    expect(shownCalls, 1);
+  });
+
+  testWidgets('a resume whose verdict is "stay open" counts as visible once '
+      'the verdict is in', (tester) async {
+    await pumpShell(tester);
+    await lifecycle(tester, AppLifecycleState.paused);
+    passcode.onEvaluate = () =>
+        Future<void>.delayed(const Duration(milliseconds: 5));
+    await lifecycle(tester, AppLifecycleState.resumed);
+    expect(shownCalls, 0);
+
+    await tester.pump(const Duration(milliseconds: 10));
+    await tester.pump();
+    expect(conversations.isClientVisible, isTrue);
+    expect(shownCalls, 1);
+  });
+
+  testWidgets('a lock verdict that fails does not leave the app hidden', (
+    tester,
+  ) async {
+    await pumpShell(tester);
+    await lifecycle(tester, AppLifecycleState.paused);
+    passcode.onEvaluate = () async {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      throw StateError('store unreadable');
+    };
+    await lifecycle(tester, AppLifecycleState.resumed);
+    await tester.pump(const Duration(milliseconds: 10));
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
+    expect(conversations.isClientVisible, isTrue);
+    expect(shownCalls, 1);
   });
 }
