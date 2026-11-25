@@ -100,6 +100,11 @@ class _VideoFullscreenViewState extends State<_VideoFullscreenView>
   /// Set once the message went: the player is released and the pop is on its
   /// way; nothing of the clip may be painted or played any more.
   bool _gone = false;
+
+  /// Set when the dialog was popped (chevron, system back, swipe): its exit
+  /// transition is running and the view is still mounted, but a second pop
+  /// from here would close the chat underneath.
+  bool _popped = false;
   bool _loading = true;
   VideoStageError? _error;
   bool _playing = false;
@@ -137,14 +142,18 @@ class _VideoFullscreenViewState extends State<_VideoFullscreenView>
   /// decrypted copy is released NOW, not after the exit transition. A sent
   /// row replacing its optimistic one keeps its `tempId`, so it stays.
   void _onMessagesChanged() {
-    if (_gone || !mounted || _isInChat()) return;
+    if (_gone || _popped || !mounted || _isInChat()) return;
     _gone = true;
     _hideTimer?.cancel();
     _controller?.removeListener(_onControllerTick);
     _session?.dispose();
     _session = null;
     setState(() => _playing = false);
-    Navigator.of(context).pop();
+    // Only the player's own route may be popped here: a pop already under
+    // way (or another route on top) leaves the chat page alone.
+    if (ModalRoute.of(context)?.isCurrent ?? false) {
+      Navigator.of(context).pop();
+    }
   }
 
   @override
@@ -164,6 +173,7 @@ class _VideoFullscreenViewState extends State<_VideoFullscreenView>
   /// handoff position instead (measured on the emulator: 27.4 s → 21.7 s).
   void _onPopInvoked(bool didPop, Object? _) {
     if (!didPop) return;
+    _popped = true;
     final controller = _controller;
     if (controller != null && controller.value.isInitialized) {
       widget.onLastPosition(controller.value.position);
@@ -310,7 +320,7 @@ class _VideoFullscreenViewState extends State<_VideoFullscreenView>
       1,
       curve: dismiss ? Curves.easeIn : Curves.easeOutCubic,
     );
-    if (!mounted) return;
+    if (!mounted || _gone || _popped) return;
     if (dismiss) {
       Navigator.pop(context);
     } else if (_controller?.value.isPlaying ?? false) {
