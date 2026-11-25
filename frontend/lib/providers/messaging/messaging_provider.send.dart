@@ -637,12 +637,27 @@ extension MessagingSend on MessagingProvider {
           deliveryStatus: MessageDeliveryStatus.sending,
         );
         notifyListeners();
-        await sendVoiceMessage(
-          recipientId: recipientId,
-          localAudioPath: url,
-          duration: message.mediaDuration ?? 0,
-          conversationId: message.conversationId,
-        );
+        // The SAME row goes again: its tempId, quote and timer as it was
+        // sent, never the composer's current reply, and never a second row.
+        try {
+          final rawBytes = await file_utils.readFileBytes(url);
+          if (rawBytes.length > MediaCryptoService.maxBytes) {
+            throw Exception('Voice file too large');
+          }
+          await _sendMediaOverBox(
+            recipientId: recipientId,
+            tempId: tempId,
+            messageType: 'VOICE',
+            bytes: Uint8List.fromList(rawBytes),
+            recording: url,
+            effectiveExpiresIn: message.disappearAfterSeconds,
+            effectiveReplyToId: message.replyToMessageId,
+            mediaDuration: message.mediaDuration,
+          );
+        } catch (e) {
+          debugPrint('[MessagingProvider] Voice retry failed: $e');
+          _markMessageFailed(tempId, 'Failed to send voice message');
+        }
       }
       return;
     }
