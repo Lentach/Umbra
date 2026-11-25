@@ -442,7 +442,10 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
         ? _buildPinnedMessageBanner(context, activeConv, messaging, convs)
         : null;
     // Auto-pop when the conversation is gone (unfriend/block)
-    if (activeConv == null && convs.conversations.isNotEmpty) {
+    // An empty list is a reason to close only once the list was loaded: the
+    // only chat is removed the same way as one of many.
+    if (activeConv == null &&
+        (convs.conversations.isNotEmpty || convs.hasLoadedConversations)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         if (Navigator.canPop(context)) {

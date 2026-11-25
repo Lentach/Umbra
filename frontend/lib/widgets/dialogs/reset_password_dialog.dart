@@ -14,11 +14,13 @@ class _ResetPasswordDialogState extends State<ResetPasswordDialog> {
   final _formKey = GlobalKey<FormState>();
   final _oldPasswordController = TextEditingController();
   final _newPasswordController = TextEditingController();
+  final _repeatPasswordController = TextEditingController();
 
   @override
   void dispose() {
     _oldPasswordController.dispose();
     _newPasswordController.dispose();
+    _repeatPasswordController.dispose();
     super.dispose();
   }
 
@@ -104,6 +106,19 @@ class _ResetPasswordDialogState extends State<ResetPasswordDialog> {
               decoration: _passwordDecoration(context, label: l10n.newPassword),
               style: RpgTheme.bodyFont(color: textColor),
               validator: (value) => _validatePassword(context, value),
+            ),
+            const SizedBox(height: 16),
+            TextFormField(
+              controller: _repeatPasswordController,
+              obscureText: true,
+              decoration: _passwordDecoration(
+                context,
+                label: l10n.repeatNewPassword,
+              ),
+              style: RpgTheme.bodyFont(color: textColor),
+              validator: (value) => value == _newPasswordController.text
+                  ? null
+                  : l10n.passwordsDoNotMatch,
             ),
           ],
         ),

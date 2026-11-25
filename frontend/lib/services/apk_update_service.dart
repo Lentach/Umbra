@@ -106,10 +106,24 @@ class ApkUpdateService {
             'url': final String url,
           },
         }
-        when versionCode > 0 && url.isNotEmpty) {
+        when versionCode > 0 && _isOwnHttpsUrl(url)) {
       return (versionCode: versionCode, versionName: versionName, url: url);
     }
     return null;
+  }
+
+  /// `/version` is untrusted input and the banner sends the user to this link
+  /// to install an APK, so only `https` on the app's own API host qualifies
+  /// (the APK is served from `/apk/` on that server). Anything else is "no
+  /// update URL", and a prompt without one is not shown.
+  bool _isOwnHttpsUrl(String url) {
+    final uri = Uri.tryParse(url);
+    final ownHost = Uri.tryParse(_baseUrl)?.host;
+    return uri != null &&
+        uri.scheme == 'https' &&
+        uri.host.isNotEmpty &&
+        ownHost != null &&
+        uri.host == ownHost;
   }
 
   /// The installed Android versionCode. `buildNumber` is that integer on

@@ -463,6 +463,8 @@
   "resetPasswordDialogTitle": "Reset Password",
   "oldPassword": "Old Password",
   "newPassword": "New Password",
+  "repeatNewPassword": "Repeat new password",
+  "passwordsDoNotMatch": "The passwords are not identical",
   "passwordRequired": "Password is required",
   "passwordMinLength": "Password must be at least 8 characters",
   "passwordMustContain": "Password must contain uppercase, lowercase, and number",
