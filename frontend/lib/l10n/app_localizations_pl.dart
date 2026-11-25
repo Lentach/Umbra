@@ -1865,7 +1865,7 @@ class AppLocalizationsPl extends AppLocalizations {
   String get videoMute => 'Wycisz';
 
   @override
-  String get videoSenderYou => 'Ty';
+  String get senderYou => 'Ty';
 
   @override
   String get settingsAutoplayVideos => 'Autoodtwarzanie wideo';

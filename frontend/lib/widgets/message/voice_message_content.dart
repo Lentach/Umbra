@@ -244,6 +244,10 @@ class VoiceMessageContent extends StatelessWidget {
                                   isDark: isDark,
                                   borderColor: borderColor,
                                   content: _replyQuoteContent(context),
+                                  currentUserId: context
+                                      .read<AuthProvider>()
+                                      .currentUser
+                                      ?.id,
                                 ),
                                 const SizedBox(height: 8),
                               ],

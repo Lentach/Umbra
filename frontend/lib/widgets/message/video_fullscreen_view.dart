@@ -337,7 +337,7 @@ class _VideoFullscreenViewState extends State<_VideoFullscreenView>
     final l10n = AppLocalizations.of(context);
     final myId = context.read<AuthProvider>().currentUser?.id;
     final sender = widget.message.senderId == myId
-        ? l10n.videoSenderYou
+        ? l10n.senderYou
         : widget.message.senderUsername;
     final when =
         '${MessageDateSeparator.dayLabel(context, widget.message.createdAt)}'

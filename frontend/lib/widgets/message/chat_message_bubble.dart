@@ -182,6 +182,7 @@ class ChatMessageBubble extends StatelessWidget {
             isDark: isDark,
             borderColor: borderColor,
             content: _replyDisplayContent(context, message.replyTo!),
+            currentUserId: context.read<AuthProvider>().currentUser?.id,
           ),
           const SizedBox(height: 8),
         ],

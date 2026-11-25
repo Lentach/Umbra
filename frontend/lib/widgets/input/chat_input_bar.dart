@@ -363,6 +363,9 @@ class ChatInputBarState extends State<ChatInputBar>
                     message: resolvedReply,
                     onDismiss: () =>
                         context.read<MessagingProvider>().clearReplyingTo(),
+                    currentUserId: context
+                        .read<ConversationsProvider>()
+                        .currentUserId,
                   );
                 },
               ),

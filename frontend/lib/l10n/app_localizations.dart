@@ -3230,11 +3230,11 @@ abstract class AppLocalizations {
   /// **'Wycisz'**
   String get videoMute;
 
-  /// No description provided for @videoSenderYou.
+  /// No description provided for @senderYou.
   ///
   /// In pl, this message translates to:
   /// **'Ty'**
-  String get videoSenderYou;
+  String get senderYou;
 
   /// No description provided for @settingsAutoplayVideos.
   ///

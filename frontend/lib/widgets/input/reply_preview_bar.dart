@@ -18,11 +18,15 @@ class ReplyPreviewBar extends StatelessWidget {
     super.key,
     required this.message,
     required this.onDismiss,
+    this.currentUserId,
   });
 
   /// Already resolved from the open message list when possible (parent owns lookup).
   final MessageModel message;
   final VoidCallback onDismiss;
+
+  /// The signed-in user: a reply to their own message is labelled "You".
+  final int? currentUserId;
 
   @override
   Widget build(BuildContext context) {
@@ -66,9 +70,12 @@ class ReplyPreviewBar extends StatelessWidget {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
-                        message.senderUsername.isNotEmpty
-                            ? message.senderUsername
-                            : 'Unknown',
+                        quotedSenderLabel(
+                          l10n,
+                          senderUsername: message.senderUsername,
+                          senderId: message.senderId,
+                          currentUserId: currentUserId,
+                        ),
                         style: RpgTheme.bodyFont(
                           fontSize: 12,
                           color: accentColor,
