@@ -7,13 +7,15 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../support/l10n.dart';
+
 /// Plan C2: the picker talks to Giphy directly, so GIF search is OFF until the
 /// user says yes. Every Giphy request starts inside [GifPickerSheet]; it not
 /// being built is what keeps the searches and the IP away from Giphy.
 void main() {
   late SettingsProvider settings;
   final openPicker = find.byKey(const ValueKey('open-gif-picker'));
-  final consent = find.text('Turn on GIFs from Giphy?');
+  final consent = find.text(l10n.gifConsentTitle);
   final picker = find.byType(GifPickerSheet);
 
   setUp(() {
@@ -57,7 +59,7 @@ void main() {
     expect(consent, findsOneWidget);
     expect(picker, findsNothing);
 
-    await tester.tap(find.text('Cancel'));
+    await tester.tap(find.text(l10n.cancel));
     await tester.pumpAndSettle();
     expect(consent, findsNothing);
     expect(picker, findsNothing);
@@ -95,7 +97,7 @@ void main() {
 
     await tester.tap(openPicker);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Turn on'));
+    await tester.tap(find.text(l10n.gifConsentEnable));
     await tester.pumpAndSettle();
     expect(picker, findsOneWidget);
     expect(settings.gifSearch, isTrue);

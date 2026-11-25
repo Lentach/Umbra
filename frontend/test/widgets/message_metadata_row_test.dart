@@ -9,6 +9,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
+import '../support/l10n.dart';
+
 MessageModel _message({
   int? disappearAfterSeconds,
   DateTime? expiresAt,
@@ -215,13 +217,13 @@ void main() {
     testWidgets('shows "edited" when editedAt is set', (tester) async {
       await pumpEdited(tester, editedMsg(editedAt: DateTime.now()));
       await tester.pump();
-      expect(find.text('edited'), findsOneWidget);
+      expect(find.text(l10n.messageEditedLabel), findsOneWidget);
     });
 
     testWidgets('hides "edited" when editedAt is null', (tester) async {
       await pumpEdited(tester, editedMsg());
       await tester.pump();
-      expect(find.text('edited'), findsNothing);
+      expect(find.text(l10n.messageEditedLabel), findsNothing);
     });
   });
 }

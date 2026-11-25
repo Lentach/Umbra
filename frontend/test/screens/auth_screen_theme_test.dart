@@ -11,6 +11,8 @@ import 'package:fireplace/theme/rpg_theme.dart';
 import 'package:fireplace/widgets/auth_form.dart';
 import 'package:fireplace/widgets/chat_background_pattern.dart';
 
+import '../support/l10n.dart';
+
 // Owner ruling 2026-07-28 (supersedes the 2026-07-18 always-Cosmic door):
 // the front door ALWAYS wears Hot Stone — light theme, plain warm-paper
 // backdrop — regardless of the ambient app theme.
@@ -85,7 +87,7 @@ void main() {
       reason: 'exactly one tab is announced as active',
     );
 
-    for (final label in ['LOGIN', 'REGISTER']) {
+    for (final label in [l10n.authLoginTab, l10n.authRegisterTab]) {
       final size = tester.getSize(
         find.ancestor(
           of: find.text(label),

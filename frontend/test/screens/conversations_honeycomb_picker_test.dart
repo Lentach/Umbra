@@ -23,6 +23,7 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../support/contact_seed.dart';
+import '../support/l10n.dart';
 import '../support/passcode_fakes.dart';
 
 class _FakeAuthProvider extends AuthProvider {
@@ -195,8 +196,8 @@ void main() {
     await _openPicker(tester);
 
     expect(find.byKey(const Key('chat-honeycomb-empty-state')), findsOneWidget);
-    expect(find.text('No friends yet'), findsOneWidget);
-    expect(find.text('Add a friend to start a chat.'), findsOneWidget);
+    expect(find.text(l10n.chatPickerEmptyTitle), findsOneWidget);
+    expect(find.text(l10n.chatPickerEmptyDescription), findsOneWidget);
   });
 
   testWidgets('reduce motion renders the picker entrance immediately', (
@@ -329,7 +330,7 @@ void _pickerNameTests() {
     expect(
       find.descendant(
         of: find.byType(ChatHoneycombPicker),
-        matching: find.text('Pending'),
+        matching: find.text(l10n.invitationStatusPending),
       ),
       findsOneWidget,
     );

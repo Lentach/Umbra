@@ -94,7 +94,11 @@ void main() {
 
     expect(find.byIcon(Icons.lock_reset_outlined), findsOneWidget);
     // Coarse hours, never a live seconds counter.
-    expect(find.textContaining('71 hours'), findsOneWidget);
+    final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+    expect(
+      find.textContaining(l10n.identityResetHoursLeft(71)),
+      findsOneWidget,
+    );
     expect(find.byType(TextButton), findsOneWidget);
   });
 

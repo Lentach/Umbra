@@ -5,6 +5,8 @@ import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
 import 'package:fireplace/widgets/message/text_message_content.dart';
 
+import '../support/l10n.dart';
+
 MessageModel _msg(String content) => MessageModel(
   id: 1,
   conversationId: 1,
@@ -41,8 +43,8 @@ void main() {
 
   testWidgets('short message shows no Read more toggle', (tester) async {
     await tester.pumpWidget(_wrap(_msg('hi there, short message')));
-    expect(find.text('Read more'), findsNothing);
-    expect(find.text('Show less'), findsNothing);
+    expect(find.text(l10n.messageReadMore), findsNothing);
+    expect(find.text(l10n.messageShowLess), findsNothing);
   });
 
   testWidgets('long message collapses behind Read more then expands',
@@ -50,24 +52,24 @@ void main() {
     await tester.pumpWidget(_wrap(_msg(longText)));
 
     // Collapsed: toggle present, body clipped to the collapse cap.
-    expect(find.text('Read more'), findsOneWidget);
-    expect(find.text('Show less'), findsNothing);
+    expect(find.text(l10n.messageReadMore), findsOneWidget);
+    expect(find.text(l10n.messageShowLess), findsNothing);
     final collapsed = tester.getSize(find.byType(RichText).first).height;
 
-    await tester.ensureVisible(find.text('Read more'));
-    await tester.tap(find.text('Read more'));
+    await tester.ensureVisible(find.text(l10n.messageReadMore));
+    await tester.tap(find.text(l10n.messageReadMore));
     await tester.pump();
 
     // Expanded: full text taller, toggle flips to Show less.
-    expect(find.text('Show less'), findsOneWidget);
-    expect(find.text('Read more'), findsNothing);
+    expect(find.text(l10n.messageShowLess), findsOneWidget);
+    expect(find.text(l10n.messageReadMore), findsNothing);
     final expanded = tester.getSize(find.byType(RichText).first).height;
     expect(expanded, greaterThan(collapsed));
 
     // Collapse again.
-    await tester.ensureVisible(find.text('Show less'));
-    await tester.tap(find.text('Show less'));
+    await tester.ensureVisible(find.text(l10n.messageShowLess));
+    await tester.tap(find.text(l10n.messageShowLess));
     await tester.pump();
-    expect(find.text('Read more'), findsOneWidget);
+    expect(find.text(l10n.messageReadMore), findsOneWidget);
   });
 }

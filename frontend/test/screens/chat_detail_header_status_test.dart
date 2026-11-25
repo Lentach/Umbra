@@ -13,6 +13,7 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../support/chat_seed.dart';
+import '../support/l10n.dart';
 
 /// The status line under the chat title (`_getHeaderStatusText`): what a user
 /// sees while the peer types, while either side records a voice note, and
@@ -20,8 +21,8 @@ import '../support/chat_seed.dart';
 const _currentUserJwt =
     'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOjEsInVzZXJuYW1lIjoiYWxpY2UiLCJ0YWciOiIwMDAxIiwiZXhwIjo5OTk5OTk5OTl9.abc';
 
-const _typingLine = 'typing…';
-const _recordingLine = 'Recording voice…';
+final String _typingLine = l10n.typing;
+final String _recordingLine = l10n.recordingVoice;
 
 /// The peer's typing / recording state is box-fed and has no public setter, so
 /// the screen reads it from here. The members are class members, so the

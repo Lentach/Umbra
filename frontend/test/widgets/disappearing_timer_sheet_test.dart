@@ -12,6 +12,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
 import '../support/chat_seed.dart';
+import '../support/l10n.dart';
 
 /// Records what the sheet asks the provider to set.
 class _RecordingConversations extends ConversationsProvider {
@@ -94,24 +95,24 @@ void main() {
       await _openSheet(tester, initialSeconds: 300);
 
       expect(find.byType(HearthFadeHexHero), findsOneWidget);
-      expect(find.textContaining('after they are read'), findsOneWidget);
+      expect(find.text(l10n.disappearingTimerExplainerLine1), findsOneWidget);
       expect(find.byType(CupertinoPicker), findsNWidgets(4));
-      expect(find.text('5 minutes'), findsOneWidget);
-      expect(find.text('Set timer'), findsOneWidget);
-      expect(find.text('Turn off'), findsOneWidget);
+      expect(find.text(l10n.disappearingTimerMinutes(5)), findsOneWidget);
+      expect(find.text(l10n.disappearingTimerSetTimer), findsOneWidget);
+      expect(find.text(l10n.disappearingTimerTurnOff), findsOneWidget);
     });
 
     testWidgets('null timer shows all zeros and Off summary', (tester) async {
       await _openSheet(tester, initialSeconds: null);
 
-      expect(find.text('Off'), findsOneWidget);
+      expect(find.text(l10n.disappearingTimerOff), findsOneWidget);
       expect(find.text('0'), findsNWidgets(4));
     });
 
     testWidgets('loads 1 day from initialSeconds', (tester) async {
       await _openSheet(tester, initialSeconds: 86400);
 
-      expect(find.text('1 day'), findsOneWidget);
+      expect(find.text(l10n.disappearingTimerDays(1)), findsOneWidget);
     });
 
     testWidgets('shows composite summary for multi-part duration', (
@@ -120,7 +121,12 @@ void main() {
       const twoDaysThreeMinutes = 2 * 86400 + 3 * 60;
       await _openSheet(tester, initialSeconds: twoDaysThreeMinutes);
 
-      expect(find.text('2 days 3 minutes'), findsOneWidget);
+      expect(
+        find.text(
+          '${l10n.disappearingTimerDays(2)} ${l10n.disappearingTimerMinutes(3)}',
+        ),
+        findsOneWidget,
+      );
     });
 
     testWidgets('set timer applies valid duration and closes sheet', (
@@ -128,7 +134,7 @@ void main() {
     ) async {
       await _openSheet(tester, initialSeconds: 300);
 
-      await _tapSheetButton(tester, 'Set timer');
+      await _tapSheetButton(tester, l10n.disappearingTimerSetTimer);
 
       expect(find.byType(DisappearingTimerSheet), findsNothing);
     });
@@ -136,7 +142,7 @@ void main() {
     testWidgets('turn off sets a null timer', (tester) async {
       final convs = await _openSheet(tester, initialSeconds: 86400);
 
-      await _tapSheetButton(tester, 'Turn off');
+      await _tapSheetButton(tester, l10n.disappearingTimerTurnOff);
 
       expect(convs.timerCalls, [(1, null)]);
     });
@@ -144,7 +150,7 @@ void main() {
     testWidgets('set timer keeps selected seconds', (tester) async {
       final convs = await _openSheet(tester, initialSeconds: 300);
 
-      await _tapSheetButton(tester, 'Set timer');
+      await _tapSheetButton(tester, l10n.disappearingTimerSetTimer);
 
       expect(convs.timerCalls, [(1, 300)]);
     });
@@ -152,9 +158,9 @@ void main() {
     testWidgets('30 days exactly is valid and applies', (tester) async {
       final convs = await _openSheet(tester, initialSeconds: 2592000);
 
-      expect(find.text('30 days'), findsOneWidget);
+      expect(find.text(l10n.disappearingTimerDays(30)), findsOneWidget);
 
-      await _tapSheetButton(tester, 'Set timer');
+      await _tapSheetButton(tester, l10n.disappearingTimerSetTimer);
 
       expect(convs.timerCalls, [(1, 2592000)]);
       expect(find.byType(DisappearingTimerSheet), findsNothing);
@@ -165,10 +171,10 @@ void main() {
     ) async {
       await _openSheet(tester, initialSeconds: 3);
 
-      await _tapSheetButton(tester, 'Set timer');
+      await _tapSheetButton(tester, l10n.disappearingTimerSetTimer);
 
       expect(
-        find.textContaining('between 5 seconds and 30 days'),
+        find.text(l10n.disappearingTimerOutOfRange),
         findsOneWidget,
       );
       expect(find.byType(DisappearingTimerSheet), findsOneWidget);
@@ -179,7 +185,12 @@ void main() {
 
       final pickers = find.byType(CupertinoPicker);
       expect(pickers, findsNWidgets(4));
-      final labels = ['Days', 'Hours', 'Minutes', 'Seconds'];
+      final labels = [
+        l10n.disappearingTimerDaysLabel,
+        l10n.disappearingTimerHoursLabel,
+        l10n.disappearingTimerMinutesLabel,
+        l10n.disappearingTimerSecondsLabel,
+      ];
       for (var i = 0; i < labels.length; i++) {
         expect(
           find.ancestor(
@@ -200,7 +211,7 @@ void main() {
       );
 
       expect(find.byType(DisappearingTimerSheet), findsOneWidget);
-      expect(find.text('1 day'), findsOneWidget);
+      expect(find.text(l10n.disappearingTimerDays(1)), findsOneWidget);
     });
 
     testWidgets('renders on teal theme with themed surface', (tester) async {
@@ -212,7 +223,7 @@ void main() {
       );
 
       expect(find.byType(DisappearingTimerSheet), findsOneWidget);
-      expect(find.text('1 day'), findsOneWidget);
+      expect(find.text(l10n.disappearingTimerDays(1)), findsOneWidget);
 
       final hero = tester.widget<HearthFadeHexHero>(
         find.byType(HearthFadeHexHero),
@@ -244,7 +255,7 @@ void main() {
       );
 
       expect(find.byType(DisappearingTimerSheet), findsOneWidget);
-      expect(find.text('5 minutes'), findsOneWidget);
+      expect(find.text(l10n.disappearingTimerMinutes(5)), findsOneWidget);
 
       expect(find.byType(GlassSurface), findsOneWidget);
       final fill = tester.widget<Container>(

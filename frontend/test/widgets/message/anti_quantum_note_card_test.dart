@@ -9,6 +9,8 @@ import 'package:fireplace/widgets/message/anti_quantum_note_card.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../../support/l10n.dart';
+
 void main() {
   // The card's internal parse uses the default AppConfig.baseUrl, so URLs must
   // be built from it for detection/expiry parsing to fire in the test VM.
@@ -52,8 +54,8 @@ void main() {
 
       expect(find.byKey(countdownKey), findsOneWidget);
       expect(find.textContaining('Self-destructs in'), findsOneWidget);
-      expect(find.text('One-time read · Tap to open'), findsOneWidget);
-      expect(find.text('This note has self-destructed'), findsNothing);
+      expect(find.text(l10n.antiQuantumNoteCardSubtitle), findsOneWidget);
+      expect(find.text(l10n.antiQuantumNoteCardDestroyed), findsNothing);
 
       // The card arms a real Timer for future expiry; unmount to dispose and
       // cancel it so no pending-timer assertion fires at teardown.
@@ -69,8 +71,8 @@ void main() {
       await tester.pumpWidget(wrap(noteUrl(expiryMs: past)));
 
       expect(find.byKey(countdownKey), findsNothing);
-      expect(find.text('This note has self-destructed'), findsOneWidget);
-      expect(find.text('One-time read · Tap to open'), findsNothing);
+      expect(find.text(l10n.antiQuantumNoteCardDestroyed), findsOneWidget);
+      expect(find.text(l10n.antiQuantumNoteCardSubtitle), findsNothing);
     },
   );
 
@@ -80,8 +82,8 @@ void main() {
       await tester.pumpWidget(wrap(noteUrl()));
 
       expect(find.byKey(countdownKey), findsNothing);
-      expect(find.text('One-time read · Tap to open'), findsOneWidget);
-      expect(find.text('This note has self-destructed'), findsNothing);
+      expect(find.text(l10n.antiQuantumNoteCardSubtitle), findsOneWidget);
+      expect(find.text(l10n.antiQuantumNoteCardDestroyed), findsNothing);
     },
   );
   group('tap routing', () {
@@ -129,9 +131,15 @@ void main() {
         expect(probed, [hex]);
         expect(find.byKey(pillKey), findsOneWidget);
         expect(find.byKey(cardKey), findsNothing);
-        expect(find.textContaining('Note destroyed'), findsOneWidget);
+        expect(
+          find.textContaining(l10n.antiQuantumNoteBurnedTitle),
+          findsOneWidget,
+        );
         expect(find.byKey(countdownKey), findsNothing);
-        expect(find.textContaining('it was read'), findsOneWidget);
+        expect(
+          find.textContaining(l10n.antiQuantumNoteBurnedSubtitle),
+          findsOneWidget,
+        );
       },
     );
 
@@ -220,7 +228,7 @@ void main() {
 
         expect(probes, 0);
         expect(find.byKey(pillKey), findsNothing);
-        expect(find.text('This note has self-destructed'), findsOneWidget);
+        expect(find.text(l10n.antiQuantumNoteCardDestroyed), findsOneWidget);
       },
     );
   });

@@ -11,6 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
 import '../../support/chat_seed.dart';
+import '../../support/l10n.dart';
 
 ConversationsProvider _providerWithConversation({
   required int conversationId,
@@ -72,13 +73,28 @@ void main() {
         ),
       );
 
-      expect(find.textContaining('5 minutes'), findsOneWidget);
+      expect(
+        find.text(
+          l10n.disappearingComposerBanner(l10n.disappearingTimerMinutes(5)),
+        ),
+        findsOneWidget,
+      );
 
       convs.setDisappearingTimer(conversationId, 86400);
       await tester.pump();
 
-      expect(find.textContaining('1 day'), findsOneWidget);
-      expect(find.textContaining('5 minutes'), findsNothing);
+      expect(
+        find.text(
+          l10n.disappearingComposerBanner(l10n.disappearingTimerDays(1)),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.text(
+          l10n.disappearingComposerBanner(l10n.disappearingTimerMinutes(5)),
+        ),
+        findsNothing,
+      );
     });
 
     testWidgets('hides banner when timer is turned off', (tester) async {
@@ -109,7 +125,12 @@ void main() {
         ),
       );
 
-      expect(find.textContaining('1 day'), findsOneWidget);
+      expect(
+        find.text(
+          l10n.disappearingComposerBanner(l10n.disappearingTimerDays(1)),
+        ),
+        findsOneWidget,
+      );
 
       convs.setDisappearingTimer(conversationId, null);
       await tester.pump();
@@ -145,7 +166,12 @@ void main() {
         ),
       );
 
-      expect(find.textContaining('5 minutes'), findsOneWidget);
+      expect(
+        find.text(
+          l10n.disappearingComposerBanner(l10n.disappearingTimerMinutes(5)),
+        ),
+        findsOneWidget,
+      );
 
       final hexPaint = tester
           .widgetList<CustomPaint>(find.byType(CustomPaint))

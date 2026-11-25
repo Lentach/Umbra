@@ -316,7 +316,10 @@ void main() {
 
       expect(find.text(l10n.linkGateResetPendingTitle), findsOneWidget);
       // The countdown rides the body copy (coarse hours, never seconds).
-      expect(find.textContaining('71 hours'), findsOneWidget);
+      expect(
+        find.text(l10n.linkGateResetPendingBody(l10n.identityResetHoursLeft(71))),
+        findsOneWidget,
+      );
       expect(find.byKey(const Key('link-gate-cancel-reset')), findsOneWidget);
       // (lxxii) two-buttons rule: a running ceremony hides the start door.
       expect(find.byKey(const Key('link-gate-start-reset')), findsNothing);

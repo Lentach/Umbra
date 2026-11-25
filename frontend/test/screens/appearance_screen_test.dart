@@ -8,6 +8,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../support/l10n.dart';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -41,9 +43,9 @@ void main() {
   ) async {
     await pumpAppearance(tester);
 
-    expect(find.text('COLOR THEME'), findsOneWidget);
-    expect(find.text('Alabaster'), findsOneWidget);
-    expect(find.text('Cosmos'), findsOneWidget);
+    expect(find.text(l10n.appearanceColorTheme.toUpperCase()), findsOneWidget);
+    expect(find.text(l10n.appearanceThemeLight), findsOneWidget);
+    expect(find.text(l10n.appearanceThemeCosmic), findsOneWidget);
     expect(find.byType(AppearancePreview), findsWidgets);
     expect(find.byIcon(Icons.palette_outlined), findsNothing);
     expect(find.byIcon(Icons.auto_awesome), findsNothing);

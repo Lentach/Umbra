@@ -29,6 +29,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import '../support/l10n.dart';
+
 /// A canonical code minted by the real ephemeral generator (a hand-typed key
 /// segment fails the strict re-encode check).
 final String _code = LinkOobCode(
@@ -238,7 +240,7 @@ void main() {
 
       expect(find.byType(LinkDeviceScreen), findsNothing);
       expect(find.text('marker-page'), findsOneWidget);
-      expect(find.text('The device has been linked.'), findsOneWidget);
+      expect(find.text(l10n.linkPrimaryDone), findsOneWidget);
       await tester.pump(const Duration(seconds: 3));
     });
 

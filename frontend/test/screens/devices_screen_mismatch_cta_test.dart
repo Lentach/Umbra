@@ -180,11 +180,12 @@ void main() {
         tester,
       ) async {
         await pumpTombstones(tester);
+        final l10n = await AppLocalizations.delegate.load(const Locale('en'));
         expect(find.byKey(const Key('device-row-1')), findsOneWidget);
         expect(find.byKey(const Key('device-row-4')), findsOneWidget);
         expect(find.byKey(const Key('device-row-2')), findsNothing);
         expect(find.byKey(const Key('device-row-3')), findsNothing);
-        expect(find.text('Revoked devices (2)'), findsOneWidget);
+        expect(find.text(l10n.devicesRevokedSection(2)), findsOneWidget);
         // The live #4 sits ABOVE the toggle — never below a graveyard.
         final row4 = tester.getTopLeft(find.byKey(const Key('device-row-4')));
         final toggle = tester.getTopLeft(
@@ -235,7 +236,8 @@ void main() {
       Future<void> revokeRow4(WidgetTester tester) async {
         await tester.tap(find.byKey(const Key('device-revoke-4')));
         await tester.pumpAndSettle();
-        await tester.tap(find.text('Remove device').last);
+        final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+        await tester.tap(find.text(l10n.devicesRevokeAction).last);
         // The revoke is in flight against a fake that never answers, so the
         // busy indicator animates forever: pump frames, do not settle.
         await tester.pump();

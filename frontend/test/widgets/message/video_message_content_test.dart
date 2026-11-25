@@ -9,6 +9,8 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:video_player/video_player.dart';
 
+import '../../support/l10n.dart';
+
 /// Counts slot traffic so tests can assert the bubble's arbiter behaviour
 /// without a live [VideoPlayerController].
 class _RecordingArbiter extends InlineVideoArbiter {
@@ -142,7 +144,7 @@ void main() {
       // Silent fallback: poster restored, slot given back, no error copy.
       expect(find.byIcon(Icons.play_arrow_rounded), findsOneWidget);
       expect(find.byType(VideoPlayer), findsNothing);
-      expect(find.text('Video failed to load'), findsNothing);
+      expect(find.text(l10n.videoFailedToLoad), findsNothing);
       expect(
         find.byKey(const ValueKey('video_inline_mute_toggle')),
         findsNothing,

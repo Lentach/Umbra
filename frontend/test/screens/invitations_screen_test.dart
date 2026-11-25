@@ -14,6 +14,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
 import '../support/contact_seed.dart';
+import '../support/l10n.dart';
 
 Map<String, dynamic> _user(int id, String username) => {
   'id': id,
@@ -168,7 +169,7 @@ void main() {
       _expectExactlyOnePeerRow(tester, 2);
       expect(
         tester.getTopLeft(find.byKey(const ValueKey(2))).dy,
-        greaterThan(tester.getTopLeft(find.text('Sent')).dy),
+        greaterThan(tester.getTopLeft(find.text(l10n.invitationsSent)).dy),
       );
 
       friends.onContactsChanged();
@@ -184,12 +185,12 @@ void main() {
       ..boxAcceptRequest = ((_) => Completer<FirstContactAccept>().future);
 
     await _pumpInvitations(tester, friends);
-    await tester.tap(find.text('Accept'));
+    await tester.tap(find.text(l10n.accept));
     await tester.pump();
 
     _expectExactlyOnePeerRow(tester, 2);
     expect(find.byKey(const Key('invitation-action-progress')), findsOneWidget);
-    expect(find.text('Invitation accepted'), findsNothing);
+    expect(find.text(l10n.invitationAccepted), findsNothing);
 
     // The in-flight frame is the assertion. Drain the action so its ack-timeout
     // timer (FriendsProvider bounds every invitation round trip) does not
@@ -207,7 +208,7 @@ void main() {
         ..boxDeclineRequest = ((_) => declined.future);
 
       await _pumpInvitations(tester, friends);
-      await tester.tap(find.text('Decline'));
+      await tester.tap(find.text(l10n.invitationDecline));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 250));
 
@@ -247,10 +248,10 @@ void main() {
     await tester.pump();
 
     _expectExactlyOnePeerRow(tester, 2);
-    expect(find.text('Invitation accepted'), findsOneWidget);
-    expect(find.text('Chat ready'), findsOneWidget);
-    expect(find.text('Open chat'), findsOneWidget);
-    expect(find.text('Done'), findsOneWidget);
+    expect(find.text(l10n.invitationAccepted), findsOneWidget);
+    expect(find.text(l10n.invitationChatReady), findsOneWidget);
+    expect(find.text(l10n.invitationOpenChat), findsOneWidget);
+    expect(find.text(l10n.invitationDone), findsOneWidget);
     expect(find.byType(InvitationsScreen), findsOneWidget);
   });
 
@@ -264,7 +265,12 @@ void main() {
     friends.onBoxFriendshipMade(2, outgoing: false);
     await tester.pump();
 
-    _expectRowInSection(tester, 2, 'Waiting for you', 'Sent');
+    _expectRowInSection(
+      tester,
+      2,
+      l10n.invitationsWaitingForYou,
+      l10n.invitationsSent,
+    );
   });
 
   testWidgets('sender renders the accepted friendship under Sent',
@@ -280,7 +286,7 @@ void main() {
     _expectExactlyOnePeerRow(tester, 2);
     expect(
       tester.getTopLeft(find.byKey(const ValueKey(2))).dy,
-      greaterThan(tester.getTopLeft(find.text('Sent')).dy),
+      greaterThan(tester.getTopLeft(find.text(l10n.invitationsSent)).dy),
     );
   });
 
@@ -327,14 +333,14 @@ void main() {
 
     deliverAccepted();
     await tester.pump();
-    await tester.tap(find.text('Done'));
+    await tester.tap(find.text(l10n.invitationDone));
     await tester.pump();
     expect(popped, isNull);
     expect(find.byKey(const ValueKey(2)), findsNothing);
 
     deliverAccepted();
     await tester.pump();
-    await tester.tap(find.text('Open chat'));
+    await tester.tap(find.text(l10n.invitationOpenChat));
     await tester.pumpAndSettle();
     expect(popped, 2);
   });
@@ -370,19 +376,19 @@ void main() {
       tester
           .getSemantics(find.byKey(const ValueKey(2)))
           .label,
-      contains('bob#0002, invitation received, wants to connect'),
+      contains(l10n.invitationSemanticIncoming('bob#0002')),
     );
     expect(
       tester
           .getSemantics(find.byKey(const ValueKey(3)))
           .label,
-      contains('mara#0003, invitation sent, waiting for response'),
+      contains(l10n.invitationSemanticOutgoing('mara#0003')),
     );
     expect(
       tester
           .getSemantics(find.byKey(const ValueKey(4)))
           .label,
-      contains('nina#0004, invitation accepted, chat ready'),
+      contains(l10n.invitationSemanticAcceptedReady('nina#0004')),
     );
     handle.dispose();
   });
@@ -394,7 +400,7 @@ void main() {
       ..boxDeclineRequest = ((_) async => throw StateError('no box'));
     await _pumpInvitations(tester, friends);
 
-    await tester.tap(find.text('Decline'));
+    await tester.tap(find.text(l10n.invitationDecline));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 250));
     await tester.pump();
@@ -402,7 +408,7 @@ void main() {
     await tester.pump();
 
     _expectExactlyOnePeerRow(tester, 2);
-    expect(find.text('Could not decline the invitation'), findsOneWidget);
+    expect(find.text(l10n.invitationDeclineFailed), findsOneWidget);
     expect(
       tester.widget<ElevatedButton>(
         find.descendant(
@@ -429,13 +435,13 @@ void main() {
     expect(find.byKey(const Key('invitation-comb--2')), findsOneWidget);
     expect(find.byKey(const Key('invitation-comb--3')), findsOneWidget);
     // With more than one request nothing auto-expands: no card, no Accept.
-    expect(find.text('Accept'), findsNothing);
+    expect(find.text(l10n.accept), findsNothing);
 
     await tester.tap(find.byKey(const Key('invitation-comb--2')));
     await tester.pump();
     expect(find.byKey(const ValueKey(2)), findsOneWidget);
     expect(find.byKey(const ValueKey(3)), findsNothing);
-    expect(find.text('Accept'), findsOneWidget);
+    expect(find.text(l10n.accept), findsOneWidget);
 
     // Picking the other hex swaps the card rather than stacking a second one.
     await tester.tap(find.byKey(const Key('invitation-comb--3')));
@@ -446,7 +452,7 @@ void main() {
     // Tapping the open hex again collapses it.
     await tester.tap(find.byKey(const Key('invitation-comb--3')));
     await tester.pump();
-    expect(find.text('Accept'), findsNothing);
+    expect(find.text(l10n.accept), findsNothing);
   });
 
   testWidgets('a lone inbound request auto-expands and its hex can collapse '
@@ -456,11 +462,11 @@ void main() {
     await _pumpInvitations(tester, friends);
 
     // The common case pays zero extra taps: the only card is already open.
-    expect(find.text('Accept'), findsOneWidget);
+    expect(find.text(l10n.accept), findsOneWidget);
 
     await tester.tap(find.byKey(const Key('invitation-comb--2')));
     await tester.pump();
-    expect(find.text('Accept'), findsNothing);
+    expect(find.text(l10n.accept), findsNothing);
   });
 
   testWidgets(
@@ -500,7 +506,7 @@ void main() {
       await _pumpInvitations(tester, friends);
       friends.onSearchUsersResult([_user(2, 'bob')]);
       await tester.pump();
-      expect(find.text('User not found'), findsNothing);
+      expect(find.text(l10n.userNotFound), findsNothing);
       expect(find.byKey(const Key('invitation-send-2')), findsNothing);
     },
   );
