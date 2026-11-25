@@ -33,6 +33,7 @@ MessageModel _videoMessage({
   bool keyed = true,
   int id = 7,
   DateTime? createdAt,
+  int? duration = 12,
 }) =>
     MessageModel(
       id: id,
@@ -46,7 +47,7 @@ MessageModel _videoMessage({
       mediaUrl: mediaUrl,
       mediaKey: keyed ? 'k' : null,
       mediaIv: keyed ? 'iv' : null,
-      mediaDuration: 12,
+      mediaDuration: duration,
       mediaWidth: 360,
       mediaHeight: 480,
       encryptedContent: 'cipher',
@@ -283,4 +284,39 @@ void main() {
       expect(arbiter.requests, 2, reason: 'current again: re-request');
     },
   );
+
+  // The `m:ss` on the poster's duration chip (the bubble is a static poster
+  // here: no SettingsProvider, so autoplay is off and the chip shows).
+  final shownDurations = <int, String>{
+    1: '0:01',
+    9: '0:09',
+    59: '0:59',
+    60: '1:00',
+    61: '1:01',
+    600: '10:00',
+    3725: '62:05', // minutes are not wrapped at the hour
+  };
+  for (final MapEntry(key: seconds, value: label) in shownDurations.entries) {
+    testWidgets('a $seconds s clip shows "$label" on its chip', (tester) async {
+      await _pumpBubble(
+        tester,
+        _videoMessage(mediaUrl: 'https://x/v.bin', duration: seconds),
+      );
+      await tester.pump();
+
+      expect(find.text(label), findsOneWidget);
+    });
+  }
+
+  for (final seconds in <int?>[0, -5, null]) {
+    testWidgets('a clip of $seconds s has no duration chip', (tester) async {
+      await _pumpBubble(
+        tester,
+        _videoMessage(mediaUrl: 'https://x/v.bin', duration: seconds),
+      );
+      await tester.pump();
+
+      expect(find.textContaining(RegExp(r'^\d+:\d\d$')), findsNothing);
+    });
+  }
 }
