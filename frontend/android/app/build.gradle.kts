@@ -16,6 +16,16 @@ if (keyPropertiesFile.exists()) {
     keyProperties.load(FileInputStream(keyPropertiesFile))
 }
 
+// OPT-IN, off by default: `-PumbraUnsignedRelease=true` (CI passes
+// `--android-project-arg=umbraUnsignedRelease=true`) packages the release APK with NO
+// signature at all, even when key.properties exists. `.github/workflows/
+// release-apk.yml` builds that file from a tag; the owner signs it offline
+// (`scripts/apk/sign-ci-apk.ps1`), so the keystore never reaches CI. An unsigned
+// APK cannot be installed, so it cannot be mistaken for a shippable one. The
+// App Bundle keeps the keystore gate: Play gets a signed bundle from the PC.
+val unsignedRelease =
+    project.findProperty("umbraUnsignedRelease")?.toString() == "true"
+
 // HARD GATE (execution-time): a release build without a real keystore must FAIL
 // LOUDLY, never silently fall back to debug signing (a debug-signed "release"
 // looks shippable but is not: Play rejects it and its signature can't ever be
@@ -28,8 +38,9 @@ if (keyPropertiesFile.exists()) {
 // packageReleaseBundle = AAB.
 tasks.matching { it.name == "packageRelease" || it.name == "packageReleaseBundle" }
     .configureEach {
+        val isApk = name == "packageRelease"
         doFirst {
-            if (!keyPropertiesFile.exists()) {
+            if (!keyPropertiesFile.exists() && !(unsignedRelease && isApk)) {
                 throw GradleException(
                     "Release packaging requested but android/key.properties is missing. " +
                     "Create the release keystore first — see docs/runbooks/android-release.md " +
@@ -100,7 +111,7 @@ android {
             // filter missed yields an inert UNSIGNED apk (also rejected by the
             // apksigner gate in build-android.ps1) — NEVER a debug-signed one
             // that looks shippable.
-            signingConfig = if (keyPropertiesFile.exists()) {
+            signingConfig = if (keyPropertiesFile.exists() && !unsignedRelease) {
                 signingConfigs.getByName("release")
             } else {
                 null
