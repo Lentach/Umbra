@@ -88,12 +88,20 @@ class _DeviceLinkGateScreenState extends State<DeviceLinkGateScreen> {
     _controller = controller;
     _connection = connection;
     connection.registerProvisioningSink(controller);
-    controller.addListener(_maybeConsumePendingPrimaryCode);
-    PendingLinkCode.listenable.addListener(_maybeConsumePendingPrimaryCode);
+    controller.addListener(_scheduleConsume);
+    PendingLinkCode.listenable.addListener(_scheduleConsume);
     // The controller has not notified yet — check the slot armed at boot.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _maybeConsumePendingPrimaryCode();
-    });
+    _scheduleConsume();
+  }
+
+  /// Every trigger (boot, a code arming, a controller notify, a rebuild) asks
+  /// AFTER the frame: a controller notify arrives from inside
+  /// `LinkThisDeviceBody.initState`, mid-build and before that body has sent
+  /// its own open, and the hello must follow the open, never lead it.
+  void _scheduleConsume() {
+    WidgetsBinding.instance
+      ..addPostFrameCallback((_) => _maybeConsumePendingPrimaryCode())
+      ..scheduleFrame();
   }
 
   /// A `p` code that arrived by deep link on this keyless install runs the
@@ -104,6 +112,10 @@ class _DeviceLinkGateScreenState extends State<DeviceLinkGateScreen> {
   void _maybeConsumePendingPrimaryCode() {
     final controller = _controller;
     if (controller == null || _consumedPendingPrimaryCode || !mounted) return;
+    // The hello runs only where its security code is ON SCREEN (states
+    // (a)/(b)/(d)): in (c) the code stays armed, and `build` asks again once
+    // the link state shows (A2-DEV-02).
+    if (!_showsCeremony(context.read<EncryptionProvider>())) return;
     final raw = PendingLinkCode.listenable.value;
     if (raw == null) return;
     final code = extractLinkCode(raw) ?? raw;
@@ -115,13 +127,20 @@ class _DeviceLinkGateScreenState extends State<DeviceLinkGateScreen> {
     );
   }
 
+  static bool _isCheckingOnly(EncryptionProvider e) =>
+      e.identityCheckUnavailable && !e.needsDeviceLink;
+
+  /// States (a)/(b)/(d) mount [LinkThisDeviceBody]; (c) does not.
+  static bool _showsCeremony(EncryptionProvider e) =>
+      e.identityResetDeadline != null || !_isCheckingOnly(e);
+
   @override
   void dispose() {
     _ticker?.cancel();
-    PendingLinkCode.listenable.removeListener(_maybeConsumePendingPrimaryCode);
+    PendingLinkCode.listenable.removeListener(_scheduleConsume);
     final controller = _controller;
     if (controller != null) {
-      controller.removeListener(_maybeConsumePendingPrimaryCode);
+      controller.removeListener(_scheduleConsume);
       _connection?.unregisterProvisioningSink(controller);
       controller.dispose();
     }
@@ -148,8 +167,12 @@ class _DeviceLinkGateScreenState extends State<DeviceLinkGateScreen> {
     final resetPending = resetDeadline != null;
     // (c): the guard could not be asked and nothing else is known — never a
     // keyless shell, and no ceremony to start against an unknown verdict.
-    final checkingOnly =
-        encryption.identityCheckUnavailable && !encryption.needsDeviceLink;
+    final checkingOnly = _isCheckingOnly(encryption);
+    // A code armed while (c) was showing runs once the body is mounted: a
+    // frame later, so the body's own open goes out BEFORE the hello.
+    if (PendingLinkCode.isArmed && _showsCeremony(encryption)) {
+      _scheduleConsume();
+    }
 
     final children = <Widget>[];
     if (resetPending) {

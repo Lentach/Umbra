@@ -539,4 +539,69 @@ void main() {
       expect(await stagedPlatform(const {}), 'unknown');
     });
   });
+
+  // A2-DEV-01: a deep-linked `p` code is consumed at the gate's first frame,
+  // before `socketReady`. The server drops a hello from a socket with no user
+  // WITHOUT answering, so the hello must go out again once the session is up
+  // or the gate spins on `awaitingHelloAck` forever.
+  group('the hello waits for the session (A2-DEV-01)', () {
+    test('a hello sent before the session is ready is sent again at '
+        'socketReady, with the same ephemeral', () async {
+      final controller = keylessController();
+      addTearDown(controller.dispose);
+
+      await controller.startNewDeviceFromCode(pCode(), platform: 'android');
+      final first = payloadOf('provisioningHello');
+
+      controller.onSessionReady();
+
+      expect(count('provisioningHello'), 2);
+      // The server pins the FIRST ephemeral and re-answers only an identical
+      // retry; a fresh one would be refused `ephemeral_already_pinned`.
+      expect(payloadOf('provisioningHello'), first);
+      expect(controller.newDeviceStep, NewDeviceLinkStep.awaitingHelloAck);
+    });
+
+    test('a code that arrives on a ready session says hello exactly once', () async {
+      final controller = keylessController();
+      addTearDown(controller.dispose);
+      controller.onSessionReady();
+
+      await controller.startNewDeviceFromCode(pCode(), platform: 'web');
+      expect(count('provisioningHello'), 1);
+
+      // A second ready with no loss in between owes nothing.
+      controller.onSessionReady();
+      expect(count('provisioningHello'), 1);
+    });
+
+    test('a hello still unanswered when the socket is lost is sent again on '
+        'the next session', () async {
+      final controller = keylessController();
+      addTearDown(controller.dispose);
+      controller.onSessionReady();
+      await controller.startNewDeviceFromCode(pCode(), platform: 'web');
+
+      controller
+        ..onSessionLost()
+        ..onSessionReady();
+
+      expect(count('provisioningHello'), 2);
+    });
+
+    test('an answered hello is never repeated', () async {
+      final controller = keylessController();
+      addTearDown(controller.dispose);
+      await controller.startNewDeviceFromCode(pCode(), platform: 'web');
+      controller.onProvisioningHelloAck({'success': true, 'deviceId': 2});
+      expect(controller.newDeviceStep, NewDeviceLinkStep.showSas);
+
+      controller
+        ..onSessionReady()
+        ..onSessionLost()
+        ..onSessionReady();
+
+      expect(count('provisioningHello'), 1);
+    });
+  });
 }

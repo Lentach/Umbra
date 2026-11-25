@@ -19,7 +19,11 @@ import 'chat_detail_screen.dart';
 import 'user_card_screen.dart';
 
 class ContactsScreen extends StatefulWidget {
-  const ContactsScreen({super.key});
+  const ContactsScreen({super.key, this.onShowChats});
+
+  /// Brings the Chats tab to the front. On a wide window the chat pane lives
+  /// on that tab, so opening a chat from here has to land there.
+  final VoidCallback? onShowChats;
 
   @override
   State<ContactsScreen> createState() => _ContactsScreenState();
@@ -61,6 +65,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
   void _openChatWithContact(BuildContext context, int userId) {
     final convs = context.read<ConversationsProvider>();
+    final isDesktop =
+        MediaQuery.of(context).size.width >= AppConstants.layoutBreakpointDesktop;
 
     // Check if conversation exists for this user
     final existingConv = convs.conversations.where((conv) {
@@ -68,12 +74,14 @@ class _ContactsScreenState extends State<ContactsScreen> {
       return otherUser?.id == userId;
     }).firstOrNull;
 
+    // The pane a wide window opens the chat in is on the Chats tab.
+    if (isDesktop) widget.onShowChats?.call();
+
     if (existingConv != null) {
       // Conversation exists, open it
       convs.openConversation(existingConv.id);
 
-      final width = MediaQuery.of(context).size.width;
-      if (width < AppConstants.layoutBreakpointDesktop) {
+      if (!isDesktop) {
         Navigator.of(context).push(
           instantOpaqueRoute(
             builder: (_) => ChatDetailScreen(conversationId: existingConv.id),
@@ -81,9 +89,9 @@ class _ContactsScreenState extends State<ContactsScreen> {
         );
       }
     } else {
-      // No conversation, start new one (backend will create)
+      // No conversation row yet: startConversation names it as the pending
+      // open, which the Chats tab consumes and opens.
       convs.startConversation(userId);
-      // consumePendingOpen will handle navigation when backend responds
     }
   }
 
@@ -134,24 +142,11 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final convs = context.watch<ConversationsProvider>();
-    // When user tapped a contact and we had no conversation, we called startConversation.
-    // Backend emits openConversation; consume it here. This is now the tab's ONLY
-    // pending-open consumer — Invitations never consumes it, because acceptance no
-    // longer emits openConversation at all (it is reserved for explicit
-    // startConversation), and Invitations only ever pops a peer id.
-    if (convs.pendingOpenConversationId != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        final id = context.read<ConversationsProvider>().consumePendingOpen();
-        if (id != null && context.mounted) {
-          Navigator.of(context).push(
-            instantOpaqueRoute(
-              builder: (_) => ChatDetailScreen(conversationId: id),
-            ),
-          );
-        }
-      });
-    }
+    // Rebuild with the chat list (the cards read it when tapped).
+    context.watch<ConversationsProvider>();
+    // The Chats tab is the ONLY consumer of the pending-open id (set by
+    // startConversation above). A second consumer here raced it: whichever
+    // post-frame callback ran first decided where the chat opened.
     // Same floating-chrome treatment as the Chats tab (owner, round 4b):
     // the list runs full-bleed behind the transparent header capsule area
     // and the bottom nav; clearance is padding, not a layout slot.

@@ -66,7 +66,9 @@ class _InvitationsScreenState extends State<InvitationsScreen> {
                 InvitationActionStatus.inFlight,
           )
           .toList(growable: false);
-      final searchFinished = _searching && friends.searchResults != null;
+      // Answered, timed out, or abandoned by a reconnect: the spinner ends
+      // with the provider's wait, not on a result that may never come.
+      final searchFinished = _searching && !friends.searchInFlight;
       if (resolvedActions.isNotEmpty || searchFinished) {
         setState(() {
           for (final requestId in resolvedActions) {
@@ -100,12 +102,12 @@ class _InvitationsScreenState extends State<InvitationsScreen> {
 
   void _search() {
     final handle = _handleController.text.trim();
-    if (handle.isEmpty) return;
-
-    setState(() => _searching = true);
     final friends = context.read<FriendsProvider>();
-    friends.clearSearchResults();
+    if (handle.isEmpty || friends.searchInFlight) return;
+
+    // Each search spends the target's one-time pre-keys: one at a time.
     friends.searchUsers(handle);
+    setState(() => _searching = friends.searchInFlight);
   }
 
   void _actOnIncoming(FriendRequestModel request, InvitationAction action) {

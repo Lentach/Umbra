@@ -15,18 +15,3 @@ Future<Map<String, bool>> requestPersistentStorage() async {
     return const {'supported': false, 'granted': false};
   }
 }
-
-/// Web: `navigator.storage.estimate()` — how full the origin's bucket is.
-/// Null when the API is unavailable or throws; never a decision input, purely
-/// diagnostic (the app was previously blind to remaining quota).
-Future<Map<String, num>?> storageEstimate() async {
-  try {
-    final estimate = await web.window.navigator.storage.estimate().toDart;
-    return {
-      'usage': estimate.usage,
-      'quota': estimate.quota,
-    };
-  } catch (_) {
-    return null;
-  }
-}

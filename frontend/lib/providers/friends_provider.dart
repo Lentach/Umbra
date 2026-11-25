@@ -259,6 +259,7 @@ class FriendsProvider extends ChangeNotifier {
       E2ePersistentDiag.record('BOX_GOODBYE_SELF_IGNORED');
       return;
     }
+    _acceptedOutcomes.remove(userId);
     onRemoveConversationsForUser?.call(userId);
     notifyListeners();
   }
@@ -326,12 +327,22 @@ class FriendsProvider extends ChangeNotifier {
 
   // ---------- Action Methods ----------
 
+  /// Whether the UI's search is still owed an answer: false once it was
+  /// answered, timed out, or a new socket abandoned it. The screen's spinner
+  /// lives exactly this long.
+  bool get searchInFlight {
+    final ui = _uiSearch;
+    return ui != null && _searchWaiters.contains(ui);
+  }
+
   void searchUsers(String handle) {
     _searchResults = null;
     _searchEntries = const {};
-    notifyListeners();
     final emit = _emit;
-    if (emit == null) return;
+    if (emit == null) {
+      notifyListeners();
+      return;
+    }
     // A search the server fails answers with an `error` instead, so no
     // answer may ever come: the waiter goes after the lookup timeout, or it
     // would take the next empty answer meant for a lookup.
@@ -347,6 +358,9 @@ class FriendsProvider extends ChangeNotifier {
     });
     _uiSearch = waiter;
     _searchWaiters.add(waiter);
+    // After the waiter is registered: a listener asking [searchInFlight]
+    // must see this search.
+    notifyListeners();
     emit('searchUsers', {'handle': handle});
   }
 
@@ -633,6 +647,7 @@ class FriendsProvider extends ChangeNotifier {
     final account = _currentUserId;
     // The chat goes first, while its row still names the peer.
     onRemoveConversationsForUser?.call(userId);
+    _acceptedOutcomes.remove(userId);
     if (block) {
       await store.update(
         userId,
@@ -670,6 +685,7 @@ class FriendsProvider extends ChangeNotifier {
     }
     if (!_isLiveFor(account)) return true;
     onRemoveConversationsForUser?.call(userId);
+    _acceptedOutcomes.remove(userId);
     notifyListeners();
     return true;
   }

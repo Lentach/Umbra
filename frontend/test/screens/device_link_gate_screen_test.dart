@@ -28,6 +28,8 @@ import 'package:fireplace/screens/link_restore_section.dart';
 import 'package:fireplace/screens/link_this_device_screen.dart'
     show LinkThisDeviceBody;
 import 'package:fireplace/screens/main_shell.dart';
+import 'package:fireplace/services/device_link/link_crypto.dart';
+import 'package:fireplace/services/device_link/pending_link_code.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -127,6 +129,7 @@ void main() {
     FlutterSecureStorage.setMockInitialValues({});
     SharedPreferences.setMockInitialValues({});
     AppVersionInfo.debugResetForTest();
+    PendingLinkCode.take();
     PackageInfo.setMockInitialValues(
       appName: 'fireplace',
       packageName: 'com.fireplace.app',
@@ -192,12 +195,16 @@ void main() {
   }
 
   /// The gate alone, for its per-state contracts.
-  Widget gateHost(_FakeEncryption encryption, {_FakeAuth? auth}) {
+  Widget gateHost(
+    _FakeEncryption encryption, {
+    _FakeAuth? auth,
+    _FakeConnection? connection,
+  }) {
     return MultiProvider(
       providers: [
         ChangeNotifierProvider<AuthProvider>.value(value: auth ?? _FakeAuth()),
         ChangeNotifierProvider<ConnectionProvider>(
-          create: (_) => _FakeConnection(),
+          create: (_) => connection ?? _FakeConnection(),
         ),
         ChangeNotifierProvider<EncryptionProvider>.value(value: encryption),
       ],
@@ -409,4 +416,88 @@ void main() {
       await teardown(tester);
     },
   );
+
+  String linkCode(LinkRole role) => LinkOobCode(
+    provisioningId: '3f2c8a1e-9b7d-4c5a-8e2f-1a6b3c9d0e4f',
+    ephPub: linkEphemeralPublicBytes(generateLinkEphemeral()),
+    platform: 'web',
+    role: role,
+  ).encode();
+
+  List<String> emittedEvents(_FakeConnection connection) =>
+      [for (final (event, _) in connection.emitted) event];
+
+  group('a deep-linked code on the gate (A2-DEV-02 / A2-DEV-09)', () {
+    tearDown(PendingLinkCode.take);
+
+    testWidgets(
+      'a primary code waits while only the checking state is on screen, '
+      'and runs the ceremony once the link state shows',
+      (tester) async {
+        final connection = _FakeConnection();
+        final encryption = _FakeEncryption(unavailable: true);
+        PendingLinkCode.arm(linkCode(LinkRole.primary));
+        await tester.pumpWidget(gateHost(encryption, connection: connection));
+        await pumpFrames(tester);
+
+        // No security code is on screen: nothing may have been said to the
+        // primary and the code must still be armed.
+        expect(find.byType(LinkThisDeviceBody), findsNothing);
+        expect(emittedEvents(connection), isNot(contains('provisioningHello')));
+        expect(PendingLinkCode.isArmed, isTrue);
+
+        encryption
+          ..unavailable = false
+          ..incomplete = true
+          ..notifyListeners();
+        await pumpFrames(tester);
+
+        expect(find.byType(LinkThisDeviceBody), findsOneWidget);
+        expect(PendingLinkCode.isArmed, isFalse);
+        final events = emittedEvents(connection);
+        expect(events, contains('provisioningHello'));
+        // The body's own open comes FIRST: a later open would restart the
+        // ceremony the code started and drop it.
+        expect(
+          events.lastIndexOf('openProvisioning'),
+          lessThan(events.indexOf('provisioningHello')),
+        );
+
+        await teardown(tester);
+      },
+    );
+
+    testWidgets('a primary code on the link state runs at once, as before', (
+      tester,
+    ) async {
+      final connection = _FakeConnection();
+      PendingLinkCode.arm(linkCode(LinkRole.primary));
+      await tester.pumpWidget(
+        gateHost(_FakeEncryption(incomplete: true), connection: connection),
+      );
+      await pumpFrames(tester);
+
+      expect(PendingLinkCode.isArmed, isFalse);
+      expect(emittedEvents(connection), contains('provisioningHello'));
+
+      await teardown(tester);
+    });
+
+    testWidgets('a new-device code is left armed for a primary screen', (
+      tester,
+    ) async {
+      final connection = _FakeConnection();
+      final code = linkCode(LinkRole.newDevice);
+      PendingLinkCode.arm(code);
+      await tester.pumpWidget(
+        gateHost(_FakeEncryption(incomplete: true), connection: connection),
+      );
+      await pumpFrames(tester);
+
+      expect(PendingLinkCode.listenable.value, code);
+      expect(emittedEvents(connection), isNot(contains('provisioningHello')));
+
+      await teardown(tester);
+    });
+  });
 }

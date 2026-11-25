@@ -15,6 +15,7 @@ import '../providers/connection_provider.dart';
 import '../providers/conversations_provider.dart';
 import '../providers/passcode_provider.dart';
 import '../providers/friends_provider.dart';
+import '../providers/messaging_provider.dart';
 import 'chat_detail_screen.dart';
 import '../utils/pending_deep_link_stub.dart'
     if (dart.library.html) '../utils/pending_deep_link_web.dart';
@@ -49,10 +50,22 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   StreamSubscription<dynamic>? _pageResumeSub;
   StreamSubscription<dynamic>? _freezeReloadSub;
   UnreadBadgeSync? _unreadBadgeSync;
+  PasscodeProvider? _passcode;
+  ConversationsProvider? _conversations;
+  bool _wasLocked = false;
 
   @override
   void initState() {
     super.initState();
+    // Android's lock is only a cover: the socket and the open chat keep
+    // running under it, so the lock itself decides whether the app counts as
+    // visible (receipts, countdowns, seen marks all read that flag).
+    final passcode = _passcode = context.read<PasscodeProvider>();
+    _wasLocked = _lockUp(passcode);
+    final conversations = _conversations = context
+        .read<ConversationsProvider>();
+    conversations.lockUp = () => _lockUp(passcode);
+    passcode.addListener(_onPasscodeChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final auth = context.read<AuthProvider>();
       final conn = context.read<ConnectionProvider>();
@@ -93,8 +106,8 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
           }
           return;
         }
-        unawaited(context.read<PasscodeProvider>().evaluateOnForeground());
-        unawaited(_recoverForeground(markVisible: true));
+        final verdict = _lockVerdictOnForeground();
+        unawaited(_recoverForeground(markVisible: true, lockVerdict: verdict));
       });
       // bfcache restore: the snapshot is coherent, only the socket is dead —
       // soft recovery. `resume` after a TAB FREEZE is different: the thawed
@@ -128,17 +141,77 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _recoverForeground({required bool markVisible}) async {
+  /// The lock covers the app: engaged, or not answered yet (a cold start
+  /// holds `unknown` until its store read lands). A device with no passcode
+  /// answers `disabled`, which is not covered.
+  static bool _lockUp(PasscodeProvider passcode) =>
+      passcode.state == PasscodeLockState.locked ||
+      passcode.state == PasscodeLockState.unknown;
+
+  /// "The user is looking" only while the lock is open; a locked app stays
+  /// hidden (the unlock, [_onPasscodeChanged], shows it).
+  ///
+  /// Only call once the foreground verdict ([_lockVerdictOnForeground]) is in:
+  /// until then the state still reads `unlocked`.
+  void _markVisibleUnlessLocked() {
+    final passcode = context.read<PasscodeProvider>();
+    context.read<ConversationsProvider>().setClientVisible(!_lockUp(passcode));
+  }
+
+  /// Asks the lock for its verdict on this foreground return, at once; the
+  /// returned future completes when the verdict is in (the lock engages only
+  /// after a store read). Never throws: a failed read is a verdict too, and
+  /// the state as it then stands decides.
+  Future<void> _lockVerdictOnForeground() async {
+    try {
+      await context.read<PasscodeProvider>().evaluateOnForeground();
+    } on Object catch (e) {
+      E2eDiagLog.add('PASSCODE_FOREGROUND_FAIL', {
+        'errorType': e.runtimeType.toString(),
+      });
+    }
+  }
+
+  void _onPasscodeChanged() {
+    final passcode = _passcode;
+    if (passcode == null || !mounted) return;
+    final locked = _lockUp(passcode);
+    if (locked == _wasLocked) return;
+    _wasLocked = locked;
+    final auth = context.read<AuthProvider>();
+    if (auth.currentUser == null || auth.token == null) return;
+    final conversations = context.read<ConversationsProvider>();
+    if (locked) {
+      conversations.setClientVisible(false);
+      return;
+    }
+    // Unlocked: the open chat is shown now, as on any foreground — but not
+    // when the app is in the background (an unlock can land after the user
+    // left; the next resume shows it).
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    if (lifecycle != null && lifecycle != AppLifecycleState.resumed) return;
+    conversations.setClientVisible(true);
+    final open = conversations.activeConversationId;
+    if (open != null) context.read<MessagingProvider>().markConversationRead(open);
+  }
+
+  Future<void> _recoverForeground({
+    required bool markVisible,
+    Future<void>? lockVerdict,
+  }) async {
     final auth = context.read<AuthProvider>();
     await auth.ensureSessionReady();
     if (!mounted) return;
     if (!auth.isLoggedIn) return;
+    context.read<ConnectionProvider>().ensureReconnectIfNeeded();
     // Only a real visibility signal may claim "user is looking": a background
     // unfreeze must not re-enable read receipts or server push suppression.
+    // And only after the lock verdict: a receipt must not leave before it.
     if (markVisible) {
-      context.read<ConversationsProvider>().setClientVisible(true);
+      await lockVerdict;
+      if (!mounted) return;
+      _markVisibleUnlessLocked();
     }
-    context.read<ConnectionProvider>().ensureReconnectIfNeeded();
     // iOS PWA: a notification tap on a suspended WebView loses the SW's
     // click postMessage — the SW also persisted the target conversation
     // to IndexedDB, so drain it now that the tab is visible again.
@@ -193,6 +266,8 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     _tabVisibilitySub?.cancel();
     _pageResumeSub?.cancel();
     _freezeReloadSub?.cancel();
+    _passcode?.removeListener(_onPasscodeChanged);
+    _conversations?.lockUp = null;
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -210,12 +285,16 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
       case AppLifecycleState.resumed:
         // Ordered FIRST: the lock verdict must be taken before any reconnect
         // or resync work paints anything behind it.
-        unawaited(context.read<PasscodeProvider>().evaluateOnForeground());
+        final verdict = _lockVerdictOnForeground();
         unawaited(() async {
           await auth.ensureSessionReady();
           if (!mounted) return;
           context.read<ConnectionProvider>().ensureReconnectIfNeeded();
-          context.read<ConversationsProvider>().setClientVisible(true);
+          // The lock engages only after a store read: marking visible before
+          // the verdict would send the open chat's read receipt under it.
+          await verdict;
+          if (!mounted) return;
+          _markVisibleUnlessLocked();
         }());
         break;
       case AppLifecycleState.paused:
@@ -393,7 +472,9 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
                     onAvatarTap: _openMyProfile,
                     visible: _selectedIndex == 0,
                   ),
-                  const ContactsScreen(),
+                  ContactsScreen(
+                    onShowChats: () => setState(() => _selectedIndex = 0),
+                  ),
                   const SettingsScreen(),
                 ],
               ),

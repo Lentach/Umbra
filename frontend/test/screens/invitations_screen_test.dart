@@ -510,4 +510,125 @@ void main() {
       expect(find.byKey(const Key('invitation-send-2')), findsNothing);
     },
   );
+
+  // A2-CON-1: an accepted row outlived the friendship it announced.
+  testWidgets(
+    'after accept then unfriend, a search for that person offers them again',
+    (tester) async {
+      final store = await _store(tester, [_incoming(2, 'bob')]);
+      final friends = friendsOver(store);
+      await _pumpInvitations(tester, friends);
+      await _put(tester, store, [_friend(2, 'bob')]);
+      friends.onBoxFriendshipMade(2, outgoing: false);
+      await tester.pump();
+      _expectExactlyOnePeerRow(tester, 2);
+
+      expect(await tester.runAsync(() => friends.unfriend(2)), isTrue);
+      await tester.pump();
+      expect(find.text(l10n.invitationAccepted), findsNothing);
+
+      friends.onSearchUsersResult([_user(2, 'bob')]);
+      await tester.pump();
+      expect(find.byKey(const Key('invitation-send-2')), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'a new request from someone who ended the friendship shows one row',
+    (tester) async {
+      final store = await _store(tester, [_incoming(2, 'bob')]);
+      final friends = friendsOver(store);
+      await _pumpInvitations(tester, friends);
+      await _put(tester, store, [_friend(2, 'bob')]);
+      friends.onBoxFriendshipMade(2, outgoing: false);
+      await tester.pump();
+
+      // Their goodbye: the messaging side removed the record, then told us.
+      await tester.runAsync(() => store.remove(2));
+      friends.onBoxFriendshipEnded(2);
+      await tester.pump();
+
+      await _put(tester, store, [_incoming(2, 'bob')]);
+      friends.onContactsChanged();
+      await tester.pump();
+
+      _expectExactlyOnePeerRow(tester, 2);
+      expect(find.text(l10n.invitationDecline), findsOneWidget);
+      expect(find.text(l10n.invitationAccepted), findsNothing);
+    },
+  );
+
+  // A2-CON-3: each search spends the target's one-time pre-keys.
+  testWidgets('Enter while a search is running starts no second search',
+      (tester) async {
+    final friends = FriendsProvider();
+    final searches = <Object?>[];
+    friends.setEmitCallback((event, data) {
+      if (event == 'searchUsers') searches.add(data);
+    });
+    await _pumpInvitations(tester, friends);
+
+    final field = find.byKey(const Key('invitation-handle-field'));
+    await tester.enterText(field, 'bob#0002');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
+    expect(searches, hasLength(1));
+    expect(
+      find.byKey(const Key('invitation-search-progress')),
+      findsOneWidget,
+    );
+
+    // Enter again, then retype another handle and press Enter mid-search.
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.enterText(field, 'cat#0003');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
+    expect(searches, hasLength(1));
+
+    // Once the answer lands the field searches again.
+    friends.onSearchUsersResult([_user(2, 'bob')]);
+    await tester.pump();
+    await tester.enterText(field, 'cat#0003');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
+    expect(searches, hasLength(2));
+    // The second search's lookup timeout must not outlive the test.
+    await tester.pump(const Duration(seconds: 11));
+  });
+
+  // A reconnect abandons the search's waiter and its timer: no answer and no
+  // timeout will ever come, so the screen must not wait for one.
+  testWidgets('a reconnect during a search ends the spinner and Enter '
+      'searches again', (tester) async {
+    final friends = FriendsProvider();
+    final searches = <Object?>[];
+    friends.setEmitCallback((event, data) {
+      if (event == 'searchUsers') searches.add(data);
+    });
+    await _pumpInvitations(tester, friends);
+
+    final field = find.byKey(const Key('invitation-handle-field'));
+    await tester.enterText(field, 'bob#0002');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
+    expect(searches, hasLength(1));
+    expect(
+      find.byKey(const Key('invitation-search-progress')),
+      findsOneWidget,
+    );
+
+    friends.onConnect(true);
+    await tester.pump(const Duration(seconds: 11));
+    expect(find.byKey(const Key('invitation-search-progress')), findsNothing);
+
+    await tester.enterText(field, 'bob#0002');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
+    expect(searches, hasLength(2));
+    expect(
+      find.byKey(const Key('invitation-search-progress')),
+      findsOneWidget,
+    );
+    await tester.pump(const Duration(seconds: 11));
+  });
 }
