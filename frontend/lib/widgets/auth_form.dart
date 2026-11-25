@@ -104,6 +104,9 @@ class _AuthFormState extends State<AuthForm> {
       RecoveryPhrase.isValid(value ?? '') ? null : l10n.recoveryPhraseMalformed;
 
   Future<void> _handleSubmit() async {
+    // Enter on a field reaches this directly; the button's own disabling only
+    // covers taps. A second submit while one is in flight is two sessions.
+    if (_loading) return;
     if (!_formKey.currentState!.validate()) return;
     setState(() => _loading = true);
     final username = _usernameController.text.trim();
