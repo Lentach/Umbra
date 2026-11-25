@@ -116,6 +116,10 @@ class _VideoFullscreenViewState extends State<_VideoFullscreenView>
 
   bool get _ready => _session?.isReady ?? false;
 
+  /// Test-only: whether the decrypted copy of the clip is still held.
+  @visibleForTesting
+  bool get holdsSessionForTest => _session != null;
+
   @override
   void initState() {
     super.initState();

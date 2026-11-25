@@ -199,4 +199,24 @@ void main() {
     expect(find.byKey(_kClose), findsNothing);
     expect(find.byKey(_kChatPage), findsOneWidget);
   });
+
+  testWidgets('the decrypted copy is released the moment its message goes, '
+      'not after the exit transition', (tester) async {
+    final message = _video();
+    final messaging = await _open(tester, message, [message]);
+    final finder = find.byWidgetPredicate(
+      (w) => w.runtimeType.toString() == '_VideoFullscreenView',
+    );
+    // ignore: avoid_dynamic_calls
+    bool holds() => (tester.state(finder) as dynamic).holdsSessionForTest as bool;
+    expect(holds(), isTrue);
+
+    messaging.deleteMessage(message.id, forEveryone: false);
+    // One frame: the dialog is still on its way out, so the view is mounted.
+    await tester.pump();
+
+    expect(finder, findsOneWidget);
+    expect(holds(), isFalse);
+    await tester.pumpAndSettle();
+  });
 }
