@@ -241,6 +241,60 @@ void main() {
       expect(friends.acceptedOutcomeForPeer(2), isNull);
     });
 
+    // A2-CON-1: the accepted row announces a friendship; once it ends, by any
+    // road, the row is gone (it hid the person from search).
+    group('an accepted row does not outlive the friendship (A2-CON-1)', () {
+      for (final block in [false, true]) {
+        final verb = block ? 'block' : 'unfriend';
+        test('$verb over the box drops it', () async {
+          await put(2, ContactState.friend);
+          final friends = provider()
+            ..boxEndFriendship = ((userId, {required block}) async {})
+            ..onBoxFriendshipMade(2, outgoing: false);
+          expect(friends.acceptedOutcomeForPeer(2), isNotNull);
+
+          final ended = block ? friends.blockUser(2) : friends.unfriend(2);
+          expect(await ended, isTrue);
+          expect(friends.acceptedOutcomeForPeer(2), isNull);
+        });
+
+        test('$verb on this device alone drops it', () async {
+          await put(2, ContactState.friend);
+          final friends = provider()..onBoxFriendshipMade(2, outgoing: true);
+          expect(friends.acceptedOutcomeForPeer(2), isNotNull);
+
+          final ended = block ? friends.blockUser(2) : friends.unfriend(2);
+          expect(await ended, isTrue);
+          expect(friends.acceptedOutcomeForPeer(2), isNull);
+        });
+      }
+
+      test('a failed end over the box keeps it: the friendship stands',
+          () async {
+        await put(2, ContactState.friend);
+        final friends = provider()
+          ..boxEndFriendship =
+              ((userId, {required block}) async => throw StateError('down'))
+          ..onBoxFriendshipMade(2, outgoing: false);
+
+        expect(await friends.unfriend(2), isFalse);
+        expect(friends.acceptedOutcomeForPeer(2), isNotNull);
+      });
+
+      test('the peer\'s goodbye drops it, and only theirs', () async {
+        await put(2, ContactState.friend);
+        await put(3, ContactState.friend);
+        final friends = provider()
+          ..onBoxFriendshipMade(2, outgoing: false)
+          ..onBoxFriendshipMade(3, outgoing: false);
+
+        friends.onBoxFriendshipEnded(2);
+
+        expect(friends.acceptedOutcomeForPeer(2), isNull);
+        expect(friends.acceptedOutcomeForPeer(3), isNotNull);
+      });
+    });
+
     // CONT-03: one box step per row. A second tap, or a tap after a
     // reconnect gave the button back, must not start a second step.
     group('a second tap while the box step runs (CONT-03)', () {

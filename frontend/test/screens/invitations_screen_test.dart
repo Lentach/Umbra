@@ -510,4 +510,51 @@ void main() {
       expect(find.byKey(const Key('invitation-send-2')), findsNothing);
     },
   );
+
+  // A2-CON-1: an accepted row outlived the friendship it announced.
+  testWidgets(
+    'after accept then unfriend, a search for that person offers them again',
+    (tester) async {
+      final store = await _store(tester, [_incoming(2, 'bob')]);
+      final friends = friendsOver(store);
+      await _pumpInvitations(tester, friends);
+      await _put(tester, store, [_friend(2, 'bob')]);
+      friends.onBoxFriendshipMade(2, outgoing: false);
+      await tester.pump();
+      _expectExactlyOnePeerRow(tester, 2);
+
+      expect(await tester.runAsync(() => friends.unfriend(2)), isTrue);
+      await tester.pump();
+      expect(find.text(l10n.invitationAccepted), findsNothing);
+
+      friends.onSearchUsersResult([_user(2, 'bob')]);
+      await tester.pump();
+      expect(find.byKey(const Key('invitation-send-2')), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'a new request from someone who ended the friendship shows one row',
+    (tester) async {
+      final store = await _store(tester, [_incoming(2, 'bob')]);
+      final friends = friendsOver(store);
+      await _pumpInvitations(tester, friends);
+      await _put(tester, store, [_friend(2, 'bob')]);
+      friends.onBoxFriendshipMade(2, outgoing: false);
+      await tester.pump();
+
+      // Their goodbye: the messaging side removed the record, then told us.
+      await tester.runAsync(() => store.remove(2));
+      friends.onBoxFriendshipEnded(2);
+      await tester.pump();
+
+      await _put(tester, store, [_incoming(2, 'bob')]);
+      friends.onContactsChanged();
+      await tester.pump();
+
+      _expectExactlyOnePeerRow(tester, 2);
+      expect(find.text(l10n.invitationDecline), findsOneWidget);
+      expect(find.text(l10n.invitationAccepted), findsNothing);
+    },
+  );
 }

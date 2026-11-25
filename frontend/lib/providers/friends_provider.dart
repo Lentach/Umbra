@@ -259,6 +259,7 @@ class FriendsProvider extends ChangeNotifier {
       E2ePersistentDiag.record('BOX_GOODBYE_SELF_IGNORED');
       return;
     }
+    _acceptedOutcomes.remove(userId);
     onRemoveConversationsForUser?.call(userId);
     notifyListeners();
   }
@@ -633,6 +634,7 @@ class FriendsProvider extends ChangeNotifier {
     final account = _currentUserId;
     // The chat goes first, while its row still names the peer.
     onRemoveConversationsForUser?.call(userId);
+    _acceptedOutcomes.remove(userId);
     if (block) {
       await store.update(
         userId,
@@ -670,6 +672,7 @@ class FriendsProvider extends ChangeNotifier {
     }
     if (!_isLiveFor(account)) return true;
     onRemoveConversationsForUser?.call(userId);
+    _acceptedOutcomes.remove(userId);
     notifyListeners();
     return true;
   }
