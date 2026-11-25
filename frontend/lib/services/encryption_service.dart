@@ -372,12 +372,26 @@ class EncryptionService {
       'e2e_${userId}_peer_key_change_notes_v1';
 
   /// The (lxxix) demotion, shared by both detection paths (server event and
-  /// local libsignal). With warnings OFF: record the muted one-shot note, then
-  /// auto-acknowledge through [acknowledgePeerIdentity] — the SAME
-  /// compare-and-swap the manual ceremony uses, so the anchor advances only to
-  /// a key this device recorded. With warnings ON this is a no-op and today's
-  /// manual-confirmation surface is unchanged.
-  Future<void> _demoteKeyChangeIfMuted(int peerId) async {
+  /// local libsignal). With warnings OFF it records the muted one-shot note;
+  /// whether it also acknowledges depends on who staged the candidate.
+  ///
+  /// [localCandidateBase64] is the key the local libsignal detection staged
+  /// in THIS very call (the store's `onIdentityChanged` callback). Only that
+  /// path may auto-acknowledge, and only for exactly that key, through the
+  /// SAME compare-and-swap the manual ceremony uses
+  /// ([acknowledgePeerIdentity]'s `adoptIdentityBase64`): the anchor advances
+  /// only to a key this device recorded, and if the slot moved meanwhile the
+  /// CAS refuses and the pill stands. The server-event path passes none: the
+  /// pending slot may then hold a key staged by a refused session build
+  /// ((lv)), a held foreign frame (decision 143, held mark in RAM only) or
+  /// the compare screen ((xlvii) clause 3), each waiting for a human, and a
+  /// server-reported change is an event the server alone chooses to send. It
+  /// writes the note and nothing else. With warnings ON this is a no-op and
+  /// today's manual-confirmation surface is unchanged.
+  Future<void> _demoteKeyChangeIfMuted(
+    int peerId, {
+    String? localCandidateBase64,
+  }) async {
     if (keyChangeWarnings()) return;
     // B3 (decision 143): a frame was held under this identity, whatever the
     // setting says. The staged candidate is the one nobody has seen yet.
@@ -386,10 +400,9 @@ class EncryptionService {
     _peerKeyChangeNotes.remove(peerId);
     _peerKeyChangeNotes[peerId] = DateTime.now().toUtc().toIso8601String();
     await _persistKeyChangeNotes();
-    // A bare acknowledge promotes the staged candidate (the local-detection
-    // path stages it before firing). When nothing is staged — the plain
-    // server-event shape — nothing advances and nothing is pinned, so the peer
-    // STAYS in `_peersWithChangedIdentity`.
+    // With no local candidate — the plain server-event shape — nothing
+    // advances and nothing is pinned, so the peer STAYS in
+    // `_peersWithChangedIdentity`.
     //
     // That case no longer hides: since 2026-09-13 `chat_detail_screen` renders
     // the actionable pill for any peer still in that set, because a
@@ -399,8 +412,28 @@ class EncryptionService {
     // actually WAS absorbed. Do not re-gate the pill on the warnings setting:
     // that setting picks how an absorbed change is announced, not whether a
     // chat that cannot send says so.
-    await acknowledgePeerIdentity(peerId);
+    if (localCandidateBase64 != null) {
+      await acknowledgePeerIdentity(
+        peerId,
+        adoptIdentityBase64: localCandidateBase64,
+      );
+    }
     onPeerIdentityChanged?.call(peerId);
+  }
+
+  /// The local libsignal detection's entry to [_demoteKeyChangeIfMuted]:
+  /// reads the candidate the store staged for this detection and passes that
+  /// exact key on. A failed or empty read passes none, so the demotion writes
+  /// its note and acknowledges nothing (the pill stands).
+  Future<void> _demoteLocalDetection(int peerId) async {
+    String? staged;
+    try {
+      final pending = await _identityStore.pendingAccountIdentity(
+        peerId.toString(),
+      );
+      if (pending != null) staged = base64Encode(pending.serialize());
+    } catch (_) {}
+    await _demoteKeyChangeIfMuted(peerId, localCandidateBase64: staged);
   }
 
   Future<void> _persistKeyChangeNotes() async {
@@ -642,12 +675,13 @@ class EncryptionService {
       return;
     }
     final fresh = _peersWithChangedIdentity.add(peerId);
-    // (lxxxiv): with warnings OFF the muted demotion below acknowledges
-    // without a staged candidate, so the anchor does not advance and the peer
-    // STAYS in this set. Returning here on a repeat would drop every later
-    // server-reported change for that peer — the "new device or browser"
-    // line would fire once per peer, ever. With warnings ON the standing pill
-    // already says it, and the repeat is the duplicate it always was.
+    // (lxxxiv): with warnings OFF the muted demotion below writes its note
+    // but acknowledges nothing on this path, so the anchor does not advance
+    // and the peer STAYS in this set. Returning here on a repeat would drop
+    // every later server-reported change for that peer — the "new device or
+    // browser" line would fire once per peer, ever. With warnings ON the
+    // standing pill already says it, and the repeat is the duplicate it
+    // always was.
     if (!fresh && keyChangeWarnings()) return;
     E2ePersistentDiag.record('PEER_IDENTITY_CHANGED', {
       'peerId': peerId,
@@ -1377,8 +1411,11 @@ class EncryptionService {
         onPeerIdentityChanged?.call(peerId);
         _persistIdentityChanged();
         // (lxxix): not awaited — this callback runs inside isTrustedIdentity
-        // on the Signal path, same reasoning as the persist above.
-        _demoteKeyChangeIfMuted(peerId);
+        // on the Signal path, same reasoning as the persist above. The store
+        // wrote the candidate just before firing, so the slot holds the key
+        // THIS detection staged; it is read there and handed on as the one
+        // key the muted demotion may acknowledge.
+        _demoteLocalDetection(peerId).ignore();
       },
     );
     _preKeyStore = SecurePreKeyStore(_storage, p);
