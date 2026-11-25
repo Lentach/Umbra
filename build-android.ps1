@@ -214,5 +214,5 @@ if ($Bundle) {
   Write-Host "`nNext: upload the .aab in Play Console (owner) - see 'Play App Bundle' in docs/runbooks/android-release.md. The self-hosted APK is a separate .\build-android.ps1 run."
   exit 0
 }
-Write-Host "`nNext: smoke-test on a real device (checklist items 1-7, incl. the LINK ceremony), then attach to a GitHub Release with the SHA256."
+Write-Host "`nNext: smoke-test on a real device (checklist items 1-7, incl. the LINK ceremony), then record the SHA256. This PC build is the FALLBACK: the release path is the CI build signed by .\sign-ci-apk.ps1, and this file's hash matches no GitHub release."
 Write-Host "Distribution + user wording (LINK the phone as a 2nd device; enable linking on the web FIRST; never delete accounts or clear site data): docs/runbooks/android-release.md"

@@ -69,7 +69,8 @@ android {
         // every release build and is a known Windows flake source (lint-cache
         // jar locks, e.g. :file_picker:lintVitalAnalyzeRelease FileSystemException
         // 2026-07-29). We don't gate releases on lint; the release gates are the
-        // signing/16KB checks in build-android.ps1.
+        // signing/16KB checks in build-android.ps1, sign-ci-apk.ps1 and
+        // .github/workflows/release-apk.yml.
         checkReleaseBuilds = false
     }
 

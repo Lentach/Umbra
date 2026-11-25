@@ -23,10 +23,13 @@ armed-gate, and `CONTENT_KEY_LOST` → retired-id rendering.
 | Gate | Where | Failure mode it kills |
 |---|---|---|
 | Release packaging without a keystore **throws at execution time** (exactly `packageRelease`/`packageReleaseBundle` — covers bare `gradlew build`/`assemble`; release `signingConfig` is NULL without a keystore, so any missed path yields an inert UNSIGNED apk) | `frontend/android/app/build.gradle.kts` | silent fallback to debug signing |
-| Signer check on the built APK (`apksigner verify --print-certs`; NOT keytool — minSdk 24 means v2/v3-only signatures, which keytool can't read) | `build-android.ps1` | debug-signed APK shipping anyway |
-| 16KB ELF alignment of every 64-bit `.so` | `scripts/verify-apk-16k.mjs` (falsified by `verify-apk-16k.selftest.mjs`) | webcrypto pub-cache patch silently dropped → crash on Android 15 16KB devices |
+| Signer check on the built APK (`apksigner verify --print-certs`; NOT keytool — minSdk 24 means v2/v3-only signatures, which keytool can't read) | `build-android.ps1`, `sign-ci-apk.ps1` (which also requires v2-only) | debug-signed APK shipping anyway |
+| 16KB ELF alignment of every 64-bit `.so` | `scripts/verify-apk-16k.mjs` (falsified by `verify-apk-16k.selftest.mjs`), run by `build-android.ps1`, `release-apk.yml` and `sign-ci-apk.ps1` | webcrypto pub-cache patch silently dropped → crash on Android 15 16KB devices |
 | Backup lockdown | `AndroidManifest.xml` `allowBackup=false` + `res/xml/data_extraction_rules.xml` | plaintext SharedPreferences uploaded to Google Drive; secure-storage blob restored without its Keystore key (= permanently dead Signal identity) |
-| versionCode monotonicity | `build-android.ps1` derives `major*1_000_000 + minor*10_000 + patch` | Play rejecting non-incrementing uploads; `+N` never enters pubspec (root CLAUDE.md §5) |
+| CI build carries no signature (apksigner must reject it with "Missing META-INF/MANIFEST.MF") | `.github/workflows/release-apk.yml`, `sign-ci-apk.ps1` | a signed or half-signed file leaving CI; a keystore creeping into CI |
+| Release tag equals the pubspec version and is a commit on master | `release-apk.yml`; `sign-ci-apk.ps1 -Tag` re-checks it on the PC and requires the release and its unsigned assets to be made by `github-actions[bot]` | signing a file built from a side branch or uploaded by hand |
+| Signed APK = CI build + signature, byte for byte | `scripts/verify-apk-signed-matches-unsigned.mjs` (falsified by its `.selftest.mjs`), run by `sign-ci-apk.ps1` | the shipped file differing from the file CI built |
+| versionCode monotonicity | `build-android.ps1` and `release-apk.yml` both derive `major*1_000_000 + minor*10_000 + patch` | Play rejecting non-incrementing uploads; `+N` never enters pubspec (root CLAUDE.md §5) |
 
 Firebase/FCM needs **no secret provisioning**: Android initializes from the committed
 `google-services.json` natively (`Firebase.initializeApp()` with no options — the Dart-side
@@ -110,7 +113,44 @@ back and hash-compare, have the paper copy typed back and verified the same way,
 pass files. apksigner reads `--ks-pass file:` and `--key-pass file:` from the SAME file line by line —
 write the password twice.
 
-## Build
+## Build in CI, sign on the PC (the release path since 2026-11-25)
+
+Owner decision 2026-11-25 (gap report §4.4 step 1). GitHub Actions builds the release APK UNSIGNED
+from a version tag; the keystore and its passwords stay on the PC and are in no GitHub secret (the
+only Actions secret is `GIPHY_API_KEY`, a client-side key that is inside every APK anyway).
+
+```powershell
+# 1. master carries the version bump and its CI is green. Tag that commit:
+git tag v0.2.104 <master sha>; git push origin v0.2.104
+# 2. .github/workflows/release-apk.yml builds, runs the gates and creates the GitHub release with
+#    umbra-0.2.104-unsigned.apk + its .sha256. Wait for both jobs by NAME on the tagged commit.
+# 3. repo root, on the PC: download, check where it came from, sign, run the gates, publish the checksum
+.\sign-ci-apk.ps1 -Tag v0.2.104 -PublishChecksum
+# 4. device smoke on dist\apk\umbra-0.2.104.apk, then copy the APK AND umbra-0.2.104.apk.sha256
+#    to ~/fireplace/apk/ on the server; there: sha256sum -c umbra-0.2.104.apk.sha256
+```
+
+- The build record of a release names BOTH hashes: the unsigned CI file and the signed file.
+- Anyone can check that the two are one build:
+  `node scripts/verify-apk-signed-matches-unsigned.mjs umbra-<v>.apk umbra-<v>-unsigned.apk`.
+- `apksigner sign` runs with `--alignment-preserved true`. Without it apksigner rewrites the padding
+  of every stored entry and the byte comparison fails (MEASURED 2026-11-25, build-tools 36.0.0).
+  With it, the signed file is the CI file plus up to 4095 zero bytes and one signing block.
+- CI build values: `BASE_URL` (workflow `env`, same default as `build-android.ps1`), `GIT_COMMIT` =
+  8-character commit, `BUILD_TIME` = the COMMIT time in UTC (not "now", so a tag always gives the
+  same value), `GIPHY_API_KEY` from the secret (a tag build fails without it).
+- NOT true yet: a second build of the same tag is not promised to be byte-identical, and the runner
+  image, the actions and Gradle are not pinned by digest (gap report §4.4 steps 2-3).
+- A pull request that touches the Android project, the pubspec files or these scripts runs the
+  build job only and leaves a workflow artifact (14 days). `.\sign-ci-apk.ps1 -UnsignedApk <file>`
+  signs such a file for a test; never ship it.
+- `/apk/` on the server serves every file as an APK download, so the `.sha256` file downloads
+  too; `curl` shows it.
+
+## Build on the PC (fallback, and the Play bundle)
+
+Use this when GitHub Actions is unavailable. A PC build is NOT the CI build: its hash matches no
+release, so say so in the build record.
 
 ```powershell
 # repo root, on the PC (never the VM)
@@ -244,7 +284,7 @@ copy; send the SHA256 with the file. A `v0.2.48` GitHub DRAFT release was create
 no tag, so do NOT look for `gh release edit … --draft=false`. Friend-facing notes (Polish install
 steps, the Play Protect warning, the never-uninstall rule) are kept at
 `C:/Users/Lentach/Desktop/release-notes-0.2.48.md` — paste them alongside the link.
-⚠️ If a release is ever wanted again: `gh release create --target <sha>` is REJECTED with
+⚠️ Releases are back since 2026-11-25, created by `release-apk.yml` from an existing tag (`--verify-tag`). By hand: `gh release create --target <sha>` is REJECTED with
 `Release.target_commitish is invalid` — pass a BRANCH name (`--target master`).
 
 ⚠️ **Two earlier 0.2.42 builds exist and must NOT be shipped.** `601248e0…` was built from a
@@ -442,11 +482,11 @@ diagnosing a "vanishing" message in that thread: it has **disappearing messages 
   Android identifies the app by it, so a rename would be a different app and every friend would have
   to uninstall, destroying their keys and history. The only name a friend ever sees is **Umbra**
   (`aapt2 dump badging` → `application-label:'Umbra'`).
-- **No GitHub release has ever been published.** A `v0.2.48` DRAFT was created and then DELETED when
+- **GitHub releases start with the first tag after 2026-11-25** (`release-apk.yml`): each holds the UNSIGNED build and the checksums, never the signed APK. Before that none was published. A `v0.2.48` DRAFT was created and then DELETED when
   the owner chose the cloud link; `git ls-remote --tags` shows no `v*` tag, because a draft release
-  never creates one. `gh release list` is empty — which also keeps the Play App Signing PEPK door
+  never creates one. `gh release list` was empty until then — an unsigned asset carries no certificate, so the Play App Signing PEPK door stays
   open (see the trap about a Google-generated cert).
-- **Give friends the SHA256 with the file** so a re-download can be verified, and keep recording
+- **Give friends the SHA256 with the file** (it is also beside the APK under `/apk/` and in the GitHub release) so a re-download can be verified, and keep recording
   every shipped hash in the build records above — that is the only way to tell two same-version
   binaries apart.
 - **Updating a sideload is NOT a reinstall-from-scratch — MEASURED 2026-09-13 (pre-flight above).**
@@ -466,7 +506,7 @@ diagnosing a "vanishing" message in that thread: it has **disappearing messages 
   are already met; the open items are listed under the 2026-11-17 decision above.
 - ⛔ **The signing certificate is a one-way door, and the trigger is a USER INSTALL — not a
   published release.** The old wording tied the deadline to "`gh release list` empty", which under
-  the cloud-link decision above is unreachable: there will never be a release, so that test would
+  the cloud-link decision above was unreachable (and is meaningless now that releases hold unsigned builds), so that test would
   read "still open" forever. What actually matters: any device holding an APK signed with THIS
   keystore can only take a Play update if Play App Signing ADOPTED this keystore via PEPK. Let
   Google generate its own key instead and those installs are refused (different cert) with uninstall
