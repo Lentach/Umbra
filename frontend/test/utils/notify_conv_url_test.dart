@@ -1,7 +1,4 @@
-@TestOn('browser')
-library;
-
-import 'package:fireplace/utils/notify_conv_param_web.dart';
+import 'package:fireplace/utils/notify_conv_url.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
