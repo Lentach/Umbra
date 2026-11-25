@@ -306,8 +306,10 @@ class _RecoveryKeyScreenState extends State<RecoveryKeyScreen> {
       const SizedBox(height: 20),
       OutlinedButton.icon(
         onPressed: () async {
-          await Clipboard.setData(ClipboardData(text: words.join(' ')));
+          // Recorded BEFORE the write: a close during the await must still
+          // find the phrase to wipe.
           _copiedPhrase = words.join(' ');
+          await Clipboard.setData(ClipboardData(text: _copiedPhrase!));
           if (context.mounted) {
             showTopSnackBar(context, l10n.recoveryKeyCopied);
           }

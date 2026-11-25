@@ -471,6 +471,50 @@ void main() {
     expect(clipboardText ?? '', isEmpty);
   });
 
+  testWidgets('A2-AUTH-02: leaving while the copy is still being written '
+      'still wipes the phrase', (tester) async {
+    final firstWrite = Completer<void>();
+    var writes = 0;
+    clipboardText = null;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        switch (call.method) {
+          case 'Clipboard.setData':
+            clipboardText = (call.arguments as Map)['text'] as String?;
+            // The platform takes its time over the user's Copy only.
+            if (writes++ == 0) await firstWrite.future;
+            return null;
+          case 'Clipboard.getData':
+            return clipboardText == null
+                ? null
+                : <String, dynamic>{'text': clipboardText};
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+    await pumpScreen(tester, results: <bool?>[]);
+    await tester.tap(find.text(support.l10n.recoveryKeyGenerateAction));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(support.l10n.recoveryKeyCopyAction));
+    await tester.pump();
+    expect(clipboardText, isNotEmpty, reason: 'the write is under way');
+
+    await tester.tap(find.byIcon(Icons.arrow_back));
+    await tester.pumpAndSettle();
+    expect(find.byType(RecoveryKeyScreen), findsNothing);
+    firstWrite.complete();
+    await tester.pumpAndSettle();
+
+    expect(clipboardText ?? '', isEmpty);
+  });
+
   testWidgets('A2-AUTH-02: something the user copied since is left alone',
       (tester) async {
     mockClipboard(tester);
