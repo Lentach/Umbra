@@ -15,6 +15,7 @@ import '../providers/connection_provider.dart';
 import '../providers/conversations_provider.dart';
 import '../providers/passcode_provider.dart';
 import '../providers/friends_provider.dart';
+import '../providers/messaging_provider.dart';
 import 'chat_detail_screen.dart';
 import '../utils/pending_deep_link_stub.dart'
     if (dart.library.html) '../utils/pending_deep_link_web.dart';
@@ -49,10 +50,18 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   StreamSubscription<dynamic>? _pageResumeSub;
   StreamSubscription<dynamic>? _freezeReloadSub;
   UnreadBadgeSync? _unreadBadgeSync;
+  PasscodeProvider? _passcode;
+  bool _wasLocked = false;
 
   @override
   void initState() {
     super.initState();
+    // Android's lock is only a cover: the socket and the open chat keep
+    // running under it, so the lock itself decides whether the app counts as
+    // visible (receipts, countdowns, seen marks all read that flag).
+    final passcode = _passcode = context.read<PasscodeProvider>();
+    _wasLocked = passcode.isLocked;
+    passcode.addListener(_onPasscodeChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final auth = context.read<AuthProvider>();
       final conn = context.read<ConnectionProvider>();
@@ -128,6 +137,36 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     }
   }
 
+  /// "The user is looking" only while the lock is open; a locked app stays
+  /// hidden (the unlock, [_onPasscodeChanged], shows it).
+  void _markVisibleUnlessLocked() {
+    final passcode = context.read<PasscodeProvider>();
+    context.read<ConversationsProvider>().setClientVisible(!passcode.isLocked);
+  }
+
+  void _onPasscodeChanged() {
+    final passcode = _passcode;
+    if (passcode == null || !mounted) return;
+    final locked = passcode.isLocked;
+    if (locked == _wasLocked) return;
+    _wasLocked = locked;
+    final auth = context.read<AuthProvider>();
+    if (auth.currentUser == null || auth.token == null) return;
+    final conversations = context.read<ConversationsProvider>();
+    if (locked) {
+      conversations.setClientVisible(false);
+      return;
+    }
+    // Unlocked: the open chat is shown now, as on any foreground — but not
+    // when the app is in the background (an unlock can land after the user
+    // left; the next resume shows it).
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    if (lifecycle != null && lifecycle != AppLifecycleState.resumed) return;
+    conversations.setClientVisible(true);
+    final open = conversations.activeConversationId;
+    if (open != null) context.read<MessagingProvider>().markConversationRead(open);
+  }
+
   Future<void> _recoverForeground({required bool markVisible}) async {
     final auth = context.read<AuthProvider>();
     await auth.ensureSessionReady();
@@ -136,7 +175,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     // Only a real visibility signal may claim "user is looking": a background
     // unfreeze must not re-enable read receipts or server push suppression.
     if (markVisible) {
-      context.read<ConversationsProvider>().setClientVisible(true);
+      _markVisibleUnlessLocked();
     }
     context.read<ConnectionProvider>().ensureReconnectIfNeeded();
     // iOS PWA: a notification tap on a suspended WebView loses the SW's
@@ -193,6 +232,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     _tabVisibilitySub?.cancel();
     _pageResumeSub?.cancel();
     _freezeReloadSub?.cancel();
+    _passcode?.removeListener(_onPasscodeChanged);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -215,7 +255,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
           await auth.ensureSessionReady();
           if (!mounted) return;
           context.read<ConnectionProvider>().ensureReconnectIfNeeded();
-          context.read<ConversationsProvider>().setClientVisible(true);
+          _markVisibleUnlessLocked();
         }());
         break;
       case AppLifecycleState.paused:
