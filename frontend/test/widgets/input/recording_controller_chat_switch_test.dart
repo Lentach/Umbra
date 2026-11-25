@@ -181,4 +181,26 @@ void main() {
     expect(voiceSignalsToBob(), [false]);
     await tester.pump(const Duration(seconds: 5));
   });
+
+  testWidgets('a recording that started with no chat open survives a chat '
+      'opening (the resume reassert): it is not discarded, and the note goes '
+      'to the chat open at stop', (tester) async {
+    conversations.closeConversation();
+    await recordInChat10(tester);
+    expect(recorder.isRecording, isTrue);
+
+    await switchTo(tester, 10);
+
+    expect(recorder.isRecording, isTrue);
+    expect(find.text(l10n.snackbarVoiceRecordingCanceled), findsNothing);
+
+    await recorder.stopAndSend();
+    await settle(tester);
+
+    expect(sent, hasLength(1));
+    expect(sent.single.conversationId, 10);
+    expect(recorder.isRecording, isFalse);
+    expect(find.text(l10n.snackbarVoiceRecordingCanceled), findsNothing);
+    await tester.pump(const Duration(seconds: 5));
+  });
 }

@@ -144,6 +144,9 @@ class RecordingControllerState extends State<RecordingController>
   /// across chats on the desktop split view, so the open chat can change
   /// under a recording: the note, its 120 s auto-send and the "recording…"
   /// signal all belong to THIS chat, never to the one open when they fire.
+  /// Null when no chat was open at the start (the resume reassert opens it a
+  /// moment later): such a recording belongs to no chat yet, is never
+  /// discarded for a chat opening, and goes to the chat open at stop.
   int? _recordingConversationId;
 
   // ── decorative animation (dot pulse + timer rebuild + waveform sweep) ──
@@ -175,10 +178,12 @@ class RecordingControllerState extends State<RecordingController>
     }
   }
 
-  /// The open chat is no longer the one this recording started in.
+  /// The open chat is no longer the one this recording started in. A
+  /// recording that started with no chat open has none to leave.
   bool get _recordingLeftItsChat =>
       _isRecording &&
       !_isStopping &&
+      _recordingConversationId != null &&
       _conversationsProvider?.activeConversationId != _recordingConversationId;
 
   /// A recording is DISCARDED, not sent, when the open chat changes: the
@@ -490,8 +495,10 @@ class RecordingControllerState extends State<RecordingController>
     final onRecordingStateChanged = widget.onRecordingStateChanged;
     // The chat the recording started in: ChatDetailScreen.dispose clears
     // activeConversationId, so a send that outlives the screen has to carry
-    // the id captured here.
-    final conversationId = _recordingConversationId;
+    // the id captured here. A recording that started with no chat open goes
+    // to the chat open now.
+    final conversationId = _recordingConversationId ??
+        _conversationsProvider?.activeConversationId;
     _recordingTimer?.cancel();
     _recordingTimer = null;
     if (_waveformController.isAnimating) _waveformController.stop();
