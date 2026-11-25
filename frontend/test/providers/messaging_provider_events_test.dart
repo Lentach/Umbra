@@ -21,8 +21,9 @@ class _PurgingEncryption extends EncryptionProvider {
 
   @override
   Future<PlaintextPurgeResult> purgeLocalPlaintext(
-    Iterable<int> messageIds,
-  ) async {
+    Iterable<int> messageIds, {
+    int? account,
+  }) async {
     localPurges.add(messageIds.toSet());
     return const PlaintextPurgeResult.empty();
   }
