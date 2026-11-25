@@ -9,7 +9,8 @@
 // so that it starts on a 4096-byte boundary (MEASURED with build-tools 36.0.0:
 // 20 bytes). This script takes the padding and the block out of the signed
 // file, puts the offset back, and requires the result to be byte-identical to
-// the unsigned file. Anyone can run it on the two published files. It does
+// the unsigned file (falsified by verify-apk-signed-matches-unsigned.selftest.mjs).
+// Anyone can run it on the two published files. It does
 // NOT check the signature itself: `apksigner verify --print-certs` does that.
 //
 // The signer must run `apksigner sign --alignment-preserved true`: without it
@@ -20,7 +21,7 @@
 // has one, either file is not a plain (non-zip64) zip, the padding is not all
 // zero or is 4096 bytes or more, or one byte differs.
 //
-// Usage: node scripts/apk/verify-signed-matches-unsigned.mjs <signed.apk> <unsigned.apk>
+// Usage: node scripts/verify-apk-signed-matches-unsigned.mjs <signed.apk> <unsigned.apk>
 
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -72,7 +73,7 @@ function signingBlockStart(buf, cdOffset, label) {
 const [signedPath, unsignedPath] = process.argv.slice(2);
 if (!signedPath || !unsignedPath) {
   console.error(
-    'Usage: node scripts/apk/verify-signed-matches-unsigned.mjs <signed.apk> <unsigned.apk>',
+    'Usage: node scripts/verify-apk-signed-matches-unsigned.mjs <signed.apk> <unsigned.apk>',
   );
   process.exit(2);
 }

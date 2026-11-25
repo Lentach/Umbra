@@ -20,9 +20,10 @@ if (keyPropertiesFile.exists()) {
 // `--android-project-arg=umbraUnsignedRelease=true`) packages the release APK with NO
 // signature at all, even when key.properties exists. `.github/workflows/
 // release-apk.yml` builds that file from a tag; the owner signs it offline
-// (`scripts/apk/sign-ci-apk.ps1`), so the keystore never reaches CI. An unsigned
+// (`sign-ci-apk.ps1`), so the keystore never reaches CI. An unsigned
 // APK cannot be installed, so it cannot be mistaken for a shippable one. The
-// App Bundle keeps the keystore gate: Play gets a signed bundle from the PC.
+// App Bundle refuses the property (gate below): Play gets a signed bundle
+// from the PC.
 val unsignedRelease =
     project.findProperty("umbraUnsignedRelease")?.toString() == "true"
 
@@ -40,6 +41,12 @@ tasks.matching { it.name == "packageRelease" || it.name == "packageReleaseBundle
     .configureEach {
         val isApk = name == "packageRelease"
         doFirst {
+            if (unsignedRelease && !isApk) {
+                throw GradleException(
+                    "umbraUnsignedRelease applies to the APK only; " +
+                    "build the App Bundle without it."
+                )
+            }
             if (!keyPropertiesFile.exists() && !(unsignedRelease && isApk)) {
                 throw GradleException(
                     "Release packaging requested but android/key.properties is missing. " +
@@ -105,11 +112,12 @@ android {
 
     buildTypes {
         release {
-            // The execution-time gate above throws whenever a release artifact
-            // is PACKAGED without a keystore. Defense in depth: with no
-            // keystore the signingConfig is NULL, so even a path the task-name
-            // filter missed yields an inert UNSIGNED apk (also rejected by the
-            // apksigner gate in build-android.ps1) — NEVER a debug-signed one
+            // The execution-time gate above throws when a release artifact is
+            // packaged without a keystore, except the APK when
+            // `umbraUnsignedRelease` is set (see top). signingConfig is NULL
+            // with no keystore or with that property, so a path the task
+            // filter missed yields an inert UNSIGNED apk (rejected by the
+            // apksigner gate in build-android.ps1), never a debug-signed one
             // that looks shippable.
             signingConfig = if (keyPropertiesFile.exists() && !unsignedRelease) {
                 signingConfigs.getByName("release")

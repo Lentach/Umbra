@@ -7,20 +7,22 @@
 .WHY
   The release keystore never leaves the PC. CI builds the APK from a public tag
   with public logs and publishes it and its SHA-256 in the GitHub release; this
-  script adds the signature offline. `scripts/apk/verify-signed-matches-unsigned.mjs`
+  script adds the signature offline. `scripts/verify-apk-signed-matches-unsigned.mjs`
   then takes the signature back out and requires the bytes to equal the CI file.
 
 .USAGE
   From the repo root:
-    .\scripts\apk\sign-ci-apk.ps1 -Tag v0.2.104
-    .\scripts\apk\sign-ci-apk.ps1 -Tag v0.2.104 -PublishChecksum
-    .\scripts\apk\sign-ci-apk.ps1 -UnsignedApk C:\tmp\umbra-0.2.104-unsigned.apk
+    .\sign-ci-apk.ps1 -Tag v0.2.104 -PublishChecksum   (a release)
+    .\sign-ci-apk.ps1 -Tag v0.2.104
+    .\sign-ci-apk.ps1 -UnsignedApk C:\tmp\umbra-0.2.104-unsigned.apk   (a pull-request artifact; never ship it)
   Output: dist\apk\umbra-<version>.apk and umbra-<version>.apk.sha256 (gitignored).
   -PublishChecksum also uploads the .sha256 file to the tag's GitHub release.
 
-.GATES (same as build-android.ps1)
-  pinned signer certificate, v2-only signature, 16KB ELF alignment, and the
-  signed-equals-unsigned proof.
+.GATES
+  With -Tag: the tag is a commit on origin/master and the release and its
+  unsigned assets were made by the release workflow. Always: the input is
+  unsigned; pinned signer certificate and 16KB ELF alignment (as in
+  build-android.ps1); v2-only signature; the signed-equals-unsigned proof.
 #>
 [CmdletBinding()]
 param(
@@ -37,7 +39,7 @@ param(
 # NOTE: deliberately NOT $ErrorActionPreference='Stop' (see build-android.ps1):
 # native tools write progress to stderr. We check $LASTEXITCODE.
 
-$repoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path))
+$repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $repoRoot
 
 function Step($m) { Write-Host "`n=== $m ===" -ForegroundColor Cyan }
@@ -64,7 +66,7 @@ foreach ($k in 'storeFile', 'storePassword', 'keyPassword', 'keyAlias') {
   if (-not $kp[$k]) { Fail "$keyProps has no '$k'." }
 }
 # Gradle resolves storeFile against the app module (frontend/android/app).
-$keystore = [System.IO.Path]::GetFullPath((Join-Path "$repoRoot\frontend\android\app" $kp['storeFile']))
+$keystore = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine("$repoRoot\frontend\android\app", $kp['storeFile']))
 if (-not (Test-Path $keystore)) { Fail "Keystore not found at $keystore." }
 
 $sdkRoot = $env:ANDROID_HOME
@@ -87,6 +89,20 @@ New-Item -ItemType Directory -Force $outDir | Out-Null
 
 # ---------- the unsigned CI file ----------
 if ($Tag) {
+  # The checksum inside a release only proves the download is intact. What
+  # proves the file is OURS: the tag is on master, and the release and its
+  # unsigned assets were made by the workflow, not uploaded by hand.
+  Step "Check where release $Tag came from"
+  git fetch origin master --tags --force --quiet
+  if ($LASTEXITCODE -ne 0) { Fail "git fetch failed." }
+  git merge-base --is-ancestor "$Tag^{commit}" origin/master
+  if ($LASTEXITCODE -ne 0) { Fail "Tag $Tag is not a commit on origin/master." }
+  $who = gh api "repos/$Repo/releases/tags/$Tag" --jq '[.author.login] + [.assets[] | select(.name | test("-unsigned[.]apk([.]sha256)?$")) | .uploader.login] | unique | join(",")'
+  if ($LASTEXITCODE -ne 0 -or $who -ne 'github-actions[bot]') {
+    Fail "Release $Tag or its unsigned assets were not made by the release workflow (made by: $who)."
+  }
+  Write-Host "Tag is on origin/master; release and assets made by $who."
+
   Step "Download the CI build of $Tag"
   $dl = Join-Path $outDir "ci-$Tag"
   if (Test-Path $dl) { Remove-Item -Recurse -Force $dl }
@@ -112,9 +128,12 @@ $unsignedSha = Sha256 $UnsignedApk
 Write-Host "unsigned: $UnsignedApk"
 Write-Host "SHA256:   $unsignedSha"
 
-# The input must really be unsigned: apksigner has to REJECT it.
-& $apksigner.FullName verify $UnsignedApk 2>&1 | Out-Null
+# The input must really be unsigned: apksigner has to REJECT it, and for that
+# reason (MEASURED, build-tools 36.0.0: "ERROR: Missing META-INF/MANIFEST.MF"),
+# not because apksigner itself could not run.
+$unsOut = & $apksigner.FullName verify $UnsignedApk 2>&1 | Out-String
 if ($LASTEXITCODE -eq 0) { Fail "The input APK is already signed - this script signs only the unsigned CI build." }
+if ($unsOut -notmatch 'Missing META-INF/MANIFEST\.MF') { Fail "apksigner failed for another reason than a missing signature:`n$unsOut" }
 
 # ---------- sign ----------
 # --alignment-preserved: without it apksigner rewrites the padding of every
@@ -122,39 +141,53 @@ if ($LASTEXITCODE -eq 0) { Fail "The input APK is already signed - this script s
 Step "Sign (v2 only, as every shipped Umbra APK)"
 $signed = Join-Path $outDir "umbra-$ver.apk"
 if (Test-Path $signed) { Remove-Item -Force $signed }
-# Passwords go through the environment of this process, never argv.
-$env:UMBRA_KS_PASS = $kp['storePassword']
-$env:UMBRA_KEY_PASS = $kp['keyPassword']
-& $apksigner.FullName sign --ks $keystore --ks-key-alias $kp['keyAlias'] `
-  --ks-pass env:UMBRA_KS_PASS --key-pass env:UMBRA_KEY_PASS `
-  --v1-signing-enabled false --v2-signing-enabled true `
-  --v3-signing-enabled false --v4-signing-enabled false `
-  --alignment-preserved true `
-  --out $signed $UnsignedApk
-$signExit = $LASTEXITCODE
-Remove-Item Env:UMBRA_KS_PASS, Env:UMBRA_KEY_PASS -ErrorAction SilentlyContinue
+# Passwords go through the environment of this process, never argv; the
+# finally block clears them even on Ctrl+C.
+$signExit = 1
+try {
+  $env:UMBRA_KS_PASS = $kp['storePassword']
+  $env:UMBRA_KEY_PASS = $kp['keyPassword']
+  & $apksigner.FullName sign --ks $keystore --ks-key-alias $kp['keyAlias'] `
+    --ks-pass env:UMBRA_KS_PASS --key-pass env:UMBRA_KEY_PASS `
+    --v1-signing-enabled false --v2-signing-enabled true `
+    --v3-signing-enabled false --v4-signing-enabled false `
+    --alignment-preserved true `
+    --out $signed $UnsignedApk
+  $signExit = $LASTEXITCODE
+} finally {
+  Remove-Item Env:UMBRA_KS_PASS, Env:UMBRA_KEY_PASS -ErrorAction SilentlyContinue
+}
 if ($signExit -ne 0 -or -not (Test-Path $signed)) { Fail "apksigner sign failed (exit=$signExit)." }
+
+# A file that fails a gate below is deleted: nothing half-checked stays in dist\apk.
+function Reject($m) { Remove-Item -Force $signed -ErrorAction SilentlyContinue; Fail $m }
 
 # ---------- gate 1: pinned signer ----------
 Step "Verify signer"
 $certOut = & $apksigner.FullName verify --print-certs $signed 2>&1 | Out-String
-if ($LASTEXITCODE -ne 0) { Fail "apksigner rejected the signed APK:`n$certOut" }
-if ($certOut -match 'CN=Android Debug') { Fail "APK is DEBUG-SIGNED." }
+if ($LASTEXITCODE -ne 0) { Reject "apksigner rejected the signed APK:`n$certOut" }
+if ($certOut -match 'CN=Android Debug') { Reject "APK is DEBUG-SIGNED." }
 $fps = @([regex]::Matches($certOut, 'certificate SHA-256 digest:\s*([0-9A-Fa-f:]+)') | ForEach-Object { NormFp $_.Groups[1].Value })
 if ($fps.Count -ne 1 -or $fps[0] -ne $expectedFp) {
-  Fail "APK signer SHA-256 [$($fps -join ', ')] is not the pinned $ExpectedSignerSha256."
+  Reject "APK signer SHA-256 [$($fps -join ', ')] is not the pinned $ExpectedSignerSha256."
 }
-Write-Host "Signer OK (pinned SHA-256)."
+$schemes = & $apksigner.FullName verify -v $signed 2>&1 | Out-String
+if ($schemes -notmatch 'v1 scheme \(JAR signing\): false' -or
+    $schemes -notmatch 'v2 scheme \(APK Signature Scheme v2\): true' -or
+    $schemes -notmatch 'v3 scheme \(APK Signature Scheme v3\): false') {
+  Reject "The signature is not v2-only:`n$schemes"
+}
+Write-Host "Signer OK (pinned SHA-256, v2 only)."
 
 # ---------- gate 2: 16KB ----------
 Step "Verify 16KB ELF alignment"
 node scripts/verify-apk-16k.mjs $signed
-if ($LASTEXITCODE -ne 0) { Fail "16KB alignment gate failed - do NOT distribute this APK." }
+if ($LASTEXITCODE -ne 0) { Reject "16KB alignment gate failed - do NOT distribute this APK." }
 
 # ---------- gate 3: signed = CI file + signature ----------
 Step "Verify the signed APK is the CI build plus a signature"
-node scripts/apk/verify-signed-matches-unsigned.mjs $signed $UnsignedApk
-if ($LASTEXITCODE -ne 0) { Fail "The signed APK differs from the CI build - do NOT distribute it." }
+node scripts/verify-apk-signed-matches-unsigned.mjs $signed $UnsignedApk
+if ($LASTEXITCODE -ne 0) { Reject "The signed APK differs from the CI build - do NOT distribute it." }
 
 # ---------- checksum ----------
 Step "Done"
@@ -170,5 +203,8 @@ if ($PublishChecksum) {
   gh release upload $Tag $shaFile --repo $Repo --clobber
   if ($LASTEXITCODE -ne 0) { Fail "Uploading the checksum to release $Tag failed." }
   Write-Host "Checksum uploaded to release $Tag."
+}
+if ($Tag -and -not $PublishChecksum) {
+  Write-Host "The release notes of $Tag promise this checksum: rerun with -PublishChecksum before distributing." -ForegroundColor Yellow
 }
 Write-Host "`nNext: device smoke, then copy BOTH files to ~/fireplace/apk/ on the server (docs/runbooks/android-release.md)."

@@ -6,7 +6,7 @@ name: Release APK
 #
 # Signing stays offline: there is no keystore and no signing password in this
 # repository's secrets. The owner signs the published file on the PC with
-# `scripts/apk/sign-ci-apk.ps1`; `scripts/apk/verify-signed-matches-unsigned.mjs`
+# `sign-ci-apk.ps1`; `scripts/verify-apk-signed-matches-unsigned.mjs`
 # proves the signed file is this build plus a signature, byte for byte. An
 # unsigned APK cannot be installed on any device.
 #
@@ -14,8 +14,9 @@ name: Release APK
 # not promised to be byte-identical, and the runner image, the actions and
 # Gradle are not pinned by digest.
 #
-# The pull_request trigger only proves the build still works when the files it
-# depends on change; it uploads a workflow artifact and never makes a release.
+# The pull_request trigger re-runs the build when the Android project, its
+# dependencies or these scripts change (Dart-only changes under frontend/lib are
+# not covered); it uploads a workflow artifact and never makes a release.
 on:
   push:
     tags:
@@ -25,8 +26,13 @@ on:
       - '.github/workflows/release-apk.yml'
       - 'frontend/android/**'
       - 'frontend/patch_webcrypto_16k.ps1'
-      - 'scripts/apk/**'
+      - 'frontend/pubspec.yaml'
+      - 'frontend/pubspec.lock'
       - 'scripts/verify-apk-16k.mjs'
+      - 'scripts/verify-apk-16k.selftest.mjs'
+      - 'scripts/verify-apk-signed-matches-unsigned.mjs'
+      - 'scripts/verify-apk-signed-matches-unsigned.selftest.mjs'
+      - 'sign-ci-apk.ps1'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -34,6 +40,10 @@ concurrency:
 
 permissions:
   contents: read
+
+env:
+  # Same default as build-android.ps1 (-BaseUrl); change both together.
+  BASE_URL: https://fireplace.ignorelist.com
 
 jobs:
   build:
@@ -49,6 +59,10 @@ jobs:
         with:
           # Full history: the tag must be checked against master below.
           fetch-depth: 0
+
+      # Before anything is built: the checks below must be able to fail.
+      - name: Self-test the APK gates
+        run: node scripts/verify-apk-16k.selftest.mjs && node scripts/verify-apk-signed-matches-unsigned.selftest.mjs
 
       - name: Read version; a tag must match pubspec and be on master
         id: version
@@ -114,7 +128,7 @@ jobs:
           fi
           flutter build apk --release --build-number="$VERSION_CODE" \
             --android-project-arg=umbraUnsignedRelease=true \
-            --dart-define=BASE_URL=https://fireplace.ignorelist.com \
+            --dart-define=BASE_URL="$BASE_URL" \
             --dart-define=GIT_COMMIT="$COMMIT" \
             --dart-define=BUILD_TIME="$BUILD_TIME" \
             --dart-define=GIPHY_API_KEY="$GIPHY_API_KEY"
@@ -125,11 +139,13 @@ jobs:
           apk=frontend/build/app/outputs/flutter-apk/app-release.apk
           test -f "$apk"
           apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
-          if "$apksigner" verify "$apk" >/dev/null 2>&1; then
+          # apksigner must reject the file for THIS reason, not because it could
+          # not run (MEASURED, build-tools 36.0.0, on an unsigned build).
+          if out=$("$apksigner" verify "$apk" 2>&1); then
             echo "::error::the CI build is signed; it must be unsigned"; exit 1
           fi
-          if unzip -Z1 "$apk" | grep -Ei '^META-INF/.*\.(RSA|DSA|EC|SF)$'; then
-            echo "::error::the CI build carries a JAR signature"; exit 1
+          if ! grep -q 'Missing META-INF/MANIFEST.MF' <<<"$out"; then
+            echo "::error::apksigner failed for another reason: $out"; exit 1
           fi
 
       - name: Gate - 16KB ELF alignment
@@ -187,7 +203,7 @@ jobs:
             echo
             echo "SHA-256 of the unsigned build: \`$SHA256\`"
             echo
-            echo "The APK offered for download by the app's server is this file plus the release signature. \`umbra-$VERSION.apk.sha256\`, added here after signing, is its checksum. To check that the two are the same build: \`node scripts/apk/verify-signed-matches-unsigned.mjs umbra-$VERSION.apk umbra-$VERSION-unsigned.apk\`."
+            echo "The APK offered for download by the app's server is this file plus the release signature. \`umbra-$VERSION.apk.sha256\`, added here after signing, is its checksum. To check that the two are the same build: \`node scripts/verify-apk-signed-matches-unsigned.mjs umbra-$VERSION.apk umbra-$VERSION-unsigned.apk\`."
           } > notes.md
           gh release create "$TAG" --verify-tag --title "Umbra $VERSION" --notes-file notes.md \
             "out/umbra-$VERSION-unsigned.apk" "out/umbra-$VERSION-unsigned.apk.sha256"
