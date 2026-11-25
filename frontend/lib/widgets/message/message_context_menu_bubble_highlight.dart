@@ -213,10 +213,11 @@ class MessageContextMenuBubbleHighlight extends StatelessWidget {
           // Mirror TextMessageContent: jumbo sizing for emoji-only messages and
           // enlarged inline emoji for mixed text so the replica does not visibly
           // shift when the long-press menu opens.
-          final jumboSize = jumboEmojiFontSize(displayContent);
+          final shown = noteLinkLabel(context, message) ?? displayContent;
+          final jumboSize = jumboEmojiFontSize(shown);
           body = jumboSize != null
               ? Text(
-                  displayContent,
+                  shown,
                   style: withEmojiFont(
                     RpgTheme.bodyFont(fontSize: jumboSize, color: textColor),
                   ),
@@ -224,7 +225,7 @@ class MessageContextMenuBubbleHighlight extends StatelessWidget {
               : Text.rich(
                   TextSpan(
                     children: buildInlineEmojiSpans(
-                      displayContent,
+                      shown,
                       textStyle: RpgTheme.bodyFont(
                         fontSize: 15,
                         color: textColor,
