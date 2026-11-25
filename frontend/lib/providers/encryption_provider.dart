@@ -1586,11 +1586,17 @@ class EncryptionProvider extends ChangeNotifier {
   Future<PlaintextPurgeResult> purgeConversations(
     Iterable<int> conversationIds,
   ) async {
+    // The account the user cleared the chat under: the scan below awaits a
+    // store read, and a sign-in of another account in that gap must not turn
+    // these ids into that account's obligation (local ids restart at the same
+    // base for every account).
+    final account = _encryptionService.activeUserId;
+    if (account == null) return const PlaintextPurgeResult.empty();
     final ids = await _encryptionService.messageIdsForConversations(
       conversationIds,
     );
     if (ids.isEmpty) return const PlaintextPurgeResult.empty();
-    return purgeLocalPlaintext(ids);
+    return purgeLocalPlaintext(ids, account: account);
   }
 
   /// True when the previous sweep found nothing to destroy. The sweep ticks
@@ -4010,13 +4016,20 @@ class EncryptionProvider extends ChangeNotifier {
   }
 
   /// Clear all E2E encryption keys. Call on account deletion only.
+  ///
+  /// The provider's own state resets even when the wipe throws: the service
+  /// forgets the account regardless, so a provider still reporting
+  /// [isE2EReady] would work for an account nobody holds.
   Future<void> clearEncryptionKeys() async {
     _e2eFlowLog('CACHE_CLEAR', {'scope': 'allE2EKeys'});
-    await _encryptionService.clearAllKeys();
-    _e2eInitialized = false;
-    _pendingPreKeyFetches.clear();
-    _sessionBuilds.clear();
-    _pendingIdentityProbes.clear();
+    try {
+      await _encryptionService.clearAllKeys();
+    } finally {
+      _e2eInitialized = false;
+      _pendingPreKeyFetches.clear();
+      _sessionBuilds.clear();
+      _pendingIdentityProbes.clear();
+    }
   }
 
   @override
