@@ -12,10 +12,19 @@ import {
   RESET_DELAY_MS,
   RESET_DELAY_RECOVERY_MS,
   RECOVERY_MIN_AGE_MS,
+  TIMING_SAFE_DUMMY_VERIFIER,
 } from './identity-reset.service';
 import { AccountAuthorization } from './account-authorization.entity';
 import { IdentityResetRequest } from './identity-reset-request.entity';
 import { RecoveryKey } from './recovery-key.entity';
+
+// The real argon2 runs everywhere; `verify` is only wrapped so a test can see
+// WHICH hash was checked. Asserting the cost by the clock was flaky: a fast
+// CI runner did the 19 MiB / t=2 verify in 14.8 ms against a 15 ms floor.
+jest.mock('argon2', () => {
+  const actual = jest.requireActual<typeof import('argon2')>('argon2');
+  return { ...actual, verify: jest.fn(actual.verify) };
+});
 
 interface BuilderMock {
   update: jest.Mock;
@@ -669,19 +678,25 @@ describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', (
       );
     });
 
+    it('the dummy hash costs what a real verifier costs (same argon2 parameters)', () => {
+      const { memoryCost, timeCost, parallelism } = RECOVERY_ARGON2_OPTIONS;
+      expect(TIMING_SAFE_DUMMY_VERIFIER).toContain(
+        `$argon2id$v=19$m=${memoryCost},p=${parallelism},t=${timeCost}$`,
+      );
+    });
+
     it('no phrase enrolled reads exactly like a wrong phrase, and COSTS the same', async () => {
       recoveryRepo.findOne.mockResolvedValue(null);
 
       // (F38) Unauthenticated door: an un-enrolled account must not answer
-      // faster than an enrolled one with a wrong phrase. The native argon2
-      // module cannot be spied on, so the COST itself is asserted: the
-      // 19 MiB / t=2 verify takes tens of milliseconds; the bare early return
-      // it replaces took none.
-      const started = performance.now();
+      // faster than an enrolled one with a wrong phrase: it pays one real
+      // verify against the dummy hash, where a bare early return paid none.
+      const verify = jest.mocked(argon2.verify);
+      verify.mockClear();
       await expect(service.verifyRecoveryPhrase(7, phrase)).resolves.toBe(
         'invalid_phrase',
       );
-      expect(performance.now() - started).toBeGreaterThan(15);
+      expect(verify.mock.calls).toEqual([[TIMING_SAFE_DUMMY_VERIFIER, phrase]]);
       expect(recoveryRepo.update).not.toHaveBeenCalled();
     });
   });
@@ -730,9 +745,12 @@ describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', (
 
     it('the legacy answer still pays a verify (no timing tell against a wrong secret)', async () => {
       recoveryRepo.findOne.mockResolvedValue(v1());
-      const started = performance.now();
+      const verify = jest.mocked(argon2.verify);
+      verify.mockClear();
       await service.verifyRecoveryPhrase(7, authSecret);
-      expect(performance.now() - started).toBeGreaterThan(15);
+      expect(verify.mock.calls).toEqual([
+        [TIMING_SAFE_DUMMY_VERIFIER, authSecret],
+      ]);
     });
 
     it('a wrong authSecret on an auth_v2 row is counted in SQL and locks at the limit', async () => {

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/message_model.dart';
 import '../../theme/rpg_theme.dart';
+import '../../utils/reply_preview_helper.dart';
 
 /// The quoted-message card above a reply, shared by the text and voice bubbles.
 ///
@@ -24,12 +25,16 @@ class ReplyQuoteCard extends StatelessWidget {
 
   final String content;
 
+  /// The signed-in user: a quote of their own message is labelled "You".
+  final int? currentUserId;
+
   const ReplyQuoteCard({
     super.key,
     required this.replyTo,
     required this.isDark,
     required this.borderColor,
     required this.content,
+    this.currentUserId,
   });
 
   @override
@@ -50,9 +55,12 @@ class ReplyQuoteCard extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
-            replyTo.senderUsername.isNotEmpty
-                ? replyTo.senderUsername
-                : l10n.unknown,
+            quotedSenderLabel(
+              l10n,
+              senderUsername: replyTo.senderUsername,
+              senderId: replyTo.senderId,
+              currentUserId: currentUserId,
+            ),
             style: RpgTheme.bodyFont(
               fontSize: 12,
               color: borderColor,

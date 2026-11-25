@@ -9,10 +9,15 @@ import 'package:provider/provider.dart';
 
 import '../../support/l10n.dart';
 
-Widget _wrap(MessageModel message, {VoidCallback? onDismiss}) =>
+Widget _wrap(
+  MessageModel message, {
+  VoidCallback? onDismiss,
+  int? currentUserId,
+  Locale locale = const Locale('en'),
+}) =>
     MaterialApp(
       theme: RpgTheme.themeDataLight,
-      locale: const Locale('en'),
+      locale: locale,
       localizationsDelegates: AppLocalizations.localizationsDelegates,
       supportedLocales: AppLocalizations.supportedLocales,
       home: ChangeNotifierProvider<EncryptionProvider>(
@@ -21,6 +26,7 @@ Widget _wrap(MessageModel message, {VoidCallback? onDismiss}) =>
           body: ReplyPreviewBar(
             message: message,
             onDismiss: onDismiss ?? () {},
+            currentUserId: currentUserId,
           ),
         ),
       ),
@@ -73,6 +79,62 @@ void main() {
       expect(find.text(l10n.encryptedMessage), findsNothing,
           reason: 'media replies use the TYPE label, not the generic one');
     }
+  });
+
+  testWidgets(
+      'a reply to your OWN message is labelled You: an own row carries no '
+      'username, and that used to read Unknown', (tester) async {
+    await tester.pumpWidget(_wrap(
+      MessageModel(
+        id: 1,
+        content: 'mine',
+        senderId: 1,
+        senderUsername: '',
+        conversationId: 10,
+        createdAt: DateTime.utc(2026),
+      ),
+      currentUserId: 1,
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.text(l10n.senderYou), findsOneWidget);
+    expect(find.text(l10n.unknown), findsNothing);
+  });
+
+  testWidgets(
+      'a sender nobody can name reads Unknown in the app language, and the '
+      "peer's message keeps the peer's name", (tester) async {
+    final pl = lookupAppLocalizations(const Locale('pl'));
+    await tester.pumpWidget(_wrap(
+      MessageModel(
+        id: 1,
+        content: 'whose',
+        senderId: 2,
+        senderUsername: '',
+        conversationId: 10,
+        createdAt: DateTime.utc(2026),
+      ),
+      currentUserId: 1,
+      locale: const Locale('pl'),
+    ));
+    await tester.pumpAndSettle();
+    expect(find.text(pl.unknown), findsOneWidget);
+    expect(find.text(l10n.unknown), findsNothing);
+
+    await tester.pumpWidget(_wrap(
+      MessageModel(
+        id: 1,
+        content: 'theirs',
+        senderId: 2,
+        senderUsername: 'bob',
+        conversationId: 10,
+        createdAt: DateTime.utc(2026),
+      ),
+      currentUserId: 1,
+    ));
+    await tester.pumpAndSettle();
+    expect(find.text('bob'), findsOneWidget);
+    expect(find.text(l10n.senderYou), findsNothing);
   });
 
   testWidgets('tapping the close control fires onDismiss exactly once',

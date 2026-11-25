@@ -14,6 +14,20 @@ bool isEncryptedPreviewContent(
       content == kReplyPreviewLabels.encryptedMessageLabel;
 }
 
+/// Who a quoted message is from, as the composer's reply preview and a
+/// bubble's quote card show it: "You" for the reader's own message (its row
+/// carries no username), the sender's name otherwise, "Unknown" when neither
+/// is known.
+String quotedSenderLabel(
+  AppLocalizations l10n, {
+  required String senderUsername,
+  required int? senderId,
+  required int? currentUserId,
+}) {
+  if (currentUserId != null && senderId == currentUserId) return l10n.senderYou;
+  return senderUsername.isNotEmpty ? senderUsername : l10n.unknown;
+}
+
 bool hasUsablePlaintextContent(MessageModel message) {
   if (message.content.isEmpty) return false;
   if (message.content == '[encrypted]' ||
