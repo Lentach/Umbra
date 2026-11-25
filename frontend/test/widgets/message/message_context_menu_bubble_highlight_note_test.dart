@@ -9,8 +9,8 @@ import 'package:flutter_test/flutter_test.dart';
 
 import '../../support/l10n.dart';
 
-final _token = 'ab' * 16;
-final _aesKey = base64Url.encode(List.filled(32, 7));
+final String _token = 'ab' * 16;
+final String _aesKey = base64Url.encode(List.filled(32, 7));
 final _noteUrl =
     'https://fireplace.ignorelist.com/note/$_token#$_aesKey&e=4102444800000';
 
@@ -21,8 +21,6 @@ MessageModel _msg(String content) => MessageModel(
   senderUsername: 'alice',
   conversationId: 1,
   createdAt: DateTime(2026, 5, 23),
-  deliveryStatus: MessageDeliveryStatus.sent,
-  messageType: MessageType.text,
 );
 
 Widget _preview(String content) => MaterialApp(

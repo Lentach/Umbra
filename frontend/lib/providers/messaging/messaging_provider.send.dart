@@ -654,7 +654,7 @@ extension MessagingSend on MessagingProvider {
             effectiveReplyToId: message.replyToMessageId,
             mediaDuration: message.mediaDuration,
           );
-        } catch (e) {
+        } on Object catch (e) {
           debugPrint('[MessagingProvider] Voice retry failed: $e');
           _markMessageFailed(tempId, 'Failed to send voice message');
         }

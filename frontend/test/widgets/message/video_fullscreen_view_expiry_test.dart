@@ -59,11 +59,11 @@ Future<MessagingProvider> _open(
         ),
         ChangeNotifierProvider<MessagingProvider>.value(value: messaging),
       ],
-      child: MaterialApp(
+      child: const MaterialApp(
         localizationsDelegates: AppLocalizations.localizationsDelegates,
         supportedLocales: AppLocalizations.supportedLocales,
-        locale: const Locale('en'),
-        home: const Scaffold(key: _kHome),
+        locale: Locale('en'),
+        home: Scaffold(key: _kHome),
       ),
     ),
   );
@@ -207,8 +207,8 @@ void main() {
     final finder = find.byWidgetPredicate(
       (w) => w.runtimeType.toString() == '_VideoFullscreenView',
     );
-    // ignore: avoid_dynamic_calls
-    bool holds() => (tester.state(finder) as dynamic).holdsSessionForTest as bool;
+    bool holds() =>
+        (tester.state(finder) as dynamic).holdsSessionForTest as bool;
     expect(holds(), isTrue);
 
     messaging.deleteMessage(message.id, forEveryone: false);

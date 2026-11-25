@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -12,6 +14,15 @@ import '../../theme/rpg_theme.dart';
 ///
 /// Empty for a message that is not mine or did not fail.
 class FailedSendRetry extends StatelessWidget {
+  const FailedSendRetry({
+    required this.message,
+    required this.isMine,
+    required this.textColor,
+    required this.maxWidth,
+    required this.peerRefusedIdentity,
+    super.key,
+  });
+
   final MessageModel message;
   final bool isMine;
 
@@ -25,15 +36,6 @@ class FailedSendRetry extends StatelessWidget {
   /// peer (`EncryptionProvider.peersRefusedIdentity`), i.e. the fingerprint
   /// ceremony is outstanding.
   final bool peerRefusedIdentity;
-
-  const FailedSendRetry({
-    super.key,
-    required this.message,
-    required this.isMine,
-    required this.textColor,
-    required this.maxWidth,
-    required this.peerRefusedIdentity,
-  });
 
   /// True when THIS row may tell the user their peer's keys changed.
   ///
@@ -88,7 +90,9 @@ class FailedSendRetry extends StatelessWidget {
           onPressed: () {
             final tempId = message.tempId;
             if (tempId != null) {
-              context.read<MessagingProvider>().retryFailedMessage(tempId);
+              unawaited(
+                context.read<MessagingProvider>().retryFailedMessage(tempId),
+              );
             }
           },
           icon: const Icon(Icons.refresh, size: 16),

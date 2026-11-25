@@ -1,6 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:async';
 
 import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/services/encryption/content_kv.dart';
@@ -8,8 +8,8 @@ import 'package:fireplace/services/encryption_service.dart';
 import 'package:fireplace/services/server_clock.dart';
 import 'package:fireplace/utils/e2e_diag_log.dart';
 import 'package:fireplace/utils/message_ids.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -277,36 +277,38 @@ void main() {
       await expectBUntouched(owes: {sharedId, otherId}, audioKept: false);
     });
 
-    test('drain: a switch while a record is read before it is destroyed',
-        () async {
-      await service.enqueuePurge({sharedId}, {'ctA'});
-      // An expiry stamp keeps the obligation through the one-time amnesty.
-      await service.saveDecryptedContent(
-        sharedId,
-        {'content': 'A owed'},
-        expiresAt: serverNow.subtract(const Duration(minutes: 6)),
-      );
-      // B's outgoing record under the very same ciphertext.
-      const bPending = 'e2e_${accountB}_pendsend_v1_ctA';
-      await kv.setString(bPending, jsonEncode({'at': 1}));
-      // The amnesty pass has run once: only the pre-removal read parks next.
-      await service.amnestyUnstampedPurgeObligations();
-      final parked = kv.arm((op, key) => op == 'snapshot');
-      final drain = provider.drainPurgeBacklog();
-      await parked;
+    test(
+      'drain: a switch while a record is read before it is destroyed',
+      () async {
+        await service.enqueuePurge({sharedId}, {'ctA'});
+        // An expiry stamp keeps the obligation through the one-time amnesty.
+        await service.saveDecryptedContent(
+          sharedId,
+          {'content': 'A owed'},
+          expiresAt: serverNow.subtract(const Duration(minutes: 6)),
+        );
+        // B's outgoing record under the very same ciphertext.
+        const bPending = 'e2e_${accountB}_pendsend_v1_ctA';
+        await kv.setString(bPending, jsonEncode({'at': 1}));
+        // The amnesty pass has run once: only the pre-removal read parks next.
+        await service.amnestyUnstampedPurgeObligations();
+        final parked = kv.arm((op, key) => op == 'snapshot');
+        final drain = provider.drainPurgeBacklog();
+        await parked;
 
-      await switchTo(accountB);
-      kv.release();
-      await drain;
+        await switchTo(accountB);
+        kv.release();
+        await drain;
 
-      await expectBUntouched();
-      expect(
-        kv.containsKey(bPending),
-        isTrue,
-        reason: "A's ciphertext obligation must not remove B's record",
-      );
-      await expectAStillOwes();
-    });
+        await expectBUntouched();
+        expect(
+          kv.containsKey(bPending),
+          isTrue,
+          reason: "A's ciphertext obligation must not remove B's record",
+        );
+        await expectAStillOwes();
+      },
+    );
 
     test('drain: a switch while the record is being removed', () async {
       await service.enqueuePurge({sharedId}, const <String>{});
@@ -382,7 +384,7 @@ void main() {
   });
 
   group('clearing a chat pinned to the account that cleared it', () {
-    test('a switch while the chat\'s messages are being listed', () async {
+    test("a switch while the chat's messages are being listed", () async {
       await service.saveDecryptedContent(
         sharedId,
         {'content': 'A cleared this'},
