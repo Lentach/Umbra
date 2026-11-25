@@ -234,6 +234,20 @@ void main() {
       expect(wrong['status'], 'invalid_phrase');
       expect(wrong['deadlineAt'], isNull);
 
+      // Plan B7 tail (0.2.104): the plaintext field of clients up to 0.2.89
+      // is refused like a wrong phrase even though the enrolled phrase IS
+      // this one — and neither door spends an attempt or changes the key.
+      final plaintext = await user.requestIdentityReset(
+        legacyPlaintextPhrase: phrase,
+      );
+      expect(plaintext['status'], 'invalid_phrase');
+      expect(plaintext['deadlineAt'], isNull);
+      expect(
+        await user.setRecoveryKeyLegacyPlaintext('some other twelve words'),
+        isFalse,
+        reason: 'a plaintext enrolment must store nothing',
+      );
+
       secondSession.events.discard('identityResetPending');
       final started = await user.requestIdentityReset(recoveryPhrase: phrase);
       expect(started['status'], 'pending');

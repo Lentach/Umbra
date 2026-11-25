@@ -316,6 +316,7 @@ void main() {
             blob: served['blob'] as String,
             salt: served['salt'] as String,
             iterations: served['iterations'] as int,
+            version: served['version'] as int,
             phrase: _phrase,
           );
           expect(
