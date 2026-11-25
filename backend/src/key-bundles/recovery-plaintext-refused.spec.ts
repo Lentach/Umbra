@@ -38,6 +38,8 @@ describe('a plaintext recovery phrase is refused at every door (plan B7)', () =>
   let recoveryRepo: Record<string, jest.Mock>;
   let resetRepo: Record<string, jest.Mock>;
   let counterUpdate: jest.Mock;
+  let getOne: jest.Mock;
+  let enrolled: jest.Mock;
   let setPassword: jest.Mock;
   let client: { data: unknown; emit: jest.Mock };
   let roomEmit: jest.Mock;
@@ -61,9 +63,11 @@ describe('a plaintext recovery phrase is refused at every door (plan B7)', () =>
   beforeEach(() => {
     jest.clearAllMocks();
     counterUpdate = jest.fn().mockResolvedValue({ affected: 1, raw: [] });
+    getOne = jest.fn().mockResolvedValue(null);
+    enrolled = jest.fn().mockResolvedValue({ userId: 1 });
     const builder: Record<string, jest.Mock> = {
       execute: counterUpdate,
-      getOne: jest.fn().mockResolvedValue(null),
+      getOne,
     };
     for (const step of [
       'update',
@@ -96,7 +100,7 @@ describe('a plaintext recovery phrase is refused at every door (plan B7)', () =>
       resetRepo as never,
       recoveryRepo as never,
       // Enrolled, so the ceremony is not refused for an unrelated reason.
-      { findOne: jest.fn().mockResolvedValue({ userId: 1 }) } as never,
+      { findOne: enrolled } as never,
       {
         transaction: jest.fn((cb: (m: unknown) => unknown) => cb(manager)),
       } as never,
@@ -182,6 +186,9 @@ describe('a plaintext recovery phrase is refused at every door (plan B7)', () =>
       // Nothing changed, so no session is told a key was enrolled.
       expect(roomEmit).not.toHaveBeenCalled();
       expect(logged()).not.toContain(phrase);
+      // A crash in the service ALSO answers a failed ack: only the guard's
+      // own refusal may do it here.
+      expect(logged()).not.toContain('setRecoveryKey failed');
     },
   );
 
@@ -207,6 +214,49 @@ describe('a plaintext recovery phrase is refused at every door (plan B7)', () =>
     expect(roomEmit).not.toHaveBeenCalled();
     expect(logged()).not.toContain(phrase);
   });
+
+  // The ceremony's own preconditions come BEFORE the phrase is examined, so
+  // a plaintext phrase must not hide them: only where the credential would
+  // have been spent does it answer invalid_phrase.
+  it.each([
+    [
+      'existing',
+      () =>
+        resetRepo.findOne.mockResolvedValue({
+          status: 'pending',
+          deadlineAt: new Date('2030-01-01T00:00:00Z'),
+          shortened: false,
+        }),
+      { status: 'existing', deadlineAt: '2030-01-01T00:00:00.000Z' },
+    ],
+    [
+      'not_enrolled',
+      () => enrolled.mockResolvedValue(null),
+      { status: 'not_enrolled' },
+    ],
+    [
+      'cooldown',
+      () => getOne.mockResolvedValue({ id: 9 }),
+      { status: 'cooldown' },
+    ],
+  ])(
+    'resetIdentityRequest: a plaintext phrase keeps the %s answer that precedes the phrase',
+    async (_name, arrange, expected) => {
+      arrange();
+
+      await keyExchange.handleResetIdentityRequest(
+        client as unknown as Socket,
+        { recoveryPhrase: phrase },
+        server,
+      );
+
+      expect(client.emit.mock.calls).toEqual([
+        ['identityResetStatus', expect.objectContaining(expected)],
+      ]);
+      expect(argon2Inputs()).toEqual([]);
+      expectNothingWritten();
+    },
+  );
 
   it('POST /auth/recover: the phrase a legacy row would accept answers 401 like a wrong phrase, on a dummy verify of a constant', async () => {
     const attempt = controller.recover({

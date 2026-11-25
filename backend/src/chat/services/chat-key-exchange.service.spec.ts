@@ -1605,10 +1605,11 @@ describe('ChatKeyExchangeService', () => {
       );
       await new Promise((resolve) => setImmediate(resolve));
 
-      expect(identityResetService.requestReset).toHaveBeenCalledWith(1, {
-        kind: 'auth',
-        value: authSecret,
-      });
+      expect(identityResetService.requestReset).toHaveBeenCalledWith(
+        1,
+        { kind: 'auth', value: authSecret },
+        false,
+      );
       // Shortened shortens the delay; it never silences the notifications.
       expect(mockServer.emit).toHaveBeenCalledWith(
         'identityResetPending',
@@ -1616,9 +1617,17 @@ describe('ChatKeyExchangeService', () => {
       );
     });
 
-    // Plan B7 tail (0.2.104): the plaintext field of clients up to 0.2.89 is
-    // answered as a wrong phrase and never reaches the service.
-    it('refuses a plaintext recoveryPhrase as a wrong phrase without asking the service', async () => {
+    // Plan B7 tail (0.2.104): the plaintext field of clients up to 0.2.89
+    // reaches the service only as a value-less marker, so the ceremony's own
+    // preconditions keep their precedence and the value is never passed on.
+    it('tells the service a plaintext phrase was sent without handing it the phrase', async () => {
+      identityResetService.requestReset.mockResolvedValue({
+        status: 'invalid_phrase',
+        deadlineAt: null,
+        shortened: false,
+        phraseTooNew: false,
+      });
+
       await service.handleResetIdentityRequest(
         mockClient as Socket,
         {
@@ -1629,9 +1638,14 @@ describe('ChatKeyExchangeService', () => {
       );
       await new Promise((resolve) => setImmediate(resolve));
 
-      expect(identityResetService.requestReset).not.toHaveBeenCalled();
+      expect(identityResetService.requestReset).toHaveBeenCalledWith(
+        1,
+        undefined,
+        true,
+      );
       expect(mockClient.emit).toHaveBeenCalledWith('identityResetStatus', {
         status: 'invalid_phrase',
+        deadlineAt: undefined,
         shortened: false,
         phraseTooNew: false,
       });

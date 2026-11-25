@@ -247,6 +247,15 @@ void main() {
         isFalse,
         reason: 'a plaintext enrolment must store nothing',
       );
+      final attempts = await e2eSql(
+        'SELECT "failedAttempts" FROM recovery_keys '
+        'WHERE "userId" = ${user.userId};',
+      );
+      expect(
+        attempts.first.first,
+        '1',
+        reason: 'only the wrong phrase counted; the plaintext calls spent none',
+      );
 
       secondSession.events.discard('identityResetPending');
       final started = await user.requestIdentityReset(recoveryPhrase: phrase);

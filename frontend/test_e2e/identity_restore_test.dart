@@ -270,7 +270,8 @@ void main() {
           expect(served['blob'], sealedBackup['blob']);
           expect(served['salt'], sealedBackup['salt']);
           expect(served['iterations'], sealedBackup['iterations']);
-          expect(served['version'], 1);
+          expect(served['version'], sealedBackup['version']);
+          expect(served['version'], 2);
 
           // And it is really in Postgres, on the recovery row — not held in
           // some service-level cache that a restart would lose.
