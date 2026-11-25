@@ -175,4 +175,73 @@ void main() {
       await h.pump();
     });
   });
+
+  group('edit target', () {
+    test('an edit begun and sent in one chat still edits that message and '
+        'leaves edit mode', () async {
+      final mine = await send('typo');
+      provider.beginEditMessage(mine);
+      expect(provider.editingMessage?.id, mine.id);
+
+      provider.editMessage(mine.id, 'fixed');
+      await h.pump();
+
+      expect(provider.editingMessage, isNull);
+      expect(
+        provider.messages.singleWhere((m) => m.id == mine.id).content,
+        'fixed',
+      );
+      expect(sentEnvelopes().last['t'], 'edit');
+    });
+
+    test('opening the same chat again keeps its edit target', () async {
+      final mine = await send('typo');
+      provider.beginEditMessage(mine);
+
+      await open(10);
+
+      expect(provider.editingMessage?.id, mine.id);
+    });
+
+    test('opening another chat drops the edit target, so its composer is not '
+        'pre-filled with the old message', () async {
+      final mine = await send('typo');
+      provider.beginEditMessage(mine);
+
+      await open(11);
+      expect(provider.editingMessage, isNull);
+
+      await open(10);
+      expect(provider.editingMessage, isNull);
+    });
+
+    test('an edit of a message the open chat does not hold leaves edit mode '
+        'instead of sticking', () async {
+      final mine = await send('typo');
+      provider.beginEditMessage(mine);
+      provider.clearMessages();
+
+      provider.editMessage(mine.id, 'fixed');
+
+      expect(provider.editingMessage, isNull);
+    });
+
+    test('an edit never reaches a message of another chat, and leaves edit '
+        'mode', () async {
+      final mine = await send('typo');
+      provider.beginEditMessage(mine);
+      activeOnly(11);
+      outbox.delivered.clear();
+
+      provider.editMessage(mine.id, 'fixed');
+      await h.pump();
+
+      expect(provider.editingMessage, isNull);
+      expect(
+        provider.messages.singleWhere((m) => m.id == mine.id).content,
+        'typo',
+      );
+      expect(outbox.delivered, isEmpty);
+    });
+  });
 }
