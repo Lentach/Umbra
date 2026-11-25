@@ -7,10 +7,9 @@ import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../providers/conversations_provider.dart';
 import '../../providers/messaging_provider.dart';
-import '../gif_picker_sheet.dart';
 import '../top_snackbar.dart';
 
-/// Utility class for file / image / GIF attachment handling.
+/// Utility class for file / image / video attachment handling.
 ///
 /// Each static method receives a [BuildContext] and delegates to the
 /// appropriate provider after gathering recipient / conversation context.
@@ -160,32 +159,5 @@ class AttachmentHandler {
         );
       }
     }
-  }
-
-  // ── GIF picker ────────────────────────────────────────────────────────────
-
-  /// Opens the GIF picker sheet and, on selection, calls
-  /// [MessagingProvider.sendGif] with the selected Giphy URL.
-  static void openGifPicker(BuildContext context) {
-    final convs = context.read<ConversationsProvider>();
-    final conversationId = convs.activeConversationId;
-    if (conversationId == null) {
-      showTopSnackBar(
-          context, AppLocalizations.of(context).snackbarNoActiveConversation);
-      return;
-    }
-
-    final conv = convs.getConversationById(conversationId);
-    if (conv == null) return;
-    final recipientId = convs.getOtherUserId(conv);
-
-    final messaging = context.read<MessagingProvider>();
-
-    GifPickerSheet.show(
-      context,
-      onGifSelected: (gifUrl) {
-        messaging.sendGif(gifUrl, recipientId);
-      },
-    );
   }
 }
