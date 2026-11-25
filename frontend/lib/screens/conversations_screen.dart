@@ -31,6 +31,7 @@ import '../utils/instant_opaque_route.dart';
 import '../widgets/alert_line.dart';
 import '../widgets/backup_nudge_line.dart';
 import '../widgets/contact_backup_password_sheet.dart';
+import '../widgets/dialogs/legacy_recovery_key_dialog.dart';
 import '../widgets/sibling_silent_line.dart';
 import '../widgets/web_push_request_feedback.dart';
 import 'chat_detail_screen.dart';
@@ -56,6 +57,58 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   /// held so dispose() can unsubscribe without touching the context.
   (EncryptionProvider, VoidCallback)? _phraseOffer;
 
+  /// Plan B7: the once-per-app-start "replace your recovery key" dialog. The
+  /// listeners are held so dispose() can unsubscribe without the context.
+  EncryptionProvider? _legacyEnc;
+  PasscodeProvider? _legacyPasscode;
+  bool _legacyDialogOpen = false;
+
+  /// The ask is due: the server said the key is legacy, this account was not
+  /// asked in this run, and nothing hides the chat list (a locked or still
+  /// unreadable passcode state, another dialog or sheet, a pushed screen).
+  bool get _legacyKeyDue {
+    if (!mounted || _legacyDialogOpen) return false;
+    final userId = context.read<AuthProvider>().currentUser?.id;
+    if (userId == null || LegacyRecoveryKeyAsked.contains(userId)) return false;
+    if (_legacyEnc?.recoveryKeyLegacy != true) return false;
+    final lock = _legacyPasscode?.state;
+    if (lock == PasscodeLockState.locked ||
+        lock == PasscodeLockState.unknown) {
+      return false;
+    }
+    return true;
+  }
+
+  void _maybeAskToReplaceLegacyKey() {
+    if (!_legacyKeyDue) return;
+    // Never inside a notification: a listener can fire mid-frame.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_legacyKeyDue) return;
+      // One modal at a time: anything above this screen (a sheet, a dialog,
+      // the key screen, a chat) means "not now"; it is retried when that
+      // closes ([_openContactBackupSheet], [_openRecoveryKey]) or when the
+      // providers next speak.
+      if (!(ModalRoute.of(context)?.isCurrent ?? false)) return;
+      unawaited(_askToReplaceLegacyKey());
+    });
+  }
+
+  Future<void> _askToReplaceLegacyKey() async {
+    final userId = context.read<AuthProvider>().currentUser!.id;
+    LegacyRecoveryKeyAsked.add(userId);
+    _legacyDialogOpen = true;
+    final bool replace;
+    try {
+      replace = await showLegacyRecoveryKeyDialog(context);
+    } finally {
+      _legacyDialogOpen = false;
+    }
+    if (!replace || !mounted) return;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(builder: (_) => const RecoveryKeyScreen()),
+    );
+  }
+
   /// Decision 101 B's line, mirrored from `MessagingProvider.siblingToUnlink`
   /// by a listener: the top lines are built inside a `LayoutBuilder`, where
   /// `context.select` is not allowed, and watching the whole provider would
@@ -77,6 +130,10 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     PushService.webPushNeedsTap.addListener(_onPushNeedsTap);
     final messaging = _messaging = context.read<MessagingProvider>();
     _siblingToUnlink = messaging.siblingToUnlink;
+    _legacyEnc = context.read<EncryptionProvider>()
+      ..addListener(_maybeAskToReplaceLegacyKey);
+    _legacyPasscode = context.read<PasscodeProvider>()
+      ..addListener(_maybeAskToReplaceLegacyKey);
     messaging.addListener(_onMessagingForSilentLine);
     _listCountdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
@@ -140,7 +197,9 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       settings.loadBackupNudge(userId).ignore();
       settings.loadRecoveryLegacyPrompt(userId).ignore();
       if (auth.consumeFreshRegistration()) _armPhraseOffer(enc);
+      _maybeAskToReplaceLegacyKey();
       unawaited(_offerContactBackupPrompt(auth, settings, userId));
+      // The legacy-key dialog goes first: see [_offerContactBackupPrompt].
     });
   }
 
@@ -160,8 +219,12 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       awaitsPassword: auth.contactBackupAwaitsPassword,
       laters: settings.contactBackupLaters,
     );
-    if (!mounted || !due) return;
+    // The legacy-key dialog goes first; the sheet waits for its next normal
+    // opportunity (next app open, or the red line's tap).
+    if (!mounted || !due || _legacyDialogOpen || _legacyKeyDue) return;
     await _openContactBackupSheet();
+    // Whatever was open on top is gone: the legacy-key dialog may be due.
+    _maybeAskToReplaceLegacyKey();
   }
 
   /// Any exit without a saved backup counts one "Later" (decision 95).
@@ -188,6 +251,8 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
   @override
   void dispose() {
+    _legacyEnc?.removeListener(_maybeAskToReplaceLegacyKey);
+    _legacyPasscode?.removeListener(_maybeAskToReplaceLegacyKey);
     _listCountdownTimer?.cancel();
     PushService.webPushNeedsTap.removeListener(_onPushNeedsTap);
     _messaging.removeListener(_onMessagingForSilentLine);
@@ -228,6 +293,8 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         builder: (_) => RecoveryKeyScreen(deferrable: deferrable),
       ),
     );
+    // The screen is gone: the legacy-key dialog may be due.
+    _maybeAskToReplaceLegacyKey();
     if (saved == true || !deferrable || userId == null) return;
     settings.snoozeBackupNudge(userId).ignore();
   }
