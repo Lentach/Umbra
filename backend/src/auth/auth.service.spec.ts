@@ -417,7 +417,7 @@ describe('AuthService', () => {
       identityResetService.verifyRecoveryPhrase.mockResolvedValue('accepted');
       await service.recoverPassword(
         'testuser#0427',
-        { kind: 'phrase', value: 'a b c' },
+        Buffer.alloc(32, 1).toString('base64'),
         'NewPass1x',
       );
 
@@ -474,13 +474,7 @@ describe('AuthService', () => {
 
   // Amendment (lxxxii) clause 2 — the recovery phrase as a credential.
   describe('recoverPassword', () => {
-    const phrase =
-      'abandon ability able about above absent absorb abstract absurd abuse access accident';
-    const legacy = { kind: 'phrase', value: phrase } as const;
-    const v2 = {
-      kind: 'auth',
-      value: Buffer.alloc(32, 1).toString('base64'),
-    } as const;
+    const v2 = Buffer.alloc(32, 1).toString('base64');
 
     it('a correct phrase sets the password and answers with login tokens', async () => {
       usersService.findByUsernameAndTag.mockResolvedValue(mockUser as User);
@@ -488,13 +482,13 @@ describe('AuthService', () => {
 
       const result = await service.recoverPassword(
         'testuser#0427',
-        legacy,
+        v2,
         'NewPass1x',
       );
 
       expect(identityResetService.verifyRecoveryPhrase).toHaveBeenCalledWith(
         1,
-        legacy,
+        v2,
       );
       expect(usersService.setPassword).toHaveBeenCalledWith(1, 'NewPass1x');
       expect(devicesService.resolveLoginDeviceId).toHaveBeenCalledWith(1);
@@ -533,7 +527,7 @@ describe('AuthService', () => {
       });
 
       try {
-        await service.recoverPassword('testuser#0427', legacy, 'NewPass1x');
+        await service.recoverPassword('testuser#0427', v2, 'NewPass1x');
       } finally {
         timerSpy.mockRestore();
         nowSpy.mockRestore();
@@ -555,7 +549,7 @@ describe('AuthService', () => {
       // "no such user" must cost the same verify as a wrong phrase, or the
       // door enumerates usernames by response time.
       expect(argon2.verify).toHaveBeenCalledTimes(1);
-      expect(argon2.verify).toHaveBeenCalledWith(expect.any(String), v2.value);
+      expect(argon2.verify).toHaveBeenCalledWith(expect.any(String), v2);
       // ...but no account's failure counter is touched.
       expect(identityResetService.verifyRecoveryPhrase).not.toHaveBeenCalled();
       expect(usersService.setPassword).not.toHaveBeenCalled();
@@ -568,7 +562,7 @@ describe('AuthService', () => {
       );
 
       await expect(
-        service.recoverPassword('testuser#0427', legacy, 'NewPass1x'),
+        service.recoverPassword('testuser#0427', v2, 'NewPass1x'),
       ).rejects.toThrow(UnauthorizedException);
       expect(argon2.verify).not.toHaveBeenCalled();
     });
@@ -582,7 +576,7 @@ describe('AuthService', () => {
       await expect(
         service.recoverPassword(
           'testuser#0427',
-          { kind: 'phrase', value: 'wrong' },
+          Buffer.alloc(32, 2).toString('base64'),
           'NewPass1x',
         ),
       ).rejects.toThrow('Invalid credentials');
@@ -594,9 +588,23 @@ describe('AuthService', () => {
       identityResetService.verifyRecoveryPhrase.mockResolvedValue('locked');
 
       await expect(
-        service.recoverPassword('testuser#0427', legacy, 'NewPass1x'),
+        service.recoverPassword('testuser#0427', v2, 'NewPass1x'),
       ).rejects.toMatchObject({ status: 423 });
       expect(usersService.setPassword).not.toHaveBeenCalled();
+    });
+
+    // Plan B7 tail (0.2.104): the plaintext phrase of clients up to 0.2.89 is
+    // never verified, whatever row it would match.
+    it('a legacy plaintext phrase is refused like a wrong one: 401 and one dummy verify, even if the verifier would accept', async () => {
+      usersService.findByUsernameAndTag.mockResolvedValue(mockUser as User);
+      identityResetService.verifyRecoveryPhrase.mockResolvedValue('accepted');
+
+      await expect(service.refusePlaintextPhrase()).rejects.toMatchObject({
+        status: 401,
+        message: 'Invalid credentials',
+      });
+
+      expect(argon2.verify).toHaveBeenCalledTimes(1);
     });
 
     it('an authSecret reaches the verifier as an auth credential (v2 door)', async () => {

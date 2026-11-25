@@ -20,9 +20,11 @@ import {
  * spec §12 amendment (lxxxii) clause 2). Same identifier grammar as login,
  * same password rules as register. Plan B7: new clients send `authSecret`
  * (HKDF output of the phrase) and never the phrase; `phrase` is the legacy
- * plaintext field of clients up to 0.2.89. Exactly one of the two — and this
- * DTO MUST declare both, because the global ValidationPipe strips fields it
- * does not know.
+ * plaintext field of clients up to 0.2.89, declared ONLY so it is refused
+ * (401, like a wrong phrase; plan B7 tail, 0.2.104) — never verified. Exactly
+ * one of the two — and this DTO MUST declare both, because the global
+ * ValidationPipe strips fields it does not know and the request would turn
+ * into a different answer.
  */
 export class RecoverPasswordDto {
   @IsString()

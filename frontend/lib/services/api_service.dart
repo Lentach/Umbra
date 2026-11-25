@@ -122,7 +122,7 @@ class ApiService {
   /// The server holds the 5 / 15 min throttle. Plan B7: the phrase never
   /// leaves the device — the body carries `authSecret`, the HKDF proof
   /// `setRecoveryKey` stored a verifier of, so the same words verify at both
-  /// doors. (A key set by an older build answers 409 `legacy_recovery_key`.)
+  /// doors. (A key set by an older build answers the same 401 as a wrong phrase.)
   Future<Map<String, dynamic>> recoverPassword(
     String identifier,
     String phrase,

@@ -11,6 +11,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import {
@@ -24,9 +25,10 @@ import {
  * The optional recovery credential shortens the delay (§6.2.1). Plan B7: new
  * clients send `recoveryAuth` (the HKDF-derived authSecret) and NEVER the
  * phrase; `recoveryPhrase` is the legacy plaintext field of clients up to
- * 0.2.89 and is verified only against a legacy (`phrase_v1`) row. At most one
- * of the two. Both are bounded in length so a hostile payload cannot turn the
- * memory-hard verifier into a denial-of-service lever.
+ * 0.2.89, declared ONLY so it is refused (`invalid_phrase`, nothing verified
+ * or counted; plan B7 tail, 0.2.104). At most one of the two.
+ * `recoveryAuth` is pinned to 44 base64 characters; `recoveryPhrase` is
+ * bounded so an oversized payload fails validation before the refusal.
  */
 export class ResetIdentityRequestDto {
   @IsOptional()
@@ -132,8 +134,9 @@ function AuthSecretNeedsV2Backup() {
 /**
  * Enrolls or replaces the account's recovery key (§6.2.1). Plan B7: new
  * clients send `authSecret` (HKDF output; the phrase never leaves the device).
- * `phrase` is the legacy plaintext field of clients up to 0.2.89; it stores a
- * `phrase_v1` verifier. Exactly one of the two.
+ * `phrase` is the legacy plaintext field of clients up to 0.2.89, declared
+ * ONLY so it is refused (failed ack, nothing stored; plan B7 tail, 0.2.104).
+ * Exactly one of the two.
  */
 export class SetRecoveryKeyDto {
   @IsOptional()
@@ -151,10 +154,11 @@ export class SetRecoveryKeyDto {
 
   /**
    * The sealed identity backup, written with the verifier in one transaction
-   * ((lxxviii) clause 1). Optional: an older client enrols the phrase alone
-   * and the previously stored backup (if any) is left untouched.
+   * ((lxxviii) clause 1). Required whenever `authSecret` is sent (a version-2
+   * blob, see `AuthSecretNeedsV2Backup`); the legacy plaintext `phrase` is
+   * refused before the backup is looked at, so it is not validated then.
    */
-  @IsOptional()
+  @ValidateIf((o: SetRecoveryKeyDto) => o.authSecret != null)
   @ValidateNested()
   @Type(() => RecoveryBackupDto)
   backup?: RecoveryBackupDto;

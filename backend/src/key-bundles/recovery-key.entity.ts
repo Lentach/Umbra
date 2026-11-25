@@ -48,8 +48,8 @@ export class RecoveryKey {
 
   /**
    * What `verifierHash` was computed over (migration 0030): `phrase_v1` is the
-   * plaintext phrase (legacy), `auth_v2` the client-derived authSecret. A row
-   * verifies only the credential of its own kind.
+   * plaintext phrase (legacy; nothing verifies against it since 0.2.104),
+   * `auth_v2` the client-derived authSecret, the only kind that verifies.
    */
   @Column({ type: 'varchar', length: 16, default: 'phrase_v1' })
   verifierKind: RecoveryVerifierKind;
