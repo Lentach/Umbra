@@ -2036,6 +2036,18 @@ abstract class AppLocalizations {
   /// **'Nowe hasło'**
   String get newPassword;
 
+  /// No description provided for @repeatNewPassword.
+  ///
+  /// In pl, this message translates to:
+  /// **'Powtórz nowe hasło'**
+  String get repeatNewPassword;
+
+  /// No description provided for @passwordsDoNotMatch.
+  ///
+  /// In pl, this message translates to:
+  /// **'Hasła nie są takie same'**
+  String get passwordsDoNotMatch;
+
   /// No description provided for @passwordRequired.
   ///
   /// In pl, this message translates to:

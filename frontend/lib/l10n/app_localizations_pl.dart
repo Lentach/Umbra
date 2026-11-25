@@ -1200,6 +1200,12 @@ class AppLocalizationsPl extends AppLocalizations {
   String get newPassword => 'Nowe hasło';
 
   @override
+  String get repeatNewPassword => 'Powtórz nowe hasło';
+
+  @override
+  String get passwordsDoNotMatch => 'Hasła nie są takie same';
+
+  @override
   String get passwordRequired => 'Hasło jest wymagane';
 
   @override

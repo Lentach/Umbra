@@ -451,6 +451,8 @@
   "resetPasswordDialogTitle": "Zmień hasło",
   "oldPassword": "Obecne hasło",
   "newPassword": "Nowe hasło",
+  "repeatNewPassword": "Powtórz nowe hasło",
+  "passwordsDoNotMatch": "Hasła nie są takie same",
   "passwordRequired": "Hasło jest wymagane",
   "passwordMinLength": "Hasło musi mieć co najmniej 8 znaków",
   "passwordMustContain": "Hasło musi zawierać wielką literę, małą literę i cyfrę",

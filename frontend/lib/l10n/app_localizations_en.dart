@@ -1177,6 +1177,12 @@ class AppLocalizationsEn extends AppLocalizations {
   String get newPassword => 'New Password';
 
   @override
+  String get repeatNewPassword => 'Repeat new password';
+
+  @override
+  String get passwordsDoNotMatch => 'The passwords are not identical';
+
+  @override
   String get passwordRequired => 'Password is required';
 
   @override
