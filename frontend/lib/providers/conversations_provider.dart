@@ -304,16 +304,42 @@ class ConversationsProvider extends ChangeNotifier {
   }
 
   /// Foreground truth for gating client-side effects (e.g. read receipts).
-  bool get isClientVisible => _clientVisible;
+  /// False while the passcode lock is up ([lockUp]), whatever the lifecycle
+  /// last said: a connect or a cold start resets [_clientVisible] to true
+  /// long before anyone has entered the code.
+  bool get isClientVisible => _clientVisible && !_lockIsUp;
+
+  bool get _lockIsUp => _lockUp?.call() ?? false;
+
+  bool Function()? _lockUp;
+
+  /// A show that was asked for while the lock was up and not yet reported to
+  /// [onClientVisible]; the next [setClientVisible]`(true)` (the unlock)
+  /// reports it.
+  bool _shownUnderLock = false;
+
+  /// Whether the passcode lock covers the app now (locked, or not answered
+  /// yet). Set by `MainShell`; null on a device with no shell.
+  set lockUp(bool Function()? value) {
+    _lockUp = value;
+    _shownUnderLock = _clientVisible && _lockIsUp;
+  }
+
+  void _resetVisibleOnSessionStart() {
+    _clientVisible = true;
+    _shownUnderLock = _lockIsUp;
+  }
 
   /// Called from [MainShell] lifecycle / tab visibility so backend can suppress redundant pushes.
   void setClientVisible(bool visible) {
-    if (_clientVisible == visible) return;
+    if (_clientVisible == visible && !(visible && _shownUnderLock)) return;
     _clientVisible = visible;
-    if (visible) _hiddenArrivals.clear();
+    final underLock = _lockIsUp;
+    _shownUnderLock = visible && underLock;
+    if (visible && !underLock) _hiddenArrivals.clear();
     _postActiveConversationToSw();
     if (visible) {
-      onClientVisible?.call();
+      if (!underLock) onClientVisible?.call();
     } else {
       // The wake-up handler only matters once the app is out of sight, and a
       // request sent since the last notify changed the answer without one.
@@ -350,7 +376,7 @@ class ConversationsProvider extends ChangeNotifier {
   /// none. No effect off web (the native app is woken by FCM) and none while
   /// visible (decision 80: badge only).
   void postHiddenArrivalCard(int conversationId) {
-    if (_clientVisible) return;
+    if (isClientVisible) return;
     if (isChatMuted(conversationId)) return;
     final arrived = (_hiddenArrivals[conversationId] ?? 0) + 1;
     _hiddenArrivals[conversationId] = arrived;
@@ -381,7 +407,7 @@ class ConversationsProvider extends ChangeNotifier {
   void _postActiveConversationToSw() {
     _pushSwChannel.postMessage({
       'type': 'active-conversation',
-      'conversationId': _clientVisible ? _activeConversationId : null,
+      'conversationId': isClientVisible ? _activeConversationId : null,
     }).ignore();
   }
 
@@ -944,7 +970,7 @@ class ConversationsProvider extends ChangeNotifier {
       _prePinState.clear();
       _pendingOpenConversationId = null;
       _pendingNotificationConversationId = null;
-      _clientVisible = true;
+      _resetVisibleOnSessionStart();
       _hydrated = false;
     } else {
       // Reconnect (same user): keep conversations and active chat to avoid flicker.
@@ -969,7 +995,7 @@ class ConversationsProvider extends ChangeNotifier {
     _prePinState.clear();
     _pendingOpenConversationId = null;
     _pendingNotificationConversationId = null;
-    _clientVisible = true;
+    _resetVisibleOnSessionStart();
     _hydrated = false;
     // Clear all push notifications on logout.
     _notificationCleaner.sweepNotificationsKeepUnread(const {}, 0);

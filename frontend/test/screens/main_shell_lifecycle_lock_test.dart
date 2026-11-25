@@ -274,4 +274,56 @@ void main() {
     expect(conversations.isClientVisible, isTrue);
     expect(shownCalls, 1);
   });
+
+  // B2: visibility at mount and after a connect, under the lock.
+  testWidgets('a shell mounted under the lock is not visible, and a first '
+      'connect does not make it so', (tester) async {
+    await pumpShell(tester, initial: PasscodeLockState.locked);
+    expect(conversations.isClientVisible, isFalse);
+
+    conversations.onConnect(false);
+    expect(conversations.isClientVisible, isFalse);
+    expect(shownCalls, 0);
+  });
+
+  testWidgets('a shell mounted before the lock has answered (unknown) is not '
+      'visible', (tester) async {
+    await pumpShell(tester, initial: PasscodeLockState.unknown);
+    expect(conversations.isClientVisible, isFalse);
+    conversations.onConnect(false);
+    expect(conversations.isClientVisible, isFalse);
+  });
+
+  testWidgets('the unlock of a shell mounted under the lock shows the app '
+      'and the held-back show fires', (tester) async {
+    await pumpShell(tester, initial: PasscodeLockState.locked);
+    conversations.onConnect(false);
+    expect(shownCalls, 0);
+
+    passcode.setLock(PasscodeLockState.unlocked);
+    await tester.pump();
+    await tester.pump();
+    expect(conversations.isClientVisible, isTrue);
+    expect(shownCalls, 1);
+  });
+
+  testWidgets('the lock answering "no passcode" after mount shows the app', (
+    tester,
+  ) async {
+    await pumpShell(tester, initial: PasscodeLockState.unknown);
+    passcode.setLock(PasscodeLockState.disabled);
+    await tester.pump();
+    await tester.pump();
+    expect(conversations.isClientVisible, isTrue);
+    expect(shownCalls, 1);
+  });
+
+  testWidgets('a device with no passcode is visible at mount and after a '
+      'connect', (tester) async {
+    await pumpShell(tester, initial: PasscodeLockState.disabled);
+    expect(conversations.isClientVisible, isTrue);
+    conversations.onConnect(false);
+    expect(conversations.isClientVisible, isTrue);
+    expect(shownCalls, 0);
+  });
 }

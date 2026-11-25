@@ -237,16 +237,19 @@ const Map<String, dynamic> _bobConv = {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('a message for the open chat that arrives while locked starts '
-      'no countdown and sends no read receipt until the unlock', (
-    tester,
-  ) async {
+  // [lockedAtMount]: the shell mounts already under the lock (cold start, a
+  // notification tap) instead of the lock engaging afterwards.
+  Future<void> scenario(
+    WidgetTester tester, {
+    required bool lockedAtMount,
+  }) async {
     await tester.runAsync(() async {
       FlutterSecureStorage.setMockInitialValues({});
       SharedPreferences.setMockInitialValues({});
     });
     final auth = _Auth();
     final passcode = _Passcode();
+    if (lockedAtMount) passcode._fake = PasscodeLockState.locked;
     addTearDown(auth.dispose);
     addTearDown(passcode.dispose);
     final outbox = _Outbox();
@@ -333,8 +336,10 @@ void main() {
     // The shell's screen re-wires the receipts switch from the settings.
     messaging.receiptsAndTyping = () => true;
 
-    passcode.setLock(PasscodeLockState.locked);
-    await tester.pump();
+    if (!lockedAtMount) {
+      passcode.setLock(PasscodeLockState.locked);
+      await tester.pump();
+    }
     expect(conversations.isClientVisible, isFalse);
 
     late int localId;
@@ -382,5 +387,15 @@ void main() {
       reason: 'unlocked: the open chat is shown, the countdown starts',
     );
     expect(outbox.delivered, isNotEmpty, reason: 'unlocked: read receipt');
-  });
+  }
+
+  testWidgets('a message for the open chat that arrives while locked starts '
+      'no countdown and sends no read receipt until the unlock', (
+    tester,
+  ) => scenario(tester, lockedAtMount: false));
+
+  testWidgets('the same for a shell that mounted under the lock: the chat a '
+      'notification tap opened is not read behind it', (
+    tester,
+  ) => scenario(tester, lockedAtMount: true));
 }

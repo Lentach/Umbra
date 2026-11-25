@@ -51,6 +51,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   StreamSubscription<dynamic>? _freezeReloadSub;
   UnreadBadgeSync? _unreadBadgeSync;
   PasscodeProvider? _passcode;
+  ConversationsProvider? _conversations;
   bool _wasLocked = false;
 
   @override
@@ -60,7 +61,10 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     // running under it, so the lock itself decides whether the app counts as
     // visible (receipts, countdowns, seen marks all read that flag).
     final passcode = _passcode = context.read<PasscodeProvider>();
-    _wasLocked = passcode.isLocked;
+    _wasLocked = _lockUp(passcode);
+    final conversations = _conversations = context
+        .read<ConversationsProvider>();
+    conversations.lockUp = () => _lockUp(passcode);
     passcode.addListener(_onPasscodeChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final auth = context.read<AuthProvider>();
@@ -137,6 +141,13 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     }
   }
 
+  /// The lock covers the app: engaged, or not answered yet (a cold start
+  /// holds `unknown` until its store read lands). A device with no passcode
+  /// answers `disabled`, which is not covered.
+  static bool _lockUp(PasscodeProvider passcode) =>
+      passcode.state == PasscodeLockState.locked ||
+      passcode.state == PasscodeLockState.unknown;
+
   /// "The user is looking" only while the lock is open; a locked app stays
   /// hidden (the unlock, [_onPasscodeChanged], shows it).
   ///
@@ -144,7 +155,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   /// until then the state still reads `unlocked`.
   void _markVisibleUnlessLocked() {
     final passcode = context.read<PasscodeProvider>();
-    context.read<ConversationsProvider>().setClientVisible(!passcode.isLocked);
+    context.read<ConversationsProvider>().setClientVisible(!_lockUp(passcode));
   }
 
   /// Asks the lock for its verdict on this foreground return, at once; the
@@ -164,7 +175,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   void _onPasscodeChanged() {
     final passcode = _passcode;
     if (passcode == null || !mounted) return;
-    final locked = passcode.isLocked;
+    final locked = _lockUp(passcode);
     if (locked == _wasLocked) return;
     _wasLocked = locked;
     final auth = context.read<AuthProvider>();
@@ -256,6 +267,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     _pageResumeSub?.cancel();
     _freezeReloadSub?.cancel();
     _passcode?.removeListener(_onPasscodeChanged);
+    _conversations?.lockUp = null;
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
