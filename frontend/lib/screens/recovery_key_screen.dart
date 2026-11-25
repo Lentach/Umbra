@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
@@ -56,16 +57,40 @@ class _RecoveryKeyScreenState extends State<RecoveryKeyScreen> {
   bool _mismatch = false;
   bool _saving = false;
 
+  /// What the Copy button last put on the system clipboard, so it can be
+  /// taken back off. Null until Copy was tapped.
+  String? _copiedPhrase;
+
   late final IdentityBackupCodec _codec =
       widget.codec ?? IdentityBackupCodec();
 
   @override
   void dispose() {
+    unawaited(_clearClipboardIfStillPhrase());
     // Not security theatre against a memory dump — just no reason to keep it
     // reachable once the screen is gone.
     _words = null;
     _confirmController.dispose();
     super.dispose();
+  }
+
+  /// The Copy button leaves all twelve words on the system clipboard (and in
+  /// any clipboard history that mirrors it). Once the phrase is enrolled or
+  /// the screen is gone they are wiped — but ONLY if the clipboard still
+  /// holds exactly them: something the user copied since is theirs.
+  Future<void> _clearClipboardIfStillPhrase() async {
+    final copied = _copiedPhrase;
+    if (copied == null) return;
+    _copiedPhrase = null;
+    try {
+      final current = await Clipboard.getData(Clipboard.kTextPlain);
+      if (current?.text == copied) {
+        await Clipboard.setData(const ClipboardData(text: ''));
+      }
+    } on Object catch (_) {
+      // The platform refused the read (web without permission): leaving the
+      // clipboard alone is the safe side — never wipe what cannot be checked.
+    }
   }
 
   void _generate() => setState(() => _words = RecoveryPhrase.generate());
@@ -107,6 +132,9 @@ class _RecoveryKeyScreenState extends State<RecoveryKeyScreen> {
       final payload = await encryption.encryptionService
           .exportIdentityForBackup();
       final sealed = await _codec.seal(payload, phrase);
+      // Left during the seal (the route was closed under us): the user can no
+      // longer see this phrase, so it must not replace the one they hold.
+      if (!mounted) return;
       encryption.setRecoveryKey(phrase, backup: sealed);
     } catch (_) {
       // Nothing reached the server; the phrase on screen enrolled nothing.
@@ -136,6 +164,7 @@ class _RecoveryKeyScreenState extends State<RecoveryKeyScreen> {
       // The PR2.4 phrase wrap of the contact-backup key is minted from
       // `EncryptionProvider.setRecoveryKey` (above), not here: this screen
       // must not acquire a dependency on the auth layer for a side effect.
+      unawaited(_clearClipboardIfStillPhrase());
       setState(() => _words = null);
       showTopSnackBar(context, l10n.recoveryKeySaved);
       Navigator.of(context).pop(true);
@@ -168,14 +197,14 @@ class _RecoveryKeyScreenState extends State<RecoveryKeyScreen> {
     // words on screen, no hint which one counts.
     final replacesExisting = encryption.hasRecoveryPhrase == true;
 
-    return Scaffold(
+    final scaffold = Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor,
       extendBodyBehindAppBar: true,
       appBar: GlassTopBar(
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           tooltip: MaterialLocalizations.of(context).backButtonTooltip,
-          onPressed: () => Navigator.of(context).pop(),
+          onPressed: _saving ? null : () => Navigator.of(context).pop(),
         ),
         title: Text(
           l10n.recoveryKeyTitle,
@@ -239,6 +268,9 @@ class _RecoveryKeyScreenState extends State<RecoveryKeyScreen> {
         ),
       ),
     );
+    // While the phrase is being saved, leaving would hide the outcome (and a
+    // late success would enrol words the user never saw confirmed).
+    return PopScope(canPop: !_saving, child: scaffold);
   }
 
   List<Widget> _wordsStep(BuildContext context, List<String> words) {
@@ -275,6 +307,7 @@ class _RecoveryKeyScreenState extends State<RecoveryKeyScreen> {
       OutlinedButton.icon(
         onPressed: () async {
           await Clipboard.setData(ClipboardData(text: words.join(' ')));
+          _copiedPhrase = words.join(' ');
           if (context.mounted) {
             showTopSnackBar(context, l10n.recoveryKeyCopied);
           }

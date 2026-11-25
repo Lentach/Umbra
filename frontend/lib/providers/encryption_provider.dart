@@ -3013,17 +3013,38 @@ class EncryptionProvider extends ChangeNotifier {
   /// sent: the server receives `authSecret` (HKDF of the phrase) to verify
   /// against, and a backup sealed under a key it cannot derive.
   void setRecoveryKey(String phrase, {SealedIdentityBackup? backup}) {
+    // PR2.4: this is the one moment the phrase exists in the process, so it
+    // is the only place a phrase wrap of the contact-backup content key can
+    // be minted. But the wrap REPLACES the previous one and is uploaded at
+    // once, so it is announced only when the server confirms it stored this
+    // phrase ([onRecoveryKeySet]); until then it is held here, in memory only.
+    // Held BEFORE the emit: an answer delivered inside it must find it.
+    _pendingRecoveryPhraseTimer?.cancel();
+    _pendingRecoveryPhrase = phrase;
+    _pendingRecoveryPhraseTimer = Timer(
+      _pendingRecoveryPhraseWindow,
+      _dropPendingRecoveryPhrase,
+    );
     _emit?.call('setRecoveryKey', <String, dynamic>{
       'authSecret': RecoveryPhrase.deriveAuthSecret(phrase),
       // (lxxviii) clause 1: the phrase-sealed identity backup, written with
       // the verifier in one transaction. Absent only on legacy callers.
       if (backup != null) 'backup': backup.toWire(),
     });
-    // PR2.4: this is the one moment the phrase exists in the process, so it
-    // is the only place a phrase wrap of the contact-backup content key can
-    // be minted. Announced rather than done here — the backup service hangs
-    // off AuthProvider, and a provider must not read another provider.
-    onRecoveryPhraseEnrolled?.call(phrase);
+  }
+
+  /// The phrase waiting for the server's `recoveryKeySet` answer. Null
+  /// outside that window.
+  String? _pendingRecoveryPhrase;
+  Timer? _pendingRecoveryPhraseTimer;
+
+  /// As long as the enrolment screen waits for the answer.
+  static const Duration _pendingRecoveryPhraseWindow = Duration(seconds: 6);
+
+  void _dropPendingRecoveryPhrase() {
+    _pendingRecoveryPhraseTimer?.cancel();
+    _pendingRecoveryPhraseTimer = null;
+    _pendingRecoveryPhrase = null;
   }
 
   /// Fired by [setRecoveryKey] with the phrase that was just enrolled (or
@@ -3113,7 +3134,12 @@ class EncryptionProvider extends ChangeNotifier {
   bool? _recoveryKeyLegacy;
 
   void onRecoveryKeySet(dynamic data) {
+    final pending = _pendingRecoveryPhrase;
+    _dropPendingRecoveryPhrase();
     _recoveryKeySetResult = data is Map && data['success'] == true;
+    if (_recoveryKeySetResult == true && pending != null) {
+      onRecoveryPhraseEnrolled?.call(pending);
+    }
     // A phrase (re)enrolment always carries the freshly sealed blob now, so a
     // success means the server holds a phrase AND a backup — flip both
     // without waiting for the next `ownKeyBundleStatus`.
@@ -3579,6 +3605,7 @@ class EncryptionProvider extends ChangeNotifier {
   /// Clears pending fetches but does NOT clear keys
   /// (CLAUDE.md: "Keys NOT cleared on logout").
   void onDisconnect() {
+    _dropPendingRecoveryPhrase();
     _cancelPendingFetches();
     // (lxxiii) clause 3: UNKNOWN is deliberately NOT cleared here. A dropped
     // socket does not answer the question the guard asked; clearing would
@@ -3595,6 +3622,7 @@ class EncryptionProvider extends ChangeNotifier {
   /// Full reset — clears all E2E state. Used on logout / account switch.
   /// Does NOT clear persisted keys (use [EncryptionService.clearAllKeys] for that).
   void clearAll() {
+    _dropPendingRecoveryPhrase();
     _e2eInitialized = false;
     _generatingMoreKeys = false;
     _currentUserId = null;
