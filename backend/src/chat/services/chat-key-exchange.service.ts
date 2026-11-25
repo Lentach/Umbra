@@ -617,7 +617,7 @@ export class ChatKeyExchangeService {
       }
       const result = await this.identityResetService.requestReset(
         userId,
-        recoveryCredentialOf(dto.recoveryAuth, dto.recoveryPhrase),
+        recoveryCredentialOf(dto.recoveryAuth),
       );
       client.emit('identityResetStatus', {
         status: result.status,
@@ -737,7 +737,7 @@ export class ChatKeyExchangeService {
       const replaced = await this.identityResetService.setRecoveryKey(
         userId,
         // Validated exactly-one-of by SetRecoveryKeyDto.
-        recoveryCredentialOf(dto.authSecret, dto.phrase)!,
+        recoveryCredentialOf(dto.authSecret)!,
         // (lxxviii) clause 1: verifier and sealed blob land atomically.
         dto.backup,
       );

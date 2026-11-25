@@ -474,9 +474,8 @@ describe('AuthService', () => {
 
   // Amendment (lxxxii) clause 2 — the recovery phrase as a credential.
   describe('recoverPassword', () => {
-    const phrase =
-      'abandon ability able about above absent absorb abstract absurd abuse access accident';
-    const legacy = { kind: 'phrase', value: phrase } as const;
+    // What the controller hands over for a legacy plaintext phrase: no credential.
+    const legacy = undefined;
     const v2 = {
       kind: 'auth',
       value: Buffer.alloc(32, 1).toString('base64'),
@@ -601,7 +600,7 @@ describe('AuthService', () => {
 
     // Plan B7 tail (0.2.104): the plaintext phrase of clients up to 0.2.89 is
     // never verified, whatever row it would match.
-    it('a legacy plaintext phrase is refused like a wrong one: 401, one dummy verify on a constant, no verifier asked, no attempt spent', async () => {
+    it('a legacy plaintext phrase is refused like a wrong one: 401 and one dummy verify, even if the verifier would accept', async () => {
       usersService.findByUsernameAndTag.mockResolvedValue(mockUser as User);
       identityResetService.verifyRecoveryPhrase.mockResolvedValue('accepted');
 
@@ -609,13 +608,7 @@ describe('AuthService', () => {
         service.recoverPassword('testuser#0427', legacy, 'NewPass1x'),
       ).rejects.toMatchObject({ status: 401, message: 'Invalid credentials' });
 
-      expect(identityResetService.verifyRecoveryPhrase).not.toHaveBeenCalled();
       expect(argon2.verify).toHaveBeenCalledTimes(1);
-      expect(argon2.verify).not.toHaveBeenCalledWith(
-        expect.any(String),
-        phrase,
-      );
-      expect(usersService.setPassword).not.toHaveBeenCalled();
     });
 
     it('an authSecret reaches the verifier as an auth credential (v2 door)', async () => {

@@ -109,11 +109,12 @@ export class AuthService {
    */
   async recoverPassword(
     identifier: string,
-    credential: RecoveryCredential,
+    credential: RecoveryCredential | undefined,
     newPassword: string,
   ) {
-    if (credential.kind === 'phrase') {
-      // Plan B7 tail: a plaintext phrase is never verified, whatever the row.
+    if (credential === undefined) {
+      // Plan B7 tail: no authSecret means a legacy plaintext phrase (the DTO
+      // guarantees one of the two), which is never verified, whatever the row.
       // One verify on a CONSTANT keeps the cost of a wrong phrase; the value
       // is not hashed, stored or logged, and no attempt is counted.
       await argon2

@@ -240,7 +240,10 @@ describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', (
       // and the recovering device is unaddressable until it re-enrols.
       authorizationRepo.findOne.mockResolvedValue(null);
 
-      const result = await service.requestReset(7, { kind: 'auth', value: 'a-correct-phrase' });
+      const result = await service.requestReset(7, {
+        kind: 'auth',
+        value: 'a-correct-phrase',
+      });
 
       expect(result).toEqual({
         status: 'not_enrolled',
@@ -353,7 +356,10 @@ describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', (
       it('shortens the delay to one hour and spends the phrase', async () => {
         recoveryRepo.findOne.mockResolvedValue(enrolled());
 
-        const result = await service.requestReset(7, { kind: 'auth', value: phrase });
+        const result = await service.requestReset(7, {
+          kind: 'auth',
+          value: phrase,
+        });
 
         expect(result.status).toBe('pending');
         expect(result.shortened).toBe(true);
@@ -382,7 +388,10 @@ describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', (
           enrolled({ createdAt: new Date(Date.now() - 60_000) }),
         );
 
-        const result = await service.requestReset(7, { kind: 'auth', value: phrase });
+        const result = await service.requestReset(7, {
+          kind: 'auth',
+          value: phrase,
+        });
 
         // The ceremony still STARTS — refusing would break the lost-device
         // path §6.2 exists to serve — but at the full delay.
@@ -418,7 +427,10 @@ describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', (
           enrolled({ createdAt: new Date(Date.now() - 60_000) }),
         );
 
-        const young = await service.requestReset(7, { kind: 'auth', value: phrase });
+        const young = await service.requestReset(7, {
+          kind: 'auth',
+          value: phrase,
+        });
 
         resetRepo.findOne.mockResolvedValue(null);
         resetRepo.insert.mockClear();
@@ -441,7 +453,10 @@ describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', (
           raw: [{ failedAttempts: 1 }],
         });
 
-        const result = await service.requestReset(7, { kind: 'auth', value: 'not the phrase at all' });
+        const result = await service.requestReset(7, {
+          kind: 'auth',
+          value: 'not the phrase at all',
+        });
 
         // The age is checked AFTER verification on purpose: otherwise the
         // ordering would turn the age gate into a free oracle for probing
@@ -465,7 +480,10 @@ describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', (
           .mockResolvedValueOnce(null)
           .mockResolvedValue({ deadlineAt: winnerDeadline, shortened: false });
 
-        const result = await service.requestReset(7, { kind: 'auth', value: phrase });
+        const result = await service.requestReset(7, {
+          kind: 'auth',
+          value: phrase,
+        });
 
         // The loser reports the winner's ceremony, not one of its own.
         expect(result.status).toBe('existing');
@@ -484,7 +502,10 @@ describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', (
           raw: [{ failedAttempts: 2 }],
         });
 
-        const result = await service.requestReset(7, { kind: 'auth', value: 'not the right phrase' });
+        const result = await service.requestReset(7, {
+          kind: 'auth',
+          value: 'not the right phrase',
+        });
 
         expect(result.status).toBe('invalid_phrase');
         expect(resetRepo.insert).not.toHaveBeenCalled();
@@ -505,7 +526,10 @@ describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', (
           raw: [{ failedAttempts: RECOVERY_MAX_FAILED_ATTEMPTS }],
         });
 
-        const result = await service.requestReset(7, { kind: 'auth', value: 'wrong again' });
+        const result = await service.requestReset(7, {
+          kind: 'auth',
+          value: 'wrong again',
+        });
 
         expect(result.status).toBe('locked');
         const params = boundParams(recoveryBuilder.where, 'lockedUntil');
@@ -524,7 +548,10 @@ describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', (
           }),
         );
 
-        const result = await service.requestReset(7, { kind: 'auth', value: phrase });
+        const result = await service.requestReset(7, {
+          kind: 'auth',
+          value: phrase,
+        });
 
         expect(result.status).toBe('locked');
         expect(resetRepo.insert).not.toHaveBeenCalled();
@@ -536,7 +563,10 @@ describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', (
           enrolled({ usedAt: new Date() }),
         );
 
-        const result = await service.requestReset(7, { kind: 'auth', value: phrase });
+        const result = await service.requestReset(7, {
+          kind: 'auth',
+          value: phrase,
+        });
 
         expect(result.status).toBe('invalid_phrase');
         expect(resetRepo.insert).not.toHaveBeenCalled();
@@ -545,7 +575,10 @@ describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', (
       it('refuses when no phrase is enrolled at all', async () => {
         recoveryRepo.findOne.mockResolvedValue(null);
 
-        const result = await service.requestReset(7, { kind: 'auth', value: phrase });
+        const result = await service.requestReset(7, {
+          kind: 'auth',
+          value: phrase,
+        });
 
         expect(result.status).toBe('invalid_phrase');
         expect(resetRepo.insert).not.toHaveBeenCalled();
@@ -559,7 +592,10 @@ describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', (
           enrolled({ verifierHash: 'not-a-phc-string' }),
         );
 
-        const result = await service.requestReset(7, { kind: 'auth', value: phrase });
+        const result = await service.requestReset(7, {
+          kind: 'auth',
+          value: phrase,
+        });
 
         expect(result.status).toBe('invalid_phrase');
         expect(resetRepo.insert).not.toHaveBeenCalled();
@@ -705,38 +741,12 @@ describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', (
     const v2 = (overrides: Record<string, unknown> = {}) =>
       v1({ verifierHash: authHash, verifierKind: 'auth_v2', ...overrides });
     const auth = (value: string) => ({ kind: 'auth', value }) as const;
-    const plain = (value: string) => ({ kind: 'phrase', value }) as const;
 
     it('an auth_v2 row accepts the authSecret', async () => {
       recoveryRepo.findOne.mockResolvedValue(v2());
       await expect(
         service.verifyRecoveryPhrase(7, auth(authSecret)),
       ).resolves.toBe('accepted');
-    });
-
-    it('an auth_v2 row NEVER accepts a plaintext phrase — not even one equal to the stored secret', async () => {
-      recoveryRepo.findOne.mockResolvedValue(v2());
-      // The strongest form: the verifier really is over this very string,
-      // and it is still refused when it arrives as `phrase`.
-      await expect(
-        service.verifyRecoveryPhrase(7, plain(authSecret)),
-      ).resolves.toBe('invalid_phrase');
-    });
-
-    it('a plaintext phrase against an auth_v2 row spends no attempt (an old client cannot lock the owner out)', async () => {
-      recoveryRepo.findOne.mockResolvedValue(v2());
-      await service.verifyRecoveryPhrase(7, plain(phrase));
-      expect(recoveryBuilder.execute).not.toHaveBeenCalled();
-      expect(recoveryRepo.update).not.toHaveBeenCalled();
-    });
-
-    it('a phrase_v1 row REFUSES the plaintext phrase although its verifier matches it, and counts nothing (plan B7 tail)', async () => {
-      recoveryRepo.findOne.mockResolvedValue(v1());
-      await expect(
-        service.verifyRecoveryPhrase(7, plain(phrase)),
-      ).resolves.toBe('invalid_phrase');
-      expect(recoveryBuilder.execute).not.toHaveBeenCalled();
-      expect(recoveryRepo.update).not.toHaveBeenCalled();
     });
 
     it('a phrase_v1 row cannot check an authSecret: legacy_recovery_key, nothing counted', async () => {
@@ -784,10 +794,6 @@ describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', (
         service.verifyRecoveryPhrase(7, auth(authSecret)),
       ).resolves.toBe('locked');
       recoveryRepo.findOne.mockResolvedValue(v1({ lockedUntil }));
-      // The plaintext phrase is refused outright, locked or not (no lockout change).
-      await expect(
-        service.verifyRecoveryPhrase(7, plain(phrase)),
-      ).resolves.toBe('invalid_phrase');
       await expect(
         service.verifyRecoveryPhrase(7, auth(authSecret)),
       ).resolves.toBe('locked');
@@ -811,13 +817,6 @@ describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', (
       expect(resetRepo.insert).not.toHaveBeenCalled();
     });
 
-    it('the reset shortcut refuses a plaintext phrase on an auth_v2 row', async () => {
-      recoveryRepo.findOne.mockResolvedValue(v2());
-      const result = await service.requestReset(7, plain(authSecret));
-      expect(result.status).toBe('invalid_phrase');
-      expect(resetRepo.insert).not.toHaveBeenCalled();
-    });
-
     it('setRecoveryKey(auth) stores an auth_v2 verifier of the authSecret', async () => {
       await service.setRecoveryKey(7, auth(authSecret));
       const row = rowArg(recoveryRepo.insert);
@@ -825,12 +824,6 @@ describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', (
       expect(await argon2.verify(row.verifierHash as string, authSecret)).toBe(
         true,
       );
-    });
-
-    it('setRecoveryKey(phrase) never stores a verifier: nothing is hashed or written', async () => {
-      await expect(service.setRecoveryKey(7, plain(phrase))).rejects.toThrow();
-      expect(recoveryRepo.insert).not.toHaveBeenCalled();
-      expect(recoveryRepo.update).not.toHaveBeenCalled();
     });
 
     it('replacing a legacy row with an auth credential flips its kind in the same update', async () => {
@@ -1143,11 +1136,7 @@ describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', (
       // phrase whose verifier never landed (or vice versa) must be
       // unrepresentable. Without the backup wiring this row carries no
       // backup* columns at all and every assertion below fails.
-      await service.setRecoveryKey(
-        7,
-        { kind: 'auth', value: phrase },
-        backup,
-      );
+      await service.setRecoveryKey(7, { kind: 'auth', value: phrase }, backup);
 
       const row = rowArg(recoveryRepo.insert);
       expect(row.backupBlob).toBe(backup.blob);
@@ -1161,11 +1150,7 @@ describe('IdentityResetService (reset ceremony §6.2 / recovery key §6.2.1)', (
     it('a replacement carries the backup in the SAME update as the verifier', async () => {
       recoveryRepo.findOne.mockResolvedValue({ id: 3, userId: 7 });
 
-      await service.setRecoveryKey(
-        7,
-        { kind: 'auth', value: phrase },
-        backup,
-      );
+      await service.setRecoveryKey(7, { kind: 'auth', value: phrase }, backup);
 
       expect(recoveryRepo.update).toHaveBeenCalledWith(
         { id: 3 },

@@ -3,7 +3,6 @@ import * as argon2 from 'argon2';
 import { Server, Socket } from 'socket.io';
 import { AuthController } from '../auth/auth.controller';
 import { AuthService } from '../auth/auth.service';
-import { RecoverPasswordDto } from '../auth/dto/recover-password.dto';
 import { LoginBackoffService } from '../auth/login-backoff.service';
 import { ChatKeyExchangeService } from '../chat/services/chat-key-exchange.service';
 import {
@@ -214,7 +213,7 @@ describe('a plaintext recovery phrase is refused at every door (plan B7)', () =>
       identifier: 'alice#0427',
       phrase,
       newPassword: 'NewPass1x',
-    } as RecoverPasswordDto);
+    });
 
     await expect(attempt).rejects.toThrow(UnauthorizedException);
     await expect(attempt).rejects.toThrow('Invalid credentials');

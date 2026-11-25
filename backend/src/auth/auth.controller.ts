@@ -50,7 +50,7 @@ export class AuthController {
   recover(@Body() dto: RecoverPasswordDto) {
     return this.authService.recoverPassword(
       dto.identifier,
-      recoveryCredentialOf(dto.authSecret, dto.phrase)!,
+      recoveryCredentialOf(dto.authSecret),
       dto.newPassword,
     );
   }

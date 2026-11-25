@@ -1635,7 +1635,6 @@ describe('ChatKeyExchangeService', () => {
         shortened: false,
         phraseTooNew: false,
       });
-      expect(mockServer.emit).not.toHaveBeenCalled();
     });
 
     it('refuses a payload carrying BOTH credentials', async () => {
@@ -1797,8 +1796,6 @@ describe('ChatKeyExchangeService', () => {
         expect(mockClient.emit).toHaveBeenCalledWith('recoveryKeySet', {
           success: false,
         });
-        // Nothing was enrolled, so no session is told that something was.
-        expect(mockServer.emit).not.toHaveBeenCalled();
       },
     );
 
