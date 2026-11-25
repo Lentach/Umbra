@@ -23,6 +23,7 @@ void main() {
     service = EncryptionService();
     await service.initialize(accountB, checkServerIdentity: () async => fresh);
     await service.saveDecryptedContent(sharedId, {'content': 'B keeps this'});
+    await service.flushDecryptedLedger();
     await service.enqueuePurge({sharedId}, const <String>{});
   });
 
@@ -56,6 +57,11 @@ void main() {
       'B keeps this',
     );
     expect((await service.purgeBacklog()).ids, {sharedId});
+    expect(
+      await service.decryptedLedgerIds(),
+      contains(sharedId),
+      reason: "a stale forgetDecryptedMany must not drop B's ledger entry",
+    );
     expect(await service.retiredMessageIds(), isEmpty);
   });
 
