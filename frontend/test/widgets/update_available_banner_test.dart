@@ -72,6 +72,18 @@ void main() {
     expect(find.byKey(const Key('update-available-banner')), findsNothing);
   });
 
+  testWidgets('does not offer a download link on another host', (tester) async {
+    await pump(
+      tester,
+      client: serving({
+        ...channel(),
+        'url': 'https://evil.invalid/umbra-0.2.50.apk',
+      }),
+    );
+
+    expect(find.byKey(const Key('update-available-banner')), findsNothing);
+  });
+
   testWidgets('renders nothing off Android', (tester) async {
     await pump(tester, client: serving(channel()), isAndroid: false);
 
