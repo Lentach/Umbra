@@ -13,6 +13,7 @@ import 'package:fireplace/widgets/passcode_gate.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../support/l10n.dart';
 import '../support/passcode_fakes.dart';
 
 /// Stands in for the whole logged-in app. If this text is reachable while the
@@ -297,7 +298,7 @@ void main() {
 
     await tester.enterText(
       find.byKey(const Key('passcode-erase-field')),
-      'ERASE',
+      l10n.passcodeEraseConfirmWord,
     );
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('passcode-erase-confirm')));
@@ -320,7 +321,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.enterText(
       find.byKey(const Key('passcode-erase-field')),
-      'ERASE',
+      l10n.passcodeEraseConfirmWord,
     );
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('passcode-erase-confirm')));

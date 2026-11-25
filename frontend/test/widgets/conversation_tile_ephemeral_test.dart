@@ -9,6 +9,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
+import '../support/l10n.dart';
+
 MessageModel _lastMessage({
   int? disappearAfterSeconds,
   DateTime? expiresAt,
@@ -78,7 +80,7 @@ void main() {
       );
 
       expect(find.byIcon(Icons.notifications_off_outlined), findsOneWidget);
-      expect(find.byTooltip('Notifications muted'), findsOneWidget);
+      expect(find.byTooltip(l10n.userCardNotificationsMuted), findsOneWidget);
     });
 
     testWidgets('shows lit hex for post-read last message', (tester) async {

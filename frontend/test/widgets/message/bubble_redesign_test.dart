@@ -15,6 +15,8 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
+import '../../support/l10n.dart';
+
 MessageModel _gifMessage() => MessageModel(
   id: 1,
   content: '',
@@ -151,7 +153,7 @@ void main() {
       );
       await tester.pump();
       expect(find.byType(CircularProgressIndicator), findsOneWidget);
-      expect(find.text('Image failed to load'), findsNothing);
+      expect(find.text(l10n.imageFailedToLoad), findsNothing);
     });
 
     testWidgets('a photo whose send failed says so', (tester) async {
@@ -161,7 +163,7 @@ void main() {
         ),
       );
       await tester.pump();
-      expect(find.text('Image failed to load'), findsOneWidget);
+      expect(find.text(l10n.imageFailedToLoad), findsOneWidget);
     });
   });
 
@@ -256,7 +258,7 @@ void main() {
           ),
         );
 
-        final editedLabel = find.text('edited');
+        final editedLabel = find.text(l10n.messageEditedLabel);
         expect(editedLabel, findsOneWidget);
         expect(
           find.ancestor(of: editedLabel, matching: find.byType(Positioned)),

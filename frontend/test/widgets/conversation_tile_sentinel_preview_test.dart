@@ -88,10 +88,10 @@ void main() {
   testWidgets('a terminally failed row says so instead of leaking the label', (
     tester,
   ) async {
-    await _pumpTile(tester, _row(kDecryptionFailedLabel));
+    final l10n = await _pumpTile(tester, _row(kDecryptionFailedLabel));
 
     expect(
-      find.textContaining("can't be read", findRichText: true),
+      find.text(l10n.messageUnreadableOnThisDevice, findRichText: true),
       findsOneWidget,
     );
     expect(
@@ -114,10 +114,10 @@ void main() {
   });
 
   testWidgets('a retired row previews as no longer stored', (tester) async {
-    await _pumpTile(tester, _row(kRetiredMessageLabel));
+    final l10n = await _pumpTile(tester, _row(kRetiredMessageLabel));
 
     expect(
-      find.textContaining('no longer stored', findRichText: true),
+      find.text(l10n.messageNoLongerStoredOnThisDevice, findRichText: true),
       findsOneWidget,
     );
     expect(
@@ -142,7 +142,7 @@ void main() {
       ),
     );
 
-    expect(find.text('Attachment', findRichText: true), findsOneWidget);
+    expect(find.text(l10n.attachment, findRichText: true), findsOneWidget);
     expect(find.text(l10n.newMessagePreview, findRichText: true), findsNothing);
   });
 
@@ -177,8 +177,11 @@ void main() {
     );
     await tester.pump();
 
+    final l10n = AppLocalizations.of(
+      tester.element(find.byType(ConversationTile)),
+    );
     expect(
-      find.text('Anti-Quantum Note', findRichText: true),
+      find.text(l10n.antiQuantumNoteTitle, findRichText: true),
       findsOneWidget,
     );
     expect(

@@ -17,6 +17,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
+import '../../support/l10n.dart';
+
 MessageModel _msg({
   required int id,
   required int senderId,
@@ -732,10 +734,10 @@ void main() {
     await tester.longPress(find.byType(MessageSwipeWrapper));
     await tester.pumpAndSettle();
 
-    expect(find.text('Reply'), findsOneWidget);
-    expect(find.text('Edit'), findsOneWidget);
-    expect(find.text('Pin'), findsOneWidget);
-    expect(find.text('Delete'), findsOneWidget);
+    expect(find.text(l10n.messageActionReply), findsOneWidget);
+    expect(find.text(l10n.messageActionEdit), findsOneWidget);
+    expect(find.text(l10n.messageActionPin), findsOneWidget);
+    expect(find.text(l10n.messageActionDelete), findsOneWidget);
     expect(find.byKey(const Key('context-menu-scrim')), findsOneWidget);
     expect(find.byType(MessageContextMenuBubbleHighlight), findsOneWidget);
   });
@@ -789,10 +791,10 @@ void main() {
     );
     await tester.longPress(find.text('bubble'));
     await tester.pumpAndSettle();
-    expect(find.text('Reply'), findsOneWidget);
-    expect(find.text('Edit'), findsOneWidget);
-    expect(find.text('Pin'), findsOneWidget);
-    expect(find.text('Delete'), findsOneWidget);
+    expect(find.text(l10n.messageActionReply), findsOneWidget);
+    expect(find.text(l10n.messageActionEdit), findsOneWidget);
+    expect(find.text(l10n.messageActionPin), findsOneWidget);
+    expect(find.text(l10n.messageActionDelete), findsOneWidget);
     expect(find.byKey(const Key('context-menu-scrim')), findsOneWidget);
   });
 
@@ -898,7 +900,7 @@ void main() {
 
     final expand = find.byKey(const ValueKey('context-menu-expand-reactions'));
     expect(expand, findsOneWidget);
-    expect(find.text('Reply'), findsOneWidget);
+    expect(find.text(l10n.messageActionReply), findsOneWidget);
 
     await tester.tap(expand);
     await tester.pumpAndSettle();
@@ -907,10 +909,10 @@ void main() {
       find.byKey(const Key('context-menu-expanded-reaction-picker')),
       findsOneWidget,
     );
-    expect(find.bySemanticsLabel('Emoji picker'), findsOneWidget);
+    expect(find.bySemanticsLabel(l10n.emojiPickerSemantics), findsOneWidget);
     // Telegram parity: row and action panel unmount while expanded.
     expect(find.byKey(const Key('context-menu-emoji-bar')), findsNothing);
-    expect(find.text('Reply'), findsNothing);
+    expect(find.text(l10n.messageActionReply), findsNothing);
     // Scrim (and the bubble underneath) stay.
     expect(find.byType(BackdropFilter), findsOneWidget);
   });
@@ -1119,7 +1121,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(calls, [(emoji: '🔥', alreadyReacted: true)]);
-      expect(find.bySemanticsLabel('Emoji picker'), findsNothing);
+      expect(find.bySemanticsLabel(l10n.emojiPickerSemantics), findsNothing);
     },
   );
 
@@ -1127,14 +1129,14 @@ void main() {
     tester,
   ) async {
     await pumpDirectContextMenu(tester);
-    expect(find.text('Reply'), findsOneWidget);
+    expect(find.text(l10n.messageActionReply), findsOneWidget);
 
     final navigator = tester.state<NavigatorState>(find.byType(Navigator));
     final handled = await navigator.maybePop();
     await tester.pumpAndSettle();
 
     expect(handled, isTrue); // consumed by the overlay's PopEntry
-    expect(find.text('Reply'), findsNothing);
+    expect(find.text(l10n.messageActionReply), findsNothing);
     expect(find.byType(BackdropFilter), findsNothing);
     expect(find.text('bubble'), findsOneWidget); // chat screen intact
   });
@@ -1170,9 +1172,16 @@ void main() {
 
       await pumpDirectContextMenu(tester, message: message, currentUserId: 1);
 
-      expect(find.bySemanticsLabel('Reaction 🔥, selected'), findsOneWidget);
       expect(
-        find.bySemanticsLabel('Reaction 👍, not selected'),
+        find.bySemanticsLabel(
+          l10n.messageReactionSemantics('🔥', l10n.messageReactionSelected),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.bySemanticsLabel(
+          l10n.messageReactionSemantics('👍', l10n.messageReactionNotSelected),
+        ),
         findsOneWidget,
       );
     },
@@ -1199,9 +1208,9 @@ void main() {
     await pumpBubble(tester, _msg(id: 10, senderId: 1));
     await tester.longPress(find.byType(MessageSwipeWrapper));
     await tester.pumpAndSettle();
-    expect(find.text('Copy'), findsOneWidget);
+    expect(find.text(l10n.messageActionCopy), findsOneWidget);
 
-    await tester.tap(find.text('Copy'));
+    await tester.tap(find.text(l10n.messageActionCopy));
     await tester.pump();
 
     final setData = calls
@@ -1209,8 +1218,8 @@ void main() {
         .toList();
     expect(setData, hasLength(1));
     expect((setData.single.arguments as Map)['text'], 'hello');
-    expect(find.text('Reply'), findsNothing); // menu dismissed
-    expect(find.text('Message copied'), findsOneWidget); // top snackbar
+    expect(find.text(l10n.messageActionReply), findsNothing); // menu dismissed
+    expect(find.text(l10n.snackbarMessageCopied), findsOneWidget); // top snackbar
     // Flush showTopSnackBar's 2500ms removal future so no pending timers leak.
     await tester.pump(const Duration(seconds: 3));
   });
@@ -1219,8 +1228,8 @@ void main() {
     await pumpBubble(tester, _imageMsg(id: 11, senderId: 1));
     await tester.longPress(find.byType(MessageSwipeWrapper));
     await tester.pumpAndSettle();
-    expect(find.text('Reply'), findsOneWidget);
-    expect(find.text('Copy'), findsNothing);
+    expect(find.text(l10n.messageActionReply), findsOneWidget);
+    expect(find.text(l10n.messageActionCopy), findsNothing);
   });
 
   testWidgets('decryption-failed text bubble has no Copy row', (tester) async {
@@ -1230,8 +1239,8 @@ void main() {
     );
     await tester.longPress(find.byType(MessageSwipeWrapper));
     await tester.pumpAndSettle();
-    expect(find.text('Reply'), findsOneWidget);
-    expect(find.text('Copy'), findsNothing);
+    expect(find.text(l10n.messageActionReply), findsOneWidget);
+    expect(find.text(l10n.messageActionCopy), findsNothing);
   });
 
   testWidgets('copy row appears when onCopy is provided', (tester) async {
@@ -1275,8 +1284,8 @@ void main() {
     );
     await tester.longPress(find.text('bubble'));
     await tester.pumpAndSettle();
-    expect(find.text('Copy'), findsOneWidget);
-    expect(find.text('Reply'), findsOneWidget);
+    expect(find.text(l10n.messageActionCopy), findsOneWidget);
+    expect(find.text(l10n.messageActionReply), findsOneWidget);
   });
 
   testWidgets('copy row absent when onCopy is omitted', (tester) async {
@@ -1319,8 +1328,8 @@ void main() {
     );
     await tester.longPress(find.text('bubble'));
     await tester.pumpAndSettle();
-    expect(find.text('Copy'), findsNothing);
-    expect(find.text('Reply'), findsOneWidget);
+    expect(find.text(l10n.messageActionCopy), findsNothing);
+    expect(find.text(l10n.messageActionReply), findsOneWidget);
   });
 
   testWidgets('huge message: menu fully on-screen and Copy tappable', (
@@ -1394,10 +1403,10 @@ void main() {
     expect(panelTop + panel.size.height, lessThanOrEqualTo(viewHeight));
     expect(emoji.localToGlobal(Offset.zero).dy, greaterThanOrEqualTo(0));
 
-    await tester.tap(find.text('Copy'));
+    await tester.tap(find.text(l10n.messageActionCopy));
     await tester.pumpAndSettle();
     expect(copied, isTrue);
-    expect(find.text('Reply'), findsNothing); // menu dismissed
+    expect(find.text(l10n.messageActionReply), findsNothing); // menu dismissed
   });
 
   testWidgets('rendered gaps match overlay constant with scale overflow', (

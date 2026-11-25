@@ -11,6 +11,8 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../support/l10n.dart';
+
 void main() {
   testWidgets('an empty confirm is refused and the error goes when typing '
       'starts', (tester) async {
@@ -40,7 +42,7 @@ void main() {
 
     await tester.tap(find.byKey(const Key('contact-backup-prompt-confirm')));
     await tester.pump();
-    expect(find.text('Password is required'), findsOneWidget);
+    expect(find.text(l10n.passwordRequired), findsOneWidget);
     expect(requests, isEmpty, reason: 'nothing to check yet');
 
     await tester.enterText(
@@ -48,6 +50,6 @@ void main() {
       'p',
     );
     await tester.pump();
-    expect(find.text('Password is required'), findsNothing);
+    expect(find.text(l10n.passwordRequired), findsNothing);
   });
 }

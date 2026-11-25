@@ -4,6 +4,8 @@ import 'package:fireplace/widgets/sibling_silent_line.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../support/l10n.dart';
+
 /// Decision 101 B's line: it names the device, and its dialog is the only
 /// way to remove or keep it; dismissing the dialog does neither.
 void main() {
@@ -35,14 +37,14 @@ void main() {
 
   testWidgets('names the device the Devices screen names', (tester) async {
     await pump(tester);
-    expect(find.textContaining('“Pixel 7” has not been used'), findsOneWidget);
+    expect(find.text(l10n.siblingSilentLine('Pixel 7')), findsOneWidget);
   });
 
   testWidgets('Keep keeps, Remove removes, each once', (tester) async {
     await pump(tester);
 
     await openDialog(tester);
-    expect(find.text('Remove “Pixel 7”?'), findsOneWidget);
+    expect(find.text(l10n.siblingSilentTitle('Pixel 7')), findsOneWidget);
     await tester.tap(find.byKey(const Key('sibling-silent-keep')));
     await tester.pumpAndSettle();
     expect(calls, ['keep']);
@@ -60,7 +62,7 @@ void main() {
     await tester.tapAt(const Offset(5, 5));
     await tester.pumpAndSettle();
 
-    expect(find.text('Remove “Pixel 7”?'), findsNothing);
+    expect(find.text(l10n.siblingSilentTitle('Pixel 7')), findsNothing);
     expect(calls, isEmpty);
   });
 }

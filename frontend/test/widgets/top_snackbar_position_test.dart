@@ -4,6 +4,8 @@ import 'package:fireplace/theme/rpg_theme.dart';
 import 'package:fireplace/widgets/glass/glass_top_bar.dart';
 import 'package:fireplace/widgets/top_snackbar.dart';
 
+import '../support/l10n.dart';
+
 // Guards the fix for the toast covering the app-bar back arrow: the overlay must
 // sit BELOW the GlassTopBar band, including the status-bar (notch) inset — not
 // at top:0 where it hid the back arrow for the whole 2.5s duration.
@@ -31,7 +33,7 @@ void main() {
           body: Builder(
             builder: (ctx) {
               WidgetsBinding.instance.addPostFrameCallback((_) {
-                showTopSnackBar(ctx, 'Anti-Quantum Note sent');
+                showTopSnackBar(ctx, l10n.antiQuantumNoteSent);
               });
               return const SizedBox.expand();
             },
@@ -43,7 +45,7 @@ void main() {
     await tester.pump();
 
     final arrowBottom = tester.getRect(find.byIcon(Icons.arrow_back)).bottom;
-    final toastTop = tester.getRect(find.text('Anti-Quantum Note sent')).top;
+    final toastTop = tester.getRect(find.text(l10n.antiQuantumNoteSent)).top;
 
     expect(
       toastTop,
@@ -101,8 +103,8 @@ void main() {
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   showTopSnackBar(
                     ctx,
-                    'Invitation accepted',
-                    actionLabel: 'Open chat',
+                    l10n.invitationAccepted,
+                    actionLabel: l10n.invitationOpenChat,
                     onTap: () => taps += 1,
                   );
                 });
@@ -115,7 +117,7 @@ void main() {
       await tester.pump();
       await tester.pump();
 
-      expect(find.text('Open chat'), findsOneWidget);
+      expect(find.text(l10n.invitationOpenChat), findsOneWidget);
       expect(
         find.byWidgetPredicate(
           (widget) => widget is IgnorePointer && widget.ignoring,
@@ -123,11 +125,11 @@ void main() {
         findsNothing,
       );
 
-      await tester.tap(find.text('Open chat'));
+      await tester.tap(find.text(l10n.invitationOpenChat));
       await tester.pump();
 
       expect(taps, 1);
-      expect(find.text('Invitation accepted'), findsNothing);
+      expect(find.text(l10n.invitationAccepted), findsNothing);
 
       await tester.pump(const Duration(seconds: 3));
     },

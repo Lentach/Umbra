@@ -11,6 +11,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
+import '../../support/l10n.dart';
+
 MessageModel _videoMessage({
   String content = '',
   int? mediaWidth,
@@ -346,8 +348,8 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
       await tester.pumpAndSettle();
 
-      expect(find.text('Still sending…'), findsOneWidget);
-      expect(find.text('Video failed to load'), findsNothing);
+      expect(find.text(l10n.videoStillSending), findsOneWidget);
+      expect(find.text(l10n.videoFailedToLoad), findsNothing);
       expect(find.text('Decryption failed'), findsNothing);
     });
 
@@ -364,7 +366,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
       await tester.pumpAndSettle();
 
-      expect(find.text('Video failed to load'), findsOneWidget);
+      expect(find.text(l10n.videoFailedToLoad), findsOneWidget);
       expect(find.text('Decryption failed'), findsNothing);
     });
   });

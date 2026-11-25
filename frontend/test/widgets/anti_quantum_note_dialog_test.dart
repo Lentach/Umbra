@@ -4,6 +4,8 @@ import 'package:fireplace/l10n/app_localizations.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
 import 'package:fireplace/widgets/anti_quantum_note_dialog.dart';
 
+import '../support/l10n.dart';
+
 // The dialog reads FireplaceColors.of(context), so the wrapper needs a real
 // RpgTheme ThemeData (bare MaterialApp has no FireplaceColors extension).
 Widget _wrap(Widget child) => MaterialApp(
@@ -19,10 +21,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(AntiQuantumNoteDialog), findsOneWidget);
-    expect(find.text('1h'), findsOneWidget);
-    expect(find.text('6h'), findsOneWidget);
-    expect(find.text('12h'), findsOneWidget);
-    expect(find.text('24h'), findsOneWidget);
+    expect(find.text(l10n.antiQuantumNoteTtl1h), findsOneWidget);
+    expect(find.text(l10n.antiQuantumNoteTtl6h), findsOneWidget);
+    expect(find.text(l10n.antiQuantumNoteTtl12h), findsOneWidget);
+    expect(find.text(l10n.antiQuantumNoteTtl24h), findsOneWidget);
     expect(find.text('2h'), findsNothing);
     expect(find.byType(ElevatedButton), findsOneWidget);
   });
@@ -61,7 +63,7 @@ void main() {
     await tester.enterText(find.byType(TextField), 'secret text');
     await tester.pump();
 
-    await tester.tap(find.text('12h'));
+    await tester.tap(find.text(l10n.antiQuantumNoteTtl12h));
     await tester.pump();
 
     await tester.tap(find.byType(ElevatedButton));
