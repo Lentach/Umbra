@@ -201,22 +201,27 @@ extension AuthSessionLifecycle on AuthProvider {
     _statusMessage = null;
     _statusCode = null;
     _isError = false;
+    Future<bool>? savedCopiesGone;
     if (wipeStoredTokens) {
       // A logout that wipes the store wipes the content key with it, by
       // design: the next password login unwraps it again from the server
       // row. A TRANSIENT session drop (`wipeStoredTokens: false`) leaves
       // both alone — the store is intact and the next boot reuses them.
       // The files the user saved out of chats are plaintext outside every
-      // store, so they end with the session (A3-MSG-A-04). First, so a
-      // failing step below cannot leave them behind; best effort.
-      if (!await download_utils.deleteSavedDownloads()) {
-        E2ePersistentDiag.record('SAVED_COPIES_DELETE_FAILED', {});
-      }
+      // store, so they end with the session (A3-MSG-A-04). STARTED first, so
+      // a failing step below cannot leave them behind, and awaited only
+      // after the listeners are told: the login screen never waits on the
+      // disk or on a documents directory the platform does not answer for.
+      // Best effort; the future never throws.
+      savedCopiesGone = download_utils.deleteSavedDownloads();
       await _contactBackup.clear();
       await _tokens.clear();
     }
     await clearPwaAppBadgeOnLogout();
     notifyListeners();
+    if (savedCopiesGone != null && !await savedCopiesGone) {
+      E2ePersistentDiag.record('SAVED_COPIES_DELETE_FAILED', {});
+    }
   }
 
   /// A refresh the server refused ends the session. Refused as `Device

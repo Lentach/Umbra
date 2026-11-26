@@ -1,5 +1,9 @@
+import 'package:fireplace/config/app_config.dart';
+import 'package:fireplace/l10n/app_localizations.dart';
 import 'package:fireplace/services/api_service.dart';
+import 'package:fireplace/theme/rpg_theme.dart';
 import 'package:fireplace/widgets/message/anti_quantum_note_card.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -41,14 +45,50 @@ void main() {
     expectAnonymous(seen.single);
   });
 
-  test('the card default probe sends no Authorization either', () async {
-    final probe = defaultNoteAliveProbe(api);
+  // The card's OWN default wiring, not a probe the test builds: no
+  // `aliveProbe` is injected, the card makes its probe and its HTTP client
+  // itself. A card that built an authenticated probe again would send a
+  // login here (or none at all) and fail.
+  testWidgets('a card with no injected probe polls the status path without '
+      'any login', (tester) async {
+    final asked = <http.Request>[];
+    final expiry = DateTime.now()
+        .add(const Duration(hours: 2))
+        .millisecondsSinceEpoch;
 
-    expect(await probe(noteToken), isTrue);
+    await http.runWithClient(
+      () async {
+        await tester.pumpWidget(
+          MaterialApp(
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            theme: RpgTheme.themeDataLight,
+            home: Scaffold(
+              body: AntiQuantumNoteCard(
+                noteUrl:
+                    '${AppConfig.baseUrl}/note/$noteToken#abcABC012_-&e=$expiry',
+                isMine: false,
+                textColor: Colors.black,
+                isDark: false,
+                maxWidth: 280,
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+        // The card arms a periodic timer; unmount so none is pending.
+        await tester.pumpWidget(const SizedBox());
+      },
+      () => MockClient((request) async {
+        asked.add(request);
+        return http.Response('{"alive":true}', 200);
+      }),
+    );
 
-    expect(seen, hasLength(1));
-    expect(seen.single.url.path, '/note/$noteToken/status');
-    expectAnonymous(seen.single);
+    expect(asked, hasLength(1));
+    expect(asked.single.method, 'GET');
+    expect(asked.single.url.path, '/note/$noteToken/status');
+    expectAnonymous(asked.single);
   });
 
   test('a note that is gone reads as not alive', () async {

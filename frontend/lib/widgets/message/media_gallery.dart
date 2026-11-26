@@ -303,6 +303,9 @@ class _GalleryActions extends StatelessWidget {
   Future<void> _saveImage(BuildContext context, Uint8List bytes) async {
     final l10n = AppLocalizations.of(context);
     try {
+      // Never write a copy for a viewer that is gone (logout, a wipe): the
+      // saved copies were deleted with the session (A3-MSG-A-04).
+      if (!context.mounted) return;
       await download_utils.saveBytesAsDownload(bytes, _imageFilename(bytes));
       if (context.mounted) showTopSnackBar(context, l10n.imageSaved);
     } on Object {
