@@ -231,6 +231,46 @@ void main() {
       expect(find.byKey(const Key('link-scan-unsupported')), findsOneWidget);
       expect(find.byKey(const Key('link-code-field')), findsOneWidget);
     });
+
+    // X1: after "invalid code" + "Try again" the typed field still held the
+    // refused text, so a fresh code was appended to it and failed again.
+    testWidgets('Retry after a refused typed code presents an empty field', (
+      tester,
+    ) async {
+      final controller = await pumpToShowCode(tester);
+      await tester.ensureVisible(find.byKey(const Key('link-enter-manually')));
+      await tester.tap(find.byKey(const Key('link-enter-manually')));
+      await tester.pump();
+      await tester.enterText(
+        find.byKey(const Key('link-code-field')),
+        'not-a-link-code',
+      );
+      await tester.ensureVisible(find.byKey(const Key('link-code-continue')));
+      await tester.tap(find.byKey(const Key('link-code-continue')));
+      await tester.pump();
+      await tester.pump();
+      expect(controller.primaryStep, PrimaryLinkStep.failed);
+
+      await tester.ensureVisible(find.byKey(const Key('link-primary-retry')));
+      await tester.tap(find.byKey(const Key('link-primary-retry')));
+      await tester.pump();
+      await tester.pump();
+      controller.onProvisioningOpened({
+        'success': true,
+        'provisioningId': _provisioningId,
+      });
+      await tester.pump();
+      await tester.pump();
+      expect(controller.primaryStep, PrimaryLinkStep.showCode);
+      await tester.ensureVisible(find.byKey(const Key('link-enter-manually')));
+      await tester.tap(find.byKey(const Key('link-enter-manually')));
+      await tester.pump();
+
+      final field = tester.widget<TextField>(
+        find.byKey(const Key('link-code-field')),
+      );
+      expect(field.controller!.text, isEmpty);
+    });
   });
 
   group('LinkThisDeviceBody (new device)', () {
@@ -341,6 +381,43 @@ void main() {
 
       expect(controller.newDeviceStep, NewDeviceLinkStep.showCode);
       expect(find.byKey(const Key('link-new-code-error')), findsNothing);
+    });
+
+    // X1: the typed text belonged to the stage that just ended; the fresh
+    // stage's field must not carry it.
+    testWidgets('Retry after an aborted stage presents an empty typed field', (
+      tester,
+    ) async {
+      final controller = await pumpBody(tester);
+      await tester.ensureVisible(find.byKey(const Key('link-enter-manually')));
+      await tester.tap(find.byKey(const Key('link-enter-manually')));
+      await tester.pump();
+      await tester.enterText(
+        find.byKey(const Key('link-new-code-field')),
+        'not-a-link-code',
+      );
+
+      await controller.abortNewDevice('expired');
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.ensureVisible(find.byKey(const Key('link-new-retry')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('link-new-retry')));
+      await tester.pump();
+      controller.onProvisioningOpened({
+        'success': true,
+        'provisioningId': 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+      });
+      await tester.pump();
+      await tester.pump();
+      expect(controller.newDeviceStep, NewDeviceLinkStep.showCode);
+      await tester.ensureVisible(find.byKey(const Key('link-enter-manually')));
+      await tester.tap(find.byKey(const Key('link-enter-manually')));
+      await tester.pump();
+
+      final field = tester.widget<TextField>(
+        find.byKey(const Key('link-new-code-field')),
+      );
+      expect(field.controller!.text, isEmpty);
     });
 
     testWidgets('unsupported scanner reveals the labelled manual field', (

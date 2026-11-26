@@ -619,4 +619,89 @@ void main() {
       });
     });
   });
+
+  // X3: an account deleted on another device. The server drops this device's
+  // next handshake without a word (no `socketReady`, no event), so a socket
+  // that goes away BEFORE it ever turned ready is the one moment the session
+  // is worth asking the server about.
+  group('a handshake that never turned ready asks the session probe', () {
+    late int probes;
+
+    setUp(() {
+      probes = 0;
+      connection.onSessionRejected = () async => probes++;
+    });
+
+    test('a drop before socketReady runs the probe once', () {
+      fakeAsync((async) {
+        unawaited(connection.connect(1, 'token', _url));
+        async.flushMicrotasks();
+        socket
+          ..transportConnect()
+          ..drop();
+        async.flushMicrotasks();
+
+        expect(probes, 1);
+        connection.disconnect(isLogout: true);
+      });
+    });
+
+    test('a drop after socketReady is an ordinary drop: no probe', () {
+      fakeAsync((async) {
+        unawaited(connection.connect(1, 'token', _url));
+        async.flushMicrotasks();
+        socket
+          ..transportConnect()
+          ..serve('socketReady')
+          ..drop();
+        async.flushMicrotasks();
+
+        expect(probes, 0);
+        connection.disconnect(isLogout: true);
+      });
+    });
+
+    test('a drop this app asked for is not a rejection', () {
+      fakeAsync((async) {
+        unawaited(connection.connect(1, 'token', _url));
+        async.flushMicrotasks();
+        socket.transportConnect();
+        connection.disconnect();
+
+        socket.drop();
+        async.flushMicrotasks();
+
+        expect(probes, 0);
+        connection.disconnect(isLogout: true);
+      });
+    });
+
+    test('a reconnect loop of rejected handshakes probes at most once per '
+        'spacing', () {
+      fakeAsync((async) {
+        unawaited(connection.connect(1, 'token', _url));
+        async.flushMicrotasks();
+        socket
+          ..transportConnect()
+          ..drop();
+        async.flushMicrotasks();
+        expect(probes, 1);
+
+        async.elapse(const Duration(seconds: 5));
+        socket
+          ..transportConnect()
+          ..drop();
+        async.flushMicrotasks();
+        expect(probes, 1, reason: 'inside the spacing');
+
+        async.elapse(ConnectionProvider.kSessionProbeSpacing);
+        socket
+          ..transportConnect()
+          ..drop();
+        async.flushMicrotasks();
+        expect(probes, 2, reason: 'a later rejection asks again');
+        connection.disconnect(isLogout: true);
+      });
+    });
+  });
 }

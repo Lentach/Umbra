@@ -409,6 +409,7 @@ class _LinkThisDeviceBodyState extends State<LinkThisDeviceBody> {
                 setState(() {
                   _codeError = null;
                   _manualEntry = false;
+                  _manualCode.clear();
                 });
                 controller.startNewDeviceFlow(platform: linkPlatformLabel());
               },

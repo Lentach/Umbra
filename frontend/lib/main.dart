@@ -272,6 +272,19 @@ class _AuthGateState extends State<AuthGate> {
           : l10n.deviceRevokedNotice,
     );
 
+    // An account deleted on another device sends this one nothing; its next
+    // handshake is dropped without an event. A socket that ended before it
+    // turned ready asks the session whether the account still exists, and
+    // only a bare 401 on a live access token plus a refused refresh says no.
+    // Then this device leaves the way the deleting device did: signed out,
+    // connection closed, local keys wiped (`SettingsScreen` delete flow).
+    final encryption = context.read<EncryptionProvider>();
+    conn.onSessionRejected = () async {
+      if (!await auth.endSessionIfAccountGone()) return;
+      conn.disconnect(isLogout: true);
+      await encryption.clearEncryptionKeys();
+    };
+
     // The mirror case (spec §6.2): a reset teardown re-homed this account onto
     // a NEWLY allocated device and handed back the session bound to it. Same
     // storage path as login and as the §5.1 provisioning rebind — a second

@@ -145,6 +145,17 @@ class ConnectionProvider extends ChangeNotifier {
   /// MUST complete before the recovering device publishes any key material:
   /// see `_adoptReboundSession`.
   Future<void> Function(Map<String, dynamic> tokens)? onSessionRebound;
+
+  /// Asked when the account socket went away before it ever turned ready: the
+  /// only thing the server says to a device whose account was deleted
+  /// elsewhere is to drop its next handshake silently. Set by the widget that
+  /// owns the auth session, which verifies the session and, when the account
+  /// is gone, ends it and wipes this device. Runs at most once per
+  /// [kSessionProbeSpacing] and never twice at the same time.
+  Future<void> Function()? onSessionRejected;
+  DateTime? _lastSessionProbeAt;
+  bool _sessionProbeRunning = false;
+  static const Duration kSessionProbeSpacing = Duration(seconds: 30);
   // ---------- Public Getters ----------
 
   int? get currentUserId => _currentUserId;
@@ -711,6 +722,10 @@ class ConnectionProvider extends ChangeNotifier {
 
     // 10. On 'disconnect': handle reconnect
     _socketService.onDisconnect((_) {
+      // A socket that goes away before it ever turned ready never completed
+      // the server's handshake. For an account deleted elsewhere that is all
+      // the server ever says: it drops the connection without an event.
+      final neverReady = !_accountReady;
       E2eDiagLog.add('SOCKET_DISCONNECT', {
         'intentional': _intentionalDisconnect,
       });
@@ -725,6 +740,7 @@ class ConnectionProvider extends ChangeNotifier {
           _errorMessage = msg;
           notifyListeners();
         });
+        if (neverReady) _probeRejectedSession();
       }
       _socketReadyWatchdog?.cancel();
       _socketReadyWatchdog = null;

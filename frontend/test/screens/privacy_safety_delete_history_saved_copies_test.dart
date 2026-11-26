@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:fireplace/l10n/app_localizations.dart';
+import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/providers/settings_provider.dart';
@@ -44,6 +45,20 @@ void main() {
   });
 
   testWidgets('the confirmed delete removes the saved copies', (tester) async {
+    final messaging = MessagingProvider()
+      ..setActiveConversationIdForTest(10)
+      ..seedMessagesForTest(10, [
+        MessageModel(
+          id: 1,
+          content: 'hello',
+          senderId: 1,
+          senderUsername: 'alice',
+          conversationId: 10,
+          createdAt: DateTime.utc(2026, 1, 1),
+        ),
+      ]);
+    addTearDown(messaging.dispose);
+    expect(messaging.messages, hasLength(1));
     await tester.pumpWidget(
       MultiProvider(
         providers: [
@@ -51,7 +66,7 @@ void main() {
           ChangeNotifierProvider(
             create: (_) => SettingsProvider(initialThemePreference: 'dark'),
           ),
-          ChangeNotifierProvider(create: (_) => MessagingProvider()),
+          ChangeNotifierProvider.value(value: messaging),
         ],
         child: MaterialApp(
           theme: RpgTheme.themeDataDarkGray,
@@ -71,7 +86,11 @@ void main() {
     await tester.tap(find.text(l10n.deleteAllLocalHistoryConfirm));
     await tester.pump();
     // Real file IO: each hop resumes in the fake-async zone only on a pump.
-    for (var i = 0; i < 40 && savedCopy.existsSync(); i++) {
+    for (
+      var i = 0;
+      i < 40 && (savedCopy.existsSync() || messaging.messages.isNotEmpty);
+      i++
+    ) {
       await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 50)),
       );
@@ -82,5 +101,7 @@ void main() {
 
     expect(savedCopy.existsSync(), isFalse);
     expect(audio.existsSync(), isFalse, reason: 'the voice cache goes too');
+    // X2: a chat open during the wipe is empty right after it.
+    expect(messaging.messages, isEmpty);
   });
 }

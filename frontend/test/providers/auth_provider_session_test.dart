@@ -817,4 +817,148 @@ void main() {
       );
     });
   });
+
+  // X3: an account deleted elsewhere. The server pushes nothing to this
+  // device; the only thing it can say is a bare 401 on an authenticated call
+  // made with an access token that has not expired, and a refused refresh.
+  group('AuthProvider account gone (endSessionIfAccountGone)', () {
+    TestWidgetsFlutterBinding.ensureInitialized();
+
+    const base = 'http://localhost:3000';
+    late int meStatus;
+    late String meMessage;
+    late int refreshStatus;
+    late int meCalls;
+    late int refreshCalls;
+
+    String freshAccessJwt() {
+      String seg(Map<String, dynamic> m) =>
+          base64Url.encode(utf8.encode(jsonEncode(m))).replaceAll('=', '');
+      final exp = DateTime.now().add(const Duration(hours: 12));
+      return '${seg({'alg': 'HS256', 'typ': 'JWT'})}.'
+          '${seg({'sub': 1, 'exp': exp.millisecondsSinceEpoch ~/ 1000})}.sig';
+    }
+
+    Future<AuthProvider> loggedIn({String? access}) async {
+      SharedPreferences.setMockInitialValues({
+        'jwt_token': access ?? freshAccessJwt(),
+        'refresh_token': 'opaque_refresh',
+      });
+      meStatus = 200;
+      meMessage = '';
+      refreshStatus = 201;
+      meCalls = 0;
+      refreshCalls = 0;
+      final auth = AuthProvider(
+        api: ApiService(
+          baseUrl: base,
+          httpClient: MockClient((req) async {
+            if (req.url.path == '/users/me') {
+              meCalls++;
+              return meStatus == 200
+                  ? http.Response(
+                      jsonEncode({'id': 1, 'username': 'test', 'tag': '0001'}),
+                      200,
+                    )
+                  : http.Response(
+                      jsonEncode({'message': meMessage, 'statusCode': meStatus}),
+                      meStatus,
+                    );
+            }
+            if (req.url.path == '/auth/refresh') {
+              refreshCalls++;
+              return refreshStatus == 201
+                  ? http.Response(
+                      jsonEncode({
+                        'access_token': freshAccessJwt(),
+                        'refresh_token': 'opaque_refresh',
+                      }),
+                      201,
+                    )
+                  : http.Response(
+                      jsonEncode({'message': 'Invalid refresh token'}),
+                      refreshStatus,
+                    );
+            }
+            throw Exception('Unexpected ${req.url.path}');
+          }),
+        ),
+      );
+      await _waitForAuthSettled(auth, expectLoggedIn: true);
+      // The boot's background slide is fire-and-forget; let it land first.
+      for (var i = 0; i < 20 && refreshCalls == 0; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      // Past the slide's own answer; the test sets what the server says next.
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      meCalls = 0;
+      refreshCalls = 0;
+      return auth;
+    }
+
+    test('a bare 401 on a live access token and a refused refresh end the '
+        'session and wipe the stored tokens', () async {
+      final auth = await loggedIn();
+      meStatus = 401;
+      meMessage = 'Unauthorized';
+      refreshStatus = 401;
+
+      expect(await auth.endSessionIfAccountGone(), isTrue);
+
+      expect(auth.isLoggedIn, isFalse);
+      expect(auth.lastSessionEndReason, 'account_gone');
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getString('jwt_token'), isNull);
+      expect(prefs.getString('refresh_token'), isNull);
+    });
+
+    test('a password change elsewhere is not an account that is gone', () async {
+      final auth = await loggedIn();
+      meStatus = 401;
+      meMessage = 'Token invalidated by password change';
+      refreshStatus = 401;
+
+      expect(await auth.endSessionIfAccountGone(), isFalse);
+
+      expect(auth.isLoggedIn, isTrue);
+      expect(refreshCalls, 0);
+    });
+
+    test('a refused access token whose refresh still works keeps the '
+        'session', () async {
+      final auth = await loggedIn();
+      meStatus = 401;
+      meMessage = 'Unauthorized';
+      refreshStatus = 201;
+
+      expect(await auth.endSessionIfAccountGone(), isFalse);
+
+      expect(auth.isLoggedIn, isTrue);
+    });
+
+    test('a server or network failure never ends the session', () async {
+      final auth = await loggedIn();
+      meStatus = 503;
+      meMessage = 'Service Unavailable';
+      refreshStatus = 401;
+
+      expect(await auth.endSessionIfAccountGone(), isFalse);
+
+      expect(auth.isLoggedIn, isTrue);
+      expect(refreshCalls, 0);
+    });
+
+    test('an expired access token proves nothing: no call, no sign-out', () async {
+      final auth = await loggedIn();
+      auth.setAccessTokenForTest(_expiredAccessJwt);
+      meStatus = 401;
+      meMessage = 'Unauthorized';
+      refreshStatus = 401;
+
+      expect(await auth.endSessionIfAccountGone(), isFalse);
+
+      expect(meCalls, 0);
+      expect(auth.isLoggedIn, isTrue);
+    });
+  });
 }

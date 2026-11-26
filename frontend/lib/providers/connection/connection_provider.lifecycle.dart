@@ -74,6 +74,28 @@ extension ConnectionLifecycle on ConnectionProvider {
     });
   }
 
+  /// The socket ended before it turned ready: ask the owner of the auth
+  /// session whether the account still exists ([onSessionRejected]). Rate
+  /// limited, single-flight, and never throws: the probe is a question, and
+  /// a failing answer must not disturb the reconnect that is already queued.
+  void _probeRejectedSession() {
+    final probe = onSessionRejected;
+    if (probe == null || _sessionProbeRunning) return;
+    final now = clock.now();
+    final last = _lastSessionProbeAt;
+    if (last != null &&
+        now.difference(last) < ConnectionProvider.kSessionProbeSpacing) {
+      return;
+    }
+    _lastSessionProbeAt = now;
+    _sessionProbeRunning = true;
+    unawaited(
+      probe()
+          .catchError((Object _) {})
+          .whenComplete(() => _sessionProbeRunning = false),
+    );
+  }
+
   /// After JWT auth completes on the server (`socketReady` event).
   void _onSocketReady() {
     _socketReadyWatchdog?.cancel();
