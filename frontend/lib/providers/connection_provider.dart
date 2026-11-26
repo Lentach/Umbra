@@ -656,6 +656,8 @@ class ConnectionProvider extends ChangeNotifier {
     }
     _friendsProvider?.onRemoveConversationsForUser = (uid) {
       final removed = _conversationsProvider?.removeConversationsForUser(uid);
+      // The permanent accepted-key-change lines go with the contact's history.
+      _encryptionProvider?.forgetKeyChangeLog(peerId: uid).ignore();
       // Removing a contact must also destroy their decrypted history on this
       // device. Nothing did that before: the conversation vanished from the
       // list while every message stayed in memory and on disk, readable.

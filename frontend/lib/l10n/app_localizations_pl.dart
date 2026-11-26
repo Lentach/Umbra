@@ -610,6 +610,13 @@ class AppLocalizationsPl extends AppLocalizations {
   String get peerIdentityMarkVerifiedAction => 'Odciski się zgadzają';
 
   @override
+  String get peerIdentityMarkFriendVerifiedAction =>
+      'Oznacz jako zweryfikowane';
+
+  @override
+  String get peerIdentityVerifiedState => 'Zweryfikowano';
+
+  @override
   String get peerIdentityVerifyMenuAction => 'Zweryfikuj klucze bezpieczeństwa';
 
   @override
@@ -2270,7 +2277,7 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get settingsKeyChangeWarningsSubtitle =>
-      'Domyślnie nowe klucze są przyjmowane, a w czacie pojawia się krótka notatka.';
+      'Domyślnie nowe klucze są przyjmowane, a w czacie pojawia się krótka notatka. Zweryfikowane kontakty zawsze czekają na Twoją decyzję.';
 
   @override
   String get privacyReceiptsAndTyping => 'Potwierdzenia odczytu i pisanie';

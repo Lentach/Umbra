@@ -334,13 +334,15 @@ void main() {
   /// under another one. Returns the attacker's identity (base64).
   late String attackerIdentity;
 
-  Future<BoxInboxEntry> pinFriendAndForge() async {
+  Future<BoxInboxEntry> pinFriendAndForge({bool verified = true}) async {
     final real = generateIdentityKeyPair();
     await SecureIdentityKeyStore(
       DualStorage(const FlutterSecureStorage()),
       'e2e_1_',
     ).saveIdentity(const SignalProtocolAddress('2', 1), real.getPublicKey());
 
+    // Decision 152: only a VERIFIED friend (or warnings ON) keeps the hold.
+    if (verified) await encryption.store.markPeerVerified(2);
     final b = (await encryption.store.getKeyBundleForReupload())!;
     final attackerKeys = generateIdentityKeyPair();
     attackerIdentity = base64Encode(attackerKeys.getPublicKey().serialize());
@@ -404,14 +406,16 @@ void main() {
     },
   );
 
-  for (final warnings in [false, true]) {
+  for (final (label, warnings, verified) in [
+    ('warnings ON, friend unverified', true, false),
+    ('warnings OFF, friend VERIFIED', false, true),
+  ]) {
     test(
-      'B3: the foreign frame is held with key-change warnings '
-      '${warnings ? 'ON' : 'OFF'}: the pin stays, the new key is staged for '
-      'the compare screen and nothing acknowledges it',
+      'B3: the foreign frame is held with $label: the pin stays, the new key '
+      'is staged for the compare screen and nothing acknowledges it',
       () async {
         encryption.store.keyChangeWarnings = () => warnings;
-        final forged = await pinFriendAndForge();
+        final forged = await pinFriendAndForge(verified: verified);
         final pinned = await encryption.store.peerTofuIdentityBase64(2);
         envelope('new number, send the code');
 
@@ -438,6 +442,29 @@ void main() {
       },
     );
   }
+
+  test('decision 152: warnings OFF, friend unverified — the foreign frame is '
+      'accepted, decrypted in the same pass and shown; the pin moved, no '
+      'pill, a permanent note, the friend still unverified', () async {
+    final forged = await pinFriendAndForge(verified: false);
+    envelope('new phone, same me');
+
+    expect(await deliver(forged, _peer(2, conversationId: 10)), isTrue);
+
+    expect(encryption.decryptedIds, [forged.localId]);
+    expect(
+      provider.messages.singleWhere((m) => m.id == forged.localId).content,
+      'new phone, same me',
+    );
+    expect(await encryption.store.peerTofuIdentityBase64(2), attackerIdentity);
+    expect(encryption.peersWithChangedIdentity, isEmpty);
+    expect(encryption.peersWithHeldMessages, isEmpty);
+    expect(await encryption.isPeerVerified(2), isFalse);
+    expect(encryption.peerKeyChangeLog(2), hasLength(1));
+    // The friend's later whisper reads on the new anchor, not held.
+    envelope('and a second one');
+    expect(await deliver(entry(), _peer(2, conversationId: 10)), isTrue);
+  });
 
   group('B3: frames held behind a foreign PreKey frame', () {
     /// The friend's later whispers ride the session the held frame would

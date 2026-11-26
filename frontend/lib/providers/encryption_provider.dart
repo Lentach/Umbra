@@ -73,6 +73,22 @@ class EncryptionProvider extends ChangeNotifier {
     _revoker
       ..onRevoke = revokeForPasscodeLock
       ..onRestore = restoreAfterPasscodeUnlock;
+    // Decision 152: an unverified friend's new key was accepted from an
+    // artifact. The address that artifact just built a session for is fresh;
+    // the friend's other addresses were keyed to the replaced identity.
+    _encryptionService.onPeerAutoAccepted = (peerId, deviceId) {
+      final others = <int>{1, ...?_deviceListCache.cached(peerId)?.liveDeviceIds}
+        ..remove(deviceId);
+      _encryptionService.recordSessionRebuilds(peerId, others).ignore();
+      invalidateDeviceList(peerId, byPerson: true);
+      for (final other in others) {
+        markSessionRebuild(peerId, deviceId: other);
+      }
+      _e2eFlowLog('PEER_IDENTITY_AUTO_ACCEPTED', {
+        'peerId': peerId,
+        'deviceId': deviceId,
+      });
+    };
   }
 
   final E2eLockRevoker _revoker = E2eLockRevoker.instance;
@@ -224,6 +240,39 @@ class EncryptionProvider extends ChangeNotifier {
   /// Delegates to [EncryptionService.holdForeignFrame].
   Future<void> holdForeignFrame(int userId, String ciphertext) =>
       _encryptionService.holdForeignFrame(userId, ciphertext);
+
+  /// Delegates to [EncryptionService.autoAcceptForeignFrame] (decision 152):
+  /// true means the friend's PreKey frame may be decrypted now.
+  Future<bool> autoAcceptForeignFrame(
+    int userId,
+    String ciphertext, {
+    required int deviceId,
+  }) => _encryptionService.autoAcceptForeignFrame(
+    userId,
+    ciphertext,
+    deviceId: deviceId,
+  );
+
+  /// Whether the user verified [peerId]'s current key (key-bound).
+  Future<bool> isPeerVerified(int peerId) =>
+      _encryptionService.isPeerVerified(peerId);
+
+  /// The user compared [peerId]'s fingerprints and confirms them.
+  Future<bool> markPeerVerified(int peerId) async {
+    final marked = await _encryptionService.markPeerVerified(peerId);
+    notifyListeners();
+    return marked;
+  }
+
+  /// The instants (ms) of key changes accepted automatically for [peerId],
+  /// drawn in the chat as permanent system lines.
+  List<int> peerKeyChangeLog(int peerId) =>
+      _encryptionService.keyChangeLogOf(peerId);
+
+  /// Removes [peerId]'s (or every) accepted-key-change line with the chat's
+  /// local messages.
+  Future<void> forgetKeyChangeLog({int? peerId}) =>
+      _encryptionService.forgetKeyChangeLog(peerId: peerId);
 
   /// One-shot muted key-change notes (amendment (lxxix)): peerId → ISO-8601
   /// instant of the auto-acknowledged change. Rendered as a calm system line
@@ -3869,6 +3918,7 @@ class EncryptionProvider extends ChangeNotifier {
   Future<bool> acknowledgePeerIdentity(
     int peerId, {
     String? adoptIdentityBase64,
+    bool markVerified = false,
   }) async {
     // Capture the addresses BEFORE anything else: the cached list is the only
     // record of which devices we ever addressed, and device 1 covers the legacy
@@ -3901,6 +3951,7 @@ class EncryptionProvider extends ChangeNotifier {
         'rebuiltAddresses': addresses.toList(),
       });
       if (wasHeld) onHeldFramesReleased?.call(peerId);
+      if (markVerified) await _encryptionService.markPeerVerified(peerId);
     } else {
       // Explicitly refused: nothing advanced, so nothing is poisoned and the
       // speculative intent above names no real damage. Only the addresses THIS

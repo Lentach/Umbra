@@ -1,0 +1,261 @@
+import 'package:fireplace/services/encryption_service.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+/// Owner decision 152 (2026-11-26): with key-change warnings OFF, a friend
+/// the user has NOT verified whose new key arrives in a concrete artifact (a
+/// served bundle, a PreKey frame) is accepted without a human step; a
+/// verified friend, or warnings ON, keeps the refusal and the red pill.
+void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  const aliceId = 1;
+  const bobId = 2;
+  // Bob after a reinstall: another identity, addressed under Bob's id.
+  const newBobStore = 3;
+  const malloryId = 4;
+
+  late EncryptionService alice;
+  late EncryptionService bob;
+  late EncryptionService newBob;
+  late EncryptionService mallory;
+
+  Future<EncryptionService> started(int userId) async {
+    final service = EncryptionService();
+    await service.initialize(
+      userId,
+      checkServerIdentity: () async => const ServerIdentityGuard(exists: false),
+    );
+    return service;
+  }
+
+  Map<String, dynamic> flatBundleFrom(EncryptionService peer) {
+    final upload = peer.getKeysForUpload();
+    expect(upload, isNotNull);
+    final keyBundle = (upload!['keyBundle'] as Map).cast<String, dynamic>();
+    final otps = (upload['oneTimePreKeys'] as List)
+        .cast<Map<String, dynamic>>();
+    expect(otps, isNotEmpty);
+    return {
+      ...keyBundle,
+      'oneTimePreKeyId': otps.first['keyId'],
+      'oneTimePreKeyPublic': otps.first['publicKey'],
+    };
+  }
+
+  String identityOf(EncryptionService peer) =>
+      flatBundleFrom(peer)['identityPublicKey'] as String;
+
+  /// Alice pins Bob on first contact; returns the pinned account identity.
+  Future<String> pinBob() async {
+    await alice.buildSession(
+      bobId,
+      flatBundleFrom(bob),
+      expectedIdentityBase64: null,
+    );
+    final pinned = await alice.peerTofuIdentityBase64(bobId);
+    expect(pinned, identityOf(bob));
+    return pinned!;
+  }
+
+  setUp(() async {
+    FlutterSecureStorage.setMockInitialValues({});
+    SharedPreferences.setMockInitialValues({});
+    alice = await started(aliceId);
+    bob = await started(bobId);
+    newBob = await started(newBobStore);
+    mallory = await started(malloryId);
+  });
+
+  test('warnings OFF, unverified friend: a bundle under a new key builds the '
+      'session, the pin moves to that key and no pill is raised', () async {
+    final pinned = await pinBob();
+
+    await alice.buildSession(
+      bobId,
+      flatBundleFrom(newBob),
+      expectedIdentityBase64: pinned,
+    );
+    await pumpEventQueue();
+
+    expect(await alice.peerTofuIdentityBase64(bobId), identityOf(newBob));
+    expect(alice.peersWithChangedIdentity, isEmpty);
+    expect(alice.peersRefusedIdentity, isEmpty);
+    final sent = await alice.encrypt(bobId, 'are you back?');
+    expect(await newBob.decrypt(aliceId, sent), 'are you back?');
+  });
+
+  Future<void> expectRefused(String pinned, EncryptionService from) async {
+    await expectLater(
+      alice.buildSession(
+        bobId,
+        flatBundleFrom(from),
+        expectedIdentityBase64: pinned,
+      ),
+      throwsA(isA<AccountIdentityMismatch>()),
+    );
+    expect(await alice.peerTofuIdentityBase64(bobId), pinned);
+    expect(alice.peersRefusedIdentity, contains(bobId));
+  }
+
+  test('a VERIFIED friend is still refused with warnings OFF', () async {
+    final pinned = await pinBob();
+    expect(await alice.markPeerVerified(bobId), isTrue);
+    await expectRefused(pinned, newBob);
+  });
+
+  test('warnings ON: an unverified friend is still refused', () async {
+    final pinned = await pinBob();
+    alice.keyChangeWarnings = () => true;
+    await expectRefused(pinned, newBob);
+  });
+
+  test('a different key already in the pending slot is not auto-accepted',
+      () async {
+    final pinned = await pinBob();
+    alice.keyChangeWarnings = () => true;
+    await expectRefused(pinned, mallory); // stages mallory for a human
+    alice.keyChangeWarnings = () => false;
+
+    await expectRefused(pinned, newBob);
+    expect(
+      (await alice.peerIdentityVerification(bobId)).offeredIdentityBase64,
+      identityOf(mallory),
+      reason: 'the evidence in the slot is untouched',
+    );
+  });
+
+  test('a server event after a refusal adopts nothing, verified or not, and '
+      'with a key staged earlier', () async {
+    final pinned = await pinBob();
+    alice.keyChangeWarnings = () => true;
+    await expectRefused(pinned, mallory);
+    alice.keyChangeWarnings = () => false;
+    // Unverified, OFF, slot holds M: a claim alone moves nothing.
+    await alice.recordPeerIdentityChangedFromServer(bobId);
+    await pumpEventQueue();
+    expect(await alice.peerTofuIdentityBase64(bobId), pinned);
+    expect(alice.peersWithChangedIdentity, contains(bobId));
+    // Verified: the same.
+    await alice.markPeerVerified(bobId);
+    await alice.recordPeerIdentityChangedFromServer(bobId);
+    await pumpEventQueue();
+    expect(await alice.peerTofuIdentityBase64(bobId), pinned);
+  });
+
+  test('first contact is not an accepted change: no anchor, no auto-accept',
+      () async {
+    await newBob.buildSession(
+      aliceId,
+      flatBundleFrom(alice),
+      expectedIdentityBase64: null,
+    );
+    final frame = await newBob.encrypt(aliceId, 'hi');
+    expect(
+      await alice.autoAcceptForeignFrame(bobId, frame, deviceId: 1),
+      isFalse,
+    );
+    expect(await alice.peerTofuIdentityBase64(bobId), isNull);
+    expect(alice.keyChangeLogOf(bobId), isEmpty);
+  });
+
+  test('a foreign PreKey frame is accepted, decrypts in the same pass, the '
+      'reply works, the friend stays unverified and the note is permanent',
+      () async {
+    await pinBob();
+    await alice.markPeerVerified(bobId);
+    await alice.holdForeignFrame(bobId, 'x'); // no key: no effect on pin
+    // Verified friend: the frame is NOT accepted.
+    await newBob.buildSession(
+      aliceId,
+      flatBundleFrom(alice),
+      expectedIdentityBase64: null,
+    );
+    final frame = await newBob.encrypt(aliceId, 'new phone');
+    expect(
+      await alice.autoAcceptForeignFrame(bobId, frame, deviceId: 1),
+      isFalse,
+    );
+
+    // Unverified friend (a second Alice with an unverified pin).
+    final pinned = await alice.peerTofuIdentityBase64(bobId);
+    expect(pinned, identityOf(bob));
+    final other = await started(5);
+    await other.buildSession(
+      bobId,
+      flatBundleFrom(bob),
+      expectedIdentityBase64: null,
+    );
+    await newBob.buildSession(
+      5,
+      flatBundleFrom(other),
+      expectedIdentityBase64: null,
+    );
+    final frame2 = await newBob.encrypt(5, 'new phone');
+    final seen = <(int, int)>[];
+    other.onPeerAutoAccepted = (p, d) => seen.add((p, d));
+    expect(
+      await other.autoAcceptForeignFrame(bobId, frame2, deviceId: 1),
+      isTrue,
+    );
+    expect(seen, [(bobId, 1)]);
+    expect(await other.decrypt(bobId, frame2), 'new phone');
+    expect(await other.peerTofuIdentityBase64(bobId), identityOf(newBob));
+    expect(await other.isPeerVerified(bobId), isFalse);
+    expect(other.peersWithChangedIdentity, isEmpty);
+    final reply = await other.encrypt(bobId, 'welcome back');
+    expect(await newBob.decrypt(5, reply), 'welcome back');
+
+    expect(other.keyChangeLogOf(bobId), hasLength(1));
+    final restarted = await started(5);
+    expect(restarted.keyChangeLogOf(bobId), hasLength(1),
+        reason: 'survives a restart');
+    await restarted.forgetKeyChangeLog(peerId: bobId);
+    expect((await started(5)).keyChangeLogOf(bobId), isEmpty);
+  });
+
+  test('the verified flag survives a restart, clears when the anchor moves '
+      'another way and is re-bound by a confirm', () async {
+    final pinned = await pinBob();
+    await alice.markPeerVerified(bobId);
+    final restarted = await started(aliceId);
+    expect(await restarted.isPeerVerified(bobId), isTrue);
+
+    // Anchor moves by a human accept of a refused key (flag not re-bound).
+    await expectLater(
+      restarted.buildSession(
+        bobId,
+        flatBundleFrom(newBob),
+        expectedIdentityBase64: pinned,
+      ),
+      throwsA(isA<AccountIdentityMismatch>()),
+    );
+    final shown = await restarted.peerIdentityVerification(bobId);
+    expect(
+      await restarted.acknowledgePeerIdentity(
+        bobId,
+        adoptIdentityBase64: shown.offeredIdentityBase64,
+      ),
+      isTrue,
+    );
+    expect(await restarted.isPeerVerified(bobId), isFalse);
+
+    expect(await restarted.markPeerVerified(bobId), isTrue);
+    expect(await restarted.isPeerVerified(bobId), isTrue);
+    expect(await restarted.peerTofuIdentityBase64(bobId), identityOf(newBob));
+  });
+
+  test('the local history wipe removes the permanent notes', () async {
+    final pinned = await pinBob();
+    await alice.buildSession(
+      bobId,
+      flatBundleFrom(newBob),
+      expectedIdentityBase64: pinned,
+    );
+    expect(alice.keyChangeLogOf(bobId), hasLength(1));
+    await alice.clearDecryptedContentCache();
+    expect(alice.keyChangeLogOf(bobId), isEmpty);
+    expect((await started(aliceId)).keyChangeLogOf(bobId), isEmpty);
+  });
+}

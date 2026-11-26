@@ -99,6 +99,8 @@ class _PeerIdentityFingerprintDialogState
     final adopted = await encryption.acknowledgePeerIdentity(
       widget.peerId,
       adoptIdentityBase64: adoptIdentityBase64,
+      // Comparing the new fingerprint IS verifying it: re-bind the flag.
+      markVerified: true,
     );
     if (!mounted) return;
     if (adopted) {
@@ -112,6 +114,13 @@ class _PeerIdentityFingerprintDialogState
       _staleOffer = true;
       _loading = true;
     });
+    await _load();
+  }
+
+  Future<void> _markFriendVerified() async {
+    await context.read<EncryptionProvider>().markPeerVerified(widget.peerId);
+    if (!mounted) return;
+    setState(() => _loading = true);
     await _load();
   }
 
@@ -214,6 +223,14 @@ class _PeerIdentityFingerprintDialogState
                       value: verification?.pinnedFingerprint,
                       missing: l10n.peerIdentityFingerprintNoStoredKey,
                     ),
+                    if (verification?.verified == true && !hasStandingWarning) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        l10n.peerIdentityVerifiedState,
+                        key: const ValueKey('peer-identity-verified-state'),
+                        style: Theme.of(context).textTheme.labelLarge,
+                      ),
+                    ],
                   ],
                   const SizedBox(height: 16),
                   _FingerprintBlock(
@@ -236,6 +253,18 @@ class _PeerIdentityFingerprintDialogState
           TextButton(
             onPressed: () => _confirm(offeredKey),
             child: Text(l10n.peerIdentityMarkVerifiedAction),
+          ),
+        // No standing change and not verified yet: the user compared the
+        // number above with the friend's own and says so. Bound to this key.
+        if (!hasStandingWarning &&
+            !_loading &&
+            verification != null &&
+            verification.pinnedFingerprint != null &&
+            !verification.verified)
+          TextButton(
+            key: const ValueKey('peer-identity-mark-friend-verified'),
+            onPressed: _markFriendVerified,
+            child: Text(l10n.peerIdentityMarkFriendVerifiedAction),
           ),
       ],
     );

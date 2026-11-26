@@ -69,6 +69,9 @@ void main() {
   test('scenario 1: warnings OFF — a server event after a REFUSED build does '
       'not promote the served key the refusal staged', () async {
     final pinned = await pinBob();
+    // Decision 152: an UNVERIFIED friend's refused bundle is now accepted, so
+    // the refusal this scenario needs is a verified friend's (warnings stay OFF).
+    await alice.markPeerVerified(bobId);
     await expectLater(
       alice.buildSession(
         bobId,
@@ -170,6 +173,7 @@ void main() {
   test('the manual ceremony still promotes the DISPLAYED key after a refusal '
       'and a server event', () async {
     final pinned = await pinBob();
+    await alice.markPeerVerified(bobId);
     await expectLater(
       alice.buildSession(
         bobId,
@@ -196,6 +200,7 @@ void main() {
   test('warnings OFF — a local detection for a peer whose refusal already '
       'stands is not absorbed either', () async {
     final pinned = await pinBob();
+    await alice.markPeerVerified(bobId);
     await expectLater(
       alice.buildSession(
         bobId,

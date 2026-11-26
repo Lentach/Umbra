@@ -604,6 +604,12 @@ class AppLocalizationsEn extends AppLocalizations {
   String get peerIdentityMarkVerifiedAction => 'Fingerprints match';
 
   @override
+  String get peerIdentityMarkFriendVerifiedAction => 'Mark as verified';
+
+  @override
+  String get peerIdentityVerifiedState => 'Verified';
+
+  @override
   String get peerIdentityVerifyMenuAction => 'Verify security keys';
 
   @override
@@ -2230,7 +2236,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get settingsKeyChangeWarningsSubtitle =>
-      'By default new keys are accepted and a short note appears in the chat.';
+      'By default new keys are accepted and a short note appears in the chat. Verified contacts always wait for you.';
 
   @override
   String get privacyReceiptsAndTyping => 'Read receipts and typing';

@@ -184,9 +184,11 @@ extension MessagingBox on MessagingProvider {
           msg.encryptedContent!,
         );
     // B3 (decision 143): a PreKey frame under an identity other than the
-    // friend's pinned one is HELD, whatever the key-change setting says —
-    // never decrypted, never shown. Anyone who holds the friend's queue
-    // address (a hostile server, a revoked device) can seal one.
+    // friend's pinned one is HELD — never decrypted, never shown — unless
+    // decision 152 applies: key-change warnings OFF and the friend not
+    // verified, when its key is accepted here and the frame is read in this
+    // same pass. Anyone who holds the friend's queue address (a hostile
+    // server, a revoked device) can seal one.
     if (preKey) {
       switch (await enc.friendFrameIdentity(
         msg.senderId,
@@ -198,7 +200,21 @@ extension MessagingBox on MessagingProvider {
           newIdentity = newIdentity || (_boxHeld[msg.id] ?? false);
           _boxHeld.remove(msg.id);
         case FriendFrameIdentity.foreign:
-          return _holdForeignFrame(msg, enc, peer, remint: newIdentity);
+          if ((peer == null || peer.state == ContactState.friend) &&
+              await enc.autoAcceptForeignFrame(
+                msg.senderId,
+                msg.encryptedContent!,
+                deviceId: msg.originDeviceId ?? 1,
+              )) {
+            newIdentity = newIdentity || (_boxHeld[msg.id] ?? false);
+            _boxHeld.remove(msg.id);
+            _e2eFlowLog('BOX_FOREIGN_IDENTITY_ACCEPTED', {
+              'peer': msg.senderId,
+              'device': msg.originDeviceId ?? 1,
+            });
+          } else {
+            return _holdForeignFrame(msg, enc, peer, remint: newIdentity);
+          }
       }
     }
     final String plaintext;

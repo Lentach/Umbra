@@ -1136,6 +1136,18 @@ abstract class AppLocalizations {
   /// **'Odciski się zgadzają'**
   String get peerIdentityMarkVerifiedAction;
 
+  /// No description provided for @peerIdentityMarkFriendVerifiedAction.
+  ///
+  /// In pl, this message translates to:
+  /// **'Oznacz jako zweryfikowane'**
+  String get peerIdentityMarkFriendVerifiedAction;
+
+  /// No description provided for @peerIdentityVerifiedState.
+  ///
+  /// In pl, this message translates to:
+  /// **'Zweryfikowano'**
+  String get peerIdentityVerifiedState;
+
   /// No description provided for @peerIdentityVerifyMenuAction.
   ///
   /// In pl, this message translates to:
@@ -3899,7 +3911,7 @@ abstract class AppLocalizations {
   /// No description provided for @settingsKeyChangeWarningsSubtitle.
   ///
   /// In pl, this message translates to:
-  /// **'Domyślnie nowe klucze są przyjmowane, a w czacie pojawia się krótka notatka.'**
+  /// **'Domyślnie nowe klucze są przyjmowane, a w czacie pojawia się krótka notatka. Zweryfikowane kontakty zawsze czekają na Twoją decyzję.'**
   String get settingsKeyChangeWarningsSubtitle;
 
   /// Privacy & Safety switch (metadata-privacy decision 62, E61c): read receipts, delivered ticks and typing on chats that moved to the box. Device-local, default off.

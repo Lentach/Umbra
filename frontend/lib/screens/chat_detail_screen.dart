@@ -424,6 +424,16 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
           convs.lastMessages[widget.conversationId]?.createdAt,
           widget.conversationId,
         );
+    // Decision 152: the permanent lines for key changes accepted automatically.
+    // Selected as one string so an unchanged list does not rebuild the chat.
+    final keyChangeLogJoined = otherUser == null
+        ? ''
+        : context.select<EncryptionProvider, String>(
+            (e) => e.peerKeyChangeLog(otherUser.id).join(','),
+          );
+    final keyChangeLogMs = keyChangeLogJoined.isEmpty
+        ? const <int>[]
+        : [for (final s in keyChangeLogJoined.split(',')) int.parse(s)];
     if (otherUser != null &&
         peerKeyChangeNoteAt != null &&
         !peerKeyChangeNoted &&
@@ -501,6 +511,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
               peerHeld: peerHeld,
               peerRefused: peerRefused,
               peerKeyChangeNoted: peerKeyChangeNoted,
+              keyChangeLogMs: keyChangeLogMs,
             ),
           ),
           composerFooter,
@@ -529,6 +540,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
                 peerHeld: peerHeld,
                 peerRefused: peerRefused,
                 peerKeyChangeNoted: peerKeyChangeNoted,
+                keyChangeLogMs: keyChangeLogMs,
               ),
               composer: composerFooter,
             ),

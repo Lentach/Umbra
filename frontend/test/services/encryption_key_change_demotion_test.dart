@@ -218,6 +218,7 @@ void main() {
     await alice.buildSession(bobId, flatBundleFrom(bob),
         expectedIdentityBase64: null);
     final pinned = await alice.peerTofuIdentityBase64(bobId);
+    await alice.markPeerVerified(bobId); // decision 152: unverified is accepted
 
     // The (xxxix)/(lv) gate: the served bundle carries a foreign identity.
     await expectLater(
@@ -304,6 +305,7 @@ void main() {
     await alice.buildSession(bobId, flatBundleFrom(bob),
         expectedIdentityBase64: null);
     final pinned = await alice.peerTofuIdentityBase64(bobId);
+    await alice.markPeerVerified(bobId); // decision 152: unverified is accepted
     await expectLater(
       alice.buildSession(bobId, flatBundleFrom(mallory),
           expectedIdentityBase64: pinned),

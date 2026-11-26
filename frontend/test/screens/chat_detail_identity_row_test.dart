@@ -36,6 +36,7 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../support/chat_seed.dart';
+import '../support/l10n.dart';
 
 const _currentUserJwt =
     'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOjEsInVzZXJuYW1lIjoiYWxpY2UiLCJ0YWciOiIwMDAxIiwiZXhwIjo5OTk5OTk5OTl9.abc';
@@ -49,7 +50,14 @@ class _AlarmedEncryption extends EncryptionProvider {
     this.changedPeers = const <int>{},
     Map<int, String> notedPeers = const <int, String>{},
     this.refusedPeers = const <int>{},
+    this.keyChangeLog = const <int>[],
   }) : notedPeers = Map<int, String>.of(notedPeers);
+
+  /// Decision 152: instants (ms) of key changes accepted automatically.
+  final List<int> keyChangeLog;
+
+  @override
+  List<int> peerKeyChangeLog(int peerId) => keyChangeLog;
 
   final Set<int> refusedPeers;
 
@@ -139,6 +147,7 @@ Future<_AlarmedEncryption> _pumpChat(
   // refused. Independent of [refused] on purpose: a chat can be awaiting the
   // ceremony while a given row bounced on something else entirely.
   bool rowRefusedForIdentity = false,
+  List<int> keyChangeLog = const <int>[],
 }) async {
   SharedPreferences.setMockInitialValues({
     'key_change_warnings': keyChangeWarnings,
@@ -182,6 +191,7 @@ Future<_AlarmedEncryption> _pumpChat(
     changedPeers: alarmed ? const {_peerId} : const <int>{},
     notedPeers: noted ? {_peerId: noteAt} : const <int, String>{},
     refusedPeers: refused ? const {_peerId} : const <int>{},
+    keyChangeLog: keyChangeLog,
   );
   await tester.pumpWidget(
     MultiProvider(
@@ -276,6 +286,50 @@ void main() {
     await _pumpChat(tester, alarmed: false, withMessages: true);
 
     expect(find.byType(PeerIdentityChangedRow), findsNothing);
+  });
+
+  // ---- Decision 152: the PERMANENT line for an automatically accepted change.
+
+  testWidgets('an accepted key change stays in the history between the '
+      'messages around it and is never dismissed', (tester) async {
+    final at = DateTime.utc(2026, 1, 1, 12, 41, 30).millisecondsSinceEpoch;
+    final enc = await _pumpChat(
+      tester,
+      alarmed: false,
+      withMessages: true,
+      keyChangeWarnings: false,
+      keyChangeLog: [at],
+    );
+
+    final line = find.byKey(ValueKey('peer-key-change-log-$at'));
+    expect(line, findsOneWidget);
+    expect(
+      find.descendant(
+        of: line,
+        matching: find.text(l10n.peerIdentityChangedSystemLine('bob')),
+      ),
+      findsOneWidget,
+    );
+    // Two messages (12:40, 12:41) are older, one (12:42) newer: the note sits
+    // between them, not at the newest end.
+    final y = tester.getTopLeft(line).dy;
+    expect(find.byKey(const ValueKey(1002)), findsOneWidget);
+    expect(tester.getTopLeft(find.byKey(const ValueKey(1002))).dy, greaterThan(y));
+    expect(tester.getTopLeft(find.byKey(const ValueKey(1001))).dy, lessThan(y));
+    expect(enc.dismissed, isEmpty, reason: 'nothing forgets a permanent line');
+  });
+
+  testWidgets('an accepted key change shows in an empty chat too',
+      (tester) async {
+    final at = DateTime.utc(2026, 1, 1).millisecondsSinceEpoch;
+    await _pumpChat(
+      tester,
+      alarmed: false,
+      withMessages: false,
+      keyChangeWarnings: false,
+      keyChangeLog: [at],
+    );
+    expect(find.byKey(ValueKey('peer-key-change-log-$at')), findsOneWidget);
   });
   // ---- Amendment (lxxix): the demoted surface (falsification F11) ----
 

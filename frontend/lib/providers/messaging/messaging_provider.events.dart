@@ -12,6 +12,17 @@ extension MessagingEvents on MessagingProvider {
   /// its rows and its last-message preview.
   void _clearChatLocally(int conversationId) {
     _purgeConversationsLocally([conversationId]);
+    // The permanent accepted-key-change lines are part of this chat.
+    final conversation = _conversationsProvider?.getConversationById(
+      conversationId,
+    );
+    if (conversation != null) {
+      _encryptionProvider
+          ?.forgetKeyChangeLog(
+            peerId: _conversationsProvider?.getOtherUserId(conversation),
+          )
+          .ignore();
+    }
 
     _messages.removeWhere((m) => m.conversationId == conversationId);
     _conversationsProvider?.updateLastMessage(conversationId, null);
