@@ -122,7 +122,11 @@ class _SwipeDownToDismissState extends State<SwipeDownToDismiss>
       curve: dismiss ? Curves.easeIn : Curves.easeOutCubic,
     );
     if (!mounted) return;
-    if (dismiss) Navigator.pop(context);
+    // A tap or Back during the slide has already popped this route (it stays
+    // mounted through its exit); a second pop would close the screen under it.
+    if (dismiss && (ModalRoute.of(context)?.isCurrent ?? true)) {
+      Navigator.pop(context);
+    }
   }
 
   @override
