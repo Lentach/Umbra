@@ -190,6 +190,8 @@
   "@messageRetrySend": {"description": "Re-sends a message whose delivery failed."},
   "messageSendBlockedKeysChanged": "Not sent: this contact's security keys changed. Open the red warning in this chat and compare your safety numbers, then retry.",
   "@messageSendBlockedKeysChanged": {"description": "Sits on a failed own message when the account-anchor gate refused the send (amendments (xxxix)/(lv)). Without it the row offers only 'Retry', which silently fails again — the remedy is the fingerprint comparison the red pill opens, not another attempt. Deliberately direction-free: the pill is item 0 of a reverse:true list, so it renders BELOW the newest bubble, and 'above' would point the wrong way."},
+  "messageSendWaitsForCalmHold": "Not sent yet: tap the new-device line in this chat first. This message goes out right after.",
+  "@messageSendWaitsForCalmHold": {"description": "Sits on a failed own message that was held back because the friend's new key still waits for the person's tap (the calm line, decision 152). Neutral on purpose: nothing is wrong and nothing changed for the worse. Direction-free like messageSendBlockedKeysChanged: the line renders below the newest bubble."},
   "authStatusSavedSessionUnreadable": "Could not read the session. Restart the app.",
   "@authStatusSavedSessionUnreadable": {"description": "Auth surface status, localized from an AuthStatusCode."},
   "authStatusRegisterSucceeded": "Account created. Sign in to continue.",

@@ -32,9 +32,11 @@ class FailedSendRetry extends StatelessWidget {
   /// Widest the keys-changed line may grow.
   final double maxWidth;
 
-  /// True when the account-anchor gate is still refusing sends to this chat's
-  /// peer (`EncryptionProvider.peersRefusedIdentity`), i.e. the fingerprint
-  /// ceremony is outstanding.
+  /// True when a ceremony is outstanding for this chat's peer: the
+  /// account-anchor gate is still refusing sends
+  /// (`EncryptionProvider.peersRefusedIdentity`), i.e. the fingerprint
+  /// ceremony is outstanding, or the peer's new key waits for the tap on its
+  /// calm line (decision 152).
   final bool peerRefusedIdentity;
 
   /// True when THIS row may tell the user their peer's keys changed.
@@ -52,6 +54,12 @@ class FailedSendRetry extends StatelessWidget {
       peerRefusedIdentity &&
       context.read<MessagingProvider>().sendRefusedForIdentity(message.tempId);
 
+  /// True when THIS row was held back for the calm line's tap: a row of its
+  /// own, so a different failure in the same chat is never explained by it.
+  bool _waitsForCalmHold(BuildContext context) =>
+      peerRefusedIdentity &&
+      context.read<MessagingProvider>().sendWaitsForCalmHold(message.tempId);
+
   @override
   Widget build(BuildContext context) {
     if (!isMine || message.deliveryStatus != MessageDeliveryStatus.failed) {
@@ -60,6 +68,7 @@ class FailedSendRetry extends StatelessWidget {
     // "Retry" alone is a trap here: while the anchor is stale every attempt
     // fails the same way, so the row has to name the remedy.
     final refused = _mayNameTheRefusal(context);
+    final waits = !refused && _waitsForCalmHold(context);
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: isMine
@@ -67,11 +76,13 @@ class FailedSendRetry extends StatelessWidget {
           : CrossAxisAlignment.start,
       children: [
         const SizedBox(height: 4),
-        if (refused)
+        if (refused || waits)
           ConstrainedBox(
             constraints: BoxConstraints(maxWidth: maxWidth),
             child: Text(
-              AppLocalizations.of(context).messageSendBlockedKeysChanged,
+              waits
+                  ? AppLocalizations.of(context).messageSendWaitsForCalmHold
+                  : AppLocalizations.of(context).messageSendBlockedKeysChanged,
               textAlign: isMine ? TextAlign.end : TextAlign.start,
               // The bubble's OWN text color, not `colorScheme.error`:
               // painted on the sent-bubble fill, error red lands on a

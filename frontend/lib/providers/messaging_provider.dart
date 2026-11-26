@@ -227,6 +227,22 @@ class MessagingProvider extends ChangeNotifier {
   void markSendRefusedForIdentityForTest(String tempId) =>
       _identityRefusedSendTempIds.add(tempId);
 
+  /// tempIds whose send waits for the tap on a friend's calm line (option
+  /// C), with that friend's id: nothing is sealed on the session of a key
+  /// that is being replaced.
+  final Map<String, int> _calmDeferredSends = {};
+
+  /// True while [tempId] waits for the tap on its friend's calm line. Read
+  /// by the failed bubble, which then names the line instead of a failure.
+  bool sendWaitsForCalmHold(String? tempId) =>
+      _calmHolds.containsKey(_calmDeferredSends[tempId]);
+
+  /// Test-only: the verdict the send path writes for a row refused under a
+  /// calm hold of [peerId] (the widget tests have no box to send over).
+  @visibleForTesting
+  void markSendWaitsForCalmHoldForTest(String tempId, int peerId) =>
+      _calmDeferredSends[tempId] = peerId;
+
   /// The `sendToken` minted per tempId: the message's wire id (spec §5.4).
   ///
   /// One token per SEND, deliberately REUSED by a retry of the same optimistic
@@ -969,6 +985,7 @@ class MessagingProvider extends ChangeNotifier {
       _pendingEdits.clear();
       _emittedSendTempIds.clear();
       _identityRefusedSendTempIds.clear();
+      _calmDeferredSends.clear();
       _sendTokenByTempId.clear();
       _boxTempIds.clear();
       _boxUnsentTempIds.clear();
@@ -1011,6 +1028,7 @@ class MessagingProvider extends ChangeNotifier {
       _pendingEdits.clear();
       _emittedSendTempIds.clear();
       _identityRefusedSendTempIds.clear();
+      _calmDeferredSends.clear();
       // A box send's retry must reuse its wire id, or a device the failed
       // attempt reached shows the message twice.
       _sendTokenByTempId.removeWhere(
@@ -1062,6 +1080,7 @@ class MessagingProvider extends ChangeNotifier {
     _profileMigrateTriedAt = null;
     _emittedSendTempIds.clear();
     _identityRefusedSendTempIds.clear();
+    _calmDeferredSends.clear();
     _sendTokenByTempId.clear();
     _boxTempIds.clear();
     _boxUnsentTempIds.clear();

@@ -974,6 +974,12 @@ abstract class AppLocalizations {
   /// **'Nie wysłano: klucze bezpieczeństwa tego kontaktu się zmieniły. Otwórz czerwone ostrzeżenie w tym czacie i porównajcie odciski, a potem ponów.'**
   String get messageSendBlockedKeysChanged;
 
+  /// Sits on a failed own message that was held back because the friend's new key still waits for the person's tap (the calm line, decision 152). Neutral on purpose: nothing is wrong and nothing changed for the worse. Direction-free like messageSendBlockedKeysChanged: the line renders below the newest bubble.
+  ///
+  /// In pl, this message translates to:
+  /// **'Jeszcze nie wysłano: najpierw dotknij linii o nowym urządzeniu w tym czacie. Ta wiadomość wyjdzie zaraz potem.'**
+  String get messageSendWaitsForCalmHold;
+
   /// Auth surface status, localized from an AuthStatusCode.
   ///
   /// In pl, this message translates to:

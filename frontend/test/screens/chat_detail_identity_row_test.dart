@@ -172,6 +172,8 @@ Future<_AlarmedEncryption> _pumpChat(
   bool rowRefusedForIdentity = false,
   List<int> keyChangeLog = const <int>[],
   CalmHoldState? calmHold,
+  // That row was held back for the calm line's tap (needs [calmHold]).
+  bool rowWaitsForCalm = false,
 }) async {
   SharedPreferences.setMockInitialValues({
     'key_change_warnings': keyChangeWarnings,
@@ -207,6 +209,9 @@ Future<_AlarmedEncryption> _pumpChat(
   messaging.loadCachedMessages(10);
   if (failedOwnRow && rowRefusedForIdentity) {
     messaging.markSendRefusedForIdentityForTest('temp-1003');
+  }
+  if (failedOwnRow && rowWaitsForCalm) {
+    messaging.markSendWaitsForCalmHoldForTest('temp-1003', _peerId);
   }
 
   final auth = AuthProvider()..setAccessTokenForTest(_currentUserJwt);
@@ -675,6 +680,38 @@ void main() {
   });
 
   // ---- Decision 152 (option C): the calm line.
+
+  testWidgets('a row held back for the calm line names it, in neutral '
+      'words; an ordinary failed row in the same chat does not', (tester) async {
+    final en = await AppLocalizations.delegate.load(const Locale('en'));
+    await _pumpChat(
+      tester,
+      alarmed: false,
+      refused: false,
+      keyChangeWarnings: false,
+      withMessages: true,
+      failedOwnRow: true,
+      calmHold: CalmHoldState.waiting,
+      rowWaitsForCalm: true,
+    );
+
+    expect(find.text(en.messageSendWaitsForCalmHold), findsOneWidget);
+    expect(find.text(en.messageSendBlockedKeysChanged), findsNothing);
+    expect(find.text(en.messageRetrySend), findsOneWidget);
+
+    await _pumpChat(
+      tester,
+      alarmed: false,
+      refused: false,
+      keyChangeWarnings: false,
+      withMessages: true,
+      failedOwnRow: true,
+      calmHold: CalmHoldState.waiting,
+    );
+
+    expect(find.text(en.messageSendWaitsForCalmHold), findsNothing);
+    expect(find.text(en.messageRetrySend), findsOneWidget);
+  });
 
   testWidgets('a calm hold shows the neutral line, in an empty chat and in a '
       'populated one, and no red row', (tester) async {

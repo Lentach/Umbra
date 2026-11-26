@@ -347,6 +347,13 @@ extension MessagingBoxFriendRead on MessagingProvider {
   }) async {
     final enc = _encryptionProvider;
     if (enc == null || !enc.isE2EReady) return null;
+    // A calm hold (option C): the session held belongs to the key being
+    // replaced. Nothing is written on it and no bundle is fetched for it
+    // until the person's tap.
+    if (_calmHolds.containsKey(userId)) {
+      _e2eFlowLog('BOX_FRIEND_CALM_HELD', {'peer': userId, 'device': deviceId});
+      return null;
+    }
     if (!await _friendDeviceIsLive(userId, deviceId)) {
       _e2eFlowLog('BOX_FRIEND_NOT_LIVE', {'peer': userId, 'device': deviceId});
       return null;

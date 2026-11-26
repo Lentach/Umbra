@@ -469,11 +469,30 @@ extension MessagingBox on MessagingProvider {
         _calmHolds.remove(peerId);
       case CalmConfirm.refused:
         _calmHolds.remove(peerId);
+        // The red hold takes over, and so does its refusal for what waited:
+        // those rows now read as refused for a key change.
+        _identityRefusedSendTempIds.addAll(_takeCalmDeferred(peerId));
         await enc.holdForeignFrame(peerId, hold.ciphertext);
       case CalmConfirm.transient:
         hold.state = CalmHoldState.failed;
     }
     notifyListeners();
+    if (result == CalmConfirm.confirmed) {
+      for (final tempId in _takeCalmDeferred(peerId)) {
+        await retryFailedMessage(tempId);
+      }
+    }
+  }
+
+  /// Removes and returns, in the order written, what was held back for
+  /// [peerId]'s calm line (a row no longer loaded just stays failed).
+  List<String> _takeCalmDeferred(int peerId) {
+    final waiting = [
+      for (final MapEntry(:key, :value) in _calmDeferredSends.entries)
+        if (value == peerId) key,
+    ];
+    waiting.forEach(_calmDeferredSends.remove);
+    return waiting;
   }
 
   /// Holds friend frame [msg] (a PreKey message under a foreign identity)
@@ -528,6 +547,7 @@ extension MessagingBox on MessagingProvider {
   /// calm line and the marks that keep its frames held go with it.
   void _clearCalmHold(int peerId) {
     if (_calmHolds.remove(peerId) != null) {
+      _takeCalmDeferred(peerId); // stay failed, with their own Retry
       _encryptionProvider?.releaseCalm(peerId);
       notifyListeners();
     }

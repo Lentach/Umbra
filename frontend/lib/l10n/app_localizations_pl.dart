@@ -514,6 +514,10 @@ class AppLocalizationsPl extends AppLocalizations {
       'Nie wysłano: klucze bezpieczeństwa tego kontaktu się zmieniły. Otwórz czerwone ostrzeżenie w tym czacie i porównajcie odciski, a potem ponów.';
 
   @override
+  String get messageSendWaitsForCalmHold =>
+      'Jeszcze nie wysłano: najpierw dotknij linii o nowym urządzeniu w tym czacie. Ta wiadomość wyjdzie zaraz potem.';
+
+  @override
   String get authStatusSavedSessionUnreadable =>
       'Nie udało się odczytać sesji. Uruchom aplikację ponownie.';
 

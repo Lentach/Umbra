@@ -32,7 +32,7 @@ bool _boxCoversLive(List<int> live, Map<int, ContactOutbound> addresses) =>
     live.any((d) => addresses[d]?.relays ?? false);
 
 /// Why a box send could not build its frames ([MessagingBoxSend._sealBoxFrames]).
-enum _BoxSealFailure { noSession, tooLong }
+enum _BoxSealFailure { noSession, tooLong, calmHeld }
 
 /// The box send, out of [MessagingBox]: [_boxRoute] decides whether a
 /// message goes over the box at all, [_sendOverBox] sends it — sessions
@@ -344,6 +344,9 @@ extension MessagingBoxSend on MessagingProvider {
           });
           _markMessageFailed(tempId, 'Could not send. Try again.');
           return false;
+        case _BoxSealFailure.calmHeld:
+          _deferForCalmHold(recipientId, tempId);
+          return false;
         case _BoxSealFailure.tooLong:
           _e2eFlowLog('BOX_SEND_TOO_LONG', {
             'tempId': tempId,
@@ -500,6 +503,16 @@ extension MessagingBoxSend on MessagingProvider {
     final enc = _encryptionProvider!;
     final ownUserId = _currentUserId!;
     final frames = <(ContactOutbound, Uint8List)>[];
+    // A calm hold waits for the person's tap (option C): the session held
+    // for this friend belongs to the key being replaced, so nothing is
+    // sealed on it, be it a message, an action, a receipt or typing.
+    if (_calmHolds.containsKey(recipientId)) {
+      return (
+        frames: frames,
+        failure: _BoxSealFailure.calmHeld,
+        detail: {'peer': recipientId},
+      );
+    }
     final peerJson = E2eEnvelope.toFriend(
       json,
       relays: _vouchesRelay,
@@ -611,5 +624,15 @@ extension MessagingBoxSend on MessagingProvider {
     _e2eFlowLog('BOX_SEND_PEERS_FULL', {'tempId': tempId, 'peer': peer});
     _markMessageFailed(tempId, 'Could not send. Try again.');
     return true;
+  }
+
+  /// [tempId] waits for the tap on [peer]'s calm line: nothing was sealed or
+  /// uploaded for it. The row fails for now, says why
+  /// ([MessagingProvider.sendWaitsForCalmHold]) and is sent by
+  /// [MessagingBox.confirmCalmHold] once the key is confirmed.
+  void _deferForCalmHold(int peer, String tempId) {
+    _calmDeferredSends[tempId] = peer;
+    _e2eFlowLog('BOX_SEND_CALM_HELD', {'tempId': tempId, 'peer': peer});
+    _markMessageFailed(tempId, 'Could not send. Try again.');
   }
 }

@@ -1,8 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:fireplace/models/message_model.dart';
+import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
+import 'package:fireplace/services/box/box_frame.dart';
 import 'package:fireplace/services/box/box_friends.dart';
 import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/services/contacts/contact_store.dart';
@@ -16,6 +19,8 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../support/box_send_harness.dart';
+import '../support/chat_seed.dart';
 import '../support/verify_pinned.dart';
 
 /// Metadata-privacy item 5 on REAL Signal, BOTH sides: two friends' devices,
@@ -54,6 +59,11 @@ class _Enc extends EncryptionProvider {
   /// not (its device is then 1).
   bool peerEnrolled = true;
 
+  /// A send reads the device lists a connect verified: when set, both
+  /// accounts' lists are local (the peer's per [peerEnrolled]) and a plain
+  /// read asks nobody.
+  bool localLists = false;
+
   /// Forced lookups asked of this provider: a person's tap owes one. A test
   /// may make one refresh what the box serves.
   final List<int> forcedLookups = [];
@@ -75,6 +85,7 @@ class _Enc extends EncryptionProvider {
     Duration timeout = const Duration(seconds: 10),
   }) async {
     if (!forceRefresh) {
+      if (localLists) return cachedDeviceList(userId)!;
       return super.getVerifiedDeviceList(userId, timeout: timeout);
     }
     lookupLog.add('lookup');
@@ -85,7 +96,19 @@ class _Enc extends EncryptionProvider {
 
   @override
   VerifiedDeviceList? cachedDeviceList(int userId) => userId != _peer
-      ? null
+      ? (localLists
+            ? VerifiedDeviceList.enrolled(
+                version: 1,
+                listHash: 'G' * 44,
+                devices: [
+                  DeviceListEntry(
+                    deviceId: _device,
+                    platform: 'test',
+                    addedAtMs: 0,
+                  ),
+                ],
+              )
+            : null)
       : peerEnrolled
       ? VerifiedDeviceList.enrolled(
           version: 1,
@@ -1314,6 +1337,185 @@ void main() {
         E2eDiagLog.entries.where((e) => e.contains('BOX_DECRYPT_FAILED')),
         isEmpty,
       );
+    });
+
+    // ---- A send while the calm line waits (no old-session frame) ----
+
+    /// B's chat with the friend over a fake box outbox, with local device
+    /// lists (the send reads the lists a connect verified; here nothing may
+    /// be looked up for it).
+    Future<SendOutbox> boxForB() async {
+      final chats = ConversationsProvider()..setCurrentUserId(5);
+      seedConversations(chats, [
+        {
+          'id': 10,
+          'userOne': {'id': 5, 'username': 'b', 'tag': '0005'},
+          'userTwo': {'id': 1, 'username': 'a', 'tag': '0001'},
+          'createdAt': '2026-01-01T00:00:00.000Z',
+          'unreadCount': 0,
+          'lastMessage': null,
+        },
+      ]);
+      chats.openConversation(10);
+      final outbox = SendOutbox()
+        ..addresses[1] = {1: boxAddress(1)};
+      b.enc.localLists = true;
+      b.reader
+        ..setConversationsProvider(chats)
+        ..setActiveConversationIdForTest(10)
+        ..boxOutbox = outbox
+        ..refreshBoxDeviceLists();
+      await pumpEventQueue();
+      b.emits.clear();
+      b.enc.lookupLog.clear();
+      b.enc.forcedLookups.clear();
+      return outbox;
+    }
+
+    /// B writes [text] to the friend; returns the row.
+    Future<MessageModel> writeFromB(String text) async {
+      b.reader.sendMessage(text);
+      await pumpEventQueue();
+      return b.reader.messages.lastWhere((m) => m.content == text);
+    }
+
+    /// What the restored install reads from a frame B delivered.
+    Future<String> readByRestored(_Side restored, BoxFrame frame) =>
+        restored.enc.encryptionService.decrypt(
+          5,
+          frame.signalCiphertext,
+          deviceId: 3,
+        );
+
+    test('E1: a message written while the calm line waits is NOT sealed on '
+        'the old session and asks nobody; the tap sends it once, on the new '
+        'session, and the restored install READS it', () async {
+      final restored = await calmRestore();
+      final outbox = await boxForB();
+
+      final row = await writeFromB('written during the hold');
+
+      expect(outbox.delivered, isEmpty, reason: 'nothing on the old session');
+      expect(b.emits, isEmpty, reason: 'a send fetches no bundle');
+      expect(b.enc.lookupLog, isEmpty, reason: 'a send looks nobody up');
+      expect(row.deliveryStatus, MessageDeliveryStatus.failed);
+      expect(b.reader.sendWaitsForCalmHold(row.tempId), isTrue);
+      expect(b.reader.sendRefusedForIdentity(row.tempId), isFalse);
+      expectCalm(b);
+
+      await tap(b);
+
+      expect(outbox.delivered, hasLength(1), reason: 'sent exactly once');
+      expect(
+        await readByRestored(restored, outbox.delivered.single.$2),
+        contains('written during the hold'),
+      );
+      final sent = b.reader.messages.singleWhere((m) => m.tempId == row.tempId);
+      expect(sent.deliveryStatus, MessageDeliveryStatus.sent);
+      expect(b.reader.sendWaitsForCalmHold(row.tempId), isFalse);
+      await expectTraffic(b, restored);
+      await expectTraffic(restored, b);
+      expect(outbox.delivered, hasLength(1), reason: 'and not again');
+    });
+
+    test('E2: two messages written during the hold go out after the tap, '
+        'in the order written, once each, and both are READ', () async {
+      final restored = await calmRestore();
+      final outbox = await boxForB();
+
+      await writeFromB('first');
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+      await writeFromB('second');
+      expect(outbox.delivered, isEmpty);
+
+      await tap(b);
+
+      expect(outbox.delivered, hasLength(2));
+      final read = [
+        for (final (_, frame) in outbox.delivered)
+          await readByRestored(restored, frame),
+      ];
+      expect(read[0], contains('first'));
+      expect(read[1], contains('second'));
+    });
+
+    test('E3: the tap is refused (the served key is not the frame\'s): the '
+        'waiting message reads as refused for a key change, like a red-hold '
+        'refusal, and nothing was sent on the old session', () async {
+      final restored = await calmRestore();
+      await tap(b);
+      expect(await anchorOfA(), await idOf(restored));
+      final outbox = await boxForB();
+      await handOffFrom(a); // the OLD key again: calm, then refused
+      expectCalm(b);
+
+      final row = await writeFromB('into the refusal');
+      expect(outbox.delivered, isEmpty);
+      expect(b.reader.sendWaitsForCalmHold(row.tempId), isTrue);
+
+      await tap(b);
+
+      expectRed(b);
+      expect(outbox.delivered, isEmpty);
+      expect(b.reader.sendWaitsForCalmHold(row.tempId), isFalse);
+      expect(b.reader.sendRefusedForIdentity(row.tempId), isTrue);
+      expect(
+        b.reader.messages.singleWhere((m) => m.tempId == row.tempId).deliveryStatus,
+        MessageDeliveryStatus.failed,
+      );
+    });
+
+    test('E4: a transient failure of the tap keeps the message waiting, '
+        'unsent; the next tap that succeeds sends it once', () async {
+      final restored = await calmRestore();
+      final outbox = await boxForB();
+      final row = await writeFromB('later');
+      b.serve = (_) => null; // the server has no answer now
+
+      await tap(b);
+
+      expect(b.reader.calmHoldState(1), CalmHoldState.failed);
+      expect(outbox.delivered, isEmpty);
+      expect(b.reader.sendWaitsForCalmHold(row.tempId), isTrue);
+
+      b.serve = (bundle) => bundle;
+      await tap(b);
+
+      expect(outbox.delivered, hasLength(1));
+      expect(
+        await readByRestored(restored, outbox.delivered.single.$2),
+        contains('later'),
+      );
+    });
+
+    test('E5: a re-key answer while the line waits is not written on the '
+        'old session and fetches no bundle', () async {
+      await calmRestore();
+      b.emits.clear();
+
+      final frame = await b.reader.encryptForFriend(
+        1,
+        1,
+        '{"t":"x"}',
+        fresh: true,
+      );
+
+      expect(frame, isNull);
+      expect(b.emits, isEmpty);
+    });
+
+    test('E6: receipts, typing and an action are dropped while the line '
+        'waits, and fetch nothing', () async {
+      await calmRestore();
+      final outbox = await boxForB();
+      b.reader.receiptsAndTyping = () => true;
+
+      b.reader.sendTypingIndicator(1, 10);
+      await pumpEventQueue();
+
+      expect(outbox.delivered, isEmpty);
+      expect(b.emits, isEmpty);
+      expect(b.enc.lookupLog, isEmpty);
     });
   });
 }

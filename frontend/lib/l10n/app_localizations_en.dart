@@ -510,6 +510,10 @@ class AppLocalizationsEn extends AppLocalizations {
       'Not sent: this contact\'s security keys changed. Open the red warning in this chat and compare your safety numbers, then retry.';
 
   @override
+  String get messageSendWaitsForCalmHold =>
+      'Not sent yet: tap the new-device line in this chat first. This message goes out right after.';
+
+  @override
   String get authStatusSavedSessionUnreadable =>
       'Could not read the session. Restart the app.';
 

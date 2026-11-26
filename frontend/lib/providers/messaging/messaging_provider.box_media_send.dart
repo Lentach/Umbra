@@ -89,6 +89,11 @@ extension MessagingBoxMediaSend on MessagingProvider {
       if (body == null) throw StateError('no held attachment');
       // After the hold: the retry uploads what is held here.
       if (_peersAllPaused(route, recipientId, tempId)) return false;
+      // Before the upload: a calm hold takes no file for the old key either.
+      if (_calmHolds.containsKey(recipientId)) {
+        _deferForCalmHold(recipientId, tempId);
+        return false;
+      }
       if (effectiveReplyToId != null && _boxQuoteOf(atSend.replyTo) == null) {
         _e2eFlowLog('BOX_MEDIA_NO_QUOTE', {'tempId': tempId});
         _markMessageFailed(tempId, 'Could not send. Try again.');
