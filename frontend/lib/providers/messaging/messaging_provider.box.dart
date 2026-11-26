@@ -1,4 +1,5 @@
 part of '../messaging_provider.dart';
+// ignore_for_file: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
 
 /// Box deliveries (metadata-privacy PR3.1 slice (b)): the ONE dispatcher. A
 /// journaled delivery is decrypted here, NOW — unlike a server row, nothing
@@ -184,13 +185,11 @@ extension MessagingBox on MessagingProvider {
           msg.encryptedContent!,
         );
     // B3 (decision 143): a PreKey frame under an identity other than the
-    // friend's pinned one is HELD — never decrypted, never shown — unless
-    // decision 152 applies: key-change warnings OFF and the friend not
-    // verified, when its key is accepted here and the frame is read in this
-    // same pass. Anyone who holds the friend's queue address (a hostile
-    // server, a revoked device) can seal one.
-    // Provisional: reverted below when the decrypt does not succeed.
-    AutoAccepted? accepted;
+    // friend's pinned one is NEVER decrypted before its key is confirmed.
+    // Decision 152 (option C): for an unverified friend with warnings OFF it
+    // waits CALMLY (a neutral line, no network) until the user taps; anything
+    // else is the visible hold at once. Anyone who holds the friend's queue
+    // address (a hostile server, a revoked device) can seal one.
     if (preKey) {
       switch (await enc.friendFrameIdentity(
         msg.senderId,
@@ -201,33 +200,17 @@ extension MessagingBox on MessagingProvider {
           // dropped the list it reads).
           newIdentity = newIdentity || (_boxHeld[msg.id] ?? false);
           _boxHeld.remove(msg.id);
+          _calmHolds.remove(msg.senderId);
         case FriendFrameIdentity.foreign:
-          if (peer == null || peer.state == ContactState.friend) {
-            accepted = await enc.autoAcceptForeignFrame(
-              msg.senderId,
-              msg.encryptedContent!,
-              deviceId: msg.originDeviceId ?? 1,
-            );
-          }
-          if (accepted == null) {
-            return _holdForeignFrame(msg, enc, peer, remint: newIdentity);
-          }
-          newIdentity = newIdentity || (_boxHeld[msg.id] ?? false);
-          _boxHeld.remove(msg.id);
-          _e2eFlowLog('BOX_FOREIGN_IDENTITY_ACCEPTED', {
-            'peer': msg.senderId,
-            'device': msg.originDeviceId ?? 1,
-          });
+          return _holdForeign(
+            msg,
+            enc,
+            peer,
+            remint: newIdentity,
+            receivedAt: receivedAt,
+          );
       }
     }
-    // What this device holds for the sender BEFORE a provisional accept is
-    // decrypted: put back when the frame is refused or does not decrypt.
-    final snapshot = accepted == null
-        ? null
-        : await enc.snapshotFriendDevice(
-            msg.senderId,
-            msg.originDeviceId ?? 1,
-          );
     final String plaintext;
     try {
       plaintext = await enc.decrypt(
@@ -237,11 +220,6 @@ extension MessagingBox on MessagingProvider {
         deviceId: msg.originDeviceId ?? 1,
       );
     } on Object catch (e) {
-      // The key this frame carried is unproven: take the accept back.
-      if (accepted != null) {
-        await enc.revertAutoAccept(msg.senderId, accepted);
-        if (snapshot != null) await enc.restoreFriendDevice(snapshot);
-      }
       // A whisper of a friend with a frame held rides the session that frame
       // would build: it cannot read yet, and must neither be finished, nor
       // ask the friend to re-key, nor repair anything. Held in arrival
@@ -265,22 +243,6 @@ extension MessagingBox on MessagingProvider {
     } on Object {
       _e2eFlowLog('BOX_ENVELOPE_UNREADABLE', {'msgId': msg.id});
       return true;
-    }
-    // The decrypt proved the key: the accept stands. Its permanent note goes
-    // just BEFORE the message that came under it (that message's time is the
-    // sender's clock, clamped to our receipt — decision 13).
-    if (accepted != null) {
-      final sent = parsed.sentAt;
-      final at = sent == null || sent.isAfter(receivedAt) ? receivedAt : sent;
-      // Not awaited: the refusal check below must follow the decrypt with no
-      // await in between (the RAM part runs now, the write follows).
-      unawaited(
-        enc.alignKeyChangeNote(
-          msg.senderId,
-          accepted,
-          at.millisecondsSinceEpoch - 1,
-        ),
-      );
     }
     // Whether that device relays to the siblings a sender cannot address
     // (101 A, E101b): every frame says it, so a missing `rl` takes it back.
@@ -316,27 +278,6 @@ extension MessagingBox on MessagingProvider {
             'device': device,
             'why': 'prekey_unasked',
           });
-          // A frame this very pass refuses must not keep the key it carried:
-          // take the provisional accept back (anchor, note, intents).
-          if (accepted != null) {
-            // The frame was decrypted BEFORE it was refused (its type is only
-            // known after): its session and its per-device key row are on disk.
-            // Nothing of it may survive — neither to send on nor to read the
-            // sender's later whispers. Both calls below act at once, before any
-            // await: the restore is queued on the peer's session chain and the
-            // rebuild mark is set in memory, so a send that starts now runs
-            // after the restore and on a rebuilt session.
-            final restoring = snapshot == null
-                ? Future<void>.value()
-                : enc.restoreFriendDevice(snapshot);
-            final rebuilding = enc.rebuildSessionDurably(
-              msg.senderId,
-              msg.originDeviceId ?? 1,
-            );
-            await enc.revertAutoAccept(msg.senderId, accepted);
-            await restoring;
-            await rebuilding;
-          }
           return true;
         }
         if (newIdentity) {
@@ -443,6 +384,86 @@ extension MessagingBox on MessagingProvider {
     }
   }
 
+  /// A friend's PreKey frame under a FOREIGN identity (never decrypted).
+  /// Unparseable: finished, never held (S5). Eligible (warnings OFF, friend
+  /// not verified, anchor pinned, a held list saying NOT enrolled, and no
+  /// other key already waiting): the CALM hold — no network, no red bar, no
+  /// candidate; the line is tappable. Anything else: today's visible hold.
+  Future<bool> _holdForeign(
+    MessageModel msg,
+    EncryptionProvider enc,
+    ContactRecord? peer, {
+    required bool remint,
+    required DateTime receivedAt,
+  }) async {
+    if (peer != null && peer.state != ContactState.friend) {
+      return _dropHeld(msg);
+    }
+    final identity = preKeyIdentityOf(msg.encryptedContent!);
+    if (identity == null) {
+      _e2eFlowLog('BOX_FOREIGN_FRAME_UNPARSEABLE', {'peer': msg.senderId});
+      return true;
+    }
+    final held = _calmHolds[msg.senderId];
+    if ((held == null || held.identity == identity) &&
+        await enc.calmHoldEligible(msg.senderId)) {
+      final first = held == null || receivedAt.isBefore(held.firstReceivedAt);
+      _calmHolds[msg.senderId] = CalmHold(
+        identity: identity,
+        device: msg.originDeviceId ?? 1,
+        firstReceivedAt: first ? receivedAt : held.firstReceivedAt,
+        ciphertext: held?.ciphertext ?? msg.encryptedContent!,
+        state: held?.state ?? CalmHoldState.waiting,
+      );
+      final fresh = !_boxHeld.containsKey(msg.id);
+      _boxHeld[msg.id] = remint;
+      enc.holdCalm(msg.senderId);
+      if (fresh) {
+        _e2eFlowLog('BOX_FOREIGN_IDENTITY_CALM', {
+          'peer': msg.senderId,
+          'device': msg.originDeviceId ?? 1,
+        });
+      }
+      notifyListeners();
+      return false;
+    }
+    _calmHolds.remove(msg.senderId);
+    return _holdForeignFrame(msg, enc, peer, remint: remint);
+  }
+
+  /// What a calm hold of [peerId] shows, or null when none waits.
+  CalmHoldState? calmHoldState(int peerId) => _calmHolds[peerId]?.state;
+
+  /// The tap on a calm hold (a person's act): confirms the waiting key from a
+  /// fresh served bundle. Single flight: a second tap while it runs is
+  /// ignored. Confirmed -> the held frames drain; refused -> the visible hold;
+  /// transient -> the line stays and is tappable again.
+  Future<void> confirmCalmHold(int peerId) async {
+    final hold = _calmHolds[peerId];
+    final enc = _encryptionProvider;
+    if (hold == null || enc == null) return;
+    if (hold.state == CalmHoldState.checking) return;
+    hold.state = CalmHoldState.checking;
+    notifyListeners();
+    final result = await enc.confirmCalmKey(
+      peerId,
+      hold.device,
+      hold.identity,
+      noteAtMs: hold.firstReceivedAt.millisecondsSinceEpoch - 1,
+    );
+    if (!identical(_calmHolds[peerId], hold)) return;
+    switch (result) {
+      case CalmConfirm.confirmed:
+        _calmHolds.remove(peerId);
+      case CalmConfirm.refused:
+        _calmHolds.remove(peerId);
+        await enc.holdForeignFrame(peerId, hold.ciphertext);
+      case CalmConfirm.transient:
+        hold.state = CalmHoldState.failed;
+    }
+    notifyListeners();
+  }
+
   /// Holds friend frame [msg] (a PreKey message under a foreign identity)
   /// until the user decides (plan B3, decision 143): returns false, so the
   /// journal row stays unconsumed — it is acked already, never pruned
@@ -498,4 +519,26 @@ extension MessagingBox on MessagingProvider {
       'device': msg.originDeviceId ?? 1,
     });
   }
+}
+
+/// The line a calm hold shows ([MessagingBox.calmHoldState]).
+enum CalmHoldState { waiting, checking, failed }
+
+/// One friend's calm hold: the key its held frames claim, the device that sent
+/// the first, when the first arrived (the note is stamped just before it) and
+/// a ciphertext to turn into the visible hold when the key is refused.
+class CalmHold {
+  CalmHold({
+    required this.identity,
+    required this.device,
+    required this.firstReceivedAt,
+    required this.ciphertext,
+    required this.state,
+  });
+
+  final String identity;
+  final int device;
+  final DateTime firstReceivedAt;
+  final String ciphertext;
+  CalmHoldState state;
 }

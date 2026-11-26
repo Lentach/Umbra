@@ -2276,6 +2276,20 @@ class AppLocalizationsPl extends AppLocalizations {
   }
 
   @override
+  String calmHoldLine(String name) {
+    return '$name pisze z nowego urządzenia lub przeglądarki. Dotknij, aby odebrać.';
+  }
+
+  @override
+  String get calmHoldChecking => 'Sprawdzam klucz…';
+
+  @override
+  String get calmHoldFailed => 'Nie udało się sprawdzić. Spróbuj ponownie.';
+
+  @override
+  String get calmHoldListPreview => 'Nowe urządzenie — dotknij, aby odebrać';
+
+  @override
   String get settingsKeyChangeWarnings =>
       'Ostrzegaj o zmianie kluczy kontaktów';
 

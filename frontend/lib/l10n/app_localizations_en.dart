@@ -2236,6 +2236,20 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String calmHoldLine(String name) {
+    return '$name is writing from a new device or browser. Tap to receive.';
+  }
+
+  @override
+  String get calmHoldChecking => 'Checking the key…';
+
+  @override
+  String get calmHoldFailed => 'Could not check. Try again.';
+
+  @override
+  String get calmHoldListPreview => 'New device — tap to receive';
+
+  @override
   String get settingsKeyChangeWarnings => 'Warn when a contact\'s keys change';
 
   @override

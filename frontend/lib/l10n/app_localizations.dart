@@ -3908,6 +3908,30 @@ abstract class AppLocalizations {
   /// **'{name}: nowe urządzenie lub przeglądarka — klucze zaktualizowane.'**
   String peerIdentityChangedSystemLine(String name);
 
+  /// No description provided for @calmHoldLine.
+  ///
+  /// In pl, this message translates to:
+  /// **'{name} pisze z nowego urządzenia lub przeglądarki. Dotknij, aby odebrać.'**
+  String calmHoldLine(String name);
+
+  /// No description provided for @calmHoldChecking.
+  ///
+  /// In pl, this message translates to:
+  /// **'Sprawdzam klucz…'**
+  String get calmHoldChecking;
+
+  /// No description provided for @calmHoldFailed.
+  ///
+  /// In pl, this message translates to:
+  /// **'Nie udało się sprawdzić. Spróbuj ponownie.'**
+  String get calmHoldFailed;
+
+  /// No description provided for @calmHoldListPreview.
+  ///
+  /// In pl, this message translates to:
+  /// **'Nowe urządzenie — dotknij, aby odebrać'**
+  String get calmHoldListPreview;
+
   /// No description provided for @settingsKeyChangeWarnings.
   ///
   /// In pl, this message translates to:

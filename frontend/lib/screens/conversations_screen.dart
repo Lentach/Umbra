@@ -802,6 +802,11 @@ class _ConversationsScreenState extends State<ConversationsScreen>
                 onDelete: () => _deleteConversation(conv.id),
                 otherUser: otherUser,
                 isTyping: isTyping,
+                calmHold:
+                    otherUser != null &&
+                    context.select<MessagingProvider, bool>(
+                      (m) => m.calmHoldState(otherUser.id) != null,
+                    ),
               );
             },
           );

@@ -36,6 +36,7 @@ import '../utils/ping_sound.dart';
 import '../utils/web_keyboard_inset.dart';
 import '../providers/encryption_provider.dart';
 import '../widgets/peer_identity_changed_row.dart';
+import '../widgets/calm_hold_line.dart';
 import '../services/notification_cleaner_stub.dart'
     if (dart.library.html) '../services/notification_cleaner_web.dart'
     if (dart.library.io) '../services/notification_cleaner_io.dart';
@@ -406,6 +407,13 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
         context.select<EncryptionProvider, bool>(
           (e) => e.peersWithHeldMessages.contains(otherUser.id),
         );
+    // Decision 152 (option C): a friend's message from a new device waits
+    // CALMLY for one tap; the red bar, when it shows, wins.
+    final calmHoldState = otherUser == null || peerIdentityChanged
+        ? null
+        : context.select<MessagingProvider, CalmHoldState?>(
+            (m) => m.calmHoldState(otherUser.id),
+          );
     // (lxxxiv): the muted note lives until the next message — it renders only
     // while nothing in the conversation is newer than the change it
     // announces. The list's `lastMessages` entry covers the window before
@@ -511,6 +519,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
               peerHeld: peerHeld,
               peerRefused: peerRefused,
               peerKeyChangeNoted: peerKeyChangeNoted,
+              calmHoldState: calmHoldState,
               keyChangeLogMs: keyChangeLogMs,
             ),
           ),
@@ -540,6 +549,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
                 peerHeld: peerHeld,
                 peerRefused: peerRefused,
                 peerKeyChangeNoted: peerKeyChangeNoted,
+                calmHoldState: calmHoldState,
                 keyChangeLogMs: keyChangeLogMs,
               ),
               composer: composerFooter,

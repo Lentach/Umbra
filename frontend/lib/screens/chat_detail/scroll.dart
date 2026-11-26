@@ -311,6 +311,7 @@ extension _ChatDetailScroll on _ChatDetailScreenState {
     required bool peerHeld,
     required bool peerRefused,
     required bool peerKeyChangeNoted,
+    required CalmHoldState? calmHoldState,
     required List<int> keyChangeLogMs,
     required int currentUserId,
   }) {
@@ -338,7 +339,8 @@ extension _ChatDetailScroll on _ChatDetailScreenState {
     // the muted one-shot note. The flags are computed (and subscribed) in
     // build() — this helper also runs inside ChatComposerViewport's build,
     // where context.select is illegal.
-    final identityRowOffset = (peerIdentityChanged || peerKeyChangeNoted)
+    final identityRowOffset =
+        (peerIdentityChanged || peerKeyChangeNoted || calmHoldState != null)
         ? 1
         : 0;
     // Decision 152: each key change this device accepted by itself is a
@@ -370,6 +372,14 @@ extension _ChatDetailScroll on _ChatDetailScreenState {
                       peerId: peer!.id,
                       peerName: _getContactName(),
                       held: peerHeld,
+                    )
+                  else if (calmHoldState != null)
+                    CalmHoldLine(
+                      peerName: _getContactName(),
+                      state: calmHoldState,
+                      onTap: () => context
+                          .read<MessagingProvider>()
+                          .confirmCalmHold(peer!.id),
                     )
                   else if (peerKeyChangeNoted)
                     PeerIdentityChangedNote(
@@ -435,6 +445,15 @@ extension _ChatDetailScroll on _ChatDetailScreenState {
                           peerId: peer!.id,
                           peerName: _getContactName(),
                           held: peerHeld,
+                        );
+                      }
+                      if (calmHoldState != null && index == 0) {
+                        return CalmHoldLine(
+                          peerName: _getContactName(),
+                          state: calmHoldState,
+                          onTap: () => context
+                              .read<MessagingProvider>()
+                              .confirmCalmHold(peer!.id),
                         );
                       }
                       if (peerKeyChangeNoted && index == 0) {

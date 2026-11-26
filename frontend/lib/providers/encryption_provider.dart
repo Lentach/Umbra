@@ -245,53 +245,90 @@ class EncryptionProvider extends ChangeNotifier {
   Future<void> holdForeignFrame(int userId, String ciphertext) =>
       _encryptionService.holdForeignFrame(userId, ciphertext);
 
-  /// Delegates to [EncryptionService.autoAcceptForeignFrame] (decision 152):
-  /// non-null means the friend's PreKey frame may be decrypted now,
-  /// provisionally (see [revertAutoAccept]).
-  Future<AutoAccepted?> autoAcceptForeignFrame(
-    int userId,
-    String ciphertext, {
-    required int deviceId,
-  }) => _encryptionService.autoAcceptForeignFrame(
-    userId,
-    ciphertext,
-    deviceId: deviceId,
-  );
+  /// Friends whose new-key PreKey frame is held CALMLY (decision 152, option
+  /// C): the chat shows a neutral "tap to receive" line, never the red bar.
+  Set<int> get peersCalmHeld => _encryptionService.peersCalmHeld;
 
-  /// The frame that carried an auto-accepted key failed to decrypt: the key is
-  /// unproven, take the accept back.
-  Future<void> revertAutoAccept(int userId, AutoAccepted accepted) async {
-    await _encryptionService.revertAutoAccept(userId, accepted);
+  /// Delegates to [EncryptionService.calmHoldEligible].
+  Future<bool> calmHoldEligible(int userId) =>
+      _encryptionService.calmHoldEligible(userId);
+
+  /// Delegates to [EncryptionService.holdCalm].
+  void holdCalm(int userId) {
+    _encryptionService.holdCalm(userId);
     notifyListeners();
   }
 
-  /// Marks [userId]'s [deviceId] session for a rebuild that survives a restart
-  /// (intent written first) and drops the friend's list so the box pre-build
-  /// runs again. Used when a frame replaced the session and was then refused.
-  Future<void> rebuildSessionDurably(int userId, int deviceId) async {
-    // In memory FIRST and synchronously: a send that starts now sees it.
-    markSessionRebuild(userId, deviceId: deviceId);
-    await _encryptionService.recordSessionRebuilds(userId, {deviceId});
-    invalidateDeviceList(userId);
-  }
-
-  /// Delegates to [EncryptionService.snapshotFriendDevice].
-  Future<FriendDeviceSnapshot> snapshotFriendDevice(int userId, int deviceId) =>
-      _encryptionService.snapshotFriendDevice(userId, deviceId);
-
-  /// Delegates to [EncryptionService.restoreFriendDevice] (queued at the call).
-  Future<void> restoreFriendDevice(FriendDeviceSnapshot snapshot) =>
-      _encryptionService.restoreFriendDevice(snapshot);
-
-  /// Puts the permanent note of an accepted key ABOVE the message that came
-  /// under it (see [EncryptionService.alignKeyChangeNote]).
-  Future<void> alignKeyChangeNote(
-    int userId,
-    AutoAccepted accepted,
-    int atMs,
-  ) async {
-    await _encryptionService.alignKeyChangeNote(userId, accepted, atMs);
+  /// The tap on a calm hold: CONFIRMS [frameIdentityBase64] for [peerId] from a
+  /// fresh served bundle for [deviceId] — a person's act, so the only place a
+  /// foreign-key frame may cause a lookup (decision 153). Nothing is accepted
+  /// unless the served bundle carries exactly the frame's key AND its signed
+  /// pre-key verifies under it (M2); then the session is built from that same
+  /// bundle through `buildSession`'s trust point (pre-swap note stamped
+  /// [noteAtMs]) and the held frames drain. [CalmConfirm.refused]: the held
+  /// frame must turn into the visible hold. [CalmConfirm.transient]: nothing
+  /// could be checked; the calm hold stays.
+  Future<CalmConfirm> confirmCalmKey(
+    int peerId,
+    int deviceId,
+    String frameIdentityBase64, {
+    required int noteAtMs,
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    if (!_e2eInitialized || _currentUserId == null) return CalmConfirm.transient;
+    final Map<String, dynamic> bundle;
+    try {
+      if (isBoxOnlyPeer?.call(peerId) ?? false) {
+        // A person's act owes one fresh handle lookup (no floor, no cap, not
+        // counted against the peer-event cap); it refreshes the served
+        // bundles BEFORE anything reads one.
+        invalidateDeviceList(peerId, byPerson: true);
+        await getVerifiedDeviceList(peerId, forceRefresh: true);
+        final served = servedBundleFor?.call(peerId, deviceId);
+        if (served == null) return CalmConfirm.refused; // the device is absent
+        bundle = served;
+      } else {
+        bundle = await _fetchBundleAnswer(peerId, deviceId, timeout);
+      }
+    } on DeviceListVerificationException {
+      return CalmConfirm.refused;
+    } on Object catch (e) {
+      _e2eFlowLog('CALM_CONFIRM_FAILED', {'peerId': peerId, 'error': '$e'});
+      return CalmConfirm.transient;
+    }
+    // M2: the served key must BE the frame's key, proven by its signature,
+    // before any session work.
+    if (!_encryptionService.bundleProvesIdentity(bundle, frameIdentityBase64)) {
+      return CalmConfirm.refused;
+    }
+    var refused = false;
+    try {
+      await _encryptionService.buildSession(
+        peerId,
+        bundle,
+        deviceId: deviceId,
+        expectedIdentityBase64: await _accountIdentityAnchor(
+          peerId,
+          skipDeviceId: deviceId,
+        ),
+        acceptNoteAtMs: noteAtMs,
+      );
+    } on AccountIdentityMismatch {
+      refused = true;
+    } on Object catch (e) {
+      // A libsignal-internal failure after the accept leaves the proven key
+      // pinned; the next ensureSession builds against it (S6).
+      _e2eFlowLog('CALM_CONFIRM_BUILD_FAILED', {'peerId': peerId, 'error': '$e'});
+    }
+    if (await _encryptionService.peerTofuIdentityBase64(peerId) !=
+        frameIdentityBase64) {
+      return refused ? CalmConfirm.refused : CalmConfirm.transient;
+    }
+    _encryptionService.releaseCalm(peerId);
+    _e2eFlowLog('CALM_CONFIRMED', {'peerId': peerId, 'deviceId': deviceId});
+    onHeldFramesReleased?.call(peerId);
     notifyListeners();
+    return CalmConfirm.confirmed;
   }
 
   /// Whether the user verified [peerId]'s current key (key-bound).
@@ -4239,6 +4276,19 @@ class EncryptionProvider extends ChangeNotifier {
     }
     _pendingDeviceListFetches.clear();
   }
+}
+
+/// How a tap on a calm hold ended ([EncryptionProvider.confirmCalmKey]).
+enum CalmConfirm {
+  /// The served bundle proved the frame's key; it is pinned, held frames drain.
+  confirmed,
+
+  /// The served key differs, its signature fails, or the device is absent:
+  /// nothing is accepted and the hold becomes the visible one.
+  refused,
+
+  /// Nothing could be checked (offline, timeout, lookup spent): try again.
+  transient,
 }
 
 /// What [EncryptionProvider.adoptCarriedDeviceList] did with a list a

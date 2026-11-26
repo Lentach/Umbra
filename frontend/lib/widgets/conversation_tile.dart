@@ -26,12 +26,16 @@ class ConversationTile extends StatelessWidget {
   final UserModel? otherUser;
   final bool isTyping;
 
+  /// A friend's message from a new device waits for a tap (decision 152).
+  final bool calmHold;
+
   const ConversationTile({
     super.key,
     required this.conversationId,
     required this.displayName,
     this.lastMessage,
     this.isActive = false,
+    this.calmHold = false,
     this.unreadCount = 0,
     this.isMuted = false,
     required this.onTap,
@@ -375,6 +379,20 @@ class ConversationTile extends StatelessWidget {
                             style: RpgTheme.bodyFont(
                               fontSize: 13,
                               color: colorScheme.primary,
+                            ).copyWith(fontStyle: FontStyle.italic),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ] else if (calmHold) ...[
+                          const SizedBox(height: 3),
+                          Text(
+                            AppLocalizations.of(context).calmHoldListPreview,
+                            key: const ValueKey('calm-hold-list-preview'),
+                            style: RpgTheme.bodyFont(
+                              fontSize: 13,
+                              color: RpgTheme.isDark(context)
+                                  ? RpgTheme.mutedDark
+                                  : RpgTheme.textSecondaryLight,
                             ).copyWith(fontStyle: FontStyle.italic),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,

@@ -35,7 +35,7 @@ import '../services/device_list/device_list_cache.dart';
 import '../services/device_list/sender_list_info.dart';
 import '../services/media_crypto_service.dart';
 import '../services/encryption/prekey_identity.dart'
-    show FriendFrameIdentity, friendFrameIdentity;
+    show FriendFrameIdentity, friendFrameIdentity, preKeyIdentityOf;
 import '../services/encryption_service.dart';
 import '../services/incoming_message_sound_service.dart';
 import '../services/link_preview_service.dart';
@@ -417,6 +417,10 @@ class MessagingProvider extends ChangeNotifier {
   /// reads, so it is remembered. RAM only: the journal row is the frame, and
   /// a restart judges it again.
   final Map<int, bool> _boxHeld = {};
+
+  /// Friends whose new-key PreKey frame waits CALMLY for a tap (decision 152,
+  /// option C), by peer id. RAM only: the journal re-offer recreates it.
+  final Map<int, CalmHold> _calmHolds = {};
 
   /// Where a message goes: the box, the only path. `ConnectionProvider`
   /// wires the account session's one. Null = no route: every send fails.
@@ -971,6 +975,7 @@ class MessagingProvider extends ChangeNotifier {
       _boxUnsaved.clear();
       _boxSessionEpoch++;
       _boxHeld.clear();
+      _calmHolds.clear();
       _profileSent.clear();
       _profileFilesChecked = false;
       _profileMigrateTriedAt = null;
@@ -1037,6 +1042,7 @@ class MessagingProvider extends ChangeNotifier {
     _boxUnsaved.clear();
     _boxSessionEpoch++;
     _boxHeld.clear();
+    _calmHolds.clear();
     _profileSent.clear();
     _profileFilesChecked = false;
     _profileMigrateTriedAt = null;
