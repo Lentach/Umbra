@@ -635,7 +635,6 @@
   "messageReactionSelected": "wybrana",
   "messageReactionNotSelected": "niewybrana",
   "messageReactionSemantics": "Reakcja {emoji}, {state}",
-  "snackbarReactionUnavailable": "Reakcje nie są jeszcze gotowe na tym urządzeniu",
   "snackbarBoxReactionFailed": "Nie udało się wysłać reakcji. Spróbuj ponownie.",
   "snackbarBoxPinFailed": "Nie udało się zmienić przypięcia. Spróbuj ponownie.",
   "snackbarBoxEditFailed": "Nie udało się zapisać edycji. Spróbuj ponownie.",

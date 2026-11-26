@@ -1685,10 +1685,6 @@ class AppLocalizationsPl extends AppLocalizations {
   }
 
   @override
-  String get snackbarReactionUnavailable =>
-      'Reakcje nie są jeszcze gotowe na tym urządzeniu';
-
-  @override
   String get snackbarBoxReactionFailed =>
       'Nie udało się wysłać reakcji. Spróbuj ponownie.';
 

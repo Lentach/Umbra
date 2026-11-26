@@ -2906,12 +2906,6 @@ abstract class AppLocalizations {
   /// **'Reakcja {emoji}, {state}'**
   String messageReactionSemantics(Object emoji, Object state);
 
-  /// No description provided for @snackbarReactionUnavailable.
-  ///
-  /// In pl, this message translates to:
-  /// **'Reakcje nie są jeszcze gotowe na tym urządzeniu'**
-  String get snackbarReactionUnavailable;
-
   /// No description provided for @snackbarBoxReactionFailed.
   ///
   /// In pl, this message translates to:
