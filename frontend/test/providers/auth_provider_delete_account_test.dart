@@ -1,8 +1,10 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:fireplace/providers/auth_provider.dart';
 import 'package:fireplace/services/api_exception.dart';
 import 'package:fireplace/services/api_service.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -142,6 +144,56 @@ void main() {
     final prefs = await SharedPreferences.getInstance();
     expect(prefs.getString('jwt_token'), isNull);
     expect(prefs.getString('refresh_token'), isNull);
+  });
+
+  group('saved copies (A3-MSG-A-04)', () {
+    const pathChannel = MethodChannel('plugins.flutter.io/path_provider');
+    late Directory docs;
+    late File savedCopy;
+
+    setUp(() {
+      docs = Directory.systemTemp.createTempSync('logout_saved_');
+      savedCopy = File('${docs.path}/saved_downloads/photo.png')
+        ..createSync(recursive: true)
+        ..writeAsBytesSync([1, 2, 3]);
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(pathChannel, (call) async => docs.path);
+    });
+
+    tearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(pathChannel, null);
+      docs.deleteSync(recursive: true);
+    });
+
+    // Mutation: drop the delete from the session clear -> red.
+    test('a logout deletes the plaintext files the user saved', () async {
+      final auth = await restoredSession();
+
+      await auth.logout();
+
+      expect(savedCopy.existsSync(), isFalse);
+    });
+
+    test('deleting the account deletes them too', () async {
+      final auth = await restoredSession();
+
+      await auth.deleteAccount('right');
+
+      expect(savedCopy.existsSync(), isFalse);
+    });
+
+    test('a session that merely lapsed keeps them: nothing was signed out '
+        'by the server or the user', () async {
+      final auth = await restoredSession(
+        access: _expiredAccessJwt,
+        refreshWorks: () => false,
+      );
+
+      await auth.ensureSessionReady();
+
+      expect(savedCopy.existsSync(), isTrue);
+    });
   });
 
   // Mutation: let beforeDelete's error out (drop the try, or `on Exception`).

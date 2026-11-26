@@ -206,6 +206,12 @@ extension AuthSessionLifecycle on AuthProvider {
       // design: the next password login unwraps it again from the server
       // row. A TRANSIENT session drop (`wipeStoredTokens: false`) leaves
       // both alone — the store is intact and the next boot reuses them.
+      // The files the user saved out of chats are plaintext outside every
+      // store, so they end with the session (A3-MSG-A-04). First, so a
+      // failing step below cannot leave them behind; best effort.
+      if (!await download_utils.deleteSavedDownloads()) {
+        E2ePersistentDiag.record('SAVED_COPIES_DELETE_FAILED', {});
+      }
       await _contactBackup.clear();
       await _tokens.clear();
     }

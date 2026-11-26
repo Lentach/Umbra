@@ -17,6 +17,9 @@ import '../services/contacts/contact_store.dart';
 import '../services/encryption_service.dart';
 import '../theme/rpg_theme.dart';
 import '../utils/diag_export_redaction.dart';
+import '../utils/download_utils_web.dart'
+    if (dart.library.io) '../utils/download_utils_io.dart'
+    as download_utils;
 import '../utils/e2e_diag_log.dart';
 import '../utils/e2e_persistent_diag.dart';
 import '../widgets/dialogs/backup_passphrase_dialog.dart';
@@ -986,11 +989,14 @@ class _PrivacySafetyScreenState extends State<PrivacySafetyScreen> {
       final result = await encryptionProvider.clearLocalDecryptedContentCache();
       if (!mounted) return;
       await AudioCacheStore.clear();
+      // The plaintext files the user saved out of chats go with the history
+      // (A3-MSG-A-04); a failure is the same partial delete as any other.
+      final savedGone = await download_utils.deleteSavedDownloads();
       if (!mounted) return;
 
       showTopSnackBar(
         context,
-        result.isComplete
+        result.isComplete && savedGone
             ? l10n.snackbarAllLocalHistoryDeleted
             : l10n.snackbarFailedToDeleteAllLocalHistory,
       );
