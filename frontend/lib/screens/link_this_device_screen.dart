@@ -399,8 +399,15 @@ class _LinkThisDeviceBodyState extends State<LinkThisDeviceBody> {
             button: true,
             child: OutlinedButton(
               key: const Key('link-new-retry'),
-              onPressed: () =>
-                  controller.startNewDeviceFlow(platform: linkPlatformLabel()),
+              onPressed: () {
+                // The refusal and the typed-field fallback belonged to the
+                // code that just expired; the fresh code starts clean.
+                setState(() {
+                  _codeError = null;
+                  _manualEntry = false;
+                });
+                controller.startNewDeviceFlow(platform: linkPlatformLabel());
+              },
               child: Text(l10n.linkNewRetry),
             ),
           ),
