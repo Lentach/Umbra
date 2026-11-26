@@ -691,10 +691,6 @@ class AppLocalizationsEn extends AppLocalizations {
   String get identityResetAnyMoment => 'any moment now';
 
   @override
-  String get identityUploadLockedTitle =>
-      'Your new encryption keys were not published';
-
-  @override
   String get identityResetStartAction => 'Start reset';
 
   @override

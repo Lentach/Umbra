@@ -284,7 +284,6 @@
     "placeholders": { "minutes": { "type": "int" } }
   },
   "identityResetAnyMoment": "lada chwila",
-  "identityUploadLockedTitle": "Twoje nowe klucze szyfrowania nie zostały opublikowane",
   "identityResetStartAction": "Rozpocznij reset",
   "linkGateTitle": "Połącz to urządzenie",
   "linkGateBody": "To urządzenie nie ma kluczy konta. Połącz je z urządzenia głównego.",

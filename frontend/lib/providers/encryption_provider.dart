@@ -2300,7 +2300,8 @@ class EncryptionProvider extends ChangeNotifier {
   /// Phase 0b: a `success:false` answer with `identity_locked` means the
   /// registration lock refused to replace this account's stored identity key.
   /// That is terminal for this attempt — retrying mints nothing and would just
-  /// loop. The user's route forward is the reset ceremony, so surface it.
+  /// loop. The user's route forward is the device link gate: the flag feeds
+  /// [linkDisposesStaleMaterial], so [needsDeviceLink] offers the link.
   ///
   /// A `success:true` answer carrying `identityChanged:true` means THIS
   /// upload is what replaced the stored identity, so the audit row the server
@@ -2321,10 +2322,10 @@ class EncryptionProvider extends ChangeNotifier {
         // This is the dangerous case for a user who just re-minted keys after
         // losing theirs: the local device now believes it is healthy, but the
         // server still publishes the PREVIOUS identity, so peers keep
-        // encrypting to keys this device cannot read. Recording it drives the
-        // banner that routes them to the reset ceremony — the only thing that
-        // can make these keys land — instead of leaving them silently
-        // unreachable behind a "recovered" UI.
+        // encrypting to keys this device cannot read. Recording it
+        // ([_identityUploadLocked]) opens the link gate, which disposes of
+        // this identity and adopts the live one, instead of leaving the
+        // account silently unreachable behind a "recovered" UI.
         _e2eFlowLog('KEY_BUNDLE_IDENTITY_LOCKED', {});
         E2ePersistentDiag.record('KEY_BUNDLE_IDENTITY_LOCKED', {});
         _identityUploadLocked = true;
