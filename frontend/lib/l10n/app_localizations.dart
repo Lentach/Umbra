@@ -2906,6 +2906,18 @@ abstract class AppLocalizations {
   /// **'Reakcja {emoji}, {state}'**
   String messageReactionSemantics(Object emoji, Object state);
 
+  /// No description provided for @messageReactionChipRemove.
+  ///
+  /// In pl, this message translates to:
+  /// **'Usuń reakcję {emoji} ({count})'**
+  String messageReactionChipRemove(Object count, Object emoji);
+
+  /// No description provided for @messageReactionChipAdd.
+  ///
+  /// In pl, this message translates to:
+  /// **'Zareaguj {emoji} ({count})'**
+  String messageReactionChipAdd(Object count, Object emoji);
+
   /// No description provided for @snackbarBoxReactionFailed.
   ///
   /// In pl, this message translates to:

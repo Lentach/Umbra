@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../l10n/app_localizations.dart';
 import '../../utils/jumbo_emoji.dart';
 
 /// Displays a row of emoji reaction chips with counts.
@@ -16,12 +17,13 @@ class ReactionChipsRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final chips = reactions.entries.where((e) => e.value.isNotEmpty).map((e) {
       final isMine = e.value.contains(currentUserId);
       return Semantics(
         label: isMine
-            ? 'Remove ${e.key} reaction (${e.value.length})'
-            : 'React with ${e.key} (${e.value.length})',
+            ? l10n.messageReactionChipRemove(e.key, e.value.length)
+            : l10n.messageReactionChipAdd(e.key, e.value.length),
         button: true,
         excludeSemantics: true,
         child: GestureDetector(

@@ -1685,6 +1685,16 @@ class AppLocalizationsPl extends AppLocalizations {
   }
 
   @override
+  String messageReactionChipRemove(Object count, Object emoji) {
+    return 'Usuń reakcję $emoji ($count)';
+  }
+
+  @override
+  String messageReactionChipAdd(Object count, Object emoji) {
+    return 'Zareaguj $emoji ($count)';
+  }
+
+  @override
   String get snackbarBoxReactionFailed =>
       'Nie udało się wysłać reakcji. Spróbuj ponownie.';
 

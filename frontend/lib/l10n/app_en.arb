@@ -650,6 +650,8 @@
   "messageReactionSelected": "selected",
   "messageReactionNotSelected": "not selected",
   "messageReactionSemantics": "Reaction {emoji}, {state}",
+  "messageReactionChipRemove": "Remove reaction {emoji} ({count})",
+  "messageReactionChipAdd": "React with {emoji} ({count})",
   "snackbarBoxReactionFailed": "Couldn't send the reaction. Try again.",
   "snackbarBoxPinFailed": "Couldn't change the pin. Try again.",
   "snackbarBoxEditFailed": "Couldn't save the edit. Try again.",
