@@ -3501,22 +3501,23 @@ class EncryptionService {
 
   /// Persist decrypted message content to survive app restart.
   ///
-  /// Uses SharedPreferences (localStorage on web) instead of flutter_secure_storage
-  /// (IndexedDB) because localStorage writes are synchronous in JS — they survive
-  /// browser tab close, unlike in-flight IndexedDB transactions which are aborted.
+  /// Uses the content store (SQLCipher on Android, sealed localStorage on web)
+  /// instead of flutter_secure_storage (IndexedDB) because localStorage writes
+  /// are synchronous in JS — they survive browser tab close, unlike in-flight
+  /// IndexedDB transactions which are aborted.
   ///
   /// The `_`-prefixed envelope fields are what let later sweeps FIND this
   /// record. Without them a message is purgeable only while its row happens to
-  /// be loaded: history pages in ~50 rows at a time while the store holds up
-  /// to 2000 across sessions, so "clear chat history" on a freshly launched
-  /// app would purge the visible page and strand the rest — no expiry, no
+  /// be loaded: a chat holds only the rows it has loaded while the store holds
+  /// up to 2000 across sessions, so "clear chat history" on a freshly launched
+  /// app would purge the visible rows and strand the rest — no expiry, no
   /// conversation index, nothing left to name them by, ever.
   ///
   /// [createdAt] and [disappearAfterSeconds] are still stamped for UI expiry
   /// display and forward compatibility, but they no longer feed the sweep:
   /// a read-mode disappearing message is stored with `expiresAt: null` at
-  /// DECRYPT time and receives its real deadline later — on `messageDelivered`
-  /// or via the history-pass self-heal. Until a REAL stamp lands the record is
+  /// DECRYPT time and receives its real deadline later — when the message is
+  /// first shown. Until a REAL stamp lands the record is
   /// NOT locally destroyable (see [_recordExpiryDeadlineMs]): the old
   /// never-read fallback destroyed five still-served records on 2026-08-02
   /// when the stamp event was lost. Unstamped residue is the retention bound's job.
@@ -3811,9 +3812,10 @@ class EncryptionService {
     if (wanted.isEmpty) return result;
     try {
       // ONE authoritative snapshot for the whole pass. This is the read the
-      // history hydration depends on: every id it misses here is re-decrypted,
-      // and for an already-decrypted message that means DuplicateMessage and a
-      // permanent "[Decryption failed]".
+      // history read depends on (`allLocalMessageRecords`): a record missing
+      // here reads as "never decrypted", and re-decrypting an
+      // already-decrypted message means DuplicateMessage and a permanent
+      // "[Decryption failed]".
       final prefs = await _sharedPrefs;
       final snapshot = await _authoritativeSnapshot();
       for (final id in wanted) {
@@ -3902,14 +3904,14 @@ class EncryptionService {
 
     // Retire what we destroyed, BEFORE reporting success.
     //
-    // Without this the rows the user just wiped stay in the decrypt path: the
-    // server still serves them, hydration finds no record, the re-decrypt hits
-    // a ratchet key consumed at first decrypt, and every one of them renders a
-    // permanent "[Decryption failed]" — the whole history at once, and
-    // indistinguishable from the 2026-07-29 incident. Retention and LRU
-    // eviction already do this for exactly the same reason; a user-initiated
-    // wipe is the one destroyer that did not, so it turned a deliberate action
-    // into what looks like catastrophic corruption.
+    // Without this the rows the user just wiped stay in the decrypt path:
+    // a copy that is delivered again finds no record, the re-decrypt hits
+    // a ratchet key consumed at first decrypt, and it renders a
+    // permanent "[Decryption failed]" — for any wiped message that comes
+    // back, and indistinguishable from the 2026-07-29 incident. Retention and
+    // LRU eviction already do this for exactly the same reason; a
+    // user-initiated wipe is the one destroyer that did not, so it turned a
+    // deliberate action into what looks like catastrophic corruption.
     //
     // Bounded by `_retiredCap` (5000) against a record store capped at 2000, so
     // a full wipe fits with room to spare.
@@ -3963,9 +3965,9 @@ class EncryptionService {
   /// message can never be recovered. Not from the server, not by re-decrypting
   /// — that lands on DuplicateMessage and a permanent "[Decryption failed]"
   /// (see [saveDecryptedContent]). Call this only when the message is provably
-  /// gone for good: a server delete event, or an expiry gated on a
+  /// gone for good: a delete-for-everyone, or an expiry gated on a
   /// server-confirmed clock. NEVER on the local clock alone — a device running
-  /// fast would destroy messages that are still live server-side.
+  /// fast would destroy messages that have not expired yet.
   ///
   /// Removes per id: the plaintext record, the raw replay record, and on
   /// mobile the legacy secure-store copy. Returns a [PlaintextPurgeResult] —
@@ -4078,8 +4080,9 @@ class EncryptionService {
   /// Ids of every persisted plaintext record belonging to [conversationIds].
   ///
   /// Scans the whole prefix instead of working from loaded rows, because the
-  /// store outlives memory: history pages in ~50 rows while up to 2000 records
-  /// persist across sessions. Purging only what is loaded would strand the
+  /// store outlives memory: a chat holds only the rows it has loaded while up
+  /// to 2000 records persist across sessions. Purging only what is loaded
+  /// would strand the
   /// rest permanently — cleared and unfriended messages have no expiry, so no
   /// later sweep would ever revisit them.
   ///
@@ -4112,7 +4115,8 @@ class EncryptionService {
   /// per-minute cleanup lag.
   ///
   /// `retired` is returned separately because retention is the ONE rule that
-  /// destroys plaintext for a row the server still serves — see [markRetired].
+  /// destroys plaintext of a message nobody asked to remove (no expiry, no
+  /// delete): age alone decides — see [markRetired].
   Future<({Set<int> expired, Set<int> retired})> destroyableMessageIds({
     required DateTime serverNow,
     required Duration expiryGrace,
