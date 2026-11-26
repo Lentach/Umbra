@@ -3901,6 +3901,10 @@ class EncryptionService {
     await sweepPrefs(_rawDecryptedContentPrefix(userId), collectIds: true);
     await sweepPrefs(_pendingSendPrefix(userId));
     await sweepPrefs(_boxUnsentPrefix(userId));
+    // Parked box actions: an edit parked for a message that never arrived
+    // holds the edited words. Queued with the park's own writes, so a park in
+    // flight cannot write the row back after the sweep.
+    await _parkedWrite(userId, () => sweepPrefs(_parkedBoxActionKey(userId)));
 
     // Retire what we destroyed, BEFORE reporting success.
     //
@@ -4394,7 +4398,8 @@ class EncryptionService {
   }
 
   /// Records a delete-for-everyone of [wire]. Locked for the same reason the
-  /// retired set is: one key, every same-origin PWA engine.
+  /// retired set is: one key, every same-origin PWA engine. What was parked
+  /// for it (an edit holds words of the deleted message) goes with it.
   Future<void> addBoxTombstone(WireKey wire) async {
     final userId = _userId;
     if (userId == null) return;
@@ -4409,18 +4414,26 @@ class EncryptionService {
           ..[_tombstoneOf(wire)] = now;
         final newest = kept.entries.toList()
           ..sort((a, b) => b.value.compareTo(a.value));
-        await prefs.setString(
+        final written = await prefs.setString(
           _boxTombstoneKey(userId),
           jsonEncode({
             for (final e in newest.take(_boxTombstoneCap)) e.key: e.value,
           }),
         );
+        // Both backends answer `false` to a refused write instead of
+        // throwing; a lost tombstone lets a late copy show again.
+        if (!written) {
+          E2ePersistentDiag.record('BOX_TOMBSTONE_WRITE_FAILED', {
+            'error': 'refused',
+          });
+        }
       } on Object catch (e) {
         E2ePersistentDiag.record('BOX_TOMBSTONE_WRITE_FAILED', {
           'error': e.runtimeType.toString(),
         });
       }
     });
+    await _dropParkedFor(userId, wire);
   }
 
   Map<String, int> _readBoxTombstones(ContentKv prefs, int userId) {
@@ -4552,13 +4565,15 @@ class EncryptionService {
   ) async {
     final newest = marks.chats.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
-    await prefs.setString(
+    final written = await prefs.setString(
       _boxSeenKey(userId),
       jsonEncode({
         'b': marks.base,
         'c': {for (final e in newest.take(_boxSeenCap)) '${e.key}': e.value},
       }),
     );
+    // Refused writes answer `false`; the caller's tail records the failure.
+    if (!written) throw StateError('box seen write refused');
   }
 
   // ── Box actions parked until their target lands (item 4, E19k) ──────────
@@ -4608,7 +4623,12 @@ class EncryptionService {
         for (final (key, a) in all.take(_parkedBoxActionCap)) {
           (kept[key] ??= []).add(a);
         }
-        await prefs.setString(_parkedBoxActionKey(userId), jsonEncode(kept));
+        if (!await prefs.setString(
+          _parkedBoxActionKey(userId),
+          jsonEncode(kept),
+        )) {
+          throw StateError('parked write refused');
+        }
       } on Object catch (e) {
         E2ePersistentDiag.record('BOX_PARKED_WRITE_FAILED', {
           'error': e.runtimeType.toString(),
@@ -4647,7 +4667,12 @@ class EncryptionService {
         await _reloadPrefsForCrossContext(prefs);
         final parked = _readParkedBoxActions(prefs, userId);
         if (parked.remove(_parkedOf(conversationId, wire)) == null) return;
-        await prefs.setString(_parkedBoxActionKey(userId), jsonEncode(parked));
+        if (!await prefs.setString(
+          _parkedBoxActionKey(userId),
+          jsonEncode(parked),
+        )) {
+          throw StateError('parked write refused');
+        }
       } on Object catch (e) {
         E2ePersistentDiag.record('BOX_PARKED_WRITE_FAILED', {
           'error': e.runtimeType.toString(),
@@ -4655,6 +4680,32 @@ class EncryptionService {
       }
     });
   }
+
+  /// Drops what is parked for [wire] in EVERY chat: its message was deleted
+  /// for everyone, so nothing is left to apply to, and an edit parked here
+  /// still holds the words of that message.
+  Future<void> _dropParkedFor(int userId, WireKey wire) =>
+      _parkedWrite(userId, () async {
+        try {
+          final prefs = await _sharedPrefs;
+          await _reloadPrefsForCrossContext(prefs);
+          final parked = _readParkedBoxActions(prefs, userId);
+          final suffix = '|${_tombstoneOf(wire)}';
+          final before = parked.length;
+          parked.removeWhere((key, _) => key.endsWith(suffix));
+          if (parked.length == before) return;
+          if (!await prefs.setString(
+            _parkedBoxActionKey(userId),
+            jsonEncode(parked),
+          )) {
+            throw StateError('parked write refused');
+          }
+        } on Object catch (e) {
+          E2ePersistentDiag.record('BOX_PARKED_WRITE_FAILED', {
+            'error': e.runtimeType.toString(),
+          });
+        }
+      });
 
   /// The park's writes, one after another: the cross-context lock passes
   /// through off web, and the native store shows a write only once it
