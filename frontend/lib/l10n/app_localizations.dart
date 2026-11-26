@@ -3530,6 +3530,12 @@ abstract class AppLocalizations {
   /// **'Nie udało się zabezpieczyć kodu na tym urządzeniu.'**
   String get passcodeUnavailable;
 
+  /// No description provided for @passcodeTurnOffFailed.
+  ///
+  /// In pl, this message translates to:
+  /// **'Nie udało się wyłączyć kodu. Spróbuj ponownie.'**
+  String get passcodeTurnOffFailed;
+
   /// No description provided for @passcodeCredentialLoading.
   ///
   /// In pl, this message translates to:

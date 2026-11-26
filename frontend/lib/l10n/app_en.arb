@@ -782,6 +782,7 @@
   "passcodeTooShort": "Use at least 4 characters.",
   "passcodeBlocked": "Too many attempts. Try again in {seconds}s.",
   "passcodeUnavailable": "This device could not secure the passcode.",
+  "passcodeTurnOffFailed": "Couldn't turn off the passcode. Try again.",
   "passcodeCredentialLoading": "Reading this device's secure storage…",
   "passcodeForgot": "Forgot your passcode?",
   "passcodeNoRecovery": "A forgotten passcode cannot be recovered.",

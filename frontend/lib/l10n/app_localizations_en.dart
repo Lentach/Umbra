@@ -2001,6 +2001,10 @@ class AppLocalizationsEn extends AppLocalizations {
       'This device could not secure the passcode.';
 
   @override
+  String get passcodeTurnOffFailed =>
+      'Couldn\'t turn off the passcode. Try again.';
+
+  @override
   String get passcodeCredentialLoading =>
       'Reading this device\'s secure storage…';
 

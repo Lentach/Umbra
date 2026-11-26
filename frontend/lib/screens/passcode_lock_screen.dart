@@ -202,7 +202,10 @@ class _EnabledBody extends StatelessWidget {
     if (disabled) {
       Navigator.of(context).pop();
     } else if (passcodeProvider.lockoutRemaining == null) {
-      showTopSnackBar(context, AppLocalizations.of(context).passcodeUnavailable);
+      showTopSnackBar(
+        context,
+        AppLocalizations.of(context).passcodeTurnOffFailed,
+      );
     }
   }
 

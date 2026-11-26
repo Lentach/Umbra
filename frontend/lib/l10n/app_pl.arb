@@ -770,6 +770,7 @@
     "placeholders": { "seconds": { "type": "int" } }
   },
   "passcodeUnavailable": "Nie udało się zabezpieczyć kodu na tym urządzeniu.",
+  "passcodeTurnOffFailed": "Nie udało się wyłączyć kodu. Spróbuj ponownie.",
   "passcodeCredentialLoading": "Odczytywanie zabezpieczeń urządzenia…",
   "passcodeForgot": "Nie pamiętasz kodu?",
   "passcodeNoRecovery": "Zapomnianego kodu nie da się odzyskać.",

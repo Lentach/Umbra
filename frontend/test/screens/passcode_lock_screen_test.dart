@@ -278,7 +278,7 @@ void main() {
       await tester.pumpAndSettle();
       await _type(tester, '1234');
 
-      expect(find.text(l10n.passcodeUnavailable), findsOneWidget);
+      expect(find.text(l10n.passcodeTurnOffFailed), findsOneWidget);
       expect(refusing.isEnabled, isTrue);
       await tester.pump(const Duration(seconds: 3));
     });
