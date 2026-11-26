@@ -25,11 +25,9 @@ typedef NoteAliveProbe = Future<bool> Function(String token);
 /// The probe a card uses when none is injected: a bare `GET /note/<token>/status`
 /// on the app's own API. It carries no login and no other identifier, so the
 /// server cannot tie the polling account to the account that created the note
-/// (A3-MSG-B-04, owner decision 2026-11-26). [api] is for tests.
-NoteAliveProbe defaultNoteAliveProbe([ApiService? api]) {
-  final client = api ?? ApiService(baseUrl: AppConfig.baseUrl);
-  return client.isNoteAlive;
-}
+/// (A3-MSG-B-04, owner decision 2026-11-26).
+NoteAliveProbe defaultNoteAliveProbe() =>
+    ApiService(baseUrl: AppConfig.baseUrl).isNoteAlive;
 
 /// In-chat banner for an Anti-Quantum Note link. Replaces the raw URL text
 /// (and any link-preview card) inside the TEXT bubble. Tapping an own-origin
