@@ -297,8 +297,9 @@ void main() {
         },
         onRecordingStateChanged: (_) {},
       );
-      state.testSkipHardware = true;
-      state.simulateRecordingForTest(elapsed: const Duration(seconds: 3));
+      state
+        ..testSkipHardware = true
+        ..simulateRecordingForTest(elapsed: const Duration(seconds: 3));
       await tester.pump();
       return (state: state, sent: sent);
     }
@@ -307,11 +308,10 @@ void main() {
       testWidgets('${away.name} discards the recording with its notice and '
           'nothing is sent on return', (tester) async {
         final r = await pumpRecording(tester);
-        final binding = TestWidgetsFlutterBinding.instance;
-
         // inactive precedes hidden/paused on every platform.
-        binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-        binding.handleAppLifecycleStateChanged(away);
+        final binding = TestWidgetsFlutterBinding.instance
+          ..handleAppLifecycleStateChanged(AppLifecycleState.inactive)
+          ..handleAppLifecycleStateChanged(away);
         await tester.pump();
         binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
         await tester.pump();
@@ -353,7 +353,7 @@ void main() {
       const pathChannel = MethodChannel('plugins.flutter.io/path_provider');
       final calls = <String>[];
       final startGate = Completer<void>();
-      messenger.setMockMethodCallHandler(recordChannel, (call) async {
+      messenger..setMockMethodCallHandler(recordChannel, (call) async {
         calls.add(call.method);
         switch (call.method) {
           case 'create':
@@ -366,14 +366,15 @@ void main() {
             await startGate.future;
         }
         return null;
-      });
-      messenger.setMockMethodCallHandler(
-        pathChannel,
-        (call) async => Directory.systemTemp.path,
-      );
+      })
+        ..setMockMethodCallHandler(
+          pathChannel,
+          (call) async => Directory.systemTemp.path,
+        );
       addTearDown(() {
-        messenger.setMockMethodCallHandler(recordChannel, null);
-        messenger.setMockMethodCallHandler(pathChannel, null);
+        messenger
+          ..setMockMethodCallHandler(recordChannel, null)
+          ..setMockMethodCallHandler(pathChannel, null);
       });
       return (calls: calls, startGate: startGate);
     }
@@ -426,8 +427,9 @@ void main() {
       expect(r.state.isStarting, isTrue);
 
       // The user presses Home / the power key while the recorder is opening.
-      binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-      binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      binding
+        ..handleAppLifecycleStateChanged(AppLifecycleState.inactive)
+        ..handleAppLifecycleStateChanged(AppLifecycleState.paused);
       platform.startGate.complete();
       await settle(tester);
       await started;
@@ -468,9 +470,10 @@ void main() {
 
       final started = r.state.startRecording();
       await settle(tester);
-      binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-      binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
-      binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      binding
+        ..handleAppLifecycleStateChanged(AppLifecycleState.inactive)
+        ..handleAppLifecycleStateChanged(AppLifecycleState.paused)
+        ..handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       platform.startGate.complete();
       await settle(tester);
       await started;
@@ -490,10 +493,9 @@ void main() {
       r.state.testSkipHardware = true;
       r.state.simulateRecordingForTest(elapsed: const Duration(seconds: 3));
       await tester.pump();
-      final binding = TestWidgetsFlutterBinding.instance;
-
-      binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-      binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      final binding = TestWidgetsFlutterBinding.instance
+        ..handleAppLifecycleStateChanged(AppLifecycleState.inactive)
+        ..handleAppLifecycleStateChanged(AppLifecycleState.paused);
       await tester.pump(const Duration(seconds: 3));
       expect(r.state.isRecording, isFalse);
       expect(find.text(canceledNotice(tester)), findsNothing);
@@ -511,13 +513,13 @@ void main() {
       r.state.testSkipHardware = true;
       r.state.simulateRecordingForTest(elapsed: const Duration(seconds: 3));
       await tester.pump();
-      final binding = TestWidgetsFlutterBinding.instance;
-
-      binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
-      binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      final binding = TestWidgetsFlutterBinding.instance
+        ..handleAppLifecycleStateChanged(AppLifecycleState.paused)
+        ..handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await tester.pump(const Duration(milliseconds: 2600));
-      binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
-      binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      binding
+        ..handleAppLifecycleStateChanged(AppLifecycleState.paused)
+        ..handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await tester.pump();
 
       expect(find.text(canceledNotice(tester)), findsNothing);
