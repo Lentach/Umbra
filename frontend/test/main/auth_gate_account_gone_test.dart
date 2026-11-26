@@ -56,9 +56,13 @@ class _Auth extends AuthProvider {
 
 class _Encryption extends EncryptionProvider {
   int keyWipes = 0;
+  int? wipedUser;
 
   @override
-  Future<void> clearEncryptionKeys() async => keyWipes++;
+  Future<void> clearEncryptionKeys({int? userId}) async {
+    keyWipes++;
+    wipedUser = userId;
+  }
 }
 
 void main() {
@@ -124,6 +128,7 @@ void main() {
     expect(find.byType(AuthScreen), findsOneWidget);
     expect(find.byType(MainShell), findsNothing);
     expect(encryption.keyWipes, 1);
+    expect(encryption.wipedUser, 7, reason: 'the account the session named');
   });
 
   testWidgets('a rejected session whose account still exists is left '

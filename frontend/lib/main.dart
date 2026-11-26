@@ -279,11 +279,17 @@ class _AuthGateState extends State<AuthGate> {
     // Then this device leaves the way the deleting device did: signed out,
     // connection closed, local keys wiped (`SettingsScreen` delete flow).
     conn.onSessionRejected = () async {
+      // Taken before the verdict clears the session: a device that was closed
+      // while the account was deleted never initialized its encryption
+      // service, so the wipe has to be told whose keys to remove.
+      final accountId = auth.currentUser?.id;
       if (!await auth.endSessionIfAccountGone()) return;
       conn.disconnect(isLogout: true);
       // Read here, not in build: only an account that is gone needs it.
       if (!mounted) return;
-      await context.read<EncryptionProvider>().clearEncryptionKeys();
+      await context.read<EncryptionProvider>().clearEncryptionKeys(
+        userId: accountId,
+      );
     };
 
     // The mirror case (spec §6.2): a reset teardown re-homed this account onto

@@ -5740,8 +5740,12 @@ class EncryptionService {
   /// `initialize` drops them when the account CHANGES ((lxxxiv) rider) —
   /// nulling `_userId` here is what makes the next login take that branch.
   /// A new per-account collection belongs on that list, not here.
-  Future<void> clearAllKeys() async {
-    final userId = _userId;
+  ///
+  /// [accountId] names the account to wipe when this service holds none (a
+  /// device that was closed while its account was deleted never initialized);
+  /// without it the wipe would be a silent no-op there.
+  Future<void> clearAllKeys({int? accountId}) async {
+    final userId = accountId ?? _userId;
     Object? signalError;
     StackTrace? signalStack;
     if (userId != null) {
