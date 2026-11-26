@@ -476,12 +476,6 @@ abstract class AppLocalizations {
   /// **'Lista urządzeń zmieniła się w trakcie — podpisuję ponownie…'**
   String get linkStaleVersionRetry;
 
-  /// No description provided for @linkNewTitle.
-  ///
-  /// In pl, this message translates to:
-  /// **'Połącz to urządzenie'**
-  String get linkNewTitle;
-
   /// No description provided for @linkNewExplainer.
   ///
   /// In pl, this message translates to:

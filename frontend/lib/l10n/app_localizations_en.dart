@@ -223,9 +223,6 @@ class AppLocalizationsEn extends AppLocalizations {
       'The device list changed mid-flight — re-signing…';
 
   @override
-  String get linkNewTitle => 'Link this device';
-
-  @override
   String get linkNewExplainer =>
       'On the primary: Link a device → scan or type this code.';
 

@@ -9,100 +9,18 @@ import '../services/device_link/link_crypto.dart';
 import '../utils/link_fragment_stub.dart'
     if (dart.library.html) '../utils/link_fragment_web.dart';
 import '../theme/rpg_theme.dart';
-import '../widgets/glass/glass_top_bar.dart';
 import '../widgets/top_snackbar.dart';
 import 'link_scan_screen.dart';
 
-/// The NEW-DEVICE side (N) of the §5.1 link ceremony (Phase 2 T3).
+/// The NEW-DEVICE side (N) of the §5.1 link ceremony (Phase 2 T3), mounted
+/// inline by the (lxxiii) clause 3 `DeviceLinkGateScreen`, which is
+/// provider-state, not navigation.
 ///
 /// Renders the out-of-band code BOTH as selectable text with a copy button
 /// (the required manual path, spec §12 item (i)) and as a QR. The code is
 /// the ONLY channel `ephPubN` travels — it never touches the server
 /// (amendment (c)). Every failure path discards the adopted identity and
-/// minted keys (I1 abort hygiene, falsification 18).
-class LinkThisDeviceScreen extends StatefulWidget {
-  const LinkThisDeviceScreen({super.key, required this.controller});
-
-  final LinkCeremonyController controller;
-
-  @override
-  State<LinkThisDeviceScreen> createState() => _LinkThisDeviceScreenState();
-}
-
-class _LinkThisDeviceScreenState extends State<LinkThisDeviceScreen> {
-  bool _popped = false;
-
-  /// Same exit as the primary side: `done` returns to the devices screen —
-  /// which re-reads the list on the rebound socket ((lxviii) clause 1) — and
-  /// the confirmation is a toast there. The pop is not an abort for `done`.
-  void _onDone() {
-    if (_popped || !mounted) return;
-    _popped = true;
-    showTopSnackBar(context, AppLocalizations.of(context).linkNewDone);
-    Navigator.of(context).pop();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colors = theme.colorScheme;
-    final l10n = AppLocalizations.of(context);
-
-    // Amendment (lxvi) clause 3: the abort hangs off the POP, not the arrow,
-    // so gesture/hardware/browser back take the same exit — a stage the user
-    // walked away from must never stay approvable by the primary (I1).
-    return PopScope(
-      canPop: true,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) return;
-        final step = widget.controller.newDeviceStep;
-        if (step != NewDeviceLinkStep.done &&
-            step != NewDeviceLinkStep.aborted &&
-            step != NewDeviceLinkStep.idle) {
-          widget.controller.abortNewDevice('cancelled_locally');
-        }
-      },
-      child: Scaffold(
-        backgroundColor: theme.scaffoldBackgroundColor,
-        extendBodyBehindAppBar: true,
-        appBar: GlassTopBar(
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back),
-            tooltip: MaterialLocalizations.of(context).backButtonTooltip,
-            onPressed: () => Navigator.of(context).pop(),
-          ),
-          title: Text(
-            l10n.linkNewTitle,
-            style: RpgTheme.bodyFont(
-              fontSize: 16,
-              color: colors.onSurface,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ),
-        body: SingleChildScrollView(
-          padding: EdgeInsets.only(
-            top:
-                MediaQuery.paddingOf(context).top +
-                GlassTopBar.capsuleHeight +
-                16,
-            bottom: MediaQuery.paddingOf(context).bottom + 24,
-            left: 24,
-            right: 24,
-          ),
-          child: LinkThisDeviceBody(
-            controller: widget.controller,
-            onDone: _onDone,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// The device-side ceremony body, reusable outside this route: mounted here
-/// under a poppable Scaffold, and inline by the (lxxiii) clause 3
-/// `DeviceLinkGateScreen`, which is provider-state, not navigation. Starts
+/// minted keys (I1 abort hygiene, falsification 18). Starts
 /// `startNewDeviceFlow` on mount and reports `done` through [onDone] exactly
 /// once (post-frame — the notification can land mid-build).
 class LinkThisDeviceBody extends StatefulWidget {

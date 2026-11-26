@@ -68,7 +68,6 @@
   "linkNoDak": "Only the device that enabled linking can link.",
   "linkFailed": "Linking failed",
   "linkStaleVersionRetry": "The device list changed mid-flight — re-signing…",
-  "linkNewTitle": "Link this device",
   "linkNewExplainer": "On the primary: Link a device → scan or type this code.",
   "linkNewWaitingHello": "Waiting for your primary device…",
   "linkNewCopy": "Copy code",

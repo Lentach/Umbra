@@ -19,8 +19,8 @@ import 'recovery_key_screen.dart';
 /// The account's devices (multi-device spec §4/§5.1 — Phase 2 T3).
 ///
 /// Owns the screen-scoped [LinkCeremonyController] and registers it as
-/// ConnectionProvider's provisioning sink for its lifetime; the two link-flow
-/// screens drive the same instance. The rendered list is ONLY the DAK-signed
+/// ConnectionProvider's provisioning sink for its lifetime; the primary-side
+/// link screen drives the same instance. The rendered list is ONLY the DAK-signed
 /// canonical list, verified along the I7 chain against this device's own
 /// identity — never the server's bare word.
 class DevicesScreen extends StatefulWidget {

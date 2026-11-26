@@ -226,9 +226,6 @@ class AppLocalizationsPl extends AppLocalizations {
       'Lista urządzeń zmieniła się w trakcie — podpisuję ponownie…';
 
   @override
-  String get linkNewTitle => 'Połącz to urządzenie';
-
-  @override
   String get linkNewExplainer =>
       'Na urządzeniu głównym: Połącz urządzenie → zeskanuj lub wpisz ten kod.';
 

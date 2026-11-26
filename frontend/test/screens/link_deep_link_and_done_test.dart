@@ -246,37 +246,6 @@ void main() {
       expect(find.text(l10n.linkPrimaryDone), findsOneWidget);
       await tester.pump(const Duration(seconds: 3));
     });
-
-    testWidgets('new-device side: done pops and toasts', (tester) async {
-      final c = _bareController();
-      // startNewDeviceFlow arms the stage-expiry timer; the abort cancels it.
-      addTearDown(() async {
-        await c.abortNewDevice('cancelled');
-        c.dispose();
-      });
-      await tester.pumpWidget(
-        _ceremonyHost((_) => LinkThisDeviceScreen(controller: c)),
-      );
-      await tester.tap(find.byKey(const Key('open')));
-      // The opening step shows an indeterminate spinner (no wire answers):
-      // bounded pumps, never settle.
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 400));
-      expect(find.byType(LinkThisDeviceScreen), findsOneWidget);
-
-      c.newDeviceStep = NewDeviceLinkStep.done;
-      c.notifyListeners();
-      // Bounded pumps (the opening spinner never settles): one frame for
-      // the post-frame pop to schedule, then the route transition.
-      for (var i = 0; i < 12; i++) {
-        await tester.pump(const Duration(milliseconds: 50));
-      }
-
-      expect(find.byType(LinkThisDeviceScreen), findsNothing);
-      expect(find.text('marker-page'), findsOneWidget);
-      // Let the toast's dismiss timer run out before teardown.
-      await tester.pump(const Duration(seconds: 3));
-    });
   });
 }
 
@@ -292,7 +261,11 @@ void qrTests() {
       c.dispose();
     });
     await tester.pumpWidget(
-      _ceremonyHost((_) => LinkThisDeviceScreen(controller: c)),
+      _ceremonyHost(
+        (_) => Scaffold(
+          body: SingleChildScrollView(child: LinkThisDeviceBody(controller: c)),
+        ),
+      ),
     );
     await tester.tap(find.byKey(const Key('open')));
     await tester.pump();
