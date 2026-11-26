@@ -1333,8 +1333,7 @@ void main() {
   testWidgets('a pick that reaches the composer mid-recording says why '
       'nothing was sent', (tester) async {
     final h = await pumpComposer(tester);
-    final state = h.key.currentState!;
-    state.setRecordingForTest(true);
+    final state = h.key.currentState!..setRecordingForTest(true);
     await tester.pump();
 
     await tester.runAsync(
