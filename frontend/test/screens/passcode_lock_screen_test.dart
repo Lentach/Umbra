@@ -262,5 +262,33 @@ void main() {
       expect(find.byKey(const Key('passcode-enable')), findsNothing,
           reason: 'the setup page must not be what the user lands on');
     });
+
+    // A2-AUTH-06: the prompt accepted the code, yet `disable` can still
+    // refuse (vault unwrap failed). The user was returned to the same page
+    // with the lock on and no word why.
+    testWidgets('a refused turn-off says so instead of staying silent',
+        (tester) async {
+      final refusing = _RefusingDisable(store: store, kdf: kdf);
+      await refusing.initialize();
+      await refusing.enable(passcode: '1234', mode: PasscodeMode.digits4);
+      await tester.pumpWidget(_host(refusing));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('passcode-turn-off')));
+      await tester.pumpAndSettle();
+      await _type(tester, '1234');
+
+      expect(find.text(l10n.passcodeUnavailable), findsOneWidget);
+      expect(refusing.isEnabled, isTrue);
+      await tester.pump(const Duration(seconds: 3));
+    });
   });
+}
+
+/// A provider whose disable is refused after the code verified.
+class _RefusingDisable extends PasscodeProvider {
+  _RefusingDisable({super.store, super.kdf});
+
+  @override
+  Future<bool> disable({required String passcode}) async => false;
 }
