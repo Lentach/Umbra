@@ -84,7 +84,12 @@ class EncryptionProvider extends ChangeNotifier {
     _encryptionService.onPeerAutoAccepted = (peerId, deviceId) {
       final others = <int>{1, ...?_deviceListCache.cached(peerId)?.liveDeviceIds}
         ..remove(deviceId);
-      invalidateDeviceList(peerId, byPerson: true);
+      // The tap's own accept (`confirmCalmKey`) just refreshed this list:
+      // dropping it again would owe a second lookup of the friend, and each
+      // lookup spends one of its one-time pre-keys.
+      if (!_calmConfirming.contains(peerId)) {
+        invalidateDeviceList(peerId, byPerson: true);
+      }
       for (final other in others) {
         markSessionRebuild(peerId, deviceId: other);
       }
@@ -277,6 +282,10 @@ class EncryptionProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Friends whose calm key is being confirmed by the person's tap right now:
+  /// the lookup that tap made is the one lookup it owes.
+  final Set<int> _calmConfirming = <int>{};
+
   /// The tap on a calm hold: CONFIRMS [frameIdentityBase64] for [peerId] from a
   /// fresh served bundle for [deviceId] — a person's act, so the only place a
   /// foreign-key frame may cause a lookup (decision 153). Nothing is accepted
@@ -323,6 +332,7 @@ class EncryptionProvider extends ChangeNotifier {
       return CalmConfirm.refused;
     }
     var refused = false;
+    _calmConfirming.add(peerId);
     try {
       await _encryptionService.buildSession(
         peerId,
@@ -340,6 +350,8 @@ class EncryptionProvider extends ChangeNotifier {
       // A libsignal-internal failure after the accept leaves the proven key
       // pinned; the next ensureSession builds against it (S6).
       _e2eFlowLog('CALM_CONFIRM_BUILD_FAILED', {'peerId': peerId, 'error': '$e'});
+    } finally {
+      _calmConfirming.remove(peerId);
     }
     if (epoch != _initEpoch) return CalmConfirm.transient;
     if (await _encryptionService.peerTofuIdentityBase64(peerId) !=

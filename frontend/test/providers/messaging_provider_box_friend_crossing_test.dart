@@ -1600,6 +1600,131 @@ void main() {
       expect(read[1], contains('second'));
     });
 
+    // ---- The calm line turns visible, or is abandoned (F3, F5, F6, F7) ----
+
+    for (final warnings in [false, true]) {
+      test('F5: the friend became ${warnings ? 'warned about (warnings ON)' : 'verified'} '
+          'while the line waited: the tap turns the hold red with no lookup '
+          'and no bundle fetch, and the waiting message reads as refused',
+          () async {
+        await calmRestore();
+        final outbox = await boxForB();
+        final row = await writeFromB('late');
+        final before = await anchorOfA();
+        if (warnings) {
+          b.enc.keyChangeWarnings = () => true;
+        } else {
+          expect(await b.enc.encryptionService.verifyPinned(1), isTrue);
+        }
+        b.emits.clear();
+        b.enc.lookupLog.clear();
+        b.enc.forcedLookups.clear();
+
+        await tap(b);
+
+        expect(b.emits, isEmpty, reason: 'not one request');
+        expect(b.enc.lookupLog, isEmpty);
+        expectRed(b);
+        expect(await anchorOfA(), before);
+        expect(outbox.delivered, isEmpty);
+        expect(b.reader.sendWaitsForCalmHold(row.tempId), isFalse);
+        expect(b.reader.sendRefusedForIdentity(row.tempId), isTrue);
+        expect(b.enc.peersRefusedIdentity, contains(1));
+      });
+    }
+
+    test('a re-offer that finds the line no longer eligible turns it red '
+        'and the waiting message reads as refused, not stuck', () async {
+      await calmRestore();
+      final outbox = await boxForB();
+      final row = await writeFromB('waiting');
+      expect(await b.enc.encryptionService.verifyPinned(1), isTrue);
+
+      await reoffer(b);
+
+      expectRed(b);
+      expect(b.reader.sendWaitsForCalmHold(row.tempId), isFalse);
+      expect(b.reader.sendRefusedForIdentity(row.tempId), isTrue);
+      expect(outbox.delivered, isEmpty);
+    });
+
+    test('ONE lookup per tap, with the box refresh wired as the app wires '
+        'it: the accept inside the tap does not drop the list it just '
+        'fetched and asks the friend again (device: two searchUsers, 30 ms '
+        'and 117 ms after the tap)', () async {
+      final restored = await calmRestore();
+      final served = bundleOf(restored, 0);
+      b.enc
+        ..isBoxOnlyPeer = ((_) => true)
+        ..servedBundleFor = ((_, _) => served)
+        // What `MessagingProvider.onDeviceListInvalidated` starts: the box
+        // refresh reads the list again, forced when a lookup is owed.
+        ..onDeviceListInvalidated = (user) => unawaited(
+          b.enc
+              .getVerifiedDeviceList(
+                user,
+                forceRefresh: b.enc.peerListOwedByServer(user),
+              )
+              .then<void>((_) {}, onError: (Object _) {}),
+        );
+      b.enc.forcedLookups.clear();
+      b.enc.lookupLog.clear();
+
+      await tap(b);
+      await pumpEventQueue();
+
+      expect(await anchorOfA(), await idOf(restored));
+      expect(
+        b.enc.lookupLog.where((e) => e == 'invalidate by person'),
+        hasLength(1),
+        reason: 'the accept inside the tap must not drop the list again',
+      );
+
+    });
+
+    test('F7: the account switches while the tap waits for the lookup: the '
+        'served bundle is abandoned, nothing is built, the anchor does not '
+        'move', () async {
+      final restored = await calmRestore();
+      final before = await anchorOfA();
+      b.enc
+        ..isBoxOnlyPeer = ((_) => true)
+        ..servedBundleFor = ((_, _) => bundleOf(restored, 0))
+        ..onForcedLookup = () async => b.enc.onConnect(false); // epoch moves
+
+      await tap(b);
+
+      expect(b.enc.forcedLookups, [1], reason: 'the lookup did run');
+      expect(await anchorOfA(), before);
+      expect(b.enc.peerKeyChangeLog(1), isEmpty);
+      expect(
+        E2eDiagLog.entries.where((e) => e.contains('CALM_CONFIRMED')),
+        isEmpty,
+      );
+    });
+
+    test('F6: the hold was cleared and re-created while the tap waited: its '
+        'late REFUSED answer is discarded, the new calm line stands',
+        () async {
+      await calmRestore();
+      b.other = a; // the server still serves the OLD key: refused
+      b.gate = Completer<void>();
+      final tapped = tap(b);
+      await pumpEventQueue();
+      expect(b.reader.calmHoldState(1), CalmHoldState.checking);
+
+      b.reader.onConnect(false); // clears the holds
+      await reoffer(b); // the journal re-offers: a NEW calm hold
+      expect(b.reader.calmHoldState(1), CalmHoldState.waiting);
+      b.gate!.complete();
+      b.gate = null;
+      await tapped;
+
+      expect(b.reader.calmHoldState(1), CalmHoldState.waiting);
+      expect(b.enc.peersCalmHeld, contains(1));
+      expect(b.enc.peersWithChangedIdentity, isEmpty);
+    });
+
     // ---- The drain after the tap fails, stalls or is slow (2b) ----
 
     /// A tap whose drain is [drain] (what the app wires, replaced).
