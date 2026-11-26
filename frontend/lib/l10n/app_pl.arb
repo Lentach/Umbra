@@ -670,6 +670,7 @@
   "userCardMuted": "Wyciszono",
   "userCardCopyTag": "Kopiuj tag",
   "userCardAboutHint": "Kilka słów o Tobie",
+  "userCardAboutSaveFailed": "Nie udało się zapisać opisu. Spróbuj ponownie.",
   "userCardSharedMedia": "Udostępnione multimedia",
   "settingsChatBackground": "Tło czatu",
   "userCardCopyHandle": "Kopiuj nazwę użytkownika i tag",

@@ -1801,6 +1801,10 @@ class AppLocalizationsPl extends AppLocalizations {
   String get userCardAboutHint => 'Kilka słów o Tobie';
 
   @override
+  String get userCardAboutSaveFailed =>
+      'Nie udało się zapisać opisu. Spróbuj ponownie.';
+
+  @override
   String get userCardSharedMedia => 'Udostępnione multimedia';
 
   @override

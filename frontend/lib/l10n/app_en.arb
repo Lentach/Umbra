@@ -685,6 +685,7 @@
   "userCardMuted": "Muted",
   "userCardCopyTag": "Copy tag",
   "userCardAboutHint": "A few words about you",
+  "userCardAboutSaveFailed": "Couldn't save your About. Try again.",
   "userCardSharedMedia": "Shared media",
   "settingsChatBackground": "Chat background",
   "userCardCopyHandle": "Copy username and tag",

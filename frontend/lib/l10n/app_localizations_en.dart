@@ -1769,6 +1769,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get userCardAboutHint => 'A few words about you';
 
   @override
+  String get userCardAboutSaveFailed => 'Couldn\'t save your About. Try again.';
+
+  @override
   String get userCardSharedMedia => 'Shared media';
 
   @override

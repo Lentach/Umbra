@@ -3116,6 +3116,12 @@ abstract class AppLocalizations {
   /// **'Kilka słów o Tobie'**
   String get userCardAboutHint;
 
+  /// No description provided for @userCardAboutSaveFailed.
+  ///
+  /// In pl, this message translates to:
+  /// **'Nie udało się zapisać opisu. Spróbuj ponownie.'**
+  String get userCardAboutSaveFailed;
+
   /// No description provided for @userCardSharedMedia.
   ///
   /// In pl, this message translates to:

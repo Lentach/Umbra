@@ -146,9 +146,10 @@ class _UserCardScreenState extends State<UserCardScreen> {
     try {
       await action();
       return true;
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('Profile update failed: $e\n$st');
       if (mounted) {
-        _showFeedback(e.toString().replaceFirst('Exception: ', ''));
+        _showFeedback(AppLocalizations.of(context).userCardAboutSaveFailed);
       }
       return false;
     }
