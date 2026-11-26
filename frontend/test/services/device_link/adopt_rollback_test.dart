@@ -381,7 +381,103 @@ void main() {
     });
   });
 
+  // R11Svc S2: a second tab on the link gate gets `socketReady` between the
+  // first tab's adopt and the server's `provisioningCompleted`, finds the
+  // unsettled marker and used to delete the first tab's adopted keys out of
+  // the shared storage. The tab running the ceremony holds
+  // `fireplace-e2e-link-<uid>` from the marker until it settles or discards;
+  // a start discards only when it can take that lock.
+  group('two tabs of one origin (S2)', () {
+    late _FakeOriginLocks locks;
+
+    EncryptionService tab() => EncryptionService(
+      linkLockHolder: locks.hold,
+      linkLockIfAvailable: locks.ifAvailable,
+    )..debugSetDualStorage(DualStorage(secure));
+
+    setUp(() => locks = _FakeOriginLocks());
+
+    test('a second tab starting during the first tab ceremony leaves the '
+        'adopted identity alone, and the ceremony then settles', () async {
+      final first = tab();
+      final blob = mintBlobInputs();
+      await adopt(first, blob);
+      expect(locks.held, contains('fireplace-e2e-link-$_userId'));
+
+      await startAgain(tab());
+
+      expect(
+        await secure.read(key: '${_namespace}identity_record_v1'),
+        isNotNull,
+        reason: 'the other tab discarded the adopted identity',
+      );
+      expect(await secure.read(key: '${_namespace}link_unsettled_v1'), isNotNull);
+
+      await first.settleProvisionedIdentity(_userId);
+      final next = tab();
+      await startAgain(next);
+      expect(await next.currentIdentityPublicKeyBase64(), blob.ikPub);
+    });
+
+    test('a marker nobody holds the lock for is discarded as before', () async {
+      await adopt(tab(), mintBlobInputs());
+      locks.holderDied();
+
+      await expectLater(
+        startAgain(tab()),
+        throwsA(isA<E2eIdentityIncompleteException>()),
+      );
+      expect(await secure.readAll(), preLink);
+    });
+
+    test('settling or discarding the ceremony frees the lock', () async {
+      final settled = tab();
+      await adopt(settled, mintBlobInputs());
+      await settled.settleProvisionedIdentity(_userId);
+      expect(locks.held, isEmpty);
+
+      FlutterSecureStorage.setMockInitialValues(Map.of(preLink));
+      final discarded = tab();
+      await adopt(discarded, mintBlobInputs());
+      expect(locks.held, isNotEmpty);
+      await discarded.discardProvisionedIdentity(_userId);
+      expect(locks.held, isEmpty);
+    });
+
+    test('a refused write that rolls the adopt back frees the lock', () async {
+      final storage = _FaultySecure(failAt: 2);
+      final service = EncryptionService(
+        linkLockHolder: locks.hold,
+        linkLockIfAvailable: locks.ifAvailable,
+      )..debugSetDualStorage(DualStorage(storage));
+
+      await expectLater(adopt(service, mintBlobInputs()), throwsStateError);
+
+      expect(locks.held, isEmpty);
+    });
+  });
+
   group('through the ceremony controller', ceremonyTests);
+}
+
+/// The origin's Web Locks, shared by every "tab" of one test: `hold` takes a
+/// name until released, `ifAvailable` runs only while nobody holds it.
+class _FakeOriginLocks {
+  final Set<String> held = {};
+
+  Future<void Function()> hold(String name) async {
+    held.add(name);
+    return () => held.remove(name);
+  }
+
+  Future<bool> ifAvailable(String name, Future<void> Function() action) async {
+    if (held.contains(name)) return false;
+    await action();
+    return true;
+  }
+
+  /// The tab holding a lock died: the browser frees it.
+  void holderDied() => held.clear();
 }
 
 class _NoDakStore extends DakStore {

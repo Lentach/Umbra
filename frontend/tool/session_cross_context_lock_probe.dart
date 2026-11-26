@@ -50,6 +50,30 @@ Future<void> _runProbe() async {
     throw StateError('wrong lock result');
   }
 
+  // The device-link ceremony's lock (`fireplace-e2e-link-<uid>`): a held name
+  // refuses an `ifAvailable` request without running it, and runs it once the
+  // holder releases.
+  final release = await holdCrossContextLock('link-name');
+  var ranWhileHeld = false;
+  if (await runCrossContextLockIfAvailable('link-name', () async {
+    ranWhileHeld = true;
+  })) {
+    throw StateError('ifAvailable ran against a held lock');
+  }
+  if (ranWhileHeld) throw StateError('ifAvailable action ran while held');
+  release();
+  // The release settles a promise tick after `release()`; poll briefly for it.
+  var ranAfterRelease = false;
+  for (var i = 0; i < 50 && !ranAfterRelease; i++) {
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    await runCrossContextLockIfAvailable('link-name', () async {
+      ranAfterRelease = true;
+    });
+  }
+  if (!ranAfterRelease) {
+    throw StateError('ifAvailable did not run against a free lock');
+  }
+
   disableWebLocksForProbe();
   var unlockedActionRan = false;
   try {
