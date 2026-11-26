@@ -22,7 +22,12 @@ Future<void> showSharedMediaFullscreen(
   BuildContext? dialogContext;
   void closeIfGone() {
     final ctx = dialogContext;
-    if (ctx != null && ctx.mounted && goneWatch.isGone()) {
+    // Only the photo's own route may be popped: a route above it (or a pop
+    // already under way) is left alone, like video_fullscreen_view.dart.
+    if (ctx != null &&
+        ctx.mounted &&
+        goneWatch.isGone() &&
+        (ModalRoute.of(ctx)?.isCurrent ?? false)) {
       dialogContext = null;
       Navigator.pop(ctx);
     }

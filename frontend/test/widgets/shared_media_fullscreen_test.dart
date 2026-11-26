@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:fireplace/models/message_model.dart';
@@ -65,6 +66,45 @@ void main() {
     changes.value++;
     await tester.pumpAndSettle();
     expect(find.byType(InteractiveViewer), findsOneWidget);
+  });
+
+  testWidgets('a route above the photo is not popped in its place', (
+    tester,
+  ) async {
+    final gone = ValueNotifier<bool>(false);
+    addTearDown(gone.dispose);
+    late BuildContext home;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) {
+            home = context;
+            return TextButton(
+              onPressed: () => showSharedMediaFullscreen(
+                context,
+                png,
+                goneWatch: (changes: gone, isGone: () => gone.value),
+              ),
+              child: const Text('open'),
+            );
+          },
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    unawaited(
+      showDialog<void>(
+        context: home,
+        builder: (_) => const AlertDialog(content: Text('above')),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    gone.value = true;
+    await tester.pumpAndSettle();
+
+    expect(find.text('above'), findsOneWidget);
   });
 
   // The watch must also see the REAL provider's delete paths: they notify
