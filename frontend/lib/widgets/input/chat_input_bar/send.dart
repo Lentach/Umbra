@@ -382,6 +382,11 @@ mixin _ComposerSend on _ComposerFocus {
   /// provider sends into the ACTIVE chat, so the caption is also kept back
   /// (restored) when the user switched chats during the image's send — the
   /// desktop split view keeps this composer mounted across that switch.
+  ///
+  /// While an edit is active the field holds the EDIT, not a caption (A3-CMP-06):
+  /// it is applied to the original message (or the edit is dropped when the
+  /// field is empty, like [_send]) and the picture goes out on its own, with
+  /// no caption — the same as a paperclip pick made during an edit.
   Future<void> _sendStaged() async {
     if (_isSendingStagedMedia) return;
     final staged = _attachment.staged;
@@ -389,8 +394,17 @@ mixin _ComposerSend on _ComposerFocus {
     final keepEmojiPanel = _showEmojiPicker;
     _armComposerCollapseGuard();
 
-    final caption = _controller.text.trim();
     final messaging = context.read<MessagingProvider>();
+    final editing = messaging.editingMessage;
+    final fieldText = _controller.text.trim();
+    if (editing != null) {
+      if (fieldText.isEmpty) {
+        messaging.cancelEditMessage();
+      } else {
+        messaging.editMessage(editing.id, fieldText);
+      }
+    }
+    final caption = editing != null ? '' : fieldText;
     final convs = context.read<ConversationsProvider>();
     final expiresIn = convs.conversationDisappearingTimer;
     final conversationId = convs.activeConversationId;

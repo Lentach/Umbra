@@ -1254,4 +1254,60 @@ void main() {
     expect(secondReads, 0);
     await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
   });
+
+  // A3-CMP-06: the staged path ignored the edit, so the corrected text went
+  // out as a NEW message and the original stayed wrong under its banner.
+  testWidgets('send while editing with a pasted picture: the edit is saved '
+      'as an edit and the picture goes out on its own', (tester) async {
+    final h = await pumpComposer(tester);
+    final state = h.key.currentState!;
+    final messaging = tester
+        .element(find.byType(ChatInputBar))
+        .read<MessagingProvider>();
+    final original = MessageModel(
+      id: kFirstLocalMessageId + 1,
+      content: 'typo',
+      senderId: 1,
+      senderUsername: 'alice',
+      conversationId: 10,
+      createdAt: DateTime.now(),
+      wireId: 'wire-00000001',
+    );
+    messaging
+      ..seedMessagesForTest(10, [original])
+      ..beginEditMessage(original);
+    await tester.pump();
+    state.attachmentControllerForTest.stage(
+      bytes: kTinyPng,
+      mimeType: 'image/png',
+      filename: 'pasted.png',
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'fixed');
+
+    await tester.runAsync(state.sendForTest);
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 200));
+    await _textSettled(tester);
+
+    expect(messaging.editingMessage, isNull);
+    final texts = messaging.loadedMessagesForTest
+        .where((m) => m.messageType == MessageType.text)
+        .toList();
+    expect(texts, hasLength(1)); // no second message carrying the correction
+    expect(texts.single.id, original.id);
+    expect(texts.single.content, 'fixed');
+    expect(
+      messaging.loadedMessagesForTest.where(
+        (m) => m.messageType == MessageType.image,
+      ),
+      hasLength(1),
+    );
+    expect(h.emitted.where((kind) => kind == 'IMAGE'), hasLength(1));
+    expect(state.attachmentControllerForTest.staged, isNull);
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller!.text,
+      isEmpty,
+    );
+  });
 }
