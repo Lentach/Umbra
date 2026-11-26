@@ -5,62 +5,52 @@ import '../l10n/app_localizations.dart';
 import '../theme/rpg_theme.dart';
 import '../widgets/glass/glass_top_bar.dart';
 
-/// The server's About limit (`UpdateProfileAboutDto`, `@MaxLength(80)`).
-const int kProfileAboutMaxLength = 80;
+/// The About limit as the user sees it: 80 characters (grapheme clusters, the
+/// server's `MaxGraphemes(80)`), and 640 code points (its `MaxCodePoints(640)`
+/// and the column CHECK of migration 0032), the backstop for one cluster with
+/// an unbounded number of combining marks.
+const int kProfileAboutMaxGraphemes = 80;
+const int kProfileAboutMaxCodePoints = 640;
 
-final RegExp _presentationSequence = RegExp('[^\uFE0F\uFE0E][\uFE0F\uFE0E]');
-final RegExp _surrogatePair = RegExp('[\uD800-\uDBFF][\uDC00-\uDFFF]');
-
-/// Length as the server counts it: validator's `isLength` — UTF-16 units minus
-/// surrogate pairs and presentation sequences. Not user-visible characters
-/// (Flutter's `maxLength`): a flag counts 2 here, a family emoji 5, so 41 flags
-/// pass a grapheme counter and are refused with a 400.
-int profileAboutLength(String text) =>
-    text.length -
-    _presentationSequence.allMatches(text).length -
-    _surrogatePair.allMatches(text).length;
-
-/// Keeps the field within [kProfileAboutMaxLength] by the server's count. Like
-/// `LengthLimitingTextInputFormatter`: an edit to a field that is already full
-/// is refused (the old value stays), and an over-long paste into a field with
-/// room is cut at the last whole character that fits, keeping the selection
-/// and the IME composing region while they still lie inside the kept text.
+/// Keeps the field within both limits. Like `LengthLimitingTextInputFormatter`:
+/// an edit to a field that is already full is refused (the old value stays),
+/// and an over-long paste into a field with room is cut at the last whole
+/// character that fits, keeping the selection and the IME composing region
+/// while they still lie inside the kept text.
 class _ProfileAboutLimiter extends TextInputFormatter {
   const _ProfileAboutLimiter();
+
+  static bool _fits(int graphemes, int codePoints) =>
+      graphemes <= kProfileAboutMaxGraphemes &&
+      codePoints <= kProfileAboutMaxCodePoints;
+
+  static bool _textFits(String text) =>
+      _fits(text.characters.length, text.runes.length);
 
   @override
   TextEditingValue formatEditUpdate(
     TextEditingValue oldValue,
     TextEditingValue newValue,
   ) {
-    if (profileAboutLength(newValue.text) <= kProfileAboutMaxLength) {
-      // The database column counts code points, which the validator's count
-      // undercounts for an emoji presentation sequence (R12-BE-01).
-      return newValue.text.runes.length <= kProfileAboutMaxLength
-          ? newValue
-          : oldValue;
-    }
+    if (_textFits(newValue.text)) return newValue;
     // Already full: typing mid-text must not push the last character out.
-    if (profileAboutLength(oldValue.text) >= kProfileAboutMaxLength) {
+    if (!_textFits(oldValue.text) ||
+        oldValue.text.characters.length >= kProfileAboutMaxGraphemes ||
+        oldValue.text.runes.length >= kProfileAboutMaxCodePoints) {
       return oldValue;
     }
     final kept = StringBuffer();
-    // Anything past twice the limit cannot fit: a character costs at least
-    // one unit of the count, so a long paste is not measured rune by rune.
-    for (final rune in newValue.text.runes.take(kProfileAboutMaxLength * 2 + 2)) {
-      final next = StringBuffer()
-        ..write(kept)
-        ..writeCharCode(rune);
-      if (profileAboutLength(next.toString()) > kProfileAboutMaxLength ||
-          next.toString().runes.length > kProfileAboutMaxLength) {
-        break;
-      }
-      kept.writeCharCode(rune);
+    var graphemes = 0;
+    var codePoints = 0;
+    for (final cluster in newValue.text.characters) {
+      graphemes += 1;
+      codePoints += cluster.runes.length;
+      if (!_fits(graphemes, codePoints)) break;
+      kept.write(cluster);
     }
     final text = kept.toString();
-    int clamp(int offset) => offset < 0 || offset > text.length
-        ? text.length
-        : offset;
+    int clamp(int offset) =>
+        offset < 0 || offset > text.length ? text.length : offset;
     final composing = newValue.composing;
     return TextEditingValue(
       text: text,
@@ -73,6 +63,17 @@ class _ProfileAboutLimiter extends TextInputFormatter {
           : TextRange.empty,
     );
   }
+}
+
+/// The counter shows whichever limit is closer to binding, so a field stopped
+/// by the code-point backstop does not read "5/80".
+String profileAboutCounter(String text) {
+  final graphemes = text.characters.length;
+  final codePoints = text.runes.length;
+  return codePoints * kProfileAboutMaxGraphemes >
+          graphemes * kProfileAboutMaxCodePoints
+      ? '$codePoints/$kProfileAboutMaxCodePoints'
+      : '$graphemes/$kProfileAboutMaxGraphemes';
 }
 
 /// Full-screen About editor (replaces the centered autofocus dialog).
@@ -154,9 +155,7 @@ class _EditAboutScreenState extends State<EditAboutScreen> {
                 required currentLength,
                 required isFocused,
                 required maxLength,
-              }) => Text(
-                '${profileAboutLength(_controller.text)}/$kProfileAboutMaxLength',
-              ),
+              }) => Text(profileAboutCounter(_controller.text)),
           maxLines: 3,
           minLines: 1,
           textInputAction: TextInputAction.done,
