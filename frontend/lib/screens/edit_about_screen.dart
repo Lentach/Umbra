@@ -34,7 +34,11 @@ class _ProfileAboutLimiter extends TextInputFormatter {
     TextEditingValue newValue,
   ) {
     if (profileAboutLength(newValue.text) <= kProfileAboutMaxLength) {
-      return newValue;
+      // The database column counts code points, which the validator's count
+      // undercounts for an emoji presentation sequence (R12-BE-01).
+      return newValue.text.runes.length <= kProfileAboutMaxLength
+          ? newValue
+          : oldValue;
     }
     // Already full: typing mid-text must not push the last character out.
     if (profileAboutLength(oldValue.text) >= kProfileAboutMaxLength) {
@@ -47,7 +51,10 @@ class _ProfileAboutLimiter extends TextInputFormatter {
       final next = StringBuffer()
         ..write(kept)
         ..writeCharCode(rune);
-      if (profileAboutLength(next.toString()) > kProfileAboutMaxLength) break;
+      if (profileAboutLength(next.toString()) > kProfileAboutMaxLength ||
+          next.toString().runes.length > kProfileAboutMaxLength) {
+        break;
+      }
       kept.writeCharCode(rune);
     }
     final text = kept.toString();

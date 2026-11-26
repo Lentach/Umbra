@@ -79,4 +79,30 @@ void main() {
 
     expect(field.controller!.text, full);
   });
+
+  // R12-BE-01: the `about` column is varchar(80) and Postgres counts code
+  // points, while the validator counts a heart + selector as ONE.
+  testWidgets('the field is also capped at 80 code points', (tester) async {
+    final field = await pumpField(tester);
+    const heart = '\u2764\uFE0F';
+
+    await tester.enterText(find.byType(TextField), heart * 80);
+    expect(field.controller!.text.runes.length, lessThanOrEqualTo(80));
+
+    await tester.enterText(find.byType(TextField), heart * 40);
+    expect(field.controller!.text, heart * 40);
+    tester.testTextInput.updateEditingValue(
+      TextEditingValue(
+        text: heart * 41,
+        selection: const TextSelection.collapsed(offset: 82),
+      ),
+    );
+    await tester.pump();
+    expect(field.controller!.text, heart * 40);
+
+    await tester.enterText(find.byType(TextField), 'x' * 80);
+    expect(field.controller!.text, 'x' * 80);
+    await tester.enterText(find.byType(TextField), '\u{1F1F5}\u{1F1F1}' * 40);
+    expect(field.controller!.text, '\u{1F1F5}\u{1F1F1}' * 40);
+  });
 }
