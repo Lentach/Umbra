@@ -1,7 +1,6 @@
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../../constants/app_constants.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/message_model.dart';
@@ -190,10 +189,7 @@ class _TextMessageContentState extends State<TextMessageContent> {
     return Padding(
       padding: const EdgeInsets.only(top: 8),
       child: GestureDetector(
-        onTap: () => launchUrl(
-          Uri.parse(message.linkPreviewUrl!),
-          mode: LaunchMode.externalApplication,
-        ),
+        onTap: () => openHttpLink(message.linkPreviewUrl!),
         child: Container(
           decoration: BoxDecoration(
             color: cardBg,

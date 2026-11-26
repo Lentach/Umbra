@@ -4,6 +4,18 @@ import 'package:url_launcher/url_launcher.dart';
 
 final _urlRegex = RegExp(r'https?://[^\s]+', caseSensitive: false);
 
+/// Opens [url] externally only when it is a well-formed http(s) address with
+/// a host; anything else (`tel:`, `market:`, `intent:`, malformed) is ignored.
+Future<void> openHttpLink(String url) async {
+  final uri = Uri.tryParse(url);
+  if (uri == null ||
+      !(uri.isScheme('http') || uri.isScheme('https')) ||
+      uri.host.isEmpty) {
+    return;
+  }
+  await launchUrl(uri, mode: LaunchMode.externalApplication);
+}
+
 InlineSpan _buildPlainTextRun(String run, TextStyle style) =>
     TextSpan(text: run, style: style);
 
@@ -51,9 +63,7 @@ List<InlineSpan> buildLinkifiedSpans(
         text: url,
         style:
             linkStyle ?? style.copyWith(decoration: TextDecoration.underline),
-        recognizer: TapGestureRecognizer()
-          ..onTap = () =>
-              launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
+        recognizer: TapGestureRecognizer()..onTap = () => openHttpLink(url),
       ),
     );
     last = match.end;
