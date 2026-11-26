@@ -1913,6 +1913,10 @@ class AppLocalizationsEn extends AppLocalizations {
       'Some files were not sent — you left the chat';
 
   @override
+  String get attachmentBlockedWhileRecording =>
+      'Files were not sent — finish or discard the voice message first';
+
+  @override
   String get chatScrollToBottomSemantics => 'Scroll to newest messages';
 
   @override

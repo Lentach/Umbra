@@ -754,6 +754,7 @@
     "placeholders": { "max": { "type": "int" } }
   },
   "attachmentBatchInterrupted": "Some files were not sent — you left the chat",
+  "attachmentBlockedWhileRecording": "Files were not sent — finish or discard the voice message first",
   "chatScrollToBottomSemantics": "Scroll to newest messages",
   "avatarOpenProfileSemantics": "Open profile",
   "passcodeLock": "Passcode Lock",

@@ -1310,4 +1310,49 @@ void main() {
       isEmpty,
     );
   });
+
+  // A3-CMP-07: with the action panel open the user started a voice note and
+  // the paperclip was still there; its picks were dropped without a word.
+  testWidgets('starting a voice note closes the action panel, so the '
+      'paperclip is not reachable while recording', (tester) async {
+    final h = await pumpComposer(tester);
+    final state = h.key.currentState!;
+    await tester.tap(find.byIcon(Icons.keyboard_arrow_down));
+    await tester.pump();
+    expect(state.isActionPanelOpenForTest, isTrue);
+
+    state.setRecordingForTest(true);
+    await tester.pump();
+
+    expect(state.isActionPanelOpenForTest, isFalse);
+    state.setRecordingForTest(false);
+    await tester.pump();
+    expect(state.isActionPanelOpenForTest, isFalse);
+  });
+
+  testWidgets('a pick that reaches the composer mid-recording says why '
+      'nothing was sent', (tester) async {
+    final h = await pumpComposer(tester);
+    final state = h.key.currentState!;
+    state.setRecordingForTest(true);
+    await tester.pump();
+
+    await tester.runAsync(
+      () => state.sendPickedFiles([
+        PickedAttachment(name: 'a.jpg', readBytes: () async => kTinyPng),
+      ], pickedIn: 10),
+    );
+    await tester.pump();
+
+    expect(
+      find.text(
+        AppLocalizations.of(
+          tester.element(find.byType(ChatInputBar)),
+        ).attachmentBlockedWhileRecording,
+      ),
+      findsOneWidget,
+    );
+    expect(h.emitted, isEmpty);
+    await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
+  });
 }

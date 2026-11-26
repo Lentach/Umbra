@@ -78,7 +78,17 @@ mixin _ComposerSend on _ComposerFocus {
     List<PickedAttachment> files, {
     required int pickedIn,
   }) async {
-    if (files.isEmpty || !_canAcceptPaste()) return;
+    if (files.isEmpty || !mounted) return;
+    // A recording replaces the composer row, and the picks have nowhere to
+    // go until it is resolved: say so instead of dropping them (A3-CMP-07).
+    if (_isRecording) {
+      showTopSnackBar(
+        context,
+        AppLocalizations.of(context).attachmentBlockedWhileRecording,
+      );
+      return;
+    }
+    if (!_canAcceptPaste()) return;
     final l10n = AppLocalizations.of(context);
     final rootOverlay = Overlay.of(context, rootOverlay: true);
     var batch = files;
@@ -458,7 +468,9 @@ mixin _ComposerSend on _ComposerFocus {
 
   /// Called by [RecordingController] when recording state changes.
   /// Recording replaces the composer row — close the emoji panel with it
-  /// (Telegram parity: mic tap dismisses the panel).
+  /// (Telegram parity: mic tap dismisses the panel) and the action panel too:
+  /// its paperclip would hand picks to a composer that cannot send them
+  /// mid-recording (A3-CMP-07).
   void _onRecordingStateChanged(bool isRecording) {
     if (!mounted) {
       _isRecording = isRecording;
@@ -466,7 +478,10 @@ mixin _ComposerSend on _ComposerFocus {
     }
     setState(() {
       _isRecording = isRecording;
-      if (isRecording) _setEmojiPickerVisible(false);
+      if (isRecording) {
+        _setEmojiPickerVisible(false);
+        _showActionPanel = false;
+      }
     });
   }
 

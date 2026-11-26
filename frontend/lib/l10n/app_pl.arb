@@ -739,6 +739,7 @@
     "placeholders": { "max": { "type": "int" } }
   },
   "attachmentBatchInterrupted": "Część plików nie została wysłana — czat został zamknięty",
+  "attachmentBlockedWhileRecording": "Pliki nie zostały wysłane — najpierw zakończ lub odrzuć wiadomość głosową",
   "chatScrollToBottomSemantics": "Przewiń do najnowszych wiadomości",
   "avatarOpenProfileSemantics": "Otwórz profil",
   "passcodeLock": "Blokada kodem",
