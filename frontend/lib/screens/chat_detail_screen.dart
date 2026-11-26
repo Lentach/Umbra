@@ -11,6 +11,7 @@ import '../providers/settings_provider.dart';
 import '../services/voice_audio_coordinator.dart';
 import '../theme/rpg_theme.dart';
 import '../widgets/box_friend_older_app_note.dart';
+import '../widgets/calm_hold_line.dart';
 import '../widgets/glass/glass_top_bar.dart';
 import '../widgets/message/chat_message_bubble.dart';
 import '../widgets/input/chat_input_bar.dart';
@@ -36,7 +37,6 @@ import '../utils/ping_sound.dart';
 import '../utils/web_keyboard_inset.dart';
 import '../providers/encryption_provider.dart';
 import '../widgets/peer_identity_changed_row.dart';
-import '../widgets/calm_hold_line.dart';
 import '../services/notification_cleaner_stub.dart'
     if (dart.library.html) '../services/notification_cleaner_web.dart'
     if (dart.library.io) '../services/notification_cleaner_io.dart';

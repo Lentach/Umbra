@@ -1,4 +1,5 @@
 part of '../messaging_provider.dart';
+// This part IS MessagingProvider: the protected members it calls are its own.
 // ignore_for_file: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
 
 /// Box deliveries (metadata-privacy PR3.1 slice (b)): the ONE dispatcher. A

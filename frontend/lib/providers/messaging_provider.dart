@@ -629,7 +629,7 @@ class MessagingProvider extends ChangeNotifier {
     _calmHolds[peerId] = CalmHold(
       identity: 'seeded-identity',
       device: 1,
-      firstReceivedAt: DateTime.utc(2026, 1, 1),
+      firstReceivedAt: DateTime.utc(2026),
       ciphertext: '3:AAAA',
       state: state,
     );

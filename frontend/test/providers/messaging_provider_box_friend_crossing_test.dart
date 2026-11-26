@@ -886,7 +886,6 @@ void main() {
         signal: second.signalCiphertext,
         receivedAt: DateTime.now().toUtc(),
         acked: true,
-        viaRequestQueue: false,
       );
       expect(await b.reader.consumeBoxEntry(entry, b.peerRecord), isFalse);
       b.held.add(entry);
@@ -923,7 +922,7 @@ void main() {
 
     test('K9: a stale served bundle is refreshed BEFORE it is read: the '
         'tap owes one forced lookup and then serves what it found', () async {
-      Map<String, dynamic> served = bundleOf(a, 0);
+      var served = bundleOf(a, 0);
       b.enc
         ..isBoxOnlyPeer = ((_) => true)
         ..servedBundleFor = ((_, _) => served)
@@ -944,7 +943,7 @@ void main() {
       expect(b.held, isEmpty);
     });
 
-    test('K10: the refreshed list no longer serves the frame\'s device: '
+    test("K10: the refreshed list no longer serves the frame's device: "
         'nothing is accepted, the hold turns red', () async {
       final before = await anchorOfA();
       b.enc
@@ -1065,7 +1064,6 @@ void main() {
         signal: '3:AAAA',
         receivedAt: DateTime.now().toUtc(),
         acked: true,
-        viaRequestQueue: false,
       );
 
       expect(await b.reader.consumeBoxEntry(entry, b.peerRecord), isTrue);
@@ -1091,7 +1089,6 @@ void main() {
         signal: '2:AAAA',
         receivedAt: DateTime.now().toUtc(),
         acked: true,
-        viaRequestQueue: false,
       );
 
       expect(await b.reader.consumeBoxEntry(entry, b.peerRecord), isFalse);

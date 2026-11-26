@@ -10,10 +10,10 @@ import '../theme/rpg_theme.dart';
 /// confirmed. Three states: the invitation, "checking", and a retry hint.
 class CalmHoldLine extends StatelessWidget {
   const CalmHoldLine({
-    super.key,
     required this.peerName,
     required this.state,
     required this.onTap,
+    super.key,
   });
 
   final String peerName;

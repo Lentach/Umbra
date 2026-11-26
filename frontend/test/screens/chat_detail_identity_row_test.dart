@@ -216,8 +216,7 @@ Future<_AlarmedEncryption> _pumpChat(
     notedPeers: noted ? {_peerId: noteAt} : const <int, String>{},
     refusedPeers: refused ? const {_peerId} : const <int>{},
     keyChangeLog: keyChangeLog,
-  );
-  encryption.messaging = messaging;
+  )..messaging = messaging;
   if (calmHold != null) {
     messaging
       ..setEncryptionProvider(encryption)
@@ -719,7 +718,7 @@ void main() {
     expect(find.byType(CalmHoldLine), findsNothing);
   });
 
-  testWidgets('a tap on the line asks the provider to confirm that friend\'s '
+  testWidgets("a tap on the line asks the provider to confirm that friend's "
       'key; while it checks the line says so and a second tap is ignored; a '
       'transient failure leaves it tappable again', (tester) async {
     final enc = await _pumpChat(

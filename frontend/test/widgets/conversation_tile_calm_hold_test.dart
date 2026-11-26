@@ -30,7 +30,6 @@ Future<void> _pumpTile(
           child: ConversationTile(
             conversationId: 10,
             displayName: 'Alice',
-            lastMessage: null,
             onTap: () {},
             onDelete: () {},
             calmHold: calmHold,

@@ -463,19 +463,20 @@ void main() {
   test('M4: an accept whose decision read an anchor that moved meanwhile does '
       'not swap, and takes back only its own note and intents', () async {
     final pinned = await pinBob();
-    alice.knownAddressesOf = (_) => {1, 2};
-    // While the build for device 1 decides against O, the build for device 2
-    // accepts the friend's real new key K2: the anchor is K2 when device 1
-    // gets to its swap.
-    alice.debugAfterAutoAcceptDecision = () async {
-      alice.debugAfterAutoAcceptDecision = null;
-      await alice.buildSession(
-        bobId,
-        flatBundleFrom(mallory),
-        deviceId: 2,
-        expectedIdentityBase64: pinned,
-      );
-    };
+    alice
+      ..knownAddressesOf = ((_) => {1, 2})
+      // While the build for device 1 decides against O, the build for device
+      // 2 accepts the friend's real new key K2: the anchor is K2 when device
+      // 1 gets to its swap.
+      ..debugAfterAutoAcceptDecision = () async {
+        alice.debugAfterAutoAcceptDecision = null;
+        await alice.buildSession(
+          bobId,
+          flatBundleFrom(mallory),
+          deviceId: 2,
+          expectedIdentityBase64: pinned,
+        );
+      };
 
     await expectLater(
       alice.buildSession(
@@ -553,7 +554,7 @@ void main() {
       flatBundleFrom(alice),
       expectedIdentityBase64: null,
     );
-    final frame = await newBob.encrypt(aliceId, 'x', deviceId: 1);
+    final frame = await newBob.encrypt(aliceId, 'x');
 
     await alice.holdForeignFrame(bobId, frame);
 
