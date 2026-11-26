@@ -63,12 +63,16 @@ class _LinkScanScreenState extends State<LinkScanScreen> {
 
   /// One exit, whichever callback or button fires first. The scanner may
   /// report "unsupported" from a build-phase errorBuilder, so the pop is
-  /// deferred to the next frame in every case.
+  /// deferred to the next frame in every case. A route already leaving (the
+  /// user pressed back while the camera still sees a QR) is no longer
+  /// current: popping then would close the route BELOW the scanner.
   void _finish(LinkScanResult? result) {
     if (_popped) return;
     _popped = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) Navigator.of(context).pop(result);
+      if (mounted && ModalRoute.of(context)?.isCurrent == true) {
+        Navigator.of(context).pop(result);
+      }
     });
   }
 
