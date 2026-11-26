@@ -651,4 +651,55 @@ void main() {
     );
     expect(again.liveDeviceIds, [2]);
   });
+
+  // Traps: account-scoped async work in EncryptionProvider rechecks
+  // `_initEpoch` after every await. `adoptServedAccount` awaits the anchor
+  // read and the pin, then adopts: an account switch in between must not
+  // leave the OLD account's served list (and version floor) in the new
+  // account's cache.
+  test('an account switch while the served key is being pinned adopts '
+      'nothing', () async {
+    const stranger = 43;
+    final by = DeviceAuthorityEngine();
+    final identity = generateIdentityKeyPair();
+    final enrolled = by.mintEnrollment(
+      userId: stranger,
+      identity: identity,
+      createdAtMs: 1234567890,
+    );
+    final signed = by.signList(
+      const DeviceList(
+        userId: stranger,
+        version: 3,
+        devices: [
+          DeviceListEntry(deviceId: 1, platform: 'web', addedAtMs: 1000),
+        ],
+      ),
+    );
+    final authorization = {
+      'dakPub': enrolled['dakPub'],
+      'enrollmentSig': enrolled['enrollmentSig'],
+      'enrollmentCreatedAt': enrolled['createdAt'],
+      'listVersion': 3,
+      'listSignature': signed['listSignature'],
+      'listCanonical': signed['listCanonical'],
+    };
+
+    final adopting = provider
+        .adoptServedAccount(
+          stranger,
+          identityKey: base64Encode(identity.getPublicKey().serialize()),
+          authorization: authorization,
+        )
+        .then<Object?>((v) => v, onError: (Object e) => e);
+    // The first await is the anchor read: the account changes under it.
+    provider.clearAll();
+
+    expect(await adopting, isA<StateError>());
+    expect(
+      provider.cachedDeviceList(stranger),
+      isNull,
+      reason: "the old account's served list must not land in the next one",
+    );
+  });
 }

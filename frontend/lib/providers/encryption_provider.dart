@@ -1157,6 +1157,9 @@ class EncryptionProvider extends ChangeNotifier {
         userId == _currentUserId) {
       throw StateError('served account $userId: E2E not ready');
     }
+    // The account this answer was read for: a switch during the awaits below
+    // (the anchor read, the pin) must not land its list in the next account.
+    final epoch = _initEpoch;
     // One spelling for the comparison and the pin: the stored anchor is the
     // canonical base64 of the key's bytes, a served one may be spelled
     // otherwise (padding, url-safe) and must not read as a key change.
@@ -1189,6 +1192,9 @@ class EncryptionProvider extends ChangeNotifier {
           'served_identity_mismatch',
         );
       }
+    }
+    if (epoch != _initEpoch) {
+      throw StateError('served account $userId: account changed');
     }
     final verified = await _adoptDeviceListAnswer(
       userId,
