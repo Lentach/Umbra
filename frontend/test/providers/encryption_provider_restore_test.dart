@@ -444,11 +444,7 @@ void main() {
             () => provider.onRegistrationLockNonce({'nonce': nonce}),
           );
         case 'uploadKeyBundle':
-          scheduleMicrotask(() {
-            for (final ack in acks) {
-              provider.onKeyBundleUploaded(ack);
-            }
-          });
+          scheduleMicrotask(() => acks.forEach(provider.onKeyBundleUploaded));
         case 'getDeviceList':
           scheduleMicrotask(() => provider.onDeviceList({
                 'userId': userId,
