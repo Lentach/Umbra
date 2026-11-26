@@ -1,8 +1,55 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../l10n/app_localizations.dart';
 import '../theme/rpg_theme.dart';
 import '../widgets/glass/glass_top_bar.dart';
+
+/// The server's About limit (`UpdateProfileAboutDto`, `@MaxLength(80)`).
+const int kProfileAboutMaxLength = 80;
+
+final RegExp _presentationSequence = RegExp('[^\uFE0F\uFE0E][\uFE0F\uFE0E]');
+final RegExp _surrogatePair = RegExp('[\uD800-\uDBFF][\uDC00-\uDFFF]');
+
+/// Length as the server counts it: validator's `isLength` — UTF-16 units minus
+/// surrogate pairs and presentation sequences. Not user-visible characters
+/// (Flutter's `maxLength`): a flag counts 2 here, a family emoji 5, so 41 flags
+/// pass a grapheme counter and are refused with a 400.
+int profileAboutLength(String text) =>
+    text.length -
+    _presentationSequence.allMatches(text).length -
+    _surrogatePair.allMatches(text).length;
+
+/// Keeps the field within [kProfileAboutMaxLength] by the server's count; an
+/// over-long edit or paste is cut at the last whole character that fits.
+class _ProfileAboutLimiter extends TextInputFormatter {
+  const _ProfileAboutLimiter();
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    if (profileAboutLength(newValue.text) <= kProfileAboutMaxLength) {
+      return newValue;
+    }
+    final kept = StringBuffer();
+    // Anything past twice the limit cannot fit: a character costs at least
+    // one unit of the count, so a long paste is not measured rune by rune.
+    for (final rune in newValue.text.runes.take(kProfileAboutMaxLength * 2 + 2)) {
+      final next = StringBuffer()
+        ..write(kept)
+        ..writeCharCode(rune);
+      if (profileAboutLength(next.toString()) > kProfileAboutMaxLength) break;
+      kept.writeCharCode(rune);
+    }
+    final text = kept.toString();
+    return TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
+  }
+}
 
 /// Full-screen About editor (replaces the centered autofocus dialog).
 ///
@@ -76,7 +123,16 @@ class _EditAboutScreenState extends State<EditAboutScreen> {
         child: TextField(
           controller: _controller,
           autofocus: true,
-          maxLength: 80,
+          inputFormatters: const [_ProfileAboutLimiter()],
+          buildCounter:
+              (
+                context, {
+                required currentLength,
+                required isFocused,
+                required maxLength,
+              }) => Text(
+                '${profileAboutLength(_controller.text)}/$kProfileAboutMaxLength',
+              ),
           maxLines: 3,
           minLines: 1,
           textInputAction: TextInputAction.done,
