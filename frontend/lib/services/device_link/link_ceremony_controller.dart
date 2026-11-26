@@ -594,6 +594,7 @@ class LinkCeremonyController extends ChangeNotifier
   @override
   void dispose() {
     _disposed = true;
+    _cancelLivePrimaryStage();
     _expiryTimer?.cancel();
     // A controller torn down mid-flow (screen disposed) must not leave the
     // passcode exemption raised: no further notify will ever run.

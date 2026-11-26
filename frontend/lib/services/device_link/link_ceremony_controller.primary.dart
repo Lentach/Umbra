@@ -200,14 +200,22 @@ extension LinkCeremonyPrimary on LinkCeremonyController {
   }
 
   void cancelPrimary() {
+    _cancelLivePrimaryStage();
+    _resetPrimary();
+    notifyListeners();
+  }
+
+  /// Tells the server to drop the primary's open stage, if it has one. Shared
+  /// by [cancelPrimary] and [dispose]: a screen removed from the stack (the
+  /// device-link gate's sweep) is never popped, so its PopScope cannot send
+  /// this and the stage would otherwise linger until it expires.
+  void _cancelLivePrimaryStage() {
     final id = _primaryProvisioningId;
     if (id != null &&
         primaryStep != PrimaryLinkStep.idle &&
         primaryStep != PrimaryLinkStep.done) {
       _emit('cancelProvisioning', {'provisioningId': id});
     }
-    _resetPrimary();
-    notifyListeners();
   }
 
   void _resetPrimary() {
