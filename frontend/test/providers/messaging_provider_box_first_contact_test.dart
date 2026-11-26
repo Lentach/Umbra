@@ -1154,6 +1154,64 @@ void main() {
     });
   }
 
+  // A2-ENC-A-1: the anchor is pinned BEFORE the list is adopted, so the pin
+  // must wait for the list's own checks. Mutation: replace the
+  // `_listPassesAdoptChecks(...)` guard in `adoptServedAccount` with `true`
+  // and this goes red (the served key is pinned under a list that is refused).
+  test('a first-contact answer whose list FAILS verification pins nothing '
+      'and caches nothing', () async {
+    await befriend();
+    final dak = DeviceAuthorityEngine();
+    final enrollment = dak.mintEnrollment(
+      userId: 5,
+      identity: await bob.enc.encryptionService.identityKeyPairForLinking(),
+      createdAtMs: 1,
+    );
+    DeviceList listAt(int version) => DeviceList(
+      userId: 5,
+      version: version,
+      devices: const [
+        DeviceListEntry(deviceId: 1, platform: 'web', addedAtMs: 1000),
+      ],
+    );
+    final list = dak.signList(listAt(1));
+    // A signature over a DIFFERENT list: well formed, never verifies.
+    final foreign = dak.signList(listAt(2));
+    final authorization = {
+      'dakPub': enrollment['dakPub'],
+      'enrollmentSig': enrollment['enrollmentSig'],
+      'enrollmentCreatedAt': enrollment['createdAt'],
+      'listVersion': 1,
+      'listSignature': foreign['listSignature'],
+      'listCanonical': list['listCanonical'],
+    };
+    final restored = _Side(7, 'carol', box);
+    await restored.start();
+    await restored.store.update(
+      5,
+      (_) => ContactRecord.fromJson(
+        alice.recordOf(5)!.toBackupJson(),
+      ),
+    );
+    restored.answer = (_) => [
+      {...bob.searchEntry, 'authorization': authorization},
+    ];
+
+    await expectLater(
+      restored.enc.getVerifiedDeviceList(5),
+      throwsA(isA<DeviceListVerificationException>()),
+    );
+
+    expect(
+      await restored.enc.encryptionService.peerTofuIdentityBase64(5),
+      isNull,
+      reason: 'a refused list must not pin the served key',
+    );
+    expect(restored.enc.cachedDeviceList(5), isNull);
+    expect(restored.enc.encryptionService.deviceListPins, isEmpty);
+    restored.session.dispose();
+  });
+
   test('a request the box refuses at its global ceiling is BUSY, any other '
       'refusal FAILED, and neither leaves a record (plan D2)', () async {
     for (final (code, outcome) in [
