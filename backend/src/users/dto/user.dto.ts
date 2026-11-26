@@ -10,6 +10,7 @@ import {
   PASSWORD_REGEX,
   PASSWORD_REGEX_MESSAGE,
 } from '../../auth-core/password.constants';
+import { MaxCodePoints } from '../../common/max-code-points';
 
 export class ResetPasswordDto {
   @IsString()
@@ -40,6 +41,6 @@ export class VerifyPasswordDto {
 export class UpdateProfileAboutDto {
   @IsOptional()
   @IsString()
-  @MaxLength(80)
+  @MaxCodePoints(80) // users.about is varchar(80): Postgres counts code points
   about?: string | null;
 }
