@@ -266,6 +266,18 @@ abstract class AppLocalizations {
   /// **'Ładowanie…'**
   String get devicesLoading;
 
+  /// No description provided for @settingsDeviceWebBrowser.
+  ///
+  /// In pl, this message translates to:
+  /// **'Przeglądarka internetowa'**
+  String get settingsDeviceWebBrowser;
+
+  /// No description provided for @settingsDeviceNativeApp.
+  ///
+  /// In pl, this message translates to:
+  /// **'To urządzenie'**
+  String get settingsDeviceNativeApp;
+
   /// No description provided for @devicesExplainer.
   ///
   /// In pl, this message translates to:
@@ -386,6 +398,12 @@ abstract class AppLocalizations {
   /// **'główne'**
   String get devicesPrimaryBadge;
 
+  /// No description provided for @devicesRowSemantics.
+  ///
+  /// In pl, this message translates to:
+  /// **'Urządzenie {id} {platform}'**
+  String devicesRowSemantics(int id, String platform);
+
   /// No description provided for @devicesThisDeviceKeyless.
   ///
   /// In pl, this message translates to:
@@ -452,6 +470,24 @@ abstract class AppLocalizations {
   /// **'Urządzenie zostało połączone.'**
   String get linkPrimaryDone;
 
+  /// No description provided for @linkQrSemantics.
+  ///
+  /// In pl, this message translates to:
+  /// **'Kod QR połączenia {payload}'**
+  String linkQrSemantics(String payload);
+
+  /// No description provided for @linkCodeSemantics.
+  ///
+  /// In pl, this message translates to:
+  /// **'Kod połączenia'**
+  String get linkCodeSemantics;
+
+  /// No description provided for @linkSecurityCodeSemantics.
+  ///
+  /// In pl, this message translates to:
+  /// **'Kod bezpieczeństwa {code}'**
+  String linkSecurityCodeSemantics(String code);
+
   /// No description provided for @linkInvalidCode.
   ///
   /// In pl, this message translates to:
@@ -475,12 +511,6 @@ abstract class AppLocalizations {
   /// In pl, this message translates to:
   /// **'Lista urządzeń zmieniła się w trakcie — podpisuję ponownie…'**
   String get linkStaleVersionRetry;
-
-  /// No description provided for @linkNewTitle.
-  ///
-  /// In pl, this message translates to:
-  /// **'Połącz to urządzenie'**
-  String get linkNewTitle;
 
   /// No description provided for @linkNewExplainer.
   ///

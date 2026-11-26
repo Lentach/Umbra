@@ -27,6 +27,16 @@ extension LinkCeremonyPrimary on LinkCeremonyController {
       notifyListeners();
       return;
     }
+    // Both devices scanned each other (A2-DEV-04): leaving the displayed `p`
+    // code for this paste closes our own stage first, as
+    // [startNewDeviceFromCode] does — else the new device's hello would be
+    // acked on a stage nobody approves, until it expires.
+    final ownStage = _primaryProvisioningId;
+    if (primaryStep == PrimaryLinkStep.showCode &&
+        ownStage != null &&
+        ownStage != code.provisioningId) {
+      _emit('cancelProvisioning', {'provisioningId': ownStage});
+    }
     _parsedCode = code;
     _primaryProvisioningId = code.provisioningId;
     final eph = generateLinkEphemeral();

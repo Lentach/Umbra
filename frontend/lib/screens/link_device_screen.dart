@@ -385,7 +385,7 @@ class _LinkDeviceScreenState extends State<LinkDeviceScreen> {
           ),
           child: QrImageView(
             data: qrPayload,
-            semanticsLabel: 'link qr $qrPayload',
+            semanticsLabel: l10n.linkQrSemantics(qrPayload),
             version: QrVersions.auto,
             size: 200,
             backgroundColor: Colors.white,
@@ -401,7 +401,7 @@ class _LinkDeviceScreenState extends State<LinkDeviceScreen> {
           border: Border.all(color: colors.outlineVariant),
         ),
         child: Semantics(
-          label: 'link code',
+          label: l10n.linkCodeSemantics,
           child: SelectableText(
             code,
             key: const Key('link-primary-oob-code'),
@@ -496,7 +496,7 @@ class _SasCode extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     return Semantics(
-      label: 'security code $code',
+      label: AppLocalizations.of(context).linkSecurityCodeSemantics(code),
       child: Container(
         key: const Key('link-sas-code'),
         padding: const EdgeInsets.symmetric(vertical: 20),

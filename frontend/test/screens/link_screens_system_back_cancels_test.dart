@@ -1,22 +1,20 @@
-// Amendment (lxvi) clause 3 — every way off a ceremony screen cancels the
-// ceremony.
+// Amendment (lxvi) clause 3 — every way off the primary's ceremony screen
+// cancels the ceremony. (The new-device side is no longer a route: the gate
+// mounts its body inline, A2-DEV-06.)
 //
-// Live QA 2026-09-02: both §5.1 screens cancelled only from their own app-bar
-// arrow. The system back (Android gesture/hardware back, browser back) popped
-// the route and left the ceremony running — observed as the primary's screen
-// reopening in the previous ceremony's `done` state; by the same code a new
-// device that backs out mid-SAS leaves a live stage the primary can still
-// approve (I1 abort hygiene, skipped on the one exit users take on purpose).
+// Live QA 2026-09-02: the screen cancelled only from its own app-bar arrow.
+// The system back (Android gesture/hardware back, browser back) popped the
+// route and left the ceremony running — observed as the primary's screen
+// reopening in the previous ceremony's `done` state.
 //
-// The system back is what `Navigator.maybePop` delivers, so that is what these
-// tests drive — NOT the arrow.
+// The system back is what `Navigator.maybePop` delivers, so that is what this
+// test drives — NOT the arrow.
 //
-// Falsification contract: removing either screen's `PopScope` turns its test
-// RED (no `cancelProvisioning` on the wire, step left live).
+// Falsification contract: removing the screen's `PopScope` turns its test
+// RED (step left live).
 
 import 'package:fireplace/l10n/app_localizations.dart';
 import 'package:fireplace/screens/link_device_screen.dart';
-import 'package:fireplace/screens/link_this_device_screen.dart';
 import 'package:fireplace/services/device_link/link_ceremony_controller.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
 import 'package:flutter/material.dart';
@@ -105,29 +103,6 @@ void main() {
     await nav.maybePop();
     await pumpFrames(tester);
   }
-
-  testWidgets(
-    'new-device screen: system back aborts a live stage and tells the server',
-    (tester) async {
-      await pumpPushed(tester, LinkThisDeviceScreen(controller: controller));
-      // The screen opened the stage; the server answers with an id.
-      expect(emitted.map((e) => e.$1), contains('openProvisioning'));
-      controller.onProvisioningOpened({
-        'success': true,
-        'provisioningId': 'stage-1',
-      });
-      await tester.pump();
-      expect(controller.newDeviceStep, NewDeviceLinkStep.showCode);
-
-      await systemBack(tester);
-
-      expect(find.byKey(_homeKey), findsOneWidget);
-      expect(controller.newDeviceStep, NewDeviceLinkStep.aborted);
-      final cancel = emitted.where((e) => e.$1 == 'cancelProvisioning');
-      expect(cancel, hasLength(1));
-      expect((cancel.single.$2 as Map)['provisioningId'], 'stage-1');
-    },
-  );
 
   testWidgets('primary screen: system back resets a live ceremony', (
     tester,

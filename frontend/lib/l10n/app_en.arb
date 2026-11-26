@@ -30,6 +30,8 @@
   "passwordResetFailed": "Password reset failed",
   "accountDeletionFailed": "Account deletion failed",
   "devicesLoading": "Loading…",
+  "settingsDeviceWebBrowser": "Web browser",
+  "settingsDeviceNativeApp": "This device",
   "devicesExplainer": "Add new devices from the primary device only.",
   "devicesLinkedDeviceNote": "This device is linked. New devices are added from the primary device.",
   "devicesNotEnrolled": "Device linking is not enabled for this account yet.",
@@ -53,6 +55,10 @@
   "deviceMismatchBody": "This device's keys were revoked. Link it again from your other device.",
   "deviceMismatchAction": "Link this device",
   "devicesPrimaryBadge": "primary",
+  "devicesRowSemantics": "Device {id} {platform}",
+  "@devicesRowSemantics": {
+    "placeholders": { "id": { "type": "int" }, "platform": { "type": "String" } }
+  },
   "devicesThisDeviceKeyless": "This device holds no keys yet. Link it to your primary device.",
   "linkPrimaryTitle": "Link a device",
   "linkPrimaryExplainer": "On the new device choose \u201cLink this device\u201d, then type the code it shows here.",
@@ -64,11 +70,19 @@
   "linkCancel": "Cancel",
   "linkWaitingForDevice": "Waiting for the new device…",
   "linkPrimaryDone": "The device has been linked.",
+  "linkQrSemantics": "Link QR code {payload}",
+  "@linkQrSemantics": {
+    "placeholders": { "payload": { "type": "String" } }
+  },
+  "linkCodeSemantics": "Link code",
+  "linkSecurityCodeSemantics": "Security code {code}",
+  "@linkSecurityCodeSemantics": {
+    "placeholders": { "code": { "type": "String" } }
+  },
   "linkInvalidCode": "Invalid code. Copy it exactly from the new device.",
   "linkNoDak": "Only the device that enabled linking can link.",
   "linkFailed": "Linking failed",
   "linkStaleVersionRetry": "The device list changed mid-flight — re-signing…",
-  "linkNewTitle": "Link this device",
   "linkNewExplainer": "On the primary: Link a device → scan or type this code.",
   "linkNewWaitingHello": "Waiting for your primary device…",
   "linkNewCopy": "Copy code",

@@ -28,6 +28,8 @@
   "passwordResetFailed": "Nie udało się zmienić hasła",
   "accountDeletionFailed": "Nie udało się usunąć konta",
   "devicesLoading": "Ładowanie…",
+  "settingsDeviceWebBrowser": "Przeglądarka internetowa",
+  "settingsDeviceNativeApp": "To urządzenie",
   "devicesExplainer": "Nowe urządzenie dodasz tylko z urządzenia głównego.",
   "devicesLinkedDeviceNote": "To urządzenie jest połączone. Nowe urządzenia dodaje się z urządzenia głównego.",
   "devicesNotEnrolled": "Łączenie urządzeń nie jest jeszcze włączone dla tego konta.",
@@ -51,6 +53,10 @@
   "deviceMismatchBody": "Klucze tego urządzenia zostały unieważnione. Połącz je ponownie z drugiego urządzenia.",
   "deviceMismatchAction": "Po\u0142\u0105cz to urz\u0105dzenie",
   "devicesPrimaryBadge": "główne",
+  "devicesRowSemantics": "Urządzenie {id} {platform}",
+  "@devicesRowSemantics": {
+    "placeholders": { "id": { "type": "int" }, "platform": { "type": "String" } }
+  },
   "devicesThisDeviceKeyless": "To urządzenie nie ma jeszcze kluczy. Połącz je ze swoim głównym urządzeniem.",
   "linkPrimaryTitle": "Połącz urządzenie",
   "linkPrimaryExplainer": "Na nowym urządzeniu wybierz „Połącz to urządzenie”, a potem wpisz tutaj wyświetlony kod.",
@@ -62,11 +68,19 @@
   "linkCancel": "Anuluj",
   "linkWaitingForDevice": "Czekam na nowe urządzenie…",
   "linkPrimaryDone": "Urządzenie zostało połączone.",
+  "linkQrSemantics": "Kod QR połączenia {payload}",
+  "@linkQrSemantics": {
+    "placeholders": { "payload": { "type": "String" } }
+  },
+  "linkCodeSemantics": "Kod połączenia",
+  "linkSecurityCodeSemantics": "Kod bezpieczeństwa {code}",
+  "@linkSecurityCodeSemantics": {
+    "placeholders": { "code": { "type": "String" } }
+  },
   "linkInvalidCode": "Nieprawidłowy kod. Przepisz go dokładnie z nowego urządzenia.",
   "linkNoDak": "Łączyć można tylko z urządzenia, które włączyło łączenie.",
   "linkFailed": "Łączenie nie powiodło się",
   "linkStaleVersionRetry": "Lista urządzeń zmieniła się w trakcie — podpisuję ponownie…",
-  "linkNewTitle": "Połącz to urządzenie",
   "linkNewExplainer": "Na urządzeniu głównym: Połącz urządzenie → zeskanuj lub wpisz ten kod.",
   "linkNewWaitingHello": "Czekam na główne urządzenie…",
   "linkNewCopy": "Skopiuj kod",

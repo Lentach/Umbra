@@ -19,8 +19,8 @@ import 'recovery_key_screen.dart';
 /// The account's devices (multi-device spec §4/§5.1 — Phase 2 T3).
 ///
 /// Owns the screen-scoped [LinkCeremonyController] and registers it as
-/// ConnectionProvider's provisioning sink for its lifetime; the two link-flow
-/// screens drive the same instance. The rendered list is ONLY the DAK-signed
+/// ConnectionProvider's provisioning sink for its lifetime; the primary-side
+/// link screen drives the same instance. The rendered list is ONLY the DAK-signed
 /// canonical list, verified along the I7 chain against this device's own
 /// identity — never the server's bare word.
 class DevicesScreen extends StatefulWidget {
@@ -328,18 +328,22 @@ class _DevicesScreenState extends State<DevicesScreen> {
           isPrimary: entry.deviceId == primaryDeviceId,
           // Only the primary may revoke, and never itself (amendment
           // (xxi)) — the server enforces both; this just does not offer an
-          // action guaranteed to be refused.
+          // action guaranteed to be refused. A linked device holds no DAK
+          // (the primary's signing key), so it is refused every time and
+          // offers neither revoke nor rename.
           onRevoke:
-              entry.revokedAtMs == null &&
+              controller.holdsDak == true &&
+                  entry.revokedAtMs == null &&
                   entry.deviceId != primaryDeviceId &&
                   entry.deviceId !=
                       context.read<EncryptionProvider>().ownDeviceId
               ? () => _confirmRevoke(context, controller, entry, l10n)
               : null,
           // (lxxx) clause 1: a name is informational, so ANY live row may
-          // take one — including this device and the primary. A revoked row
-          // is a tombstone and gets no affordance.
-          onRename: entry.revokedAtMs == null
+          // take one — including this device and the primary — when this
+          // device can sign the list. A revoked row is a tombstone and gets
+          // no affordance.
+          onRename: controller.holdsDak == true && entry.revokedAtMs == null
               ? () => _promptRename(context, controller, entry, l10n)
               : null,
           busy:
@@ -767,7 +771,7 @@ class _DeviceRow extends StatelessWidget {
 
     return Semantics(
       label:
-          'device ${entry.deviceId} ${entry.platform}'
+          '${l10n.devicesRowSemantics(entry.deviceId, entry.platform)}'
           '${name == null ? '' : ' $name'}'
           '${isPrimary ? ' ${l10n.devicesPrimaryBadge}' : ''}'
           '${revoked ? ' ${l10n.devicesRevokedBadge}' : ''}',

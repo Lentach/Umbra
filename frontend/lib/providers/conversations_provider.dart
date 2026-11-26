@@ -332,7 +332,8 @@ class ConversationsProvider extends ChangeNotifier {
     _shownUnderLock = _lockIsUp;
   }
 
-  /// Called from [MainShell] lifecycle / tab visibility so backend can suppress redundant pushes.
+  /// Called from [MainShell] lifecycle / tab visibility. Gates on-device read
+  /// receipts, countdowns and the hidden-page card; the server is not told.
   void setClientVisible(bool visible) {
     if (_clientVisible == visible && !(visible && _shownUnderLock)) return;
     _clientVisible = visible;

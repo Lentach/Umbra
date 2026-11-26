@@ -125,6 +125,63 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  // A2-DEV-05 [SUSPECT]: the user presses back; the route plays its exit
+  // animation with the camera still running. A QR decoded in that window used
+  // to pop the route BELOW the scanner (the ceremony screen, or the gate).
+  testWidgets('a QR decoded while back is already leaving pops nothing more', (
+    tester,
+  ) async {
+    void Function(String)? fireCode;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: RpgTheme.themeDataLight,
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Builder(
+          builder: (context) => TextButton(
+            key: const Key('open-below'),
+            onPressed: () => Navigator.of(context).push<void>(
+              MaterialPageRoute(
+                builder: (below) => Scaffold(
+                  body: TextButton(
+                    key: const Key('open-scan'),
+                    onPressed: () => Navigator.of(below).push<LinkScanResult>(
+                      MaterialPageRoute(
+                        fullscreenDialog: true,
+                        builder: (_) => LinkScanScreen(
+                          scannerBuilder: ({required onCode, onUnsupported}) {
+                            fireCode = onCode;
+                            return const SizedBox();
+                          },
+                        ),
+                      ),
+                    ),
+                    child: const Text('below'),
+                  ),
+                ),
+              ),
+            ),
+            child: const Text('open'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.byKey(const Key('open-below')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('open-scan')));
+    await tester.pumpAndSettle();
+    expect(find.byType(LinkScanScreen), findsOneWidget);
+
+    final nav = tester.state<NavigatorState>(find.byType(Navigator));
+    await nav.maybePop();
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(find.byType(LinkScanScreen), findsOneWidget, reason: 'leaving');
+    fireCode!('fp-link.v2.raw');
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('open-scan')), findsOneWidget);
+  });
+
   // The VM test host resolves the LinkQrScanner facade to the NATIVE impl
   // (dart.library.io), where the host is neither Android nor iOS — i.e. the
   // unsupported path, exactly what a desktop native build would hit.

@@ -53,13 +53,28 @@ class _PrivacySafetyScreenState extends State<PrivacySafetyScreen> {
     _loadFingerprint();
   }
 
+  /// Whether the last fingerprint read ran after E2E was ready: a null from a
+  /// read made BEFORE that (offline, or right after start-up) is not final,
+  /// so the screen asks again once setup finishes (A2-SET-5).
+  bool _fingerprintReadWhileReady = false;
+  bool _fingerprintReading = false;
+
   Future<void> _loadFingerprint() async {
-    final fp = await context
-        .read<EncryptionProvider>()
-        .getIdentityFingerprint();
+    if (_fingerprintReading) return;
+    _fingerprintReading = true;
+    final encryption = context.read<EncryptionProvider>();
+    final readyAtRead = encryption.isE2EReady;
+    String? fp;
+    try {
+      fp = await encryption.getIdentityFingerprint();
+    } on Object catch (e) {
+      debugPrint('Error loading identity fingerprint: $e');
+    }
+    _fingerprintReading = false;
     if (mounted) {
       setState(() {
         _fingerprint = fp;
+        _fingerprintReadWhileReady = readyAtRead;
         _loading = false;
       });
     }
@@ -70,6 +85,18 @@ class _PrivacySafetyScreenState extends State<PrivacySafetyScreen> {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final l10n = AppLocalizations.of(context);
+    // E2E setup finished after the last read answered null: read again.
+    final e2eReady = context.select<EncryptionProvider, bool>(
+      (e) => e.isE2EReady,
+    );
+    if (e2eReady &&
+        !_loading &&
+        !_fingerprintReadWhileReady &&
+        !_fingerprintReading) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_loadFingerprint());
+      });
+    }
 
     return Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor,

@@ -59,6 +59,9 @@ class _AuthFormState extends State<AuthForm> {
   @override
   void didUpdateWidget(AuthForm oldWidget) {
     super.didUpdateWidget(oldWidget);
+    // One password field serves every door; a value typed for one (a failed
+    // sign-in guess) must not become the NEW password of another.
+    if (widget.mode != oldWidget.mode) _passwordController.clear();
     final prefill = widget.initialUsername;
     if (prefill != null && prefill != oldWidget.initialUsername) {
       _usernameController.text = prefill;
