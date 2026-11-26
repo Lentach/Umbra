@@ -935,10 +935,10 @@ class EncryptionProvider extends ChangeNotifier {
   VerifiedDeviceList? cachedDeviceList(int userId) =>
       _deviceListCache.cached(userId);
 
-  /// Drop the cached list so the next old-path send refetches (e.g. on
-  /// `deviceListChanged` for the own account). The rollback pin survives.
-  /// Every drop goes through here so [onDeviceListInvalidated] sees it: a box
-  /// send never refetches, so the box refresh must.
+  /// Drop the cached list (e.g. on `deviceListChanged` for the own account).
+  /// The rollback pin survives. No send refetches it: every drop goes through
+  /// here so [onDeviceListInvalidated] sees it, and the box refresh behind
+  /// that callback does the refetch.
   ///
   /// A FRIEND's list ([listIsByHandle]) is refetched by one handle lookup, which
   /// spends a one-time pre-key of every live device of the friend (E114a), so
@@ -1348,9 +1348,9 @@ class EncryptionProvider extends ChangeNotifier {
       });
       if (userId != _currentUserId) {
         _serverVerifiedAt[userId] = DateTime.now();
-        // Kept only for a box peer (decision 51): an old-path peer's list
-        // stays memory-only, so its first row after a restart is checked
-        // against a fresh lookup, as before slice (e).
+        // Kept only where [keepsDeviceListFor] says so (a box peer, decision
+        // 51): any other account's list stays memory-only and is looked up
+        // again after a restart.
         if (keepsDeviceListFor?.call(userId) ?? false) {
           unawaited(
             _encryptionService.recordPeerDeviceList(userId, authorization),
@@ -1498,7 +1498,8 @@ class EncryptionProvider extends ChangeNotifier {
   }
 
   /// Handler for `deviceListChanged` (own-account broadcast): drop the
-  /// cached own list so the next send re-fetches and re-verifies.
+  /// cached own list; the box refresh ([onDeviceListInvalidated]) re-fetches
+  /// and re-verifies it.
   void onDeviceListChanged(dynamic data) {
     if (data is! Map || data['userId'] is! int) return;
     final userId = data['userId'] as int;
@@ -3587,9 +3588,8 @@ class EncryptionProvider extends ChangeNotifier {
     // Peer wedged after a phrase restore, 2026-09-22: a peer whose identity
     // moved to a NEW deviceId leaves us holding BOTH a dead session and the
     // verified list that keeps pointing every send and every accept-gate
-    // check at the device it abandoned. Invalidate only — the next old-path
-    // send (or inbound row) re-verifies through its own rate-limited
-    // refetch; a box-covered peer's list is looked up by the box refresh.
+    // check at the device it abandoned. Invalidate only: no send refetches,
+    // the box refresh ([onDeviceListInvalidated]) looks the list up again.
     invalidateDeviceList(fromUserId);
     _e2eFlowLog('SESSION_REBUILD_RECEIVED', {'fromUserId': fromUserId});
   }
