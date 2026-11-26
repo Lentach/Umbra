@@ -301,6 +301,11 @@ extension MessagingBox on MessagingProvider {
             'device': device,
             'why': 'prekey_unasked',
           });
+          // A frame this very pass refuses must not keep the key it carried:
+          // take the provisional accept back (anchor, note, intents).
+          if (accepted != null) {
+            await enc.revertAutoAccept(msg.senderId, accepted);
+          }
           return true;
         }
         if (newIdentity) {

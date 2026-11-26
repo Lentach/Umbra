@@ -630,5 +630,66 @@ void main() {
       expect(b.held, hasLength(1));
       expect(b.link.learned, restored.sid);
     });
+
+    // ---- Decision 152, warnings OFF (the default), friend unverified ----
+
+    Future<String> idOf(_Side s) async =>
+        (await s.enc.encryptionService.getKeyBundleForReupload())![
+                'identityPublicKey']
+            as String;
+
+    Future<String?> anchorOfA() => b.enc.encryptionService
+        .peerTofuIdentityBase64(1);
+
+    test('warnings OFF: the restored (not enrolled) device is accepted at '
+        'once — one note, the handoff taken, traffic both ways', () async {
+      onTheBox();
+      final restored = await restoreA();
+
+      await restored.link.restart();
+      await pump();
+
+      expect(b.held, isEmpty);
+      expect(b.refusals, isEmpty);
+      expect(b.link.learned, restored.sid);
+      expect(await anchorOfA(), await idOf(restored));
+      expect(b.enc.peerKeyChangeLog(1), hasLength(1));
+      await expectTraffic(b, restored);
+      await expectTraffic(restored, b);
+    });
+
+    test('warnings OFF: from a friend held as ENROLLED, the refused handoff '
+        'leaves the anchor, the note and the address untouched', () async {
+      b.enc.peerEnrolled = true;
+      onTheBox();
+      final before = await anchorOfA();
+      final restored = await restoreA();
+
+      await restored.link.restart();
+      await pump();
+
+      expect(b.refusals, ['prekey_unasked']);
+      expect(b.link.learned, a.sid);
+      expect(await anchorOfA(), before);
+      expect(b.enc.peerKeyChangeLog(1), isEmpty);
+    });
+
+    test('warnings OFF: after the restore, a device still holding the OLD '
+        'identity is refused and does not flip the anchor back or add a '
+        'note', () async {
+      onTheBox();
+      final restored = await restoreA();
+      await restored.link.restart();
+      await pump();
+      expect(b.link.learned, restored.sid);
+      expect(b.enc.peerKeyChangeLog(1), hasLength(1));
+
+      await handOffFrom(a);
+
+      expect(b.refusals, ['prekey_unasked']);
+      expect(b.link.learned, restored.sid);
+      expect(await anchorOfA(), await idOf(restored));
+      expect(b.enc.peerKeyChangeLog(1), hasLength(1));
+    });
   });
 }

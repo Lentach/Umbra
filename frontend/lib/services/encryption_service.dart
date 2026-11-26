@@ -812,6 +812,7 @@ class EncryptionService {
     final at = log.indexOf(was);
     if (at < 0) return;
     log[at] = atMs;
+    accepted.noteAtMs = atMs; // a later revert finds the entry where it is now
     log.sort();
     await _persistKeyChangeLog();
     onPeerIdentityChanged?.call(peerId);
@@ -6574,7 +6575,7 @@ class PeerIdentityVerification {
 /// still PROVISIONAL: the artifact that carried the key must prove it, or the
 /// caller hands this back to [EncryptionService.revertAutoAccept].
 class AutoAccepted {
-  const AutoAccepted({
+  AutoAccepted({
     required this.previousIdentityBase64,
     required this.noteAtMs,
     required this.intents,
@@ -6602,7 +6603,7 @@ class AutoAccepted {
   final String previousIdentityBase64;
 
   /// The instant of the permanent note this accept wrote.
-  final int noteAtMs;
+  int noteAtMs;
 
   /// The rebuild intents this accept recorded.
   final Set<int> intents;
