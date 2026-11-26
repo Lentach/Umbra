@@ -2876,12 +2876,6 @@ abstract class AppLocalizations {
   /// **'Edytowanie wiadomości'**
   String get messageEditingTitle;
 
-  /// No description provided for @messagePinRequiresSentMessage.
-  ///
-  /// In pl, this message translates to:
-  /// **'Poczekaj na wysłanie wiadomości, aby ją przypiąć'**
-  String get messagePinRequiresSentMessage;
-
   /// No description provided for @messageReactionMoreEmoji.
   ///
   /// In pl, this message translates to:

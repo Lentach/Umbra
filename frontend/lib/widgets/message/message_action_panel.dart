@@ -6,7 +6,6 @@ import '../glass/glass_surface.dart';
 class MessageActionPanel extends StatelessWidget {
   const MessageActionPanel({
     super.key,
-    required this.isMine,
     required this.canPinOrDeleteForEveryone,
     required this.onReply,
     this.onCopy,
@@ -15,7 +14,6 @@ class MessageActionPanel extends StatelessWidget {
     required this.onDelete,
   });
 
-  final bool isMine;
   final bool canPinOrDeleteForEveryone;
   final VoidCallback onReply;
 

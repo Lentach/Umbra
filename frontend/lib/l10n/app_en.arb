@@ -645,7 +645,6 @@
   "messageDeleteForEveryone": "Delete for everyone",
   "messageEditedLabel": "edited",
   "messageEditingTitle": "Editing message",
-  "messagePinRequiresSentMessage": "Wait until the message is sent before pinning",
   "messageReactionMoreEmoji": "More emoji reactions",
   "messageReactionSelected": "selected",
   "messageReactionNotSelected": "not selected",

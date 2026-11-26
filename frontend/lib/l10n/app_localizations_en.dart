@@ -1637,10 +1637,6 @@ class AppLocalizationsEn extends AppLocalizations {
   String get messageEditingTitle => 'Editing message';
 
   @override
-  String get messagePinRequiresSentMessage =>
-      'Wait until the message is sent before pinning';
-
-  @override
   String get messageReactionMoreEmoji => 'More emoji reactions';
 
   @override

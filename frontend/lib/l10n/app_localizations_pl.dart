@@ -1667,10 +1667,6 @@ class AppLocalizationsPl extends AppLocalizations {
   String get messageEditingTitle => 'Edytowanie wiadomości';
 
   @override
-  String get messagePinRequiresSentMessage =>
-      'Poczekaj na wysłanie wiadomości, aby ją przypiąć';
-
-  @override
   String get messageReactionMoreEmoji => 'Więcej reakcji emoji';
 
   @override

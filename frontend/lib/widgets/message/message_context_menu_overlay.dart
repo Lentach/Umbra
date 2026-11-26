@@ -8,7 +8,6 @@ import '../emoji/fireplace_emoji_picker.dart';
 import '../../models/message_model.dart';
 import '../../utils/jumbo_emoji.dart';
 import '../../utils/message_ids.dart';
-import '../top_snackbar.dart';
 import 'context_menu_bubble_anchor.dart';
 import 'message_action_panel.dart';
 import '../glass/glass_surface.dart';
@@ -390,7 +389,6 @@ void openMessageContextMenu({
 }) {
   _dismissMessageContextMenu();
   final overlay = Overlay.of(context);
-  final l10n = AppLocalizations.of(context);
   final anchorRect =
       bubbleRenderBox.localToGlobal(Offset.zero) & bubbleRenderBox.size;
   final layoutRect = bubbleRectForContextMenuLayout(anchorRect);
@@ -526,7 +524,6 @@ void openMessageContextMenu({
                   child: Align(
                     alignment: bubbleAlign,
                     child: MessageActionPanel(
-                      isMine: isMine,
                       canPinOrDeleteForEveryone: canPinOrDeleteForEveryone,
                       onReply: () {
                         dismissMessageContextMenu();
@@ -546,14 +543,7 @@ void openMessageContextMenu({
                             },
                       onPin: () {
                         dismissMessageContextMenu();
-                        if (!canPinOrDeleteForEveryone) {
-                          showTopSnackBar(
-                            context,
-                            l10n.messagePinRequiresSentMessage,
-                          );
-                        } else {
-                          onPin();
-                        }
+                        onPin();
                       },
                       onDelete: () {
                         dismissMessageContextMenu();
