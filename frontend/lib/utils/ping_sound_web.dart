@@ -13,7 +13,7 @@ JSFunction? _unlockListener;
 
 web.AudioContext _context() => _ctx ??= web.AudioContext();
 
-/// Installs a one-shot gesture-unlock for the [web.AudioContext].
+/// Installs a permanent gesture listener that resumes the [web.AudioContext].
 ///
 /// On iOS the context starts `suspended` and only produces sound once it has
 /// been `resume()`d from inside a real user gesture. Pings fire on message
