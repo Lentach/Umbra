@@ -111,7 +111,7 @@ class RecordingController extends StatefulWidget {
 }
 
 class RecordingControllerState extends State<RecordingController>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   MessagingProvider? _messagingProvider;
   ConversationsProvider? _conversationsProvider;
 
@@ -198,9 +198,26 @@ class RecordingControllerState extends State<RecordingController>
     });
   }
 
+  /// A recording is DISCARDED when the app goes to the background (owner
+  /// 2026-11-26): after a call or a screen lock the wall-clock 120 s timer
+  /// would otherwise send a note the user never confirmed, over the cap.
+  /// Only `paused` / `hidden` count: `inactive` is a web tab losing focus or
+  /// a system dialog (the microphone permission prompt), and a recording is
+  /// not running yet while that prompt is up ([_isRecording] flips after the
+  /// recorder starts), so a start in flight is never touched.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.paused &&
+        state != AppLifecycleState.hidden) {
+      return;
+    }
+    if (_isRecording && !_isStopping) unawaited(cancelRecording());
+  }
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     // Do NOT repeat() here — only while recording (idle spin wastes frames on web).
     _waveformController = AnimationController(
       vsync: this,
@@ -210,6 +227,7 @@ class RecordingControllerState extends State<RecordingController>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _conversationsProvider?.removeListener(_onConversationsChanged);
     _waveformController.dispose();
     _recordingTimer?.cancel();

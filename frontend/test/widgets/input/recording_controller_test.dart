@@ -268,4 +268,98 @@ void main() {
       expect(state.isRecording, isFalse);
     });
   });
+
+  // A3-CMP-04 (owner 2026-11-26): a recording is DISCARDED when the app goes
+  // to the background, never sent on return.
+  group('RecordingController app lifecycle', () {
+    tearDown(() {
+      TestWidgetsFlutterBinding.instance
+          .handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    });
+
+    Future<({RecordingControllerState state, List<int> sent})> pumpRecording(
+      WidgetTester tester,
+    ) async {
+      final sent = <int>[];
+      final state = await _pumpController(
+        tester,
+        onVoiceSent:
+            ({
+              required duration,
+              conversationId,
+              localAudioPath,
+              audioBytes,
+            }) async {
+          sent.add(duration);
+        },
+        onRecordingStateChanged: (_) {},
+      );
+      state.testSkipHardware = true;
+      state.simulateRecordingForTest(elapsed: const Duration(seconds: 3));
+      await tester.pump();
+      return (state: state, sent: sent);
+    }
+
+    for (final away in [AppLifecycleState.paused, AppLifecycleState.hidden]) {
+      testWidgets('${away.name} discards the recording with its notice and '
+          'nothing is sent on return', (tester) async {
+        final r = await pumpRecording(tester);
+        final binding = TestWidgetsFlutterBinding.instance;
+
+        // inactive precedes hidden/paused on every platform.
+        binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+        binding.handleAppLifecycleStateChanged(away);
+        await tester.pump();
+        binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+        await tester.pump();
+
+        expect(r.state.isRecording, isFalse);
+        expect(
+          find.text(AppLocalizations.of(tester.element(find.byType(Scaffold)))
+              .snackbarVoiceRecordingCanceled),
+          findsOneWidget,
+        );
+        await r.state.stopAndSend(); // a late auto-stop finds nothing
+        await tester.pump(const Duration(milliseconds: 2600));
+        expect(r.sent, isEmpty);
+      });
+    }
+
+    testWidgets('inactive alone (a web tab losing focus, a dialog) keeps '
+        'the recording', (tester) async {
+      final r = await pumpRecording(tester);
+
+      TestWidgetsFlutterBinding.instance
+          .handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      await tester.pump();
+
+      expect(r.state.isRecording, isTrue);
+      await r.state.cancelRecording();
+      await tester.pump(const Duration(milliseconds: 2600));
+    });
+
+    testWidgets('the permission dialog moving the app to the background '
+        'while the start is pending does not kill the recording that '
+        'starts', (tester) async {
+      final r = await pumpRecording(tester);
+      // Back to idle: a start awaiting the permission has no recording yet.
+      await r.state.cancelRecording();
+      await tester.pump(const Duration(milliseconds: 2600));
+      r.state.debugSetStartingForTest(true);
+      final binding = TestWidgetsFlutterBinding.instance;
+
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      // The grant lands and the recorder starts.
+      r.state.simulateRecordingForTest();
+      await tester.pump();
+
+      expect(r.state.isRecording, isTrue);
+      expect(find.byType(Overlay), findsOneWidget);
+      await r.state.cancelRecording();
+      await tester.pump(const Duration(milliseconds: 2600));
+    });
+  });
 }
