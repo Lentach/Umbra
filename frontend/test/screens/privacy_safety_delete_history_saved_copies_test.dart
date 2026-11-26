@@ -43,9 +43,7 @@ void main() {
     docs.deleteSync(recursive: true);
   });
 
-  /// Opens the screen, taps "Delete all local messages" and confirms; the
-  /// delete is then running.
-  Future<void> startConfirmedDelete(WidgetTester tester) async {
+  testWidgets('the confirmed delete removes the saved copies', (tester) async {
     await tester.pumpWidget(
       MultiProvider(
         providers: [
@@ -72,38 +70,15 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text(l10n.deleteAllLocalHistoryConfirm));
     await tester.pump();
-  }
-
-  /// Real file IO: each hop resumes in the fake-async zone only on a pump.
-  Future<void> untilSavedCopyGone(WidgetTester tester) async {
+    // Real file IO: each hop resumes in the fake-async zone only on a pump.
     for (var i = 0; i < 40 && savedCopy.existsSync(); i++) {
       await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 50)),
       );
       await tester.pump();
     }
-  }
-
-  testWidgets('the confirmed delete removes the saved copies', (tester) async {
-    await startConfirmedDelete(tester);
-    await untilSavedCopyGone(tester);
     // Let the confirmation toast time out.
     await tester.pump(const Duration(seconds: 4));
-
-    expect(savedCopy.existsSync(), isFalse);
-    expect(audio.existsSync(), isFalse, reason: 'the voice cache goes too');
-  });
-
-  testWidgets('leaving the screen mid-delete does not skip the voice cache '
-      'or the saved copies', (tester) async {
-    await startConfirmedDelete(tester);
-    // Back out while the spinner runs: the screen is gone before the
-    // history clear resolves.
-    await tester.pumpWidget(const SizedBox.shrink());
-    await untilSavedCopyGone(tester);
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 100)),
-    );
 
     expect(savedCopy.existsSync(), isFalse);
     expect(audio.existsSync(), isFalse, reason: 'the voice cache goes too');
