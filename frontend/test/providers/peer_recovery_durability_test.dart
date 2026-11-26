@@ -326,6 +326,36 @@ void main() {
     );
   });
 
+  test(
+    'a refused second acknowledgement keeps the first one\'s rebuild intent',
+    () async {
+      await enc.encryptionService.recordPeerIdentityChangedFromServer(peerId);
+      final pinned = await pinnedPeerKeyBase64();
+      // The first acknowledgement goes through; its rebuild has not run yet
+      // (a box friend with no served bundle throws and leaves the intent).
+      expect(
+        await enc.acknowledgePeerIdentity(peerId, adoptIdentityBase64: pinned),
+        isTrue,
+      );
+      expect(enc.encryptionService.pendingSessionRebuilds, contains((peerId, 1)));
+
+      // A stale dialog or a double tap acknowledges again: nothing is staged
+      // any more, so it is refused and used to wipe EVERY intent for the peer.
+      expect(
+        await enc.acknowledgePeerIdentity(peerId, adoptIdentityBase64: pinned),
+        isFalse,
+      );
+
+      // The app is killed before the rebuild happens.
+      final revived = await freshProvider();
+      expect(
+        revived.needsSessionRebuild(peerId, deviceId: 1),
+        isTrue,
+        reason: 'the session is still keyed to the replaced identity',
+      );
+    },
+  );
+
   test('the intent is cleared only once a session is really rebuilt', () async {
     await enc.encryptionService.recordPeerIdentityChangedFromServer(peerId);
     final pinned = await pinnedPeerKeyBase64();

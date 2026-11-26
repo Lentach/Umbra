@@ -3841,7 +3841,10 @@ class EncryptionProvider extends ChangeNotifier {
     // identity. Recording first can only over-record: if the acknowledgement is
     // refused we clear it below, and a crash before that costs one pre-key
     // fetch instead of a message.
-    await _encryptionService.recordSessionRebuilds(peerId, addresses);
+    final recordedNow = await _encryptionService.recordSessionRebuilds(
+      peerId,
+      addresses,
+    );
     final advanced = await _encryptionService.acknowledgePeerIdentity(
       peerId,
       adoptIdentityBase64: adoptIdentityBase64,
@@ -3858,9 +3861,12 @@ class EncryptionProvider extends ChangeNotifier {
       if (wasHeld) onHeldFramesReleased?.call(peerId);
     } else {
       // Explicitly refused: nothing advanced, so nothing is poisoned and the
-      // speculative intent above names no real damage. Only an EXPLICIT refusal
-      // clears it — an exception leaves it standing, which is the safe side.
-      await _encryptionService.clearSessionRebuildsFor(peerId);
+      // speculative intent above names no real damage. Only the addresses THIS
+      // call recorded are cleared: an intent an earlier, successful
+      // acknowledgement left is still owed (its rebuild may not have run).
+      // Only an EXPLICIT refusal clears — an exception leaves it standing,
+      // which is the safe side.
+      await _encryptionService.clearSessionRebuilds(peerId, recordedNow);
     }
     notifyListeners();
     return advanced;

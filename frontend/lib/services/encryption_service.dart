@@ -1153,18 +1153,24 @@ class EncryptionService {
   /// the two MUST leave a redundant rebuild rather than a cleared warning over
   /// a poisoned session. A redundant rebuild costs one pre-key fetch and one
   /// one-time pre-key; the other ordering costs a message.
-  Future<void> recordSessionRebuilds(
+  ///
+  /// Returns the addresses this call ADDED. An address that already carried an
+  /// intent from an earlier acknowledgement is not returned, so a refusal of
+  /// the later one cannot take the earlier one's intent with it
+  /// ([clearSessionRebuilds]).
+  Future<Set<int>> recordSessionRebuilds(
     int peerId,
     Iterable<int> addresses,
   ) async {
-    var added = false;
+    final added = <int>{};
     for (final deviceId in addresses) {
       if (_pendingSessionRebuilds.add(_rebuildEntry(peerId, deviceId))) {
-        added = true;
+        added.add(deviceId);
       }
     }
-    if (!added) return;
+    if (added.isEmpty) return added;
     await _persistSessionRebuilds();
+    return added;
   }
 
   /// Drop the persisted intent for one address, once a rebuild really happened.
@@ -1175,13 +1181,18 @@ class EncryptionService {
     await _persistSessionRebuilds();
   }
 
-  /// Drop every persisted intent for [peerId] — the acknowledgement was
-  /// refused, so nothing advanced and nothing is poisoned.
-  Future<void> clearSessionRebuildsFor(int peerId) async {
-    final prefix = '$peerId:';
-    final before = _pendingSessionRebuilds.length;
-    _pendingSessionRebuilds.removeWhere((e) => e.startsWith(prefix));
-    if (_pendingSessionRebuilds.length == before) return;
+  /// Drop the intents of [peerId] that [recordSessionRebuilds] just added —
+  /// the acknowledgement was refused, so nothing advanced for them. Intents
+  /// left by an EARLIER acknowledgement that went through stay: their rebuild
+  /// may not have run, and the session is still keyed to the replaced identity.
+  Future<void> clearSessionRebuilds(int peerId, Iterable<int> addresses) async {
+    var removed = false;
+    for (final deviceId in addresses) {
+      if (_pendingSessionRebuilds.remove(_rebuildEntry(peerId, deviceId))) {
+        removed = true;
+      }
+    }
+    if (!removed) return;
     await _persistSessionRebuilds();
   }
 
@@ -5558,6 +5569,7 @@ class EncryptionService {
     needsKeyUpload = false;
     _keysForUpload = null;
     _userId = null;
+    _ownReplacedWhileLocked = null;
     _prefs = null;
     _prefsOpening = null;
     _storage.clearPrefsCache();
@@ -5569,7 +5581,6 @@ class EncryptionService {
   /// Mid-session passcode re-lock: drop every piece of key material and
   /// plaintext this instance holds in RAM, WITHOUT touching storage.
   ///
-    _ownReplacedWhileLocked = null;
   /// This is what makes a re-lock a real revocation rather than a UI barrier.
   /// [clearAllKeys] is the destructive sibling (logout/account deletion) and
   /// deliberately shares only the cache-dropping tail with this method.
