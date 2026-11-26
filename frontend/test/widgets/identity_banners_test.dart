@@ -94,6 +94,7 @@ class _FakeEncryption extends EncryptionProvider {
   Future<bool> acknowledgePeerIdentity(
     int peerId, {
     String? adoptIdentityBase64,
+    bool markVerified = false,
   }) async {
     acknowledged.add(peerId);
     adoptedKeys.add(adoptIdentityBase64);
