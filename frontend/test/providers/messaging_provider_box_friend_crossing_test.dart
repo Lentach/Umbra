@@ -124,6 +124,28 @@ class _Enc extends EncryptionProvider {
       : const VerifiedDeviceList.notEnrolled();
 }
 
+/// A box whose address for the friend is the queue the contact record holds
+/// NOW (the handoff moves it), as the real outbox reads it.
+class _LearnedOutbox extends SendOutbox {
+  _LearnedOutbox(this._queue);
+
+  final String Function() _queue;
+
+
+  @override
+  Iterable<int> coveredPeers() => const [1];
+  @override
+  Map<int, ContactOutbound> addressesFor(int peerUserId) => peerUserId == 1
+      ? {
+          1: ContactOutbound(
+            peerDeviceId: 1,
+            sid: _queue(),
+            sealPub: boxAddress(1).sealPub,
+          ),
+        }
+      : const {};
+}
+
 String _sid(String c) => '${c * 42}E';
 final String _sealPub = '${'b' * 42}w';
 
@@ -746,12 +768,14 @@ void main() {
     /// confirmed the box drains again (what `onHeldFramesReleased` does).
     Future<void> tap(_Side side) async {
       var released = 0;
-      side.enc.onHeldFramesReleased = (_) => released++;
-      await side.reader.confirmCalmHold(side.peerId);
-      if (released > 0) {
-        expect(released, 1, reason: 'one release per confirmed key');
+      // What the app wires: the drain reads the held frames and completes.
+      side.enc.onHeldFramesReleased = (_) async {
+        released++;
         await reoffer(side);
-      }
+      };
+      await side.reader.confirmCalmHold(side.peerId);
+      await pumpEventQueue(); // the released rows' sends finish
+      expect(released, lessThanOrEqualTo(1), reason: 'one release per key');
     }
 
     /// Nothing but the calm line: no warning, no candidate, no request.
@@ -1357,8 +1381,7 @@ void main() {
         },
       ]);
       chats.openConversation(10);
-      final outbox = SendOutbox()
-        ..addresses[1] = {1: boxAddress(1)};
+      final outbox = _LearnedOutbox(() => b.link.learned!);
       b.enc.localLists = true;
       b.reader
         ..setConversationsProvider(chats)
@@ -1407,6 +1430,12 @@ void main() {
 
       expect(outbox.delivered, hasLength(1), reason: 'sent exactly once');
       expect(
+        outbox.delivered.single.$1.sid,
+        restored.sid,
+        reason: "written to the new install's queue (the handoff was taken "
+            'before the release), not the old one',
+      );
+      expect(
         await readByRestored(restored, outbox.delivered.single.$2),
         contains('written during the hold'),
       );
@@ -1431,6 +1460,11 @@ void main() {
       await tap(b);
 
       expect(outbox.delivered, hasLength(2));
+      expect(
+        outbox.delivered.map((d) => d.$1.sid),
+        everyElement(restored.sid),
+        reason: "both went to the new install's queue, not the old one",
+      );
       final read = [
         for (final (_, frame) in outbox.delivered)
           await readByRestored(restored, frame),

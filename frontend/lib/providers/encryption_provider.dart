@@ -239,7 +239,12 @@ class EncryptionProvider extends ChangeNotifier {
   /// Called once the user accepted a friend's changed identity while frames
   /// of it were held, after the session state the old key poisoned was
   /// dropped: the box reader offers the journal again.
-  void Function(int peerId)? onHeldFramesReleased;
+  FutureOr<void> Function(int peerId)? onHeldFramesReleased;
+
+  /// Reads the frames a confirmed calm hold of [peerId] kept back, and
+  /// completes once they are read (the friend's handoff included).
+  Future<void> drainReleasedFrames(int peerId) async =>
+      onHeldFramesReleased?.call(peerId);
 
   /// Delegates to [EncryptionService.holdForeignFrame].
   Future<void> holdForeignFrame(int userId, String ciphertext) =>
@@ -333,7 +338,8 @@ class EncryptionProvider extends ChangeNotifier {
     }
     _encryptionService.releaseCalm(peerId);
     _e2eFlowLog('CALM_CONFIRMED', {'peerId': peerId, 'deviceId': deviceId});
-    onHeldFramesReleased?.call(peerId);
+    // The held frames are drained by the caller once it dropped its calm
+    // hold ([drainReleasedFrames]): the drain answers on the friend's queue.
     notifyListeners();
     return CalmConfirm.confirmed;
   }

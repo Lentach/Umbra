@@ -24,6 +24,13 @@ extension BoxSessionWiring on BoxSession {
     if (!_disposed) unawaited(_inbox.drain());
   }
 
+  /// [drainInbox], completing once everything it offered has been read.
+  Future<void> drainInboxSettled() async {
+    if (_disposed) return;
+    await _inbox.drain();
+    await _inbox.idle;
+  }
+
   /// The Signal side of the sibling swap (`MessagingProvider`).
   OwnDeviceEncrypt? get encryptForOwnDevice => _swap.encrypt;
 

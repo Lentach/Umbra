@@ -623,7 +623,8 @@ class ConnectionProvider extends ChangeNotifier {
     };
     // B3 (decision 143): a friend's frames held under a changed identity are
     // read again the moment the user accepts it.
-    _encryptionProvider?.onHeldFramesReleased = (_) => _box?.drainInbox();
+    _encryptionProvider?.onHeldFramesReleased = (_) =>
+        _box?.drainInboxSettled();
     _encryptionProvider?.onDeviceListInvalidated = (invalidated) {
       _messagingProvider?.onDeviceListInvalidated(invalidated);
       // The own list changed (a device linked or revoked): the siblings may

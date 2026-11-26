@@ -478,6 +478,9 @@ extension MessagingBox on MessagingProvider {
     }
     notifyListeners();
     if (result == CalmConfirm.confirmed) {
+      // The held frames are read FIRST: the friend's handoff names the queue
+      // its new install reads, and a row sent before it goes to the old one.
+      await enc.drainReleasedFrames(peerId);
       for (final tempId in _takeCalmDeferred(peerId)) {
         await retryFailedMessage(tempId);
       }
