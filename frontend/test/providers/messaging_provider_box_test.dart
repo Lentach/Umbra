@@ -444,34 +444,78 @@ void main() {
     );
   }
 
-  test('decision 152: warnings OFF, friend unverified — the foreign frame is '
-      'accepted, decrypted in the same pass and shown; the pin moved, no '
-      'pill, a permanent note, the friend still unverified', () async {
+  /// Decision 152 (option C): the friend's held list says NOT enrolled, so a
+  /// foreign frame may wait calmly (the persisted list, not the cache).
+  Future<void> heldNotEnrolled() =>
+      encryption.store.recordPeerDeviceList(2, null);
+
+  test('decision 152: warnings OFF, friend unverified, list not enrolled — '
+      'the foreign frame WAITS calmly: not decrypted, not shown, no pill, no '
+      'note, no request, the pin where it was', () async {
+    final forged = await pinFriendAndForge(verified: false);
+    await heldNotEnrolled();
+    final pinned = await encryption.store.peerTofuIdentityBase64(2);
+    envelope('new phone, same me');
+
+    expect(await deliver(forged, _peer(2, conversationId: 10)), isFalse);
+    // Offered again (every connect does): the same verdict, one log line.
+    expect(await deliver(forged, _peer(2, conversationId: 10)), isFalse);
+
+    expect(encryption.decryptedIds, isEmpty);
+    expect(provider.messages, isEmpty);
+    expect(provider.calmHoldState(2), CalmHoldState.waiting);
+    expect(encryption.peersCalmHeld, contains(2));
+    expect(encryption.peersWithHeldMessages, contains(2));
+    expect(encryption.peersWithChangedIdentity, isEmpty);
+    expect(await encryption.store.peerTofuIdentityBase64(2), pinned);
+    expect(await encryption.isPeerVerified(2), isFalse);
+    expect(encryption.peerKeyChangeLog(2), isEmpty);
+    expect(emitted, isEmpty, reason: 'a frame alone asks nobody');
+    expect(
+      E2eDiagLog.entries.where((e) => e.contains('BOX_FOREIGN_IDENTITY_CALM')),
+      hasLength(1),
+    );
+    expect(
+      E2eDiagLog.entries.where((e) => e.contains('BOX_FOREIGN_IDENTITY_HELD')),
+      isEmpty,
+      reason: 'the calm hold is not the visible one',
+    );
+  });
+
+  test('decision 152: warnings OFF, friend unverified but NO held list — '
+      'the visible hold at once, no calm line', () async {
     final forged = await pinFriendAndForge(verified: false);
     envelope('new phone, same me');
 
-    expect(await deliver(forged, _peer(2, conversationId: 10)), isTrue);
+    expect(await deliver(forged, _peer(2, conversationId: 10)), isFalse);
 
-    expect(encryption.decryptedIds, [forged.localId]);
-    expect(
-      provider.messages.singleWhere((m) => m.id == forged.localId).content,
-      'new phone, same me',
-    );
-    expect(await encryption.store.peerTofuIdentityBase64(2), attackerIdentity);
-    expect(encryption.peersWithChangedIdentity, isEmpty);
-    expect(encryption.peersWithHeldMessages, isEmpty);
-    expect(await encryption.isPeerVerified(2), isFalse);
-    expect(encryption.peerKeyChangeLog(2), hasLength(1));
-    // The friend's later whisper reads on the new anchor, not held.
-    envelope('and a second one');
-    expect(await deliver(entry(), _peer(2, conversationId: 10)), isTrue);
+    expect(provider.calmHoldState(2), isNull);
+    expect(encryption.peersCalmHeld, isEmpty);
+    expect(encryption.peersWithChangedIdentity, contains(2));
+    expect(encryption.decryptedIds, isEmpty);
   });
 
   test('decision 152: clearing the chat removes its permanent key-change '
       "line, and only that chat's", () async {
-    final forged = await pinFriendAndForge(verified: false);
-    envelope('from the new phone');
-    expect(await deliver(forged, _peer(2, conversationId: 10)), isTrue);
+    await pinFriendAndForge(verified: false);
+    // A note as the person's tap leaves it: the bundle path accepts a served
+    // key (an unverified friend, warnings OFF) and stamps the note.
+    final newPhone = EncryptionService();
+    await newPhone.initialize(
+      9,
+      checkServerIdentity: () async => const ServerIdentityGuard(exists: false),
+    );
+    final upload = newPhone.getKeysForUpload()!;
+    final otp = (upload['oneTimePreKeys'] as List).first as Map;
+    await encryption.store.buildSession(
+      2,
+      {
+        ...(upload['keyBundle'] as Map).cast<String, dynamic>(),
+        'oneTimePreKeyId': otp['keyId'],
+        'oneTimePreKeyPublic': otp['publicKey'],
+      },
+      expectedIdentityBase64: await encryption.store.peerTofuIdentityBase64(2),
+    );
     expect(encryption.peerKeyChangeLog(2), hasLength(1));
 
     provider.clearChatHistory(11); // carol's chat: not this one
@@ -484,39 +528,10 @@ void main() {
     expect(encryption.peerKeyChangeLog(2), isEmpty);
   });
 
-  test('decision 152: the permanent note is stamped just BEFORE the message '
-      'that came under the new key', () async {
-    final forged = await pinFriendAndForge(verified: false);
-    final sentAt = receivedAt.subtract(const Duration(minutes: 5));
-    envelope('from the new phone', sentAt: sentAt);
-
-    expect(await deliver(forged, _peer(2, conversationId: 10)), isTrue);
-
-    final shown = provider.messages.singleWhere((m) => m.id == forged.localId);
-    expect(shown.createdAt, sentAt);
-    expect(
-      encryption.peerKeyChangeLog(2).single,
-      shown.createdAt.millisecondsSinceEpoch - 1,
-      reason: 'the line sits above the message, not below it',
-    );
-  });
-
-  test('decision 152: a frame whose decrypt FAILS does not keep the key it '
-      'claimed — the anchor and the note go back', () async {
-    final forged = await pinFriendAndForge(verified: false);
-    final pinned = await encryption.store.peerTofuIdentityBase64(2);
-    encryption.inbound = StateError('bad mac');
-
-    await deliver(forged, _peer(2, conversationId: 10));
-
-    expect(await encryption.store.peerTofuIdentityBase64(2), pinned);
-    expect(encryption.peerKeyChangeLog(2), isEmpty);
-    expect(provider.messages, isEmpty);
-  });
-
-  test('decision 152: a friend who is no longer a friend gets no accept — '
+  test('decision 152: a friend who is no longer a friend gets no calm hold — '
       'its foreign frame is finished, the anchor stays', () async {
     final forged = await pinFriendAndForge(verified: false);
+    await heldNotEnrolled();
     final pinned = await encryption.store.peerTofuIdentityBase64(2);
     envelope('hello');
 
@@ -528,6 +543,8 @@ void main() {
       isTrue,
     );
 
+    expect(provider.calmHoldState(2), isNull);
+    expect(encryption.peersCalmHeld, isEmpty);
     expect(await encryption.store.peerTofuIdentityBase64(2), pinned);
     expect(encryption.decryptedIds, isEmpty);
     expect(encryption.peerKeyChangeLog(2), isEmpty);

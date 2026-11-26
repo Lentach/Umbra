@@ -766,6 +766,7 @@ void main() {
       expect(b.link.learned, a.sid, reason: 'the old address stands');
       expect(b.enc.peerKeyChangeLog(1), isEmpty);
 
+      final firstAt = b.held.single.receivedAt;
       await tap(b);
 
       expect(b.held, isEmpty);
@@ -774,7 +775,11 @@ void main() {
       expect(b.enc.peersWithHeldMessages, isEmpty);
       expect(b.enc.peersWithChangedIdentity, isEmpty);
       expect(await anchorOfA(), await idOf(restored));
-      expect(b.enc.peerKeyChangeLog(1), hasLength(1));
+      expect(
+        b.enc.peerKeyChangeLog(1).single,
+        firstAt.millisecondsSinceEpoch - 1,
+        reason: 'the note sits just above the first message held for it',
+      );
       expect(b.refusals, isEmpty);
       expect(b.link.learned, restored.sid);
       expect(restored.link.acked, isTrue);
