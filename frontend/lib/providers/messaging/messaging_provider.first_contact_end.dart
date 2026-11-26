@@ -80,6 +80,7 @@ extension MessagingFirstContactEnd on MessagingProvider {
   /// above (or the caller's), never refreshed first.
   void _afterBoxFriendshipEnded(int userId) {
     _firstContactLog('BOX_FRIENDSHIP_ENDED', userId);
+    _clearCalmHold(userId);
     onBoxContactsChanged?.call();
     notifyListeners();
   }

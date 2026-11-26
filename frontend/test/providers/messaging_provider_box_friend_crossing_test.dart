@@ -1052,6 +1052,194 @@ void main() {
       expect(await anchorOfA(), await idOf(restored));
     });
 
+    // ---- C-1: the journal offers the frame again WHILE the tap checks ----
+
+    /// The tap on B stalls at the server; a connect offers the held frame
+    /// again meanwhile; then the answer arrives.
+    Future<void> tapAcrossReoffer() async {
+      b.gate = Completer<void>();
+      final tapped = tap(b);
+      await pumpEventQueue();
+      expect(b.reader.calmHoldState(1), CalmHoldState.checking);
+      await reoffer(b);
+      expect(b.reader.calmHoldState(1), CalmHoldState.checking);
+      expect(b.held, hasLength(1));
+      b.gate!.complete();
+      b.gate = null;
+      await tapped;
+    }
+
+    test('C-1a: a re-offer while the tap checks, then no answer: the line '
+        'is tappable again and the second tap asks again', () async {
+      final restored = await calmRestore();
+      b.serve = (_) => null;
+
+      await tapAcrossReoffer();
+
+      expect(b.reader.calmHoldState(1), CalmHoldState.failed);
+      expect(b.enc.peersCalmHeld, contains(1));
+      expect(b.held, hasLength(1));
+
+      b.serve = (bundle) => bundle;
+      await tap(b);
+
+      expect(b.fetches, 2);
+      expect(b.held, isEmpty);
+      expect(await anchorOfA(), await idOf(restored));
+    });
+
+    test('C-1b: a re-offer while the tap checks, then a served key that is '
+        "not the frame's: the hold turns red, the calm line is gone", () async {
+      final before = await anchorOfA();
+      await calmRestore();
+      b.other = a; // the server still serves the OLD key
+
+      await tapAcrossReoffer();
+
+      expectRed(b);
+      expect(b.fetches, 1);
+      expect(await anchorOfA(), before);
+      expect(b.enc.peerKeyChangeLog(1), isEmpty);
+    });
+
+    test('C-1c: a re-offer while the tap checks, then the key is confirmed: '
+        'accepted once and drained', () async {
+      final restored = await calmRestore();
+
+      await tapAcrossReoffer();
+
+      expect(b.held, isEmpty);
+      expect(b.reader.calmHoldState(1), isNull);
+      expect(b.enc.peersCalmHeld, isEmpty);
+      expect(b.enc.peersWithHeldMessages, isEmpty);
+      expect(b.fetches, 1);
+      expect(b.enc.peerKeyChangeLog(1), hasLength(1));
+      expect(await anchorOfA(), await idOf(restored));
+      expect(b.link.learned, restored.sid);
+    });
+
+    test('the note is stamped from the EARLIEST frame held, whatever order '
+        'the journal offered them in', () async {
+      final restored = await calmRestore();
+      final earlier = b.held.single.receivedAt.subtract(
+        const Duration(seconds: 5),
+      );
+      final second = (await restored.reader.encryptForFriend(
+        5,
+        3,
+        jsonEncode(
+          E2eEnvelope.buildQueueHandoff(sid: _sid('S'), sealPub: _sealPub),
+        ),
+        fresh: true,
+      ))!;
+      final entry = BoxInboxEntry(
+        rid: 'friend-rid',
+        id: 'earlier',
+        localId: nextLocal++,
+        peerUserId: 1,
+        senderDeviceId: 1,
+        signal: second.signalCiphertext,
+        receivedAt: earlier,
+        acked: true,
+      );
+      expect(await b.reader.consumeBoxEntry(entry, b.peerRecord), isFalse);
+      b.held.add(entry);
+
+      await tap(b);
+
+      expect(
+        b.enc.peerKeyChangeLog(1).single,
+        earlier.millisecondsSinceEpoch - 1,
+      );
+    });
+
+    // ---- C-4: the calm entry and the held marks move together ----
+
+    test("C-4: a PreKey frame under the friend's PINNED key, arriving while "
+        'another key waits calmly, leaves the line, the marks and the tap '
+        'as they were', () async {
+      final restored = await calmRestore();
+
+      await handOffFrom(a);
+
+      expect(b.refusals, ['prekey_unasked'], reason: 'read, and refused');
+      expectCalm(b);
+
+      await tap(b);
+
+      expect(b.held, isEmpty);
+      expect(await anchorOfA(), await idOf(restored));
+    });
+
+    // ---- C-5: guards a mutant used to survive ----
+
+    test('a SECOND new key while one waits calmly is never calm: the hold '
+        'turns red for both, nothing is asked', () async {
+      final before = await anchorOfA();
+      await calmRestore();
+      final other = await restoreA(); // yet another identity for A
+
+      await other.link.restart();
+      await pump();
+
+      expectRed(b, held: 2);
+      expect(b.emits, isEmpty);
+      expect(await anchorOfA(), before);
+    });
+
+    test('the tap confirms only when the frame key IS pinned after the '
+        'build: warnings turned ON meanwhile refuse the accept, and the '
+        'hold turns red with nothing released', () async {
+      final before = await anchorOfA();
+      await calmRestore();
+      b.enc.keyChangeWarnings = () => true;
+      var released = 0;
+      b.enc.onHeldFramesReleased = (_) => released++;
+
+      await b.reader.confirmCalmHold(1);
+
+      expect(released, 0);
+      expectRed(b);
+      expect(await anchorOfA(), before);
+      expect(b.enc.peerKeyChangeLog(1), isEmpty);
+    });
+
+    // ---- The friendship ends while a frame waits calmly ----
+
+    for (final state in [ContactState.blocked, ContactState.former]) {
+      test('the friend is ${state.name} while a frame waits calmly: the next '
+          'offer finishes the frame and clears the line and its marks',
+          () async {
+        await calmRestore();
+        final gone = ContactRecord(
+          userId: 1,
+          username: 'p1',
+          tag: '0000',
+          state: state,
+        );
+
+        expect(await b.reader.consumeBoxEntry(b.held.single, gone), isTrue);
+
+        expect(b.reader.calmHoldState(1), isNull);
+        expect(b.enc.peersCalmHeld, isEmpty);
+        expect(b.enc.peersWithHeldMessages, isEmpty);
+        expect(b.enc.peersWithChangedIdentity, isEmpty);
+        expect(b.emits, isEmpty);
+      });
+    }
+
+    test('the friendship ends while a frame waits calmly, with no offer '
+        'after it: the line and the marks are gone at once', () async {
+      await calmRestore();
+
+      b.reader.onFriendshipEnded(1);
+
+      expect(b.reader.calmHoldState(1), isNull);
+      expect(b.enc.peersCalmHeld, isEmpty);
+      expect(b.enc.peersWithHeldMessages, isEmpty);
+      expect(b.enc.peersWithChangedIdentity, isEmpty);
+    });
+
     test('S5: a PreKey frame whose body cannot be parsed is finished, '
         'never held, never asked about', () async {
       onTheBox();

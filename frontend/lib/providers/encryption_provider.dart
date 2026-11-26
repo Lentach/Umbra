@@ -259,6 +259,13 @@ class EncryptionProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Delegates to [EncryptionService.releaseCalm]: the calm hold ended
+  /// without a confirmed key (the friendship ended).
+  void releaseCalm(int userId) {
+    _encryptionService.releaseCalm(userId);
+    notifyListeners();
+  }
+
   /// The tap on a calm hold: CONFIRMS [frameIdentityBase64] for [peerId] from a
   /// fresh served bundle for [deviceId] — a person's act, so the only place a
   /// foreign-key frame may cause a lookup (decision 153). Nothing is accepted

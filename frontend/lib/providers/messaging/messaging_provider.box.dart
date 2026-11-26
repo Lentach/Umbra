@@ -70,6 +70,7 @@ extension MessagingBox on MessagingProvider {
         'peer': entry.peerUserId,
         'reason': refusal,
       });
+      _clearCalmHold(entry.peerUserId);
       return Future.value(true);
     }
     final msg = MessageModel(
@@ -201,7 +202,12 @@ extension MessagingBox on MessagingProvider {
           // dropped the list it reads).
           newIdentity = newIdentity || (_boxHeld[msg.id] ?? false);
           _boxHeld.remove(msg.id);
-          _calmHolds.remove(msg.senderId);
+          // Only a frame of the key that WAITS calmly settles that hold (the
+          // anchor reached it); a frame of the pinned key leaves it alone.
+          if (_calmHolds[msg.senderId]?.identity ==
+              preKeyIdentityOf(msg.encryptedContent!)) {
+            _calmHolds.remove(msg.senderId);
+          }
         case FriendFrameIdentity.foreign:
           return _holdForeign(
             msg,
@@ -408,14 +414,19 @@ extension MessagingBox on MessagingProvider {
     final held = _calmHolds[msg.senderId];
     if ((held == null || held.identity == identity) &&
         await enc.calmHoldEligible(msg.senderId)) {
-      final first = held == null || receivedAt.isBefore(held.firstReceivedAt);
-      _calmHolds[msg.senderId] = CalmHold(
-        identity: identity,
-        device: msg.originDeviceId ?? 1,
-        firstReceivedAt: first ? receivedAt : held.firstReceivedAt,
-        ciphertext: held?.ciphertext ?? msg.encryptedContent!,
-        state: held?.state ?? CalmHoldState.waiting,
-      );
+      // One object per peer, updated in place: a tap in flight holds it, and
+      // a replaced one would leave that tap's answer with nothing to settle.
+      if (held == null) {
+        _calmHolds[msg.senderId] = CalmHold(
+          identity: identity,
+          device: msg.originDeviceId ?? 1,
+          firstReceivedAt: receivedAt,
+          ciphertext: msg.encryptedContent!,
+          state: CalmHoldState.waiting,
+        );
+      } else if (receivedAt.isBefore(held.firstReceivedAt)) {
+        held.firstReceivedAt = receivedAt;
+      }
       final fresh = !_boxHeld.containsKey(msg.id);
       _boxHeld[msg.id] = remint;
       enc.holdCalm(msg.senderId);
@@ -505,12 +516,25 @@ extension MessagingBox on MessagingProvider {
 
   bool _dropHeld(MessageModel msg) {
     _boxHeld.remove(msg.id);
+    _clearCalmHold(msg.senderId);
     _e2eFlowLog('BOX_HELD_DISCARDED', {
       'peer': msg.senderId,
       'device': msg.originDeviceId ?? 1,
     });
     return true;
   }
+
+  /// The friendship with [peerId] ended (unfriend, block, their goodbye): a
+  /// calm line and the marks that keep its frames held go with it.
+  void _clearCalmHold(int peerId) {
+    if (_calmHolds.remove(peerId) != null) {
+      _encryptionProvider?.releaseCalm(peerId);
+      notifyListeners();
+    }
+  }
+
+  /// Called when [peerId] stops being a friend.
+  void onFriendshipEnded(int peerId) => _clearCalmHold(peerId);
 
   /// Once per held frame per run (the caller's `_boxHeld` mark): peer and
   /// device only, never key material or content.
@@ -539,7 +563,7 @@ class CalmHold {
 
   final String identity;
   final int device;
-  final DateTime firstReceivedAt;
+  DateTime firstReceivedAt;
   final String ciphertext;
   CalmHoldState state;
 }
