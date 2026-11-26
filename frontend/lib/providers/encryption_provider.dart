@@ -271,6 +271,12 @@ class EncryptionProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Delegates to [EncryptionService.markRefusedIdentity].
+  void markRefusedIdentity(int userId) {
+    _encryptionService.markRefusedIdentity(userId);
+    notifyListeners();
+  }
+
   /// The tap on a calm hold: CONFIRMS [frameIdentityBase64] for [peerId] from a
   /// fresh served bundle for [deviceId] — a person's act, so the only place a
   /// foreign-key frame may cause a lookup (decision 153). Nothing is accepted
@@ -288,6 +294,8 @@ class EncryptionProvider extends ChangeNotifier {
     Duration timeout = const Duration(seconds: 10),
   }) async {
     if (!_e2eInitialized || _currentUserId == null) return CalmConfirm.transient;
+    // Account-scoped: a switch while the tap waits abandons its result.
+    final epoch = _initEpoch;
     final Map<String, dynamic> bundle;
     try {
       if (isBoxOnlyPeer?.call(peerId) ?? false) {
@@ -308,6 +316,7 @@ class EncryptionProvider extends ChangeNotifier {
       _e2eFlowLog('CALM_CONFIRM_FAILED', {'peerId': peerId, 'error': '$e'});
       return CalmConfirm.transient;
     }
+    if (epoch != _initEpoch) return CalmConfirm.transient;
     // M2: the served key must BE the frame's key, proven by its signature,
     // before any session work.
     if (!_encryptionService.bundleProvesIdentity(bundle, frameIdentityBase64)) {
@@ -332,10 +341,12 @@ class EncryptionProvider extends ChangeNotifier {
       // pinned; the next ensureSession builds against it (S6).
       _e2eFlowLog('CALM_CONFIRM_BUILD_FAILED', {'peerId': peerId, 'error': '$e'});
     }
+    if (epoch != _initEpoch) return CalmConfirm.transient;
     if (await _encryptionService.peerTofuIdentityBase64(peerId) !=
         frameIdentityBase64) {
       return refused ? CalmConfirm.refused : CalmConfirm.transient;
     }
+    if (epoch != _initEpoch) return CalmConfirm.transient;
     _encryptionService.releaseCalm(peerId);
     _e2eFlowLog('CALM_CONFIRMED', {'peerId': peerId, 'deviceId': deviceId});
     // The held frames are drained by the caller once it dropped its calm

@@ -1599,5 +1599,86 @@ void main() {
       expect(read[0], contains('first'));
       expect(read[1], contains('second'));
     });
+
+    // ---- The drain after the tap fails, stalls or is slow (2b) ----
+
+    /// A tap whose drain is [drain] (what the app wires, replaced).
+    Future<void> tapWithDrain(
+      _Side side,
+      Future<void> Function() drain,
+    ) async {
+      side.enc.onHeldFramesReleased = (_) => drain();
+      await side.reader.confirmCalmHold(side.peerId);
+      await pumpEventQueue();
+    }
+
+    test('2b-a: the drain throws and no handoff was learned: the message '
+        'leaves the waiting state, nothing is written to the old queue, '
+        'the tap does not throw', () async {
+      await calmRestore();
+      final outbox = await boxForB();
+      final row = await writeFromB('stuck');
+
+      await tapWithDrain(b, () async => throw StateError('drain broke'));
+
+      expect(outbox.delivered, isEmpty, reason: 'the old queue is not used');
+      expect(b.reader.sendWaitsForCalmHold(row.tempId), isFalse);
+      expect(
+        b.reader.messages.singleWhere((m) => m.tempId == row.tempId)
+            .deliveryStatus,
+        MessageDeliveryStatus.failed,
+        reason: 'an ordinary failed row, with its own Retry',
+      );
+      expect(b.reader.sendRefusedForIdentity(row.tempId), isFalse);
+    });
+
+    test('2b-a2: the drain throws AFTER the handoff was learned: the message '
+        'goes out once, to the learned queue', () async {
+      final restored = await calmRestore();
+      final outbox = await boxForB();
+      await writeFromB('learned');
+
+      await tapWithDrain(b, () async {
+        await reoffer(b);
+        throw StateError('late failure');
+      });
+
+      expect(outbox.delivered, hasLength(1));
+      expect(outbox.delivered.single.$1.sid, restored.sid);
+    });
+
+    test('2b-b: the drain never completes: after the bound the message '
+        'leaves the waiting state and nothing is written to the old queue',
+        () async {
+      await calmRestore();
+      final outbox = await boxForB();
+      final row = await writeFromB('stalled');
+      b.reader.calmDrainBound = const Duration(milliseconds: 50);
+
+      await tapWithDrain(b, () => Completer<void>().future);
+
+      expect(outbox.delivered, isEmpty);
+      expect(b.reader.sendWaitsForCalmHold(row.tempId), isFalse);
+      expect(
+        b.reader.messages.singleWhere((m) => m.tempId == row.tempId)
+            .deliveryStatus,
+        MessageDeliveryStatus.failed,
+      );
+    });
+
+    test('2b-c: a slow drain that completes within the bound: the message '
+        'is released once, to the learned queue', () async {
+      final restored = await calmRestore();
+      final outbox = await boxForB();
+      await writeFromB('slow');
+
+      await tapWithDrain(b, () async {
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+        await reoffer(b);
+      });
+
+      expect(outbox.delivered, hasLength(1));
+      expect(outbox.delivered.single.$1.sid, restored.sid);
+    });
   });
 }

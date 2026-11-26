@@ -50,11 +50,13 @@ const _peerId = 2;
 
 class _AlarmedEncryption extends EncryptionProvider {
   _AlarmedEncryption({
-    this.changedPeers = const <int>{},
+    Set<int> changedPeers = const <int>{},
     Map<int, String> notedPeers = const <int, String>{},
-    this.refusedPeers = const <int>{},
+    Set<int> refusedPeers = const <int>{},
     this.keyChangeLog = const <int>[],
-  }) : notedPeers = Map<int, String>.of(notedPeers);
+  }) : notedPeers = Map<int, String>.of(notedPeers),
+       changedPeers = Set<int>.of(changedPeers),
+       refusedPeers = Set<int>.of(refusedPeers);
 
   /// Decision 152: instants (ms) of key changes accepted automatically.
   final List<int> keyChangeLog;
@@ -88,6 +90,23 @@ class _AlarmedEncryption extends EncryptionProvider {
   Set<int> get peersRefusedIdentity => refusedPeers;
 
   final Set<int> changedPeers;
+
+  @override
+  Future<bool> calmHoldEligible(int userId) async => true;
+
+  /// What the red-turn path told the chat: the peer is named refused, and
+  /// its frame is held visibly.
+  @override
+  void markRefusedIdentity(int userId) {
+    refusedPeers.add(userId);
+    notifyListeners();
+  }
+
+  @override
+  Future<void> holdForeignFrame(int userId, String ciphertext) async {
+    changedPeers.add(userId);
+    notifyListeners();
+  }
 
   /// Mutable, like the service's map: a dismissal must make the next build
   /// see NO note, or the test proves nothing about convergence.
@@ -174,6 +193,7 @@ Future<_AlarmedEncryption> _pumpChat(
   CalmHoldState? calmHold,
   // That row was held back for the calm line's tap (needs [calmHold]).
   bool rowWaitsForCalm = false,
+  bool embedded = false,
 }) async {
   SharedPreferences.setMockInitialValues({
     'key_change_warnings': keyChangeWarnings,
@@ -246,7 +266,11 @@ Future<_AlarmedEncryption> _pumpChat(
         supportedLocales: AppLocalizations.supportedLocales,
         locale: const Locale('en'),
         theme: RpgTheme.themeDataDarkGray,
-        home: const ChatDetailScreen(conversationId: 10),
+        home: embedded
+            ? const Scaffold(
+                body: ChatDetailScreen(conversationId: 10, isEmbedded: true),
+              )
+            : const ChatDetailScreen(conversationId: 10),
       ),
     ),
   );
@@ -710,6 +734,37 @@ void main() {
     expect(find.text(en.messageSendWaitsForCalmHold), findsNothing);
     expect(find.text(en.messageRetrySend), findsOneWidget);
   });
+
+  for (final embedded in [false, true]) {
+    testWidgets('a held row names the wait, and after a REFUSED tap names the '
+        'key-change refusal exactly as a red-hold row does, never a bare '
+        'Retry (${embedded ? 'embedded' : 'full'} layout)', (tester) async {
+      final en = await AppLocalizations.delegate.load(const Locale('en'));
+      final enc = await _pumpChat(
+        tester,
+        alarmed: false,
+        keyChangeWarnings: false,
+        withMessages: true,
+        failedOwnRow: true,
+        calmHold: CalmHoldState.waiting,
+        rowWaitsForCalm: true,
+        embedded: embedded,
+      );
+      expect(find.text(en.messageSendWaitsForCalmHold), findsOneWidget);
+      enc.confirmAnswer = Completer<CalmConfirm>();
+
+      await tester.tap(find.byKey(const ValueKey('calm-hold-line')));
+      await tester.pump();
+      enc.confirmAnswer!.complete(CalmConfirm.refused);
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.byType(PeerIdentityChangedRow), findsOneWidget);
+      expect(find.text(en.messageSendBlockedKeysChanged), findsOneWidget);
+      expect(find.text(en.messageSendWaitsForCalmHold), findsNothing);
+      expect(find.text(en.messageRetrySend), findsOneWidget);
+    });
+  }
 
   testWidgets('a calm hold shows the neutral line, in an empty chat and in a '
       'populated one, and no red row', (tester) async {

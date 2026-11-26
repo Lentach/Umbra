@@ -232,6 +232,12 @@ class MessagingProvider extends ChangeNotifier {
   /// that is being replaced.
   final Map<String, int> _calmDeferredSends = {};
 
+  /// How long the tap on a calm line waits for the held frames to be read
+  /// (the friend's handoff names the queue to send to) before the waiting
+  /// messages stop waiting. Tests shorten it.
+  @visibleForTesting
+  Duration calmDrainBound = const Duration(seconds: 20);
+
   /// True while [tempId] waits for the tap on its friend's calm line. Read
   /// by the failed bubble, which then names the line instead of a failure.
   bool sendWaitsForCalmHold(String? tempId) =>

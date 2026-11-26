@@ -207,6 +207,7 @@ extension MessagingBox on MessagingProvider {
           if (_calmHolds[msg.senderId]?.identity ==
               preKeyIdentityOf(msg.encryptedContent!)) {
             _calmHolds.remove(msg.senderId);
+            _takeCalmDeferred(msg.senderId); // settled: a plain Retry remains
           }
         case FriendFrameIdentity.foreign:
           return _holdForeign(
@@ -439,7 +440,9 @@ extension MessagingBox on MessagingProvider {
       notifyListeners();
       return false;
     }
-    _calmHolds.remove(msg.senderId);
+    if (_calmHolds.remove(msg.senderId) != null) {
+      _refuseCalmDeferred(msg.senderId, enc);
+    }
     return _holdForeignFrame(msg, enc, peer, remint: remint);
   }
 
@@ -457,6 +460,16 @@ extension MessagingBox on MessagingProvider {
     if (hold.state == CalmHoldState.checking) return;
     hold.state = CalmHoldState.checking;
     notifyListeners();
+    // Verified or warnings ON since the hold began: the visible hold, and
+    // no request at all (a lookup spends one of the friend's pre-keys).
+    if (!await enc.calmHoldEligible(peerId)) {
+      if (!identical(_calmHolds[peerId], hold)) return;
+      _calmHolds.remove(peerId);
+      _refuseCalmDeferred(peerId, enc);
+      await enc.holdForeignFrame(peerId, hold.ciphertext);
+      notifyListeners();
+      return;
+    }
     final result = await enc.confirmCalmKey(
       peerId,
       hold.device,
@@ -469,9 +482,8 @@ extension MessagingBox on MessagingProvider {
         _calmHolds.remove(peerId);
       case CalmConfirm.refused:
         _calmHolds.remove(peerId);
-        // The red hold takes over, and so does its refusal for what waited:
-        // those rows now read as refused for a key change.
-        _identityRefusedSendTempIds.addAll(_takeCalmDeferred(peerId));
+        // The red hold takes over, and so does its refusal for what waited.
+        _refuseCalmDeferred(peerId, enc);
         await enc.holdForeignFrame(peerId, hold.ciphertext);
       case CalmConfirm.transient:
         hold.state = CalmHoldState.failed;
@@ -480,11 +492,40 @@ extension MessagingBox on MessagingProvider {
     if (result == CalmConfirm.confirmed) {
       // The held frames are read FIRST: the friend's handoff names the queue
       // its new install reads, and a row sent before it goes to the old one.
-      await enc.drainReleasedFrames(peerId);
-      for (final tempId in _takeCalmDeferred(peerId)) {
+      final before = _boxQueuesOf(peerId);
+      var drained = false;
+      try {
+        await enc.drainReleasedFrames(peerId).timeout(calmDrainBound);
+        drained = true;
+      } on Object catch (e) {
+        _e2eFlowLog('CALM_DRAIN_INCOMPLETE', {'peer': peerId, 'error': '$e'});
+      }
+      // Whatever happened, the rows stop waiting here.
+      final rows = _takeCalmDeferred(peerId);
+      // A drain that failed before the friend's handoff was read leaves the
+      // send target at the OLD queue: those rows stay ordinary failed rows
+      // (their own Retry), never written there on the person's behalf.
+      if (!drained && setEquals(_boxQueuesOf(peerId), before)) return;
+      for (final tempId in rows) {
         await retryFailedMessage(tempId);
       }
     }
+  }
+
+  /// The queues the box would send [peerId]'s messages to now.
+  Set<String> _boxQueuesOf(int peerId) => {
+    for (final to in (boxOutbox?.addressesFor(peerId) ?? const {}).values)
+      to.sid,
+  };
+
+  /// What waited for [peerId]'s calm line when it turns into the visible
+  /// hold: those rows read as refused for a key change (as under a red-hold
+  /// refusal), and the chat names it for them ([peersRefusedIdentity]).
+  void _refuseCalmDeferred(int peerId, EncryptionProvider enc) {
+    final rows = _takeCalmDeferred(peerId);
+    if (rows.isEmpty) return;
+    _identityRefusedSendTempIds.addAll(rows);
+    enc.markRefusedIdentity(peerId);
   }
 
   /// Removes and returns, in the order written, what was held back for
