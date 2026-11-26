@@ -343,6 +343,9 @@ class _LinkDeviceScreenState extends State<LinkDeviceScreen> {
             child: OutlinedButton(
               key: const Key('link-primary-retry'),
               onPressed: () {
+                // The typed text belonged to the attempt that just failed;
+                // the next one starts from an empty field.
+                _code.clear();
                 controller.cancelPrimary();
                 if (widget.initialCode == null) {
                   // The screen mounted in the flipped shape — restart it

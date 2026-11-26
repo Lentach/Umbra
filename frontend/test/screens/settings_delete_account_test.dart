@@ -91,7 +91,7 @@ class _Encryption extends EncryptionProvider {
   }
 
   @override
-  Future<void> clearEncryptionKeys() async {
+  Future<void> clearEncryptionKeys({int? userId}) async {
     keyWipes++;
     await duringWipe?.call();
   }

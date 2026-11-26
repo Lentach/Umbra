@@ -10,6 +10,8 @@ import {
   PASSWORD_REGEX,
   PASSWORD_REGEX_MESSAGE,
 } from '../../auth-core/password.constants';
+import { MaxCodePoints } from '../../common/max-code-points';
+import { MaxGraphemes } from '../../common/max-graphemes';
 
 export class ResetPasswordDto {
   @IsString()
@@ -40,6 +42,9 @@ export class VerifyPasswordDto {
 export class UpdateProfileAboutDto {
   @IsOptional()
   @IsString()
-  @MaxLength(80)
+  // 80 characters as the user sees them; 640 code points is the column's
+  // CHECK (migration 0032), the backstop for a cluster of unbounded size.
+  @MaxGraphemes(80)
+  @MaxCodePoints(640)
   about?: string | null;
 }

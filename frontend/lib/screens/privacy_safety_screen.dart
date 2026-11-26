@@ -1011,6 +1011,7 @@ class _PrivacySafetyScreenState extends State<PrivacySafetyScreen> {
     if (!confirmed) return;
 
     final encryptionProvider = context.read<EncryptionProvider>();
+    final messaging = context.read<MessagingProvider>();
     setState(() => _deletingAllLocalHistory = true);
     try {
       final result = await encryptionProvider.clearLocalDecryptedContentCache();
@@ -1020,6 +1021,9 @@ class _PrivacySafetyScreenState extends State<PrivacySafetyScreen> {
       // The plaintext files the user saved out of chats go with the history
       // (A3-MSG-A-04); a failure is the same partial delete as any other.
       final savedGone = await download_utils.deleteSavedDownloads();
+      // What the open chat and the chat list still hold is a copy of what was
+      // just destroyed; before the `mounted` check for the same reason.
+      messaging.onLocalHistoryWiped();
       if (!mounted) return;
 
       showTopSnackBar(

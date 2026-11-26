@@ -46,10 +46,13 @@ describe('UsersController', () => {
       ['POST', '/users/profile-photos/3/main'],
       ['POST', '/users/profile-photos/order'],
       ['DELETE', '/users/profile-photos/3'],
-    ])('%s %s answers 404: an older build cannot change a photo', async (method, path) => {
-      const res = await fetch(`${base}${path}`, { method });
-      expect(res.status).toBe(404);
-    });
+    ])(
+      '%s %s answers 404: an older build cannot change a photo',
+      async (method, path) => {
+        const res = await fetch(`${base}${path}`, { method });
+        expect(res.status).toBe(404);
+      },
+    );
 
     it('GET /users/me still serves the legacy server photo the one-time migration reads', async () => {
       usersService.findProfileById.mockResolvedValue({
@@ -66,6 +69,13 @@ describe('UsersController', () => {
         id: 7,
         profilePictureUrl: '/avatars/alice.jpg',
       });
+    });
+
+    it('GET /users/me names a missing account, so a device can tell it from a bad token', async () => {
+      usersService.findProfileById.mockResolvedValue(null);
+      const res = await fetch(`${base}/users/me`);
+      expect(res.status).toBe(401);
+      expect(await res.json()).toMatchObject({ message: 'Account not found' });
     });
   });
 

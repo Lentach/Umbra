@@ -9,7 +9,7 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { JwtService } from '@nestjs/jwt';
-import { Logger, UseGuards } from '@nestjs/common';
+import { Logger, OnModuleInit, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { WsThrottlerGuard } from './guards/ws-throttler.guard';
 import { UsersService } from '../users/users.service';
@@ -26,7 +26,9 @@ import { buildCorsOrigin } from '../common/socket-cors';
 @WebSocketGateway({
   cors: { origin: buildCorsOrigin() },
 })
-export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class ChatGateway
+  implements OnGatewayConnection, OnGatewayDisconnect, OnModuleInit
+{
   private readonly logger = new Logger(ChatGateway.name);
 
   @WebSocketServer()
@@ -47,6 +49,21 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private devicesService: DevicesService,
     private chatDeviceRevocationService: ChatDeviceRevocationService,
   ) {}
+
+  onModuleInit() {
+    this.usersService.onAccountDeleted((userId) =>
+      this.disconnectAccountSockets(userId),
+    );
+  }
+
+  /**
+   * The account was deleted: drop every socket of it (all devices, all tabs).
+   * Nothing is emitted; a device's reconnect is refused at the handshake
+   * (`user_missing`) and its client then verifies the session.
+   */
+  disconnectAccountSockets(userId: number): void {
+    this.server?.in(userRoom(userId)).disconnectSockets(true);
+  }
 
   // On WebSocket connection — verify the JWT token.
   async handleConnection(client: Socket) {

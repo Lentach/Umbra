@@ -393,3 +393,41 @@ describe('ChatGateway handleGetServerTime', () => {
     expect(Number.isNaN(Date.parse(String(payload?.serverTime)))).toBe(false);
   });
 });
+
+describe('ChatGateway account deletion', () => {
+  it('disconnects the sockets of the deleted account only', () => {
+    const gateway = createGateway();
+    const disconnectSockets = jest.fn();
+    const inRoom = jest.fn(() => ({ disconnectSockets }));
+    (gateway as unknown as { server: unknown }).server = { in: inRoom };
+
+    gateway.disconnectAccountSockets(7);
+
+    expect(inRoom).toHaveBeenCalledTimes(1);
+    expect(inRoom).toHaveBeenCalledWith('user:7');
+    expect(disconnectSockets).toHaveBeenCalledWith(true);
+  });
+
+  it('registers for account deletions when the module starts', () => {
+    const onAccountDeleted = jest.fn<void, [(id: number) => void]>();
+    const gateway = new ChatGateway(
+      {} as JwtService,
+      { onAccountDeleted } as unknown as UsersService,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as DevicesService,
+      {} as any,
+    );
+    const disconnectSockets = jest.fn();
+    const inRoom = jest.fn(() => ({ disconnectSockets }));
+    (gateway as unknown as { server: unknown }).server = { in: inRoom };
+
+    gateway.onModuleInit();
+    const [listener] = onAccountDeleted.mock.calls[0];
+    listener(9);
+
+    expect(inRoom).toHaveBeenCalledWith('user:9');
+  });
+});

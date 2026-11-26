@@ -346,8 +346,9 @@ void main() {
     // recorder plugin (create / start / stop / dispose), both faked at their
     // platform channels. `start` parks on [startGate].
     ({List<String> calls, Completer<void> startGate}) fakeRecorderPlatform(
-      WidgetTester tester,
-    ) {
+      WidgetTester tester, {
+      String? stopUrl,
+    }) {
       final messenger = tester.binding.defaultBinaryMessenger;
       const recordChannel = MethodChannel('com.llfbandit.record/messages');
       const pathChannel = MethodChannel('plugins.flutter.io/path_provider');
@@ -364,6 +365,8 @@ void main() {
             );
           case 'start':
             await startGate.future;
+          case 'stop':
+            return stopUrl;
         }
         return null;
       })
@@ -523,6 +526,71 @@ void main() {
       await tester.pump();
 
       expect(find.text(canceledNotice(tester)), findsNothing);
+    });
+
+    // A3-CMP-08: on the web `recorder.stop()` returns a blob URL that holds
+    // the audio in page memory until revoked. Native returns a file path
+    // through the same call, so the real recorder plugin and the controller's
+    // own flow run here; only the revoke itself (web-only) is observed.
+    group('a stopped recording releases its audio (A3-CMP-08)', () {
+      late List<String> revoked;
+
+      setUp(() {
+        revoked = [];
+        RecordingControllerState.debugRevokeOverride = revoked.add;
+      });
+      tearDown(() => RecordingControllerState.debugRevokeOverride = null);
+
+      Future<RecordingControllerState> goLive(WidgetTester tester) async {
+        final platform = fakeRecorderPlatform(tester, stopUrl: 'blob:voice-1');
+        final r = await pumpIdle(tester);
+        platform.startGate.complete();
+        final started = r.state.startRecording();
+        await settle(tester);
+        await started;
+        expect(r.state.isRecording, isTrue);
+        return r.state;
+      }
+
+      testWidgets('sending the note', (tester) async {
+        final state = await goLive(tester);
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 600)),
+        );
+        final done = state.stopAndSend();
+        await settle(tester);
+        await done;
+
+        expect(revoked, ['blob:voice-1']);
+        await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
+      });
+
+      testWidgets('a note dropped as too short', (tester) async {
+        final state = await goLive(tester);
+        final done = state.stopAndSend();
+        await settle(tester);
+        await done;
+
+        expect(revoked, ['blob:voice-1']);
+      });
+
+      testWidgets('deleting it with the trash button', (tester) async {
+        final state = await goLive(tester);
+        final done = state.cancelRecording();
+        await settle(tester);
+        await done;
+
+        expect(revoked, ['blob:voice-1']);
+        await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
+      });
+
+      testWidgets('leaving the chat while it records', (tester) async {
+        await goLive(tester);
+        await tester.pumpWidget(const SizedBox.shrink());
+        await settle(tester);
+
+        expect(revoked, ['blob:voice-1']);
+      });
     });
   });
 }

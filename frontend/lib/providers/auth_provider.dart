@@ -218,6 +218,53 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// True from the account DELETE request until this device's logout ends.
+  bool _accountDeleteInFlight = false;
+
+  /// The account this session belongs to may have been deleted on another
+  /// device. The server tells nobody: deleting an account revokes its refresh
+  /// sessions and removes the user row, and that is all. What a device CAN
+  /// observe is `401 {message: 'Account not found'}` on an authenticated call
+  /// made with an access token that has not expired (the JWT strategy and
+  /// `/users/me` name a missing user), followed by a refresh the server
+  /// refuses. A bare `Unauthorized` (bad signature after a secret rotation, a
+  /// clock that runs behind) or an older backend never matches, so a live
+  /// account is never wiped; `Device revoked` and `Token invalidated by
+  /// password change` name themselves.
+  ///
+  /// Ends the session and returns true only on that combination. A network
+  /// failure, a 5xx, an expired access token (a refusal then proves nothing:
+  /// a password change elsewhere revokes refresh tokens too) or a working
+  /// refresh return false and leave the session alone.
+  Future<bool> endSessionIfAccountGone() async {
+    if (_accountDeleteInFlight) return false;
+    final access = _token;
+    if (access == null || _refreshToken == null) return false;
+    if (_isAccessExpired(access)) return false;
+    final epoch = _sessionEpoch;
+    try {
+      await _api.fetchMe(access);
+      return false;
+    } on ApiException catch (e) {
+      if (e.statusCode != 401 || e.message != 'Account not found') {
+        return false;
+      }
+    } on Object {
+      return false;
+    }
+    try {
+      await _refreshSessionLocked();
+      return false;
+    } on SessionRefreshInvalidException catch (e) {
+      if (e.deviceRevoked) return false;
+    } on Object {
+      return false;
+    }
+    if (epoch != _sessionEpoch) return false;
+    await _clearLocalAuthState('account_gone', source: 'accountGoneProbe');
+    return true;
+  }
+
   /// Keeps access JWT valid using the opaque refresh token (messenger-style session).
   Future<void> ensureSessionReady() async {
     await _ensureSessionReadyBody();
@@ -511,8 +558,15 @@ class AuthProvider extends ChangeNotifier {
     if (token == null) {
       throw Exception('Not authenticated');
     }
-    await _api.deleteAccount(token, password);
-    await logout();
+    // The delete removes the row this session names, which is exactly what the
+    // account-gone probe looks for: it stands down until the logout is done.
+    _accountDeleteInFlight = true;
+    try {
+      await _api.deleteAccount(token, password);
+      await logout();
+    } finally {
+      _accountDeleteInFlight = false;
+    }
     return true;
   }
 

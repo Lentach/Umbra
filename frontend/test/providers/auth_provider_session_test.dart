@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -815,6 +816,212 @@ void main() {
         reason: 'boot-loop repeats must not churn the FIFO; eviction re-arms '
             'the event so recurrence is never permanently lost',
       );
+    });
+  });
+
+  // X3: an account deleted elsewhere. The server pushes nothing to this
+  // device; the only thing it can say is a bare 401 on an authenticated call
+  // made with an access token that has not expired, and a refused refresh.
+  group('AuthProvider account gone (endSessionIfAccountGone)', () {
+    TestWidgetsFlutterBinding.ensureInitialized();
+
+    const base = 'http://localhost:3000';
+    late int meStatus;
+    late String meMessage;
+    var refreshMessage = 'Invalid refresh token';
+    late int refreshStatus;
+    late int meCalls;
+    late int refreshCalls;
+    Completer<void>? deleteGate;
+    var deleteReached = false;
+
+    String freshAccessJwt() {
+      String seg(Map<String, dynamic> m) =>
+          base64Url.encode(utf8.encode(jsonEncode(m))).replaceAll('=', '');
+      final exp = DateTime.now().add(const Duration(hours: 12));
+      return '${seg({'alg': 'HS256', 'typ': 'JWT'})}.'
+          '${seg({'sub': 1, 'exp': exp.millisecondsSinceEpoch ~/ 1000})}.sig';
+    }
+
+    Future<AuthProvider> loggedIn({String? access}) async {
+      SharedPreferences.setMockInitialValues({
+        'jwt_token': access ?? freshAccessJwt(),
+        'refresh_token': 'opaque_refresh',
+      });
+      meStatus = 200;
+      meMessage = '';
+      refreshMessage = 'Invalid refresh token';
+      refreshStatus = 201;
+      meCalls = 0;
+      refreshCalls = 0;
+      deleteGate = null;
+      deleteReached = false;
+      final auth = AuthProvider(
+        api: ApiService(
+          baseUrl: base,
+          httpClient: MockClient((req) async {
+            if (req.url.path == '/users/me') {
+              meCalls++;
+              return meStatus == 200
+                  ? http.Response(
+                      jsonEncode({'id': 1, 'username': 'test', 'tag': '0001'}),
+                      200,
+                    )
+                  : http.Response(
+                      jsonEncode({'message': meMessage, 'statusCode': meStatus}),
+                      meStatus,
+                    );
+            }
+            if (req.url.path == '/auth/refresh') {
+              refreshCalls++;
+              return refreshStatus == 201
+                  ? http.Response(
+                      jsonEncode({
+                        'access_token': freshAccessJwt(),
+                        'refresh_token': 'opaque_refresh',
+                      }),
+                      201,
+                    )
+                  : http.Response(
+                      jsonEncode({'message': refreshMessage}),
+                      refreshStatus,
+                    );
+            }
+            if (req.url.path == '/users/verify-password') {
+              return http.Response('{}', 201);
+            }
+            if (req.method == 'DELETE' && req.url.path == '/users/account') {
+              deleteReached = true;
+              await deleteGate?.future;
+              return http.Response('{}', 200);
+            }
+            if (req.url.path == '/auth/logout') return http.Response('', 200);
+            throw Exception('Unexpected ${req.url.path}');
+          }),
+        ),
+      );
+      await _waitForAuthSettled(auth, expectLoggedIn: true);
+      // The boot's background slide is fire-and-forget; let it land first.
+      for (var i = 0; i < 20 && refreshCalls == 0; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      // Past the slide's own answer; the test sets what the server says next.
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      meCalls = 0;
+      refreshCalls = 0;
+      return auth;
+    }
+
+    test('a bare 401 on a live access token and a refused refresh end the '
+        'session and wipe the stored tokens', () async {
+      final auth = await loggedIn();
+      meStatus = 401;
+      meMessage = 'Account not found';
+      refreshStatus = 401;
+
+      expect(await auth.endSessionIfAccountGone(), isTrue);
+
+      expect(auth.isLoggedIn, isFalse);
+      expect(auth.lastSessionEndReason, 'account_gone');
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getString('jwt_token'), isNull);
+      expect(prefs.getString('refresh_token'), isNull);
+    });
+
+    test('a password change elsewhere is not an account that is gone', () async {
+      final auth = await loggedIn();
+      meStatus = 401;
+      meMessage = 'Token invalidated by password change';
+      refreshStatus = 401;
+
+      expect(await auth.endSessionIfAccountGone(), isFalse);
+
+      expect(auth.isLoggedIn, isTrue);
+      expect(refreshCalls, 0);
+    });
+
+    test('a refused access token whose refresh still works keeps the '
+        'session', () async {
+      final auth = await loggedIn();
+      meStatus = 401;
+      meMessage = 'Account not found';
+      refreshStatus = 201;
+
+      expect(await auth.endSessionIfAccountGone(), isFalse);
+
+      expect(auth.isLoggedIn, isTrue);
+    });
+
+    test('a bare Unauthorized (bad signature, clock skew) never signs out', () async {
+      final auth = await loggedIn();
+      meStatus = 401;
+      meMessage = 'Unauthorized';
+      refreshStatus = 401;
+
+      expect(await auth.endSessionIfAccountGone(), isFalse);
+
+      expect(auth.isLoggedIn, isTrue);
+      expect(refreshCalls, 0);
+    });
+
+    test('a missing account whose refresh answers Device revoked is the '
+        'revoke path, not an account that is gone', () async {
+      final auth = await loggedIn();
+      meStatus = 401;
+      meMessage = 'Account not found';
+      refreshStatus = 401;
+      refreshMessage = 'Device revoked';
+
+      expect(await auth.endSessionIfAccountGone(), isFalse);
+
+      expect(auth.isLoggedIn, isTrue);
+    });
+
+    test('a server or network failure never ends the session', () async {
+      final auth = await loggedIn();
+      meStatus = 503;
+      meMessage = 'Service Unavailable';
+      refreshStatus = 401;
+
+      expect(await auth.endSessionIfAccountGone(), isFalse);
+
+      expect(auth.isLoggedIn, isTrue);
+      expect(refreshCalls, 0);
+    });
+
+    test('an expired access token proves nothing: no call, no sign-out', () async {
+      final auth = await loggedIn();
+      auth.setAccessTokenForTest(_expiredAccessJwt);
+      meStatus = 401;
+      meMessage = 'Unauthorized';
+      refreshStatus = 401;
+
+      expect(await auth.endSessionIfAccountGone(), isFalse);
+
+      expect(meCalls, 0);
+      expect(auth.isLoggedIn, isTrue);
+    });
+
+    test('while this device deletes the account, the probe stands down', () async {
+      final auth = await loggedIn();
+      final gate = deleteGate = Completer<void>();
+
+      final deleting = auth.deleteAccount('pw');
+      for (var i = 0; i < 50 && !deleteReached; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(deleteReached, isTrue);
+      // The delete just removed the row: the probe would see exactly this.
+      meStatus = 401;
+      meMessage = 'Account not found';
+      refreshStatus = 401;
+
+      expect(await auth.endSessionIfAccountGone(), isFalse);
+      expect(auth.isLoggedIn, isTrue, reason: 'the delete flow logs out');
+
+      gate.complete();
+      await deleting;
+      expect(auth.isLoggedIn, isFalse);
     });
   });
 }

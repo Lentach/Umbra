@@ -26,6 +26,13 @@ describe('JwtStrategy.validate', () => {
     ).rejects.toThrow(UnauthorizedException);
   });
 
+  it('names a missing account, which is how a device tells it from a bad token', async () => {
+    mockUsersService.findById.mockResolvedValue(null);
+    await expect(
+      strategy.validate({ sub: 1, username: 'a', tag: '1234', iat: 1000 }),
+    ).rejects.toThrow('Account not found');
+  });
+
   it('accepts token issued after passwordChangedAt', async () => {
     mockUsersService.findById.mockResolvedValue({
       id: 1,

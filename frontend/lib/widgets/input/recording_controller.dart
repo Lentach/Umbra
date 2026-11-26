@@ -20,6 +20,9 @@ import '../../utils/page_load_nonce.dart';
 import '../../utils/mic_permission_state_stub.dart'
     if (dart.library.html) '../../utils/mic_permission_state_web.dart'
     as mic_perm;
+import '../../utils/recording_blob_url_stub.dart'
+    if (dart.library.html) '../../utils/recording_blob_url_web.dart'
+    as recording_blob;
 import '../../utils/secure_context_stub.dart'
     if (dart.library.html) '../../utils/secure_context_web.dart'
     as secure_context;
@@ -139,6 +142,22 @@ class RecordingControllerState extends State<RecordingController>
   /// Re-entrancy across [stopAndSend] / [cancelRecording] / the 120 s timer,
   /// all reachable as discrete taps in the same frame.
   bool _isStopping = false;
+
+  /// Widget tests: what a stopped recording's URL is released through. The
+  /// real release is web-only (`URL.revokeObjectURL`), which no host test can
+  /// reach. Non-null only under test.
+  @visibleForTesting
+  static void Function(String url)? debugRevokeOverride;
+
+  /// Frees the audio a stopped recording holds (A3-CMP-08). On the web
+  /// `recorder.stop()` returns a blob URL whose bytes stay in page memory until
+  /// it is revoked: every voice note — sent, deleted with the trash button or
+  /// dropped as too short — kept its audio until the page reloaded. A no-op
+  /// off the web, where the same value is a file path the caller deletes.
+  static void _releaseRecordingBlob(String? url) {
+    if (url == null || url.isEmpty) return;
+    (debugRevokeOverride ?? recording_blob.revokeRecordingBlobUrl)(url);
+  }
 
   /// A recording was discarded because the app went away; the user is told
   /// when it comes back ([_announceDiscardedWhileAway]).
@@ -316,7 +335,7 @@ class RecordingControllerState extends State<RecordingController>
     _audioRecorder = null;
     if (recorder != null) {
       try {
-        await recorder.stop();
+        _releaseRecordingBlob(await recorder.stop());
       } catch (_) {}
       try {
         await recorder.dispose();
@@ -645,6 +664,8 @@ class RecordingControllerState extends State<RecordingController>
 
       _setStateIfMounted(() => _recordingPath = null);
     } finally {
+      // After the blob was read (sent, too short or failed alike).
+      _releaseRecordingBlob(path);
       _isStopping = false;
     }
   }
@@ -675,7 +696,7 @@ class RecordingControllerState extends State<RecordingController>
         // Best-effort teardown — a throwing stop()/dispose() must not strand
         // _isStopping/_isRecording and wedge the recording bar.
         try {
-          await recorder.stop();
+          _releaseRecordingBlob(await recorder.stop());
         } catch (_) {}
         try {
           await recorder.dispose();

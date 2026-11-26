@@ -1,10 +1,13 @@
 import 'dart:typed_data';
 
-import 'package:flutter_test/flutter_test.dart';
+import 'package:fireplace/models/message_model.dart';
+import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
-import 'package:fireplace/models/message_model.dart';
+import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/utils/message_ids.dart';
+import 'package:flutter_test/flutter_test.dart';
+import '../support/chat_seed.dart';
 
 MessageModel _msg(int id, int convId, {DateTime? at}) => MessageModel(
       id: id,
@@ -136,6 +139,62 @@ void main() {
 
       // Empty list → cache entry removed so hasCachedMessages is false
       expect(provider.hasCachedMessages(10), isFalse);
+    });
+
+    // X2: "delete all local messages" destroyed the stored plaintext but the
+    // open chat's rows, the chat cache and the list previews stayed on
+    // screen until a restart.
+    test('wiping all local history empties the open chat and the previews', () {
+      final conversations = ConversationsProvider();
+      provider
+        ..setConversationsProvider(conversations)
+        ..setActiveConversationIdForTest(10)
+        ..seedMessagesForTest(10, [_msg(1, 10), _msg(2, 10)])
+        ..seedCacheForTest(11, [_msg(3, 11)]);
+      conversations.updateLastMessage(10, _msg(2, 10));
+      var notified = 0;
+      provider
+        ..addListener(() => notified++)
+        ..onLocalHistoryWiped();
+
+      expect(provider.messages, isEmpty);
+      expect(provider.hasCachedMessages(10), isFalse);
+      expect(provider.hasCachedMessages(11), isFalse);
+      expect(conversations.lastMessages, isEmpty);
+      expect(notified, 1);
+    });
+
+    test('a wipe also drops the reply and edit in progress, the pinned '
+        'preview and the unread counts of the wiped chats', () {
+      final conversations = ConversationsProvider()..onConnect(false);
+      seedConversations(conversations, [
+        {
+          'id': 10,
+          'userOne': {'id': 1, 'username': 'alice', 'tag': '0001'},
+          'userTwo': {'id': 2, 'username': 'bob', 'tag': '0002'},
+          'createdAt': DateTime.utc(2026).toIso8601String(),
+          'unreadCount': 3,
+        },
+      ]);
+      conversations.applyBoxPin(
+        10,
+        BoxPin(at: DateTime.utc(2026, 2), senderId: 1, wireId: 'w1'),
+        shown: _msg(kFirstLocalMessageId + 1, 10),
+      );
+      provider
+        ..setConversationsProvider(conversations)
+        ..setReplyingTo(_msg(1, 10))
+        ..beginEditMessage(_msg(2, 10));
+      expect(conversations.conversations.single.pinnedMessagePreview, isNotNull);
+      expect(conversations.getUnreadCount(10), 3);
+
+      provider.onLocalHistoryWiped();
+
+      expect(provider.replyingToMessage, isNull);
+      expect(provider.editingMessage, isNull);
+      expect(conversations.conversations.single.pinnedMessagePreview, isNull);
+      expect(conversations.conversations.single.pinnedMessageId, isNull);
+      expect(conversations.getUnreadCount(10), 0);
     });
   });
 

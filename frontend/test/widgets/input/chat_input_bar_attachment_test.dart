@@ -1254,4 +1254,158 @@ void main() {
     expect(secondReads, 0);
     await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
   });
+
+  // A3-CMP-06: the staged path ignored the edit, so the corrected text went
+  // out as a NEW message and the original stayed wrong under its banner.
+  testWidgets('send while editing with a pasted picture: the edit is saved '
+      'as an edit and the picture goes out on its own', (tester) async {
+    final h = await pumpComposer(tester);
+    final state = h.key.currentState!;
+    final messaging = tester
+        .element(find.byType(ChatInputBar))
+        .read<MessagingProvider>();
+    final original = MessageModel(
+      id: kFirstLocalMessageId + 1,
+      content: 'typo',
+      senderId: 1,
+      senderUsername: 'alice',
+      conversationId: 10,
+      createdAt: DateTime.now(),
+      wireId: 'wire-00000001',
+    );
+    messaging
+      ..seedMessagesForTest(10, [original])
+      ..beginEditMessage(original);
+    await tester.pump();
+    state.attachmentControllerForTest.stage(
+      bytes: kTinyPng,
+      mimeType: 'image/png',
+      filename: 'pasted.png',
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'fixed');
+
+    await tester.runAsync(state.sendForTest);
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 200));
+    await _textSettled(tester);
+
+    expect(messaging.editingMessage, isNull);
+    final texts = messaging.loadedMessagesForTest
+        .where((m) => m.messageType == MessageType.text)
+        .toList();
+    expect(texts, hasLength(1)); // no second message carrying the correction
+    expect(texts.single.id, original.id);
+    expect(texts.single.content, 'fixed');
+    expect(
+      messaging.loadedMessagesForTest.where(
+        (m) => m.messageType == MessageType.image,
+      ),
+      hasLength(1),
+    );
+    expect(h.emitted.where((kind) => kind == 'IMAGE'), hasLength(1));
+    expect(state.attachmentControllerForTest.staged, isNull);
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller!.text,
+      isEmpty,
+    );
+  });
+
+  // A3-CMP-07: with the action panel open the user started a voice note and
+  // the paperclip was still there; its picks were dropped without a word.
+  testWidgets('starting a voice note closes the action panel, so the '
+      'paperclip is not reachable while recording', (tester) async {
+    final h = await pumpComposer(tester);
+    final state = h.key.currentState!;
+    await tester.tap(find.byIcon(Icons.keyboard_arrow_down));
+    await tester.pump();
+    expect(state.isActionPanelOpenForTest, isTrue);
+
+    state.setRecordingForTest(true);
+    await tester.pump();
+
+    expect(state.isActionPanelOpenForTest, isFalse);
+    state.setRecordingForTest(false);
+    await tester.pump();
+    expect(state.isActionPanelOpenForTest, isFalse);
+  });
+
+  testWidgets('a pick that reaches the composer mid-recording says why '
+      'nothing was sent', (tester) async {
+    final h = await pumpComposer(tester);
+    final state = h.key.currentState!..setRecordingForTest(true);
+    await tester.pump();
+
+    await tester.runAsync(
+      () => state.sendPickedFiles([
+        PickedAttachment(name: 'a.jpg', readBytes: () async => kTinyPng),
+      ], pickedIn: 10),
+    );
+    await tester.pump();
+
+    expect(
+      find.text(
+        AppLocalizations.of(
+          tester.element(find.byType(ChatInputBar)),
+        ).attachmentBlockedWhileRecording,
+      ),
+      findsOneWidget,
+    );
+    expect(h.emitted, isEmpty);
+    await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
+  });
+
+  testWidgets('send while editing with a picture and over-long text: the '
+      '"too long" toast, nothing applied or sent, edit and picture stay', (
+    tester,
+  ) async {
+    final h = await pumpComposer(tester);
+    final state = h.key.currentState!;
+    final messaging = tester
+        .element(find.byType(ChatInputBar))
+        .read<MessagingProvider>();
+    final original = MessageModel(
+      id: kFirstLocalMessageId + 1,
+      content: 'typo',
+      senderId: 1,
+      senderUsername: 'alice',
+      conversationId: 10,
+      createdAt: DateTime.now(),
+      wireId: 'wire-00000001',
+    );
+    messaging
+      ..seedMessagesForTest(10, [original])
+      ..beginEditMessage(original);
+    await tester.pump();
+    state.attachmentControllerForTest.stage(
+      bytes: kTinyPng,
+      mimeType: 'image/png',
+      filename: 'pasted.png',
+    );
+    await tester.pumpAndSettle();
+    final long = 'x' * 20000;
+    tester.widget<TextField>(find.byType(TextField)).controller!.text = long;
+
+    await tester.runAsync(state.sendForTest);
+    await tester.pump();
+    await _textSettled(tester);
+
+    expect(
+      find.text(
+        AppLocalizations.of(
+          tester.element(find.byType(ChatInputBar)),
+        ).messageTooLong,
+      ),
+      findsOneWidget,
+    );
+    expect(h.emitted, isEmpty);
+    expect(messaging.editingMessage, isNotNull);
+    expect(messaging.loadedMessagesForTest.single.content, 'typo');
+    expect(state.attachmentControllerForTest.staged, isNotNull);
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller!.text,
+      long,
+    );
+    await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
+  });
 }

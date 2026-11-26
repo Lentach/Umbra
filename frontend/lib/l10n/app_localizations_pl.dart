@@ -1948,6 +1948,10 @@ class AppLocalizationsPl extends AppLocalizations {
       'Część plików nie została wysłana — czat został zamknięty';
 
   @override
+  String get attachmentBlockedWhileRecording =>
+      'Pliki nie zostały wysłane — najpierw zakończ lub odrzuć wiadomość głosową';
+
+  @override
   String get chatScrollToBottomSemantics => 'Przewiń do najnowszych wiadomości';
 
   @override

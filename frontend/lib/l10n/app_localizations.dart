@@ -3362,6 +3362,12 @@ abstract class AppLocalizations {
   /// **'Część plików nie została wysłana — czat został zamknięty'**
   String get attachmentBatchInterrupted;
 
+  /// No description provided for @attachmentBlockedWhileRecording.
+  ///
+  /// In pl, this message translates to:
+  /// **'Pliki nie zostały wysłane — najpierw zakończ lub odrzuć wiadomość głosową'**
+  String get attachmentBlockedWhileRecording;
+
   /// No description provided for @chatScrollToBottomSemantics.
   ///
   /// In pl, this message translates to:

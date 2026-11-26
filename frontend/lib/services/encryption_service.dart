@@ -120,9 +120,14 @@ class EncryptionService {
   EncryptionService({
     int decryptedContentCacheLimit = 2000,
     SessionCrossContextLockRunner? sessionCrossContextLock,
+    CrossContextLockHolder? linkLockHolder,
+    CrossContextTryLockRunner? linkLockIfAvailable,
   }) : _decryptedContentCacheLimit = decryptedContentCacheLimit,
        _sessionCrossContextLock =
-           sessionCrossContextLock ?? runSessionCrossContextLocked;
+           sessionCrossContextLock ?? runSessionCrossContextLocked,
+       _holdLink = linkLockHolder ?? holdCrossContextLock,
+       _runLinkLockIfAvailable =
+           linkLockIfAvailable ?? runCrossContextLockIfAvailable;
 
   /// Batch size for replenishment (preKeysLow). Server threshold is 10.
   static const int _preKeyBatchSize = 100;
@@ -324,6 +329,23 @@ class EncryptionService {
   /// settlement — the sole state in which [discardProvisionedIdentity] may
   /// destroy key material (T3 review invariant lock).
   bool _provisionalIdentityAdopted = false;
+
+  /// The Web Lock a running §5.1 ceremony holds (see [_linkLockName]); null
+  /// when this process has none. Released where
+  /// [_provisionalIdentityAdopted] clears.
+  void Function()? _releaseLinkHold;
+  final CrossContextLockHolder _holdLink;
+  final CrossContextTryLockRunner _runLinkLockIfAvailable;
+
+  /// One name per account, shared by every tab of the origin: the tab that
+  /// wrote the unsettled marker holds it until it settles or discards.
+  String _linkLockName(int userId) => 'fireplace-e2e-link-$userId';
+
+  void _releaseLinkLock() {
+    final release = _releaseLinkHold;
+    _releaseLinkHold = null;
+    release?.call();
+  }
 
   /// Peers whose identity key changed under us, surfaced so the UI can warn
   /// instead of silently trusting the new key.
@@ -1573,9 +1595,16 @@ class EncryptionService {
     // The marker names the adopted identity (its public key): a marker that
     // matches nothing stored (a failed rollback's leftover, with a restore or
     // mint installed since) only goes itself, it never takes a later identity.
-    if (!_provisionalIdentityAdopted) {
-      final marker = await _storage.read(key: _linkUnsettledKey(userId));
-      if (marker != null) {
+    if (!_provisionalIdentityAdopted &&
+        await _storage.read(key: _linkUnsettledKey(userId)) != null) {
+      // Another tab may be running the ceremony right now (between its adopt
+      // and the server's `provisioningCompleted`); its adopted keys sit in
+      // this shared storage. Only a marker whose ceremony lock is free is an
+      // abandoned one. The marker is read again under the lock: the ceremony
+      // may have settled between the read above and the lock being taken.
+      final ran = await _runLinkLockIfAvailable(_linkLockName(userId), () async {
+        final marker = await _storage.read(key: _linkUnsettledKey(userId));
+        if (marker == null) return;
         final stored = _identityRecordPublicKey(
           await _storage.read(key: '${p}identity_record_v1'),
         );
@@ -1590,6 +1619,15 @@ class EncryptionService {
             'userId': userId,
           });
         }
+      });
+      if (!ran) {
+        E2ePersistentDiag.record('LINK_UNSETTLED_HELD_ELSEWHERE', {
+          'userId': userId,
+        });
+        // The adopted keys are another tab's unsettled ceremony: loading
+        // them would make this tab that identity. E2E stays down; the next
+        // connect retries.
+        throw const E2eIdentityCheckUnavailableException();
       }
     }
     // A THROWING read propagates: a storage error must never be read as "no
@@ -2063,6 +2101,10 @@ class EncryptionService {
     // deletes what was written before it propagates.
     _provisionalIdentityAdopted = true;
     try {
+      // Held from before the marker exists until this ceremony settles or
+      // discards, so another tab's [initialize] can tell a live ceremony from
+      // an abandoned one (R11Svc S2).
+      _releaseLinkHold ??= await _holdLink(_linkLockName(userId));
       await _storage.write(
         key: _linkUnsettledKey(userId),
         value: base64Encode(identityKeyPair.getPublicKey().serialize()),
@@ -2136,6 +2178,7 @@ class EncryptionService {
     _keysForUpload = null;
     needsKeyUpload = false;
     _provisionalIdentityAdopted = false;
+    _releaseLinkLock();
     _initialized = false;
   }
 
@@ -2172,6 +2215,7 @@ class EncryptionService {
     if (!_provisionalIdentityAdopted) return;
     await _storage.delete(key: _linkUnsettledKey(userId));
     _provisionalIdentityAdopted = false;
+    _releaseLinkLock();
     E2ePersistentDiag.record('LINK_IDENTITY_SETTLED', {'userId': userId});
   }
 
@@ -2188,7 +2232,13 @@ class EncryptionService {
         'discardProvisionedIdentity: no provisional identity to discard',
       );
     }
-    await _deleteAdoptedMaterial(userId);
+    try {
+      await _deleteAdoptedMaterial(userId);
+    } finally {
+      // A failed delete leaves the marker for the next start to finish; the
+      // lock must not outlive this ceremony either way.
+      _releaseLinkLock();
+    }
     _keysForUpload = null;
     needsKeyUpload = false;
     _provisionalIdentityAdopted = false;
@@ -5690,8 +5740,12 @@ class EncryptionService {
   /// `initialize` drops them when the account CHANGES ((lxxxiv) rider) —
   /// nulling `_userId` here is what makes the next login take that branch.
   /// A new per-account collection belongs on that list, not here.
-  Future<void> clearAllKeys() async {
-    final userId = _userId;
+  ///
+  /// [accountId] names the account to wipe when this service holds none (a
+  /// device that was closed while its account was deleted never initialized);
+  /// without it the wipe would be a silent no-op there.
+  Future<void> clearAllKeys({int? accountId}) async {
+    final userId = accountId ?? _userId;
     Object? signalError;
     StackTrace? signalStack;
     if (userId != null) {

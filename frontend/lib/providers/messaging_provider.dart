@@ -1074,6 +1074,20 @@ class MessagingProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// The stored plaintext of every chat was just destroyed ("delete all local
+  /// messages"): the rows the open chat holds, the per-chat cache and the
+  /// chat-list previews are copies of it and go too. The open chat stays
+  /// open and empty; the session itself is untouched.
+  void onLocalHistoryWiped() {
+    _messages = [];
+    _conversationCache.clear();
+    _replyingToMessage = null;
+    _editingMessage = null;
+    _pendingEdits.clear();
+    _conversationsProvider?.onLocalHistoryWiped();
+    notifyListeners();
+  }
+
   /// True once [dispose] ran. Deferred (post-frame) callers that outlive the
   /// provider — e.g. ChatDetailScreen's teardown-deferred [clearMessages] —
   /// must check this instead of notifying a disposed ChangeNotifier.
