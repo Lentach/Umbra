@@ -613,6 +613,14 @@ void main() {
         (senderId: 77, wireId: 'original-wire-id'): 5002,
         (senderId: 66, wireId: 'hijacked-wire-id'): null,
       });
+      // No claim at all, not just no unique holder: id -1 matches no record.
+      expect(
+        await service.wireHeldByOther(
+          (senderId: 66, wireId: 'hijacked-wire-id'),
+          -1,
+        ),
+        isFalse,
+      );
     });
 
     test('the lookup spans the content store and the legacy secure store',
@@ -664,6 +672,13 @@ void main() {
         (senderId: 77, wireId: 'live-wire-0010'): 4010,
         (senderId: 77, wireId: 'stale-wire-0010'): null,
       });
+      expect(
+        await service.wireHeldByOther(
+          (senderId: 77, wireId: 'stale-wire-0010'),
+          -1,
+        ),
+        isFalse,
+      );
     });
 
     test("one wire id from two senders resolves to each sender's record",
@@ -762,6 +777,13 @@ void main() {
       expect(await service.getDecryptedContent(4050), isNotNull);
       expect(await service.wireHolder((senderId: 77, wireId: 'bare-wire-0050')),
           isNull);
+      expect(
+        await service.wireHeldByOther(
+          (senderId: 77, wireId: 'bare-wire-0050'),
+          -1,
+        ),
+        isFalse,
+      );
     });
 
     group('A3-SVC-C-2: a removal does not race a save of the same id', () {
