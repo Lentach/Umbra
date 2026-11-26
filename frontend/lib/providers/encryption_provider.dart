@@ -265,6 +265,15 @@ class EncryptionProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Marks [userId]'s [deviceId] session for a rebuild that survives a restart
+  /// (intent written first) and drops the friend's list so the box pre-build
+  /// runs again. Used when a frame replaced the session and was then refused.
+  Future<void> rebuildSessionDurably(int userId, int deviceId) async {
+    await _encryptionService.recordSessionRebuilds(userId, {deviceId});
+    markSessionRebuild(userId, deviceId: deviceId);
+    invalidateDeviceList(userId);
+  }
+
   /// Puts the permanent note of an accepted key ABOVE the message that came
   /// under it (see [EncryptionService.alignKeyChangeNote]).
   Future<void> alignKeyChangeNote(

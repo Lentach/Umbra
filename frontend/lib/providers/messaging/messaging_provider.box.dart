@@ -305,6 +305,14 @@ extension MessagingBox on MessagingProvider {
           // take the provisional accept back (anchor, note, intents).
           if (accepted != null) {
             await enc.revertAutoAccept(msg.senderId, accepted);
+            // The frame was decrypted BEFORE it was refused (its type is only
+            // known after): the session with that device is the frame's now.
+            // Nothing it brought may carry our next message — rebuild it from
+            // a bundle checked against the reverted anchor.
+            await enc.rebuildSessionDurably(
+              msg.senderId,
+              msg.originDeviceId ?? 1,
+            );
           }
           return true;
         }

@@ -672,6 +672,12 @@ void main() {
       expect(b.link.learned, a.sid);
       expect(await anchorOfA(), before);
       expect(b.enc.peerKeyChangeLog(1), isEmpty);
+      // The refused frame was decrypted first: nothing it brought may carry
+      // B's next message. The friend's real device (served on the rebuild)
+      // reads it, the minting device does not.
+      b.other = a;
+      await expectTraffic(b, a);
+      expect(await anchorOfA(), before);
     });
 
     test('warnings OFF: after the restore, a device still holding the OLD '
@@ -690,6 +696,10 @@ void main() {
       expect(b.link.learned, restored.sid);
       expect(await anchorOfA(), await idOf(restored));
       expect(b.enc.peerKeyChangeLog(1), hasLength(1));
+      // The frame was decrypted before it was refused: B's session with that
+      // device is the OLD device's now. B's next message must still reach the
+      // restored device (the session is rebuilt from its bundle).
+      await expectTraffic(b, restored);
     });
   });
 }
