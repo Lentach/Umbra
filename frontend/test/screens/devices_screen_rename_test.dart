@@ -150,6 +150,26 @@ void main() {
     expect(find.byKey(const Key('device-rename-2')), findsNothing);
   });
 
+  // A2-DEV-03: a linked device holds no DAK, so the server always refuses
+  // its revoke and rename. The icons must not be offered at all.
+  testWidgets('a device without the DAK offers neither revoke nor rename', (
+    tester,
+  ) async {
+    final controller = await _pumpEnrolled(tester, _twoLive);
+    expect(find.byKey(const Key('device-revoke-6')), findsOneWidget);
+    expect(find.byKey(const Key('device-rename-6')), findsOneWidget);
+
+    controller
+      ..holdsDak = false
+      ..notifyListeners();
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('device-row-6')), findsOneWidget);
+    expect(find.byKey(const Key('device-revoke-6')), findsNothing);
+    expect(find.byKey(const Key('device-rename-6')), findsNothing);
+    expect(find.byKey(const Key('device-rename-1')), findsNothing);
+  });
+
   testWidgets('the save button signs and emits updateDeviceList', (
     tester,
   ) async {
