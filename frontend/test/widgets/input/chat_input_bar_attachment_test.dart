@@ -972,6 +972,67 @@ void main() {
       await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
     });
 
+    // A3-CMP-05: the toast said "Document sent!" whatever happened, because
+    // the provider swallowed the failure and returned nothing.
+    testWidgets('a document that is too large to send says the upload '
+        'failed, never that it was sent', (tester) async {
+      final h = await pumpComposer(tester);
+
+      await tester.runAsync(
+        () => pick(h, [
+          PickedAttachment(
+            name: 'huge.pdf',
+            readBytes: () async => Uint8List(MediaCryptoService.maxBytes + 1),
+          ),
+        ]),
+      );
+      await tester.pump();
+
+      expect(h.emitted, isEmpty);
+      expect(find.text(l10n.snackbarDocumentSent), findsNothing);
+      expect(find.text(l10n.uploadFailed), findsOneWidget);
+      await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
+    });
+
+    testWidgets('a document whose upload fails says the upload failed, never '
+        'that it was sent', (tester) async {
+      final h = await pumpComposer(tester, throwOnUpload: Exception('boom'));
+
+      await tester.runAsync(
+        () => pick(h, [
+          PickedAttachment(
+            name: 'plan.pdf',
+            readBytes: () async => Uint8List(64),
+          ),
+        ]),
+      );
+      await tester.pump();
+
+      expect(h.emitted, isEmpty);
+      expect(find.text(l10n.snackbarDocumentSent), findsNothing);
+      expect(find.text(l10n.uploadFailed), findsOneWidget);
+      await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
+    });
+
+    testWidgets('a document that went out says it was sent', (tester) async {
+      final h = await pumpComposer(tester);
+
+      await tester.runAsync(
+        () => pick(h, [
+          PickedAttachment(
+            name: 'plan.pdf',
+            readBytes: () async => Uint8List(64),
+          ),
+        ]),
+      );
+      await tester.pump();
+
+      expect(h.emitted, ['FILE']);
+      expect(find.text(l10n.snackbarDocumentSent), findsOneWidget);
+      expect(find.text(l10n.uploadFailed), findsNothing);
+      await tester.pump(const Duration(seconds: 3)); // flush snackbar timer
+    });
+
     // UI-06: a second pick made while the first batch is still sending used
     // to interleave with it, so the peer saw the files out of pick order.
     testWidgets('a second pick made mid-batch goes out after the first, '

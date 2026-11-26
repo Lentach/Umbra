@@ -203,12 +203,13 @@ void main() {
         conversationId: 10,
         localAudioBytes: [1, 2, 3, 4],
       );
-      await h.provider.sendFileMessage(
+      final fileOk = await h.provider.sendFileMessage(
         [5, 6, 7],
         'plan.pdf',
         'application/pdf',
         2,
       );
+      expect(fileOk, isTrue);
 
       final [voice, file] = [
         for (final (_, frame) in h.outbox.delivered) _envelopeOf(frame),
