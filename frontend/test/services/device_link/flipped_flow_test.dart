@@ -224,6 +224,52 @@ void main() {
     },
   );
 
+  // A2-DEV-04: both devices scan each other at once. The primary that moves
+  // on to the classic flow must close its OWN displayed stage, or the new
+  // device's hello is acked on a stage nobody will approve.
+  test('a pasted n code cancels the primary\'s own open stage first', () async {
+    final engine = DeviceAuthorityEngine();
+    final enrollment = engine.mintEnrollment(
+      userId: _userId,
+      identity: generateIdentityKeyPair(),
+      createdAtMs: 1755600000000,
+    );
+    final dak = engine.exportDakForPersistence();
+    final controller = LinkCeremonyController(
+      userId: _userId,
+      emit: (event, data) => emitted.add((event, data)),
+      identity: _Identity(generateIdentityKeyPair()),
+      adoptSession: (_) async {},
+      reconnect: (_) async {},
+      engine: engine,
+      dakStore: _StubDakStore(
+        DakRecord(
+          userId: _userId,
+          dakPub: dak['dakPub']!,
+          dakPriv: dak['dakPriv']!,
+          createdAtMs: enrollment['createdAt'] as int,
+        ),
+      ),
+    );
+    addTearDown(controller.dispose);
+
+    await controller.startPrimaryShowFlow(platform: 'web');
+    controller.onProvisioningOpened({
+      'success': true,
+      'provisioningId': 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+    });
+    expect(controller.primaryStep, PrimaryLinkStep.showCode);
+
+    await controller.startPrimaryFlow(nCode());
+
+    expect(payloadOf('cancelProvisioning'), {
+      'provisioningId': 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+    });
+    expect(count('cancelProvisioning'), 1);
+    expect(controller.primaryStep, PrimaryLinkStep.awaitingHelloAck);
+    expect(payloadOf('provisioningHello')['provisioningId'], _provisioningId);
+  });
+
   test('flipped flow end to end: SAS equal, blob adopted, rebind done', () async {
     // --- Primary controller (enrolled, holds the DAK) ---
     final primaryEmitted = <(String, dynamic)>[];
