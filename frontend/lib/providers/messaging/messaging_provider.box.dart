@@ -189,6 +189,8 @@ extension MessagingBox on MessagingProvider {
     // verified, when its key is accepted here and the frame is read in this
     // same pass. Anyone who holds the friend's queue address (a hostile
     // server, a revoked device) can seal one.
+    // Provisional: reverted below when the decrypt does not succeed.
+    AutoAccepted? accepted;
     if (preKey) {
       switch (await enc.friendFrameIdentity(
         msg.senderId,
@@ -200,21 +202,22 @@ extension MessagingBox on MessagingProvider {
           newIdentity = newIdentity || (_boxHeld[msg.id] ?? false);
           _boxHeld.remove(msg.id);
         case FriendFrameIdentity.foreign:
-          if ((peer == null || peer.state == ContactState.friend) &&
-              await enc.autoAcceptForeignFrame(
-                msg.senderId,
-                msg.encryptedContent!,
-                deviceId: msg.originDeviceId ?? 1,
-              )) {
-            newIdentity = newIdentity || (_boxHeld[msg.id] ?? false);
-            _boxHeld.remove(msg.id);
-            _e2eFlowLog('BOX_FOREIGN_IDENTITY_ACCEPTED', {
-              'peer': msg.senderId,
-              'device': msg.originDeviceId ?? 1,
-            });
-          } else {
+          if (peer == null || peer.state == ContactState.friend) {
+            accepted = await enc.autoAcceptForeignFrame(
+              msg.senderId,
+              msg.encryptedContent!,
+              deviceId: msg.originDeviceId ?? 1,
+            );
+          }
+          if (accepted == null) {
             return _holdForeignFrame(msg, enc, peer, remint: newIdentity);
           }
+          newIdentity = newIdentity || (_boxHeld[msg.id] ?? false);
+          _boxHeld.remove(msg.id);
+          _e2eFlowLog('BOX_FOREIGN_IDENTITY_ACCEPTED', {
+            'peer': msg.senderId,
+            'device': msg.originDeviceId ?? 1,
+          });
       }
     }
     final String plaintext;
@@ -226,6 +229,8 @@ extension MessagingBox on MessagingProvider {
         deviceId: msg.originDeviceId ?? 1,
       );
     } on Object catch (e) {
+      // The key this frame carried is unproven: take the accept back.
+      if (accepted != null) await enc.revertAutoAccept(msg.senderId, accepted);
       // A whisper of a friend with a frame held rides the session that frame
       // would build: it cannot read yet, and must neither be finished, nor
       // ask the friend to re-key, nor repair anything. Held in arrival

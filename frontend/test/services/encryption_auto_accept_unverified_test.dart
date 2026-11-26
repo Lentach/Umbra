@@ -155,7 +155,7 @@ void main() {
     final frame = await newBob.encrypt(aliceId, 'hi');
     expect(
       await alice.autoAcceptForeignFrame(bobId, frame, deviceId: 1),
-      isFalse,
+      isNull,
     );
     expect(await alice.peerTofuIdentityBase64(bobId), isNull);
     expect(alice.keyChangeLogOf(bobId), isEmpty);
@@ -176,7 +176,7 @@ void main() {
     final frame = await newBob.encrypt(aliceId, 'new phone');
     expect(
       await alice.autoAcceptForeignFrame(bobId, frame, deviceId: 1),
-      isFalse,
+      isNull,
     );
 
     // Unverified friend (a second Alice with an unverified pin).
@@ -198,7 +198,7 @@ void main() {
     other.onPeerAutoAccepted = (p, d) => seen.add((p, d));
     expect(
       await other.autoAcceptForeignFrame(bobId, frame2, deviceId: 1),
-      isTrue,
+      isNotNull,
     );
     expect(seen, [(bobId, 1)]);
     expect(await other.decrypt(bobId, frame2), 'new phone');
@@ -334,5 +334,60 @@ void main() {
     expect(alice.keyChangeLogOf(bobId), isEmpty);
     expect(alice.pendingSessionRebuilds, isEmpty);
     expect((await started(aliceId)).keyChangeLogOf(bobId), isEmpty);
+  });
+
+  test('a bundle whose signed pre-key is not signed by the offered identity '
+      'moves no anchor and writes no note', () async {
+    final pinned = await pinBob();
+    final forged = {
+      ...flatBundleFrom(newBob),
+      // A signature that is valid for ANOTHER identity.
+      'signedPreKeySignature': flatBundleFrom(bob)['signedPreKeySignature'],
+    };
+    await expectLater(
+      alice.buildSession(bobId, forged, expectedIdentityBase64: pinned),
+      throwsA(isA<AccountIdentityMismatch>()),
+    );
+    expect(await alice.peerTofuIdentityBase64(bobId), pinned);
+    expect(alice.keyChangeLogOf(bobId), isEmpty);
+    expect(alice.peersRefusedIdentity, contains(bobId));
+  });
+
+  test('a build that fails after the accept takes the accept back', () async {
+    final pinned = await pinBob();
+    alice.knownAddressesOf = (_) => {1, 2};
+    final broken = {...flatBundleFrom(newBob), 'registrationId': 'not-an-int'};
+    await expectLater(
+      alice.buildSession(bobId, broken, expectedIdentityBase64: pinned),
+      throwsA(isA<TypeError>()),
+    );
+    expect(await alice.peerTofuIdentityBase64(bobId), pinned);
+    expect(alice.keyChangeLogOf(bobId), isEmpty);
+    expect(alice.pendingSessionRebuilds, isEmpty);
+  });
+
+  test('a frame accept is provisional: reverting restores the anchor, the '
+      'note and the intents', () async {
+    final pinned = await pinBob();
+    alice.knownAddressesOf = (_) => {1, 2};
+    await newBob.buildSession(
+      aliceId,
+      flatBundleFrom(alice),
+      expectedIdentityBase64: null,
+    );
+    final frame = await newBob.encrypt(aliceId, 'hi');
+    final accepted = await alice.autoAcceptForeignFrame(
+      bobId,
+      frame,
+      deviceId: 1,
+    );
+    expect(accepted, isNotNull);
+    expect(await alice.peerTofuIdentityBase64(bobId), identityOf(newBob));
+
+    await alice.revertAutoAccept(bobId, accepted!);
+
+    expect(await alice.peerTofuIdentityBase64(bobId), pinned);
+    expect(alice.keyChangeLogOf(bobId), isEmpty);
+    expect(alice.pendingSessionRebuilds, isEmpty);
   });
 }

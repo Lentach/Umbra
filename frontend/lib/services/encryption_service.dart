@@ -654,20 +654,20 @@ class EncryptionService {
   /// anchor moves through the same compare-and-swap the manual ceremony uses,
   /// with the expected key set to the offered one, and the change is written
   /// to the permanent [keyChangeLogOf] record. The friend stays unverified.
-  Future<bool> _autoAcceptUnverified(
+  Future<AutoAccepted?> _autoAcceptUnverified(
     int peerId,
     String offeredIdentityBase64, {
     required int deviceId,
   }) async {
-    if (keyChangeWarnings() || !_initialized) return false;
+    if (keyChangeWarnings() || !_initialized) return null;
     try {
       final name = peerId.toString();
       final pinned = await _identityStore.getAccountIdentity(name);
       if (pinned == null ||
           base64Encode(pinned.serialize()) == offeredIdentityBase64) {
-        return false;
+        return null;
       }
-      if (await isPeerVerified(peerId)) return false;
+      if (await isPeerVerified(peerId)) return null;
       final pending = await _identityStore.pendingAccountIdentity(name);
       if (pending == null) {
         await _identityStore.stagePendingAccountIdentity(
@@ -675,7 +675,7 @@ class EncryptionService {
           IdentityKey.fromBytes(base64Decode(offeredIdentityBase64), 0),
         );
       } else if (base64Encode(pending.serialize()) != offeredIdentityBase64) {
-        return false;
+        return null;
       }
       // acknowledgePeerIdentity answers only for a peer with a standing
       // warning; join the set in RAM for the call.
@@ -685,7 +685,8 @@ class EncryptionService {
       // rebuild intents for the friend's OTHER addresses. A refused swap
       // takes both back.
       final before = List<int>.of(_keyChangeLog[peerId] ?? const <int>[]);
-      _appendKeyChange(peerId, DateTime.now().toUtc().millisecondsSinceEpoch);
+      final noteAt = DateTime.now().toUtc().millisecondsSinceEpoch;
+      _appendKeyChange(peerId, noteAt);
       await _persistKeyChangeLog();
       final others = <int>{1, ...?knownAddressesOf?.call(peerId)}
         ..remove(deviceId);
@@ -704,7 +705,7 @@ class EncryptionService {
         }
         await _persistKeyChangeLog();
         await clearSessionRebuilds(peerId, intents);
-        return false;
+        return null;
       }
       E2ePersistentDiag.record('PEER_IDENTITY_AUTO_ACCEPTED', {
         'peerId': peerId,
@@ -712,23 +713,80 @@ class EncryptionService {
       });
       onPeerAutoAccepted?.call(peerId, deviceId);
       onPeerIdentityChanged?.call(peerId);
-      return true;
+      return AutoAccepted(
+        previousIdentityBase64: base64Encode(pinned.serialize()),
+        noteAtMs: noteAt,
+        intents: intents,
+      );
     } on Object catch (e) {
       debugPrint('[EncryptionService] auto-accept failed: $e');
-      return false;
+      return null;
     }
   }
 
   /// [_autoAcceptUnverified] for a friend's PreKey frame [ciphertext] the
-  /// reader judged `foreign`: true means the frame may be decrypted now.
-  Future<bool> autoAcceptForeignFrame(
+  /// reader judged `foreign`: non-null means the frame may be decrypted now,
+  /// PROVISIONALLY — the caller reverts through [revertAutoAccept] when the
+  /// decrypt fails, because only a decrypt that succeeds proves the sender
+  /// holds the key it claims.
+  Future<AutoAccepted?> autoAcceptForeignFrame(
     int peerId,
     String ciphertext, {
     required int deviceId,
   }) async {
     final identity = preKeyIdentityOf(ciphertext);
-    if (identity == null) return false;
+    if (identity == null) return null;
     return _autoAcceptUnverified(peerId, identity, deviceId: deviceId);
+  }
+
+  /// Takes an [accepted] auto-accept back: the artifact that carried the key
+  /// did not prove it (the decrypt or the session build failed). The anchor
+  /// returns to the key it held, the note and the rebuild intents go.
+  Future<void> revertAutoAccept(int peerId, AutoAccepted accepted) async {
+    try {
+      await _identityStore.adoptAccountIdentity(
+        peerId.toString(),
+        IdentityKey.fromBytes(
+          base64Decode(accepted.previousIdentityBase64),
+          0,
+        ),
+        expectedPendingBase64: null,
+      );
+      _keyChangeLog[peerId]?.remove(accepted.noteAtMs);
+      if (_keyChangeLog[peerId]?.isEmpty ?? false) {
+        _keyChangeLog.remove(peerId);
+      }
+      await _persistKeyChangeLog();
+      await clearSessionRebuilds(peerId, accepted.intents);
+      E2ePersistentDiag.record('PEER_IDENTITY_AUTO_ACCEPT_REVERTED', {
+        'peerId': peerId,
+      });
+      onPeerIdentityChanged?.call(peerId);
+    } on Object catch (e) {
+      debugPrint('[EncryptionService] auto-accept revert failed: $e');
+    }
+  }
+
+  /// Whether [bundle]'s signed pre-key is signed by [identity]: the one proof
+  /// a served bundle carries that its key belongs to a holder of the private
+  /// half. Checked BEFORE the anchor may move.
+  bool _signedPreKeyVerifies(
+    Map<String, dynamic> bundle,
+    IdentityKey identity,
+  ) {
+    try {
+      final signed = Curve.decodePoint(
+        base64Decode(bundle['signedPreKeyPublic'] as String),
+        0,
+      );
+      return Curve.verifySignature(
+        identity.publicKey,
+        signed.serialize(),
+        base64Decode(bundle['signedPreKeySignature'] as String),
+      );
+    } on Object {
+      return false;
+    }
   }
 
   Future<void> _persistKeyChangeNotes() async {
@@ -2930,16 +2988,22 @@ class EncryptionService {
     // resolves the anchor across the account's known devices, never from a
     // fixed device slot.
     final expected = expectedIdentityBase64;
+    AutoAccepted? autoAccepted;
     if (expected != null) {
       final offered = base64Encode(identityKey.serialize());
       if (offered != expected) {
         // Owner decision 152: an unverified friend's new key, in the bundle
-        // this very build holds, is accepted when warnings are OFF.
-        if (!await _autoAcceptUnverified(
-          userId,
-          offered,
-          deviceId: deviceId,
-        )) {
+        // this very build holds, is accepted when warnings are OFF — only
+        // when the bundle proves it: its signed pre-key must verify under
+        // the offered identity, or the existing refusal stands.
+        autoAccepted = _signedPreKeyVerifies(preKeyBundle, identityKey)
+            ? await _autoAcceptUnverified(
+                userId,
+                offered,
+                deviceId: deviceId,
+              )
+            : null;
+        if (autoAccepted == null) {
           debugPrint(
             '[EncryptionService] REFUSED session userId=$userId '
             'deviceId=$deviceId reason=account_identity_mismatch',
@@ -2969,23 +3033,28 @@ class EncryptionService {
     // success (session_builder.dart: saveIdentity before storeSession).
     // Leave the store able to see the OLD key and decide.
 
-    final bundle = PreKeyBundle(
-      preKeyBundle['registrationId'] as int,
-      deviceId,
-      preKeyBundle['oneTimePreKeyId'] as int? ?? 0,
-      oneTimePreKey,
-      preKeyBundle['signedPreKeyId'] as int,
-      Curve.decodePoint(
-        base64Decode(preKeyBundle['signedPreKeyPublic'] as String),
-        0,
-      ),
-      Uint8List.fromList(
-        base64Decode(preKeyBundle['signedPreKeySignature'] as String),
-      ),
-      identityKey,
-    );
-
-    await builder.processPreKeyBundle(bundle);
+    try {
+      final bundle = PreKeyBundle(
+        preKeyBundle['registrationId'] as int,
+        deviceId,
+        preKeyBundle['oneTimePreKeyId'] as int? ?? 0,
+        oneTimePreKey,
+        preKeyBundle['signedPreKeyId'] as int,
+        Curve.decodePoint(
+          base64Decode(preKeyBundle['signedPreKeyPublic'] as String),
+          0,
+        ),
+        Uint8List.fromList(
+          base64Decode(preKeyBundle['signedPreKeySignature'] as String),
+        ),
+        identityKey,
+      );
+      await builder.processPreKeyBundle(bundle);
+    } on Object {
+      // The build did not complete: the key it carried stays unproven.
+      if (autoAccepted != null) await revertAutoAccept(userId, autoAccepted);
+      rethrow;
+    }
     debugPrint(
       '[EncryptionService] Session built with userId=$userId deviceId=$deviceId',
     );
@@ -6449,4 +6518,24 @@ class PeerIdentityVerification {
   /// Is there a key to adopt?
   bool get hasOffer =>
       offeredIdentityBase64 != null && offeredIdentityBase64!.isNotEmpty;
+}
+
+/// An auto-accept of an unverified friend's new key (decision 152) that is
+/// still PROVISIONAL: the artifact that carried the key must prove it, or the
+/// caller hands this back to [EncryptionService.revertAutoAccept].
+class AutoAccepted {
+  const AutoAccepted({
+    required this.previousIdentityBase64,
+    required this.noteAtMs,
+    required this.intents,
+  });
+
+  /// The anchor before the move.
+  final String previousIdentityBase64;
+
+  /// The instant of the permanent note this accept wrote.
+  final int noteAtMs;
+
+  /// The rebuild intents this accept recorded.
+  final Set<int> intents;
 }

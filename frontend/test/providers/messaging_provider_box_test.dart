@@ -467,6 +467,38 @@ void main() {
     expect(await deliver(entry(), _peer(2, conversationId: 10)), isTrue);
   });
 
+  test('decision 152: a frame whose decrypt FAILS does not keep the key it '
+      'claimed — the anchor and the note go back', () async {
+    final forged = await pinFriendAndForge(verified: false);
+    final pinned = await encryption.store.peerTofuIdentityBase64(2);
+    encryption.inbound = StateError('bad mac');
+
+    await deliver(forged, _peer(2, conversationId: 10));
+
+    expect(await encryption.store.peerTofuIdentityBase64(2), pinned);
+    expect(encryption.peerKeyChangeLog(2), isEmpty);
+    expect(provider.messages, isEmpty);
+  });
+
+  test('decision 152: a friend who is no longer a friend gets no accept — '
+      'its foreign frame is finished, the anchor stays', () async {
+    final forged = await pinFriendAndForge(verified: false);
+    final pinned = await encryption.store.peerTofuIdentityBase64(2);
+    envelope('hello');
+
+    expect(
+      await deliver(
+        forged,
+        _peer(2, conversationId: 10, state: ContactState.former),
+      ),
+      isTrue,
+    );
+
+    expect(await encryption.store.peerTofuIdentityBase64(2), pinned);
+    expect(encryption.decryptedIds, isEmpty);
+    expect(encryption.peerKeyChangeLog(2), isEmpty);
+  });
+
   group('B3: frames held behind a foreign PreKey frame', () {
     /// The friend's later whispers ride the session the held frame would
     /// build: they cannot read yet.

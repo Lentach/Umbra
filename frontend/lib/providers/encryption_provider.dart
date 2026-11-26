@@ -246,8 +246,9 @@ class EncryptionProvider extends ChangeNotifier {
       _encryptionService.holdForeignFrame(userId, ciphertext);
 
   /// Delegates to [EncryptionService.autoAcceptForeignFrame] (decision 152):
-  /// true means the friend's PreKey frame may be decrypted now.
-  Future<bool> autoAcceptForeignFrame(
+  /// non-null means the friend's PreKey frame may be decrypted now,
+  /// provisionally (see [revertAutoAccept]).
+  Future<AutoAccepted?> autoAcceptForeignFrame(
     int userId,
     String ciphertext, {
     required int deviceId,
@@ -256,6 +257,13 @@ class EncryptionProvider extends ChangeNotifier {
     ciphertext,
     deviceId: deviceId,
   );
+
+  /// The frame that carried an auto-accepted key failed to decrypt: the key is
+  /// unproven, take the accept back.
+  Future<void> revertAutoAccept(int userId, AutoAccepted accepted) async {
+    await _encryptionService.revertAutoAccept(userId, accepted);
+    notifyListeners();
+  }
 
   /// Whether the user verified [peerId]'s current key (key-bound).
   Future<bool> isPeerVerified(int peerId) =>
