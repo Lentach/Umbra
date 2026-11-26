@@ -1,5 +1,5 @@
 import 'ping_sound_stub.dart'
-    if (dart.library.html) 'ping_sound_web.dart' as impl;
+    if (dart.library.js_interop) 'ping_sound_web.dart' as impl;
 
 /// Plays the PING alert sound once.
 ///

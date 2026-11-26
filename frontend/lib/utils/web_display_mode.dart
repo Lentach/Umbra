@@ -1,7 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import 'web_display_mode_stub.dart'
-    if (dart.library.html) 'web_display_mode_web.dart' as impl;
+    if (dart.library.js_interop) 'web_display_mode_web.dart' as impl;
 
 /// Test seam for the (lxxiv) install rules. `flutter test` runs the VM build
 /// (`kIsWeb == false`, the stub always answers "installed"), so widget tests

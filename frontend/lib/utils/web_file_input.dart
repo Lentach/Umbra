@@ -2,7 +2,7 @@ import 'dart:typed_data';
 import 'dart:ui' show Rect;
 
 import 'web_file_input_stub.dart'
-    if (dart.library.html) 'web_file_input_web.dart' as impl;
+    if (dart.library.js_interop) 'web_file_input_web.dart' as impl;
 
 /// A file picked through the anchored web `<input type=file>` door. Its bytes
 /// are read on demand, so a multi-file pick holds one file in RAM at a time
