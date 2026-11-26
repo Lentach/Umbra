@@ -473,7 +473,7 @@ abstract class AppLocalizations {
   /// No description provided for @linkQrSemantics.
   ///
   /// In pl, this message translates to:
-  /// **'Kod QR połączenia {payload}'**
+  /// **'Kod QR do połączenia {payload}'**
   String linkQrSemantics(String payload);
 
   /// No description provided for @linkCodeSemantics.

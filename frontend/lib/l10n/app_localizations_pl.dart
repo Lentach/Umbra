@@ -223,7 +223,7 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String linkQrSemantics(String payload) {
-    return 'Kod QR połączenia $payload';
+    return 'Kod QR do połączenia $payload';
   }
 
   @override

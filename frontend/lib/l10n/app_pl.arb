@@ -68,7 +68,7 @@
   "linkCancel": "Anuluj",
   "linkWaitingForDevice": "Czekam na nowe urządzenie…",
   "linkPrimaryDone": "Urządzenie zostało połączone.",
-  "linkQrSemantics": "Kod QR połączenia {payload}",
+  "linkQrSemantics": "Kod QR do połączenia {payload}",
   "@linkQrSemantics": {
     "placeholders": { "payload": { "type": "String" } }
   },
