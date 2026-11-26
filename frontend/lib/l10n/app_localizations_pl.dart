@@ -389,6 +389,10 @@ class AppLocalizationsPl extends AppLocalizations {
   String get userNotFound => 'Nie znaleziono użytkownika';
 
   @override
+  String get userSearchNoAnswer =>
+      'Brak odpowiedzi. Sprawdź połączenie i spróbuj ponownie.';
+
+  @override
   String get invitationWantsToConnect => 'Chce się połączyć';
 
   @override

@@ -117,6 +117,7 @@
   "sendInvitation": "Wyślij zaproszenie",
   "invitationFindUser": "Znajdź użytkownika",
   "userNotFound": "Nie znaleziono użytkownika",
+  "userSearchNoAnswer": "Brak odpowiedzi. Sprawdź połączenie i spróbuj ponownie.",
   "invitationWantsToConnect": "Chce się połączyć",
   "invitationWaitingForResponse": "Czeka na odpowiedź",
   "invitationAccepted": "Zaproszenie zaakceptowane",

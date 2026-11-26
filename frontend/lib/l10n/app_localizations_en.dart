@@ -386,6 +386,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get userNotFound => 'User not found';
 
   @override
+  String get userSearchNoAnswer =>
+      'No answer. Check your connection and try again.';
+
+  @override
   String get invitationWantsToConnect => 'Wants to connect';
 
   @override

@@ -119,6 +119,7 @@
   "sendInvitation": "Send invitation",
   "invitationFindUser": "Find user",
   "userNotFound": "User not found",
+  "userSearchNoAnswer": "No answer. Check your connection and try again.",
   "invitationWantsToConnect": "Wants to connect",
   "invitationWaitingForResponse": "Waiting for response",
   "invitationAccepted": "Invitation accepted",

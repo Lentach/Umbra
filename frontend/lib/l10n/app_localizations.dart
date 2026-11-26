@@ -770,6 +770,12 @@ abstract class AppLocalizations {
   /// **'Nie znaleziono użytkownika'**
   String get userNotFound;
 
+  /// No description provided for @userSearchNoAnswer.
+  ///
+  /// In pl, this message translates to:
+  /// **'Brak odpowiedzi. Sprawdź połączenie i spróbuj ponownie.'**
+  String get userSearchNoAnswer;
+
   /// No description provided for @invitationWantsToConnect.
   ///
   /// In pl, this message translates to:
