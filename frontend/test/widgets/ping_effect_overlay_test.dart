@@ -6,7 +6,6 @@ import 'package:fireplace/widgets/ping_effect_overlay.dart';
 import 'package:fireplace/widgets/ping_glyph.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import '../support/l10n.dart';
 
 void main() {
   testWidgets(
@@ -128,7 +127,8 @@ void main() {
     final glyph = tester.widget<PingGlyph>(find.byType(PingGlyph));
     expect(glyph.size, 18);
     expect(glyph.color, color);
-    expect(find.text(l10n.ping), findsOneWidget);
+    // The brand word, not the sentence-case "Ping" of the action tile.
+    expect(find.text('PING!'), findsOneWidget);
     expect(find.byIcon(Icons.campaign), findsNothing);
   });
 }

@@ -52,7 +52,7 @@ class ConversationTile extends StatelessWidget {
 
   String _lastMessagePreview(BuildContext context, MessageModel lastMessage) {
     final l10n = AppLocalizations.of(context);
-    if (lastMessage.messageType == MessageType.ping) return l10n.ping;
+    if (lastMessage.messageType == MessageType.ping) return l10n.pingBubbleLabel;
     if (lastMessage.messageType == MessageType.voice) return l10n.voiceMessage;
     if (lastMessage.messageType == MessageType.image) {
       return l10n.attachment;

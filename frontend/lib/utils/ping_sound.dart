@@ -24,6 +24,5 @@ Future<void> playPingSound() => impl.playPingSound();
 /// receipt — not during a gesture — so this installs a permanent listener that
 /// resumes the context on every gesture (never a one-shot latch: an iOS
 /// interruption can only be cleared by a later gesture). Call when a screen
-/// that can show a ping
-/// opens. No-op off web.
+/// that can show a ping opens. No-op off web.
 void primePingSound() => impl.primePingSound();

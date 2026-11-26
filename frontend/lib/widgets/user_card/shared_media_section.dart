@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -10,21 +11,31 @@ import '../message/box_media_source.dart';
 import '../message/message_context_menu_overlay.dart' show messageGoneWatch;
 
 /// The user card's fullscreen photo. It closes by itself once [goneWatch]
-/// says the message left the cache (expiry, delete for everyone), like the
-/// chat's gallery, so a vanished photo is never kept on screen (A3-MSG-B-11).
+/// says the message left the cache (expiry, delete for everyone, delete for
+/// me, chat cleared), like the chat's gallery, so a vanished photo is never
+/// kept on screen (A3-MSG-B-11).
 Future<void> showSharedMediaFullscreen(
   BuildContext context,
   Uint8List bytes, {
   required ({Listenable changes, bool Function() isGone}) goneWatch,
 }) {
   BuildContext? dialogContext;
-  void onChange() {
+  void closeIfGone() {
     final ctx = dialogContext;
-    if (ctx != null && ctx.mounted && goneWatch.isGone()) {
+    // Only the photo's own route may be popped: a route above it (or a pop
+    // already under way) is left alone, like video_fullscreen_view.dart.
+    if (ctx != null &&
+        ctx.mounted &&
+        goneWatch.isGone() &&
+        (ModalRoute.of(ctx)?.isCurrent ?? false)) {
       dialogContext = null;
       Navigator.pop(ctx);
     }
   }
+
+  // Deferred: the provider's delete paths notify BEFORE they update the RAM
+  // cache the watch reads, so a check inside the notify still sees the row.
+  void onChange() => scheduleMicrotask(closeIfGone);
 
   goneWatch.changes.addListener(onChange);
   return showDialog<void>(
