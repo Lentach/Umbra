@@ -239,6 +239,7 @@
   "peerIdentityMarkVerifiedAction": "Fingerprints match",
   "peerIdentityMarkFriendVerifiedAction": "Mark as verified",
   "peerIdentityVerifiedState": "Verified",
+  "peerIdentityKeyChangedWhileOpen": "The key changed while this was open. Compare again.",
   "peerIdentityVerifyMenuAction": "Verify security keys",
   "peerIdentityFingerprintDialogTitle": "Verify security keys",
   "peerIdentityFingerprintDialogDescription": "Compare with {name} over another channel. They must match.",

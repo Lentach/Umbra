@@ -443,11 +443,16 @@ class EncryptionService {
     return bound == await peerTofuIdentityBase64(peerId);
   }
 
-  /// Marks [peerId] verified, bound to the key pinned now. False when none is
-  /// pinned (nothing to verify).
-  Future<bool> markPeerVerified(int peerId) async {
+  /// Marks [peerId] verified, bound to [expectedIdentityBase64] — the key the
+  /// user was SHOWN and compared. Refused (false) unless the pinned anchor is
+  /// exactly that key now: an auto-accept while the dialog was open must not
+  /// turn the server's new key into a verified one.
+  Future<bool> markPeerVerified(
+    int peerId, {
+    required String expectedIdentityBase64,
+  }) async {
     final anchor = await peerTofuIdentityBase64(peerId);
-    if (anchor == null) return false;
+    if (anchor == null || anchor != expectedIdentityBase64) return false;
     _peerVerified[peerId] = anchor;
     await _persistPeerVerified();
     onPeerIdentityChanged?.call(peerId);
@@ -761,6 +766,7 @@ class EncryptionService {
   Future<bool> acknowledgePeerIdentity(
     int peerId, {
     String? adoptIdentityBase64,
+    bool markVerified = false,
   }) async {
     if (!_peersWithChangedIdentity.contains(peerId)) return false;
     final name = peerId.toString();
@@ -851,6 +857,17 @@ class EncryptionService {
       'source': source,
     });
     if (!advanced) return false;
+    // Bind the flag to the adopted key BEFORE the warning clears and any held
+    // frame drains, so the friend is never unverified in between.
+    if (markVerified) {
+      final key = (supplied != null && supplied.isNotEmpty)
+          ? supplied
+          : await peerTofuIdentityBase64(peerId);
+      if (key != null) {
+        _peerVerified[peerId] = key;
+        await _persistPeerVerified();
+      }
+    }
     _peersWithChangedIdentity.remove(peerId);
     _peersRefusedIdentity.remove(peerId);
     _peersHeldForIdentity.remove(peerId);
@@ -3315,6 +3332,9 @@ class EncryptionService {
         offeredWasServed: offeredWasServed && offered != null,
         offerMatchesPin: offerMatchesPin,
         verified: await isPeerVerified(peerId),
+        pinnedIdentityBase64: pinned == null
+            ? null
+            : base64Encode(pinned.serialize()),
       );
     } catch (_) {
       return const PeerIdentityVerification();
@@ -6337,6 +6357,7 @@ class PeerIdentityVerification {
     this.offeredWasServed = false,
     this.offerMatchesPin = false,
     this.verified = false,
+    this.pinnedIdentityBase64,
   });
 
   /// Fingerprint of the account anchor this device already accepted, or null
@@ -6374,6 +6395,10 @@ class PeerIdentityVerification {
 
   /// The user verified the pinned key of this peer (decision 152).
   final bool verified;
+
+  /// Base64 of the pinned anchor this verification DISPLAYED, passed back to
+  /// [EncryptionService.markPeerVerified] so what was compared is what is bound.
+  final String? pinnedIdentityBase64;
 
   /// Is there a key to adopt?
   bool get hasOffer =>

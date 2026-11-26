@@ -617,6 +617,10 @@ class AppLocalizationsPl extends AppLocalizations {
   String get peerIdentityVerifiedState => 'Zweryfikowano';
 
   @override
+  String get peerIdentityKeyChangedWhileOpen =>
+      'Klucz zmienił się w trakcie. Porównaj ponownie.';
+
+  @override
   String get peerIdentityVerifyMenuAction => 'Zweryfikuj klucze bezpieczeństwa';
 
   @override

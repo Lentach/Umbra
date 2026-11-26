@@ -1,4 +1,5 @@
 import 'package:fireplace/services/encryption_service.dart';
+import '../support/verify_pinned.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -71,7 +72,7 @@ void main() {
     final pinned = await pinBob();
     // Decision 152: an UNVERIFIED friend's refused bundle is now accepted, so
     // the refusal this scenario needs is a verified friend's (warnings stay OFF).
-    await alice.markPeerVerified(bobId);
+    await alice.verifyPinned(bobId);
     await expectLater(
       alice.buildSession(
         bobId,
@@ -173,7 +174,7 @@ void main() {
   test('the manual ceremony still promotes the DISPLAYED key after a refusal '
       'and a server event', () async {
     final pinned = await pinBob();
-    await alice.markPeerVerified(bobId);
+    await alice.verifyPinned(bobId);
     await expectLater(
       alice.buildSession(
         bobId,
@@ -200,7 +201,7 @@ void main() {
   test('warnings OFF — a local detection for a peer whose refusal already '
       'stands is not absorbed either', () async {
     final pinned = await pinBob();
-    await alice.markPeerVerified(bobId);
+    await alice.verifyPinned(bobId);
     await expectLater(
       alice.buildSession(
         bobId,

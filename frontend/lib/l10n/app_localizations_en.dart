@@ -610,6 +610,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get peerIdentityVerifiedState => 'Verified';
 
   @override
+  String get peerIdentityKeyChangedWhileOpen =>
+      'The key changed while this was open. Compare again.';
+
+  @override
   String get peerIdentityVerifyMenuAction => 'Verify security keys';
 
   @override

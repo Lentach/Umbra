@@ -258,8 +258,14 @@ class EncryptionProvider extends ChangeNotifier {
       _encryptionService.isPeerVerified(peerId);
 
   /// The user compared [peerId]'s fingerprints and confirms them.
-  Future<bool> markPeerVerified(int peerId) async {
-    final marked = await _encryptionService.markPeerVerified(peerId);
+  Future<bool> markPeerVerified(
+    int peerId, {
+    required String expectedIdentityBase64,
+  }) async {
+    final marked = await _encryptionService.markPeerVerified(
+      peerId,
+      expectedIdentityBase64: expectedIdentityBase64,
+    );
     notifyListeners();
     return marked;
   }
@@ -3940,6 +3946,7 @@ class EncryptionProvider extends ChangeNotifier {
     final advanced = await _encryptionService.acknowledgePeerIdentity(
       peerId,
       adoptIdentityBase64: adoptIdentityBase64,
+      markVerified: markVerified,
     );
     if (advanced) {
       invalidateDeviceList(peerId, byPerson: true);
@@ -3951,7 +3958,6 @@ class EncryptionProvider extends ChangeNotifier {
         'rebuiltAddresses': addresses.toList(),
       });
       if (wasHeld) onHeldFramesReleased?.call(peerId);
-      if (markVerified) await _encryptionService.markPeerVerified(peerId);
     } else {
       // Explicitly refused: nothing advanced, so nothing is poisoned and the
       // speculative intent above names no real damage. Only the addresses THIS

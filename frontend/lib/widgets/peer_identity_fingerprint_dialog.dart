@@ -70,6 +70,9 @@ class _PeerIdentityFingerprintDialogState
   /// explanation of why nothing happened.
   bool _staleOffer = false;
 
+  /// "Mark as verified" was refused: the pinned key is no longer the one shown.
+  bool _keyChangedWhileOpen = false;
+
   @override
   void initState() {
     super.initState();
@@ -118,9 +121,19 @@ class _PeerIdentityFingerprintDialogState
   }
 
   Future<void> _markFriendVerified() async {
-    await context.read<EncryptionProvider>().markPeerVerified(widget.peerId);
+    final shown = _verification?.pinnedIdentityBase64;
+    if (shown == null) return;
+    // Binds to the key that was DISPLAYED; refused when the anchor moved
+    // while this dialog was open.
+    final marked = await context.read<EncryptionProvider>().markPeerVerified(
+      widget.peerId,
+      expectedIdentityBase64: shown,
+    );
     if (!mounted) return;
-    setState(() => _loading = true);
+    setState(() {
+      _keyChangedWhileOpen = !marked;
+      _loading = true;
+    });
     await _load();
   }
 
@@ -159,6 +172,16 @@ class _PeerIdentityFingerprintDialogState
                     const SizedBox(height: 12),
                     Text(
                       l10n.peerIdentityFingerprintOfferChanged(widget.peerName),
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                  ],
+                  if (_keyChangedWhileOpen) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      l10n.peerIdentityKeyChangedWhileOpen,
+                      key: const ValueKey('peer-identity-key-changed-open'),
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: Theme.of(context).colorScheme.error,
                       ),

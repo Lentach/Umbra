@@ -23,6 +23,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../support/chat_seed.dart';
 import '../support/contact_seed.dart';
 
+import '../support/verify_pinned.dart';
 /// The real store behind [EncryptionProvider]; only Signal and the device
 /// list round trip are faked.
 class _BoxEncryption extends EncryptionProvider {
@@ -342,7 +343,7 @@ void main() {
     ).saveIdentity(const SignalProtocolAddress('2', 1), real.getPublicKey());
 
     // Decision 152: only a VERIFIED friend (or warnings ON) keeps the hold.
-    if (verified) await encryption.store.markPeerVerified(2);
+    if (verified) await encryption.store.verifyPinned(2);
     final b = (await encryption.store.getKeyBundleForReupload())!;
     final attackerKeys = generateIdentityKeyPair();
     attackerIdentity = base64Encode(attackerKeys.getPublicKey().serialize());

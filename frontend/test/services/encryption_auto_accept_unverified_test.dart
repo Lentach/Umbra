@@ -1,4 +1,5 @@
 import 'package:fireplace/services/encryption_service.dart';
+import '../support/verify_pinned.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -101,7 +102,7 @@ void main() {
 
   test('a VERIFIED friend is still refused with warnings OFF', () async {
     final pinned = await pinBob();
-    expect(await alice.markPeerVerified(bobId), isTrue);
+    expect(await alice.verifyPinned(bobId), isTrue);
     await expectRefused(pinned, newBob);
   });
 
@@ -138,7 +139,7 @@ void main() {
     expect(await alice.peerTofuIdentityBase64(bobId), pinned);
     expect(alice.peersWithChangedIdentity, contains(bobId));
     // Verified: the same.
-    await alice.markPeerVerified(bobId);
+    await alice.verifyPinned(bobId);
     await alice.recordPeerIdentityChangedFromServer(bobId);
     await pumpEventQueue();
     expect(await alice.peerTofuIdentityBase64(bobId), pinned);
@@ -164,7 +165,7 @@ void main() {
       'reply works, the friend stays unverified and the note is permanent',
       () async {
     await pinBob();
-    await alice.markPeerVerified(bobId);
+    await alice.verifyPinned(bobId);
     await alice.holdForeignFrame(bobId, 'x'); // no key: no effect on pin
     // Verified friend: the frame is NOT accepted.
     await newBob.buildSession(
@@ -218,7 +219,7 @@ void main() {
   test('the verified flag survives a restart, clears when the anchor moves '
       'another way and is re-bound by a confirm', () async {
     final pinned = await pinBob();
-    await alice.markPeerVerified(bobId);
+    await alice.verifyPinned(bobId);
     final restarted = await started(aliceId);
     expect(await restarted.isPeerVerified(bobId), isTrue);
 
@@ -241,7 +242,7 @@ void main() {
     );
     expect(await restarted.isPeerVerified(bobId), isFalse);
 
-    expect(await restarted.markPeerVerified(bobId), isTrue);
+    expect(await restarted.verifyPinned(bobId), isTrue);
     expect(await restarted.isPeerVerified(bobId), isTrue);
     expect(await restarted.peerTofuIdentityBase64(bobId), identityOf(newBob));
   });

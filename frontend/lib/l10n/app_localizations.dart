@@ -1148,6 +1148,12 @@ abstract class AppLocalizations {
   /// **'Zweryfikowano'**
   String get peerIdentityVerifiedState;
 
+  /// No description provided for @peerIdentityKeyChangedWhileOpen.
+  ///
+  /// In pl, this message translates to:
+  /// **'Klucz zmienił się w trakcie. Porównaj ponownie.'**
+  String get peerIdentityKeyChangedWhileOpen;
+
   /// No description provided for @peerIdentityVerifyMenuAction.
   ///
   /// In pl, this message translates to:

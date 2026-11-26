@@ -239,6 +239,7 @@
   "peerIdentityMarkVerifiedAction": "Odciski się zgadzają",
   "peerIdentityMarkFriendVerifiedAction": "Oznacz jako zweryfikowane",
   "peerIdentityVerifiedState": "Zweryfikowano",
+  "peerIdentityKeyChangedWhileOpen": "Klucz zmienił się w trakcie. Porównaj ponownie.",
   "peerIdentityVerifyMenuAction": "Zweryfikuj klucze bezpieczeństwa",
   "peerIdentityFingerprintDialogTitle": "Zweryfikuj klucze bezpieczeństwa",
   "peerIdentityFingerprintDialogDescription": "Porównaj z {name} innym kanałem. Muszą się zgadzać.",
