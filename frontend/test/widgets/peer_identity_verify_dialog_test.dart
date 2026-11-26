@@ -146,4 +146,22 @@ void main() {
     expect(await alice.peerTofuIdentityBase64(bobId), identityOf(newBob));
     expect(await alice.isPeerVerified(bobId), isTrue);
   });
+
+  testWidgets('an unreadable verified record: no "Verified" claim and no '
+      'button to write over it', (tester) async {
+    await alice.markPeerVerified(
+      bobId,
+      expectedIdentityBase64: identityOf(bob),
+    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('e2e_1_peer_verified_v1', '{nope');
+    alice = await tester.runAsync(() => started(1)) as EncryptionService;
+    enc = EncryptionProvider(service: alice);
+
+    await open(tester);
+
+    expect(find.byKey(stateKey), findsNothing);
+    expect(find.byKey(markKey), findsNothing);
+    expect(prefs.getString('e2e_1_peer_verified_v1'), '{nope');
+  });
 }

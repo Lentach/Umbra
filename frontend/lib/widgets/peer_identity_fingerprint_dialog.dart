@@ -283,7 +283,8 @@ class _PeerIdentityFingerprintDialogState
             !_loading &&
             verification != null &&
             verification.pinnedFingerprint != null &&
-            !verification.verified)
+            !verification.verified &&
+            !verification.verifiedUnknown)
           TextButton(
             key: const ValueKey('peer-identity-mark-friend-verified'),
             onPressed: _markFriendVerified,

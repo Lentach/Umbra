@@ -490,6 +490,8 @@ class EncryptionService {
     int peerId, {
     required String expectedIdentityBase64,
   }) async {
+    await _refreshPeerVerified();
+    if (_peerVerifiedUnreadable) return false;
     final anchor = await peerTofuIdentityBase64(peerId);
     if (anchor == null || anchor != expectedIdentityBase64) return false;
     _peerVerified[peerId] = anchor;
@@ -501,6 +503,9 @@ class EncryptionService {
   Future<void> _persistPeerVerified() async {
     final userId = _userId;
     if (userId == null) return;
+    // Never replace an unreadable record: it would hold one friend's mark and
+    // un-verify everyone else once it reads again.
+    if (_peerVerifiedUnreadable) return;
     try {
       final prefs = await _sharedPrefs;
       // Union with what a sibling tab wrote (ours wins): verification is only
@@ -3575,7 +3580,8 @@ class EncryptionService {
             : base64Encode(offered.serialize()),
         offeredWasServed: offeredWasServed && offered != null,
         offerMatchesPin: offerMatchesPin,
-        verified: await isPeerVerified(peerId),
+        verified: await isPeerVerified(peerId) && !_peerVerifiedUnreadable,
+        verifiedUnknown: _peerVerifiedUnreadable,
         pinnedIdentityBase64: pinned == null
             ? null
             : base64Encode(pinned.serialize()),
@@ -6601,6 +6607,7 @@ class PeerIdentityVerification {
     this.offeredWasServed = false,
     this.offerMatchesPin = false,
     this.verified = false,
+    this.verifiedUnknown = false,
     this.pinnedIdentityBase64,
   });
 
@@ -6639,6 +6646,10 @@ class PeerIdentityVerification {
 
   /// The user verified the pinned key of this peer (decision 152).
   final bool verified;
+
+  /// The verified record could not be read, so [verified] says nothing: the
+  /// UI must not claim either state.
+  final bool verifiedUnknown;
 
   /// Base64 of the pinned anchor this verification DISPLAYED, passed back to
   /// [EncryptionService.markPeerVerified] so what was compared is what is bound.

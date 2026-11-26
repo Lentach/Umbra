@@ -578,4 +578,40 @@ void main() {
       reason: 'evidence in the slot is never overwritten',
     );
   });
+
+  test('R3: while the verified record is unreadable nothing is written over '
+      'it, so a repaired read still knows the other friends', () async {
+    final pinned = await pinBob();
+    expect(await alice.verifyPinned(bobId), isTrue);
+    final prefs = await SharedPreferences.getInstance();
+    final good = prefs.getString('e2e_${aliceId}_peer_verified_v1')!;
+    await prefs.setString('e2e_${aliceId}_peer_verified_v1', '{nope');
+    final tab = await started(aliceId);
+    await tab.buildSession(
+      malloryId,
+      flatBundleFrom(mallory),
+      expectedIdentityBase64: null,
+    );
+
+    expect(await tab.verifyPinned(malloryId), isFalse,
+        reason: 'cannot mark while the record is unreadable');
+    expect(prefs.getString('e2e_${aliceId}_peer_verified_v1'), '{nope');
+
+    await prefs.setString('e2e_${aliceId}_peer_verified_v1', good);
+    expect(await tab.isPeerVerified(bobId), isTrue);
+    expect(await tab.peerTofuIdentityBase64(bobId), pinned);
+  });
+
+  test('R3: the verification reports "unknown", not "verified", while the '
+      'record is unreadable', () async {
+    await pinBob();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('e2e_${aliceId}_peer_verified_v1', '{nope');
+    final tab = await started(aliceId);
+
+    final v = await tab.peerIdentityVerification(bobId);
+
+    expect(v.verified, isFalse);
+    expect(v.verifiedUnknown, isTrue);
+  });
 }
