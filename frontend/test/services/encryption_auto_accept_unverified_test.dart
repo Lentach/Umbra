@@ -390,4 +390,22 @@ void main() {
     expect(alice.keyChangeLogOf(bobId), isEmpty);
     expect(alice.pendingSessionRebuilds, isEmpty);
   });
+
+  test('a stale expectation for the key that is ALREADY pinned builds the '
+      'session: no bar, no second note, whatever the setting', () async {
+    await pinBob();
+    alice.keyChangeWarnings = () => true;
+    await alice.verifyPinned(bobId);
+
+    await alice.buildSession(
+      bobId,
+      flatBundleFrom(bob),
+      expectedIdentityBase64: identityOf(mallory), // stale
+    );
+
+    expect(alice.peersRefusedIdentity, isEmpty);
+    expect(alice.peersWithChangedIdentity, isEmpty);
+    expect(alice.keyChangeLogOf(bobId), isEmpty);
+    expect(await alice.isPeerVerified(bobId), isTrue);
+  });
 }

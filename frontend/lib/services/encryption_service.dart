@@ -659,14 +659,22 @@ class EncryptionService {
     String offeredIdentityBase64, {
     required int deviceId,
   }) async {
-    if (keyChangeWarnings() || !_initialized) return null;
+    if (!_initialized) return null;
     try {
       final name = peerId.toString();
       final pinned = await _identityStore.getAccountIdentity(name);
-      if (pinned == null ||
+      // The offered key IS the anchor (the caller's expectation was stale: a
+      // concurrent accept moved it): nothing to accept, no bar, no note — and
+      // whatever the setting or the verified flag says.
+      if (pinned != null &&
           base64Encode(pinned.serialize()) == offeredIdentityBase64) {
-        return null;
+        return AutoAccepted(
+          previousIdentityBase64: offeredIdentityBase64,
+          noteAtMs: AutoAccepted.alreadyPinned,
+          intents: const <int>{},
+        );
       }
+      if (keyChangeWarnings() || pinned == null) return null;
       if (await isPeerVerified(peerId)) return null;
       final pending = await _identityStore.pendingAccountIdentity(name);
       if (pending == null) {
@@ -743,6 +751,7 @@ class EncryptionService {
   /// did not prove it (the decrypt or the session build failed). The anchor
   /// returns to the key it held, the note and the rebuild intents go.
   Future<void> revertAutoAccept(int peerId, AutoAccepted accepted) async {
+    if (accepted.noteAtMs == AutoAccepted.alreadyPinned) return;
     try {
       await _identityStore.adoptAccountIdentity(
         peerId.toString(),
@@ -6538,4 +6547,8 @@ class AutoAccepted {
 
   /// The rebuild intents this accept recorded.
   final Set<int> intents;
+
+  /// [noteAtMs] of an accept that moved nothing: the key was already pinned.
+  static const int alreadyPinned = -1;
 }
+
