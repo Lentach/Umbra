@@ -854,7 +854,7 @@
   "peerIdentityChangedSystemLine": "{name}: new device or browser — keys updated.",
   "@peerIdentityChangedSystemLine": {"placeholders": {"name": {"type": "String"}}},
   "settingsKeyChangeWarnings": "Warn when a contact's keys change",
-  "settingsKeyChangeWarningsSubtitle": "By default new keys are accepted and a short note appears in the chat. Verified contacts always wait for you.",
+  "settingsKeyChangeWarningsSubtitle": "By default new keys are accepted and a short note appears in the chat. New keys from verified contacts always wait for your approval.",
   "privacyReceiptsAndTyping": "Read receipts and typing",
   "@privacyReceiptsAndTyping": {"description": "Privacy & Safety switch (metadata-privacy decision 62, E61c): read receipts, delivered ticks and typing on chats that moved to the box. Device-local, default off."},
   "privacyReceiptsAndTypingSubtitle": "Works only when you both turn it on. Applies to chats moved to the new private delivery.",

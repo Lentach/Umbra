@@ -2240,7 +2240,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get settingsKeyChangeWarningsSubtitle =>
-      'By default new keys are accepted and a short note appears in the chat. Verified contacts always wait for you.';
+      'By default new keys are accepted and a short note appears in the chat. New keys from verified contacts always wait for your approval.';
 
   @override
   String get privacyReceiptsAndTyping => 'Read receipts and typing';

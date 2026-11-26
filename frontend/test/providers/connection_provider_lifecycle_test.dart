@@ -91,6 +91,11 @@ class _Encryption extends EncryptionProvider {
   Future<void> initializeE2E(int userId) async {
     log.add('encryption.initializeE2E($userId)');
   }
+
+  @override
+  Future<void> forgetKeyChangeLog({int? peerId}) async {
+    log.add('encryption.forgetKeyChangeLog($peerId)');
+  }
 }
 
 class _Friends extends FriendsProvider {
@@ -190,6 +195,14 @@ void main() {
       wire();
       await connection.connect(1, 'token', _url);
       log.clear();
+    });
+
+    // Decision 152: the permanent "keys updated" lines go with the contact.
+    test('unfriending a contact removes that contact\'s permanent key-change '
+        'lines', () async {
+      friends.onRemoveConversationsForUser!(2);
+
+      expect(log, contains('encryption.forgetKeyChangeLog(2)'));
     });
 
     test('the same account again keeps every list: onConnect(true) and no '

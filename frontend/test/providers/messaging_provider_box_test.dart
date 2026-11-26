@@ -467,6 +467,23 @@ void main() {
     expect(await deliver(entry(), _peer(2, conversationId: 10)), isTrue);
   });
 
+  test('decision 152: clearing the chat removes its permanent key-change '
+      'line, and only that chat\'s', () async {
+    final forged = await pinFriendAndForge(verified: false);
+    envelope('from the new phone');
+    expect(await deliver(forged, _peer(2, conversationId: 10)), isTrue);
+    expect(encryption.peerKeyChangeLog(2), hasLength(1));
+
+    provider.clearChatHistory(11); // carol's chat: not this one
+    await pump();
+    expect(encryption.peerKeyChangeLog(2), hasLength(1));
+
+    provider.clearChatHistory(10);
+    await pump();
+
+    expect(encryption.peerKeyChangeLog(2), isEmpty);
+  });
+
   test('decision 152: the permanent note is stamped just BEFORE the message '
       'that came under the new key', () async {
     final forged = await pinFriendAndForge(verified: false);
