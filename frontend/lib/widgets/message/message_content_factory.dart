@@ -4,7 +4,6 @@ import '../../models/message_model.dart';
 import '../../providers/messaging_provider.dart';
 import '../../providers/settings_provider.dart';
 import 'file_message_content.dart';
-import 'voice_message_content.dart';
 import 'gif_message_content.dart';
 import 'image_message_content.dart';
 import 'ping_message_content.dart';
@@ -36,7 +35,9 @@ class MessageContentFactory {
     }
     switch (message.messageType) {
       case MessageType.voice:
-        return VoiceMessageContent(message: message, isMine: isMine);
+        // Never reached: ChatMessageBubble hands voice rows to
+        // VoiceMessageContent before it asks this factory (A3-MSG-A-06).
+        return const SizedBox.shrink();
 
       case MessageType.text:
         return TextMessageContent(
