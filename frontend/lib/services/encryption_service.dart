@@ -1624,6 +1624,10 @@ class EncryptionService {
         E2ePersistentDiag.record('LINK_UNSETTLED_HELD_ELSEWHERE', {
           'userId': userId,
         });
+        // The adopted keys are another tab's unsettled ceremony: loading
+        // them would make this tab that identity. E2E stays down; the next
+        // connect retries.
+        throw const E2eIdentityCheckUnavailableException();
       }
     }
     // A THROWING read propagates: a storage error must never be read as "no

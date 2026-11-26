@@ -403,9 +403,15 @@ void main() {
       final blob = mintBlobInputs();
       await adopt(first, blob);
       expect(locks.held, contains('fireplace-e2e-link-$_userId'));
+      final before = await secure.readAll();
+      final second = tab();
 
-      await startAgain(tab());
-
+      await expectLater(
+        startAgain(second),
+        throwsA(isA<E2eIdentityCheckUnavailableException>()),
+      );
+      expect(second.isInitialized, isFalse, reason: 'must not adopt A keys');
+      expect(await secure.readAll(), before, reason: 'no storage write');
       expect(
         await secure.read(key: '${_namespace}identity_record_v1'),
         isNotNull,
