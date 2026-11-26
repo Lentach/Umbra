@@ -2232,11 +2232,16 @@ class EncryptionService {
         'discardProvisionedIdentity: no provisional identity to discard',
       );
     }
-    await _deleteAdoptedMaterial(userId);
+    try {
+      await _deleteAdoptedMaterial(userId);
+    } finally {
+      // A failed delete leaves the marker for the next start to finish; the
+      // lock must not outlive this ceremony either way.
+      _releaseLinkLock();
+    }
     _keysForUpload = null;
     needsKeyUpload = false;
     _provisionalIdentityAdopted = false;
-    _releaseLinkLock();
     _initialized = false;
     E2ePersistentDiag.record('LINK_IDENTITY_DISCARDED', {'userId': userId});
   }

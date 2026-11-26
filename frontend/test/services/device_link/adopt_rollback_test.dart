@@ -461,6 +461,24 @@ void main() {
 
       expect(locks.held, isEmpty);
     });
+
+    test('a discard whose delete fails still frees the lock', () async {
+      final storage = _FaultySecure()
+        ..undeletable = '${_namespace}link_unsettled_v1';
+      final service = EncryptionService(
+        linkLockHolder: locks.hold,
+        linkLockIfAvailable: locks.ifAvailable,
+      )..debugSetDualStorage(DualStorage(storage));
+      await adopt(service, mintBlobInputs());
+      expect(locks.held, isNotEmpty);
+
+      await expectLater(
+        service.discardProvisionedIdentity(_userId),
+        throwsStateError,
+      );
+
+      expect(locks.held, isEmpty);
+    });
   });
 
   group('through the ceremony controller', ceremonyTests);
