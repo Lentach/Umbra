@@ -857,6 +857,27 @@ class EncryptionService {
   /// here and [_loadOwnIdentityReplaced] applies it under the dismissal rules.
   String? _ownReplacedWhileLocked;
 
+  /// True once `initialize` has loaded the dismissal state and the keys (or
+  /// ended without them). Until then a server-origin report is held in
+  /// [_ownReplacedFromServerHeld]: with no user bound, or in the window after
+  /// the user is bound and before the persisted state is read, it would be
+  /// judged against a null watermark, an unarmed one-shot flag and no key.
+  bool _ownAlarmLoaded = false;
+
+  /// The newest server-origin report held while [_ownAlarmLoaded] is false.
+  ({String occurredAt, String? replacedTo})? _ownReplacedFromServerHeld;
+
+  Future<void> _releaseHeldOwnReplaced() async {
+    _ownAlarmLoaded = true;
+    final held = _ownReplacedFromServerHeld;
+    _ownReplacedFromServerHeld = null;
+    if (held == null) return;
+    await recordOwnIdentityReplacedFromServer(
+      held.occurredAt,
+      replacedTo: held.replacedTo,
+    );
+  }
+
   Future<void> recordOwnIdentityReplaced(String occurredAt) async {
     _ownIdentityReplacedAt = occurredAt;
     if (_userId == null) {
@@ -909,6 +930,20 @@ class EncryptionService {
     // entirely already achieves this, so ignoring grants it nothing new.
     final normalized = normalizeServerInstant(occurredAt);
     if (normalized == null) return;
+
+    // The dismissal watermark, the one-shot own-publish flag and our own key
+    // are judged below, and none of them is loaded before `initialize` ends
+    // (A3-SVC-A-2): hold the report and replay it then, whole.
+    if (!_ownAlarmLoaded) {
+      final held = _ownReplacedFromServerHeld;
+      if (held == null || normalized.compareTo(held.occurredAt) >= 0) {
+        _ownReplacedFromServerHeld = (
+          occurredAt: normalized,
+          replacedTo: replacedTo,
+        );
+      }
+      return;
+    }
 
     if (replacedTo != null && replacedTo.isNotEmpty) {
       // Unknown own key (not initialized yet) falls THROUGH to reporting:
@@ -1474,7 +1509,23 @@ class EncryptionService {
 
   /// Initialize the encryption service for the given user. Loads keys from
   /// secure storage or generates new ones if this is a fresh install.
+  ///
+  /// Server reports of an own-identity replacement are held until this ends,
+  /// however it ends: a throw leaves no keys, and an unknown own key reports
+  /// (silence must never be the fail-open answer for an alarm).
   Future<void> initialize(
+    int userId, {
+    Future<ServerIdentityGuard?> Function()? checkServerIdentity,
+  }) async {
+    _ownAlarmLoaded = false;
+    try {
+      await _initialize(userId, checkServerIdentity: checkServerIdentity);
+    } finally {
+      await _releaseHeldOwnReplaced();
+    }
+  }
+
+  Future<void> _initialize(
     int userId, {
     Future<ServerIdentityGuard?> Function()? checkServerIdentity,
   }) async {
@@ -1556,6 +1607,9 @@ class EncryptionService {
       // preKeysLow bounce.
       needsKeyUpload = _keysForUpload != null;
       _initialized = true;
+      // Before the retract: a report about our own row is judged against the
+      // loaded key and never raised, so there is nothing to flash and retract.
+      await _releaseHeldOwnReplaced();
       await _retractOwnRowAlarm();
       return;
     }
@@ -5679,6 +5733,8 @@ class EncryptionService {
     _keysForUpload = null;
     _userId = null;
     _ownReplacedWhileLocked = null;
+    _ownReplacedFromServerHeld = null;
+    _ownAlarmLoaded = false;
     _prefs = null;
     _prefsOpening = null;
     _storage.clearPrefsCache();
