@@ -253,7 +253,6 @@ class AuthGate extends StatefulWidget {
 
 class _AuthGateState extends State<AuthGate> {
   bool _previousLoggedInState = false;
-  bool _previousGated = false;
 
   @override
   Widget build(BuildContext context) {
@@ -328,27 +327,14 @@ class _AuthGateState extends State<AuthGate> {
       final gated = context.select<EncryptionProvider, bool>(
         (e) => e.needsDeviceLink || e.identityCheckUnavailable,
       );
-      // TWO defences, because they cover opposite directions (issue #175):
-      //
-      // 1. Here: routes ALREADY on the stack when the verdict lands (a
-      //    reconnect init after a mid-session wipe leaves the user inside a
-      //    chat or the devices screen). Edge-triggered, because that is when
-      //    the stack changes meaning.
-      // 2. `DeviceLinkGateRouteGuard` on the root navigator: routes pushed
-      //    AFTER the verdict. A push does not rebuild `AuthGate`, so this
-      //    build-time branch cannot see them — and `MainShell` keeps building
-      //    under `Offstage` while gated, which is exactly how a chat got
-      //    pushed over the gate on the 0.2.41 APK.
-      //
-      // Both keep non-page routes (dialogs, sheets) and the ceremony's own
-      // scanner — see `gateKeepsRoute`.
-      if (gated && !_previousGated) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted) return;
-          Navigator.of(context).popUntil(gateKeepsRoute);
-        });
-      }
-      _previousGated = gated;
+      // `DeviceLinkGateRouteGuard` on the root navigator keeps the gate on top
+      // in both directions (issue #175): routes pushed AFTER the verdict (a
+      // push does not rebuild `AuthGate`, and `MainShell` keeps building under
+      // `Offstage` while gated — how a chat got pushed over the gate on the
+      // 0.2.41 APK), and, on the verdict's edge, routes ALREADY on the stack
+      // (a reconnect init after a mid-session wipe leaves the user inside a
+      // chat or the devices screen). It keeps non-page routes (dialogs,
+      // sheets) and the ceremony's own scanner — see `gateKeepsRoute`.
       // Issue #208: the shell stays hidden until local storage has said
       // whether this install is still the device it was (a few ms) — else a
       // re-signed-in old device painted its chat list before the gate. Local
@@ -383,7 +369,6 @@ class _AuthGateState extends State<AuthGate> {
         ],
       );
     }
-    _previousGated = false;
     return const AuthScreen();
   }
 }

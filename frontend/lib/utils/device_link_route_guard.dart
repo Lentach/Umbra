@@ -29,16 +29,43 @@ bool gateKeepsRoute(Route<dynamic> route) =>
 ///
 /// Removal is deferred to a post-frame callback: `didPush` fires mid-push, and
 /// tearing the route down inside that call races the transition.
+///
+/// The guard also owns the edge sweep: when the verdict lands, every page route
+/// ALREADY on the stack goes. It walks its own route list instead of using
+/// `popUntil(gateKeepsRoute)`, which stops at the first kept route from the
+/// top — a dialog open over a pushed page left that page standing under it
+/// (A2-DEV-10).
 class DeviceLinkGateRouteGuard extends NavigatorObserver {
-  DeviceLinkGateRouteGuard(this._encryption);
+  DeviceLinkGateRouteGuard(this._encryption) {
+    _wasGated = _gated;
+    _encryption.addListener(_onEncryptionChanged);
+  }
 
   final EncryptionProvider _encryption;
+  final List<Route<dynamic>> _routes = [];
+  bool _wasGated = false;
 
   bool get _gated =>
       _encryption.needsDeviceLink || _encryption.identityCheckUnavailable;
 
+  void _onEncryptionChanged() {
+    final gated = _gated;
+    final rising = gated && !_wasGated;
+    _wasGated = gated;
+    if (!rising) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_gated) return;
+      for (final route in List.of(_routes)) {
+        if (route.isActive && !gateKeepsRoute(route)) {
+          navigator?.removeRoute(route);
+        }
+      }
+    });
+  }
+
   @override
   void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    _routes.add(route);
     if (!_gated || gateKeepsRoute(route)) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       // Re-check: the verdict can clear between the push and the frame, and
@@ -46,5 +73,23 @@ class DeviceLinkGateRouteGuard extends NavigatorObserver {
       if (!_gated || !route.isActive) return;
       navigator?.removeRoute(route);
     });
+  }
+
+  @override
+  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) =>
+      _routes.remove(route);
+
+  @override
+  void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) =>
+      _routes.remove(route);
+
+  @override
+  void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) {
+    final at = oldRoute == null ? -1 : _routes.indexOf(oldRoute);
+    if (at >= 0 && newRoute != null) {
+      _routes[at] = newRoute;
+    } else if (newRoute != null) {
+      _routes.add(newRoute);
+    }
   }
 }
