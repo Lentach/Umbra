@@ -521,6 +521,7 @@ void main() {
         'handoff is taken and what we write reaches the restored device, '
         'both ways', () async {
       onTheBox();
+      b.enc.keyChangeWarnings = () => true; // decision 143's hold
       final restored = await restoreA();
 
       await restored.link.restart();
@@ -548,6 +549,7 @@ void main() {
       () async {
         b.enc.peerEnrolled = true;
         onTheBox();
+        b.enc.keyChangeWarnings = () => true; // decision 143's hold
         final restored = await restoreA();
 
         await restored.link.restart();
@@ -613,6 +615,7 @@ void main() {
     test('once the new identity is taken, a device still holding the OLD '
         'one cannot take the address back', () async {
       onTheBox();
+      b.enc.keyChangeWarnings = () => true; // decision 143's hold
       final restored = await restoreA();
       await restored.link.restart();
       await pump();

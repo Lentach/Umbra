@@ -468,7 +468,7 @@ void main() {
   });
 
   test('decision 152: clearing the chat removes its permanent key-change '
-      'line, and only that chat\'s', () async {
+      "line, and only that chat's", () async {
     final forged = await pinFriendAndForge(verified: false);
     envelope('from the new phone');
     expect(await deliver(forged, _peer(2, conversationId: 10)), isTrue);

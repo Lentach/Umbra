@@ -325,7 +325,7 @@ void main() {
     // Received direction: the note is 1 ms before the newest message (12:42).
     final before = DateTime.utc(2026, 1, 1, 12, 42).millisecondsSinceEpoch - 1;
     // Sent direction: the build happened after the last message.
-    final after = DateTime.utc(2026, 9, 1).millisecondsSinceEpoch;
+    final after = DateTime.utc(2026, 9).millisecondsSinceEpoch;
     await _pumpChat(
       tester,
       alarmed: false,
@@ -343,7 +343,7 @@ void main() {
 
   testWidgets('an accepted key change shows in an empty chat too',
       (tester) async {
-    final at = DateTime.utc(2026, 1, 1).millisecondsSinceEpoch;
+    final at = DateTime.utc(2026).millisecondsSinceEpoch;
     await _pumpChat(
       tester,
       alarmed: false,

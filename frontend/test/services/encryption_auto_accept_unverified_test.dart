@@ -1,8 +1,8 @@
 import 'package:fireplace/services/encryption_service.dart';
-import '../support/verify_pinned.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../support/verify_pinned.dart';
 
 /// Owner decision 152 (2026-11-26): with key-change warnings OFF, a friend
 /// the user has NOT verified whose new key arrives in a concrete artifact (a
@@ -323,8 +323,8 @@ void main() {
   });
 
   test('a refused swap leaves no note and no rebuild intent', () async {
-    final pinned = await pinBob();
     alice.knownAddressesOf = (_) => {1, 2};
+    final pinned = await pinBob();
     // A different candidate lands in the slot between the checks and the swap.
     alice.debugBeforeAutoAcceptSwap = () =>
         alice.debugStagePending(bobId, identityOf(mallory));

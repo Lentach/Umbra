@@ -434,7 +434,7 @@ class EncryptionService {
   String _peerVerifiedKey(int userId) => 'e2e_${userId}_peer_verified_v1';
 
   /// An unverified friend's new key was accepted by this device on its own
-  /// ([_autoAcceptUnverified]); [deviceId] is the address whose session the
+  /// (`_autoAcceptUnverified`); `deviceId` is the address whose session the
   /// artifact just built. Set by the provider, which drops the cached list and
   /// marks the friend's OTHER addresses for a rebuild.
   void Function(int peerId, int deviceId)? onPeerAutoAccepted;
@@ -458,8 +458,7 @@ class EncryptionService {
       );
 
   void _appendKeyChange(int peerId, int atMs) {
-    final log = _keyChangeLog[peerId] ??= <int>[];
-    log.add(atMs);
+    final log = _keyChangeLog.putIfAbsent(peerId, () => <int>[])..add(atMs);
     if (log.length > _keyChangeLogPerPeer) {
       log.removeRange(
         _keyChangeLogHead,
@@ -503,7 +502,7 @@ class EncryptionService {
           for (final e in _peerVerified.entries) e.key.toString(): e.value,
         }),
       );
-    } catch (_) {}
+    } on Object catch (_) {}
   }
 
   Future<void> _loadPeerVerified(int userId) async {
@@ -517,7 +516,7 @@ class EncryptionService {
         final peerId = int.tryParse('$key');
         if (peerId != null && value is String) _peerVerified[peerId] = value;
       }
-    } catch (_) {}
+    } on Object catch (_) {}
   }
 
   Future<void> _persistKeyChangeLog() async {
@@ -540,7 +539,7 @@ class EncryptionService {
           for (final r in kept) {'peerId': r.peerId, 'atMs': r.atMs},
         ]),
       );
-    } catch (_) {}
+    } on Object catch (_) {}
   }
 
   Future<void> _loadKeyChangeLog(int userId) async {
@@ -558,7 +557,7 @@ class EncryptionService {
       for (final list in _keyChangeLog.values) {
         list.sort();
       }
-    } catch (_) {}
+    } on Object catch (_) {}
   }
 
   /// Removes [peerId]'s accepted-key-change lines — or everyone's when null —
@@ -6571,4 +6570,3 @@ class AutoAccepted {
   /// [noteAtMs] of an accept that moved nothing: the key was already pinned.
   static const int alreadyPinned = -1;
 }
-

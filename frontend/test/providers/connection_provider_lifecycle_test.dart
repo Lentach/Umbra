@@ -198,7 +198,7 @@ void main() {
     });
 
     // Decision 152: the permanent "keys updated" lines go with the contact.
-    test('unfriending a contact removes that contact\'s permanent key-change '
+    test("unfriending a contact removes that contact's permanent key-change "
         'lines', () async {
       friends.onRemoveConversationsForUser!(2);
 

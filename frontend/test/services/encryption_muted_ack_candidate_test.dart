@@ -1,8 +1,8 @@
 import 'package:fireplace/services/encryption_service.dart';
-import '../support/verify_pinned.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../support/verify_pinned.dart';
 
 /// Audit row A3-SVC-A-1: with key-change warnings OFF (the default), the muted
 /// demotion must never promote a pending candidate that no local libsignal

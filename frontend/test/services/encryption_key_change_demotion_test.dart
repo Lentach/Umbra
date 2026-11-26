@@ -1,8 +1,8 @@
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import '../support/verify_pinned.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fireplace/services/encryption_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../support/verify_pinned.dart';
 
 /// Amendment (lxxix): the peer key-change surface is DEMOTED by default.
 ///
