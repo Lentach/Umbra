@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -830,6 +831,8 @@ void main() {
     late int refreshStatus;
     late int meCalls;
     late int refreshCalls;
+    Completer<void>? deleteGate;
+    var deleteReached = false;
 
     String freshAccessJwt() {
       String seg(Map<String, dynamic> m) =>
@@ -849,6 +852,8 @@ void main() {
       refreshStatus = 201;
       meCalls = 0;
       refreshCalls = 0;
+      deleteGate = null;
+      deleteReached = false;
       final auth = AuthProvider(
         api: ApiService(
           baseUrl: base,
@@ -880,6 +885,15 @@ void main() {
                       refreshStatus,
                     );
             }
+            if (req.url.path == '/users/verify-password') {
+              return http.Response('{}', 201);
+            }
+            if (req.method == 'DELETE' && req.url.path == '/users/account') {
+              deleteReached = true;
+              await deleteGate?.future;
+              return http.Response('{}', 200);
+            }
+            if (req.url.path == '/auth/logout') return http.Response('', 200);
             throw Exception('Unexpected ${req.url.path}');
           }),
         ),
@@ -959,6 +973,28 @@ void main() {
 
       expect(meCalls, 0);
       expect(auth.isLoggedIn, isTrue);
+    });
+
+    test('while this device deletes the account, the probe stands down', () async {
+      final auth = await loggedIn();
+      final gate = deleteGate = Completer<void>();
+
+      final deleting = auth.deleteAccount('pw');
+      for (var i = 0; i < 50 && !deleteReached; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(deleteReached, isTrue);
+      // The delete just removed the row: the probe would see exactly this.
+      meStatus = 401;
+      meMessage = 'Unauthorized';
+      refreshStatus = 401;
+
+      expect(await auth.endSessionIfAccountGone(), isFalse);
+      expect(auth.isLoggedIn, isTrue, reason: 'the delete flow logs out');
+
+      gate.complete();
+      await deleting;
+      expect(auth.isLoggedIn, isFalse);
     });
   });
 }

@@ -218,6 +218,9 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// True from the account DELETE request until this device's logout ends.
+  bool _accountDeleteInFlight = false;
+
   /// The account this session belongs to may have been deleted on another
   /// device. The server tells nobody: deleting an account revokes its refresh
   /// sessions and removes the user row, and that is all. What a device CAN
@@ -233,6 +236,7 @@ class AuthProvider extends ChangeNotifier {
   /// a password change elsewhere revokes refresh tokens too) or a working
   /// refresh return false and leave the session alone.
   Future<bool> endSessionIfAccountGone() async {
+    if (_accountDeleteInFlight) return false;
     final access = _token;
     if (access == null || _refreshToken == null) return false;
     if (_isAccessExpired(access)) return false;
@@ -551,8 +555,15 @@ class AuthProvider extends ChangeNotifier {
     if (token == null) {
       throw Exception('Not authenticated');
     }
-    await _api.deleteAccount(token, password);
-    await logout();
+    // The delete removes the row this session names, which is exactly what the
+    // account-gone probe looks for: it stands down until the logout is done.
+    _accountDeleteInFlight = true;
+    try {
+      await _api.deleteAccount(token, password);
+      await logout();
+    } finally {
+      _accountDeleteInFlight = false;
+    }
     return true;
   }
 
