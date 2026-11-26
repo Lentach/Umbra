@@ -407,6 +407,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get userNotFound => 'User not found';
 
   @override
+  String get userSearchNoAnswer =>
+      'No answer. Check your connection and try again.';
+
+  @override
   String get invitationWantsToConnect => 'Wants to connect';
 
   @override
@@ -1780,6 +1784,9 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get userCardAboutHint => 'A few words about you';
+
+  @override
+  String get userCardAboutSaveFailed => 'Couldn\'t save your About. Try again.';
 
   @override
   String get userCardSharedMedia => 'Shared media';

@@ -493,9 +493,9 @@ class _ConversationsScreenState extends State<ConversationsScreen>
       return;
     }
 
-    // The backend creates the conversation and emits `openConversation`; the
-    // build path below consumes that pending ID through this screen's normal
-    // open-chat path.
+    // No chat row yet: startConversation shows the friend's chat locally and
+    // names it as the pending open, which the build path below consumes
+    // through this screen's normal open-chat path.
     convs.startConversation(userId);
   }
 

@@ -99,6 +99,11 @@ class _LinkRestoreSectionState extends State<LinkRestoreSection> {
           key: const Key('link-gate-restore-field'),
           controller: _controller,
           enabled: !busy,
+          // The phrase is the account's master secret: the keyboard must not
+          // alter a word nor learn the words (IME hint; no-op off Android).
+          autocorrect: false,
+          enableSuggestions: false,
+          enableIMEPersonalizedLearning: false,
           minLines: 2,
           maxLines: 3,
           textInputAction: TextInputAction.done,

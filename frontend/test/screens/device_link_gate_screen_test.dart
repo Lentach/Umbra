@@ -88,6 +88,7 @@ class _FakeEncryption extends EncryptionProvider {
     this.unavailable = false,
     this.deadline,
     this.answer,
+    this.clearsAnswer = false,
   });
 
   bool incomplete;
@@ -96,6 +97,10 @@ class _FakeEncryption extends EncryptionProvider {
   String? answer;
   int retryCalls = 0;
   int cancelCalls = 0;
+
+  /// Whether [clearIdentityResetRequestStatus] consumes [answer], as the real
+  /// provider does.
+  final bool clearsAnswer;
 
   @override
   bool get identityIncomplete => incomplete;
@@ -112,6 +117,13 @@ class _FakeEncryption extends EncryptionProvider {
   @override
   Future<void> retryE2EInit() async {
     retryCalls++;
+  }
+
+  @override
+  void clearIdentityResetRequestStatus() {
+    if (!clearsAnswer || answer == null) return;
+    answer = null;
+    notifyListeners();
   }
 
   @override
@@ -350,6 +362,27 @@ void main() {
       answer: EncryptionProvider.identityResetPhraseTooNewStatus,
     );
     await tester.pumpWidget(gateHost(encryption));
+    await pumpFrames(tester);
+    final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+
+    expect(find.text(l10n.linkGateResetPhraseTooNew), findsOneWidget);
+
+    await teardown(tester);
+  });
+
+  // A3-MISC-6: under the real AuthGate the Offstage shell keeps its reset
+  // banner mounted, and the banner consumes the answer (clears it) in a
+  // post-frame callback. The gate's lasting line must not vanish with it.
+  testWidgets('the phrase_too_new line outlives the banner under the shell', (
+    tester,
+  ) async {
+    final encryption = _FakeEncryption(
+      incomplete: true,
+      deadline: DateTime.now().add(const Duration(hours: 71)),
+      answer: EncryptionProvider.identityResetPhraseTooNewStatus,
+      clearsAnswer: true,
+    );
+    await tester.pumpWidget(authGateHost(encryption, _FakeAuth()));
     await pumpFrames(tester);
     final l10n = await AppLocalizations.delegate.load(const Locale('en'));
 

@@ -800,6 +800,12 @@ abstract class AppLocalizations {
   /// **'Nie znaleziono użytkownika'**
   String get userNotFound;
 
+  /// No description provided for @userSearchNoAnswer.
+  ///
+  /// In pl, this message translates to:
+  /// **'Brak odpowiedzi. Sprawdź połączenie i spróbuj ponownie.'**
+  String get userSearchNoAnswer;
+
   /// No description provided for @invitationWantsToConnect.
   ///
   /// In pl, this message translates to:
@@ -3133,6 +3139,12 @@ abstract class AppLocalizations {
   /// In pl, this message translates to:
   /// **'Kilka słów o Tobie'**
   String get userCardAboutHint;
+
+  /// No description provided for @userCardAboutSaveFailed.
+  ///
+  /// In pl, this message translates to:
+  /// **'Nie udało się zapisać opisu. Spróbuj ponownie.'**
+  String get userCardAboutSaveFailed;
 
   /// No description provided for @userCardSharedMedia.
   ///

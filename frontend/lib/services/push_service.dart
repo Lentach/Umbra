@@ -1,6 +1,6 @@
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart'
-    show defaultTargetPlatform, kIsWeb, TargetPlatform, ValueNotifier;
+    show debugPrint, defaultTargetPlatform, kIsWeb, TargetPlatform, ValueNotifier;
 
 import '../push_android_stub.dart'
     if (dart.library.io) 'android_fcm_local_notifications.dart'
@@ -23,9 +23,8 @@ enum WebPushRequestStatus {
 
 class WebPushRequestResult {
   final WebPushRequestStatus status;
-  final String? details;
 
-  const WebPushRequestResult(this.status, {this.details});
+  const WebPushRequestResult(this.status);
 }
 
 /// Local push setup: the web browser subscription and the Android FCM
@@ -171,10 +170,10 @@ class PushService {
       webPushNeedsTap.value = false;
       return const WebPushRequestResult(WebPushRequestStatus.subscribed);
     } catch (e) {
-      return WebPushRequestResult(
-        WebPushRequestStatus.failed,
-        details: e.toString(),
-      );
+      // The cause is for the developer console; the user sees a translated
+      // sentence only.
+      debugPrint('Web push request failed: $e');
+      return const WebPushRequestResult(WebPushRequestStatus.failed);
     }
   }
 

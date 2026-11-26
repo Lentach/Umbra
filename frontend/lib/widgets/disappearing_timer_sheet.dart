@@ -107,8 +107,9 @@ class _DisappearingTimerSheetState extends State<DisappearingTimerSheet> {
   void _setTimer() {
     final l10n = AppLocalizations.of(context);
     final total = _totalSeconds;
+    // All zeros is "off", as the hint and the summary say.
     if (total == 0) {
-      setState(() => _errorText = l10n.disappearingTimerOutOfRange);
+      _turnOff();
       return;
     }
     if (total < kDisappearingMinSeconds || total > kDisappearingMaxSeconds) {

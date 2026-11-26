@@ -9,6 +9,7 @@ import 'package:fireplace/providers/friends_provider.dart';
 import 'package:fireplace/screens/edit_about_screen.dart';
 import 'package:fireplace/screens/user_card_photo_actions.dart';
 import 'package:fireplace/screens/user_card_screen.dart';
+import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/services/profile/profile_photo_cache.dart';
 import 'package:fireplace/services/profile/profile_photos.dart'
     show ProfilePhotoOutcome;
@@ -18,6 +19,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../support/contact_seed.dart';
 import '../support/l10n.dart';
 
 /// AuthProvider fake: applies profile mutations in memory so the card's
@@ -32,8 +34,13 @@ class _FakeAuthProvider extends AuthProvider {
   @override
   UserModel? get currentUser => _user;
 
+  /// Thrown by [updateProfileAbout] when set (a refused save).
+  Exception? aboutThrows;
+
   @override
   Future<void> updateProfileAbout(String? about) async {
+    final thrown = aboutThrows;
+    if (thrown != null) throw thrown;
     _user = _user!.copyWith(about: about, clearAbout: about == null);
     notifyListeners();
   }
@@ -111,13 +118,14 @@ Widget _wrap(
   UserCardVisualData data, {
   AuthProvider? auth,
   ProfilePhotoActions? photoActions,
+  FriendsProvider? friends,
 }) {
   return MultiProvider(
     providers: [
       ChangeNotifierProvider<AuthProvider>(
         create: (_) => auth ?? _FakeAuthProvider(null),
       ),
-      ChangeNotifierProvider(create: (_) => FriendsProvider()),
+      ChangeNotifierProvider(create: (_) => friends ?? FriendsProvider()),
     ],
     child: MaterialApp(
       theme: RpgTheme.themeDataLight,
@@ -432,6 +440,76 @@ void main() {
       expect(find.byType(EditAboutScreen), findsNothing);
       expect(find.byType(UserCardScreen), findsOneWidget);
       expect(find.text('new about'), findsOneWidget);
+    });
+
+    // A2-CON-6: a refused save names the failure in the app's language, never
+    // the raw exception text.
+    testWidgets('a refused About save shows the translated message', (
+      tester,
+    ) async {
+      final auth = _FakeAuthProvider(_selfUser(about: 'old about'))
+        ..aboutThrows = Exception('Not authenticated');
+      await tester.pumpWidget(_wrap(_selfCard(auth), auth: auth));
+      await tester.pump();
+
+      await _scrollToBody(tester);
+      await tester.tap(find.text(l10n.userCardEditAbout));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'new about');
+      await tester.tap(find.byIcon(Icons.check));
+      await tester.pumpAndSettle();
+
+      expect(find.text(l10n.userCardAboutSaveFailed), findsOneWidget);
+      expect(find.textContaining('Not authenticated'), findsNothing);
+      expect(find.text('old about'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 3));
+    });
+  });
+
+  // A2-CON-7: a box end that could not reach the other devices changed
+  // nothing, so the card stays and says why.
+  group('removing or blocking a contact the box could not end', () {
+    Future<void> pumpFriend(WidgetTester tester) async {
+      final store = (await tester.runAsync(
+        () => openContactStore([
+          contactRecord(2, 'alice', ContactState.friend, box: true),
+        ]),
+      ))!;
+      final friends = friendsOver(store)
+        ..boxEndFriendship = (userId, {required block}) async =>
+            throw StateError('sibling unreachable');
+      await tester.pumpWidget(_wrap(contact, friends: friends));
+      await tester.pump();
+    }
+
+    testWidgets('unfriend keeps the card open and shows the sync notice', (
+      tester,
+    ) async {
+      await pumpFriend(tester);
+
+      await tester.tap(find.text(l10n.userCardRemoveContact));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(l10n.remove));
+      await tester.pumpAndSettle();
+
+      expect(find.text(l10n.boxEndNotSynced), findsOneWidget);
+      expect(find.byType(UserCardScreen), findsOneWidget);
+      await tester.pump(const Duration(seconds: 3));
+    });
+
+    testWidgets('block keeps the card open and shows the sync notice', (
+      tester,
+    ) async {
+      await pumpFriend(tester);
+
+      await tester.tap(find.text(l10n.block));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(l10n.block).last);
+      await tester.pumpAndSettle();
+
+      expect(find.text(l10n.boxEndNotSynced), findsOneWidget);
+      expect(find.byType(UserCardScreen), findsOneWidget);
+      await tester.pump(const Duration(seconds: 3));
     });
   });
 

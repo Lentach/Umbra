@@ -119,10 +119,18 @@ class FriendsProvider extends ChangeNotifier {
       _requests(ContactState.pendingIn);
   List<FriendRequestModel> get sentRequests =>
       _requests(ContactState.pendingOut);
-  int get pendingRequestsCount =>
-      _store?.all.where((r) => _isBoxRequest(r, ContactState.pendingIn)).length ??
-      0;
+  int get pendingRequestsCount => friendRequests.length;
   List<UserModel>? get searchResults => _searchResults;
+
+  /// The empty result a search publishes when no answer came in time. Never
+  /// identical to a real answer's list, so [searchUnanswered] needs no flag
+  /// to reset with the results.
+  static const List<UserModel> _kNoAnswer = [];
+
+  /// Whether the shown empty [searchResults] is a search nobody answered (the
+  /// socket was down or the server failed it), not an answer of "no such
+  /// account".
+  bool get searchUnanswered => identical(_searchResults, _kNoAnswer);
 
   /// The raw entry for [userId] in the answer [searchResults] shows; null
   /// once the results are cleared.
@@ -352,7 +360,7 @@ class FriendsProvider extends ChangeNotifier {
       // The screen's spinner ends on a result: publish an empty one, unless
       // a newer search already replaced this one.
       if (identical(_uiSearch, waiter) && _searchResults == null) {
-        _searchResults = const [];
+        _searchResults = _kNoAnswer;
         notifyListeners();
       }
     });

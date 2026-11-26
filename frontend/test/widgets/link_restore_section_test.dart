@@ -99,4 +99,20 @@ void main() {
     expect(provider.restoreFailure, IdentityRestoreFailure.noBackup);
     expect(find.text(l10n.linkGateRestoreNoBackup), findsOneWidget);
   });
+
+  // A3-MISC-9 (the gate's copy of the phrase field).
+  testWidgets('the phrase field is closed to autocorrect and IME learning',
+      (tester) async {
+    await pumpSection(tester);
+
+    await tester.tap(find.byKey(const Key('link-gate-restore')));
+    await tester.pumpAndSettle();
+
+    final field = tester.widget<TextField>(
+      find.byKey(const Key('link-gate-restore-field')),
+    );
+    expect(field.autocorrect, isFalse);
+    expect(field.enableSuggestions, isFalse);
+    expect(field.enableIMEPersonalizedLearning, isFalse);
+  });
 }
