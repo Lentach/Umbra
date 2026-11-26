@@ -1,9 +1,13 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:fireplace/config/app_config.dart';
 import 'package:fireplace/l10n/app_localizations.dart';
 import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
 import 'package:fireplace/widgets/message/file_message_content.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -79,5 +83,52 @@ void main() {
 
     expect(asked, [Uri.parse(url)]);
     await drain(tester);
+  });
+
+  // A3-MSG-A-04: a download still in flight when the chat goes away (logout,
+  // a wipe) must not write a fresh plaintext copy after the delete ran.
+  testWidgets('a download that finishes after the chat is gone saves nothing',
+      (tester) async {
+    const pathChannel = MethodChannel('plugins.flutter.io/path_provider');
+    final docs = Directory.systemTemp.createTempSync('file_bubble_saved_');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(pathChannel, (call) async => docs.path);
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(pathChannel, null);
+      docs.deleteSync(recursive: true);
+    });
+    final release = Completer<void>();
+    final url = '${AppConfig.baseUrl}/media/old/report.pdf';
+
+    await http.runWithClient(
+      () async {
+        await tester.pumpWidget(_wrap(_file(url)));
+        await tester.tap(find.text('report.pdf'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text(l10nOf(tester).download));
+        await tester.pump();
+        // The fetch is in flight; the chat goes away (logout unmounts it).
+        await tester.pumpWidget(const SizedBox.shrink());
+        release.complete();
+        // Real file IO: each hop resumes in the fake-async zone on a pump.
+        for (var i = 0; i < 10; i++) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 30)),
+          );
+          await tester.pump();
+        }
+      },
+      () => MockClient((request) async {
+        await release.future;
+        return http.Response('plain bytes', 200);
+      }),
+    );
+
+    expect(
+      Directory('${docs.path}/saved_downloads').existsSync(),
+      isFalse,
+      reason: 'nothing may be written after the screen is gone',
+    );
   });
 }

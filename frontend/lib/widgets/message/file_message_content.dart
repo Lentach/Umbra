@@ -45,6 +45,10 @@ class _FileMessageContentState extends State<FileMessageContent> {
         iv: widget.message.mediaIv,
         box: box,
       );
+      // The fetch can outlive the chat (logout, a wipe): the saved copies
+      // were deleted with the session, so a write now would leave a fresh
+      // plaintext one behind (A3-MSG-A-04).
+      if (!context.mounted) return;
       await download_utils.saveBytesAsDownload(plain, _filename);
       if (context.mounted) {
         showTopSnackBar(context, l10n.documentDownloaded);
