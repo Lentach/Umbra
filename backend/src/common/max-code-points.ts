@@ -27,7 +27,7 @@ export function MaxCodePoints(
           return typeof value === 'string' && Array.from(value).length <= max;
         },
         defaultMessage(args?: ValidationArguments): string {
-          return `${args?.property} must be at most ${max} characters`;
+          return `${args?.property} must be at most ${max} code points`;
         },
       },
     });
