@@ -776,7 +776,6 @@ class EncryptionService {
       // moves (the (xlviii) clause 1 order): the permanent note and the
       // rebuild intents for the friend's OTHER addresses. A refused swap
       // takes both back.
-      final before = List<int>.of(_keyChangeLog[peerId] ?? const <int>[]);
       final noteAt = DateTime.now().toUtc().millisecondsSinceEpoch;
       _appendKeyChange(peerId, noteAt);
       await _persistKeyChangeLog(merge: true);
@@ -792,10 +791,11 @@ class EncryptionService {
       );
       if (!advanced) {
         if (!wasWarned) _peersWithChangedIdentity.remove(peerId);
-        if (before.isEmpty) {
+        // Take back only THIS accept's note: restoring a snapshot would
+        // resurrect one a concurrent revert removed meanwhile.
+        _keyChangeLog[peerId]?.remove(noteAt);
+        if (_keyChangeLog[peerId]?.isEmpty ?? false) {
           _keyChangeLog.remove(peerId);
-        } else {
-          _keyChangeLog[peerId] = before;
         }
         await _persistKeyChangeLog();
         await clearSessionRebuilds(peerId, intents);

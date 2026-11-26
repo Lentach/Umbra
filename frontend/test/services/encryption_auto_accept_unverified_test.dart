@@ -645,4 +645,62 @@ void main() {
         reason: 'the anchor that moved meanwhile stands');
     expect(alice.keyChangeLogOf(bobId), isEmpty);
   });
+
+  test('S3a: a confirmed standing change never writes over an unreadable '
+      'verified record', () async {
+    final pinned = await pinBob();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('e2e_${aliceId}_peer_verified_v1', '{nope');
+    final tab = await started(aliceId);
+    await expectLater(
+      tab.buildSession(
+        bobId,
+        flatBundleFrom(newBob),
+        expectedIdentityBase64: pinned,
+      ),
+      throwsA(isA<AccountIdentityMismatch>()),
+    ); // held: the record is unreadable, so the friend counts as verified
+    final shown = await tab.peerIdentityVerification(bobId);
+
+    expect(
+      await tab.acknowledgePeerIdentity(
+        bobId,
+        adoptIdentityBase64: shown.offeredIdentityBase64,
+        markVerified: true,
+      ),
+      isTrue,
+    );
+
+    expect(prefs.getString('e2e_${aliceId}_peer_verified_v1'), '{nope',
+        reason: 'one friend\'s mark must not replace the unreadable record');
+  });
+
+  test('S3b/c: an accept whose decision read an anchor that was reverted '
+      'meanwhile does not swap', () async {
+    final pinned = await pinBob();
+    // A provisional frame accept moves the anchor to K1.
+    final tokenA = await alice.autoAcceptForeignFrame(
+      bobId,
+      await frameFrom(newBob),
+      deviceId: 1,
+    );
+    expect(tokenA, isNotNull);
+    // A bundle under K2 is decided against K1; before its swap the first
+    // accept is reverted (its decrypt failed): the anchor is back at O.
+    alice.debugBeforeAutoAcceptSwap = () =>
+        alice.revertAutoAccept(bobId, tokenA!);
+
+    await expectLater(
+      alice.buildSession(
+        bobId,
+        flatBundleFrom(mallory),
+        expectedIdentityBase64: identityOf(newBob),
+      ),
+      throwsA(isA<AccountIdentityMismatch>()),
+    );
+
+    expect(await alice.peerTofuIdentityBase64(bobId), pinned,
+        reason: 'a decision taken against a reverted anchor does not swap');
+    expect(alice.keyChangeLogOf(bobId), isEmpty);
+  });
 }
