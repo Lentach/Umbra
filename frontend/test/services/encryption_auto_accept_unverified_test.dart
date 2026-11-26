@@ -259,4 +259,41 @@ void main() {
     expect(alice.keyChangeLogOf(bobId), isEmpty);
     expect((await started(aliceId)).keyChangeLogOf(bobId), isEmpty);
   });
+
+  test('the note cap is per peer: flooding one friend never evicts another '
+      "friend's note, and a flooded friend keeps its first 5 and newest 45",
+      () async {
+    // Friend Y (id 4): one accepted change.
+    await alice.buildSession(
+      malloryId,
+      flatBundleFrom(mallory),
+      expectedIdentityBase64: null,
+    );
+    await alice.buildSession(
+      malloryId,
+      flatBundleFrom(newBob),
+      expectedIdentityBase64: identityOf(mallory),
+    );
+    final other = alice.keyChangeLogOf(malloryId);
+    expect(other, hasLength(1));
+
+    // Friend Bob flips between two keys 120 times.
+    var anchor = await pinBob();
+    for (var i = 0; i < 120; i++) {
+      final to = i.isEven ? newBob : bob;
+      await alice.buildSession(
+        bobId,
+        flatBundleFrom(to),
+        expectedIdentityBase64: anchor,
+      );
+      anchor = identityOf(to);
+    }
+
+    expect(alice.keyChangeLogOf(malloryId), other,
+        reason: "another friend's note survives the flood");
+    expect(alice.keyChangeLogOf(bobId), hasLength(50));
+    final restarted = await started(aliceId);
+    expect(restarted.keyChangeLogOf(malloryId), other);
+    expect(restarted.keyChangeLogOf(bobId), hasLength(50));
+  });
 }

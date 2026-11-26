@@ -412,7 +412,11 @@ class EncryptionService {
   /// the `e2e_<uid>_` namespace wipes. Separate from the one-shot notes above,
   /// which stay ephemeral for the claim-only paths.
   final Map<int, List<int>> _keyChangeLog = <int, List<int>>{};
-  static const int _keyChangeLogCap = 500;
+  /// Per PEER, never across peers: a flood from one friend cannot evict
+  /// another friend's note. Keeps the first [_keyChangeLogHead] and the
+  /// newest rest of [_keyChangeLogPerPeer].
+  static const int _keyChangeLogPerPeer = 50;
+  static const int _keyChangeLogHead = 5;
 
   /// The instants (ms, ascending) of [peerId]'s accepted key changes.
   List<int> keyChangeLogOf(int peerId) =>
@@ -500,9 +504,7 @@ class EncryptionService {
         await prefs.remove(_keyChangeLogKey(userId));
         return;
       }
-      final kept = all.length > _keyChangeLogCap
-          ? all.sublist(all.length - _keyChangeLogCap)
-          : all;
+      final kept = all;
       await prefs.setString(
         _keyChangeLogKey(userId),
         jsonEncode([
@@ -659,6 +661,12 @@ class EncryptionService {
       }
       final log = _keyChangeLog[peerId] ??= <int>[];
       log.add(DateTime.now().toUtc().millisecondsSinceEpoch);
+      if (log.length > _keyChangeLogPerPeer) {
+        log.removeRange(
+          _keyChangeLogHead,
+          log.length - (_keyChangeLogPerPeer - _keyChangeLogHead),
+        );
+      }
       await _persistKeyChangeLog();
       E2ePersistentDiag.record('PEER_IDENTITY_AUTO_ACCEPTED', {
         'peerId': peerId,
