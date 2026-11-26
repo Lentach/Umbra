@@ -2396,4 +2396,14 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get storageLossContinueAction => 'Kontynuuj';
+
+  @override
+  String localRetentionNotice(int days) {
+    return 'Wiadomości na tym urządzeniu są usuwane automatycznie po $days dniach od zapisania.';
+  }
+
+  @override
+  String restoreRetentionWarning(int days) {
+    return 'Wiadomości z kopii starsze niż $days dni zostaną usunięte ponownie zaraz po przywróceniu.';
+  }
 }

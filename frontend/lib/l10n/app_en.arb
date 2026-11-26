@@ -915,5 +915,7 @@
   "storageLossContactsNote": "Contacts will come back on their own — they rebuild from the backup kept on your account.",
   "storageLossHistoryNote": "Message history can only come back from a backup file.",
   "storageLossRestoreAction": "Restore from a backup",
-  "storageLossContinueAction": "Continue"
+  "storageLossContinueAction": "Continue",
+  "localRetentionNotice": "Messages on this device are deleted automatically {days} days after they were stored.",
+  "restoreRetentionWarning": "Messages in a backup that are older than {days} days are deleted again right after the restore."
 }

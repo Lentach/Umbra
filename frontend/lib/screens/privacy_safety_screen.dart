@@ -14,6 +14,7 @@ import '../services/audio_cache_store.dart';
 import '../services/backup/history_backup.dart';
 import '../services/backup/history_backup_service.dart';
 import '../services/contacts/contact_store.dart';
+import '../services/encryption_service.dart';
 import '../theme/rpg_theme.dart';
 import '../utils/diag_export_redaction.dart';
 import '../utils/e2e_diag_log.dart';
@@ -245,6 +246,12 @@ class _PrivacySafetyScreenState extends State<PrivacySafetyScreen> {
               ),
             ),
             _buildAntiQuantumNoteExplainer(context),
+            _buildRetentionLine(
+              context,
+              l10n.localRetentionNotice(
+                EncryptionService.retentionWindow.inDays,
+              ),
+            ),
             SettingsSectionCaption(label: l10n.settingsSectionPreferences),
             _buildDeleteAllLocalHistoryCard(context),
             _buildHistoryBackupCard(context),
@@ -412,6 +419,28 @@ class _PrivacySafetyScreenState extends State<PrivacySafetyScreen> {
     );
   }
 
+  /// One plain sentence on the console rail, no icon: the retention facts are
+  /// a footnote to the row they sit under, not a row of their own.
+  Widget _buildRetentionLine(BuildContext context, String text) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        kConsoleHexLeft + kConsoleHexWidth + 12,
+        0,
+        16,
+        12,
+      ),
+      child: Text(
+        text,
+        style: RpgTheme.bodyFont(
+          fontSize: 12.5,
+          color: colorScheme.onSurfaceVariant,
+        ).copyWith(height: 1.35),
+      ),
+    );
+  }
+
   Widget _buildDeleteAllLocalHistoryCard(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final l10n = AppLocalizations.of(context);
@@ -509,6 +538,12 @@ class _PrivacySafetyScreenState extends State<PrivacySafetyScreen> {
             label: l10n.historyBackupImportButton,
             busy: _importingHistoryBackup,
             onPressed: _importHistoryBackup,
+          ),
+          _buildRetentionLine(
+            context,
+            l10n.restoreRetentionWarning(
+              EncryptionService.retentionWindow.inDays,
+            ),
           ),
         ],
       ],

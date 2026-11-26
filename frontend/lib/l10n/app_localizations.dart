@@ -4123,6 +4123,18 @@ abstract class AppLocalizations {
   /// In pl, this message translates to:
   /// **'Kontynuuj'**
   String get storageLossContinueAction;
+
+  /// One line on the Privacy & security screen: local message retention (EncryptionService.retentionWindow). The count is always the constant; the text is not pluralised.
+  ///
+  /// In pl, this message translates to:
+  /// **'Wiadomości na tym urządzeniu są usuwane automatycznie po {days} dniach od zapisania.'**
+  String localRetentionNotice(int days);
+
+  /// Warning on both restore doors (Storage-loss screen, Privacy import row): a restored message keeps its original age, so the retention sweep removes the old ones again.
+  ///
+  /// In pl, this message translates to:
+  /// **'Wiadomości z kopii starsze niż {days} dni zostaną usunięte ponownie zaraz po przywróceniu.'**
+  String restoreRetentionWarning(int days);
 }
 
 class _AppLocalizationsDelegate

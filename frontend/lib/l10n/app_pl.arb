@@ -938,5 +938,15 @@
   "storageLossContactsNote": "Kontakty wrócą same — odtworzą się z kopii zapisanej na koncie.",
   "storageLossHistoryNote": "Historia wiadomości może wrócić tylko z pliku kopii.",
   "storageLossRestoreAction": "Przywróć z kopii",
-  "storageLossContinueAction": "Kontynuuj"
+  "storageLossContinueAction": "Kontynuuj",
+  "localRetentionNotice": "Wiadomości na tym urządzeniu są usuwane automatycznie po {days} dniach od zapisania.",
+  "@localRetentionNotice": {
+    "description": "One line on the Privacy & security screen: local message retention (EncryptionService.retentionWindow). The count is always the constant; the text is not pluralised.",
+    "placeholders": { "days": { "type": "int" } }
+  },
+  "restoreRetentionWarning": "Wiadomości z kopii starsze niż {days} dni zostaną usunięte ponownie zaraz po przywróceniu.",
+  "@restoreRetentionWarning": {
+    "description": "Warning on both restore doors (Storage-loss screen, Privacy import row): a restored message keeps its original age, so the retention sweep removes the old ones again.",
+    "placeholders": { "days": { "type": "int" } }
+  }
 }
