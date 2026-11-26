@@ -141,14 +141,22 @@ class AttachmentHandler {
 
     showTopSnackBar(context, l10n.snackbarUploadingDocument);
     try {
-      await messaging.sendFileMessage(
+      final sent = await messaging.sendFileMessage(
         bytes,
         fileName,
         mimeType,
         recipientId,
       );
       if (context.mounted) {
-        showTopSnackBar(context, l10n.snackbarDocumentSent);
+        if (sent) {
+          showTopSnackBar(context, l10n.snackbarDocumentSent);
+        } else {
+          showTopSnackBar(
+            context,
+            l10n.uploadFailed,
+            backgroundColor: errorColor,
+          );
+        }
       }
     } on Object catch (e) {
       if (context.mounted) {

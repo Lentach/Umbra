@@ -415,15 +415,16 @@ extension MessagingSend on MessagingProvider {
   }
 
   /// Send a file (document) message over the box ([_sendMediaOverBox]); the
-  /// file name rides in the envelope.
-  Future<void> sendFileMessage(
+  /// file name rides in the envelope. True only when the send went out; a
+  /// refusal or failure marks the row failed and returns false.
+  Future<bool> sendFileMessage(
     List<int> fileBytes,
     String fileName,
     String fileMimeType,
     int recipientId,
   ) async {
     final activeConversationId = _conversationsProvider?.activeConversationId;
-    if (activeConversationId == null || _currentUserId == null) return;
+    if (activeConversationId == null || _currentUserId == null) return false;
 
     final effectiveExpiresIn =
         _conversationsProvider!.conversationDisappearingTimer;
@@ -445,10 +446,10 @@ extension MessagingSend on MessagingProvider {
     try {
       if (fileBytes.length > MediaCryptoService.maxBytes) {
         _markMessageFailed(tempId, 'File too large (max 20 MB)');
-        return;
+        return false;
       }
 
-      await _sendMediaOverBox(
+      return await _sendMediaOverBox(
         recipientId: recipientId,
         tempId: tempId,
         messageType: 'FILE',
@@ -460,6 +461,7 @@ extension MessagingSend on MessagingProvider {
     } catch (e) {
       debugPrint('[MessagingProvider] File send failed: $e');
       _markMessageFailed(tempId, 'File send failed: ${e.toString()}');
+      return false;
     }
   }
 

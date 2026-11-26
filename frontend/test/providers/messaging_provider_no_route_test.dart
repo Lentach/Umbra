@@ -120,8 +120,14 @@ void main() {
   });
 
   test('a file fails before any upload', () async {
-    await h.provider.sendFileMessage([1, 2, 3], 'a.pdf', 'application/pdf', 2);
+    final ok = await h.provider.sendFileMessage(
+      [1, 2, 3],
+      'a.pdf',
+      'application/pdf',
+      2,
+    );
 
+    expect(ok, isFalse);
     expect(lastRow().messageType, MessageType.file);
     expect(lastRow().deliveryStatus, MessageDeliveryStatus.failed);
     expectNothingLeft();
