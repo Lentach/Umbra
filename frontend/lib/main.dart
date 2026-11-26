@@ -278,11 +278,12 @@ class _AuthGateState extends State<AuthGate> {
     // only a bare 401 on a live access token plus a refused refresh says no.
     // Then this device leaves the way the deleting device did: signed out,
     // connection closed, local keys wiped (`SettingsScreen` delete flow).
-    final encryption = context.read<EncryptionProvider>();
     conn.onSessionRejected = () async {
       if (!await auth.endSessionIfAccountGone()) return;
       conn.disconnect(isLogout: true);
-      await encryption.clearEncryptionKeys();
+      // Read here, not in build: only an account that is gone needs it.
+      if (!mounted) return;
+      await context.read<EncryptionProvider>().clearEncryptionKeys();
     };
 
     // The mirror case (spec §6.2): a reset teardown re-homed this account onto
