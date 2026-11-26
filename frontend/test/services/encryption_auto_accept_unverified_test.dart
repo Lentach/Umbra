@@ -490,4 +490,31 @@ void main() {
     expect(alice.keyChangeLogOf(bobId), isEmpty);
     expect(alice.peersWithChangedIdentity, isEmpty);
   });
+
+  test('N3: an unreadable verified record counts every PINNED friend as '
+      'verified (hold) until it reads again', () async {
+    final pinned = await pinBob();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('e2e_${aliceId}_peer_verified_v1', '{nope');
+
+    final restarted = await started(aliceId);
+
+    expect(await restarted.isPeerVerified(bobId), isTrue,
+        reason: 'uncertainty answers the safe way');
+    expect(await restarted.isPeerVerified(7), isFalse,
+        reason: 'nothing pinned, nothing to hold');
+    await expectLater(
+      restarted.buildSession(
+        bobId,
+        flatBundleFrom(newBob),
+        expectedIdentityBase64: pinned,
+      ),
+      throwsA(isA<AccountIdentityMismatch>()),
+    );
+    expect(await restarted.peerTofuIdentityBase64(bobId), pinned);
+
+    // The record reads again (here: repaired empty): back to unverified.
+    await prefs.setString('e2e_${aliceId}_peer_verified_v1', '{}');
+    expect(await restarted.isPeerVerified(bobId), isFalse);
+  });
 }

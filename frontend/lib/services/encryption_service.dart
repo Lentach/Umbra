@@ -470,6 +470,13 @@ class EncryptionService {
   /// Whether [peerId] is verified: the user compared fingerprints and the
   /// pinned anchor is still that very key.
   Future<bool> isPeerVerified(int peerId) async {
+    final userId = _userId;
+    if (_peerVerifiedUnreadable && userId != null) {
+      await _loadPeerVerified(userId); // try again: the record may read now
+    }
+    if (_peerVerifiedUnreadable) {
+      return await peerTofuIdentityBase64(peerId) != null;
+    }
     final bound = _peerVerified[peerId];
     if (bound == null) return false;
     return bound == await peerTofuIdentityBase64(peerId);
@@ -505,18 +512,31 @@ class EncryptionService {
     } on Object catch (_) {}
   }
 
+  /// True while the verified record could not be read (or parsed): nobody can
+  /// say who is verified, so every pinned friend counts as verified (hold)
+  /// until a read succeeds — the safe answer, never "everyone unverified".
+  bool _peerVerifiedUnreadable = false;
+
   Future<void> _loadPeerVerified(int userId) async {
     try {
       final prefs = await _sharedPrefs;
       final raw = prefs.getString(_peerVerifiedKey(userId));
-      if (raw == null) return;
-      final decoded = jsonDecode(raw);
-      if (decoded is! Map) return;
-      for (final MapEntry(:key, :value) in decoded.entries) {
-        final peerId = int.tryParse('$key');
-        if (peerId != null && value is String) _peerVerified[peerId] = value;
+      final fresh = <int, String>{};
+      if (raw != null) {
+        final decoded = jsonDecode(raw);
+        if (decoded is! Map) throw const FormatException('not a map');
+        for (final MapEntry(:key, :value) in decoded.entries) {
+          final peerId = int.tryParse('$key');
+          if (peerId != null && value is String) fresh[peerId] = value;
+        }
       }
-    } on Object catch (_) {}
+      _peerVerified
+        ..clear()
+        ..addAll(fresh);
+      _peerVerifiedUnreadable = false;
+    } on Object catch (_) {
+      _peerVerifiedUnreadable = true;
+    }
   }
 
   Future<void> _persistKeyChangeLog() async {
@@ -2380,6 +2400,7 @@ class EncryptionService {
     _peerKeyChangeNotes.clear();
     _keyChangeLog.clear();
     _peerVerified.clear();
+    _peerVerifiedUnreadable = false;
     _peersRefusedIdentity.clear();
     _peersHeldForIdentity.clear();
     _pendingSessionRebuilds.clear();
