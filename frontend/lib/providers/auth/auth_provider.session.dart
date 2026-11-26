@@ -216,6 +216,8 @@ extension AuthSessionLifecycle on AuthProvider {
       savedCopiesGone = download_utils.deleteSavedDownloads();
       await _contactBackup.clear();
       await _tokens.clear();
+      // The emoji picker's recent list is device-wide, not per account.
+      await clearRecentEmoji();
     }
     await clearPwaAppBadgeOnLogout();
     notifyListeners();
