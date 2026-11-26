@@ -672,7 +672,7 @@ void main() {
     );
 
     expect(prefs.getString('e2e_${aliceId}_peer_verified_v1'), '{nope',
-        reason: 'one friend\'s mark must not replace the unreadable record');
+        reason: "one friend's mark must not replace the unreadable record");
   });
 
   test('S3b/c: an accept whose decision read an anchor that was reverted '
