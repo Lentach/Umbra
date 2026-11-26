@@ -143,4 +143,31 @@ void main() {
     expect(find.byKey(const Key('auth-forgot-password')), findsOneWidget);
     expect(find.byKey(const Key('auth-recover-phrase')), findsNothing);
   });
+
+  // A2-AUTH-05: one password field serves all three forms. A failed sign-in
+  // guess left in it became the account's NEW password when the user did not
+  // notice the (dotted) field was already filled.
+  testWidgets('a password typed on one form never rides into the other', (
+    tester,
+  ) async {
+    await _pump(tester, MockClient((req) async => _json({}, 500)));
+    String passwordText() => tester
+        .widget<TextFormField>(find.byType(TextFormField).last)
+        .controller!
+        .text;
+
+    await tester.enterText(find.byType(TextFormField).last, 'WrongGuess1');
+    await tester.tap(find.byKey(const Key('auth-forgot-password')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('auth-recover-phrase')), findsOneWidget);
+    expect(passwordText(), isEmpty);
+
+    // And back: an abandoned new password is not a sign-in guess.
+    await tester.enterText(find.byType(TextFormField).last, 'NewPass1x');
+    await tester.ensureVisible(find.byKey(const Key('auth-recover-back')));
+    await tester.tap(find.byKey(const Key('auth-recover-back')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('auth-recover-phrase')), findsNothing);
+    expect(passwordText(), isEmpty);
+  });
 }
