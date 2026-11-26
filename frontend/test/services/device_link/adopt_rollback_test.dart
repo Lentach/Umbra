@@ -261,6 +261,38 @@ void main() {
     expect(service.needsKeyUpload, isTrue);
   });
 
+  test('a rolled-back adopt over stale material leaves the service '
+      'uninitialized', () async {
+    final storage = _FaultySecure();
+    final service = serviceOver(storage);
+    await service.initialize(
+      _userId,
+      checkServerIdentity: () async =>
+          const ServerIdentityGuard(exists: false, linkingEnabled: false),
+    );
+    expect(service.isInitialized, isTrue);
+
+    storage
+      ..writes = 0
+      ..failAt = 2;
+    final blob = mintBlobInputs();
+    await expectLater(
+      service.adoptProvisionedIdentity(
+        userId: _userId,
+        ikPubBase64: blob.ikPub,
+        ikPrivBase64: blob.ikPriv,
+        dakPubBase64: blob.dakPub,
+        disposeStaleMaterial: true,
+      ),
+      throwsStateError,
+    );
+    expect(
+      service.isInitialized,
+      isFalse,
+      reason: 'the identity store is empty after the rollback',
+    );
+  });
+
   group('a marker left by a failed rollback (S1)', () {
     const markerKey = '${_namespace}link_unsettled_v1';
 

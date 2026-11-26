@@ -2085,6 +2085,7 @@ class EncryptionService {
     _keysForUpload = null;
     needsKeyUpload = false;
     _provisionalIdentityAdopted = false;
+    _initialized = false;
   }
 
   /// Deletes EXACTLY what [adoptProvisionedIdentity] writes, the unsettled
