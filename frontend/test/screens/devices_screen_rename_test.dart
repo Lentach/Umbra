@@ -222,6 +222,23 @@ void main() {
     expect(find.byKey(const Key('device-rename-1')), findsNothing);
   });
 
+  // A2-DEV-03: a key read that THREW is not "no DAK" — the icons stay (a tap
+  // re-reads the key) instead of vanishing until the screen is reopened.
+  testWidgets('a failed key read keeps revoke and rename offered', (
+    tester,
+  ) async {
+    final controller = await _pumpEnrolled(tester, _twoLive);
+
+    controller
+      ..holdsDak = null
+      ..dakReadFailed = true
+      ..notifyListeners();
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('device-revoke-6')), findsOneWidget);
+    expect(find.byKey(const Key('device-rename-6')), findsOneWidget);
+  });
+
   testWidgets('the save button signs and emits updateDeviceList', (
     tester,
   ) async {

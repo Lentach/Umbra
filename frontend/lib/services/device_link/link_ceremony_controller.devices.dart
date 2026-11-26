@@ -9,10 +9,27 @@ extension LinkCeremonyDevices on LinkCeremonyController {
   }
 
   Future<void> _resolveDakPresence() async {
-    final present = await _readDak() != null;
+    DakRecord? record;
+    var readFailed = false;
+    try {
+      record = await _readDakOrThrow();
+    } on Object catch (_) {
+      readFailed = true;
+    }
     // The screen may have popped during the Keystore read.
-    if (_disposed || holdsDak == present) return;
+    if (_disposed) return;
+    if (readFailed) {
+      // A glitch is not an answer: leave `holdsDak` as it was and say so, so
+      // the screen keeps the actions and a later refresh can settle it.
+      if (dakReadFailed) return;
+      dakReadFailed = true;
+      notifyListeners();
+      return;
+    }
+    final present = record != null;
+    if (holdsDak == present && !dakReadFailed) return;
     holdsDak = present;
+    dakReadFailed = false;
     notifyListeners();
   }
 
@@ -140,19 +157,27 @@ extension LinkCeremonyDevices on LinkCeremonyController {
     }
   }
 
+  /// The stored DAK, or null when none is held. A read that THROWS is treated
+  /// as null by the action paths (a revoke or rename then fails closed with
+  /// `no_dak`); the presence check uses [_readDakOrThrow] so it can tell the
+  /// two apart.
   Future<DakRecord?> _readDak() async {
     try {
-      final record = await _dakStore.read(userId: userId);
-      if (record != null) {
-        _engine.restoreDak(
-          dakPubBase64: record.dakPub,
-          dakPrivBase64: record.dakPriv,
-        );
-      }
-      return record;
-    } catch (_) {
+      return await _readDakOrThrow();
+    } on Object catch (_) {
       return null;
     }
+  }
+
+  Future<DakRecord?> _readDakOrThrow() async {
+    final record = await _dakStore.read(userId: userId);
+    if (record != null) {
+      _engine.restoreDak(
+        dakPubBase64: record.dakPub,
+        dakPrivBase64: record.dakPriv,
+      );
+    }
+    return record;
   }
 
   /// Revokes one of this account's OTHER devices (spec §5.5).

@@ -330,9 +330,10 @@ class _DevicesScreenState extends State<DevicesScreen> {
           // (xxi)) — the server enforces both; this just does not offer an
           // action guaranteed to be refused. A linked device holds no DAK
           // (the primary's signing key), so it is refused every time and
-          // offers neither revoke nor rename.
+          // offers neither revoke nor rename. A key read that THREW says
+          // nothing about that, so the actions stay: the tap re-reads it.
           onRevoke:
-              controller.holdsDak == true &&
+              (controller.holdsDak == true || controller.dakReadFailed) &&
                   entry.revokedAtMs == null &&
                   entry.deviceId != primaryDeviceId &&
                   entry.deviceId !=
@@ -343,7 +344,9 @@ class _DevicesScreenState extends State<DevicesScreen> {
           // take one — including this device and the primary — when this
           // device can sign the list. A revoked row is a tombstone and gets
           // no affordance.
-          onRename: controller.holdsDak == true && entry.revokedAtMs == null
+          onRename:
+              (controller.holdsDak == true || controller.dakReadFailed) &&
+                  entry.revokedAtMs == null
               ? () => _promptRename(context, controller, entry, l10n)
               : null,
           busy:

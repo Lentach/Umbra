@@ -87,6 +87,12 @@ class LinkCeremonyController extends ChangeNotifier
   /// `linkNoDak` after the user typed a code.
   bool? holdsDak;
 
+  /// The last DAK presence check THREW (Keystore or storage glitch), so
+  /// [holdsDak] is unresolved rather than `false`. The devices screen keeps
+  /// revoke and rename offered while this is set — a tap re-reads the key, and
+  /// the next refresh clears the flag — instead of hiding them until reopened.
+  bool dakReadFailed = false;
+
   /// The raw authorization fields of the last VERIFIED own-list answer —
   /// the primary flow signs against these.
   Map<String, dynamic>? _authorization;
