@@ -3877,6 +3877,15 @@ class EncryptionService {
       return PlaintextPurgeResult(removed: 0, failedIds: wanted);
     }
 
+    // A3-SVC-C-2: a save of one of these ids that is already queued or in
+    // flight rewrites the WHOLE record when it finds none, so it must land
+    // before the removal, never after it (a message the friend deleted for
+    // everyone came back). The chain swallows its own failures.
+    await Future.wait([
+      for (final id in wanted)
+        ?_decryptedSaveTails[_decryptedContentKey(userId, id)],
+    ]);
+
     var removed = 0;
     final failed = <int>{};
     final done = <int>{};
