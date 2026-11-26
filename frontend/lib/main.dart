@@ -334,7 +334,8 @@ class _AuthGateState extends State<AuthGate> {
       // 0.2.41 APK), and, on the verdict's edge, routes ALREADY on the stack
       // (a reconnect init after a mid-session wipe leaves the user inside a
       // chat or the devices screen). It keeps non-page routes (dialogs,
-      // sheets) and the ceremony's own scanner — see `gateKeepsRoute`.
+      // sheets) that sit over no removed page, and the ceremony's own scanner
+      // — see `gateKeepsRoute`; a dialog above a removed page goes with it.
       // Issue #208: the shell stays hidden until local storage has said
       // whether this install is still the device it was (a few ms) — else a
       // re-signed-in old device painted its chat list before the gate. Local

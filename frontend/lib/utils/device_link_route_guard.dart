@@ -17,9 +17,10 @@ bool gateKeepsRoute(Route<dynamic> route) =>
 /// Keeps the device-link gate the TOP surface while it is up (issue #175).
 ///
 /// The gate is a `Stack` child in `AuthGate`, not a route, so anything pushed
-/// on the root navigator covers it completely. `AuthGate` pops what is already
-/// on the stack when the verdict lands, but that is a one-shot: it cannot see
-/// a route pushed LATER, and pushing a route does not rebuild `AuthGate`.
+/// on the root navigator covers it completely. `AuthGate` does not sweep: this
+/// guard does, both for what is already on the stack when the verdict lands
+/// (the edge sweep below) and for a route pushed LATER, since pushing a route
+/// does not rebuild `AuthGate`.
 ///
 /// Device-observed 2026-09-13 on the 0.2.41 release APK: `MainShell` stays
 /// MOUNTED under `Offstage` while gated, `Offstage` still BUILDS, and its
@@ -31,7 +32,8 @@ bool gateKeepsRoute(Route<dynamic> route) =>
 /// tearing the route down inside that call races the transition.
 ///
 /// The guard also owns the edge sweep: when the verdict lands, every page route
-/// ALREADY on the stack goes. It walks its own route list instead of using
+/// ALREADY on the stack goes, and so does everything pushed above a removed
+/// page except the scanner. It walks its own route list instead of using
 /// `popUntil(gateKeepsRoute)`, which stops at the first kept route from the
 /// top — a dialog open over a pushed page left that page standing under it
 /// (A2-DEV-10).
