@@ -208,7 +208,11 @@ class EncryptionService {
     if (cached != null) return cached;
     final opening = _prefsOpening ??= (_kvOpener ?? openPlatformContentKv)();
     try {
-      return _prefs = await opening;
+      final opened = await opening;
+      // A revoke (passcode lock) that ran while this opened dropped
+      // `_prefsOpening`; the store it revoked must not become the cache.
+      if (identical(_prefsOpening, opening)) _prefs = opened;
+      return opened;
     } catch (_) {
       if (_prefsOpening == opening) _prefsOpening = null;
       rethrow;
