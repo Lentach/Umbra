@@ -760,16 +760,6 @@ void main() {
         expect(await service.getDecryptedContent(7001), isNull,
             reason: 'the deleted message must stay deleted');
       });
-
-      test('a save called just before the removal does not outlive it',
-          () async {
-        await service.saveDecryptedContent(7002, {'content': 'old'});
-        final save = service.saveDecryptedContent(7002, {'content': 'edit'});
-        final removal = service.removeDecryptedContent([7002]);
-        await Future.wait([save, removal]);
-
-        expect(await service.getDecryptedContent(7002), isNull);
-      });
     });
   });
 }

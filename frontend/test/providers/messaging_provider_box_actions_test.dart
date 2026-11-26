@@ -60,6 +60,19 @@ class _Encryption extends EncryptionProvider {
   /// While set, every [decrypt] waits for it: a read in flight.
   Completer<void>? decryptHold;
 
+  /// While set, the next [getDecryptedContent] answers only once it
+  /// completes: a reader that took its snapshot before a removal.
+  Completer<void>? contentHoldOnce;
+
+  @override
+  Future<Map<String, dynamic>?> getDecryptedContent(int messageId) async {
+    final record = await super.getDecryptedContent(messageId);
+    final hold = contentHoldOnce;
+    contentHoldOnce = null;
+    if (hold != null) await hold.future;
+    return record;
+  }
+
   @override
   Future<VerifiedDeviceList> getVerifiedDeviceList(
     int userId, {
@@ -1190,6 +1203,43 @@ void main() {
         await bobDoes(action('react', s: 1, w: mineRow.wireId!, emoji: '😂', on: false));
         expect(row(mineRow.id)!.reactions, isEmpty);
         expect(row(msg.id)!.reactions, isEmpty, reason: 'only the target');
+      },
+    );
+
+    test(
+      'an action read before a delete of its target, finishing after it, '
+      'does not bring the record back (A3-SVC-C-2)',
+      () async {
+        final msg = await fromBob('gone soon', wire: 'wire-bob-0200');
+        // The chat is closed: the target is rebuilt from its record.
+        provider.clearMessages();
+        encryption.contentHoldOnce = Completer<void>();
+        final hold = encryption.contentHoldOnce!;
+
+        var done = false;
+        final react = bobDoes(
+          action('react', s: 2, w: 'wire-bob-0200', emoji: '🔥', on: true),
+        ).whenComplete(() => done = true);
+        await pump();
+        expect(done, isFalse, reason: 'parked at its read of the record');
+
+        // The user deletes the message meanwhile (the chat was reopened); the
+        // purge removes the record.
+        provider.getMessages(10);
+        await pump(120);
+        provider.deleteMessage(msg.id, forEveryone: false);
+        await pump();
+        expect(await recordOf(msg.id), isNull);
+
+        hold.complete();
+        await react;
+        await pump();
+
+        expect(
+          await recordOf(msg.id),
+          isNull,
+          reason: 'a deleted message must stay deleted',
+        );
       },
     );
 
