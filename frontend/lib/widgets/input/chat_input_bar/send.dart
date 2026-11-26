@@ -394,13 +394,23 @@ mixin _ComposerSend on _ComposerFocus {
   /// desktop split view keeps this composer mounted across that switch.
   ///
   /// While an edit is active the field holds the EDIT, not a caption (A3-CMP-06):
-  /// it is applied to the original message (or the edit is dropped when the
-  /// field is empty, like [_send]) and the picture goes out on its own, with
-  /// no caption — the same as a paperclip pick made during an edit.
+  /// it is applied to the original message and the picture goes out on its
+  /// own, with no caption — the same as a paperclip pick made during an edit.
+  /// Edit text over the size limit is refused up front like [_send] does,
+  /// before anything is cleared or sent. An EMPTY field differs from [_send]
+  /// (which does nothing and stays in edit mode): the picture is the send, so
+  /// edit mode is left.
   Future<void> _sendStaged() async {
     if (_isSendingStagedMedia) return;
     final staged = _attachment.staged;
     if (staged == null) return;
+    final editText = _controller.text.trim();
+    if (context.read<MessagingProvider>().editingMessage != null &&
+        editText.isNotEmpty &&
+        !isMessageWithinByteLimit(editText)) {
+      showTopSnackBar(context, AppLocalizations.of(context).messageTooLong);
+      return;
+    }
     final keepEmojiPanel = _showEmojiPicker;
     _armComposerCollapseGuard();
 
