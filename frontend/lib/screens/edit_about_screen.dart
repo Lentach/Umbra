@@ -20,8 +20,11 @@ int profileAboutLength(String text) =>
     _presentationSequence.allMatches(text).length -
     _surrogatePair.allMatches(text).length;
 
-/// Keeps the field within [kProfileAboutMaxLength] by the server's count; an
-/// over-long edit or paste is cut at the last whole character that fits.
+/// Keeps the field within [kProfileAboutMaxLength] by the server's count. Like
+/// `LengthLimitingTextInputFormatter`: an edit to a field that is already full
+/// is refused (the old value stays), and an over-long paste into a field with
+/// room is cut at the last whole character that fits, keeping the selection
+/// and the IME composing region while they still lie inside the kept text.
 class _ProfileAboutLimiter extends TextInputFormatter {
   const _ProfileAboutLimiter();
 
@@ -32,6 +35,10 @@ class _ProfileAboutLimiter extends TextInputFormatter {
   ) {
     if (profileAboutLength(newValue.text) <= kProfileAboutMaxLength) {
       return newValue;
+    }
+    // Already full: typing mid-text must not push the last character out.
+    if (profileAboutLength(oldValue.text) >= kProfileAboutMaxLength) {
+      return oldValue;
     }
     final kept = StringBuffer();
     // Anything past twice the limit cannot fit: a character costs at least
@@ -44,9 +51,19 @@ class _ProfileAboutLimiter extends TextInputFormatter {
       kept.writeCharCode(rune);
     }
     final text = kept.toString();
+    int clamp(int offset) => offset < 0 || offset > text.length
+        ? text.length
+        : offset;
+    final composing = newValue.composing;
     return TextEditingValue(
       text: text,
-      selection: TextSelection.collapsed(offset: text.length),
+      selection: newValue.selection.copyWith(
+        baseOffset: clamp(newValue.selection.baseOffset),
+        extentOffset: clamp(newValue.selection.extentOffset),
+      ),
+      composing: composing.isValid && composing.end <= text.length
+          ? composing
+          : TextRange.empty,
     );
   }
 }

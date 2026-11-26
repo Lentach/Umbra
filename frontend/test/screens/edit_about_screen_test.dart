@@ -59,4 +59,24 @@ void main() {
     await tester.enterText(find.byType(TextField), 'short about');
     expect(field.controller!.text, 'short about');
   });
+
+  testWidgets('typing into a full field is refused, not a dropped last '
+      'character', (tester) async {
+    final field = await pumpField(tester);
+    final full = '${'a' * 79}z';
+    await tester.enterText(find.byType(TextField), full);
+    expect(field.controller!.text, full);
+
+    // A letter typed at the start: 81 long. The old cut kept the first 80 and
+    // silently lost the final 'z'.
+    tester.testTextInput.updateEditingValue(
+      TextEditingValue(
+        text: 'y$full',
+        selection: const TextSelection.collapsed(offset: 1),
+      ),
+    );
+    await tester.pump();
+
+    expect(field.controller!.text, full);
+  });
 }
