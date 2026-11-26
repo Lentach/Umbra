@@ -50,21 +50,21 @@ class _FakeConnectionProvider extends ConnectionProvider {
 
 _FakeConnectionProvider _connection = _FakeConnectionProvider();
 
-Widget _host() {
+Widget _host({int? revokeDeviceId, EncryptionProvider? encryption}) {
   _connection = _FakeConnectionProvider();
   return MultiProvider(
     providers: [
       ChangeNotifierProvider<AuthProvider>(create: (_) => _FakeAuthProvider()),
       ChangeNotifierProvider<ConnectionProvider>.value(value: _connection),
       ChangeNotifierProvider<EncryptionProvider>.value(
-        value: FakeEncryptionProvider(),
+        value: encryption ?? FakeEncryptionProvider(),
       ),
     ],
     child: MaterialApp(
       theme: RpgTheme.themeDataDarkGray,
       localizationsDelegates: AppLocalizations.localizationsDelegates,
       supportedLocales: AppLocalizations.supportedLocales,
-      home: const DevicesScreen(),
+      home: DevicesScreen(revokeDeviceId: revokeDeviceId),
     ),
   );
 }
@@ -104,6 +104,53 @@ Future<LinkCeremonyController> _pumpEnrolled(
   controller.notifyListeners();
   await tester.pumpAndSettle();
   return controller;
+}
+
+class _OwnDeviceFour extends FakeEncryptionProvider {
+  @override
+  int get ownDeviceId => 4;
+}
+
+/// Opens the screen with [revokeDeviceId] (the chat list's "remove" line),
+/// then lets the verified list arrive, the way a real visit does. Returns the
+/// `revokeDevice` frames the screen signed and sent.
+Future<List<(String, dynamic)>> _visitAsking(
+  WidgetTester tester,
+  int revokeDeviceId,
+) async {
+  _seedDak();
+  await tester.pumpWidget(
+    _host(
+      revokeDeviceId: revokeDeviceId,
+      encryption: _OwnDeviceFour(),
+    ),
+  );
+  await tester.pumpAndSettle();
+  _connection.sink!
+    ..listState = DeviceListState.enrolled
+    ..verifiedList = const DeviceList(
+      userId: 7,
+      version: 3,
+      devices: [
+        DeviceListEntry(deviceId: 1, platform: 'android', addedAtMs: 1000),
+        DeviceListEntry(deviceId: 4, platform: 'web', addedAtMs: 2000),
+        DeviceListEntry(deviceId: 6, platform: 'web', addedAtMs: 3000),
+        DeviceListEntry(
+          deviceId: 8,
+          platform: 'web',
+          addedAtMs: 3500,
+          revokedAtMs: 3600,
+        ),
+      ],
+    )
+    ..holdsDak = true
+    ..notifyListeners();
+  // The revoke is in flight against a fake that never answers: no settle.
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 400));
+  return _connection.emitted
+      .where((e) => e.$1 == 'revokeDevice')
+      .toList();
 }
 
 const _twoLive = DeviceList(
@@ -288,4 +335,42 @@ void main() {
       expect(find.text('android · #1 · $badge'), findsNothing);
     },
   );
+
+  // A2-DEV-09: the chat list's "remove" line opens this screen with the
+  // device to revoke. It must revoke exactly that live sibling, and nothing
+  // when the id is the primary, this device, a tombstone or unknown.
+  testWidgets('revokeDeviceId revokes the named live sibling, once', (
+    tester,
+  ) async {
+    final frames = await _visitAsking(tester, 6);
+
+    expect(frames, hasLength(1));
+    final signed = parseCanonicalDeviceList(
+      base64Decode(
+        (frames.single.$2 as Map<String, dynamic>)['listCanonical'] as String,
+      ),
+    );
+    expect(
+      signed.devices.where((d) => d.revokedAtMs != null).map((d) => d.deviceId),
+      containsAll([6, 8]),
+    );
+    expect(
+      signed.devices.firstWhere((d) => d.deviceId == 4).revokedAtMs,
+      isNull,
+    );
+    expect(signed.devices.firstWhere((d) => d.deviceId == 1).revokedAtMs, isNull);
+  });
+
+  for (final (label, id) in [
+    ('the primary', 1),
+    ('this device', 4),
+    ('an already revoked row', 8),
+    ('an id the list does not name', 99),
+  ]) {
+    testWidgets('revokeDeviceId naming $label revokes nothing', (tester) async {
+      final frames = await _visitAsking(tester, id);
+
+      expect(frames, isEmpty);
+    });
+  }
 }
