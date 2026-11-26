@@ -1138,8 +1138,10 @@ class EncryptionProvider extends ChangeNotifier {
   /// list is I7-verified under [identityKey] — or under the anchor held, which
   /// must BE [identityKey] — adopted as the list the server served (E50a's
   /// DAK pin), and kept across restarts (decision 51). Then [identityKey]
-  /// becomes the account anchor when none is held. Throws, adopting nothing,
-  /// when another key is pinned (a key change is a human's call, (xlvi)) or
+  /// becomes the account anchor when none is held — BEFORE the list is
+  /// adopted, so a key another answer pinned meanwhile refuses this one
+  /// without leaving its list (and version floor) behind. Throws, adopting
+  /// nothing, when another key is pinned (a key change is a human's call, (xlvi)) or
   /// the list does not verify — unless [replaceStaleAnchor]: the caller
   /// knows the account is no longer a contact at all (decision 112), so a
   /// pinned key is a leftover of a friendship that ended, and the served key
@@ -1175,6 +1177,19 @@ class EncryptionProvider extends ChangeNotifier {
     if (stale && !replaceStaleAnchor) {
       throw DeviceListVerificationException(userId, 'served_identity_mismatch');
     }
+    // No key held: pin the served key first, once its list passes the checks
+    // adopting would make. Adopting first left a refused key's list cached,
+    // and its version floor stored, when another answer's key won the pin in
+    // between, so the pinned key's own (lower) list read as a rollback. A list
+    // that fails the checks is left to the adopt below, which throws.
+    if (held == null && _listPassesAdoptChecks(userId, authorization, served)) {
+      if (!await _encryptionService.stageAccountAnchor(userId, served)) {
+        throw DeviceListVerificationException(
+          userId,
+          'served_identity_mismatch',
+        );
+      }
+    }
     final verified = await _adoptDeviceListAnswer(
       userId,
       authorization,
@@ -1182,12 +1197,27 @@ class EncryptionProvider extends ChangeNotifier {
     );
     if (stale) {
       await _encryptionService.replaceStaleAccountAnchor(userId, served);
-    } else if (held == null &&
-        !await _encryptionService.stageAccountAnchor(userId, served)) {
-      throw DeviceListVerificationException(userId, 'served_identity_mismatch');
     }
     unawaited(_encryptionService.recordPeerDeviceList(userId, authorization));
     return verified;
+  }
+
+  /// Whether [_deviceListCache] would adopt [authorization] under [anchor] now,
+  /// as far as a pure check can tell: the I7 chain, the version floor and the
+  /// enrolled-to-not-enrolled rule, nothing cached.
+  bool _listPassesAdoptChecks(
+    int userId,
+    Map<String, dynamic>? authorization,
+    String anchor,
+  ) {
+    final pinned = _deviceListCache.pinnedVersion(userId);
+    if (authorization == null) return pinned == null;
+    return DeviceAuthorityEngine.verifyPeerDeviceList(
+      authorization: authorization,
+      tofuIdentityKeyBase64: anchor,
+      expectedUserId: userId,
+      previousVersion: pinned == null ? null : pinned - 1,
+    ).ok;
   }
 
   /// Decision 51 / E50c: when this device finds itself off the box longer
