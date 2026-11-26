@@ -1521,12 +1521,27 @@ class EncryptionService {
     // identity here without this install ever becoming a linked device. Only
     // THIS process's own running ceremony may hold such material; anything
     // else goes before the load below can take it for the install's own.
-    if (!_provisionalIdentityAdopted &&
-        await _storage.read(key: _linkUnsettledKey(userId)) != null) {
-      await _deleteAdoptedMaterial(userId);
-      E2ePersistentDiag.record('LINK_UNSETTLED_ADOPT_DISCARDED', {
-        'userId': userId,
-      });
+    // The marker names the adopted identity (its public key): a marker that
+    // matches nothing stored (a failed rollback's leftover, with a restore or
+    // mint installed since) only goes itself, it never takes a later identity.
+    if (!_provisionalIdentityAdopted) {
+      final marker = await _storage.read(key: _linkUnsettledKey(userId));
+      if (marker != null) {
+        final stored = _identityRecordPublicKey(
+          await _storage.read(key: '${p}identity_record_v1'),
+        );
+        if (stored != null && stored == marker) {
+          await _deleteAdoptedMaterial(userId);
+          E2ePersistentDiag.record('LINK_UNSETTLED_ADOPT_DISCARDED', {
+            'userId': userId,
+          });
+        } else {
+          await _storage.delete(key: _linkUnsettledKey(userId));
+          E2ePersistentDiag.record('LINK_UNSETTLED_MARKER_STALE', {
+            'userId': userId,
+          });
+        }
+      }
     }
     // A THROWING read propagates: a storage error must never be read as "no
     // keys". Only a definitive outcome reaches the server-backed guard.
@@ -1719,6 +1734,9 @@ class EncryptionService {
       'reason': reason,
     });
     debugPrint('[EncryptionService] Generating new keys (fresh install)');
+    // A leftover unsettled marker (a failed rollback) must not outlive into
+    // the identity minted here (S1); a failed delete aborts the mint.
+    await _storage.delete(key: _linkUnsettledKey(userId));
     await _generateKeys();
     needsKeyUpload = true;
     identityIncomplete = false;
@@ -1993,7 +2011,10 @@ class EncryptionService {
     // deletes what was written before it propagates.
     _provisionalIdentityAdopted = true;
     try {
-      await _storage.write(key: _linkUnsettledKey(userId), value: '1');
+      await _storage.write(
+        key: _linkUnsettledKey(userId),
+        value: base64Encode(identityKeyPair.getPublicKey().serialize()),
+      );
 
       final registrationId = generateRegistrationId(false);
       await _identityStore.initialize(identityKeyPair, registrationId);
@@ -2275,6 +2296,10 @@ class EncryptionService {
         await _hasPriorInstallResidue(existingPrefix)) {
       if (!await _wipeSignalMaterial(existingPrefix)) deferred();
     }
+
+    // A leftover unsettled marker (a failed rollback) must not outlive into
+    // the identity restored here (S1); a failed delete aborts the restore.
+    await _storage.delete(key: _linkUnsettledKey(userId));
 
     _userId = userId;
     final p = 'e2e_${userId}_';

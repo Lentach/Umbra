@@ -17,6 +17,7 @@
 import 'dart:convert';
 
 import 'package:fireplace/services/device_link/dak_store.dart';
+import 'package:fireplace/services/device_link/identity_backup.dart';
 import 'package:fireplace/services/device_link/link_ceremony_controller.dart';
 import 'package:fireplace/services/device_link/link_crypto.dart';
 import 'package:fireplace/services/encryption/signal_stores.dart';
@@ -45,6 +46,9 @@ class _FaultySecure extends FlutterSecureStorage {
   final bool killOnFault;
   int writes = 0;
   bool _dead = false;
+
+  /// A key whose delete is refused (a failing rollback); null = none.
+  String? undeletable;
 
   void _alive() {
     if (_dead) throw StateError('process is gone');
@@ -83,6 +87,7 @@ class _FaultySecure extends FlutterSecureStorage {
     WindowsOptions? wOptions,
   }) async {
     _alive();
+    if (key == undeletable) throw StateError('delete refused');
     await super.delete(key: key);
   }
 
@@ -254,6 +259,94 @@ void main() {
     await startAgain(service);
     expect(await service.currentIdentityPublicKeyBase64(), blob.ikPub);
     expect(service.needsKeyUpload, isTrue);
+  });
+
+  group('a marker left by a failed rollback (S1)', () {
+    const markerKey = '${_namespace}link_unsettled_v1';
+
+    ({String ikPub, String ikPriv, String dakPub}) blobOf(
+      IdentityKeyPair pair,
+    ) => (
+      ikPub: base64Encode(pair.getPublicKey().serialize()),
+      ikPriv: base64Encode(pair.getPrivateKey().serialize()),
+      dakPub: base64Encode(List<int>.filled(32, 3)),
+    );
+
+    test('a phrase restore of the same identity after it survives the next '
+        'start', () async {
+      final total = await writesOfACleanAdopt();
+      final storage = _FaultySecure(failAt: total)..undeletable = markerKey;
+      final service = serviceOver(storage);
+      final pair = generateIdentityKeyPair();
+      final blob = blobOf(pair);
+
+      await expectLater(adopt(service, blob), throwsStateError);
+      expect(await secure.read(key: markerKey), isNotNull);
+
+      // Same gate, same process: the user restores with the phrase instead.
+      storage
+        ..failAt = null
+        ..undeletable = null;
+      await service.adoptRestoredIdentity(
+        userId: _userId,
+        payload: IdentityBackupPayload(
+          userId: _userId,
+          identity: jsonEncode({
+            'pair': base64Encode(pair.serialize()),
+            'registrationId': 4242,
+          }),
+          dak: null,
+        ),
+      );
+
+      final next = serviceOver(secure);
+      await startAgain(next);
+      expect(await next.currentIdentityPublicKeyBase64(), blob.ikPub);
+      expect(await secure.read(key: markerKey), isNull);
+    });
+
+    test('the identity a completed reset minted after it survives the next '
+        'start', () async {
+      final storage = _FaultySecure()..undeletable = markerKey;
+      final service = serviceOver(storage);
+      await adopt(service, mintBlobInputs());
+      // The ceremony aborts; its discard dies on the last delete.
+      await expectLater(
+        service.discardProvisionedIdentity(_userId),
+        throwsStateError,
+      );
+      expect(await secure.read(key: markerKey), isNotNull);
+
+      storage.undeletable = null;
+      await service.initialize(
+        _userId,
+        checkServerIdentity: () async => const ServerIdentityGuard(
+          exists: true,
+          resetCompleted: true,
+        ),
+      );
+      final minted = await service.currentIdentityPublicKeyBase64();
+      expect(minted, isNotNull);
+
+      final next = serviceOver(secure);
+      await startAgain(next);
+      expect(await next.currentIdentityPublicKeyBase64(), minted);
+      expect(await secure.read(key: markerKey), isNull);
+    });
+
+    test('a marker that names another identity than the stored one is '
+        'dropped and the stored identity stays', () async {
+      final service = serviceOver(secure);
+      final blob = mintBlobInputs();
+      await adopt(service, blob);
+      await service.settleProvisionedIdentity(_userId);
+      await secure.write(key: markerKey, value: mintBlobInputs().ikPub);
+
+      final next = serviceOver(secure);
+      await startAgain(next);
+      expect(await next.currentIdentityPublicKeyBase64(), blob.ikPub);
+      expect(await secure.read(key: markerKey), isNull);
+    });
   });
 
   group('through the ceremony controller', ceremonyTests);
