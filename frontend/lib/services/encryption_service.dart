@@ -819,8 +819,8 @@ class EncryptionService {
   Set<int> get peersCalmHeld => Set.unmodifiable(_peersCalmHeld);
 
   /// Whether a foreign-key frame of [peerId] may be held CALMLY: warnings OFF,
-  /// the friend not verified (N3 counts an unreadable record as verified), an
-  /// anchor pinned, and a device list HELD (the persisted one, so the tap's own
+  /// the friend not verified (N3 counts an unreadable record as verified), and
+  /// a device list HELD (the persisted one, so the tap's own
   /// invalidation cannot flip this) that says NOT enrolled. Anything else is
   /// today's visible hold.
   Future<bool> calmHoldEligible(int peerId) async {
@@ -829,7 +829,8 @@ class EncryptionService {
     // a server claim) keeps every later frame visible too.
     if (_peersWithChangedIdentity.contains(peerId)) return false;
     if (await isPeerVerified(peerId)) return false;
-    if (await peerTofuIdentityBase64(peerId) == null) return false;
+    // No anchor check: a foreign frame is only judged against a pinned
+    // anchor (a missing one reads as `noAnchor`, first contact).
     return _peerDeviceLists.containsKey(peerId) &&
         _peerDeviceLists[peerId] == null;
   }

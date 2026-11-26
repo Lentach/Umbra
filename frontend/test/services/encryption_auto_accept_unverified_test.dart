@@ -528,6 +528,21 @@ void main() {
     expect(await alice.calmHoldEligible(bobId), isFalse);
   });
 
+  test('calm hold is never for a friend with a STANDING warning (a held '
+      'frame already turned red)', () async {
+    await pinBob();
+    await record(alice, list: null);
+    await newBob.buildSession(
+      aliceId,
+      flatBundleFrom(alice),
+      expectedIdentityBase64: null,
+    );
+    await alice.holdForeignFrame(bobId, await newBob.encrypt(aliceId, 'x'));
+    expect(alice.peersWithChangedIdentity, contains(bobId));
+
+    expect(await alice.calmHoldEligible(bobId), isFalse);
+  });
+
   test('a calm hold counts as HELD (a whisper behind the frame waits) but '
       'raises no warning and stages no candidate; releasing it ends both',
       () async {
