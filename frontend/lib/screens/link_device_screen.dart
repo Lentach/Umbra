@@ -207,6 +207,11 @@ class _LinkDeviceScreenState extends State<LinkDeviceScreen> {
               key: const Key('link-code-field'),
               controller: _code,
               autofocus: true,
+              // The code is machine text: a keyboard that "corrects"
+              // `fp-link` to `TP-Link` makes every typed code invalid.
+              keyboardType: TextInputType.visiblePassword,
+              autocorrect: false,
+              enableSuggestions: false,
               maxLines: 3,
               minLines: 1,
               style: const TextStyle(fontFamily: 'monospace', fontSize: 14),
@@ -462,6 +467,9 @@ class _LinkDeviceScreenState extends State<LinkDeviceScreen> {
           child: TextField(
             key: const Key('link-code-field'),
             controller: _code,
+            keyboardType: TextInputType.visiblePassword,
+            autocorrect: false,
+            enableSuggestions: false,
             maxLines: 3,
             minLines: 1,
             style: const TextStyle(fontFamily: 'monospace', fontSize: 14),

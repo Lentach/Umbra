@@ -295,6 +295,10 @@ class _LinkThisDeviceBodyState extends State<LinkThisDeviceBody> {
                 child: TextField(
                   key: const Key('link-new-code-field'),
                   controller: _manualCode,
+                  // Machine text: no autocorrect (see link_device_screen).
+                  keyboardType: TextInputType.visiblePassword,
+                  autocorrect: false,
+                  enableSuggestions: false,
                   maxLines: 3,
                   minLines: 1,
                   style: const TextStyle(
