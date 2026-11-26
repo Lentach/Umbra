@@ -1711,7 +1711,7 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String messageReactionChipAdd(Object count, Object emoji) {
-    return 'Zareaguj $emoji ($count)';
+    return 'Dodaj reakcję $emoji ($count)';
   }
 
   @override

@@ -2945,7 +2945,7 @@ abstract class AppLocalizations {
   /// No description provided for @messageReactionChipAdd.
   ///
   /// In pl, this message translates to:
-  /// **'Zareaguj {emoji} ({count})'**
+  /// **'Dodaj reakcję {emoji} ({count})'**
   String messageReactionChipAdd(Object count, Object emoji);
 
   /// No description provided for @snackbarBoxReactionFailed.

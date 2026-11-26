@@ -650,7 +650,7 @@
   "messageReactionNotSelected": "niewybrana",
   "messageReactionSemantics": "Reakcja {emoji}, {state}",
   "messageReactionChipRemove": "Usuń reakcję {emoji} ({count})",
-  "messageReactionChipAdd": "Zareaguj {emoji} ({count})",
+  "messageReactionChipAdd": "Dodaj reakcję {emoji} ({count})",
   "snackbarBoxReactionFailed": "Nie udało się wysłać reakcji. Spróbuj ponownie.",
   "snackbarBoxPinFailed": "Nie udało się zmienić przypięcia. Spróbuj ponownie.",
   "snackbarBoxEditFailed": "Nie udało się zapisać edycji. Spróbuj ponownie.",
