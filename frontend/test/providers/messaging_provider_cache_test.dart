@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
+import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/utils/message_ids.dart';
@@ -136,6 +137,28 @@ void main() {
 
       // Empty list → cache entry removed so hasCachedMessages is false
       expect(provider.hasCachedMessages(10), isFalse);
+    });
+
+    // X2: "delete all local messages" destroyed the stored plaintext but the
+    // open chat's rows, the chat cache and the list previews stayed on
+    // screen until a restart.
+    test('wiping all local history empties the open chat and the previews', () {
+      final conversations = ConversationsProvider();
+      provider.setConversationsProvider(conversations);
+      provider.setActiveConversationIdForTest(10);
+      provider.seedMessagesForTest(10, [_msg(1, 10), _msg(2, 10)]);
+      provider.seedCacheForTest(11, [_msg(3, 11)]);
+      conversations.updateLastMessage(10, _msg(2, 10));
+      var notified = 0;
+      provider.addListener(() => notified++);
+
+      provider.onLocalHistoryWiped();
+
+      expect(provider.messages, isEmpty);
+      expect(provider.hasCachedMessages(10), isFalse);
+      expect(provider.hasCachedMessages(11), isFalse);
+      expect(conversations.lastMessages, isEmpty);
+      expect(notified, 1);
     });
   });
 

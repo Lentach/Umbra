@@ -880,6 +880,14 @@ class ConversationsProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Drop every chat's last-message preview (the plaintext they copy was
+  /// wiped from this device).
+  void clearLastMessages() {
+    if (_lastMessages.isEmpty) return;
+    _lastMessages.clear();
+    notifyListeners();
+  }
+
   /// Each of [rows] (chat id → a message) becomes its chat's last message
   /// unless the one held is as new or newer: the box messages a launch
   /// finds stored, which no server snapshot names (decision 14).
