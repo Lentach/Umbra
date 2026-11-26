@@ -1500,4 +1500,112 @@ void main() {
         highlight.localToGlobal(Offset.zero).dx + highlight.size.width;
     expect(emojiTrailing, closeTo(highlightTrailing, 1.0));
   });
+
+  // A3-MSG-B-06: a message that expires or is deleted while its menu is open
+  // must not stay readable (or copyable) behind the scrim.
+  testWidgets('the menu closes when its message leaves the list', (
+    tester,
+  ) async {
+    final listRows = ValueNotifier<bool>(false);
+    addTearDown(listRows.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        theme: RpgTheme.themeDataLight,
+        home: Scaffold(
+          body: MultiProvider(
+            providers: [
+              ChangeNotifierProvider<SettingsProvider>(
+                create: (_) => SettingsProvider(),
+              ),
+            ],
+            child: Builder(
+              builder: (ctx) => Center(
+                child: GestureDetector(
+                  onLongPress: () {
+                    final box = ctx.findRenderObject() as RenderBox;
+                    openMessageContextMenu(
+                      context: ctx,
+                      message: _msg(id: 10, senderId: 1),
+                      bubbleRenderBox: box,
+                      isMine: true,
+                      currentUserId: 1,
+                      onReply: () {},
+                      onPin: () {},
+                      onDelete: () {},
+                      onReaction: (emoji, alreadyReacted) {},
+                      goneWatch: (
+                        changes: listRows,
+                        isGone: () => listRows.value,
+                      ),
+                    );
+                  },
+                  child: const Text('bubble'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.longPress(find.text('bubble'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('context-menu-scrim')), findsOneWidget);
+
+    listRows.value = true;
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('context-menu-scrim')), findsNothing);
+  });
+
+  // A3-MSG-B-09: Pin on an unsent row (temp id) is a disabled row; the tap
+  // does nothing and never reaches onPin.
+  testWidgets('Pin on an unsent row is disabled', (tester) async {
+    var pinned = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        theme: RpgTheme.themeDataLight,
+        home: Scaffold(
+          body: MultiProvider(
+            providers: [
+              ChangeNotifierProvider<SettingsProvider>(
+                create: (_) => SettingsProvider(),
+              ),
+            ],
+            child: Builder(
+              builder: (ctx) => Center(
+                child: GestureDetector(
+                  onLongPress: () {
+                    final box = ctx.findRenderObject() as RenderBox;
+                    openMessageContextMenu(
+                      context: ctx,
+                      message: _msg(id: -5, senderId: 1),
+                      bubbleRenderBox: box,
+                      isMine: true,
+                      currentUserId: 1,
+                      onReply: () {},
+                      onPin: () => pinned++,
+                      onDelete: () {},
+                      onReaction: (emoji, alreadyReacted) {},
+                    );
+                  },
+                  child: const Text('bubble'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.longPress(find.text('bubble'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text(l10n.messageActionPin));
+    await tester.pumpAndSettle();
+
+    expect(pinned, 0);
+    expect(find.text(l10n.messageActionPin), findsOneWidget);
+  });
 }

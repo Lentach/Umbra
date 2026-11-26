@@ -8,7 +8,6 @@ import '../emoji/fireplace_emoji_picker.dart';
 import '../../models/message_model.dart';
 import '../../utils/jumbo_emoji.dart';
 import '../../utils/message_ids.dart';
-import '../top_snackbar.dart';
 import 'context_menu_bubble_anchor.dart';
 import 'message_action_panel.dart';
 import '../glass/glass_surface.dart';
@@ -40,6 +39,7 @@ class _ContextMenuPopEntry implements PopEntry<Object?> {
 
 _ContextMenuPopEntry? _contextMenuPopEntry;
 ModalRoute<Object?>? _contextMenuPopRoute;
+VoidCallback? _removeGoneWatch;
 
 const _kReactionEmojis = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
 
@@ -344,11 +344,30 @@ void _dismissMessageContextMenu() {
     _contextMenuPopEntry = null;
     _contextMenuPopRoute = null;
   }
+  _removeGoneWatch?.call();
+  _removeGoneWatch = null;
   _activeMessageContextMenu?.remove();
   _activeMessageContextMenu = null;
 }
 
 void dismissMessageContextMenu() => _dismissMessageContextMenu();
+
+/// The `goneWatch` of [openMessageContextMenu] for a chat row: true once no
+/// row in [rows] is [message] any more. A send that settles swaps a temp id
+/// for the server id, so the row also counts as present by temp id or wire id.
+({Listenable changes, bool Function() isGone}) messageGoneWatch(
+  Listenable changes,
+  List<MessageModel> Function() rows,
+  MessageModel message,
+) => (
+  changes: changes,
+  isGone: () => !rows().any(
+    (m) =>
+        m.id == message.id ||
+        (message.tempId != null && m.tempId == message.tempId) ||
+        (message.wireId != null && m.wireId == message.wireId),
+  ),
+);
 
 typedef MessageContextMenuBubbleBuilder =
     Widget Function(BuildContext overlayContext);
@@ -366,10 +385,10 @@ void openMessageContextMenu({
   VoidCallback? onEdit,
   required void Function(String emoji, bool alreadyReacted) onReaction,
   MessageContextMenuBubbleBuilder? bubblePreviewBuilder,
+  ({Listenable changes, bool Function() isGone})? goneWatch,
 }) {
   _dismissMessageContextMenu();
   final overlay = Overlay.of(context);
-  final l10n = AppLocalizations.of(context);
   final anchorRect =
       bubbleRenderBox.localToGlobal(Offset.zero) & bubbleRenderBox.size;
   final layoutRect = bubbleRectForContextMenuLayout(anchorRect);
@@ -505,7 +524,6 @@ void openMessageContextMenu({
                   child: Align(
                     alignment: bubbleAlign,
                     child: MessageActionPanel(
-                      isMine: isMine,
                       canPinOrDeleteForEveryone: canPinOrDeleteForEveryone,
                       onReply: () {
                         dismissMessageContextMenu();
@@ -525,14 +543,7 @@ void openMessageContextMenu({
                             },
                       onPin: () {
                         dismissMessageContextMenu();
-                        if (!canPinOrDeleteForEveryone) {
-                          showTopSnackBar(
-                            context,
-                            l10n.messagePinRequiresSentMessage,
-                          );
-                        } else {
-                          onPin();
-                        }
+                        onPin();
                       },
                       onDelete: () {
                         dismissMessageContextMenu();
@@ -602,6 +613,24 @@ void openMessageContextMenu({
     _contextMenuPopEntry = _ContextMenuPopEntry();
     _contextMenuPopRoute = route;
     route.registerPopEntry(_contextMenuPopEntry!);
+  }
+  final watch = goneWatch;
+  final opened = _activeMessageContextMenu;
+  if (watch != null) {
+    // The row can leave the list while the menu is open (expiry tick, the
+    // peer's delete for everyone); the snapshot copy must not outlive it.
+    void onChange() {
+      if (watch.isGone()) {
+        Future<void>.microtask(() {
+          if (identical(_activeMessageContextMenu, opened)) {
+            _dismissMessageContextMenu();
+          }
+        });
+      }
+    }
+
+    watch.changes.addListener(onChange);
+    _removeGoneWatch = () => watch.changes.removeListener(onChange);
   }
 }
 

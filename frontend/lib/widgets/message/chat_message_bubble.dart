@@ -93,6 +93,7 @@ class ChatMessageBubble extends StatelessWidget {
         themePreference: themePreference,
       ),
       onReply: () => messaging.setReplyingTo(message),
+      goneWatch: messageGoneWatch(messaging, () => messaging.messages, message),
       onCopy: !message.hasCopyablePlaintext
           ? null
           : () {
@@ -126,12 +127,22 @@ class ChatMessageBubble extends StatelessWidget {
     );
   }
 
+  Widget _failedRetry(Color textColor, double contentAreaWidth) =>
+      FailedSendRetry(
+        message: message,
+        isMine: isMine,
+        textColor: textColor,
+        maxWidth: contentAreaWidth,
+        peerRefusedIdentity: peerRefusedIdentity,
+      );
+
   Widget _buildContentColumn(
     BuildContext context,
     bool isDark,
     Color textColor,
     Color borderColor, {
     required double contentAreaWidth,
+    bool withRetry = true,
   }) {
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -161,13 +172,7 @@ class ChatMessageBubble extends StatelessWidget {
           // an alpha that would disagree with it on the white-on-teal bubbles.
           themePreference: context.read<SettingsProvider>().themePreference,
         ),
-        FailedSendRetry(
-          message: message,
-          isMine: isMine,
-          textColor: textColor,
-          maxWidth: contentAreaWidth,
-          peerRefusedIdentity: peerRefusedIdentity,
-        ),
+        if (withRetry) _failedRetry(textColor, contentAreaWidth),
       ],
     );
   }
@@ -323,16 +328,28 @@ class ChatMessageBubble extends StatelessWidget {
                   }
 
                   if (isMediaMessage) {
-                    child = Stack(
+                    // The Retry row sits BELOW the media Stack: inside it, the
+                    // pill at the bottom right covered the button (A3-MSG-A-08).
+                    child = Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: isMine
+                          ? CrossAxisAlignment.end
+                          : CrossAxisAlignment.start,
                       children: [
-                        _buildContentColumn(
-                          context,
-                          isDark,
-                          textColor,
-                          borderColor,
-                          contentAreaWidth: contentAreaWidth,
+                        Stack(
+                          children: [
+                            _buildContentColumn(
+                              context,
+                              isDark,
+                              textColor,
+                              borderColor,
+                              contentAreaWidth: contentAreaWidth,
+                              withRetry: false,
+                            ),
+                            mediaTimeOverlay,
+                          ],
                         ),
-                        mediaTimeOverlay,
+                        _failedRetry(textColor, contentAreaWidth),
                       ],
                     );
                   } else {

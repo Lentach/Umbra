@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 
 import 'image_clipboard_stub.dart'
-    if (dart.library.html) 'image_clipboard_web.dart'
+    if (dart.library.js_interop) 'image_clipboard_web.dart'
     as impl;
 
 /// Whether the current platform can copy an image to the system clipboard.

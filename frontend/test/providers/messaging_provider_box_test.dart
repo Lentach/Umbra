@@ -585,6 +585,29 @@ void main() {
     );
   });
 
+  // A3-UTL-03: the app marks rows it could not read with literal strings in
+  // the message text. A friend who types one of them must get an ordinary
+  // message: not the fake "keys are gone" row, and not unsaved.
+  test("a friend's literal sentinel text is an ordinary, saved message", () async {
+    for (final label in [
+      kDecryptionFailedLabel,
+      kRetiredMessageLabel,
+      kEncryptionNotInitializedLabel,
+      kEncryptedPlaceholderLabel,
+      kNotLinkedYetMessageLabel,
+    ]) {
+      envelope(label);
+      final e = entry();
+      expect(await deliver(e, _peer(2, conversationId: 10)), isTrue);
+
+      final shown = provider.messages.singleWhere((m) => m.id == e.localId);
+      expect(shown.content, isNot(label), reason: label);
+      expect(shown.content.replaceAll('\u200B', ''), label, reason: label);
+      final record = await encryption.store.getDecryptedContent(e.localId);
+      expect(record?['content'], shown.content, reason: 'saved: $label');
+    }
+  });
+
   test(
     'a message this device already holds (same sender, same wire id) is '
     'finished with, not shown twice',

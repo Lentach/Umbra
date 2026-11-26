@@ -1454,6 +1454,9 @@ class AppLocalizationsPl extends AppLocalizations {
   String get documentDownloaded => 'Dokument pobrany';
 
   @override
+  String get documentFallbackName => 'dokument';
+
+  @override
   String get documentDownloadFailed => 'Nie udało się pobrać dokumentu';
 
   @override
@@ -1685,10 +1688,6 @@ class AppLocalizationsPl extends AppLocalizations {
   String get messageEditingTitle => 'Edytowanie wiadomości';
 
   @override
-  String get messagePinRequiresSentMessage =>
-      'Poczekaj na wysłanie wiadomości, aby ją przypiąć';
-
-  @override
   String get messageReactionMoreEmoji => 'Więcej reakcji emoji';
 
   @override
@@ -1703,8 +1702,14 @@ class AppLocalizationsPl extends AppLocalizations {
   }
 
   @override
-  String get snackbarReactionUnavailable =>
-      'Reakcje nie są jeszcze gotowe na tym urządzeniu';
+  String messageReactionChipRemove(Object count, Object emoji) {
+    return 'Usuń reakcję $emoji ($count)';
+  }
+
+  @override
+  String messageReactionChipAdd(Object count, Object emoji) {
+    return 'Zareaguj $emoji ($count)';
+  }
 
   @override
   String get snackbarBoxReactionFailed =>

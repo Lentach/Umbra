@@ -3,22 +3,18 @@ import 'package:provider/provider.dart';
 
 import '../../l10n/app_localizations.dart';
 import '../../providers/messaging_provider.dart';
-import '../../utils/message_ids.dart';
 import '../top_snackbar.dart';
 
 /// Toggles a reaction and reports the one failure a user can act on.
 ///
-/// Since reactions became blinded tokens (`docs/design/reaction-privacy.md`)
-/// a tap can legitimately fail: this device may hold no key for the
-/// conversation — a locked vault, an offline pull, or a device linked after
-/// the key was distributed. The provider refuses to fall back to a plaintext
-/// emoji in that case, so without this the chip would just never appear and
-/// the tap would look broken.
+/// A reaction travels over the box (item 4) and names its message by id: the
+/// provider returns false when the box did not take it, or the row is one
+/// this device cannot name yet (an unsent or failed own message). Without a
+/// toast the tap would look dead, so every such case says "couldn't send,
+/// try again".
 ///
 /// Shared by every reaction entry point (bubble chips, voice-message chips,
-/// the context menu's picker) so all of them fail the same visible way. A
-/// box message's reaction (item 4) fails for another reason — the box did
-/// not take it — and says that instead.
+/// the context menu's picker) so all of them fail the same visible way.
 Future<void> toggleReaction(
   BuildContext context,
   int messageId,
@@ -29,9 +25,7 @@ Future<void> toggleReaction(
   // Resolved BEFORE the await: the overlay this was tapped from may be gone by
   // the time the round trip answers, and a dead context cannot be localized.
   final l10n = AppLocalizations.of(context);
-  final message = isLocalMessageId(messageId)
-      ? l10n.snackbarBoxReactionFailed
-      : l10n.snackbarReactionUnavailable;
+  final message = l10n.snackbarBoxReactionFailed;
   final sent = alreadyReacted
       ? await messaging.removeReaction(messageId, emoji)
       : await messaging.addReaction(messageId, emoji);

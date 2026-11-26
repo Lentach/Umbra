@@ -1428,6 +1428,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get documentDownloaded => 'Document downloaded';
 
   @override
+  String get documentFallbackName => 'document';
+
+  @override
   String get documentDownloadFailed => 'Failed to download document';
 
   @override
@@ -1655,10 +1658,6 @@ class AppLocalizationsEn extends AppLocalizations {
   String get messageEditingTitle => 'Editing message';
 
   @override
-  String get messagePinRequiresSentMessage =>
-      'Wait until the message is sent before pinning';
-
-  @override
   String get messageReactionMoreEmoji => 'More emoji reactions';
 
   @override
@@ -1673,8 +1672,14 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
-  String get snackbarReactionUnavailable =>
-      'Reactions aren\'t ready on this device yet';
+  String messageReactionChipRemove(Object count, Object emoji) {
+    return 'Remove reaction $emoji ($count)';
+  }
+
+  @override
+  String messageReactionChipAdd(Object count, Object emoji) {
+    return 'React with $emoji ($count)';
+  }
 
   @override
   String get snackbarBoxReactionFailed =>

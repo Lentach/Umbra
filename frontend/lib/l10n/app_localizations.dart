@@ -2474,6 +2474,12 @@ abstract class AppLocalizations {
   /// **'Dokument pobrany'**
   String get documentDownloaded;
 
+  /// No description provided for @documentFallbackName.
+  ///
+  /// In pl, this message translates to:
+  /// **'dokument'**
+  String get documentFallbackName;
+
   /// No description provided for @documentDownloadFailed.
   ///
   /// In pl, this message translates to:
@@ -2900,12 +2906,6 @@ abstract class AppLocalizations {
   /// **'Edytowanie wiadomości'**
   String get messageEditingTitle;
 
-  /// No description provided for @messagePinRequiresSentMessage.
-  ///
-  /// In pl, this message translates to:
-  /// **'Poczekaj na wysłanie wiadomości, aby ją przypiąć'**
-  String get messagePinRequiresSentMessage;
-
   /// No description provided for @messageReactionMoreEmoji.
   ///
   /// In pl, this message translates to:
@@ -2930,11 +2930,17 @@ abstract class AppLocalizations {
   /// **'Reakcja {emoji}, {state}'**
   String messageReactionSemantics(Object emoji, Object state);
 
-  /// No description provided for @snackbarReactionUnavailable.
+  /// No description provided for @messageReactionChipRemove.
   ///
   /// In pl, this message translates to:
-  /// **'Reakcje nie są jeszcze gotowe na tym urządzeniu'**
-  String get snackbarReactionUnavailable;
+  /// **'Usuń reakcję {emoji} ({count})'**
+  String messageReactionChipRemove(Object count, Object emoji);
+
+  /// No description provided for @messageReactionChipAdd.
+  ///
+  /// In pl, this message translates to:
+  /// **'Zareaguj {emoji} ({count})'**
+  String messageReactionChipAdd(Object count, Object emoji);
 
   /// No description provided for @snackbarBoxReactionFailed.
   ///

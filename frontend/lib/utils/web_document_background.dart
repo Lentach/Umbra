@@ -1,7 +1,7 @@
 import 'package:flutter/widgets.dart' show Color;
 
 import 'web_document_background_stub.dart'
-    if (dart.library.html) 'web_document_background_web.dart'
+    if (dart.library.js_interop) 'web_document_background_web.dart'
     as impl;
 
 /// CSS `#rrggbb` for [color] (alpha dropped — document backgrounds are

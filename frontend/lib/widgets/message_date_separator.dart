@@ -18,12 +18,18 @@ class MessageDateSeparator extends StatelessWidget {
 
   /// "Today" / "Yesterday" / short date for [date], device-local. Shared with
   /// the fullscreen video header so both surfaces name a day the same way.
-  static String dayLabel(BuildContext context, DateTime date) {
+  static String dayLabel(BuildContext context, DateTime date, {DateTime? now}) {
     final l10n = AppLocalizations.of(context);
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
+    now ??= DateTime.now();
+    // Calendar days, not elapsed time: local midnights are 23 or 25 hours
+    // apart across a clock change, so build both days as UTC dates.
+    final today = DateTime.utc(now.year, now.month, now.day);
     final localDate = date.toLocal();
-    final messageDay = DateTime(localDate.year, localDate.month, localDate.day);
+    final messageDay = DateTime.utc(
+      localDate.year,
+      localDate.month,
+      localDate.day,
+    );
     final diff = today.difference(messageDay).inDays;
 
     if (diff == 0) return l10n.chatDateToday;

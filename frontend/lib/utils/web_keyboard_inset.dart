@@ -1,7 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import 'web_keyboard_inset_stub.dart'
-    if (dart.library.html) 'web_keyboard_inset_web.dart'
+    if (dart.library.js_interop) 'web_keyboard_inset_web.dart'
     as impl;
 
 /// Tracks the iOS soft-keyboard height from `window.visualViewport`.

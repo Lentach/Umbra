@@ -1,5 +1,5 @@
 import 'web_ios_viewport_pin_stub.dart'
-    if (dart.library.html) 'web_ios_viewport_pin_web.dart' as impl;
+    if (dart.library.js_interop) 'web_ios_viewport_pin_web.dart' as impl;
 
 /// Scoped iOS-WebKit composer viewport pin. Active ONLY while the composer is
 /// focused and fully reverted on blur — NOT the banned always-on global

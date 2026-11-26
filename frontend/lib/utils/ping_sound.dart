@@ -1,5 +1,5 @@
 import 'ping_sound_stub.dart'
-    if (dart.library.html) 'ping_sound_web.dart' as impl;
+    if (dart.library.js_interop) 'ping_sound_web.dart' as impl;
 
 /// Plays the PING alert sound once.
 ///
@@ -21,7 +21,9 @@ Future<void> playPingSound() => impl.playPingSound();
 ///
 /// On iOS an `AudioContext` starts `suspended` and only begins producing sound
 /// once `resume()`d from inside a real user gesture. A ping fires on message
-/// receipt — not during a gesture — so this installs a one-shot gesture
-/// listener that unlocks the context. Call when a screen that can show a ping
+/// receipt — not during a gesture — so this installs a permanent listener that
+/// resumes the context on every gesture (never a one-shot latch: an iOS
+/// interruption can only be cleared by a later gesture). Call when a screen
+/// that can show a ping
 /// opens. No-op off web.
 void primePingSound() => impl.primePingSound();

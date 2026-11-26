@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../l10n/app_localizations.dart';
 import '../../theme/rpg_theme.dart';
 import '../ping_glyph.dart';
 
@@ -24,7 +25,7 @@ class PingMessageContent extends StatelessWidget {
         PingGlyph(size: 18, color: textColor),
         const SizedBox(width: 6),
         Text(
-          'PING!',
+          AppLocalizations.of(context).ping,
           style: RpgTheme.bodyFont(
             fontSize: 14,
             color: textColor,
