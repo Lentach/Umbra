@@ -537,7 +537,7 @@ class EncryptionService {
   /// until a read succeeds — the safe answer, never "everyone unverified".
   bool _peerVerifiedUnreadable = false;
 
-  Future<void> _loadPeerVerified(int userId) async {
+  Future<void> _loadPeerVerified(int userId, {bool union = false}) async {
     try {
       final prefs = await _sharedPrefs;
       final raw = prefs.getString(_peerVerifiedKey(userId));
@@ -550,9 +550,10 @@ class EncryptionService {
           if (peerId != null && value is String) fresh[peerId] = value;
         }
       }
-      _peerVerified
-        ..clear()
-        ..addAll(fresh);
+      if (!union) _peerVerified.clear();
+      for (final e in fresh.entries) {
+        _peerVerified.putIfAbsent(e.key, () => e.value);
+      }
       _peerVerifiedUnreadable = false;
     } on Object catch (_) {
       _peerVerifiedUnreadable = true;
@@ -566,7 +567,7 @@ class EncryptionService {
     try {
       await _reloadPrefsForCrossContext(await _sharedPrefs);
     } on Object catch (_) {}
-    await _loadPeerVerified(userId);
+    await _loadPeerVerified(userId, union: true);
   }
 
   /// Unions the stored note log into memory (by peer and instant) so this
@@ -740,6 +741,10 @@ class EncryptionService {
     if (!_initialized) return null;
     try {
       final name = peerId.toString();
+      // Another tab may have verified this friend since this one loaded: the
+      // decision is rare, so read the record through BEFORE reading the anchor
+      // the swap is compared against (the awaits open no window).
+      if (!keyChangeWarnings()) await _refreshPeerVerified();
       final pinned = await _identityStore.getAccountIdentity(name);
       // The offered key IS the anchor (the caller's expectation was stale: a
       // concurrent accept moved it): nothing to accept, no bar, no note — and
@@ -753,9 +758,6 @@ class EncryptionService {
         );
       }
       if (keyChangeWarnings() || pinned == null) return null;
-      // Another tab may have verified this friend since this one loaded: the
-      // decision is rare, so read the record through right before it.
-      await _refreshPeerVerified();
       if (await isPeerVerified(peerId)) return null;
       final pending = await _identityStore.pendingAccountIdentity(name);
       if (pending == null) {
@@ -785,6 +787,8 @@ class EncryptionService {
       final advanced = await acknowledgePeerIdentity(
         peerId,
         adoptIdentityBase64: offeredIdentityBase64,
+        // The swap fails if the anchor moved since the decision read it.
+        expectedAnchorBase64: base64Encode(pinned.serialize()),
       );
       if (!advanced) {
         if (!wasWarned) _peersWithChangedIdentity.remove(peerId);
@@ -1004,6 +1008,7 @@ class EncryptionService {
     int peerId, {
     String? adoptIdentityBase64,
     bool markVerified = false,
+    String? expectedAnchorBase64,
   }) async {
     if (!_peersWithChangedIdentity.contains(peerId)) return false;
     final name = peerId.toString();
@@ -1021,6 +1026,7 @@ class EncryptionService {
       final promoted = await _identityStore.promotePendingAccountIdentity(
         name,
         expectedIdentityBase64: supplied,
+        expectedAnchorBase64: expectedAnchorBase64,
       );
       if (promoted) {
         advanced = true;

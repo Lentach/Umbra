@@ -614,4 +614,35 @@ void main() {
     expect(v.verified, isFalse);
     expect(v.verifiedUnknown, isTrue);
   });
+
+  test('R4: a mark whose write was lost is still held by this tab after the '
+      'read-through (union, not replace)', () async {
+    final pinned = await pinBob();
+    expect(await alice.verifyPinned(bobId), isTrue);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('e2e_${aliceId}_peer_verified_v1'); // the write was lost
+
+    await expectRefused(pinned, newBob);
+  });
+
+  test('R4: the swap fails when the anchor moved since the decision read it',
+      () async {
+    final pinned = await pinBob();
+    final tab2 = await started(aliceId);
+    alice.debugBeforeAutoAcceptSwap = () =>
+        tab2.replaceStaleAccountAnchor(bobId, identityOf(mallory));
+
+    await expectLater(
+      alice.buildSession(
+        bobId,
+        flatBundleFrom(newBob),
+        expectedIdentityBase64: pinned,
+      ),
+      throwsA(isA<AccountIdentityMismatch>()),
+    );
+
+    expect(await alice.peerTofuIdentityBase64(bobId), identityOf(mallory),
+        reason: 'the anchor that moved meanwhile stands');
+    expect(alice.keyChangeLogOf(bobId), isEmpty);
+  });
 }

@@ -726,10 +726,16 @@ class SecureIdentityKeyStore extends IdentityKeyStore {
   Future<bool> promotePendingAccountIdentity(
     String name, {
     String? expectedIdentityBase64,
+    String? expectedAnchorBase64,
   }) => _serializePending(name, () async {
     final pendingKey = _pendingKey(name);
     final stored = await _storage.read(key: pendingKey);
     if (stored == null) return false;
+    // The anchor must still be the one the caller decided against.
+    if (expectedAnchorBase64 != null &&
+        await _storage.read(key: _accountKey(name)) != expectedAnchorBase64) {
+      return false;
+    }
     if (expectedIdentityBase64 != null && stored != expectedIdentityBase64) {
       // The candidate moved under us. Refuse: the caller must re-display.
       return false;
