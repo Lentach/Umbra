@@ -686,6 +686,7 @@ class EncryptionService {
       }
       // acknowledgePeerIdentity answers only for a peer with a standing
       // warning; join the set in RAM for the call.
+      final wasRefused = _peersRefusedIdentity.contains(peerId);
       final wasWarned = !_peersWithChangedIdentity.add(peerId);
       // Everything that must outlive a kill is written BEFORE the anchor
       // moves (the (xlviii) clause 1 order): the permanent note and the
@@ -724,6 +725,12 @@ class EncryptionService {
         previousIdentityBase64: base64Encode(pinned.serialize()),
         noteAtMs: noteAt,
         intents: intents,
+        acceptedIdentityBase64: offeredIdentityBase64,
+        wasWarned: wasWarned,
+        wasRefused: wasRefused,
+        pendingBeforeBase64: pending == null
+            ? null
+            : base64Encode(pending.serialize()),
       );
     } on Object catch (e) {
       debugPrint('[EncryptionService] auto-accept failed: $e');
@@ -752,14 +759,29 @@ class EncryptionService {
   Future<void> revertAutoAccept(int peerId, AutoAccepted accepted) async {
     if (accepted.noteAtMs == AutoAccepted.alreadyPinned) return;
     try {
-      await _identityStore.adoptAccountIdentity(
+      final reverted = await _identityStore.revertAccountIdentity(
         peerId.toString(),
-        IdentityKey.fromBytes(
+        expectedCurrentBase64: accepted.acceptedIdentityBase64,
+        previous: IdentityKey.fromBytes(
           base64Decode(accepted.previousIdentityBase64),
           0,
         ),
-        expectedPendingBase64: null,
+        restorePendingBase64: accepted.pendingBeforeBase64,
       );
+      if (!reverted) {
+        // The anchor moved on since (a later, legitimate accept or a human
+        // confirm): that decision stands, this revert is void.
+        E2ePersistentDiag.record('PEER_IDENTITY_AUTO_ACCEPT_REVERT_VOID', {
+          'peerId': peerId,
+        });
+        return;
+      }
+      // Put back what the accept cleared: the standing warning (durably).
+      if (accepted.wasWarned) {
+        _peersWithChangedIdentity.add(peerId);
+        await _persistIdentityChanged();
+      }
+      if (accepted.wasRefused) _peersRefusedIdentity.add(peerId);
       _keyChangeLog[peerId]?.remove(accepted.noteAtMs);
       if (_keyChangeLog[peerId]?.isEmpty ?? false) {
         _keyChangeLog.remove(peerId);
@@ -6556,7 +6578,25 @@ class AutoAccepted {
     required this.previousIdentityBase64,
     required this.noteAtMs,
     required this.intents,
+    this.acceptedIdentityBase64 = '',
+    this.wasWarned = false,
+    this.wasRefused = false,
+    this.pendingBeforeBase64,
   });
+
+  /// The key this accept pinned: a revert applies only while it is still the
+  /// anchor.
+  final String acceptedIdentityBase64;
+
+  /// The peer stood in the persisted warning set before the accept cleared it.
+  final bool wasWarned;
+
+  /// The peer stood in the (RAM) refused set before the accept cleared it.
+  final bool wasRefused;
+
+  /// The candidate the pending slot held (the accepted key itself) before the
+  /// promotion consumed it, or null when the slot was empty.
+  final String? pendingBeforeBase64;
 
   /// The anchor before the move.
   final String previousIdentityBase64;

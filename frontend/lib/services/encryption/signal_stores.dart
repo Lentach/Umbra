@@ -827,6 +827,28 @@ class SecureIdentityKeyStore extends IdentityKeyStore {
     return true;
   });
 
+  /// Takes back an accept that was provisional (decision 152): sets [name]'s
+  /// account anchor to [previous] — but ONLY while it still equals
+  /// [expectedCurrentBase64], atomically with every other pending-slot writer.
+  /// A later, legitimate accept that moved the anchor on is never overwritten
+  /// (false). [restorePendingBase64], when given, puts the candidate the accept
+  /// consumed back into the slot.
+  Future<bool> revertAccountIdentity(
+    String name, {
+    required String expectedCurrentBase64,
+    required IdentityKey previous,
+    String? restorePendingBase64,
+  }) => _serializePending(name, () async {
+    final key = _accountKey(name);
+    if (await _storage.read(key: key) != expectedCurrentBase64) return false;
+    await _storage.write(key: key, value: encodedOf(previous));
+    _trustedMemo[key] = previous;
+    if (restorePendingBase64 != null) {
+      await _storage.write(key: _pendingKey(name), value: restorePendingBase64);
+    }
+    return true;
+  });
+
   bool _sameIdentity(IdentityKey a, IdentityKey b) {
     final x = a.serialize();
     final y = b.serialize();
