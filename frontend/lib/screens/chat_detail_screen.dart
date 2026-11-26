@@ -49,10 +49,16 @@ class ChatDetailScreen extends StatefulWidget {
   final int conversationId;
   final bool isEmbedded;
 
+  /// Replaces the platform notification cleaner's close (tests only).
+  @visibleForTesting
+  final Future<void> Function(int conversationId, {required int newUnreadTotal})?
+  closeNotification;
+
   const ChatDetailScreen({
     super.key,
     required this.conversationId,
     this.isEmbedded = false,
+    this.closeNotification,
   });
 
   @override
@@ -135,6 +141,22 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     }
   }
 
+  /// Closes the tray card (and fixes the app badge) of the open chat.
+  void _closeNotification() {
+    if (!mounted) return;
+    // Exclude this conversation — opening it reads it, but the local count
+    // may not be zeroed yet when this runs, and the badge must not flash
+    // the about-to-be-read messages back in.
+    final unreadTotal = _conversations.unreadCounts.entries
+        .where((e) => e.key != widget.conversationId)
+        .fold<int>(0, (sum, e) => sum + e.value);
+    (widget.closeNotification ??
+        _notificationCleaner.closeNotificationForConversation)(
+      widget.conversationId,
+      newUnreadTotal: unreadTotal,
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -166,19 +188,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
         context.read<SettingsProvider>().loadChatBackground(userId);
       }
     });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      // Exclude this conversation — opening it reads it, but the local count
-      // may not be zeroed yet when this runs, and the badge must not flash
-      // the about-to-be-read messages back in.
-      final unreadTotal = _conversations.unreadCounts.entries
-          .where((e) => e.key != widget.conversationId)
-          .fold<int>(0, (sum, e) => sum + e.value);
-      _notificationCleaner.closeNotificationForConversation(
-        widget.conversationId,
-        newUnreadTotal: unreadTotal,
-      );
-    });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _closeNotification());
 
     // Countdown tick + expiry prune run on [ConversationsScreen] (always mounted in
     // [MainShell] IndexedStack) so we avoid duplicate 1 Hz timers when chat is open.
@@ -201,6 +211,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
         messaging.loadCachedMessages(widget.conversationId);
         convs.openConversation(widget.conversationId);
         messaging.getMessages(widget.conversationId);
+        _closeNotification();
       });
     }
   }
