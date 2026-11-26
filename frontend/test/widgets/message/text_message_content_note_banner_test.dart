@@ -6,6 +6,21 @@ import 'package:fireplace/widgets/message/anti_quantum_note_card.dart';
 import 'package:fireplace/widgets/message/text_message_content.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:url_launcher_platform_interface/link.dart';
+import 'package:url_launcher_platform_interface/url_launcher_platform_interface.dart';
+
+class _FakeUrlLauncher extends UrlLauncherPlatform {
+  final List<String> launched = [];
+
+  @override
+  LinkDelegate? get linkDelegate => null;
+
+  @override
+  Future<bool> launchUrl(String url, LaunchOptions options) async {
+    launched.add(url);
+    return true;
+  }
+}
 
 MessageModel _msg({required String content, String? linkPreviewUrl}) =>
     MessageModel(
@@ -107,4 +122,35 @@ void main() {
       expect(find.text('https://example.com/page'), findsOneWidget);
     },
   );
+
+  // A3-MSG-A-02: the card's address comes from the peer's envelope unchecked.
+  testWidgets('the preview card opens only an http(s) address', (tester) async {
+    final previous = UrlLauncherPlatform.instance;
+    final launcher = _FakeUrlLauncher();
+    UrlLauncherPlatform.instance = launcher;
+    addTearDown(() => UrlLauncherPlatform.instance = previous);
+
+    for (final url in [
+      'tel:+48123456789',
+      'market://details?id=x',
+      'intent://x#Intent;scheme=http;end',
+      'https://',
+      'http://[bad',
+    ]) {
+      await tester.pumpWidget(_wrap(_msg(content: 'hi', linkPreviewUrl: url)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Example Title'));
+      await tester.pump();
+      expect(tester.takeException(), isNull, reason: url);
+    }
+    expect(launcher.launched, isEmpty);
+
+    await tester.pumpWidget(
+      _wrap(_msg(content: 'hi', linkPreviewUrl: 'HTTPS://example.com/page')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Example Title'));
+    await tester.pump();
+    expect(launcher.launched, ['https://example.com/page']);
+  });
 }

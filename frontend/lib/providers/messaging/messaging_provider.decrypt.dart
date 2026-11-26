@@ -215,7 +215,7 @@ extension MessagingDecrypt on MessagingProvider {
       boxDevice: msg.originDeviceId ?? 1,
     );
     return msg.copyWith(
-      content: parsed.content,
+      content: neutralizeSentinelText(parsed.content),
       messageType: _parseMessageTypeString(parsed.messageType),
       mediaUrl: _boxMediaUrlOf(parsed),
       mediaDuration: parsed.mediaDuration,

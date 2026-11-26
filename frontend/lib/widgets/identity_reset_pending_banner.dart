@@ -89,10 +89,17 @@ class _IdentityResetPendingBannerState
     final answer = context.select<EncryptionProvider, String?>(
       (e) => e.identityResetRequestStatus,
     );
-    if (answer != null) {
-      _reportAnswer(answer);
-    } else {
+    // The shell stays mounted under the device-link gate (`AuthGate`), and the
+    // gate shows `phrase_too_new` as a lasting line of its own: consuming it
+    // here would leave the owner a snackbar for 2.5 s instead.
+    final gated = context.select<EncryptionProvider, bool>(
+      (e) => e.needsDeviceLink || e.identityCheckUnavailable,
+    );
+    if (answer == null) {
       _reportedAnswer = null;
+    } else if (!gated ||
+        answer != EncryptionProvider.identityResetPhraseTooNewStatus) {
+      _reportAnswer(answer);
     }
     // (lxxiii) clause 3: this banner renders ONLY the pending countdown — for
     // the account's OTHER, healthy sessions, which may want to cancel a reset

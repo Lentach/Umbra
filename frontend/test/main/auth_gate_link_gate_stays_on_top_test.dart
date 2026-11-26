@@ -8,11 +8,12 @@
 // consumer pushed a chat route on the ROOT navigator AFTER the gate verdict —
 // and AuthGate's cure fired only on the `gated` edge, which had already passed.
 //
-// Falsification contract: restore the edge condition (`if (gated &&
-// !_previousGated)`) in `main.dart` and test 1 goes RED — the orphan route
-// stays on top and DeviceLinkGateScreen is never visible. Test 2 pins the
-// carve-out that makes the sweep safe: the ceremony's OWN scanner route
-// survives it. Test 3 is the control: an ungated tree is untouched.
+// Falsification contract: remove the guard's `didPush` removal and test 1 goes
+// RED — the orphan route stays on top and DeviceLinkGateScreen is never
+// visible. Test 2 pins the carve-out that makes the sweep safe: the
+// ceremony's OWN scanner route survives it. Test 3 (A2-DEV-10) pins the edge
+// sweep of routes already on the stack, even under an open dialog. Test 4 is
+// the control: an ungated tree is untouched.
 
 import 'dart:async';
 
@@ -186,6 +187,43 @@ void main() {
       findsOneWidget,
       reason: 'sweeping the scanner would close the ceremony mid-flow',
     );
+  });
+
+  // A2-DEV-10: the verdict lands while a dialog is open above a pushed page.
+  // The sweep stopped at the dialog (a kept route), so the page under it
+  // survived; now the page goes and so does the dialog above it (nothing is
+  // left to pop: the orphan dialog is not floating over the gate).
+  testWidgets('a page under an open dialog is swept too', (tester) async {
+    final auth = _StubAuth();
+    final encryption = _ToggleGate();
+    addTearDown(auth.dispose);
+    addTearDown(encryption.dispose);
+    await _pumpApp(tester, auth, encryption);
+
+    final root = Navigator.of(tester.element(find.byType(MainShell)));
+    unawaited(
+      root.push(
+        MaterialPageRoute<void>(
+          builder: (_) => const Scaffold(key: _orphanKey, body: SizedBox()),
+        ),
+      ),
+    );
+    await _pumpFrames(tester, 30);
+    unawaited(
+      showDialog<void>(
+        context: tester.element(find.byKey(_orphanKey)),
+        builder: (_) => const AlertDialog(content: Text('open dialog')),
+      ),
+    );
+    await _pumpFrames(tester, 10);
+    expect(find.text('open dialog'), findsOneWidget);
+
+    encryption.raiseGate();
+    await _pumpFrames(tester, 30);
+
+    expect(find.text('open dialog'), findsNothing);
+    expect(find.byKey(_orphanKey), findsNothing);
+    expect(find.byType(DeviceLinkGateScreen), findsOneWidget);
   });
 
   testWidgets('an UNgated logged-in tree keeps its pushed route', (

@@ -11,6 +11,7 @@ import '../widgets/glass/glass_sheet.dart';
 import '../widgets/glass/glass_top_bar.dart';
 import '../widgets/passcode_entry_view.dart';
 import '../widgets/settings_console.dart';
+import '../widgets/top_snackbar.dart';
 
 /// Settings → Security → Passcode Lock.
 ///
@@ -194,9 +195,18 @@ class _EnabledBody extends StatelessWidget {
     final current = await _askCurrentCode(context, passcodeProvider);
     if (current == null) return;
     final disabled = await passcodeProvider.disable(passcode: current);
+    if (!context.mounted) return;
     // The job is done — leave, instead of re-rendering as the "enable it"
-    // page the user has no reason to look at. A refusal stays put.
-    if (disabled && context.mounted) Navigator.of(context).pop();
+    // page the user has no reason to look at. A refusal stays put, but says
+    // so (the code verified, yet the vault could not be opened or unwrapped).
+    if (disabled) {
+      Navigator.of(context).pop();
+    } else if (passcodeProvider.lockoutRemaining == null) {
+      showTopSnackBar(
+        context,
+        AppLocalizations.of(context).passcodeTurnOffFailed,
+      );
+    }
   }
 
   Future<void> _pickAutoLock(BuildContext context) async {

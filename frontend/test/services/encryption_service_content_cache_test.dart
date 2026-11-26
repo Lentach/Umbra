@@ -560,9 +560,9 @@ void main() {
   });
 
   // metadata-privacy PR2.1: the `_wid`/`_wsid` stamp and the
-  // `(senderId, wireId) -> localId` index. Nothing in the app reads the index
-  // yet; the box path (PR3.1) will dedup at-least-once deliveries against it,
-  // so a miss there re-shows a message and a wrong hit swallows one.
+  // `(senderId, wireId) -> localId` lookup (`wireHolder`). The box path
+  // dedups at-least-once deliveries against it, so a miss re-shows a message
+  // and a wrong hit swallows one.
   group('EncryptionService wire id', () {
     late EncryptionService service;
 
@@ -572,6 +572,10 @@ void main() {
       service = EncryptionService();
       await service.initialize(42, checkServerIdentity: () async => const ServerIdentityGuard(exists: false));
     });
+
+    Future<Map<WireKey, int?>> holders(List<WireKey> keys) async => {
+      for (final key in keys) key: await service.wireHolder(key),
+    };
 
     test('a later write that names no wire id keeps the stamp', () async {
       await service.saveDecryptedContent(
@@ -583,7 +587,7 @@ void main() {
       // An edit re-persists the row with new text and no wire id of its own.
       await service.saveDecryptedContent(5001, {'content': 'hi, edited'});
 
-      expect(await service.wireIdIndex(), {
+      expect(await holders([(senderId: 77, wireId: 'temp_1758700000000_1-abc')]), {
         (senderId: 77, wireId: 'temp_1758700000000_1-abc'): 5001,
       });
     });
@@ -602,12 +606,24 @@ void main() {
         wire: (senderId: 66, wireId: 'hijacked-wire-id'),
       );
 
-      expect(await service.wireIdIndex(), {
+      expect(await holders([
+        (senderId: 77, wireId: 'original-wire-id'),
+        (senderId: 66, wireId: 'hijacked-wire-id'),
+      ]), {
         (senderId: 77, wireId: 'original-wire-id'): 5002,
+        (senderId: 66, wireId: 'hijacked-wire-id'): null,
       });
+      // No claim at all, not just no unique holder: id -1 matches no record.
+      expect(
+        await service.wireHeldByOther(
+          (senderId: 66, wireId: 'hijacked-wire-id'),
+          -1,
+        ),
+        isFalse,
+      );
     });
 
-    test('the index spans the content store and the legacy secure store',
+    test('the lookup spans the content store and the legacy secure store',
         () async {
       await const FlutterSecureStorage().write(
         key: 'e2e_42_decrypted_4001',
@@ -624,7 +640,10 @@ void main() {
       );
       await service.saveDecryptedContent(4003, {'content': 'no wire id'});
 
-      expect(await service.wireIdIndex(), {
+      expect(await holders([
+        (senderId: 77, wireId: 'legacy-wire-0001'),
+        (senderId: 42, wireId: 'fresh-wire-0002'),
+      ]), {
         (senderId: 77, wireId: 'legacy-wire-0001'): 4001,
         (senderId: 42, wireId: 'fresh-wire-0002'): 4002,
       });
@@ -646,9 +665,20 @@ void main() {
         wire: (senderId: 77, wireId: 'live-wire-0010'),
       );
 
-      expect(await service.wireIdIndex(), {
+      expect(await holders([
+        (senderId: 77, wireId: 'live-wire-0010'),
+        (senderId: 77, wireId: 'stale-wire-0010'),
+      ]), {
         (senderId: 77, wireId: 'live-wire-0010'): 4010,
+        (senderId: 77, wireId: 'stale-wire-0010'): null,
       });
+      expect(
+        await service.wireHeldByOther(
+          (senderId: 77, wireId: 'stale-wire-0010'),
+          -1,
+        ),
+        isFalse,
+      );
     });
 
     test("one wire id from two senders resolves to each sender's record",
@@ -668,7 +698,10 @@ void main() {
         wire: (senderId: 42, wireId: 'our-wire-id'),
       );
 
-      expect(await service.wireIdIndex(), {
+      expect(await holders([
+        (senderId: 77, wireId: 'our-wire-id'),
+        (senderId: 42, wireId: 'our-wire-id'),
+      ]), {
         (senderId: 77, wireId: 'our-wire-id'): 4030,
         (senderId: 42, wireId: 'our-wire-id'): 4031,
       });
@@ -694,8 +727,12 @@ void main() {
         wire: (senderId: 77, wireId: 'other-wire-id'),
       );
 
-      expect(await service.wireIdIndex(), {
+      expect(await holders([
+        (senderId: 77, wireId: 'other-wire-id'),
+        (senderId: 77, wireId: 'shared-wire-id'),
+      ]), {
         (senderId: 77, wireId: 'other-wire-id'): 4022,
+        (senderId: 77, wireId: 'shared-wire-id'): null,
       });
     });
 
@@ -712,8 +749,12 @@ void main() {
         wire: (senderId: 77, wireId: 'scoped-wire-0041'),
       );
 
-      expect(await service.wireIdIndex(), {
+      expect(await holders([
+        (senderId: 77, wireId: 'scoped-wire-0041'),
+        (senderId: 77, wireId: 'bare-wire-0040'),
+      ]), {
         (senderId: 77, wireId: 'scoped-wire-0041'): 4041,
+        (senderId: 77, wireId: 'bare-wire-0040'): null,
       });
     });
 
@@ -734,7 +775,15 @@ void main() {
       );
 
       expect(await service.getDecryptedContent(4050), isNotNull);
-      expect(await service.wireIdIndex(), isEmpty);
+      expect(await service.wireHolder((senderId: 77, wireId: 'bare-wire-0050')),
+          isNull);
+      expect(
+        await service.wireHeldByOther(
+          (senderId: 77, wireId: 'bare-wire-0050'),
+          -1,
+        ),
+        isFalse,
+      );
     });
 
     group('A3-SVC-C-2: a removal does not race a save of the same id', () {

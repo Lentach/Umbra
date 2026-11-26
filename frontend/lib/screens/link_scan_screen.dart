@@ -29,8 +29,8 @@ class LinkScanManual extends LinkScanResult {
 
 /// Route name for the scanner surface.
 ///
-/// While the device-link gate is up, `AuthGate` sweeps page routes off the
-/// root navigator so nothing can cover it (`main.dart`, issue #175). The
+/// While the device-link gate is up, `DeviceLinkGateRouteGuard` sweeps page
+/// routes off the root navigator so nothing can cover it (issue #175). The
 /// ceremony's OWN scanner is the one page route that must survive that sweep,
 /// and this name is how the sweep recognises it.
 const String kLinkScanRouteName = 'link-scan';
@@ -63,12 +63,21 @@ class _LinkScanScreenState extends State<LinkScanScreen> {
 
   /// One exit, whichever callback or button fires first. The scanner may
   /// report "unsupported" from a build-phase errorBuilder, so the pop is
-  /// deferred to the next frame in every case.
+  /// deferred to the next frame in every case. A route that is not current
+  /// (leaving after the user pressed back while the camera still sees a QR, or
+  /// covered by another route) must not pop: that would close the route BELOW
+  /// the scanner. Nothing popped means the exit is still unspent, so the latch
+  /// is released — otherwise the X would stay dead once the scanner shows again.
   void _finish(LinkScanResult? result) {
     if (_popped) return;
     _popped = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) Navigator.of(context).pop(result);
+      if (!mounted) return;
+      if (ModalRoute.of(context)?.isCurrent == true) {
+        Navigator.of(context).pop(result);
+      } else {
+        _popped = false;
+      }
     });
   }
 

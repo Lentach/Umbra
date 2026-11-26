@@ -39,6 +39,16 @@ void main() {
       expect(provider.consumePendingFriendAccepted(), isNull);
     });
 
+    // A2-CON-4: "no answer" is a marker INSTANCE. A real empty answer, even one
+    // set through a canonical `const []`, is "no such account".
+    test('a real empty answer is never read as "no answer"', () {
+      final provider = FriendsProvider()
+        ..setSearchResultsForTest(const <UserModel>[]);
+
+      expect(provider.searchResults, isEmpty);
+      expect(provider.searchUnanswered, isFalse);
+    });
+
     test('with no contact store every list is empty', () {
       final provider = FriendsProvider()..setCurrentUserId(1);
 
@@ -213,6 +223,26 @@ void main() {
 
         expect(friends.friends, isEmpty);
         expect(friends.isFriend(7), isFalse);
+      });
+
+      // A2-CON-5: the `+` badge and the Contacts counter read this count,
+      // and the door they lead to (Invitations) lists `friendRequests`.
+      test('a request past its 30 days is not counted as pending', () async {
+        final fresh = record(8, ContactState.pendingIn);
+        await seed([
+          fresh,
+          record(9, ContactState.pendingIn).copyWith(
+            boxOrigin: ContactBoxOrigin(
+              at: DateTime.now().toUtc().subtract(
+                BoxFirstContact.lifetime + const Duration(hours: 1),
+              ),
+            ),
+          ),
+        ]);
+        final friends = provider();
+
+        expect(friends.friendRequests.map((r) => r.id), [-8]);
+        expect(friends.pendingRequestsCount, 1);
       });
     });
 

@@ -1,5 +1,5 @@
 import 'privacy_curtain_stub.dart'
-    if (dart.library.html) 'privacy_curtain_web.dart' as impl;
+    if (dart.library.js_interop) 'privacy_curtain_web.dart' as impl;
 
 /// The DOM privacy curtain (`#fp-curtain` in `web/index.html`), web only.
 ///

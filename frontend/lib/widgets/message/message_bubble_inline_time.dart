@@ -1,7 +1,9 @@
 import '../../models/message_model.dart';
 import '../../utils/anti_quantum_note_link.dart';
 
-/// Full-bleed image/GIF bubble content height (matches [ImageMessageContent] / [GifMessageContent]).
+/// Fixed height of the long-press menu's placeholder copy of a media bubble.
+/// Same value as `MediaPreviewFrame.legacyHeight`, the fallback for media
+/// without dimensions; live bubbles size from the media's aspect ratio.
 const kMessageMediaBubbleHeight = 220.0;
 
 /// Whether delivery time sits inline on the right vs stacked below.

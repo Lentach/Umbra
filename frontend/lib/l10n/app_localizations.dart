@@ -266,6 +266,18 @@ abstract class AppLocalizations {
   /// **'Ładowanie…'**
   String get devicesLoading;
 
+  /// No description provided for @settingsDeviceWebBrowser.
+  ///
+  /// In pl, this message translates to:
+  /// **'Przeglądarka internetowa'**
+  String get settingsDeviceWebBrowser;
+
+  /// No description provided for @settingsDeviceNativeApp.
+  ///
+  /// In pl, this message translates to:
+  /// **'To urządzenie'**
+  String get settingsDeviceNativeApp;
+
   /// No description provided for @devicesExplainer.
   ///
   /// In pl, this message translates to:
@@ -386,6 +398,12 @@ abstract class AppLocalizations {
   /// **'główne'**
   String get devicesPrimaryBadge;
 
+  /// No description provided for @devicesRowSemantics.
+  ///
+  /// In pl, this message translates to:
+  /// **'Urządzenie {id} {platform}'**
+  String devicesRowSemantics(int id, String platform);
+
   /// No description provided for @devicesThisDeviceKeyless.
   ///
   /// In pl, this message translates to:
@@ -452,6 +470,24 @@ abstract class AppLocalizations {
   /// **'Urządzenie zostało połączone.'**
   String get linkPrimaryDone;
 
+  /// No description provided for @linkQrSemantics.
+  ///
+  /// In pl, this message translates to:
+  /// **'Kod QR do połączenia {payload}'**
+  String linkQrSemantics(String payload);
+
+  /// No description provided for @linkCodeSemantics.
+  ///
+  /// In pl, this message translates to:
+  /// **'Kod połączenia'**
+  String get linkCodeSemantics;
+
+  /// No description provided for @linkSecurityCodeSemantics.
+  ///
+  /// In pl, this message translates to:
+  /// **'Kod bezpieczeństwa {code}'**
+  String linkSecurityCodeSemantics(String code);
+
   /// No description provided for @linkInvalidCode.
   ///
   /// In pl, this message translates to:
@@ -475,12 +511,6 @@ abstract class AppLocalizations {
   /// In pl, this message translates to:
   /// **'Lista urządzeń zmieniła się w trakcie — podpisuję ponownie…'**
   String get linkStaleVersionRetry;
-
-  /// No description provided for @linkNewTitle.
-  ///
-  /// In pl, this message translates to:
-  /// **'Połącz to urządzenie'**
-  String get linkNewTitle;
 
   /// No description provided for @linkNewExplainer.
   ///
@@ -769,6 +799,12 @@ abstract class AppLocalizations {
   /// In pl, this message translates to:
   /// **'Nie znaleziono użytkownika'**
   String get userNotFound;
+
+  /// No description provided for @userSearchNoAnswer.
+  ///
+  /// In pl, this message translates to:
+  /// **'Brak odpowiedzi. Sprawdź połączenie i spróbuj ponownie.'**
+  String get userSearchNoAnswer;
 
   /// No description provided for @invitationWantsToConnect.
   ///
@@ -1238,12 +1274,6 @@ abstract class AppLocalizations {
   /// **'lada chwila'**
   String get identityResetAnyMoment;
 
-  /// No description provided for @identityUploadLockedTitle.
-  ///
-  /// In pl, this message translates to:
-  /// **'Twoje nowe klucze szyfrowania nie zostały opublikowane'**
-  String get identityUploadLockedTitle;
-
   /// No description provided for @identityResetStartAction.
   ///
   /// In pl, this message translates to:
@@ -1663,6 +1693,12 @@ abstract class AppLocalizations {
   /// In pl, this message translates to:
   /// **'Ping'**
   String get ping;
+
+  /// No description provided for @pingBubbleLabel.
+  ///
+  /// In pl, this message translates to:
+  /// **'PING!'**
+  String get pingBubbleLabel;
 
   /// No description provided for @attachment.
   ///
@@ -2444,6 +2480,12 @@ abstract class AppLocalizations {
   /// **'Dokument pobrany'**
   String get documentDownloaded;
 
+  /// No description provided for @documentFallbackName.
+  ///
+  /// In pl, this message translates to:
+  /// **'dokument'**
+  String get documentFallbackName;
+
   /// No description provided for @documentDownloadFailed.
   ///
   /// In pl, this message translates to:
@@ -2870,12 +2912,6 @@ abstract class AppLocalizations {
   /// **'Edytowanie wiadomości'**
   String get messageEditingTitle;
 
-  /// No description provided for @messagePinRequiresSentMessage.
-  ///
-  /// In pl, this message translates to:
-  /// **'Poczekaj na wysłanie wiadomości, aby ją przypiąć'**
-  String get messagePinRequiresSentMessage;
-
   /// No description provided for @messageReactionMoreEmoji.
   ///
   /// In pl, this message translates to:
@@ -2900,11 +2936,17 @@ abstract class AppLocalizations {
   /// **'Reakcja {emoji}, {state}'**
   String messageReactionSemantics(Object emoji, Object state);
 
-  /// No description provided for @snackbarReactionUnavailable.
+  /// No description provided for @messageReactionChipRemove.
   ///
   /// In pl, this message translates to:
-  /// **'Reakcje nie są jeszcze gotowe na tym urządzeniu'**
-  String get snackbarReactionUnavailable;
+  /// **'Usuń reakcję {emoji} ({count})'**
+  String messageReactionChipRemove(Object count, Object emoji);
+
+  /// No description provided for @messageReactionChipAdd.
+  ///
+  /// In pl, this message translates to:
+  /// **'Dodaj reakcję {emoji} ({count})'**
+  String messageReactionChipAdd(Object count, Object emoji);
 
   /// No description provided for @snackbarBoxReactionFailed.
   ///
@@ -3109,6 +3151,12 @@ abstract class AppLocalizations {
   /// In pl, this message translates to:
   /// **'Kilka słów o Tobie'**
   String get userCardAboutHint;
+
+  /// No description provided for @userCardAboutSaveFailed.
+  ///
+  /// In pl, this message translates to:
+  /// **'Nie udało się zapisać opisu. Spróbuj ponownie.'**
+  String get userCardAboutSaveFailed;
 
   /// No description provided for @userCardSharedMedia.
   ///
@@ -3487,6 +3535,12 @@ abstract class AppLocalizations {
   /// In pl, this message translates to:
   /// **'Nie udało się zabezpieczyć kodu na tym urządzeniu.'**
   String get passcodeUnavailable;
+
+  /// No description provided for @passcodeTurnOffFailed.
+  ///
+  /// In pl, this message translates to:
+  /// **'Nie udało się wyłączyć kodu. Spróbuj ponownie.'**
+  String get passcodeTurnOffFailed;
 
   /// No description provided for @passcodeCredentialLoading.
   ///

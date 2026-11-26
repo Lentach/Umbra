@@ -73,7 +73,7 @@ void main() {
         // No socket in a widget test, so the reaction cannot be sent and the
         // user is told: the snackbar proves the tap reached the chip.
         final l10n = await AppLocalizations.delegate.load(const Locale('en'));
-        expect(find.text(l10n.snackbarReactionUnavailable), findsOneWidget);
+        expect(find.text(l10n.snackbarBoxReactionFailed), findsOneWidget);
         await tester.pump(const Duration(seconds: 5));
       },
     );
@@ -119,7 +119,7 @@ void main() {
     await tester.pump();
 
     final l10n = await AppLocalizations.delegate.load(const Locale('en'));
-    expect(find.text(l10n.snackbarReactionUnavailable), findsOneWidget);
+    expect(find.text(l10n.snackbarBoxReactionFailed), findsOneWidget);
     await tester.pump(const Duration(seconds: 5));
   });
 }

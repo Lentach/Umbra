@@ -24,10 +24,7 @@ void showWebPushRequestFeedback(
       colors.error,
     ),
     WebPushRequestStatus.noChange => (l10n.webPushNoChanges, colors.primary),
-    WebPushRequestStatus.failed => (
-      '${l10n.webPushEnableFailed}: ${result.details ?? ''}',
-      colors.error,
-    ),
+    WebPushRequestStatus.failed => (l10n.webPushEnableFailed, colors.error),
   };
   showTopSnackBar(context, text, backgroundColor: color);
 }

@@ -97,6 +97,12 @@ class AppLocalizationsPl extends AppLocalizations {
   String get devicesLoading => 'Ładowanie…';
 
   @override
+  String get settingsDeviceWebBrowser => 'Przeglądarka internetowa';
+
+  @override
+  String get settingsDeviceNativeApp => 'To urządzenie';
+
+  @override
   String get devicesExplainer =>
       'Nowe urządzenie dodasz tylko z urządzenia głównego.';
 
@@ -175,6 +181,11 @@ class AppLocalizationsPl extends AppLocalizations {
   String get devicesPrimaryBadge => 'główne';
 
   @override
+  String devicesRowSemantics(int id, String platform) {
+    return 'Urządzenie $id $platform';
+  }
+
+  @override
   String get devicesThisDeviceKeyless =>
       'To urządzenie nie ma jeszcze kluczy. Połącz je ze swoim głównym urządzeniem.';
 
@@ -211,6 +222,19 @@ class AppLocalizationsPl extends AppLocalizations {
   String get linkPrimaryDone => 'Urządzenie zostało połączone.';
 
   @override
+  String linkQrSemantics(String payload) {
+    return 'Kod QR do połączenia $payload';
+  }
+
+  @override
+  String get linkCodeSemantics => 'Kod połączenia';
+
+  @override
+  String linkSecurityCodeSemantics(String code) {
+    return 'Kod bezpieczeństwa $code';
+  }
+
+  @override
   String get linkInvalidCode =>
       'Nieprawidłowy kod. Przepisz go dokładnie z nowego urządzenia.';
 
@@ -224,9 +248,6 @@ class AppLocalizationsPl extends AppLocalizations {
   @override
   String get linkStaleVersionRetry =>
       'Lista urządzeń zmieniła się w trakcie — podpisuję ponownie…';
-
-  @override
-  String get linkNewTitle => 'Połącz to urządzenie';
 
   @override
   String get linkNewExplainer =>
@@ -387,6 +408,10 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get userNotFound => 'Nie znaleziono użytkownika';
+
+  @override
+  String get userSearchNoAnswer =>
+      'Brak odpowiedzi. Sprawdź połączenie i spróbuj ponownie.';
 
   @override
   String get invitationWantsToConnect => 'Chce się połączyć';
@@ -701,10 +726,6 @@ class AppLocalizationsPl extends AppLocalizations {
   String get identityResetAnyMoment => 'lada chwila';
 
   @override
-  String get identityUploadLockedTitle =>
-      'Twoje nowe klucze szyfrowania nie zostały opublikowane';
-
-  @override
   String get identityResetStartAction => 'Rozpocznij reset';
 
   @override
@@ -942,6 +963,9 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get ping => 'Ping';
+
+  @override
+  String get pingBubbleLabel => 'PING!';
 
   @override
   String get attachment => 'Załącznik';
@@ -1433,6 +1457,9 @@ class AppLocalizationsPl extends AppLocalizations {
   String get documentDownloaded => 'Dokument pobrany';
 
   @override
+  String get documentFallbackName => 'dokument';
+
+  @override
   String get documentDownloadFailed => 'Nie udało się pobrać dokumentu';
 
   @override
@@ -1664,10 +1691,6 @@ class AppLocalizationsPl extends AppLocalizations {
   String get messageEditingTitle => 'Edytowanie wiadomości';
 
   @override
-  String get messagePinRequiresSentMessage =>
-      'Poczekaj na wysłanie wiadomości, aby ją przypiąć';
-
-  @override
   String get messageReactionMoreEmoji => 'Więcej reakcji emoji';
 
   @override
@@ -1682,8 +1705,14 @@ class AppLocalizationsPl extends AppLocalizations {
   }
 
   @override
-  String get snackbarReactionUnavailable =>
-      'Reakcje nie są jeszcze gotowe na tym urządzeniu';
+  String messageReactionChipRemove(Object count, Object emoji) {
+    return 'Usuń reakcję $emoji ($count)';
+  }
+
+  @override
+  String messageReactionChipAdd(Object count, Object emoji) {
+    return 'Dodaj reakcję $emoji ($count)';
+  }
 
   @override
   String get snackbarBoxReactionFailed =>
@@ -1795,6 +1824,10 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get userCardAboutHint => 'Kilka słów o Tobie';
+
+  @override
+  String get userCardAboutSaveFailed =>
+      'Nie udało się zapisać opisu. Spróbuj ponownie.';
 
   @override
   String get userCardSharedMedia => 'Udostępnione multimedia';
@@ -2004,6 +2037,10 @@ class AppLocalizationsPl extends AppLocalizations {
   @override
   String get passcodeUnavailable =>
       'Nie udało się zabezpieczyć kodu na tym urządzeniu.';
+
+  @override
+  String get passcodeTurnOffFailed =>
+      'Nie udało się wyłączyć kodu. Spróbuj ponownie.';
 
   @override
   String get passcodeCredentialLoading =>

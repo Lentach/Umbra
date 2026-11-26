@@ -312,6 +312,37 @@ void main() {
       expect(find.byKey(const Key('link-new-code-error')), findsOneWidget);
     });
 
+    // A2-DEV-08: a refusal belongs to the code that earned it. After the
+    // stage expired, Retry showed a fresh code under the OLD error line.
+    testWidgets('Retry after an expired stage drops the old code refusal', (
+      tester,
+    ) async {
+      final controller = await pumpBody(tester, scanResult: _nCode);
+      await tester.ensureVisible(find.byKey(const Key('link-scan')));
+      await tester.tap(find.byKey(const Key('link-scan')));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.byKey(const Key('fake-scan-hit')));
+      await tester.tap(find.byKey(const Key('fake-scan-hit')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.byKey(const Key('link-new-code-error')), findsOneWidget);
+
+      await controller.abortNewDevice('expired');
+      await tester.pump();
+      await tester.ensureVisible(find.byKey(const Key('link-new-retry')));
+      await tester.tap(find.byKey(const Key('link-new-retry')));
+      await tester.pump();
+      controller.onProvisioningOpened({
+        'success': true,
+        'provisioningId': 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+      });
+      await tester.pump();
+      await tester.pump();
+
+      expect(controller.newDeviceStep, NewDeviceLinkStep.showCode);
+      expect(find.byKey(const Key('link-new-code-error')), findsNothing);
+    });
+
     testWidgets('unsupported scanner reveals the labelled manual field', (
       tester,
     ) async {

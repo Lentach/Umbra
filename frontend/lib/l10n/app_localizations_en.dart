@@ -97,6 +97,12 @@ class AppLocalizationsEn extends AppLocalizations {
   String get devicesLoading => 'Loading…';
 
   @override
+  String get settingsDeviceWebBrowser => 'Web browser';
+
+  @override
+  String get settingsDeviceNativeApp => 'This device';
+
+  @override
   String get devicesExplainer =>
       'Add new devices from the primary device only.';
 
@@ -173,6 +179,11 @@ class AppLocalizationsEn extends AppLocalizations {
   String get devicesPrimaryBadge => 'primary';
 
   @override
+  String devicesRowSemantics(int id, String platform) {
+    return 'Device $id $platform';
+  }
+
+  @override
   String get devicesThisDeviceKeyless =>
       'This device holds no keys yet. Link it to your primary device.';
 
@@ -209,6 +220,19 @@ class AppLocalizationsEn extends AppLocalizations {
   String get linkPrimaryDone => 'The device has been linked.';
 
   @override
+  String linkQrSemantics(String payload) {
+    return 'Link QR code $payload';
+  }
+
+  @override
+  String get linkCodeSemantics => 'Link code';
+
+  @override
+  String linkSecurityCodeSemantics(String code) {
+    return 'Security code $code';
+  }
+
+  @override
   String get linkInvalidCode =>
       'Invalid code. Copy it exactly from the new device.';
 
@@ -221,9 +245,6 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get linkStaleVersionRetry =>
       'The device list changed mid-flight — re-signing…';
-
-  @override
-  String get linkNewTitle => 'Link this device';
 
   @override
   String get linkNewExplainer =>
@@ -384,6 +405,10 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get userNotFound => 'User not found';
+
+  @override
+  String get userSearchNoAnswer =>
+      'No answer. Check your connection and try again.';
 
   @override
   String get invitationWantsToConnect => 'Wants to connect';
@@ -691,10 +716,6 @@ class AppLocalizationsEn extends AppLocalizations {
   String get identityResetAnyMoment => 'any moment now';
 
   @override
-  String get identityUploadLockedTitle =>
-      'Your new encryption keys were not published';
-
-  @override
   String get identityResetStartAction => 'Start reset';
 
   @override
@@ -929,6 +950,9 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get ping => 'Ping';
+
+  @override
+  String get pingBubbleLabel => 'PING!';
 
   @override
   String get attachment => 'Attachment';
@@ -1407,6 +1431,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get documentDownloaded => 'Document downloaded';
 
   @override
+  String get documentFallbackName => 'document';
+
+  @override
   String get documentDownloadFailed => 'Failed to download document';
 
   @override
@@ -1634,10 +1661,6 @@ class AppLocalizationsEn extends AppLocalizations {
   String get messageEditingTitle => 'Editing message';
 
   @override
-  String get messagePinRequiresSentMessage =>
-      'Wait until the message is sent before pinning';
-
-  @override
   String get messageReactionMoreEmoji => 'More emoji reactions';
 
   @override
@@ -1652,8 +1675,14 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
-  String get snackbarReactionUnavailable =>
-      'Reactions aren\'t ready on this device yet';
+  String messageReactionChipRemove(Object count, Object emoji) {
+    return 'Remove reaction $emoji ($count)';
+  }
+
+  @override
+  String messageReactionChipAdd(Object count, Object emoji) {
+    return 'React with $emoji ($count)';
+  }
 
   @override
   String get snackbarBoxReactionFailed =>
@@ -1763,6 +1792,9 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get userCardAboutHint => 'A few words about you';
+
+  @override
+  String get userCardAboutSaveFailed => 'Couldn\'t save your About. Try again.';
 
   @override
   String get userCardSharedMedia => 'Shared media';
@@ -1970,6 +2002,10 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get passcodeUnavailable =>
       'This device could not secure the passcode.';
+
+  @override
+  String get passcodeTurnOffFailed =>
+      'Couldn\'t turn off the passcode. Try again.';
 
   @override
   String get passcodeCredentialLoading =>

@@ -27,6 +27,16 @@ extension LinkCeremonyPrimary on LinkCeremonyController {
       notifyListeners();
       return;
     }
+    // Both devices scanned each other (A2-DEV-04): leaving the displayed `p`
+    // code for this paste closes our own stage first, as
+    // [startNewDeviceFromCode] does — else the new device's hello would be
+    // acked on a stage nobody approves, until it expires.
+    final ownStage = _primaryProvisioningId;
+    if (primaryStep == PrimaryLinkStep.showCode &&
+        ownStage != null &&
+        ownStage != code.provisioningId) {
+      _emit('cancelProvisioning', {'provisioningId': ownStage});
+    }
     _parsedCode = code;
     _primaryProvisioningId = code.provisioningId;
     final eph = generateLinkEphemeral();
@@ -190,14 +200,22 @@ extension LinkCeremonyPrimary on LinkCeremonyController {
   }
 
   void cancelPrimary() {
+    _cancelLivePrimaryStage();
+    _resetPrimary();
+    notifyListeners();
+  }
+
+  /// Tells the server to drop the primary's open stage, if it has one. Shared
+  /// by [cancelPrimary] and [dispose]: a screen removed from the stack (the
+  /// device-link gate's sweep) is never popped, so its PopScope cannot send
+  /// this and the stage would otherwise linger until it expires.
+  void _cancelLivePrimaryStage() {
     final id = _primaryProvisioningId;
     if (id != null &&
         primaryStep != PrimaryLinkStep.idle &&
         primaryStep != PrimaryLinkStep.done) {
       _emit('cancelProvisioning', {'provisioningId': id});
     }
-    _resetPrimary();
-    notifyListeners();
   }
 
   void _resetPrimary() {

@@ -97,7 +97,6 @@ void main() {
       throwsA(isA<E2eIdentityCheckUnavailableException>()),
     );
     expect(storage.writeCount, 0);
-    expect(service.identityIncomplete, isFalse);
     expect(
       E2ePersistentDiag.entries
           .where((e) => e.contains('IDENTITY_RESIDUE_DISCARD_DEFERRED')),

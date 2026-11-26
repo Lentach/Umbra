@@ -82,6 +82,9 @@ class AntiQuantumNoteLink {
   String get origin => url.substring(0, url.indexOf('/note/'));
 }
 
+/// The largest epoch-ms a [DateTime] can hold.
+const int _maxEpochMs = 8640000000000000;
+
 /// Parse a note link previously accepted by [isAntiQuantumNoteUrl];
 /// returns null when [content] is not a note link.
 AntiQuantumNoteLink? parseAntiQuantumNoteLink(String content,
@@ -93,7 +96,9 @@ AntiQuantumNoteLink? parseAntiQuantumNoteLink(String content,
   for (final part in fragment.split('&').skip(1)) {
     if (part.startsWith('e=')) {
       final ms = int.tryParse(part.substring(2));
-      if (ms != null) {
+      // DateTime throws beyond +-8.64e15 ms; a peer controls these digits, so
+      // an out-of-range value reads as "no expiry" (as E2eEnvelope does).
+      if (ms != null && ms <= _maxEpochMs) {
         expiresAt = DateTime.fromMillisecondsSinceEpoch(ms);
       }
     }

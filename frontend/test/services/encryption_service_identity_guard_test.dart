@@ -56,7 +56,6 @@ void main() {
         );
 
         expect(svc.needsKeyUpload, isTrue);
-        expect(svc.identityIncomplete, isFalse);
         expect(await secure.read(key: 'e2e_21_identity_record_v1'), isNotNull);
         expect(
           await secure.read(key: 'e2e_21_session_49_1'),
@@ -83,7 +82,6 @@ void main() {
       );
 
       expect(svc.needsKeyUpload, isTrue);
-      expect(svc.identityIncomplete, isFalse);
       expect(await secure.read(key: 'e2e_22_identity_record_v1'), isNotNull);
       expect(
         E2ePersistentDiag.entries.where(
@@ -103,7 +101,6 @@ void main() {
         ),
         throwsA(isA<E2eIdentityIncompleteException>()),
       );
-      expect(svc.identityIncomplete, isTrue);
       expect(await secure.read(key: 'e2e_23_identity_record_v1'), isNull);
     });
   });

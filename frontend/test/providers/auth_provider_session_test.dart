@@ -660,6 +660,23 @@ void main() {
       expect(auth.isError, isTrue);
     });
 
+    // A3-CMP-09: the picker keeps its recent emoji in SharedPreferences, device
+    // wide; the next account on this device must not see them.
+    test('a session end that wipes the store clears the recent emoji', () async {
+      final auth = await loggedIn();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        'recent',
+        jsonEncode([
+          {'emoji': {'emoji': '😀'}, 'counter': 3},
+        ]),
+      );
+
+      await auth.logout();
+
+      expect(prefs.getString('recent') ?? '[]', '[]');
+    });
+
     test('is a no-op when no session is held', () async {
       SharedPreferences.setMockInitialValues({});
       final auth = AuthProvider(

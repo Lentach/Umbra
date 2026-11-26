@@ -84,6 +84,11 @@ class _RecoveryPhrasePromptState extends State<_RecoveryPhrasePrompt> {
           TextField(
             controller: _controller,
             autofocus: true,
+            // The phrase is the account's master secret: the keyboard must not
+            // alter a word nor learn the words (IME hint; no-op off Android).
+            autocorrect: false,
+            enableSuggestions: false,
+            enableIMEPersonalizedLearning: false,
             minLines: 2,
             maxLines: 3,
             textInputAction: TextInputAction.done,

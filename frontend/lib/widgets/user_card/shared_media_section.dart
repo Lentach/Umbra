@@ -1,10 +1,62 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../../models/message_model.dart';
+import '../../providers/messaging_provider.dart';
 import '../../utils/encrypted_media_loader.dart';
 import '../message/box_media_source.dart';
+import '../message/message_context_menu_overlay.dart' show messageGoneWatch;
+
+/// The user card's fullscreen photo. It closes by itself once [goneWatch]
+/// says the message left the cache (expiry, delete for everyone, delete for
+/// me, chat cleared), like the chat's gallery, so a vanished photo is never
+/// kept on screen (A3-MSG-B-11).
+Future<void> showSharedMediaFullscreen(
+  BuildContext context,
+  Uint8List bytes, {
+  required ({Listenable changes, bool Function() isGone}) goneWatch,
+}) {
+  BuildContext? dialogContext;
+  void closeIfGone() {
+    final ctx = dialogContext;
+    // Only the photo's own route may be popped: a route above it (or a pop
+    // already under way) is left alone, like video_fullscreen_view.dart.
+    if (ctx != null &&
+        ctx.mounted &&
+        goneWatch.isGone() &&
+        (ModalRoute.of(ctx)?.isCurrent ?? false)) {
+      dialogContext = null;
+      Navigator.pop(ctx);
+    }
+  }
+
+  // Deferred: the provider's delete paths notify BEFORE they update the RAM
+  // cache the watch reads, so a check inside the notify still sees the row.
+  void onChange() => scheduleMicrotask(closeIfGone);
+
+  goneWatch.changes.addListener(onChange);
+  return showDialog<void>(
+    context: context,
+    builder: (ctx) {
+      dialogContext = ctx;
+      return Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: EdgeInsets.zero,
+        child: GestureDetector(
+          onTap: () => Navigator.pop(ctx),
+          child: InteractiveViewer(
+            minScale: 0.5,
+            maxScale: 4.0,
+            child: Image.memory(bytes, fit: BoxFit.contain),
+          ),
+        ),
+      );
+    },
+  ).whenComplete(() => goneWatch.changes.removeListener(onChange));
+}
 
 /// Horizontal strip of image/GIF media exchanged in a conversation, shown on
 /// the other-user card ("shared media", Telegram parity).
@@ -95,19 +147,15 @@ class _SharedMediaThumbState extends State<_SharedMediaThumb> {
   }
 
   void _showFullscreen(BuildContext context, Uint8List bytes) {
-    showDialog<void>(
-      context: context,
-      builder: (dialogContext) => Dialog(
-        backgroundColor: Colors.transparent,
-        insetPadding: EdgeInsets.zero,
-        child: GestureDetector(
-          onTap: () => Navigator.pop(dialogContext),
-          child: InteractiveViewer(
-            minScale: 0.5,
-            maxScale: 4.0,
-            child: Image.memory(bytes, fit: BoxFit.contain),
-          ),
-        ),
+    final messaging = context.read<MessagingProvider>();
+    final message = widget.message;
+    showSharedMediaFullscreen(
+      context,
+      bytes,
+      goneWatch: messageGoneWatch(
+        messaging,
+        () => messaging.cachedMessagesFor(message.conversationId),
+        message,
       ),
     );
   }

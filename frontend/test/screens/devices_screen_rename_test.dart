@@ -50,21 +50,26 @@ class _FakeConnectionProvider extends ConnectionProvider {
 
 _FakeConnectionProvider _connection = _FakeConnectionProvider();
 
-Widget _host() {
+Widget _host({
+  int? revokeDeviceId,
+  EncryptionProvider? encryption,
+  Locale? locale,
+}) {
   _connection = _FakeConnectionProvider();
   return MultiProvider(
     providers: [
       ChangeNotifierProvider<AuthProvider>(create: (_) => _FakeAuthProvider()),
       ChangeNotifierProvider<ConnectionProvider>.value(value: _connection),
       ChangeNotifierProvider<EncryptionProvider>.value(
-        value: FakeEncryptionProvider(),
+        value: encryption ?? FakeEncryptionProvider(),
       ),
     ],
     child: MaterialApp(
       theme: RpgTheme.themeDataDarkGray,
       localizationsDelegates: AppLocalizations.localizationsDelegates,
       supportedLocales: AppLocalizations.supportedLocales,
-      home: const DevicesScreen(),
+      locale: locale,
+      home: DevicesScreen(revokeDeviceId: revokeDeviceId),
     ),
   );
 }
@@ -104,6 +109,53 @@ Future<LinkCeremonyController> _pumpEnrolled(
   controller.notifyListeners();
   await tester.pumpAndSettle();
   return controller;
+}
+
+class _OwnDeviceFour extends FakeEncryptionProvider {
+  @override
+  int get ownDeviceId => 4;
+}
+
+/// Opens the screen with [revokeDeviceId] (the chat list's "remove" line),
+/// then lets the verified list arrive, the way a real visit does. Returns the
+/// `revokeDevice` frames the screen signed and sent.
+Future<List<(String, dynamic)>> _visitAsking(
+  WidgetTester tester,
+  int revokeDeviceId,
+) async {
+  _seedDak();
+  await tester.pumpWidget(
+    _host(
+      revokeDeviceId: revokeDeviceId,
+      encryption: _OwnDeviceFour(),
+    ),
+  );
+  await tester.pumpAndSettle();
+  _connection.sink!
+    ..listState = DeviceListState.enrolled
+    ..verifiedList = const DeviceList(
+      userId: 7,
+      version: 3,
+      devices: [
+        DeviceListEntry(deviceId: 1, platform: 'android', addedAtMs: 1000),
+        DeviceListEntry(deviceId: 4, platform: 'web', addedAtMs: 2000),
+        DeviceListEntry(deviceId: 6, platform: 'web', addedAtMs: 3000),
+        DeviceListEntry(
+          deviceId: 8,
+          platform: 'web',
+          addedAtMs: 3500,
+          revokedAtMs: 3600,
+        ),
+      ],
+    )
+    ..holdsDak = true
+    ..notifyListeners();
+  // The revoke is in flight against a fake that never answers: no settle.
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 400));
+  return _connection.emitted
+      .where((e) => e.$1 == 'revokeDevice')
+      .toList();
 }
 
 const _twoLive = DeviceList(
@@ -148,6 +200,43 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('device-row-2')), findsOneWidget);
     expect(find.byKey(const Key('device-rename-2')), findsNothing);
+  });
+
+  // A2-DEV-03: a linked device holds no DAK, so the server always refuses
+  // its revoke and rename. The icons must not be offered at all.
+  testWidgets('a device without the DAK offers neither revoke nor rename', (
+    tester,
+  ) async {
+    final controller = await _pumpEnrolled(tester, _twoLive);
+    expect(find.byKey(const Key('device-revoke-6')), findsOneWidget);
+    expect(find.byKey(const Key('device-rename-6')), findsOneWidget);
+
+    controller
+      ..holdsDak = false
+      ..notifyListeners();
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('device-row-6')), findsOneWidget);
+    expect(find.byKey(const Key('device-revoke-6')), findsNothing);
+    expect(find.byKey(const Key('device-rename-6')), findsNothing);
+    expect(find.byKey(const Key('device-rename-1')), findsNothing);
+  });
+
+  // A2-DEV-03: a key read that THREW is not "no DAK" — the icons stay (a tap
+  // re-reads the key) instead of vanishing until the screen is reopened.
+  testWidgets('a failed key read keeps revoke and rename offered', (
+    tester,
+  ) async {
+    final controller = await _pumpEnrolled(tester, _twoLive);
+
+    controller
+      ..holdsDak = null
+      ..dakReadFailed = true
+      ..notifyListeners();
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('device-revoke-6')), findsOneWidget);
+    expect(find.byKey(const Key('device-rename-6')), findsOneWidget);
   });
 
   testWidgets('the save button signs and emits updateDeviceList', (
@@ -268,4 +357,65 @@ void main() {
       expect(find.text('android · #1 · $badge'), findsNothing);
     },
   );
+
+  // A2-DEV-09: the chat list's "remove" line opens this screen with the
+  // device to revoke. It must revoke exactly that live sibling, and nothing
+  // when the id is the primary, this device, a tombstone or unknown.
+  testWidgets('revokeDeviceId revokes the named live sibling, once', (
+    tester,
+  ) async {
+    final frames = await _visitAsking(tester, 6);
+
+    expect(frames, hasLength(1));
+    final signed = parseCanonicalDeviceList(
+      base64Decode(
+        (frames.single.$2 as Map<String, dynamic>)['listCanonical'] as String,
+      ),
+    );
+    expect(
+      signed.devices.where((d) => d.revokedAtMs != null).map((d) => d.deviceId),
+      containsAll([6, 8]),
+    );
+    expect(
+      signed.devices.firstWhere((d) => d.deviceId == 4).revokedAtMs,
+      isNull,
+    );
+    expect(signed.devices.firstWhere((d) => d.deviceId == 1).revokedAtMs, isNull);
+  });
+
+  for (final (label, id) in [
+    ('the primary', 1),
+    ('this device', 4),
+    ('an already revoked row', 8),
+    ('an id the list does not name', 99),
+  ]) {
+    testWidgets('revokeDeviceId naming $label revokes nothing', (tester) async {
+      final frames = await _visitAsking(tester, id);
+
+      expect(frames, isEmpty);
+    });
+  }
+
+  // A2-DEV-07: the screen reader names a row in the app's language.
+  testWidgets('a device row is announced in Polish, not English', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    await tester.pumpWidget(_host(locale: const Locale('pl')));
+    await tester.pumpAndSettle();
+    _connection.sink!
+      ..listState = DeviceListState.enrolled
+      ..verifiedList = _twoLive
+      ..holdsDak = true
+      ..notifyListeners();
+    await tester.pumpAndSettle();
+
+    final pl = await AppLocalizations.delegate.load(const Locale('pl'));
+    expect(
+      find.bySemanticsLabel(RegExp('^${pl.devicesRowSemantics(6, 'web')}')),
+      findsOneWidget,
+    );
+    expect(find.bySemanticsLabel(RegExp('^device 6')), findsNothing);
+    semantics.dispose();
+  });
 }

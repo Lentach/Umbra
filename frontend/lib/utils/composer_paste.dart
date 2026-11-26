@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 
 import 'composer_paste_stub.dart'
-    if (dart.library.html) 'composer_paste_web.dart' as impl;
+    if (dart.library.js_interop) 'composer_paste_web.dart' as impl;
 
 typedef PastedImageHandler = void Function(
     Uint8List bytes, String mimeType, String filename);

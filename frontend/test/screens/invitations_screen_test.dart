@@ -631,4 +631,40 @@ void main() {
     );
     await tester.pump(const Duration(seconds: 11));
   });
+
+  // A2-CON-4: no answer within the window is a connection problem, not a
+  // missing account.
+  testWidgets('a search nobody answers says so, not "user not found"',
+      (tester) async {
+    final friends = FriendsProvider()..setEmitCallback((_, _) {});
+    await _pumpInvitations(tester, friends);
+
+    await tester.enterText(
+      find.byKey(const Key('invitation-handle-field')),
+      'bob#0002',
+    );
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 11));
+
+    expect(find.text(l10n.userSearchNoAnswer), findsOneWidget);
+    expect(find.text(l10n.userNotFound), findsNothing);
+  });
+
+  testWidgets('an empty answer still says "user not found"', (tester) async {
+    final friends = FriendsProvider()..setEmitCallback((_, _) {});
+    await _pumpInvitations(tester, friends);
+
+    await tester.enterText(
+      find.byKey(const Key('invitation-handle-field')),
+      'bob#0002',
+    );
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
+    friends.onSearchUsersResult(<dynamic>[]);
+    await tester.pump();
+
+    expect(find.text(l10n.userNotFound), findsOneWidget);
+    expect(find.text(l10n.userSearchNoAnswer), findsNothing);
+  });
 }

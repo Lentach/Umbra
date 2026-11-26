@@ -205,7 +205,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     if (!auth.isLoggedIn) return;
     context.read<ConnectionProvider>().ensureReconnectIfNeeded();
     // Only a real visibility signal may claim "user is looking": a background
-    // unfreeze must not re-enable read receipts or server push suppression.
+    // unfreeze must not re-enable on-device read receipts or countdowns.
     // And only after the lock verdict: a receipt must not leave before it.
     if (markVisible) {
       await lockVerdict;
@@ -301,10 +301,11 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
       case AppLifecycleState.detached:
       case AppLifecycleState.hidden:
       case AppLifecycleState.inactive:
-        // Treat inactive as background for push: iOS/Android often enter inactive
-        // (app switcher, home gesture) before paused; leaving it true kept
-        // pushClientState.clientVisible true so the server skipped pushes while
-        // the user was no longer looking at the app.
+        // Treat inactive as background: iOS/Android often enter inactive
+        // (app switcher, home gesture) before paused; leaving visibility true
+        // there would keep on-device read receipts and countdowns running
+        // while the user is no longer looking at the app. Nothing is sent to
+        // the server.
         context.read<ConversationsProvider>().setClientVisible(false);
         // Owed shred rotation: fire now instead of waiting out the debounce —
         // background is the last CPU this process may ever get. No-op unless

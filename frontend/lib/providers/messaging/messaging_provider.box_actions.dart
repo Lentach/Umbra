@@ -559,7 +559,7 @@ extension MessagingBoxActions on MessagingProvider {
       at: at,
       emoji: action.emoji,
       on: action.on,
-      content: parsed.content,
+      content: neutralizeSentinelText(parsed.content),
     );
     final target = await _heldBoxTarget(wire, conversationId);
     if (target != null) {

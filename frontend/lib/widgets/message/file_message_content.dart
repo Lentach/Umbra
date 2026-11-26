@@ -27,8 +27,9 @@ class FileMessageContent extends StatefulWidget {
 }
 
 class _FileMessageContentState extends State<FileMessageContent> {
-  String get _filename =>
-      widget.message.content.isNotEmpty ? widget.message.content : 'document';
+  String _filenameFor(AppLocalizations l10n) => widget.message.content.isNotEmpty
+      ? widget.message.content
+      : l10n.documentFallbackName;
 
   Future<void> _downloadDocument(BuildContext context) async {
     final l10n = AppLocalizations.of(context);
@@ -49,7 +50,7 @@ class _FileMessageContentState extends State<FileMessageContent> {
       // were deleted with the session, so a write now would leave a fresh
       // plaintext one behind (A3-MSG-A-04).
       if (!context.mounted) return;
-      await download_utils.saveBytesAsDownload(plain, _filename);
+      await download_utils.saveBytesAsDownload(plain, _filenameFor(l10n));
       if (context.mounted) {
         showTopSnackBar(context, l10n.documentDownloaded);
       }
@@ -109,7 +110,7 @@ class _FileMessageContentState extends State<FileMessageContent> {
             const SizedBox(width: 8),
             Flexible(
               child: Text(
-                _filename,
+                _filenameFor(AppLocalizations.of(context)),
                 style: RpgTheme.bodyFont(fontSize: 14, color: widget.textColor),
                 overflow: TextOverflow.ellipsis,
               ),

@@ -2501,7 +2501,7 @@ that is the designed outcome).
     mounted but `Offstage` (the socket, the guard's own round trip and the reset hydration all live
     under the shell — unmounting it would starve the gate of the very state that opens it). No
     shell, no banners, no composer. The gate is ONE screen with four states, chosen by provider state,
-    never by navigation: (a) **link** — the device-side §5.1 ceremony inline (the `LinkThisDeviceScreen`
+    never by navigation: (a) **link** — the device-side §5.1 ceremony inline (the gate's inline link
     body: QR + text code, "Czekam na urządzenie główne…"), the always-visible action; (b) **reset
     pending** (`identityResetDeadline != null`) — countdown (1 h when `shortened`, else 72 h; a
     `phrase_too_new` answer is shown as the reason the wait is 72 h) + "Anuluj", the link stays

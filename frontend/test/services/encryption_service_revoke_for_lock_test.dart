@@ -2,10 +2,12 @@
 // teardown. Only its callers were faked anywhere, so deleting any one of its
 // three revocations left the suite green while a re-locked web tab kept
 // plaintext and the Signal identity in memory. One test per effect.
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:fireplace/services/encryption/content_key_manager.dart';
 import 'package:fireplace/services/encryption/content_key_wrap.dart';
+import 'package:fireplace/services/encryption/content_kv.dart';
 import 'package:fireplace/services/encryption/content_sealer.dart';
 import 'package:fireplace/services/encryption/sealed_sig_envelope.dart';
 import 'package:fireplace/services/encryption/sealed_web_content_kv.dart';
@@ -121,5 +123,28 @@ void main() {
 
     await expectLater(store.getIdentityKeyPair(), throwsA(anything));
     expect(await service.getIdentityFingerprint(), isNull);
+  });
+
+  // A3-SVC-D-03: a content store whose open was still running when the lock
+  // revoked it was cached as the live store when the open finished, so after
+  // the unlock every read and write went to a revoked store until a reload.
+  test('a store that finishes opening after the revoke is not cached', () async {
+    final stale = Completer<ContentKv>();
+    var opens = 0;
+    final fresh = await PrefsContentKv.open();
+    final service = EncryptionService()
+      ..debugSetContentKvOpener(() {
+        opens++;
+        return opens == 1 ? stale.future : Future.value(fresh);
+      });
+
+    final opening = service.contentKv;
+    await service.revokeForPasscodeLock();
+    stale.complete(fresh);
+    await opening;
+
+    // The unlock: the next touch must open a store of its own again.
+    await service.contentKv;
+    expect(opens, 2, reason: 'the revoked open must not become the cache');
   });
 }

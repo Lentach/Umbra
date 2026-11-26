@@ -901,6 +901,43 @@ void main() {
       },
     );
 
+    // A3-UTL-03, sender side: our own copy of a label's literal text is data
+    // too, or our device shows the fake "unreadable" row and never saves it.
+    test("sending a sentinel's literal text stays ordinary and saved", () async {
+      for (final label in [
+        kDecryptionFailedLabel,
+        kRetiredMessageLabel,
+        kEncryptionNotInitializedLabel,
+        kEncryptedPlaceholderLabel,
+        kNotLinkedYetMessageLabel,
+      ]) {
+        final msg = await mine(label);
+
+        expect(msg.content, isNot(label), reason: label);
+        expect(msg.content.replaceAll('\u200B', ''), label, reason: label);
+        expect((await recordOf(msg.id))?['content'], msg.content, reason: label);
+        // The receiver marks the same text again: it must not stack.
+        expect(neutralizeSentinelText(msg.content), msg.content);
+      }
+      final last = provider.messages.last;
+      await restart();
+      expect(row(last.id)!.content, last.content);
+    });
+
+    test("editing our text to a sentinel's literal text stays ordinary", () async {
+      final msg = await mine('typo');
+
+      provider.editMessage(msg.id, kDecryptionFailedLabel);
+      await pump();
+
+      final shown = row(msg.id)!.content;
+      expect(shown, isNot(kDecryptionFailedLabel));
+      expect(shown.replaceAll('\u200B', ''), kDecryptionFailedLabel);
+      expect((await recordOf(msg.id))?['content'], shown);
+      await restart();
+      expect(row(msg.id)!.content, shown);
+    });
+
     test('an edit NO device took reverts the row and the record and says so', () async {
       final msg = await mine('typo');
       outbox.refuse.addAll([1, 2, 3]);
@@ -1340,6 +1377,24 @@ void main() {
         expect(row(e.localId)!.content, isEmpty, reason: 'text only');
       },
     );
+
+    // A3-UTL-03: an edit's text is a friend's text as well.
+    test("an edit to a sentinel's literal text stays ordinary text", () async {
+      final msg = await fromBob('first', wire: 'wire-bob-0023');
+      await bobDoes(
+        action(
+          'edit',
+          s: 2,
+          w: 'wire-bob-0023',
+          content: kDecryptionFailedLabel,
+          at: msg.createdAt.add(const Duration(minutes: 1)),
+        ),
+      );
+      final shown = row(msg.id)!.content;
+      expect(shown, isNot(kDecryptionFailedLabel));
+      expect(shown.replaceAll('\u200B', ''), kDecryptionFailedLabel);
+      expect((await recordOf(msg.id))?['content'], shown);
+    });
 
     test('Bob cannot edit or delete OUR message', () async {
       final ours = await mine('mine');

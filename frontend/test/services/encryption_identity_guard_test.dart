@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:fireplace/services/encryption/signal_stores.dart';
 import 'package:fireplace/services/encryption_service.dart';
+import 'package:fireplace/utils/e2e_persistent_diag.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:libsignal_protocol_dart/libsignal_protocol_dart.dart';
@@ -39,7 +40,6 @@ void main() {
       await svc.initialize(1, checkServerIdentity: () async => const ServerIdentityGuard(exists: false));
 
       expect(svc.needsKeyUpload, isTrue);
-      expect(svc.identityIncomplete, isFalse);
       expect(
         await secure.read(key: 'e2e_1_identity_record_v1'),
         isNotNull,
@@ -106,7 +106,6 @@ void main() {
         svc.initialize(2, checkServerIdentity: () async => const ServerIdentityGuard(exists: true)),
         throwsA(isA<E2eIdentityIncompleteException>()),
       );
-      expect(svc.identityIncomplete, isTrue);
       expect(
         await secure.read(key: 'e2e_2_identity_record_v1'),
         isNull,
@@ -176,7 +175,6 @@ void main() {
         svc.initialize(5, checkServerIdentity: () async => null),
         throwsA(isA<E2eIdentityCheckUnavailableException>()),
       );
-      expect(svc.identityIncomplete, isFalse);
       expect(await secure.read(key: 'e2e_5_identity_record_v1'), isNull);
       expect(await secure.read(key: 'e2e_5_session_49_1'), 'fake-record');
     });
@@ -193,7 +191,6 @@ void main() {
       await svc.initialize(8, checkServerIdentity: () async => const ServerIdentityGuard(exists: false));
 
       expect(svc.needsKeyUpload, isTrue);
-      expect(svc.identityIncomplete, isFalse);
     });
   });
 
@@ -210,7 +207,6 @@ void main() {
         svc.initialize(21, checkServerIdentity: () async => const ServerIdentityGuard(exists: true)),
         throwsA(isA<E2eIdentityIncompleteException>()),
       );
-      expect(svc.identityIncomplete, isTrue);
       expect(
         await secure.read(key: 'e2e_21_identity_record_v1'),
         isNull,
@@ -224,7 +220,6 @@ void main() {
       await svc.initialize(22, checkServerIdentity: () async => const ServerIdentityGuard(exists: false));
 
       expect(svc.needsKeyUpload, isTrue);
-      expect(svc.identityIncomplete, isFalse);
       expect(await secure.read(key: 'e2e_22_identity_record_v1'), isNotNull);
     });
 
@@ -233,12 +228,6 @@ void main() {
       await expectLater(
         svc.initialize(23, checkServerIdentity: () async => null),
         throwsA(isA<E2eIdentityCheckUnavailableException>()),
-      );
-      expect(
-        svc.identityIncomplete,
-        isFalse,
-        reason: 'UNKNOWN is transient — it must not raise the '
-            'destructive-recovery surface',
       );
       expect(await secure.read(key: 'e2e_23_identity_record_v1'), isNull);
     });
@@ -305,9 +294,10 @@ void main() {
       });
 
       final svc = EncryptionService();
+      await E2ePersistentDiag.clear();
+      await E2ePersistentDiag.init();
       await svc.initialize(9, checkServerIdentity: () async => const ServerIdentityGuard(exists: false));
 
-      expect(svc.identityIncomplete, isFalse);
       expect(
         svc.needsKeyUpload,
         isTrue,
@@ -323,6 +313,15 @@ void main() {
         await secure.read(key: 'e2e_9_identity_key_pair'),
         isNot(legacyPair(pair)),
         reason: 'the damaged legacy identity is replaced, not kept',
+      );
+      expect(
+        E2ePersistentDiag.entries.where(
+          (e) =>
+              e.contains('IDENTITY_MINTED') &&
+              e.contains('absent-residue-discarded-server-says-none'),
+        ),
+        hasLength(1),
+        reason: 'a mint that first wiped leftovers must not say "no residue"',
       );
 
       // And the service is usable again without consulting anyone.

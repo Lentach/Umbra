@@ -29,6 +29,11 @@ class _AuthScreenState extends State<AuthScreen> {
   /// recover door).
   String? _prefilledUsername;
 
+  /// True only right after a registration that created the account but could
+  /// not sign in: the sign-in tab then keeps the password the user chose.
+  /// Every other tab change resets it.
+  bool _keepPassword = false;
+
   /// The status line to show, localized here because the provider has no
   /// locale. A code always wins over [AuthProvider.statusMessage]: the latter
   /// is the pre-localized channel used for the device-revoked notice, and the
@@ -40,7 +45,10 @@ class _AuthScreenState extends State<AuthScreen> {
   }
 
   void _switchTab(AuthProvider auth, {required bool login}) {
-    setState(() => _mode = login ? AuthFormMode.login : AuthFormMode.register);
+    setState(() {
+      _mode = login ? AuthFormMode.login : AuthFormMode.register;
+      _keepPassword = false;
+    });
     auth.clearStatus();
   }
 
@@ -51,13 +59,17 @@ class _AuthScreenState extends State<AuthScreen> {
     setState(() {
       _mode = AuthFormMode.login;
       _prefilledUsername = username;
+      _keepPassword = false;
     });
     auth.clearStatus();
   }
 
   /// The recovery phrase as a credential (spec (lxxxii) clause 2).
   void _goToRecover(AuthProvider auth) {
-    setState(() => _mode = AuthFormMode.recover);
+    setState(() {
+      _mode = AuthFormMode.recover;
+      _keepPassword = false;
+    });
     auth.clearStatus();
   }
 
@@ -197,6 +209,7 @@ class _AuthScreenState extends State<AuthScreen> {
                           AuthForm(
                             mode: _mode,
                             initialUsername: _prefilledUsername,
+                            keepPassword: _keepPassword,
                             // A status describes ONE attempt. Leaving it under
                             // an edited form is how a stale "already taken"
                             // ended up under a name the user had just changed.
@@ -219,14 +232,17 @@ class _AuthScreenState extends State<AuthScreen> {
                                   // Registration signs the user in itself; the
                                   // shell takes over and this screen is gone.
                                   // It lands here only when that sign-in
-                                  // failed, so the credentials are ready on
-                                  // the login tab.
+                                  // failed: the account exists, so the login
+                                  // tab gets the username AND the password the
+                                  // user just chose (every other tab change
+                                  // clears the password field).
                                   if (created &&
                                       mounted &&
                                       !authProvider.isLoggedIn) {
                                     setState(() {
                                       _mode = AuthFormMode.login;
                                       _prefilledUsername = username;
+                                      _keepPassword = true;
                                     });
                                   }
                               }

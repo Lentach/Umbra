@@ -1,4 +1,6 @@
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'dart:typed_data';
+
+import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:video_player/video_player.dart';
 
 import '../../models/message_model.dart';
@@ -59,7 +61,33 @@ class VideoPlaybackSession {
   /// the owner having to dig the durable log out of hacker mode.
   String? failureDetail;
 
-  VideoPlaybackSession({required this.message, this.box});
+  /// Seams for tests (A3-MSG-A-09); production uses the real loader and the
+  /// real temp-file writer.
+  VideoPlaybackSession({
+    required this.message,
+    this.box,
+    @visibleForTesting
+    Future<Uint8List> Function({
+      required String url,
+      String? key,
+      String? iv,
+      BoxCiphertextSource? box,
+    })
+    loadBytes = loadDecryptedMediaBytes,
+    @visibleForTesting
+    Future<String> Function(Uint8List bytes, Object id) writeTempFile =
+        video_temp.writeVideoTempFile,
+  }) : _loadBytes = loadBytes,
+       _writeTempFile = writeTempFile;
+
+  final Future<Uint8List> Function({
+    required String url,
+    String? key,
+    String? iv,
+    BoxCiphertextSource? box,
+  })
+  _loadBytes;
+  final Future<String> Function(Uint8List bytes, Object id) _writeTempFile;
 
   VideoPlayerController? get controller => _controller;
 
@@ -85,7 +113,7 @@ class VideoPlaybackSession {
     var stage = 'fetch_decrypt';
     var byteCount = 0;
     try {
-      final bytes = await loadDecryptedMediaBytes(
+      final bytes = await _loadBytes(
         url: url,
         key: message.mediaKey,
         iv: message.mediaIv,
@@ -101,7 +129,7 @@ class VideoPlaybackSession {
         _objectUrl = blobUrl;
         controller = VideoPlayerController.networkUrl(Uri.parse(blobUrl));
       } else {
-        final path = await video_temp.writeVideoTempFile(bytes, message.id);
+        final path = await _writeTempFile(bytes, message.id);
         if (_disposed) {
           // dispose() already ran with a null _tempFilePath; nothing else
           // would ever delete this file.

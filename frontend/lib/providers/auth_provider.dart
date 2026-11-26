@@ -18,6 +18,7 @@ import '../utils/download_utils_web.dart'
     if (dart.library.io) '../utils/download_utils_io.dart'
     as download_utils;
 import '../utils/e2e_persistent_diag.dart';
+import '../widgets/emoji/recent_emoji.dart';
 import 'auth/auth_status.dart';
 
 export 'auth/auth_status.dart';

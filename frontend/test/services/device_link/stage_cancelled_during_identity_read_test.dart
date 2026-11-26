@@ -120,7 +120,11 @@ void main() {
     expect(controller.verifiedList, isNotNull);
   });
 
-  tearDown(() => controller.dispose());
+  var disposedByTest = false;
+  tearDown(() {
+    if (!disposedByTest) controller.dispose();
+    disposedByTest = false;
+  });
 
   int count(String event) => emitted.where((e) => e.$1 == event).length;
 
@@ -162,5 +166,28 @@ void main() {
 
     expect(count('provisionDevice'), 0);
     expect(controller.primaryStep, PrimaryLinkStep.showSas);
+  });
+
+  // A primary swept off the stack by the device-link gate is removed, not
+  // popped, so the screen's PopScope never sends the cancel. The controller's
+  // own teardown must, or the stage lingers on the server until it expires.
+  test('a controller disposed mid-ceremony cancels its live stage', () async {
+    const id = '3f2c8a1e-9b7d-4c5a-8e2f-1a6b3c9d0e4f';
+    await reachSas(id);
+    expect(count('cancelProvisioning'), 0);
+
+    disposedByTest = true;
+    controller.dispose();
+
+    final cancels = emitted.where((e) => e.$1 == 'cancelProvisioning');
+    expect(cancels.map((e) => e.$2), [
+      {'provisioningId': id},
+    ]);
+  });
+
+  test('disposing an idle controller cancels nothing', () async {
+    disposedByTest = true;
+    controller.dispose();
+    expect(count('cancelProvisioning'), 0);
   });
 }

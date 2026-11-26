@@ -166,6 +166,25 @@ void main() {
       expect(find.byType(DisappearingTimerSheet), findsNothing);
     });
 
+    // A3-MISC-4: the hint says all zeros turn the timer off.
+    testWidgets('Set with all zeros turns the timer off', (tester) async {
+      final convs = await _openSheet(tester, initialSeconds: 300);
+      for (final picker in find.byType(CupertinoPicker).evaluate()) {
+        tester
+            .widget<CupertinoPicker>(find.byWidget(picker.widget))
+            .scrollController!
+            .jumpToItem(0);
+      }
+      await tester.pumpAndSettle();
+      expect(find.text(l10n.disappearingTimerOff), findsOneWidget);
+
+      await _tapSheetButton(tester, l10n.disappearingTimerSetTimer);
+
+      expect(convs.timerCalls, [(1, null)]);
+      expect(find.text(l10n.disappearingTimerOutOfRange), findsNothing);
+      expect(find.byType(DisappearingTimerSheet), findsNothing);
+    });
+
     testWidgets('out-of-range selection shows validation error', (
       tester,
     ) async {

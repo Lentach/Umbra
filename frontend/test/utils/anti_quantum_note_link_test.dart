@@ -176,6 +176,18 @@ void main() {
       expect(link.expiresAt, DateTime.fromMillisecondsSinceEpoch(ms));
     });
 
+    // A3-UTL-02: a friend's link can carry any digits after e=; a value outside
+    // DateTime's range must read as "no expiry", not throw into the bubble.
+    test('an e= beyond the DateTime range is ignored, not thrown', () {
+      for (final huge in ['9000000000000000', '99999999999999999999']) {
+        final noteUrl = '$baseUrl/note/$hex#abcABC012_-&e=$huge';
+        final link = parseAntiQuantumNoteLink(noteUrl, baseUrl: baseUrl);
+        expect(link, isNotNull, reason: huge);
+        expect(link!.expiresAt, isNull, reason: huge);
+        expect(link.token, hex);
+      }
+    });
+
     test('ignores c= and only reads e= for expiresAt', () {
       const ms = 1720000000000;
       final noteUrl = '$baseUrl/note/$hex#abcABC012_-&c=42&e=$ms';

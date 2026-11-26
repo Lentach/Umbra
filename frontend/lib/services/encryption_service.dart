@@ -208,7 +208,11 @@ class EncryptionService {
     if (cached != null) return cached;
     final opening = _prefsOpening ??= (_kvOpener ?? openPlatformContentKv)();
     try {
-      return _prefs = await opening;
+      final opened = await opening;
+      // A revoke (passcode lock) that ran while this opened dropped
+      // `_prefsOpening`; the store it revoked must not become the cache.
+      if (identical(_prefsOpening, opening)) _prefs = opened;
+      return opened;
     } catch (_) {
       if (_prefsOpening == opening) _prefsOpening = null;
       rethrow;
@@ -320,12 +324,6 @@ class EncryptionService {
   /// settlement — the sole state in which [discardProvisionedIdentity] may
   /// destroy key material (T3 review invariant lock).
   bool _provisionalIdentityAdopted = false;
-
-  /// True once [initialize] refused to start because the server already holds
-  /// a bundle for this login's device while local identity material is missing
-  /// or incomplete. The way forward is the §5.1 link or the §6.2 reset; nothing
-  /// in this service mints over an enrolled identity (amendment (lxxi)).
-  bool identityIncomplete = false;
 
   /// Peers whose identity key changed under us, surfaced so the UI can warn
   /// instead of silently trusting the new key.
@@ -1648,7 +1646,6 @@ class EncryptionService {
       debugPrint(
         '[EncryptionService] Identity incomplete — refusing to regenerate',
       );
-      identityIncomplete = true;
       throw const E2eIdentityIncompleteException();
     }
 
@@ -1667,6 +1664,8 @@ class EncryptionService {
       residue: residue,
       reason: guard.exists
           ? 'server-bundle-unlocked-remint'
+          : residue
+          ? 'absent-residue-discarded-server-says-none'
           : 'absent-no-residue-server-says-none',
     );
   }
@@ -1684,7 +1683,6 @@ class EncryptionService {
       final load = await _identityStore.loadFromStorage();
       if (load == IdentityLoadResult.loaded) {
         needsKeyUpload = _keysForUpload != null;
-        identityIncomplete = false;
         _initialized = true;
         return;
       }
@@ -1793,7 +1791,6 @@ class EncryptionService {
     await _storage.delete(key: _linkUnsettledKey(userId));
     await _generateKeys();
     needsKeyUpload = true;
-    identityIncomplete = false;
     _initialized = true;
   }
 
@@ -2004,8 +2001,9 @@ class EncryptionService {
   }) async {
     // Invariant lock (T3 review NOTE): adopting over a device that already
     // holds ANY identity would silently orphan every session keyed to it —
-    // the UI gates this flow on identityIncomplete, but the service must
-    // refuse on its own too. Both record shapes checked (atomic + legacy).
+    // the UI gates this flow on EncryptionProvider.needsDeviceLink, but the
+    // service must refuse on its own too. Both record shapes checked (atomic
+    // + legacy).
     // Amendment (lxv) carves out exactly ONE exception: a ceremony-authorized
     // disposal of (lxiv)-mismatched stale material.
     final existingPrefix = 'e2e_${userId}_';
@@ -2117,7 +2115,6 @@ class EncryptionService {
     }
 
     needsKeyUpload = true;
-    identityIncomplete = false;
     _initialized = true;
     E2ePersistentDiag.record('LINK_IDENTITY_ADOPTED', {'userId': userId});
   }
@@ -2406,7 +2403,6 @@ class EncryptionService {
     await _storage.write(key: '${p}setup_complete', value: 'true');
 
     needsKeyUpload = true;
-    identityIncomplete = false;
     _initialized = true;
     E2ePersistentDiag.record('RESTORE_IDENTITY_ADOPTED', {'userId': userId});
     // (lxxvi) clause 3: raw keys just landed — wrap them NOW on a device
@@ -3509,22 +3505,23 @@ class EncryptionService {
 
   /// Persist decrypted message content to survive app restart.
   ///
-  /// Uses SharedPreferences (localStorage on web) instead of flutter_secure_storage
-  /// (IndexedDB) because localStorage writes are synchronous in JS — they survive
-  /// browser tab close, unlike in-flight IndexedDB transactions which are aborted.
+  /// Uses the content store (SQLCipher on Android, sealed localStorage on web)
+  /// instead of flutter_secure_storage (IndexedDB) because localStorage writes
+  /// are synchronous in JS — they survive browser tab close, unlike in-flight
+  /// IndexedDB transactions which are aborted.
   ///
   /// The `_`-prefixed envelope fields are what let later sweeps FIND this
   /// record. Without them a message is purgeable only while its row happens to
-  /// be loaded: history pages in ~50 rows at a time while the store holds up
-  /// to 2000 across sessions, so "clear chat history" on a freshly launched
-  /// app would purge the visible page and strand the rest — no expiry, no
+  /// be loaded: a chat holds only the rows it has loaded while the store holds
+  /// up to 2000 across sessions, so "clear chat history" on a freshly launched
+  /// app would purge the visible rows and strand the rest — no expiry, no
   /// conversation index, nothing left to name them by, ever.
   ///
   /// [createdAt] and [disappearAfterSeconds] are still stamped for UI expiry
   /// display and forward compatibility, but they no longer feed the sweep:
   /// a read-mode disappearing message is stored with `expiresAt: null` at
-  /// DECRYPT time and receives its real deadline later — on `messageDelivered`
-  /// or via the history-pass self-heal. Until a REAL stamp lands the record is
+  /// DECRYPT time and receives its real deadline later — when the message is
+  /// first shown. Until a REAL stamp lands the record is
   /// NOT locally destroyable (see [_recordExpiryDeadlineMs]): the old
   /// never-read fallback destroyed five still-served records on 2026-08-02
   /// when the stamp event was lost. Unstamped residue is the retention bound's job.
@@ -3662,7 +3659,7 @@ class EncryptionService {
         // legitimately changes, while a later write is exactly where a peer
         // could try to move it (an edit is a fresh envelope the peer
         // controls). An edit re-persists WITHOUT one, so carrying it forward
-        // also keeps the record in [wireIdIndex]. Carried as a pair, so a
+        // also keeps the record in the wire-claims view. Carried as a pair, so a
         // later write can never supply the sender of a `_wid` stamped without
         // one.
         if (existing?[_metaWireId] != null) ...{
@@ -3819,9 +3816,10 @@ class EncryptionService {
     if (wanted.isEmpty) return result;
     try {
       // ONE authoritative snapshot for the whole pass. This is the read the
-      // history hydration depends on: every id it misses here is re-decrypted,
-      // and for an already-decrypted message that means DuplicateMessage and a
-      // permanent "[Decryption failed]".
+      // history read depends on (`allLocalMessageRecords`): a record missing
+      // here reads as "never decrypted", and re-decrypting an
+      // already-decrypted message means DuplicateMessage and a permanent
+      // "[Decryption failed]".
       final prefs = await _sharedPrefs;
       final snapshot = await _authoritativeSnapshot();
       for (final id in wanted) {
@@ -3907,17 +3905,21 @@ class EncryptionService {
     await sweepPrefs(_rawDecryptedContentPrefix(userId), collectIds: true);
     await sweepPrefs(_pendingSendPrefix(userId));
     await sweepPrefs(_boxUnsentPrefix(userId));
+    // Parked box actions: an edit parked for a message that never arrived
+    // holds the edited words. Queued with the park's own writes, so a park in
+    // flight cannot write the row back after the sweep.
+    await _parkedWrite(userId, () => sweepPrefs(_parkedBoxActionKey(userId)));
 
     // Retire what we destroyed, BEFORE reporting success.
     //
-    // Without this the rows the user just wiped stay in the decrypt path: the
-    // server still serves them, hydration finds no record, the re-decrypt hits
-    // a ratchet key consumed at first decrypt, and every one of them renders a
-    // permanent "[Decryption failed]" — the whole history at once, and
-    // indistinguishable from the 2026-07-29 incident. Retention and LRU
-    // eviction already do this for exactly the same reason; a user-initiated
-    // wipe is the one destroyer that did not, so it turned a deliberate action
-    // into what looks like catastrophic corruption.
+    // Without this the rows the user just wiped stay in the decrypt path:
+    // a copy that is delivered again finds no record, the re-decrypt hits
+    // a ratchet key consumed at first decrypt, and it renders a
+    // permanent "[Decryption failed]" — for any wiped message that comes
+    // back, and indistinguishable from the 2026-07-29 incident. Retention and
+    // LRU eviction already do this for exactly the same reason; a
+    // user-initiated wipe is the one destroyer that did not, so it turned a
+    // deliberate action into what looks like catastrophic corruption.
     //
     // Bounded by `_retiredCap` (5000) against a record store capped at 2000, so
     // a full wipe fits with room to spare.
@@ -3971,9 +3973,9 @@ class EncryptionService {
   /// message can never be recovered. Not from the server, not by re-decrypting
   /// — that lands on DuplicateMessage and a permanent "[Decryption failed]"
   /// (see [saveDecryptedContent]). Call this only when the message is provably
-  /// gone for good: a server delete event, or an expiry gated on a
+  /// gone for good: a delete-for-everyone, or an expiry gated on a
   /// server-confirmed clock. NEVER on the local clock alone — a device running
-  /// fast would destroy messages that are still live server-side.
+  /// fast would destroy messages that have not expired yet.
   ///
   /// Removes per id: the plaintext record, the raw replay record, and on
   /// mobile the legacy secure-store copy. Returns a [PlaintextPurgeResult] —
@@ -4086,8 +4088,9 @@ class EncryptionService {
   /// Ids of every persisted plaintext record belonging to [conversationIds].
   ///
   /// Scans the whole prefix instead of working from loaded rows, because the
-  /// store outlives memory: history pages in ~50 rows while up to 2000 records
-  /// persist across sessions. Purging only what is loaded would strand the
+  /// store outlives memory: a chat holds only the rows it has loaded while up
+  /// to 2000 records persist across sessions. Purging only what is loaded
+  /// would strand the
   /// rest permanently — cleared and unfriended messages have no expiry, so no
   /// later sweep would ever revisit them.
   ///
@@ -4120,7 +4123,8 @@ class EncryptionService {
   /// per-minute cleanup lag.
   ///
   /// `retired` is returned separately because retention is the ONE rule that
-  /// destroys plaintext for a row the server still serves — see [markRetired].
+  /// destroys plaintext of a message nobody asked to remove (no expiry, no
+  /// delete): age alone decides — see [markRetired].
   Future<({Set<int> expired, Set<int> retired})> destroyableMessageIds({
     required DateTime serverNow,
     required Duration expiryGrace,
@@ -4194,42 +4198,11 @@ class EncryptionService {
     }
   }
 
-  /// `(senderId, wireId) -> localId` over every persisted plaintext record
-  /// (metadata-privacy PR2.1): the `_wid`/`_wsid` stamp of each `_decrypted_`
-  /// record, keyed back to the id its key names. Nothing reads it yet; the
-  /// box path (PR3.1) dedups its at-least-once deliveries against it.
-  ///
-  /// Both record stores, as [getDecryptedContent] reads them: the content
-  /// store, then — mobile only — the legacy secure store for keys the content
-  /// store does not hold, so a stale legacy copy never outvotes the live one.
-  ///
-  /// The AUTHORITATIVE view, like the history read path: the caller will
-  /// treat a miss as "never seen", and a reload-clobbered cache would hand it
-  /// exactly that for a message this device already holds.
-  ///
-  /// Keyed by SENDER as well as wire id ([WireKey]). A peer sees the wire ids
-  /// of our own sends in plaintext and can stamp one on a message of its
-  /// own; scoped, that claim sits under the peer's name and can never shadow
-  /// ours — even when it lands first, before our copy exists to contradict
-  /// it. A `_wid` stamped without its sender claims nothing. Two records
-  /// holding one sender's wire id contradict `UNIQUE(senderId, sendToken)`,
-  /// so that key maps to NOTHING rather than to a guess. A record that cannot
-  /// be decoded claims nothing. Null means the stores could not be
-  /// enumerated, which is not the same answer as an empty index.
-  Future<Map<WireKey, int>?> wireIdIndex() async {
-    final claims = await _scanWireClaims();
-    if (claims == null) return null;
-    return {
-      for (final MapEntry(key: wire, value: ids) in claims.entries)
-        if (ids.length == 1) wire: ids.single,
-    };
-  }
-
   /// Whether a record OTHER than [id] already holds [wire] — the box path's
   /// dedup (metadata-privacy PR3.1 slice (b)): the same message may already
   /// be here, delivered over the old path or journaled twice. Any claim
   /// counts, ambiguous ones too: this asks "is it here", not "which row is
-  /// it" ([wireIdIndex]). Null when the stores could not be enumerated.
+  /// it" ([wireHolder]). Null when the stores could not be enumerated.
   ///
   /// Served from a per-account cache: the first call scans every record (on
   /// web that unseals them), and [saveDecryptedContent] adds each new stamp.
@@ -4243,7 +4216,7 @@ class EncryptionService {
 
   /// The ONE record holding [wire] — what a box reply's quote resolves to
   /// (metadata-privacy item 3, E18a) — from [wireHeldByOther]'s cache. Null
-  /// when none or more than one does ([wireIdIndex]'s rule: a guess would
+  /// when none or more than one does (a guess would
   /// show the wrong message as the quote) or the stores could not be
   /// enumerated. A deleted record's claim is kept, so the caller reads the
   /// record before trusting the id.
@@ -4331,7 +4304,17 @@ class EncryptionService {
     return getDecryptedContentMany(ids);
   }
 
-  /// Every `(sender, wire id)` stamp → the record ids holding it.
+  /// Every `(sender, wire id)` stamp → the record ids holding it: the
+  /// `_wid`/`_wsid` stamp of each `_decrypted_` record, keyed back to the id
+  /// its key names. Both record stores, as [getDecryptedContent] reads them:
+  /// the content store, then — mobile only — the legacy secure store for keys
+  /// the content store does not hold, so a stale legacy copy never outvotes
+  /// the live one. Keyed by SENDER as well as wire id: a peer sees the wire
+  /// ids of our own sends in plaintext and can stamp one on a message of its
+  /// own; scoped, that claim sits under the peer's name and can never shadow
+  /// ours. A `_wid` stamped without its sender claims nothing, and a record
+  /// that cannot be decoded claims nothing. Null means the stores could not
+  /// be enumerated.
   Future<Map<WireKey, Set<int>>?> _scanWireClaims() async {
     final userId = _userId;
     if (userId == null) return null;
@@ -4419,7 +4402,8 @@ class EncryptionService {
   }
 
   /// Records a delete-for-everyone of [wire]. Locked for the same reason the
-  /// retired set is: one key, every same-origin PWA engine.
+  /// retired set is: one key, every same-origin PWA engine. What was parked
+  /// for it (an edit holds words of the deleted message) goes with it.
   Future<void> addBoxTombstone(WireKey wire) async {
     final userId = _userId;
     if (userId == null) return;
@@ -4434,18 +4418,26 @@ class EncryptionService {
           ..[_tombstoneOf(wire)] = now;
         final newest = kept.entries.toList()
           ..sort((a, b) => b.value.compareTo(a.value));
-        await prefs.setString(
+        final written = await prefs.setString(
           _boxTombstoneKey(userId),
           jsonEncode({
             for (final e in newest.take(_boxTombstoneCap)) e.key: e.value,
           }),
         );
+        // Both backends answer `false` to a refused write instead of
+        // throwing; a lost tombstone lets a late copy show again.
+        if (!written) {
+          E2ePersistentDiag.record('BOX_TOMBSTONE_WRITE_FAILED', {
+            'error': 'refused',
+          });
+        }
       } on Object catch (e) {
         E2ePersistentDiag.record('BOX_TOMBSTONE_WRITE_FAILED', {
           'error': e.runtimeType.toString(),
         });
       }
     });
+    await _dropParkedFor(userId, wire);
   }
 
   Map<String, int> _readBoxTombstones(ContentKv prefs, int userId) {
@@ -4577,13 +4569,15 @@ class EncryptionService {
   ) async {
     final newest = marks.chats.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
-    await prefs.setString(
+    final written = await prefs.setString(
       _boxSeenKey(userId),
       jsonEncode({
         'b': marks.base,
         'c': {for (final e in newest.take(_boxSeenCap)) '${e.key}': e.value},
       }),
     );
+    // Refused writes answer `false`; the caller's tail records the failure.
+    if (!written) throw StateError('box seen write refused');
   }
 
   // ── Box actions parked until their target lands (item 4, E19k) ──────────
@@ -4633,7 +4627,12 @@ class EncryptionService {
         for (final (key, a) in all.take(_parkedBoxActionCap)) {
           (kept[key] ??= []).add(a);
         }
-        await prefs.setString(_parkedBoxActionKey(userId), jsonEncode(kept));
+        if (!await prefs.setString(
+          _parkedBoxActionKey(userId),
+          jsonEncode(kept),
+        )) {
+          throw StateError('parked write refused');
+        }
       } on Object catch (e) {
         E2ePersistentDiag.record('BOX_PARKED_WRITE_FAILED', {
           'error': e.runtimeType.toString(),
@@ -4672,7 +4671,12 @@ class EncryptionService {
         await _reloadPrefsForCrossContext(prefs);
         final parked = _readParkedBoxActions(prefs, userId);
         if (parked.remove(_parkedOf(conversationId, wire)) == null) return;
-        await prefs.setString(_parkedBoxActionKey(userId), jsonEncode(parked));
+        if (!await prefs.setString(
+          _parkedBoxActionKey(userId),
+          jsonEncode(parked),
+        )) {
+          throw StateError('parked write refused');
+        }
       } on Object catch (e) {
         E2ePersistentDiag.record('BOX_PARKED_WRITE_FAILED', {
           'error': e.runtimeType.toString(),
@@ -4680,6 +4684,32 @@ class EncryptionService {
       }
     });
   }
+
+  /// Drops what is parked for [wire] in EVERY chat: its message was deleted
+  /// for everyone, so nothing is left to apply to, and an edit parked here
+  /// still holds the words of that message.
+  Future<void> _dropParkedFor(int userId, WireKey wire) =>
+      _parkedWrite(userId, () async {
+        try {
+          final prefs = await _sharedPrefs;
+          await _reloadPrefsForCrossContext(prefs);
+          final parked = _readParkedBoxActions(prefs, userId);
+          final suffix = '|${_tombstoneOf(wire)}';
+          final before = parked.length;
+          parked.removeWhere((key, _) => key.endsWith(suffix));
+          if (parked.length == before) return;
+          if (!await prefs.setString(
+            _parkedBoxActionKey(userId),
+            jsonEncode(parked),
+          )) {
+            throw StateError('parked write refused');
+          }
+        } on Object catch (e) {
+          E2ePersistentDiag.record('BOX_PARKED_WRITE_FAILED', {
+            'error': e.runtimeType.toString(),
+          });
+        }
+      });
 
   /// The park's writes, one after another: the cross-context lock passes
   /// through off web, and the native store shows a write only once it
@@ -4968,22 +4998,17 @@ class EncryptionService {
   // Decrypt ledger — "ids whose plaintext I have successfully persisted at
   // least once".
   //
-  // [markRetired] answers "I destroyed this deliberately". The ledger answers
-  // the question the app could not previously ask at all: a record is missing
-  // NOW — did it ever exist? Without an answer, a record lost to quota,
-  // eviction, corruption or a bug is indistinguishable from a message that was
-  // never decrypted, so the app re-runs Signal decrypt on a ciphertext whose
-  // ratchet key it already consumed, gets DuplicateMessage, and the row becomes
-  // a permanent '[Decryption failed]'. That is precisely the 2026-07-29
-  // incident's mechanism, and every storage-loss path can re-trigger it.
+  // It no longer gates decryption (batch 2, ENC-12 / EC-17). Its readers are
+  // `ContactStore._nextLocalId`, which must never hand out a local id that was
+  // used before, and the hacker-mode diagnostics panel (`diagStorageSets`).
+  // [markRetired] answers "I destroyed this deliberately"; the ledger answers
+  // "did this id ever hold a record".
   //
-  // Fail-safe in each direction that matters, which is why it is safe to let
-  // this gate decryption at all:
+  // Fail-safe in each direction that matters:
   //  * recorded ONLY after a CONFIRMED commit of real plaintext, so a failed
-  //    write can never mark a message "already decrypted" and lock it out of
-  //    the one decrypt that would have worked;
-  //  * a load failure, a miss, or an evicted entry degrades to the OLD
-  //    behaviour (attempt the decrypt) — never to a false "unavailable";
+  //    write can never mark a message "already decrypted";
+  //  * a load failure, a miss, or an evicted entry only means an id can look
+  //    unused, which the retired set and the record scan still cover;
   //  * deliberate destruction drops the entries through
   //    [forgetDecryptedMany].
   //
@@ -5127,9 +5152,9 @@ class EncryptionService {
   /// Drop every id in [ids] from the ledger, one lock and one write.
   ///
   /// For DELIBERATE destruction (expiry sweep, delete purges, the full wipe):
-  /// a purged record whose ledger entry survives makes the next served copy of
-  /// that row read as UNEXPECTED loss — `LEDGER_RECORD_LOST` plus a permanent
-  /// retire — turning an ordered deletion into a false alarm (the 2026-08-02
+  /// a purged record whose ledger entry survives reads as UNEXPECTED loss in
+  /// the diagnostics panel — an ordered deletion looking like a lost record
+  /// (the 2026-08-02
   /// dump carried exactly this ambiguity). Reads authoritatively (getString
   /// serves the clobberable cache, the exact 2026-07-29 mechanism) and writes
   /// UNCONDITIONALLY: a write skipped on a short read is precisely when the
@@ -5218,7 +5243,8 @@ class EncryptionService {
   /// the fallback. The stamp travels on a single unacked socket event and can
   /// be lost (race with the persist, missed socket window), and on 2026-08-02
   /// the fallback destroyed five records the server was still serving —
-  /// `LEDGER_RECORD_LOST` ×5, the ledger's first real catch. An unstamped
+  /// `LEDGER_RECORD_LOST` ×5 (the ledger's first real catch, back when it
+  /// gated decryption; that gate is gone). An unstamped
   /// record now simply does not expire locally; the 30-day retention bound
   /// cleans the residue.
   /// Over-retention is recoverable, over-destruction is not.
@@ -5845,8 +5871,10 @@ class EncryptionService {
   int? _cachedContentEstimate;
 
   Future<void> _pruneDecryptedContentCache(ContentKv prefs, int userId) async {
-    // NO reload here: the only caller (saveDecryptedContent) reloaded a few
-    // lines earlier and has not awaited anything that could invalidate it.
+    // NO reload here: `_saveDecryptedContent` does not reload either (it
+    // reads through `_authoritativeSnapshot` and awaits `setString` before
+    // this call), so the cache may be stale. That only under-counts the
+    // records, which is the safe side (see `_cachedContentKeys`).
     if (_decryptedContentCacheLimit <= 0) {
       await clearDecryptedContentCache();
       return;

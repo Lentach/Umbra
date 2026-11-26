@@ -317,7 +317,7 @@ class _InvitationContent extends StatelessWidget {
             friends.searchResults!.isEmpty) ...[
           const SizedBox(height: 12),
           Text(
-            l10n.userNotFound,
+            friends.searchUnanswered ? l10n.userSearchNoAnswer : l10n.userNotFound,
             textAlign: TextAlign.center,
             style: RpgTheme.bodyFont(
               fontSize: 14,

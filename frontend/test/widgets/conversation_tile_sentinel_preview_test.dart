@@ -152,6 +152,12 @@ void main() {
     expect(find.text('see you tomorrow', findRichText: true), findsOneWidget);
   });
 
+  testWidgets('a ping previews as the brand word PING!', (tester) async {
+    await _pumpTile(tester, _row('', type: MessageType.ping));
+
+    expect(find.text('PING!', findRichText: true), findsOneWidget);
+  });
+
   testWidgets('tile shows note label instead of raw note URL', (tester) async {
     // Own-origin note URL: whole trimmed content is one note link, so the tile
     // preview must show the label, never the raw URL.
