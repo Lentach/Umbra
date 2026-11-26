@@ -32,6 +32,12 @@ class AuthForm extends StatefulWidget {
   /// about the PREVIOUS attempt cannot sit under an edited form.
   final VoidCallback? onEdited;
 
+  /// Keeps the password field through a mode change. Set only for the hand-over
+  /// of an account that was created but could not sign in: the password the
+  /// user just chose is the right one for the sign-in tab. Every other switch
+  /// still clears it.
+  final bool keepPassword;
+
   const AuthForm({
     super.key,
     required this.mode,
@@ -39,6 +45,7 @@ class AuthForm extends StatefulWidget {
     required this.onRecover,
     this.initialUsername,
     this.onEdited,
+    this.keepPassword = false,
   });
 
   @override
@@ -61,7 +68,9 @@ class _AuthFormState extends State<AuthForm> {
     super.didUpdateWidget(oldWidget);
     // One password field serves every door; a value typed for one (a failed
     // sign-in guess) must not become the NEW password of another.
-    if (widget.mode != oldWidget.mode) _passwordController.clear();
+    if (widget.mode != oldWidget.mode && !widget.keepPassword) {
+      _passwordController.clear();
+    }
     final prefill = widget.initialUsername;
     if (prefill != null && prefill != oldWidget.initialUsername) {
       _usernameController.text = prefill;

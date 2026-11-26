@@ -170,4 +170,46 @@ void main() {
     expect(find.byKey(const Key('auth-recover-phrase')), findsNothing);
     expect(passwordText(), isEmpty);
   });
+
+  // The account was created but the sign-in after it failed (a stalled first
+  // request on iOS Safari). The screen moves to the sign-in tab; the password
+  // the user just chose is the right one and must still be in the field.
+  testWidgets('a created account that could not sign in lands on the sign-in '
+      'tab with its password kept', (tester) async {
+    final l10n = await _pump(
+      tester,
+      MockClient((req) async => switch (req.url.path) {
+            '/auth/register' => _json({'id': 7}, 201),
+            _ => _json({}, 500),
+          }),
+    );
+    String passwordText() => tester
+        .widget<TextFormField>(find.byType(TextFormField).last)
+        .controller!
+        .text;
+
+    await tester.tap(find.text(l10n.authRegisterTab));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextFormField).first, 'newbie');
+    await tester.enterText(find.byType(TextFormField).last, 'Fresh1Pass');
+    await tester.ensureVisible(find.byKey(const Key('auth-submit')));
+    await tester.tap(find.byKey(const Key('auth-submit')));
+    await tester.pumpAndSettle();
+
+    // On the sign-in tab, name and password ready.
+    expect(find.byKey(const Key('auth-forgot-password')), findsOneWidget);
+    expect(
+      tester
+          .widget<TextFormField>(find.byType(TextFormField).first)
+          .controller!
+          .text,
+      'newbie',
+    );
+    expect(passwordText(), 'Fresh1Pass');
+
+    // Only that hand-over keeps it: the next switch clears as before.
+    await tester.tap(find.byKey(const Key('auth-forgot-password')));
+    await tester.pumpAndSettle();
+    expect(passwordText(), isEmpty);
+  });
 }
