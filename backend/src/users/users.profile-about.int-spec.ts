@@ -223,7 +223,7 @@ describeWithDb('PATCH /users/profile-about on real Postgres', () => {
       expect(await column()).toBe('text');
       expect(await hasCheck()).toBe(true);
       const rows: Array<{ length: number }> = await db.query(
-        `SELECT char_length(about) AS length FROM public.users WHERE username = 'bob'`,
+        `SELECT char_length(about) AS length FROM public.users WHERE tag = '2222'`,
       );
       expect(rows[0].length).toBe(100);
     });
