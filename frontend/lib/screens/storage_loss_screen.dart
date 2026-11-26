@@ -8,6 +8,7 @@ import '../services/backup/history_backup.dart';
 import '../services/backup/history_backup_service.dart';
 import '../services/backup/storage_loss.dart';
 import '../services/contacts/contact_store.dart';
+import '../services/encryption_service.dart';
 import '../theme/rpg_theme.dart';
 import '../widgets/dialogs/backup_passphrase_dialog.dart';
 import '../widgets/settings_console.dart';
@@ -193,6 +194,14 @@ class _StorageLossScreenState extends State<StorageLossScreen> {
                     context,
                     icon: Icons.history_toggle_off,
                     text: l10n.storageLossHistoryNote,
+                  ),
+                  const SizedBox(height: 12),
+                  _note(
+                    context,
+                    icon: Icons.warning_amber_rounded,
+                    text: l10n.restoreRetentionWarning(
+                      EncryptionService.retentionWindow.inDays,
+                    ),
                   ),
                   if (_error != null) ...[
                     const SizedBox(height: 20),

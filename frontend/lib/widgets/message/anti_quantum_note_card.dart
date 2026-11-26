@@ -1,11 +1,9 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
-import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
 import '../../theme/rpg_theme.dart';
 import '../../utils/anti_quantum_note_link.dart';
@@ -23,6 +21,15 @@ const kNoteAliveProbeInterval = Duration(seconds: 30);
 
 /// Test seam: resolves whether the note behind [token] still exists.
 typedef NoteAliveProbe = Future<bool> Function(String token);
+
+/// The probe a card uses when none is injected: a bare `GET /note/<token>/status`
+/// on the app's own API. It carries no login and no other identifier, so the
+/// server cannot tie the polling account to the account that created the note
+/// (A3-MSG-B-04, owner decision 2026-11-26). [api] is for tests.
+NoteAliveProbe defaultNoteAliveProbe([ApiService? api]) {
+  final client = api ?? ApiService(baseUrl: AppConfig.baseUrl);
+  return client.isNoteAlive;
+}
 
 /// In-chat banner for an Anti-Quantum Note link. Replaces the raw URL text
 /// (and any link-preview card) inside the TEXT bubble. Tapping an own-origin
@@ -43,9 +50,8 @@ typedef NoteAliveProbe = Future<bool> Function(String token);
 class AntiQuantumNoteCard extends StatefulWidget {
   final String noteUrl;
 
-  /// Overrides the default REST probe in tests. When null the card resolves
-  /// [AuthProvider]/[ApiService] lazily and skips probing entirely if they
-  /// are unavailable (plain widget-test trees).
+  /// Overrides the default REST probe in tests. When null the card uses
+  /// [defaultNoteAliveProbe] (an anonymous status call).
   final NoteAliveProbe? aliveProbe;
   final bool isMine;
   final Color textColor;
@@ -129,13 +135,14 @@ class _AntiQuantumNoteCardState extends State<AntiQuantumNoteCard> {
     _probeTimer = Timer.periodic(kNoteAliveProbeInterval, (_) => _probeOnce());
   }
 
+  /// Built once per card: every probe reuses one HTTP client instead of
+  /// opening a new one every [kNoteAliveProbeInterval].
+  late final NoteAliveProbe _probe =
+      widget.aliveProbe ?? defaultNoteAliveProbe();
+
   Future<void> _probeOnce() async {
     if (_probeInFlight || _burned || _destroyed) return;
-    final probe = widget.aliveProbe ?? _defaultProbe();
-    if (probe == null) {
-      _probeTimer?.cancel();
-      return;
-    }
+    final probe = _probe;
     _probeInFlight = true;
     try {
       final alive = await probe(_token!);
@@ -153,21 +160,6 @@ class _AntiQuantumNoteCardState extends State<AntiQuantumNoteCard> {
     } finally {
       _probeInFlight = false;
     }
-  }
-
-  /// Default REST probe; null when the tree has no [AuthProvider] (tests) or
-  /// no session token yet.
-  NoteAliveProbe? _defaultProbe() {
-    String? jwt;
-    try {
-      jwt = context.read<AuthProvider>().token;
-    } catch (_) {
-      return null;
-    }
-    if (jwt == null) return null;
-    final api = ApiService(baseUrl: AppConfig.baseUrl);
-    final sessionToken = jwt;
-    return (noteToken) => api.isNoteAlive(sessionToken, noteToken);
   }
 
   @override

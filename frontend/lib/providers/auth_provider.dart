@@ -14,6 +14,9 @@ import '../services/push_service.dart';
 import '../services/session_refresh_exception.dart';
 import '../config/app_config.dart';
 import '../utils/contact_backup_prompt.dart';
+import '../utils/download_utils_web.dart'
+    if (dart.library.io) '../utils/download_utils_io.dart'
+    as download_utils;
 import '../utils/e2e_persistent_diag.dart';
 import 'auth/auth_status.dart';
 

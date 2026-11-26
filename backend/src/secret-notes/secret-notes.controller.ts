@@ -58,11 +58,14 @@ export class SecretNotesController {
 
   /** Existence check for the in-chat note banner: the client flips the card
    *  to a "burned — it was read" remnant when the note is gone BEFORE its
-   *  clock (the `e=` fragment param) ran out. JWT-guarded — only app clients
-   *  query it; the public reveal page never calls this. Malformed tokens get
-   *  `alive:false` (no oracle beyond what GET /note/:token already exposes).
+   *  clock (the `e=` fragment param) ran out. DELIBERATELY PUBLIC, like the
+   *  reveal page it mirrors (owner decision 2026-11-26, A3-MSG-B-04): a
+   *  request that carries a JWT lets a request log link the account that
+   *  created the note (POST /notes) to every account that polls it, so the
+   *  client sends no login. The throttle below is the only limit. Malformed
+   *  tokens get `alive:false` (no oracle beyond what GET /note/:token
+   *  already exposes).
    */
-  @UseGuards(JwtAuthGuard)
   @Get('note/:token/status')
   @Throttle({ default: { limit: 120, ttl: 60000 } })
   async noteStatus(@Param('token') token: string): Promise<{ alive: boolean }> {

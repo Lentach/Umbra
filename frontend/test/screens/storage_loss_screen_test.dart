@@ -3,6 +3,7 @@ import 'package:fireplace/screens/storage_loss_screen.dart';
 import 'package:fireplace/services/backup/history_backup.dart';
 import 'package:fireplace/services/backup/history_backup_service.dart';
 import 'package:fireplace/services/backup/storage_loss.dart';
+import 'package:fireplace/services/encryption_service.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -64,6 +65,18 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(StorageLoss.lostThisBoot, isFalse);
+  });
+
+  testWidgets('warns that restored messages older than the retention window '
+      'are deleted again', (tester) async {
+    await pumpScreen(tester, service: _FakeBackupService.succeeding());
+
+    expect(
+      find.text(
+        l10n.restoreRetentionWarning(EncryptionService.retentionWindow.inDays),
+      ),
+      findsOneWidget,
+    );
   });
 
   testWidgets('a successful restore acknowledges the latch', (tester) async {

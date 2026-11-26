@@ -2354,4 +2354,14 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get storageLossContinueAction => 'Continue';
+
+  @override
+  String localRetentionNotice(int days) {
+    return 'Messages on this device are deleted automatically $days days after they were stored.';
+  }
+
+  @override
+  String restoreRetentionWarning(int days) {
+    return 'Messages in a backup that are older than $days days are deleted again right after the restore.';
+  }
 }
