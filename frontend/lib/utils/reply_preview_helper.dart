@@ -246,11 +246,28 @@ String replyDisplayContentForQuote(
           : decrypted;
     }
   }
+  // The provider writes the English type label as a media quote's text (it has
+  // no BuildContext). Once the quoted row has left the list, name the type in
+  // the app's language instead (A3-UTL-04).
+  const english = kReplyPreviewLabels;
+  final storedTypeLabel =
+      replyTo.messageType != MessageType.text &&
+      replyTo.content ==
+          replyTypeLabel(
+            replyTo.messageType,
+            voiceMessageLabel: english.voiceMessageLabel,
+            imageLabel: english.imageLabel,
+            gifLabel: english.gifLabel,
+            documentLabel: english.documentLabel,
+            pingLabel: english.pingLabel,
+            videoLabel: english.videoLabel,
+            encryptedMessageLabel: english.encryptedMessageLabel,
+          );
   return replyPreviewForMessage(
     l10n,
     MessageModel(
       id: replyTo.id,
-      content: replyTo.content,
+      content: storedTypeLabel ? '' : replyTo.content,
       senderId: 0,
       senderUsername: replyTo.senderUsername,
       conversationId: conversationId,
