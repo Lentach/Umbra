@@ -90,6 +90,7 @@ class VoiceMessageContent extends StatelessWidget {
         themePreference: themePreference,
       ),
       onReply: () => messaging.setReplyingTo(message),
+      goneWatch: messageGoneWatch(messaging, () => messaging.messages, message),
       onPin: () => messaging.pinMessage(message.conversationId, message.id),
       onDelete: () {
         showMessageDeleteDialog(

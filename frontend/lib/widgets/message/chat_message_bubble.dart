@@ -93,6 +93,7 @@ class ChatMessageBubble extends StatelessWidget {
         themePreference: themePreference,
       ),
       onReply: () => messaging.setReplyingTo(message),
+      goneWatch: messageGoneWatch(messaging, () => messaging.messages, message),
       onCopy: !message.hasCopyablePlaintext
           ? null
           : () {
