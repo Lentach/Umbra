@@ -1341,6 +1341,24 @@ void main() {
       },
     );
 
+    // A3-UTL-03: an edit's text is a friend's text as well.
+    test("an edit to a sentinel's literal text stays ordinary text", () async {
+      final msg = await fromBob('first', wire: 'wire-bob-0023');
+      await bobDoes(
+        action(
+          'edit',
+          s: 2,
+          w: 'wire-bob-0023',
+          content: kDecryptionFailedLabel,
+          at: msg.createdAt.add(const Duration(minutes: 1)),
+        ),
+      );
+      final shown = row(msg.id)!.content;
+      expect(shown, isNot(kDecryptionFailedLabel));
+      expect(shown.replaceAll('\u200B', ''), kDecryptionFailedLabel);
+      expect((await recordOf(msg.id))?['content'], shown);
+    });
+
     test('Bob cannot edit or delete OUR message', () async {
       final ours = await mine('mine');
       await bobDoes(action('edit', s: 1, w: ours.wireId!, content: 'pwned'));

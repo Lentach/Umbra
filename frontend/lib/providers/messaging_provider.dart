@@ -122,6 +122,23 @@ const String kEncryptionNotInitializedLabel = '[Encryption not initialized]';
 /// nothing failed here.
 const String kNotLinkedYetMessageLabel = '[Sent before this device was linked]';
 
+/// A peer's text is data, but the app also marks rows it could not read with
+/// the literal labels above, and every display and save rule keys on the exact
+/// string. A friend who types one would get the fake "your keys are gone" row
+/// and a message that is never saved (A3-UTL-03). Text equal to a label gets
+/// one trailing zero-width space: invisible, and no longer a label. The
+/// labels are never written to the wire, so no real row is touched.
+String neutralizeSentinelText(String content) =>
+    const {
+      kDecryptionFailedLabel,
+      kEncryptedPlaceholderLabel,
+      kRetiredMessageLabel,
+      kEncryptionNotInitializedLabel,
+      kNotLinkedYetMessageLabel,
+    }.contains(content)
+    ? '$content\u200B'
+    : content;
+
 /// Zone key under which a box read carries the session epoch it was queued in.
 final Object _boxReadEpochKey = Object();
 
