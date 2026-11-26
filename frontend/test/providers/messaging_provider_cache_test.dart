@@ -1,13 +1,13 @@
 import 'dart:typed_data';
 
-import 'package:flutter_test/flutter_test.dart';
-import 'package:fireplace/providers/encryption_provider.dart';
-import 'package:fireplace/providers/conversations_provider.dart';
-import 'package:fireplace/services/contacts/contact_record.dart';
-import '../support/chat_seed.dart';
-import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/models/message_model.dart';
+import 'package:fireplace/providers/conversations_provider.dart';
+import 'package:fireplace/providers/encryption_provider.dart';
+import 'package:fireplace/providers/messaging_provider.dart';
+import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/utils/message_ids.dart';
+import 'package:flutter_test/flutter_test.dart';
+import '../support/chat_seed.dart';
 
 MessageModel _msg(int id, int convId, {DateTime? at}) => MessageModel(
       id: id,
@@ -146,15 +146,16 @@ void main() {
     // screen until a restart.
     test('wiping all local history empties the open chat and the previews', () {
       final conversations = ConversationsProvider();
-      provider.setConversationsProvider(conversations);
-      provider.setActiveConversationIdForTest(10);
-      provider.seedMessagesForTest(10, [_msg(1, 10), _msg(2, 10)]);
-      provider.seedCacheForTest(11, [_msg(3, 11)]);
+      provider
+        ..setConversationsProvider(conversations)
+        ..setActiveConversationIdForTest(10)
+        ..seedMessagesForTest(10, [_msg(1, 10), _msg(2, 10)])
+        ..seedCacheForTest(11, [_msg(3, 11)]);
       conversations.updateLastMessage(10, _msg(2, 10));
       var notified = 0;
-      provider.addListener(() => notified++);
-
-      provider.onLocalHistoryWiped();
+      provider
+        ..addListener(() => notified++)
+        ..onLocalHistoryWiped();
 
       expect(provider.messages, isEmpty);
       expect(provider.hasCachedMessages(10), isFalse);
@@ -171,7 +172,7 @@ void main() {
           'id': 10,
           'userOne': {'id': 1, 'username': 'alice', 'tag': '0001'},
           'userTwo': {'id': 2, 'username': 'bob', 'tag': '0002'},
-          'createdAt': DateTime.utc(2026, 1, 1).toIso8601String(),
+          'createdAt': DateTime.utc(2026).toIso8601String(),
           'unreadCount': 3,
         },
       ]);

@@ -264,40 +264,39 @@ class _AuthGateState extends State<AuthGate> {
     // the connection, the auth session and the locale at once. Logout
     // semantics — the local history and Signal keys stay (spec §1 non-goal).
     final l10n = AppLocalizations.of(context);
-    conn.onDeviceRevoked = (reason) => auth.logoutBecauseDeviceRevoked(
-      // (lxxviii): a phrase restore elsewhere is not a takeover and not a
-      // deliberate revocation — word the sign-out accordingly.
-      reason == 'restored'
-          ? l10n.deviceRevokedRestoredNotice
-          : l10n.deviceRevokedNotice,
-    );
-
-    // An account deleted on another device sends this one nothing; its next
-    // handshake is dropped without an event. A socket that ended before it
-    // turned ready asks the session whether the account still exists, and
-    // only a bare 401 on a live access token plus a refused refresh says no.
-    // Then this device leaves the way the deleting device did: signed out,
-    // connection closed, local keys wiped (`SettingsScreen` delete flow).
-    conn.onSessionRejected = () async {
-      // Taken before the verdict clears the session: a device that was closed
-      // while the account was deleted never initialized its encryption
-      // service, so the wipe has to be told whose keys to remove.
-      final accountId = auth.currentUser?.id;
-      if (!await auth.endSessionIfAccountGone()) return;
-      conn.disconnect(isLogout: true);
-      // Read here, not in build: only an account that is gone needs it.
-      if (!mounted) return;
-      await context.read<EncryptionProvider>().clearEncryptionKeys(
-        userId: accountId,
-      );
-    };
-
-    // The mirror case (spec §6.2): a reset teardown re-homed this account onto
-    // a NEWLY allocated device and handed back the session bound to it. Same
-    // storage path as login and as the §5.1 provisioning rebind — a second
-    // token path would drift. Without this the recovering device publishes its
-    // pre-keys under the device the teardown just revoked.
-    conn.onSessionRebound = auth.adoptProvisionedSession;
+    conn
+      ..onDeviceRevoked = ((reason) => auth.logoutBecauseDeviceRevoked(
+        // (lxxviii): a phrase restore elsewhere is not a takeover and not a
+        // deliberate revocation — word the sign-out accordingly.
+        reason == 'restored'
+            ? l10n.deviceRevokedRestoredNotice
+            : l10n.deviceRevokedNotice,
+      ))
+      // An account deleted on another device sends this one nothing; its next
+      // handshake is dropped without an event. A socket that ended before it
+      // turned ready asks the session whether the account still exists, and
+      // only a bare 401 on a live access token plus a refused refresh says no.
+      // Then this device leaves the way the deleting device did: signed out,
+      // connection closed, local keys wiped (`SettingsScreen` delete flow).
+      ..onSessionRejected = () async {
+        // Taken before the verdict clears the session: a device that was
+        // closed while the account was deleted never initialized its
+        // encryption service, so the wipe has to be told whose keys to remove.
+        final accountId = auth.currentUser?.id;
+        if (!await auth.endSessionIfAccountGone()) return;
+        conn.disconnect(isLogout: true);
+        // Read here, not in build: only an account that is gone needs it.
+        if (!mounted) return;
+        await this.context.read<EncryptionProvider>().clearEncryptionKeys(
+          userId: accountId,
+        );
+      }
+      // The mirror case (spec §6.2): a reset teardown re-homed this account
+      // onto a NEWLY allocated device and handed back the session bound to it.
+      // Same storage path as login and as the §5.1 provisioning rebind — a
+      // second token path would drift. Without this the recovering device
+      // publishes its pre-keys under the device the teardown just revoked.
+      ..onSessionRebound = auth.adoptProvisionedSession;
 
     // Issue #234: the session refresh answered `Device revoked` — the
     // account socket never said so (a cold start opens none), so the

@@ -409,7 +409,7 @@ describe('ChatGateway account deletion', () => {
   });
 
   it('registers for account deletions when the module starts', () => {
-    const onAccountDeleted = jest.fn();
+    const onAccountDeleted = jest.fn<void, [(id: number) => void]>();
     const gateway = new ChatGateway(
       {} as JwtService,
       { onAccountDeleted } as unknown as UsersService,
@@ -425,7 +425,7 @@ describe('ChatGateway account deletion', () => {
     (gateway as unknown as { server: unknown }).server = { in: inRoom };
 
     gateway.onModuleInit();
-    const listener = onAccountDeleted.mock.calls[0][0] as (id: number) => void;
+    const [listener] = onAccountDeleted.mock.calls[0];
     listener(9);
 
     expect(inRoom).toHaveBeenCalledWith('user:9');

@@ -46,10 +46,13 @@ describe('UsersController', () => {
       ['POST', '/users/profile-photos/3/main'],
       ['POST', '/users/profile-photos/order'],
       ['DELETE', '/users/profile-photos/3'],
-    ])('%s %s answers 404: an older build cannot change a photo', async (method, path) => {
-      const res = await fetch(`${base}${path}`, { method });
-      expect(res.status).toBe(404);
-    });
+    ])(
+      '%s %s answers 404: an older build cannot change a photo',
+      async (method, path) => {
+        const res = await fetch(`${base}${path}`, { method });
+        expect(res.status).toBe(404);
+      },
+    );
 
     it('GET /users/me still serves the legacy server photo the one-time migration reads', async () => {
       usersService.findProfileById.mockResolvedValue({

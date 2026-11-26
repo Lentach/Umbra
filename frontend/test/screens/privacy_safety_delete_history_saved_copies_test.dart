@@ -54,7 +54,7 @@ void main() {
           senderId: 1,
           senderUsername: 'alice',
           conversationId: 10,
-          createdAt: DateTime.utc(2026, 1, 1),
+          createdAt: DateTime.utc(2026),
         ),
       ]);
     addTearDown(messaging.dispose);

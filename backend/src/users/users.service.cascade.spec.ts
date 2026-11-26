@@ -105,7 +105,9 @@ describe('UsersService.deleteAccount – cascade', () => {
     service.onAccountDeleted((id) => deleted.push(id));
 
     mockRepo.remove.mockRejectedValueOnce(new Error('delete aborted'));
-    await expect(service.deleteAccount(7, 'correct-password')).rejects.toThrow();
+    await expect(
+      service.deleteAccount(7, 'correct-password'),
+    ).rejects.toThrow();
     expect(deleted).toEqual([]);
 
     await service.deleteAccount(7, 'correct-password');
