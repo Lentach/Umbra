@@ -296,4 +296,43 @@ void main() {
     expect(restarted.keyChangeLogOf(malloryId), other);
     expect(restarted.keyChangeLogOf(bobId), hasLength(50));
   });
+
+  test('the note and the rebuild intents are written BEFORE the anchor '
+      'moves', () async {
+    final pinned = await pinBob();
+    alice.knownAddressesOf = (_) => {1, 2};
+    var seen = false;
+    alice.debugBeforeAutoAcceptSwap = () async {
+      seen = true;
+      expect(alice.keyChangeLogOf(bobId), hasLength(1));
+      expect(alice.pendingSessionRebuilds, contains((bobId, 2)));
+      expect(await alice.peerTofuIdentityBase64(bobId), pinned);
+    };
+
+    await alice.buildSession(
+      bobId,
+      flatBundleFrom(newBob),
+      expectedIdentityBase64: pinned,
+    );
+
+    expect(seen, isTrue);
+    expect(await alice.peerTofuIdentityBase64(bobId), identityOf(newBob));
+    expect(alice.pendingSessionRebuilds, contains((bobId, 2)));
+    expect(alice.pendingSessionRebuilds, isNot(contains((bobId, 1))),
+        reason: 'the address the artifact built is fresh');
+  });
+
+  test('a refused swap leaves no note and no rebuild intent', () async {
+    final pinned = await pinBob();
+    alice.knownAddressesOf = (_) => {1, 2};
+    // A different candidate lands in the slot between the checks and the swap.
+    alice.debugBeforeAutoAcceptSwap = () =>
+        alice.debugStagePending(bobId, identityOf(mallory));
+
+    await expectRefused(pinned, newBob);
+
+    expect(alice.keyChangeLogOf(bobId), isEmpty);
+    expect(alice.pendingSessionRebuilds, isEmpty);
+    expect((await started(aliceId)).keyChangeLogOf(bobId), isEmpty);
+  });
 }

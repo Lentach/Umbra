@@ -439,6 +439,35 @@ class EncryptionService {
   /// marks the friend's OTHER addresses for a rebuild.
   void Function(int peerId, int deviceId)? onPeerAutoAccepted;
 
+  /// The addresses (device ids) this device knows for a friend, so an
+  /// auto-accept can record the rebuild intent of the OTHER ones before the
+  /// anchor moves. Set by the provider.
+  Set<int> Function(int peerId)? knownAddressesOf;
+
+  /// Test seam: runs after the note and intents are written, right before
+  /// the anchor swap.
+  @visibleForTesting
+  Future<void> Function()? debugBeforeAutoAcceptSwap;
+
+  /// Test seam: stage [identityBase64] as [peerId]'s pending candidate.
+  @visibleForTesting
+  Future<void> debugStagePending(int peerId, String identityBase64) =>
+      _identityStore.stagePendingAccountIdentity(
+        peerId.toString(),
+        IdentityKey.fromBytes(base64Decode(identityBase64), 0),
+      );
+
+  void _appendKeyChange(int peerId, int atMs) {
+    final log = _keyChangeLog[peerId] ??= <int>[];
+    log.add(atMs);
+    if (log.length > _keyChangeLogPerPeer) {
+      log.removeRange(
+        _keyChangeLogHead,
+        log.length - (_keyChangeLogPerPeer - _keyChangeLogHead),
+      );
+    }
+  }
+
   /// Whether [peerId] is verified: the user compared fingerprints and the
   /// pinned anchor is still that very key.
   Future<bool> isPeerVerified(int peerId) async {
@@ -651,23 +680,32 @@ class EncryptionService {
       // acknowledgePeerIdentity answers only for a peer with a standing
       // warning; join the set in RAM for the call.
       final wasWarned = !_peersWithChangedIdentity.add(peerId);
+      // Everything that must outlive a kill is written BEFORE the anchor
+      // moves (the (xlviii) clause 1 order): the permanent note and the
+      // rebuild intents for the friend's OTHER addresses. A refused swap
+      // takes both back.
+      final before = List<int>.of(_keyChangeLog[peerId] ?? const <int>[]);
+      _appendKeyChange(peerId, DateTime.now().toUtc().millisecondsSinceEpoch);
+      await _persistKeyChangeLog();
+      final others = <int>{1, ...?knownAddressesOf?.call(peerId)}
+        ..remove(deviceId);
+      final intents = await recordSessionRebuilds(peerId, others);
+      await debugBeforeAutoAcceptSwap?.call();
       final advanced = await acknowledgePeerIdentity(
         peerId,
         adoptIdentityBase64: offeredIdentityBase64,
       );
       if (!advanced) {
         if (!wasWarned) _peersWithChangedIdentity.remove(peerId);
+        if (before.isEmpty) {
+          _keyChangeLog.remove(peerId);
+        } else {
+          _keyChangeLog[peerId] = before;
+        }
+        await _persistKeyChangeLog();
+        await clearSessionRebuilds(peerId, intents);
         return false;
       }
-      final log = _keyChangeLog[peerId] ??= <int>[];
-      log.add(DateTime.now().toUtc().millisecondsSinceEpoch);
-      if (log.length > _keyChangeLogPerPeer) {
-        log.removeRange(
-          _keyChangeLogHead,
-          log.length - (_keyChangeLogPerPeer - _keyChangeLogHead),
-        );
-      }
-      await _persistKeyChangeLog();
       E2ePersistentDiag.record('PEER_IDENTITY_AUTO_ACCEPTED', {
         'peerId': peerId,
         'deviceId': deviceId,

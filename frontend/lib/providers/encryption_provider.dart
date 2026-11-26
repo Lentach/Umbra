@@ -76,10 +76,14 @@ class EncryptionProvider extends ChangeNotifier {
     // Decision 152: an unverified friend's new key was accepted from an
     // artifact. The address that artifact just built a session for is fresh;
     // the friend's other addresses were keyed to the replaced identity.
+    // The service writes the durable rebuild intents BEFORE the anchor moves
+    // (it asks which addresses we know); this hook does the in-RAM half.
+    _encryptionService.knownAddressesOf = (peerId) => {
+      ...?_deviceListCache.cached(peerId)?.liveDeviceIds,
+    };
     _encryptionService.onPeerAutoAccepted = (peerId, deviceId) {
       final others = <int>{1, ...?_deviceListCache.cached(peerId)?.liveDeviceIds}
         ..remove(deviceId);
-      _encryptionService.recordSessionRebuilds(peerId, others).ignore();
       invalidateDeviceList(peerId, byPerson: true);
       for (final other in others) {
         markSessionRebuild(peerId, deviceId: other);
