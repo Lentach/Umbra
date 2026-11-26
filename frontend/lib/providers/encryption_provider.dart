@@ -265,6 +265,17 @@ class EncryptionProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Puts the permanent note of an accepted key ABOVE the message that came
+  /// under it (see [EncryptionService.alignKeyChangeNote]).
+  Future<void> alignKeyChangeNote(
+    int userId,
+    AutoAccepted accepted,
+    int atMs,
+  ) async {
+    await _encryptionService.alignKeyChangeNote(userId, accepted, atMs);
+    notifyListeners();
+  }
+
   /// Whether the user verified [peerId]'s current key (key-bound).
   Future<bool> isPeerVerified(int peerId) =>
       _encryptionService.isPeerVerified(peerId);

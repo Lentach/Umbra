@@ -467,6 +467,23 @@ void main() {
     expect(await deliver(entry(), _peer(2, conversationId: 10)), isTrue);
   });
 
+  test('decision 152: the permanent note is stamped just BEFORE the message '
+      'that came under the new key', () async {
+    final forged = await pinFriendAndForge(verified: false);
+    final sentAt = receivedAt.subtract(const Duration(minutes: 5));
+    envelope('from the new phone', sentAt: sentAt);
+
+    expect(await deliver(forged, _peer(2, conversationId: 10)), isTrue);
+
+    final shown = provider.messages.singleWhere((m) => m.id == forged.localId);
+    expect(shown.createdAt, sentAt);
+    expect(
+      encryption.peerKeyChangeLog(2).single,
+      shown.createdAt.millisecondsSinceEpoch - 1,
+      reason: 'the line sits above the message, not below it',
+    );
+  });
+
   test('decision 152: a frame whose decrypt FAILS does not keep the key it '
       'claimed — the anchor and the note go back', () async {
     final forged = await pinFriendAndForge(verified: false);

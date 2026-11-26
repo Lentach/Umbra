@@ -319,6 +319,28 @@ void main() {
     expect(enc.dismissed, isEmpty, reason: 'nothing forgets a permanent line');
   });
 
+  testWidgets('a note stamped before the first message under the new key '
+      'sits ABOVE it; one newer than every message sits at the bottom',
+      (tester) async {
+    // Received direction: the note is 1 ms before the newest message (12:42).
+    final before = DateTime.utc(2026, 1, 1, 12, 42).millisecondsSinceEpoch - 1;
+    // Sent direction: the build happened after the last message.
+    final after = DateTime.utc(2026, 9, 1).millisecondsSinceEpoch;
+    await _pumpChat(
+      tester,
+      alarmed: false,
+      withMessages: true,
+      keyChangeWarnings: false,
+      keyChangeLog: [before, after],
+    );
+
+    final above = tester.getTopLeft(find.byKey(ValueKey('peer-key-change-log-$before'))).dy;
+    final below = tester.getTopLeft(find.byKey(ValueKey('peer-key-change-log-$after'))).dy;
+    final first = tester.getTopLeft(find.byKey(const ValueKey(1002))).dy;
+    expect(above, lessThan(first), reason: 'above the message under the new key');
+    expect(below, greaterThan(first), reason: 'after the last message');
+  });
+
   testWidgets('an accepted key change shows in an empty chat too',
       (tester) async {
     final at = DateTime.utc(2026, 1, 1).millisecondsSinceEpoch;

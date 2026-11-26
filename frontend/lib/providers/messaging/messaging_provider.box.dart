@@ -255,6 +255,18 @@ extension MessagingBox on MessagingProvider {
       _e2eFlowLog('BOX_ENVELOPE_UNREADABLE', {'msgId': msg.id});
       return true;
     }
+    // The decrypt proved the key: the accept stands. Its permanent note goes
+    // just BEFORE the message that came under it (that message's time is the
+    // sender's clock, clamped to our receipt — decision 13).
+    if (accepted != null) {
+      final sent = parsed.sentAt;
+      final at = sent == null || sent.isAfter(receivedAt) ? receivedAt : sent;
+      await enc.alignKeyChangeNote(
+        msg.senderId,
+        accepted,
+        at.millisecondsSinceEpoch - 1,
+      );
+    }
     // Whether that device relays to the siblings a sender cannot address
     // (101 A, E101b): every frame says it, so a missing `rl` takes it back.
     final origin = msg.originDeviceId;

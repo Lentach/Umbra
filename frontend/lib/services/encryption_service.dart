@@ -776,6 +776,26 @@ class EncryptionService {
     }
   }
 
+  /// Moves [accepted]'s permanent note back to [atMs] when it is later: the
+  /// line must sit ABOVE the first message that came under the new key, and
+  /// that message's own time (the sender's clock, clamped to receipt) is only
+  /// known once the frame is decrypted and parsed.
+  Future<void> alignKeyChangeNote(
+    int peerId,
+    AutoAccepted accepted,
+    int atMs,
+  ) async {
+    final was = accepted.noteAtMs;
+    final log = _keyChangeLog[peerId];
+    if (was == AutoAccepted.alreadyPinned || was <= atMs || log == null) return;
+    final at = log.indexOf(was);
+    if (at < 0) return;
+    log[at] = atMs;
+    log.sort();
+    await _persistKeyChangeLog();
+    onPeerIdentityChanged?.call(peerId);
+  }
+
   /// Whether [bundle]'s signed pre-key is signed by [identity]: the one proof
   /// a served bundle carries that its key belongs to a holder of the private
   /// half. Checked BEFORE the anchor may move.
