@@ -386,6 +386,12 @@ abstract class AppLocalizations {
   /// **'główne'**
   String get devicesPrimaryBadge;
 
+  /// No description provided for @devicesRowSemantics.
+  ///
+  /// In pl, this message translates to:
+  /// **'Urządzenie {id} {platform}'**
+  String devicesRowSemantics(int id, String platform);
+
   /// No description provided for @devicesThisDeviceKeyless.
   ///
   /// In pl, this message translates to:
@@ -451,6 +457,24 @@ abstract class AppLocalizations {
   /// In pl, this message translates to:
   /// **'Urządzenie zostało połączone.'**
   String get linkPrimaryDone;
+
+  /// No description provided for @linkQrSemantics.
+  ///
+  /// In pl, this message translates to:
+  /// **'Kod QR połączenia {payload}'**
+  String linkQrSemantics(String payload);
+
+  /// No description provided for @linkCodeSemantics.
+  ///
+  /// In pl, this message translates to:
+  /// **'Kod połączenia'**
+  String get linkCodeSemantics;
+
+  /// No description provided for @linkSecurityCodeSemantics.
+  ///
+  /// In pl, this message translates to:
+  /// **'Kod bezpieczeństwa {code}'**
+  String linkSecurityCodeSemantics(String code);
 
   /// No description provided for @linkInvalidCode.
   ///

@@ -173,6 +173,11 @@ class AppLocalizationsEn extends AppLocalizations {
   String get devicesPrimaryBadge => 'primary';
 
   @override
+  String devicesRowSemantics(int id, String platform) {
+    return 'Device $id $platform';
+  }
+
+  @override
   String get devicesThisDeviceKeyless =>
       'This device holds no keys yet. Link it to your primary device.';
 
@@ -207,6 +212,19 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get linkPrimaryDone => 'The device has been linked.';
+
+  @override
+  String linkQrSemantics(String payload) {
+    return 'Link QR code $payload';
+  }
+
+  @override
+  String get linkCodeSemantics => 'Link code';
+
+  @override
+  String linkSecurityCodeSemantics(String code) {
+    return 'Security code $code';
+  }
 
   @override
   String get linkInvalidCode =>

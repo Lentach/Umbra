@@ -276,7 +276,7 @@ void qrTests() {
     await tester.pump();
     final qr = tester.widget<QrImageView>(find.byType(QrImageView));
     expect(qr.semanticsLabel, endsWith('/link#$_code'));
-    expect(qr.semanticsLabel, startsWith('link qr http'));
+    expect(qr.semanticsLabel, startsWith(l10n.linkQrSemantics('http')));
     expect(find.text(_code), findsOneWidget);
   });
 }

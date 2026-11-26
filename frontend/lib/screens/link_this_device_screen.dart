@@ -206,7 +206,7 @@ class _LinkThisDeviceBodyState extends State<LinkThisDeviceBody> {
                       code;
                   return QrImageView(
                     data: qrPayload,
-                    semanticsLabel: 'link qr $qrPayload',
+                    semanticsLabel: l10n.linkQrSemantics(qrPayload),
                     version: QrVersions.auto,
                     size: 200,
                     backgroundColor: Colors.white,
@@ -224,7 +224,7 @@ class _LinkThisDeviceBodyState extends State<LinkThisDeviceBody> {
               border: Border.all(color: colors.outlineVariant),
             ),
             child: Semantics(
-              label: 'link code',
+              label: l10n.linkCodeSemantics,
               child: SelectableText(
                 code,
                 key: const Key('link-oob-code'),
@@ -439,7 +439,7 @@ class _LinkThisDeviceBodyState extends State<LinkThisDeviceBody> {
       ),
       const SizedBox(height: 16),
       Semantics(
-        label: 'security code $sas',
+        label: l10n.linkSecurityCodeSemantics(sas),
         child: Container(
           key: const Key('link-new-sas-code'),
           padding: const EdgeInsets.symmetric(vertical: 20),

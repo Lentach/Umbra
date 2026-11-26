@@ -50,7 +50,11 @@ class _FakeConnectionProvider extends ConnectionProvider {
 
 _FakeConnectionProvider _connection = _FakeConnectionProvider();
 
-Widget _host({int? revokeDeviceId, EncryptionProvider? encryption}) {
+Widget _host({
+  int? revokeDeviceId,
+  EncryptionProvider? encryption,
+  Locale? locale,
+}) {
   _connection = _FakeConnectionProvider();
   return MultiProvider(
     providers: [
@@ -64,6 +68,7 @@ Widget _host({int? revokeDeviceId, EncryptionProvider? encryption}) {
       theme: RpgTheme.themeDataDarkGray,
       localizationsDelegates: AppLocalizations.localizationsDelegates,
       supportedLocales: AppLocalizations.supportedLocales,
+      locale: locale,
       home: DevicesScreen(revokeDeviceId: revokeDeviceId),
     ),
   );
@@ -373,4 +378,27 @@ void main() {
       expect(frames, isEmpty);
     });
   }
+
+  // A2-DEV-07: the screen reader names a row in the app's language.
+  testWidgets('a device row is announced in Polish, not English', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    await tester.pumpWidget(_host(locale: const Locale('pl')));
+    await tester.pumpAndSettle();
+    _connection.sink!
+      ..listState = DeviceListState.enrolled
+      ..verifiedList = _twoLive
+      ..holdsDak = true
+      ..notifyListeners();
+    await tester.pumpAndSettle();
+
+    final pl = await AppLocalizations.delegate.load(const Locale('pl'));
+    expect(
+      find.bySemanticsLabel(RegExp('^${pl.devicesRowSemantics(6, 'web')}')),
+      findsOneWidget,
+    );
+    expect(find.bySemanticsLabel(RegExp('^device 6')), findsNothing);
+    semantics.dispose();
+  });
 }

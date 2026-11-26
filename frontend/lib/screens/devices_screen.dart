@@ -771,7 +771,7 @@ class _DeviceRow extends StatelessWidget {
 
     return Semantics(
       label:
-          'device ${entry.deviceId} ${entry.platform}'
+          '${l10n.devicesRowSemantics(entry.deviceId, entry.platform)}'
           '${name == null ? '' : ' $name'}'
           '${isPrimary ? ' ${l10n.devicesPrimaryBadge}' : ''}'
           '${revoked ? ' ${l10n.devicesRevokedBadge}' : ''}',
