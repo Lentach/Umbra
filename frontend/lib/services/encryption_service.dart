@@ -503,6 +503,21 @@ class EncryptionService {
     if (userId == null) return;
     try {
       final prefs = await _sharedPrefs;
+      // Union with what a sibling tab wrote (ours wins): verification is only
+      // ever added, never removed.
+      try {
+        await _reloadPrefsForCrossContext(prefs);
+        final raw = prefs.getString(_peerVerifiedKey(userId));
+        final stored = raw == null ? null : jsonDecode(raw);
+        if (stored is Map) {
+          for (final MapEntry(:key, :value) in stored.entries) {
+            final peerId = int.tryParse('$key');
+            if (peerId != null && value is String) {
+              _peerVerified.putIfAbsent(peerId, () => value);
+            }
+          }
+        }
+      } on Object catch (_) {}
       await prefs.setString(
         _peerVerifiedKey(userId),
         jsonEncode({
@@ -539,11 +554,50 @@ class EncryptionService {
     }
   }
 
-  Future<void> _persistKeyChangeLog() async {
+  /// Reads the verified record through (a sibling tab may have written it).
+  Future<void> _refreshPeerVerified() async {
+    final userId = _userId;
+    if (userId == null) return;
+    try {
+      await _reloadPrefsForCrossContext(await _sharedPrefs);
+    } on Object catch (_) {}
+    await _loadPeerVerified(userId);
+  }
+
+  /// Unions the stored note log into memory (by peer and instant) so this
+  /// tab's next write cannot erase a note a sibling tab wrote. Memory only
+  /// ever GAINS entries here; removals stay with their own paths.
+  Future<void> _mergeStoredKeyChangeLog(ContentKv prefs, int userId) async {
+    try {
+      await _reloadPrefsForCrossContext(prefs);
+      final raw = prefs.getString(_keyChangeLogKey(userId));
+      if (raw == null) return;
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return;
+      for (final entry in decoded) {
+        if (entry case {'peerId': final int peerId, 'atMs': final int atMs}) {
+          final log = _keyChangeLog[peerId] ??= <int>[];
+          if (!log.contains(atMs)) log.add(atMs);
+        }
+      }
+      for (final log in _keyChangeLog.values) {
+        log.sort();
+        if (log.length > _keyChangeLogPerPeer) {
+          log.removeRange(
+            _keyChangeLogHead,
+            log.length - (_keyChangeLogPerPeer - _keyChangeLogHead),
+          );
+        }
+      }
+    } on Object catch (_) {}
+  }
+
+  Future<void> _persistKeyChangeLog({bool merge = false}) async {
     final userId = _userId;
     if (userId == null) return;
     try {
       final prefs = await _sharedPrefs;
+      if (merge) await _mergeStoredKeyChangeLog(prefs, userId);
       final all = [
         for (final e in _keyChangeLog.entries)
           for (final at in e.value) (peerId: e.key, atMs: at),
@@ -694,6 +748,9 @@ class EncryptionService {
         );
       }
       if (keyChangeWarnings() || pinned == null) return null;
+      // Another tab may have verified this friend since this one loaded: the
+      // decision is rare, so read the record through right before it.
+      await _refreshPeerVerified();
       if (await isPeerVerified(peerId)) return null;
       final pending = await _identityStore.pendingAccountIdentity(name);
       if (pending == null) {
@@ -715,7 +772,7 @@ class EncryptionService {
       final before = List<int>.of(_keyChangeLog[peerId] ?? const <int>[]);
       final noteAt = DateTime.now().toUtc().millisecondsSinceEpoch;
       _appendKeyChange(peerId, noteAt);
-      await _persistKeyChangeLog();
+      await _persistKeyChangeLog(merge: true);
       final others = <int>{1, ...?knownAddressesOf?.call(peerId)}
         ..remove(deviceId);
       final intents = await recordSessionRebuilds(peerId, others);

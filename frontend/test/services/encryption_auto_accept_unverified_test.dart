@@ -517,4 +517,41 @@ void main() {
     await prefs.setString('e2e_${aliceId}_peer_verified_v1', '{}');
     expect(await restarted.isPeerVerified(bobId), isFalse);
   });
+
+  test('N4: a verification made in another tab is seen by the accept '
+      'decision, not just at load', () async {
+    final pinned = await pinBob();
+    final tab2 = await started(aliceId); // another tab, same storage
+    expect(await tab2.verifyPinned(bobId), isTrue);
+
+    // This tab loaded before: it must still hold the friend.
+    await expectRefused(pinned, newBob);
+  });
+
+  test('N4: a note written by another tab is not overwritten by this tab\'s '
+      'next accept', () async {
+    final pinned = await pinBob();
+    final tab2 = await started(aliceId);
+    await tab2.buildSession(
+      malloryId,
+      flatBundleFrom(mallory),
+      expectedIdentityBase64: null,
+    );
+    // This tab accepts Bob's new key first, then the other tab accepts Y's.
+    await alice.buildSession(
+      bobId,
+      flatBundleFrom(newBob),
+      expectedIdentityBase64: pinned,
+    );
+    await tab2.buildSession(
+      malloryId,
+      flatBundleFrom(newBob),
+      expectedIdentityBase64: identityOf(mallory),
+    );
+
+    final fresh = await started(aliceId);
+    expect(fresh.keyChangeLogOf(bobId), hasLength(1),
+        reason: "the first tab's note survives the other tab's write");
+    expect(fresh.keyChangeLogOf(malloryId), hasLength(1));
+  });
 }
