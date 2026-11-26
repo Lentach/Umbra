@@ -1407,6 +1407,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get documentDownloaded => 'Document downloaded';
 
   @override
+  String get documentFallbackName => 'document';
+
+  @override
   String get documentDownloadFailed => 'Failed to download document';
 
   @override

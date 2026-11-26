@@ -539,6 +539,7 @@
   "privacyAntiQuantumNotePointTimer": "Nieotwarte znikają po 1–24 h.",
 
   "documentDownloaded": "Dokument pobrany",
+  "documentFallbackName": "dokument",
   "documentDownloadFailed": "Nie udało się pobrać dokumentu",
   "documentDownloadConfirmTitle": "Pobrać dokument?",
   "documentDownloadConfirmMessage": "Czy chcesz pobrać ten plik?",

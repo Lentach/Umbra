@@ -1433,6 +1433,9 @@ class AppLocalizationsPl extends AppLocalizations {
   String get documentDownloaded => 'Dokument pobrany';
 
   @override
+  String get documentFallbackName => 'dokument';
+
+  @override
   String get documentDownloadFailed => 'Nie udało się pobrać dokumentu';
 
   @override

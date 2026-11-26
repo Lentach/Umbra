@@ -2444,6 +2444,12 @@ abstract class AppLocalizations {
   /// **'Dokument pobrany'**
   String get documentDownloaded;
 
+  /// No description provided for @documentFallbackName.
+  ///
+  /// In pl, this message translates to:
+  /// **'dokument'**
+  String get documentFallbackName;
+
   /// No description provided for @documentDownloadFailed.
   ///
   /// In pl, this message translates to:

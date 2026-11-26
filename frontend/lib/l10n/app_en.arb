@@ -548,6 +548,7 @@
   "privacyAntiQuantumNotePointTimer": "Unopened ones vanish after 1–24 h.",
 
   "documentDownloaded": "Document downloaded",
+  "documentFallbackName": "document",
   "documentDownloadFailed": "Failed to download document",
   "documentDownloadConfirmTitle": "Download document?",
   "documentDownloadConfirmMessage": "Do you want to download this file?",

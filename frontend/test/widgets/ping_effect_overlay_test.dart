@@ -1,10 +1,12 @@
 import 'dart:ui';
 
-import 'package:flutter/material.dart';
-import 'package:flutter_test/flutter_test.dart';
+import 'package:fireplace/l10n/app_localizations.dart';
+import 'package:fireplace/widgets/message/ping_message_content.dart';
 import 'package:fireplace/widgets/ping_effect_overlay.dart';
 import 'package:fireplace/widgets/ping_glyph.dart';
-import 'package:fireplace/widgets/message/ping_message_content.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import '../support/l10n.dart';
 
 void main() {
   testWidgets(
@@ -115,6 +117,8 @@ void main() {
     const color = Color(0xFF123456);
     await tester.pumpWidget(
       const MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: Scaffold(
           body: PingMessageContent(isMine: false, textColor: color),
         ),
@@ -124,7 +128,7 @@ void main() {
     final glyph = tester.widget<PingGlyph>(find.byType(PingGlyph));
     expect(glyph.size, 18);
     expect(glyph.color, color);
-    expect(find.text('PING!'), findsOneWidget);
+    expect(find.text(l10n.ping), findsOneWidget);
     expect(find.byIcon(Icons.campaign), findsNothing);
   });
 }
