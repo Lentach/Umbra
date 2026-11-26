@@ -9,13 +9,14 @@ import 'package:fireplace/services/contacts/contact_store.dart';
 import 'package:fireplace/services/device_list/device_list_cache.dart';
 import 'package:fireplace/services/device_list/device_list_canonical.dart';
 import 'package:fireplace/services/encryption/signal_stores.dart';
-import 'package:fireplace/services/encryption_service.dart';
 import 'package:fireplace/utils/e2e_diag_log.dart';
 import 'package:fireplace/utils/e2e_envelope.dart';
 import 'package:fireplace/utils/message_ids.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../support/verify_pinned.dart';
 
 /// Metadata-privacy item 5 on REAL Signal, BOTH sides: two friends' devices,
 /// each the shipped reader (`consumeBoxEntry`) and friend encrypt path
@@ -52,6 +53,35 @@ class _Enc extends EncryptionProvider {
   /// The peer's held list: enrolled, or — single-device by construction —
   /// not (its device is then 1).
   bool peerEnrolled = true;
+
+  /// Forced lookups asked of this provider: a person's tap owes one. A test
+  /// may make one refresh what the box serves.
+  final List<int> forcedLookups = [];
+  Future<void> Function()? onForcedLookup;
+
+  /// What was asked of the device-list cache, in order.
+  final List<String> lookupLog = [];
+
+  @override
+  void invalidateDeviceList(int userId, {bool byPerson = false}) {
+    lookupLog.add('invalidate ${byPerson ? 'by person' : 'by event'}');
+    super.invalidateDeviceList(userId, byPerson: byPerson);
+  }
+
+  @override
+  Future<VerifiedDeviceList> getVerifiedDeviceList(
+    int userId, {
+    bool forceRefresh = false,
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    if (!forceRefresh) {
+      return super.getVerifiedDeviceList(userId, timeout: timeout);
+    }
+    lookupLog.add('lookup');
+    forcedLookups.add(userId);
+    await onForcedLookup?.call();
+    return cachedDeviceList(userId)!;
+  }
 
   @override
   VerifiedDeviceList? cachedDeviceList(int userId) => userId != _peer
@@ -111,7 +141,7 @@ class _Side {
   /// This side's queue for the peer.
   final String sid;
   late final _Enc enc = _Enc(device, peerId, peerDevice);
-  late final MessagingProvider reader;
+  late MessagingProvider reader;
   late final _Link link;
   late _Side other;
   int otp = 0;
@@ -119,6 +149,20 @@ class _Side {
   /// Frames this side's reader held (not finished): the box journal keeps
   /// them and offers them again.
   final List<BoxInboxEntry> held = [];
+
+  /// Every request this side's encryption provider sent (the own-bundle
+  /// check apart): a bundle fetch, a lookup. A calm hold sends none.
+  final List<String> emits = [];
+
+  /// What the server serves for a bundle fetch: the bundle as it is, or
+  /// whatever a test makes of it (null: the server has none).
+  Map<String, dynamic>? Function(Map<String, dynamic> bundle) serve =
+      (bundle) => bundle;
+
+  /// While set, a bundle answer waits for it.
+  Completer<void>? gate;
+
+  int get fetches => emits.where((e) => e == 'fetchPreKeyBundle').length;
 
   ContactRecord get peerRecord => ContactRecord(
     userId: peerId,
@@ -321,30 +365,39 @@ void main() {
     };
   }
 
+  /// A reader as the app builds one at start.
+  MessagingProvider newReader(_Side side) => MessagingProvider()
+    ..setEncryptionProvider(side.enc)
+    ..setCurrentUserId(side.userId)
+    ..setToken('tok')
+    ..setIncomingMessageSoundEnabledForTest(false)
+    ..onConnect(false)
+    ..setEmitCallback((event, data) {})
+    ..boxFriends = side.link;
+
   Future<void> wire(_Side side) async {
     side.enc.setEmitCallback((event, data) {
       if (event == 'checkOwnKeyBundle') {
         side.enc.onOwnKeyBundleStatus({'exists': false});
+        return;
       }
+      side.emits.add(event);
       if (event == 'fetchPreKeyBundle') {
-        side.enc.onPreKeyBundleResponse({
-          'userId': side.peerId,
-          'deviceId': side.peerDevice,
-          'bundle': bundleOf(side.other, side.other.otp++),
-        });
+        final bundle = bundleOf(side.other, side.other.otp++);
+        unawaited(() async {
+          await side.gate?.future;
+          side.enc.onPreKeyBundleResponse({
+            'userId': side.peerId,
+            'deviceId': side.peerDevice,
+            'bundle': side.serve(bundle),
+          });
+        }());
       }
     });
     await side.enc.initializeE2E(side.userId);
     side
       ..link = _Link(side, mail)
-      ..reader = (MessagingProvider()
-        ..setEncryptionProvider(side.enc)
-        ..setCurrentUserId(side.userId)
-        ..setToken('tok')
-        ..setIncomingMessageSoundEnabledForTest(false)
-        ..onConnect(false)
-        ..setEmitCallback((event, data) {})
-        ..boxFriends = side.link);
+      ..reader = newReader(side);
   }
 
   /// Delivers every frame in flight, and whatever reading them sends.
@@ -373,10 +426,8 @@ void main() {
     expect(mail, isEmpty, reason: 'the pump must settle');
   }
 
-  /// The user accepts the friend's new key on [side] (the dialog's confirm),
-  /// and the box journal offers what was held again, in order.
-  Future<void> acceptAndReoffer(_Side side) async {
-    expect(await side.enc.acknowledgePeerIdentity(side.peerId), isTrue);
+  /// The box journal offers what [side] held again, in order.
+  Future<void> reoffer(_Side side) async {
     final again = [...side.held];
     side.held.clear();
     for (final entry in again) {
@@ -386,6 +437,13 @@ void main() {
     }
     await pumpEventQueue();
     await pump();
+  }
+
+  /// The user accepts the friend's new key on [side] (the dialog's confirm),
+  /// and the box journal offers what was held again, in order.
+  Future<void> acceptAndReoffer(_Side side) async {
+    expect(await side.enc.acknowledgePeerIdentity(side.peerId), isTrue);
+    await reoffer(side);
   }
 
   bool converged() =>
@@ -418,6 +476,8 @@ void main() {
     a.link._asked.clear();
     b.link._asked.clear();
     E2eDiagLog.clear();
+    a.emits.clear(); // the key upload of the start-up is not a request
+    b.emits.clear();
   });
 
   tearDown(E2eDiagLog.clear);
@@ -471,7 +531,11 @@ void main() {
   group('a friend device that lost its storage (decision 88)', () {
     /// Only a NOT enrolled account re-mints on a login (an enrolled one
     /// gates), and B holds A's list as such.
-    setUp(() => b.enc.peerEnrolled = false);
+    setUp(() async {
+      b.enc.peerEnrolled = false;
+      // Calm needs the PERSISTED list too (the cache alone is not enough).
+      await b.enc.encryptionService.recordPeerDeviceList(1, null);
+    });
 
     /// Before the wipe the pair was on the box: each held the other's queue
     /// and had acked it.
@@ -518,19 +582,6 @@ void main() {
       );
     }
 
-    /// What [s] holds for its friend device: session record and key row.
-    Future<FriendDeviceSnapshot> holding(_Side s) => s.enc.encryptionService
-        .snapshotFriendDevice(s.peerId, s.peerDevice);
-
-    /// Nothing the refused frame brought survives: the session (so no later
-    /// whisper of its sender reads on it) and the per-device key row are
-    /// exactly what they were.
-    Future<void> expectUntouched(_Side s, FriendDeviceSnapshot before) async {
-      final now = await holding(s);
-      expect(now.sessionBytes, before.sessionBytes);
-      expect(now.identity?.serialize(), before.identity?.serialize());
-    }
-
     test('is HELD until we accept its new key (decision 143); then the '
         'handoff is taken and what we write reaches the restored device, '
         'both ways', () async {
@@ -546,6 +597,10 @@ void main() {
       expect(b.refusals, isEmpty);
       expect(b.link.learned, a.sid, reason: 'the old address stands');
       expect(b.enc.peersWithHeldMessages, contains(1));
+      // Warnings ON: never the calm line, never a request.
+      expect(b.reader.calmHoldState(1), isNull);
+      expect(b.enc.peersCalmHeld, isEmpty);
+      expect(b.emits, isEmpty);
 
       await acceptAndReoffer(b);
 
@@ -645,80 +700,405 @@ void main() {
       expect(b.link.learned, restored.sid);
     });
 
-    // ---- Decision 152, warnings OFF (the default), friend unverified ----
+    // ---- Decision 152 (option C): the calm hold and the person's tap ----
 
     Future<String> idOf(_Side s) async =>
         (await s.enc.encryptionService.getKeyBundleForReupload())![
                 'identityPublicKey']
             as String;
 
-    Future<String?> anchorOfA() => b.enc.encryptionService
-        .peerTofuIdentityBase64(1);
+    Future<String?> anchorOfA() =>
+        b.enc.encryptionService.peerTofuIdentityBase64(1);
 
-    test('warnings OFF: the restored (not enrolled) device is accepted at '
-        'once — one note, the handoff taken, traffic both ways', () async {
+    /// The restored device's handoff reaches B and waits calmly.
+    Future<_Side> calmRestore() async {
       onTheBox();
+      final restored = await restoreA();
+      await restored.link.restart();
+      await pump();
+      return restored;
+    }
+
+    /// The person taps the waiting line on [side]; when the key was
+    /// confirmed the box drains again (what `onHeldFramesReleased` does).
+    Future<void> tap(_Side side) async {
+      var released = 0;
+      side.enc.onHeldFramesReleased = (_) => released++;
+      await side.reader.confirmCalmHold(side.peerId);
+      if (released > 0) {
+        expect(released, 1, reason: 'one release per confirmed key');
+        await reoffer(side);
+      }
+    }
+
+    /// Nothing but the calm line: no warning, no candidate, no request.
+    void expectCalm(_Side s, {int held = 1}) {
+      expect(s.held, hasLength(held));
+      expect(s.reader.calmHoldState(s.peerId), CalmHoldState.waiting);
+      expect(s.enc.peersCalmHeld, contains(s.peerId));
+      expect(s.enc.peersWithHeldMessages, contains(s.peerId));
+      expect(s.enc.peersWithChangedIdentity, isEmpty);
+      expect(s.emits, isEmpty, reason: 'a frame alone asks nobody');
+    }
+
+    /// The visible (red) hold: the pill's set, no calm line.
+    void expectRed(_Side s, {int held = 1}) {
+      expect(s.held, hasLength(held));
+      expect(s.reader.calmHoldState(s.peerId), isNull);
+      expect(s.enc.peersCalmHeld, isEmpty);
+      expect(s.enc.peersWithHeldMessages, contains(s.peerId));
+      expect(s.enc.peersWithChangedIdentity, contains(s.peerId));
+    }
+
+    test('K1: a restored not-enrolled friend waits CALMLY, with no request '
+        'at all; one tap takes its key, the handoff and the held frame, '
+        'both ways', () async {
+      onTheBox();
+      final before = await anchorOfA();
+      expect(before, isNotNull);
       final restored = await restoreA();
 
       await restored.link.restart();
       await pump();
 
+      expectCalm(b);
+      expect(await anchorOfA(), before);
+      expect(b.link.learned, a.sid, reason: 'the old address stands');
+      expect(b.enc.peerKeyChangeLog(1), isEmpty);
+
+      await tap(b);
+
       expect(b.held, isEmpty);
-      expect(b.refusals, isEmpty);
-      expect(b.link.learned, restored.sid);
+      expect(b.reader.calmHoldState(1), isNull);
+      expect(b.enc.peersCalmHeld, isEmpty);
+      expect(b.enc.peersWithHeldMessages, isEmpty);
+      expect(b.enc.peersWithChangedIdentity, isEmpty);
       expect(await anchorOfA(), await idOf(restored));
       expect(b.enc.peerKeyChangeLog(1), hasLength(1));
+      expect(b.refusals, isEmpty);
+      expect(b.link.learned, restored.sid);
+      expect(restored.link.acked, isTrue);
+      expect(b.fetches, 1, reason: 'the tap asked once');
       await expectTraffic(b, restored);
       await expectTraffic(restored, b);
     });
 
-    test('warnings OFF: from a friend held as ENROLLED, the refused handoff '
-        'leaves the anchor, the note and the address untouched', () async {
+    test('K2: a friend held as ENROLLED gets the visible hold at once: '
+        'nothing is delivered, nothing is asked, and its real device still '
+        'reads our next message', () async {
       b.enc.peerEnrolled = true;
+      await b.enc.encryptionService.recordPeerDeviceList(1, {
+        'listVersion': 1,
+        'dakPub': 'x',
+      });
       onTheBox();
-      final held = await holding(b);
       final before = await anchorOfA();
       final restored = await restoreA();
 
       await restored.link.restart();
       await pump();
 
-      expect(b.refusals, ['prekey_unasked']);
+      expectRed(b);
+      expect(b.emits, isEmpty);
+      expect(b.refusals, isEmpty);
       expect(b.link.learned, a.sid);
       expect(await anchorOfA(), before);
       expect(b.enc.peerKeyChangeLog(1), isEmpty);
-      // The refused frame was decrypted first: nothing it brought may carry
-      // B's next message. The friend's real device (served on the rebuild)
-      // reads it, the minting device does not.
       b.other = a;
-      await expectUntouched(b, held);
       await expectTraffic(b, a);
+    });
+
+    test('K3: a device still holding the OLD key, after the new one was '
+        'taken, waits calmly too, but the tap finds the served key is the '
+        'new one: refused, red hold, anchor untouched', () async {
+      final restored = await calmRestore();
+      await tap(b);
+      expect(await anchorOfA(), await idOf(restored));
+      expect(b.link.learned, restored.sid);
+      b.emits.clear();
+
+      await handOffFrom(a);
+
+      expectCalm(b);
+      expect(b.fetches, 0);
+      await tap(b);
+
+      expectRed(b);
+      expect(await anchorOfA(), await idOf(restored));
+      expect(b.enc.peerKeyChangeLog(1), hasLength(1));
+      expect(b.link.learned, restored.sid);
+      expect(b.refusals, isEmpty);
+    });
+
+    test('K5: a served bundle whose signed pre-key was not signed by the '
+        "frame's key is refused: red hold, no anchor move, no note", () async {
+      final before = await anchorOfA();
+      final forged = bundleOf(a, 0)['signedPreKeySignature'];
+      b.serve = (bundle) => {...bundle, 'signedPreKeySignature': forged};
+      await calmRestore();
+
+      await tap(b);
+
+      expectRed(b);
+      expect(b.fetches, 1);
+      expect(await anchorOfA(), before);
+      expect(b.enc.peerKeyChangeLog(1), isEmpty);
+      expect(b.link.learned, a.sid);
+    });
+
+    test('K6: a VERIFIED friend gets the visible hold at once, no calm line '
+        'and no request', () async {
+      expect(await b.enc.encryptionService.verifyPinned(1), isTrue);
+      onTheBox();
+      final before = await anchorOfA();
+      final restored = await restoreA();
+
+      await restored.link.restart();
+      await pump();
+
+      expectRed(b);
+      expect(b.emits, isEmpty);
       expect(await anchorOfA(), before);
     });
 
-    test('warnings OFF: after the restore, a device still holding the OLD '
-        'identity is refused and does not flip the anchor back or add a '
-        'note', () async {
-      onTheBox();
-      final restored = await restoreA();
+    test('K7: two frames under the same new key share ONE calm hold; one '
+        'tap takes the key once and both frames drain', () async {
+      final restored = await calmRestore();
+      final second = (await restored.reader.encryptForFriend(
+        5,
+        3,
+        jsonEncode(
+          E2eEnvelope.buildQueueHandoff(sid: _sid('S'), sealPub: _sealPub),
+        ),
+        fresh: true,
+      ))!;
+      final entry = BoxInboxEntry(
+        rid: 'friend-rid',
+        id: 'second',
+        localId: nextLocal++,
+        peerUserId: 1,
+        senderDeviceId: 1,
+        signal: second.signalCiphertext,
+        receivedAt: DateTime.now().toUtc(),
+        acked: true,
+        viaRequestQueue: false,
+      );
+      expect(await b.reader.consumeBoxEntry(entry, b.peerRecord), isFalse);
+      b.held.add(entry);
+
+      expectCalm(b, held: 2);
+
+      await tap(b);
+
+      expect(b.fetches, 1, reason: 'one tap, one request');
+      expect(b.enc.peerKeyChangeLog(1), hasLength(1));
+      expect(await anchorOfA(), await idOf(restored));
+      expect(b.held, isEmpty);
+    });
+
+    test('K8: after a restart the journal re-offers the frame and the calm '
+        'line returns; the tap works as before', () async {
+      final restored = await calmRestore();
+      // The process dies: RAM holds and the reader go, the journal stays.
+      b.enc.encryptionService.releaseCalm(1);
+      b.reader.dispose();
+      b.reader = newReader(b);
+      expect(b.reader.calmHoldState(1), isNull);
+      expect(b.enc.peersWithHeldMessages, isEmpty);
+
+      await reoffer(b);
+
+      expectCalm(b);
+      await tap(b);
+
+      expect(b.held, isEmpty);
+      expect(await anchorOfA(), await idOf(restored));
+      expect(b.link.learned, restored.sid);
+    });
+
+    test('K9: a stale served bundle is refreshed BEFORE it is read: the '
+        'tap owes one forced lookup and then serves what it found', () async {
+      Map<String, dynamic> served = bundleOf(a, 0);
+      b.enc
+        ..isBoxOnlyPeer = ((_) => true)
+        ..servedBundleFor = ((_, _) => served)
+        ..onForcedLookup = () async => served = bundleOf(b.other, 1);
+      final restored = await calmRestore();
+
+      b.enc.lookupLog.clear();
+      await tap(b);
+
+      expect(b.enc.forcedLookups, [1]);
+      expect(b.fetches, 0, reason: 'a box-only peer is never fetched by id');
+      expect(
+        b.enc.lookupLog.take(2),
+        ['invalidate by person', 'lookup'],
+        reason: 'a PERSON asked, and the refresh came before the read',
+      );
+      expect(await anchorOfA(), await idOf(restored));
+      expect(b.held, isEmpty);
+    });
+
+    test('K10: the refreshed list no longer serves the frame\'s device: '
+        'nothing is accepted, the hold turns red', () async {
+      final before = await anchorOfA();
+      b.enc
+        ..isBoxOnlyPeer = ((_) => true)
+        ..servedBundleFor = ((_, _) => null);
+      await calmRestore();
+
+      await tap(b);
+
+      expectRed(b);
+      expect(b.enc.forcedLookups, [1]);
+      expect(await anchorOfA(), before);
+      expect(b.enc.peerKeyChangeLog(1), isEmpty);
+    });
+
+    test('S1: killed between the build and the drain, the next start '
+        'delivers the held frame: one note, no second request', () async {
+      final restored = await calmRestore();
+      await b.reader.confirmCalmHold(1); // confirmed; the drain never ran
+      expect(await anchorOfA(), await idOf(restored));
+      expect(b.held, hasLength(1));
+      b.reader.dispose();
+      b.reader = newReader(b);
+
+      await reoffer(b);
+
+      expect(b.held, isEmpty);
+      expect(b.enc.peerKeyChangeLog(1), hasLength(1));
+      expect(b.fetches, 1);
+      expect(b.link.learned, restored.sid);
+      await expectTraffic(restored, b);
+    });
+
+    test('M1: a foreign frame, offered again and again, and a second one '
+        'from the same device, send NO request; only the tap does', () async {
+      final restored = await calmRestore();
+      for (var i = 0; i < 3; i++) {
+        await reoffer(b);
+      }
+      _now = _now.add(_resend);
       await restored.link.restart();
       await pump();
-      expect(b.link.learned, restored.sid);
+
+      expectCalm(b, held: 2);
+      expect(b.fetches, 0);
+
+      await tap(b);
+
+      expect(b.fetches, 1);
+    });
+
+    test("M2: the served key is NOT the frame's key: nothing is accepted "
+        '(anchor, note, address), the hold turns red', () async {
+      final before = await anchorOfA();
+      await calmRestore();
+      b.other = a; // the server still serves the OLD key
+
+      await tap(b);
+
+      expectRed(b);
+      expect(b.fetches, 1);
+      expect(await anchorOfA(), before);
+      expect(b.enc.peerKeyChangeLog(1), isEmpty);
+      expect(b.link.learned, a.sid);
+    });
+
+    test('single flight: a second tap while the first checks is ignored',
+        () async {
+      final restored = await calmRestore();
+      b.gate = Completer<void>();
+      var released = 0;
+      b.enc.onHeldFramesReleased = (_) => released++;
+
+      final first = b.reader.confirmCalmHold(1);
+      await pumpEventQueue();
+      expect(b.reader.calmHoldState(1), CalmHoldState.checking);
+      final second = b.reader.confirmCalmHold(1);
+      b.gate!.complete();
+      await Future.wait([first, second]);
+
+      expect(b.fetches, 1);
+      expect(released, 1, reason: 'the key was confirmed once');
       expect(b.enc.peerKeyChangeLog(1), hasLength(1));
-
-      final before = await holding(b);
-      await handOffFrom(a);
-
-      expect(b.refusals, ['prekey_unasked']);
-      expect(b.link.learned, restored.sid);
       expect(await anchorOfA(), await idOf(restored));
-      expect(b.enc.peerKeyChangeLog(1), hasLength(1));
-      // INBOUND: what the refused frame left behind must not read the sender's
-      // later whispers.
-      await expectUntouched(b, before);
-      // OUTBOUND: B's session with that device was the frame's; B's next
-      // message must still reach the restored device.
-      await expectTraffic(b, restored);
+    });
+
+    test('a transient failure keeps the calm line, tappable again; the '
+        'next tap takes the key', () async {
+      final before = await anchorOfA();
+      final restored = await calmRestore();
+      b.serve = (_) => null; // the server has no answer now
+
+      await tap(b);
+
+      expect(b.reader.calmHoldState(1), CalmHoldState.failed);
+      expect(b.enc.peersCalmHeld, contains(1));
+      expect(b.enc.peersWithChangedIdentity, isEmpty);
+      expect(b.held, hasLength(1));
+      expect(await anchorOfA(), before);
+
+      b.serve = (bundle) => bundle;
+      await tap(b);
+
+      expect(b.fetches, 2);
+      expect(b.held, isEmpty);
+      expect(await anchorOfA(), await idOf(restored));
+    });
+
+    test('S5: a PreKey frame whose body cannot be parsed is finished, '
+        'never held, never asked about', () async {
+      onTheBox();
+      final entry = BoxInboxEntry(
+        rid: 'friend-rid',
+        id: 'junk',
+        localId: nextLocal++,
+        peerUserId: 1,
+        senderDeviceId: 1,
+        signal: '3:AAAA',
+        receivedAt: DateTime.now().toUtc(),
+        acked: true,
+        viaRequestQueue: false,
+      );
+
+      expect(await b.reader.consumeBoxEntry(entry, b.peerRecord), isTrue);
+
+      expect(b.reader.calmHoldState(1), isNull);
+      expect(b.enc.peersCalmHeld, isEmpty);
+      expect(b.enc.peersWithHeldMessages, isEmpty);
+      expect(b.enc.peersWithChangedIdentity, isEmpty);
+      expect(b.emits, isEmpty);
+    });
+
+    test('a whisper behind a calm-held frame WAITS: it is neither finished '
+        'as undecryptable nor does it ask for a re-key', () async {
+      await calmRestore();
+      // A whisper of that friend that cannot read yet (its session is the
+      // one the held frame would build).
+      final entry = BoxInboxEntry(
+        rid: 'friend-rid',
+        id: 'whisper',
+        localId: nextLocal++,
+        peerUserId: 1,
+        senderDeviceId: 1,
+        signal: '2:AAAA',
+        receivedAt: DateTime.now().toUtc(),
+        acked: true,
+        viaRequestQueue: false,
+      );
+
+      expect(await b.reader.consumeBoxEntry(entry, b.peerRecord), isFalse);
+      b.held.add(entry);
+
+      expectCalm(b, held: 2);
+      expect(b.link.rekeys, 0);
+      // Held behind the frame, not failed: no failure policy ran for it.
+      expect(
+        E2eDiagLog.entries.where((e) => e.contains('BOX_DECRYPT_FAILED')),
+        isEmpty,
+      );
     });
   });
 }

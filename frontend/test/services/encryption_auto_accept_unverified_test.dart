@@ -527,6 +527,44 @@ void main() {
     expect(await alice.calmHoldEligible(bobId), isFalse);
   });
 
+  test('a calm hold counts as HELD (a whisper behind the frame waits) but '
+      'raises no warning and stages no candidate; releasing it ends both',
+      () async {
+    await pinBob();
+
+    alice.holdCalm(bobId);
+
+    expect(alice.peersCalmHeld, contains(bobId));
+    expect(alice.peersHeldForIdentity, contains(bobId));
+    expect(alice.peersWithChangedIdentity, isEmpty);
+
+    alice.releaseCalm(bobId);
+
+    expect(alice.peersCalmHeld, isEmpty);
+    expect(alice.peersHeldForIdentity, isEmpty);
+  });
+
+  test('the visible hold supersedes a calm one: the friend stays held, is '
+      'warned about, and is no longer calm', () async {
+    await pinBob();
+    alice.holdCalm(bobId);
+    await newBob.buildSession(
+      aliceId,
+      flatBundleFrom(alice),
+      expectedIdentityBase64: null,
+    );
+    final frame = await newBob.encrypt(aliceId, 'x', deviceId: 1);
+
+    await alice.holdForeignFrame(bobId, frame);
+
+    expect(alice.peersCalmHeld, isEmpty);
+    expect(alice.peersHeldForIdentity, contains(bobId));
+    expect(alice.peersWithChangedIdentity, contains(bobId));
+    // releaseCalm must not lift a hold that turned visible.
+    alice.releaseCalm(bobId);
+    expect(alice.peersHeldForIdentity, contains(bobId));
+  });
+
   test('the lxxix local auto-acknowledge never moves a VERIFIED friend',
       () async {
     await pinBob();
