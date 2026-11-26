@@ -1439,7 +1439,7 @@ void main() {
       expect(read[1], contains('second'));
     });
 
-    test('E3: the tap is refused (the served key is not the frame\'s): the '
+    test("E3: the tap is refused (the served key is not the frame's): the "
         'waiting message reads as refused for a key change, like a red-hold '
         'refusal, and nothing was sent on the old session', () async {
       final restored = await calmRestore();

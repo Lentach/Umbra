@@ -20,8 +20,8 @@ void main() {
   late BoxSendHarness h;
 
   setUp(() async {
-    h = await BoxSendHarness.create();
-    h.bob([1]);
+    final harness = await BoxSendHarness.create();
+    h = harness..bob([1]);
   });
   tearDown(() => h.dispose());
 

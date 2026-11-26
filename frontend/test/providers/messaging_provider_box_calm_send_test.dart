@@ -3,8 +3,8 @@ import 'dart:typed_data';
 
 import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../support/box_send_harness.dart';
 
@@ -42,6 +42,7 @@ void main() {
   void expectNothingWentOut() {
     expect(encryption.encryptCalls, isEmpty);
     expect(outbox.delivered, isEmpty);
+    expect(outbox.uploads, isEmpty, reason: 'no file goes up for the old key');
     expect(h.emitted, isEmpty);
     expect(
       encryption.bundleFetches,
@@ -55,9 +56,9 @@ void main() {
   for (final state in CalmHoldState.values) {
     test('a text sent while the calm line is $state is not sealed: the row '
         'waits, says so, and nothing reaches the old session', () async {
-      provider.seedCalmHoldForTest(2, state);
-
-      provider.sendMessage('hello');
+      provider
+        ..seedCalmHoldForTest(2, state)
+        ..sendMessage('hello');
       await h.pump();
 
       expectNothingWentOut();
@@ -80,9 +81,9 @@ void main() {
     expect(outbox.delivered, hasLength(1));
     outbox.delivered.clear();
     encryption.encryptCalls.clear();
-    provider.seedCalmHoldForTest(2, CalmHoldState.waiting);
-
-    provider.sendPing(2);
+    provider
+      ..seedCalmHoldForTest(2, CalmHoldState.waiting)
+      ..sendPing(2);
     await h.pump();
     final ok = await provider.sendImageMessage(
       XFile.fromData(
@@ -110,8 +111,9 @@ void main() {
 
   test('the tap that ends the line lets the row go, once, on a retry',
       () async {
-    provider.seedCalmHoldForTest(2, CalmHoldState.waiting);
-    provider.sendMessage('hello');
+    provider
+      ..seedCalmHoldForTest(2, CalmHoldState.waiting)
+      ..sendMessage('hello');
     await h.pump();
     final row = provider.messages.single;
 

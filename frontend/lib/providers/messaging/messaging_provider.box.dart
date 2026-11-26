@@ -487,12 +487,10 @@ extension MessagingBox on MessagingProvider {
   /// Removes and returns, in the order written, what was held back for
   /// [peerId]'s calm line (a row no longer loaded just stays failed).
   List<String> _takeCalmDeferred(int peerId) {
-    final waiting = [
+    return [
       for (final MapEntry(:key, :value) in _calmDeferredSends.entries)
         if (value == peerId) key,
-    ];
-    waiting.forEach(_calmDeferredSends.remove);
-    return waiting;
+    ]..forEach(_calmDeferredSends.remove);
   }
 
   /// Holds friend frame [msg] (a PreKey message under a foreign identity)

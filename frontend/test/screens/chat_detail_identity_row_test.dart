@@ -687,7 +687,6 @@ void main() {
     await _pumpChat(
       tester,
       alarmed: false,
-      refused: false,
       keyChangeWarnings: false,
       withMessages: true,
       failedOwnRow: true,
@@ -702,7 +701,6 @@ void main() {
     await _pumpChat(
       tester,
       alarmed: false,
-      refused: false,
       keyChangeWarnings: false,
       withMessages: true,
       failedOwnRow: true,
