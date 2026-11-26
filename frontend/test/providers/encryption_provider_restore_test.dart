@@ -510,6 +510,22 @@ void main() {
     expect(log, contains('updateDeviceList'));
   });
 
+  // A2-ENC-B-03: the reconnect init can race a plain same-identity re-upload
+  // ack in while the restore waits; it is not the restore's answer.
+  // Mutation: delete the `restored != true` filter in
+  // `_restoreObserveUploadAck`, and the restore fails with `upload:null`.
+  test('a plain re-upload ack arriving during the restore wait is ignored, '
+      'and the restore still reaches done', () async {
+    final (provider, log) = await restoreWithAck([
+      {'success': true, 'identityChanged': false},
+      restoredAck(),
+    ]);
+
+    expect(provider.restoreStage, IdentityRestoreStage.done);
+    expect(provider.restoreFailure, isNull);
+    expect(log, contains('updateDeviceList'));
+  });
+
   test('F10: a wrong phrase emits NO nonce request and NO upload', () async {
     final sealed = await arrangeSealedBackup();
     final provider = await buildProvider();
