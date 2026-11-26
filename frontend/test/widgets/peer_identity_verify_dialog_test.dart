@@ -155,7 +155,7 @@ void main() {
     );
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('e2e_1_peer_verified_v1', '{nope');
-    alice = await tester.runAsync(() => started(1)) as EncryptionService;
+    alice = (await tester.runAsync(() => started(1)))!;
     enc = EncryptionProvider(service: alice);
 
     await open(tester);
