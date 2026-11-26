@@ -844,8 +844,21 @@ class EncryptionService {
     return utc.toIso8601String();
   }
 
+  /// The newest replacement reported BEFORE any account was bound to this
+  /// service (A3-SVC-A-2): the socket connects while the app is passcode
+  /// locked, but `initialize` runs only after the unlock. The load of the
+  /// persisted state would overwrite the in-memory alarm, so the report waits
+  /// here and [_loadOwnIdentityReplaced] applies it under the dismissal rules.
+  String? _ownReplacedWhileLocked;
+
   Future<void> recordOwnIdentityReplaced(String occurredAt) async {
     _ownIdentityReplacedAt = occurredAt;
+    if (_userId == null) {
+      final held = _ownReplacedWhileLocked;
+      if (held == null || occurredAt.compareTo(held) > 0) {
+        _ownReplacedWhileLocked = occurredAt;
+      }
+    }
     E2ePersistentDiag.record('OWN_IDENTITY_REPLACED', {
       'occurredAt': occurredAt,
     });
@@ -1014,6 +1027,18 @@ class EncryptionService {
       final since = prefs.getString(_ownIdentitySinceKey(userId));
       _ownIdentitySince = since == null ? null : DateTime.tryParse(since);
     } catch (_) {}
+    // A3-SVC-A-2: a replacement reported while locked, now under the
+    // dismissal watermark and the newer-than-showing rule.
+    final held = _ownReplacedWhileLocked;
+    _ownReplacedWhileLocked = null;
+    if (held == null) return;
+    final seen = _ownIdentityReplacedSeenAt;
+    final current = _ownIdentityReplacedAt;
+    if ((seen != null && held.compareTo(seen) <= 0) ||
+        (current != null && held.compareTo(current) <= 0)) {
+      return;
+    }
+    await recordOwnIdentityReplaced(held);
   }
 
   /// Moves [ownIdentitySince] forward only: the server reports its LATEST
@@ -5544,6 +5569,7 @@ class EncryptionService {
   /// Mid-session passcode re-lock: drop every piece of key material and
   /// plaintext this instance holds in RAM, WITHOUT touching storage.
   ///
+    _ownReplacedWhileLocked = null;
   /// This is what makes a re-lock a real revocation rather than a UI barrier.
   /// [clearAllKeys] is the destructive sibling (logout/account deletion) and
   /// deliberately shares only the cache-dropping tail with this method.
