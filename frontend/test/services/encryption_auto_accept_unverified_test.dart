@@ -528,7 +528,7 @@ void main() {
     await expectRefused(pinned, newBob);
   });
 
-  test('N4: a note written by another tab is not overwritten by this tab\'s '
+  test("N4: a note written by another tab is not overwritten by this tab's "
       'next accept', () async {
     final pinned = await pinBob();
     final tab2 = await started(aliceId);
