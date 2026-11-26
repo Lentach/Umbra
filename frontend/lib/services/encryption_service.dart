@@ -4943,22 +4943,17 @@ class EncryptionService {
   // Decrypt ledger — "ids whose plaintext I have successfully persisted at
   // least once".
   //
-  // [markRetired] answers "I destroyed this deliberately". The ledger answers
-  // the question the app could not previously ask at all: a record is missing
-  // NOW — did it ever exist? Without an answer, a record lost to quota,
-  // eviction, corruption or a bug is indistinguishable from a message that was
-  // never decrypted, so the app re-runs Signal decrypt on a ciphertext whose
-  // ratchet key it already consumed, gets DuplicateMessage, and the row becomes
-  // a permanent '[Decryption failed]'. That is precisely the 2026-07-29
-  // incident's mechanism, and every storage-loss path can re-trigger it.
+  // It no longer gates decryption (batch 2, ENC-12 / EC-17). Its readers are
+  // `ContactStore._nextLocalId`, which must never hand out a local id that was
+  // used before, and the hacker-mode diagnostics panel (`diagStorageSets`).
+  // [markRetired] answers "I destroyed this deliberately"; the ledger answers
+  // "did this id ever hold a record".
   //
-  // Fail-safe in each direction that matters, which is why it is safe to let
-  // this gate decryption at all:
+  // Fail-safe in each direction that matters:
   //  * recorded ONLY after a CONFIRMED commit of real plaintext, so a failed
-  //    write can never mark a message "already decrypted" and lock it out of
-  //    the one decrypt that would have worked;
-  //  * a load failure, a miss, or an evicted entry degrades to the OLD
-  //    behaviour (attempt the decrypt) — never to a false "unavailable";
+  //    write can never mark a message "already decrypted";
+  //  * a load failure, a miss, or an evicted entry only means an id can look
+  //    unused, which the retired set and the record scan still cover;
   //  * deliberate destruction drops the entries through
   //    [forgetDecryptedMany].
   //
@@ -5102,9 +5097,9 @@ class EncryptionService {
   /// Drop every id in [ids] from the ledger, one lock and one write.
   ///
   /// For DELIBERATE destruction (expiry sweep, delete purges, the full wipe):
-  /// a purged record whose ledger entry survives makes the next served copy of
-  /// that row read as UNEXPECTED loss — `LEDGER_RECORD_LOST` plus a permanent
-  /// retire — turning an ordered deletion into a false alarm (the 2026-08-02
+  /// a purged record whose ledger entry survives reads as UNEXPECTED loss in
+  /// the diagnostics panel — an ordered deletion looking like a lost record
+  /// (the 2026-08-02
   /// dump carried exactly this ambiguity). Reads authoritatively (getString
   /// serves the clobberable cache, the exact 2026-07-29 mechanism) and writes
   /// UNCONDITIONALLY: a write skipped on a short read is precisely when the
@@ -5193,7 +5188,8 @@ class EncryptionService {
   /// the fallback. The stamp travels on a single unacked socket event and can
   /// be lost (race with the persist, missed socket window), and on 2026-08-02
   /// the fallback destroyed five records the server was still serving —
-  /// `LEDGER_RECORD_LOST` ×5, the ledger's first real catch. An unstamped
+  /// `LEDGER_RECORD_LOST` ×5 (the ledger's first real catch, back when it
+  /// gated decryption; that gate is gone). An unstamped
   /// record now simply does not expire locally; the 30-day retention bound
   /// cleans the residue.
   /// Over-retention is recoverable, over-destruction is not.
@@ -5820,8 +5816,10 @@ class EncryptionService {
   int? _cachedContentEstimate;
 
   Future<void> _pruneDecryptedContentCache(ContentKv prefs, int userId) async {
-    // NO reload here: the only caller (saveDecryptedContent) reloaded a few
-    // lines earlier and has not awaited anything that could invalidate it.
+    // NO reload here: `_saveDecryptedContent` does not reload either (it
+    // reads through `_authoritativeSnapshot` and awaits `setString` before
+    // this call), so the cache may be stale. That only under-counts the
+    // records, which is the safe side (see `_cachedContentKeys`).
     if (_decryptedContentCacheLimit <= 0) {
       await clearDecryptedContentCache();
       return;
