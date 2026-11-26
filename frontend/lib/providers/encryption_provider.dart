@@ -2812,8 +2812,9 @@ class EncryptionProvider extends ChangeNotifier {
 
   /// Handler for the `deviceListUpdated` server event (answer to
   /// `updateDeviceList`). Only the restore machine emits that request from
-  /// this provider; the ceremony controller's mutations answer on their own
-  /// events.
+  /// this provider, but a device rename from the ceremony controller is
+  /// answered on this same event, which the connection provider forwards to
+  /// both listeners; each ignores an answer it has nothing in flight for.
   void onDeviceListUpdated(dynamic data) {
     final pending = _pendingDeviceListUpdateAck;
     if (pending == null || pending.isCompleted) return;
