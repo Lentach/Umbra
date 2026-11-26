@@ -3652,7 +3652,7 @@ class EncryptionService {
         // legitimately changes, while a later write is exactly where a peer
         // could try to move it (an edit is a fresh envelope the peer
         // controls). An edit re-persists WITHOUT one, so carrying it forward
-        // also keeps the record in [wireIdIndex]. Carried as a pair, so a
+        // also keeps the record in the wire-claims view. Carried as a pair, so a
         // later write can never supply the sender of a `_wid` stamped without
         // one.
         if (existing?[_metaWireId] != null) ...{
@@ -4184,42 +4184,11 @@ class EncryptionService {
     }
   }
 
-  /// `(senderId, wireId) -> localId` over every persisted plaintext record
-  /// (metadata-privacy PR2.1): the `_wid`/`_wsid` stamp of each `_decrypted_`
-  /// record, keyed back to the id its key names. Nothing reads it yet; the
-  /// box path (PR3.1) dedups its at-least-once deliveries against it.
-  ///
-  /// Both record stores, as [getDecryptedContent] reads them: the content
-  /// store, then — mobile only — the legacy secure store for keys the content
-  /// store does not hold, so a stale legacy copy never outvotes the live one.
-  ///
-  /// The AUTHORITATIVE view, like the history read path: the caller will
-  /// treat a miss as "never seen", and a reload-clobbered cache would hand it
-  /// exactly that for a message this device already holds.
-  ///
-  /// Keyed by SENDER as well as wire id ([WireKey]). A peer sees the wire ids
-  /// of our own sends in plaintext and can stamp one on a message of its
-  /// own; scoped, that claim sits under the peer's name and can never shadow
-  /// ours — even when it lands first, before our copy exists to contradict
-  /// it. A `_wid` stamped without its sender claims nothing. Two records
-  /// holding one sender's wire id contradict `UNIQUE(senderId, sendToken)`,
-  /// so that key maps to NOTHING rather than to a guess. A record that cannot
-  /// be decoded claims nothing. Null means the stores could not be
-  /// enumerated, which is not the same answer as an empty index.
-  Future<Map<WireKey, int>?> wireIdIndex() async {
-    final claims = await _scanWireClaims();
-    if (claims == null) return null;
-    return {
-      for (final MapEntry(key: wire, value: ids) in claims.entries)
-        if (ids.length == 1) wire: ids.single,
-    };
-  }
-
   /// Whether a record OTHER than [id] already holds [wire] — the box path's
   /// dedup (metadata-privacy PR3.1 slice (b)): the same message may already
   /// be here, delivered over the old path or journaled twice. Any claim
   /// counts, ambiguous ones too: this asks "is it here", not "which row is
-  /// it" ([wireIdIndex]). Null when the stores could not be enumerated.
+  /// it" ([wireHolder]). Null when the stores could not be enumerated.
   ///
   /// Served from a per-account cache: the first call scans every record (on
   /// web that unseals them), and [saveDecryptedContent] adds each new stamp.
@@ -4233,7 +4202,7 @@ class EncryptionService {
 
   /// The ONE record holding [wire] — what a box reply's quote resolves to
   /// (metadata-privacy item 3, E18a) — from [wireHeldByOther]'s cache. Null
-  /// when none or more than one does ([wireIdIndex]'s rule: a guess would
+  /// when none or more than one does (a guess would
   /// show the wrong message as the quote) or the stores could not be
   /// enumerated. A deleted record's claim is kept, so the caller reads the
   /// record before trusting the id.
@@ -4321,7 +4290,17 @@ class EncryptionService {
     return getDecryptedContentMany(ids);
   }
 
-  /// Every `(sender, wire id)` stamp → the record ids holding it.
+  /// Every `(sender, wire id)` stamp → the record ids holding it: the
+  /// `_wid`/`_wsid` stamp of each `_decrypted_` record, keyed back to the id
+  /// its key names. Both record stores, as [getDecryptedContent] reads them:
+  /// the content store, then — mobile only — the legacy secure store for keys
+  /// the content store does not hold, so a stale legacy copy never outvotes
+  /// the live one. Keyed by SENDER as well as wire id: a peer sees the wire
+  /// ids of our own sends in plaintext and can stamp one on a message of its
+  /// own; scoped, that claim sits under the peer's name and can never shadow
+  /// ours. A `_wid` stamped without its sender claims nothing, and a record
+  /// that cannot be decoded claims nothing. Null means the stores could not
+  /// be enumerated.
   Future<Map<WireKey, Set<int>>?> _scanWireClaims() async {
     final userId = _userId;
     if (userId == null) return null;

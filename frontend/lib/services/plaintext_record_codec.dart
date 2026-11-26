@@ -101,8 +101,8 @@ class PlaintextRecordCodec {
   /// (`UNIQUE(senderId, sendToken)`), so the two are one identity: written
   /// together, and a `_wid` without its `_wsid` identifies nothing.
   /// Listed as metadata so the codec's legacy/sealed split keeps them beside
-  /// `_cid`; note `EncryptionService.wireIdIndex` decodes the WHOLE record
-  /// (on web: unseals it), so it does not rely on that split.
+  /// `_cid`; note `EncryptionService`'s wire-claims scan decodes the WHOLE
+  /// record (on web: unseals it), so it does not rely on that split.
   static const String wireIdKey = '_wid';
   static const String wireSenderKey = '_wsid';
 
