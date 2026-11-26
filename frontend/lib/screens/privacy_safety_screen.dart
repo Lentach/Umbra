@@ -987,7 +987,8 @@ class _PrivacySafetyScreenState extends State<PrivacySafetyScreen> {
     setState(() => _deletingAllLocalHistory = true);
     try {
       final result = await encryptionProvider.clearLocalDecryptedContentCache();
-      if (!mounted) return;
+      // The voice cache and the saved copies go BEFORE the `mounted` check:
+      // leaving the screen mid-delete must not leave plaintext behind.
       await AudioCacheStore.clear();
       // The plaintext files the user saved out of chats go with the history
       // (A3-MSG-A-04); a failure is the same partial delete as any other.
