@@ -19,7 +19,10 @@ Future<MediaPreviewMetadata?> _extractMediaPreviewMetadata(
 /// Optimistic send, send-retry and the typing signals — every send goes over
 /// the box.
 extension MessagingSend on MessagingProvider {
-  void sendMessage(String content, {int? expiresIn, int? replyToMessageId}) {
+  void sendMessage(String text, {int? expiresIn, int? replyToMessageId}) {
+    // Our own text is data as well: a label's literal text must not become
+    // the fake "unreadable" row on this device (A3-UTL-03).
+    final content = neutralizeSentinelText(text);
     final activeConversationId = _conversationsProvider?.activeConversationId;
     if (activeConversationId == null || _currentUserId == null) return;
 

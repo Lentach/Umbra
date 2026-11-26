@@ -70,7 +70,9 @@ extension MessagingActions on MessagingProvider {
   /// the box (item 4). Only own TEXT rows with a local id and a wire id are
   /// editable.
   void editMessage(int messageId, String newContent) {
-    final trimmed = newContent.trim();
+    // Same marking as a sent text (A3-UTL-03); an edit to a label's literal
+    // text must not become the fake "unreadable" row either.
+    final trimmed = neutralizeSentinelText(newContent.trim());
     if (trimmed.isEmpty || _currentUserId == null) return;
     final activeConversationId = _conversationsProvider?.activeConversationId;
     if (activeConversationId == null) return;
