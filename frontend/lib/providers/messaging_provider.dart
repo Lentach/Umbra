@@ -241,7 +241,17 @@ class MessagingProvider extends ChangeNotifier {
   /// True while [tempId] waits for the tap on its friend's calm line. Read
   /// by the failed bubble, which then names the line instead of a failure.
   bool sendWaitsForCalmHold(String? tempId) =>
-      _calmHolds.containsKey(_calmDeferredSends[tempId]);
+      _calmWaits(_calmDeferredSends[tempId]);
+
+  /// Friends whose calm key was confirmed while the held frames are still
+  /// being read: the friend's handoff is not taken yet, so the address is
+  /// still the old queue. Treated like a calm hold by every seal, except
+  /// `encryptForFriend` (the handoff acknowledgement must go out).
+  final Set<int> _calmDraining = {};
+
+  /// Whether nothing may be sealed for [peerId] right now.
+  bool _calmWaits(int? peerId) =>
+      _calmHolds.containsKey(peerId) || _calmDraining.contains(peerId);
 
   /// Test-only: the verdict the send path writes for a row refused under a
   /// calm hold of [peerId] (the widget tests have no box to send over).
@@ -1013,6 +1023,7 @@ class MessagingProvider extends ChangeNotifier {
       _boxSessionEpoch++;
       _boxHeld.clear();
       _calmHolds.clear();
+      _calmDraining.clear();
       _profileSent.clear();
       _profileFilesChecked = false;
       _profileMigrateTriedAt = null;
@@ -1080,6 +1091,7 @@ class MessagingProvider extends ChangeNotifier {
     _boxSessionEpoch++;
     _boxHeld.clear();
     _calmHolds.clear();
+    _calmDraining.clear();
     _profileSent.clear();
     _profileFilesChecked = false;
     _profileMigrateTriedAt = null;

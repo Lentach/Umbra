@@ -90,7 +90,7 @@ extension MessagingBoxMediaSend on MessagingProvider {
       // After the hold: the retry uploads what is held here.
       if (_peersAllPaused(route, recipientId, tempId)) return false;
       // Before the upload: a calm hold takes no file for the old key either.
-      if (_calmHolds.containsKey(recipientId)) {
+      if (_calmWaits(recipientId)) {
         _deferForCalmHold(recipientId, tempId);
         return false;
       }

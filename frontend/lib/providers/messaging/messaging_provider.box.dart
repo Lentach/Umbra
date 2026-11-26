@@ -479,6 +479,9 @@ extension MessagingBox on MessagingProvider {
     if (!identical(_calmHolds[peerId], hold)) return;
     switch (result) {
       case CalmConfirm.confirmed:
+        // The hold ends, but the friend's handoff is not read yet: until it
+        // is, the address is still the old queue, so sends keep waiting.
+        _calmDraining.add(peerId);
         _calmHolds.remove(peerId);
       case CalmConfirm.refused:
         _calmHolds.remove(peerId);
@@ -499,15 +502,23 @@ extension MessagingBox on MessagingProvider {
         drained = true;
       } on Object catch (e) {
         _e2eFlowLog('CALM_DRAIN_INCOMPLETE', {'peer': peerId, 'error': '$e'});
+      } finally {
+        _calmDraining.remove(peerId);
       }
       // Whatever happened, the rows stop waiting here.
       final rows = _takeCalmDeferred(peerId);
       // A drain that failed before the friend's handoff was read leaves the
       // send target at the OLD queue: those rows stay ordinary failed rows
-      // (their own Retry), never written there on the person's behalf.
+      // (their own Retry), never written there on the person's behalf. A
+      // drain that COMPLETED without a handoff releases them to the address
+      // already known (by design: the friend sent none).
       if (!drained && setEquals(_boxQueuesOf(peerId), before)) return;
       for (final tempId in rows) {
         await retryFailedMessage(tempId);
+        // In order, or not at all: a later row never goes ahead of an
+        // earlier one that failed (it stays failed, with its own Retry).
+        final row = _messages.where((m) => m.tempId == tempId).firstOrNull;
+        if (row?.deliveryStatus == MessageDeliveryStatus.failed) break;
       }
     }
   }

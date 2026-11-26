@@ -1805,5 +1805,97 @@ void main() {
       expect(outbox.delivered, hasLength(1));
       expect(outbox.delivered.single.$1.sid, restored.sid);
     });
+
+    // ---- While the drain runs, the friend's handoff is not read yet: the
+    // old queue is still the address, so nothing is sent (P1-1) ----
+
+    test('P1-1a: a message typed while the drain runs waits too, and goes '
+        "out once, after the earlier one, to the LEARNED queue", () async {
+      final restored = await calmRestore();
+      final outbox = await boxForB();
+      await writeFromB('earlier');
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+      var during = -1;
+
+      await tapWithDrain(b, () async {
+        await writeFromB('typed during the drain');
+        during = outbox.delivered.length;
+        await reoffer(b);
+      });
+
+      expect(during, 0, reason: 'nothing on the old queue meanwhile');
+      expect(outbox.delivered, hasLength(2));
+      expect(
+        outbox.delivered.map((d) => d.$1.sid),
+        everyElement(restored.sid),
+      );
+      final read = [
+        for (final (_, f) in outbox.delivered) await readByRestored(restored, f),
+      ];
+      expect(read[0], contains('earlier'));
+      expect(read[1], contains('typed during the drain'));
+    });
+
+    test('P1-1b: Retry on a held row while the drain runs stays held: the '
+        'row keeps its waiting text and nothing is sent', () async {
+      final restored = await calmRestore();
+      final outbox = await boxForB();
+      final row = await writeFromB('held');
+      var waits = false;
+      var during = -1;
+
+      await tapWithDrain(b, () async {
+        waits = b.reader.sendWaitsForCalmHold(row.tempId);
+        await b.reader.retryFailedMessage(row.tempId!);
+        await pumpEventQueue();
+        during = outbox.delivered.length;
+        await reoffer(b);
+      });
+
+      expect(waits, isTrue);
+      expect(during, 0);
+      expect(outbox.delivered, hasLength(1), reason: 'once, after the drain');
+      expect(outbox.delivered.single.$1.sid, restored.sid);
+    });
+
+    test('P1-1c: typing and a receipt while the drain runs are not written '
+        'to the old queue', () async {
+      await calmRestore();
+      final outbox = await boxForB();
+      b.reader.receiptsAndTyping = () => true;
+      var during = -1;
+
+      await tapWithDrain(b, () async {
+        b.reader.sendTypingIndicator(1, 10);
+        await pumpEventQueue();
+        during = outbox.delivered.length;
+        await reoffer(b);
+      });
+
+      expect(during, 0);
+    });
+
+    test('P3-2: the release stops at the first row that does not end sent: '
+        'the later row is never sent ahead of it and stays failed',
+        () async {
+      await calmRestore();
+      final outbox = await boxForB();
+      await writeFromB('first');
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+      final second = await writeFromB('second');
+      outbox.beforeDeliver = (call) async {
+        if (call == 0) outbox.refuse.add(1); // the box refuses the first
+      };
+
+      await tap(b);
+
+      expect(outbox.delivered, hasLength(1), reason: 'only the first tried');
+      expect(
+        b.reader.messages
+            .singleWhere((m) => m.tempId == second.tempId)
+            .deliveryStatus,
+        MessageDeliveryStatus.failed,
+      );
+    });
   });
 }

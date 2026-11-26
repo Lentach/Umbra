@@ -506,7 +506,7 @@ extension MessagingBoxSend on MessagingProvider {
     // A calm hold waits for the person's tap (option C): the session held
     // for this friend belongs to the key being replaced, so nothing is
     // sealed on it, be it a message, an action, a receipt or typing.
-    if (_calmHolds.containsKey(recipientId)) {
+    if (_calmWaits(recipientId)) {
       return (
         frames: frames,
         failure: _BoxSealFailure.calmHeld,
