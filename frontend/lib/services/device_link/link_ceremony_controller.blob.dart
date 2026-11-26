@@ -51,7 +51,15 @@ extension LinkCeremonyBlob on LinkCeremonyController {
       // (lxxvi) clause 3: the adopt just landed RAW key material — with
       // wrapping ON a crash before the next unlock would leave it raw on a
       // "protected" device, so wrap it NOW (idempotent; no-op unwired).
-      await PasscodeWrapHook.run();
+      try {
+        await PasscodeWrapHook.run();
+      } catch (_) {
+        // The adopt has landed: the abort this failure leads to must discard
+        // it (A3-SVC-B-1), or the device keeps the account's identity
+        // without ever having become a linked device.
+        _identityAdopted = true;
+        rethrow;
+      }
       if (_ceremonyOver(epoch)) {
         await _discardOrphanedAdopt();
         return;
@@ -84,6 +92,10 @@ extension LinkCeremonyBlob on LinkCeremonyController {
     newDeviceStep = NewDeviceLinkStep.rebinding;
     notifyListeners();
     try {
+      // The server committed the device: the adopted identity is this
+      // install's own from here on (A3-SVC-B-1), whatever the session
+      // adoption below does.
+      await _identity.settleProvisionedIdentity(userId);
       // Amendment (iii): persist the deviceId-bound session, then disconnect/
       // reconnect under it. Only THEN does the existing OTP-gated upload path
       // publish the minted bundle+OTPs (amendment (b): a bundle uploaded
