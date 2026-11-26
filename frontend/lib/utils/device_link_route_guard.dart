@@ -55,8 +55,16 @@ class DeviceLinkGateRouteGuard extends NavigatorObserver {
     if (!rising) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_gated) return;
+      // Bottom to top. Once a page goes, everything pushed above it belongs
+      // to that page (its dialogs, sheets, pages it opened) and goes too: a
+      // dialog kept over the gate would hold a future that runs against the
+      // page's disposed screen. Only the ceremony's scanner is spared.
+      var sweptBelow = false;
       for (final route in List.of(_routes)) {
-        if (route.isActive && !gateKeepsRoute(route)) {
+        if (!route.isActive || route.isFirst) continue;
+        final isScanner = route.settings.name == kLinkScanRouteName;
+        if (!gateKeepsRoute(route) || (sweptBelow && !isScanner)) {
+          sweptBelow = true;
           navigator?.removeRoute(route);
         }
       }

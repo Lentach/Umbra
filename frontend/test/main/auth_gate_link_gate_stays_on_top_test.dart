@@ -189,9 +189,10 @@ void main() {
     );
   });
 
-  // A2-DEV-10 [SUSPECT]: the verdict lands while a dialog is open above a
-  // pushed page. The sweep stopped at the dialog (a kept route), so the page
-  // under it survived and was what the user met after closing the dialog.
+  // A2-DEV-10: the verdict lands while a dialog is open above a pushed page.
+  // The sweep stopped at the dialog (a kept route), so the page under it
+  // survived; now the page goes and so does the dialog above it (nothing is
+  // left to pop: the orphan dialog is not floating over the gate).
   testWidgets('a page under an open dialog is swept too', (tester) async {
     final auth = _StubAuth();
     final encryption = _ToggleGate();
@@ -219,9 +220,8 @@ void main() {
 
     encryption.raiseGate();
     await _pumpFrames(tester, 30);
-    root.pop();
-    await _pumpFrames(tester, 30);
 
+    expect(find.text('open dialog'), findsNothing);
     expect(find.byKey(_orphanKey), findsNothing);
     expect(find.byType(DeviceLinkGateScreen), findsOneWidget);
   });
