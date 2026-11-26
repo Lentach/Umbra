@@ -33,6 +33,9 @@ class _NoIdentity implements LinkIdentityGateway {
 
   @override
   Future<void> discardProvisionedIdentity(int userId) async {}
+
+  @override
+  Future<void> settleProvisionedIdentity(int userId) async {}
 }
 
 /// A DakStore that answers exactly one record (or none) — the Keystore seam the

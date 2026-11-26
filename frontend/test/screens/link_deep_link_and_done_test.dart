@@ -115,6 +115,9 @@ class _NoIdentity implements LinkIdentityGateway {
   }) async {}
   @override
   Future<void> discardProvisionedIdentity(int userId) async {}
+
+  @override
+  Future<void> settleProvisionedIdentity(int userId) async {}
 }
 
 /// Hosts a ceremony screen above a marker page so a pop is observable.

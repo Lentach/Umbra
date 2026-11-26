@@ -1516,6 +1516,18 @@ class EncryptionService {
     await _loadDeviceListPins(userId);
     await _loadPeerDeviceLists(userId);
 
+    // A3-SVC-B-1: a §5.1 adopt that never settled (the process died inside
+    // it, or before the ceremony's server commit) left the account's
+    // identity here without this install ever becoming a linked device. Only
+    // THIS process's own running ceremony may hold such material; anything
+    // else goes before the load below can take it for the install's own.
+    if (!_provisionalIdentityAdopted &&
+        await _storage.read(key: _linkUnsettledKey(userId)) != null) {
+      await _deleteAdoptedMaterial(userId);
+      E2ePersistentDiag.record('LINK_UNSETTLED_ADOPT_DISCARDED', {
+        'userId': userId,
+      });
+    }
     // A THROWING read propagates: a storage error must never be read as "no
     // keys". Only a definitive outcome reaches the server-backed guard.
     final load = await _identityStore.loadFromStorage();
@@ -1975,66 +1987,88 @@ class EncryptionService {
     final p = 'e2e_${userId}_';
     _buildStores(p);
 
-    final registrationId = generateRegistrationId(false);
-    await _identityStore.initialize(identityKeyPair, registrationId);
-    // (lxiv): adopted material is re-homed by this ceremony. The proven wipe
-    // already took the stamp; this covers a TOFU confirm that re-stamped the
-    // old session's id between the wipe and here — the post-rebind connect
-    // re-stamps the assigned id.
+    // A3-SVC-B-1: the install must end this call exactly as keyless as it
+    // started or fully adopted. The unsettled marker goes in FIRST (a death
+    // anywhere below is then undone by the next start), and a throw below
+    // deletes what was written before it propagates.
+    _provisionalIdentityAdopted = true;
     try {
-      await _storage.delete(key: _materialDeviceKey(userId));
-    } on Object catch (_) {}
+      await _storage.write(key: _linkUnsettledKey(userId), value: '1');
 
-    final signedPreKey = generateSignedPreKey(identityKeyPair, 0);
-    await _signedPreKeyStore.storeSignedPreKey(signedPreKey.id, signedPreKey);
-    final preKeys = generatePreKeys(0, _initialPreKeyBatchSize);
-    await Future.wait(preKeys.map((pk) => _preKeyStore.storePreKey(pk.id, pk)));
-    await _storage.write(
-      key: '${p}next_pre_key_id',
-      value: _initialPreKeyBatchSize.toString(),
-    );
+      final registrationId = generateRegistrationId(false);
+      await _identityStore.initialize(identityKeyPair, registrationId);
+      // (lxiv): adopted material is re-homed by this ceremony. The proven
+      // wipe already took the stamp; this covers a TOFU confirm that
+      // re-stamped the old session's id between the wipe and here — the
+      // post-rebind connect re-stamps the assigned id.
+      try {
+        await _storage.delete(key: _materialDeviceKey(userId));
+      } on Object catch (_) {}
 
-    // The account's device-authority public key, for verifying own signed
-    // lists along the I7 chain (a linked device never holds the private
-    // half, invariant I2).
-    await _storage.write(key: '${p}dak_pub_v1', value: dakPubBase64);
+      final signedPreKey = generateSignedPreKey(identityKeyPair, 0);
+      await _signedPreKeyStore.storeSignedPreKey(signedPreKey.id, signedPreKey);
+      final preKeys = generatePreKeys(0, _initialPreKeyBatchSize);
+      await Future.wait(
+        preKeys.map((pk) => _preKeyStore.storePreKey(pk.id, pk)),
+      );
+      await _storage.write(
+        key: '${p}next_pre_key_id',
+        value: _initialPreKeyBatchSize.toString(),
+      );
 
-    _keysForUpload = {
-      'keyBundle': {
-        'registrationId': registrationId,
-        'identityPublicKey': base64Encode(
-          identityKeyPair.getPublicKey().serialize(),
-        ),
-        'signedPreKeyId': signedPreKey.id,
-        'signedPreKeyPublic': base64Encode(
-          signedPreKey.getKeyPair().publicKey.serialize(),
-        ),
-        'signedPreKeySignature': base64Encode(signedPreKey.signature),
-      },
-      'oneTimePreKeys': preKeys.map(_preKeyToUploadFormat).toList(),
-    };
-    await _storage.write(key: '${p}setup_complete', value: 'true');
+      // The account's device-authority public key, for verifying own signed
+      // lists along the I7 chain (a linked device never holds the private
+      // half, invariant I2).
+      await _storage.write(key: '${p}dak_pub_v1', value: dakPubBase64);
+
+      _keysForUpload = {
+        'keyBundle': {
+          'registrationId': registrationId,
+          'identityPublicKey': base64Encode(
+            identityKeyPair.getPublicKey().serialize(),
+          ),
+          'signedPreKeyId': signedPreKey.id,
+          'signedPreKeyPublic': base64Encode(
+            signedPreKey.getKeyPair().publicKey.serialize(),
+          ),
+          'signedPreKeySignature': base64Encode(signedPreKey.signature),
+        },
+        'oneTimePreKeys': preKeys.map(_preKeyToUploadFormat).toList(),
+      };
+      await _storage.write(key: '${p}setup_complete', value: 'true');
+    } on Object {
+      await _rollbackAdopt(userId);
+      rethrow;
+    }
 
     needsKeyUpload = true;
     identityIncomplete = false;
     _initialized = true;
-    _provisionalIdentityAdopted = true;
     E2ePersistentDiag.record('LINK_IDENTITY_ADOPTED', {'userId': userId});
   }
 
-  /// Abort hygiene of a failed §5.1 ceremony (I1, falsification 18): delete
-  /// EXACTLY what [adoptProvisionedIdentity] wrote, so N ends as unkeyed as
-  /// it started. Only runs on a device whose ceremony this process started —
-  /// the adopt path is reachable only while the device holds no identity.
-  Future<void> discardProvisionedIdentity(int userId) async {
-    // Invariant lock (T3 review NOTE): this delete is legal ONLY against an
-    // identity this process adopted in a still-unsettled ceremony. Any other
-    // caller would be destroying a real account's keys.
-    if (!_provisionalIdentityAdopted) {
-      throw StateError(
-        'discardProvisionedIdentity: no provisional identity to discard',
-      );
+  /// A3-SVC-B-1: undo a failed [adoptProvisionedIdentity]. A rollback that
+  /// itself fails leaves the unsettled marker behind (it is deleted last),
+  /// and the next [initialize] finishes the job.
+  Future<void> _rollbackAdopt(int userId) async {
+    try {
+      await _deleteAdoptedMaterial(userId);
+      E2ePersistentDiag.record('LINK_ADOPT_ROLLED_BACK', {'userId': userId});
+    } on Object catch (e) {
+      E2ePersistentDiag.record('LINK_ADOPT_ROLLBACK_FAILED', {
+        'userId': userId,
+        'error': e.runtimeType.toString(),
+      });
     }
+    _identityStore.forgetInMemoryIdentity();
+    _keysForUpload = null;
+    needsKeyUpload = false;
+    _provisionalIdentityAdopted = false;
+  }
+
+  /// Deletes EXACTLY what [adoptProvisionedIdentity] writes, the unsettled
+  /// marker last. Throws on a storage failure: the caller decides.
+  Future<void> _deleteAdoptedMaterial(int userId) async {
     final p = 'e2e_${userId}_';
     final all = await _storage.readAll();
     for (final key in all.keys.toList()) {
@@ -2053,6 +2087,35 @@ class EncryptionService {
         await _storage.delete(key: key);
       }
     }
+    await _storage.delete(key: _linkUnsettledKey(userId));
+  }
+
+  /// A3-SVC-B-1: the §5.1 ceremony's server commit landed, so the adopted
+  /// identity is this install's own — drop the unsettled marker. From here
+  /// [discardProvisionedIdentity] is illegal and the next start loads the
+  /// keys. A failed delete throws and leaves the marker: the next start then
+  /// treats the link as never finished.
+  Future<void> settleProvisionedIdentity(int userId) async {
+    if (!_provisionalIdentityAdopted) return;
+    await _storage.delete(key: _linkUnsettledKey(userId));
+    _provisionalIdentityAdopted = false;
+    E2ePersistentDiag.record('LINK_IDENTITY_SETTLED', {'userId': userId});
+  }
+
+  /// Abort hygiene of a failed §5.1 ceremony (I1, falsification 18): delete
+  /// EXACTLY what [adoptProvisionedIdentity] wrote, so N ends as unkeyed as
+  /// it started. Only runs on a device whose ceremony this process started —
+  /// the adopt path is reachable only while the device holds no identity.
+  Future<void> discardProvisionedIdentity(int userId) async {
+    // Invariant lock (T3 review NOTE): this delete is legal ONLY against an
+    // identity this process adopted in a still-unsettled ceremony. Any other
+    // caller would be destroying a real account's keys.
+    if (!_provisionalIdentityAdopted) {
+      throw StateError(
+        'discardProvisionedIdentity: no provisional identity to discard',
+      );
+    }
+    await _deleteAdoptedMaterial(userId);
     _keysForUpload = null;
     needsKeyUpload = false;
     _provisionalIdentityAdopted = false;
@@ -3158,6 +3221,11 @@ class EncryptionService {
 
   String _materialDeviceKey(int userId) => 'e2e_${userId}_material_device_v1';
 
+  /// A3-SVC-B-1: present from the first write of an adopt until its ceremony
+  /// settles; a start that finds it without a running ceremony discards the
+  /// adopted material.
+  String _linkUnsettledKey(int userId) => 'e2e_${userId}_link_unsettled_v1';
+
   /// Issue #208: the device id [userId]'s material on this install is
   /// stamped for, read WITHOUT the TOFU write of [confirmMaterialDeviceId] —
   /// null when nothing is stamped or storage cannot be read (never evidence
@@ -3850,6 +3918,15 @@ class EncryptionService {
     if (userId == null || _staleAccount(forUser)) {
       return PlaintextPurgeResult(removed: 0, failedIds: wanted);
     }
+
+    // A3-SVC-C-2: a save of one of these ids that is already queued or in
+    // flight rewrites the WHOLE record when it finds none, so it must land
+    // before the removal, never after it (a message the friend deleted for
+    // everyone came back). The chain swallows its own failures.
+    await Future.wait([
+      for (final id in wanted)
+        ?_decryptedSaveTails[_decryptedContentKey(userId, id)],
+    ]);
 
     var removed = 0;
     final failed = <int>{};

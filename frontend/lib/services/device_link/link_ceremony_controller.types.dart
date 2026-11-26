@@ -68,6 +68,10 @@ abstract class LinkIdentityGateway {
   });
 
   Future<void> discardProvisionedIdentity(int userId);
+
+  /// The ceremony's server commit landed: the adopted identity is this
+  /// install's own and no abort or restart may discard it any more.
+  Future<void> settleProvisionedIdentity(int userId);
 }
 
 /// Production gateway over the app's one EncryptionService instance.
@@ -108,6 +112,10 @@ class EncryptionServiceLinkGateway implements LinkIdentityGateway {
   @override
   Future<void> discardProvisionedIdentity(int userId) =>
       _service.discardProvisionedIdentity(userId);
+
+  @override
+  Future<void> settleProvisionedIdentity(int userId) =>
+      _service.settleProvisionedIdentity(userId);
 }
 
 /// Where the devices surface stands for THIS device/account.

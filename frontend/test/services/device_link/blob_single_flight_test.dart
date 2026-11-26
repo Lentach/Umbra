@@ -65,6 +65,9 @@ class _ParkedIdentity implements LinkIdentityGateway {
     discarded++;
     holdsIdentity = false;
   }
+
+  @override
+  Future<void> settleProvisionedIdentity(int userId) async {}
 }
 
 class _NoDakStore extends DakStore {
