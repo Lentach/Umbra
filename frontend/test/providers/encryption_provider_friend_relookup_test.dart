@@ -548,4 +548,26 @@ void main() {
       expect(provider.cachedDeviceList(peerId)?.liveDeviceIds, [5]);
     });
   });
+
+  // A2-ENC-A-3: `first_contact_accept` drops a request as `unverified` on this
+  // exception type and keeps it as `failed` on any other, so a garbage served
+  // key must surface as exactly this reason, with nothing adopted.
+  test('a served identity key that is not base64 is refused as '
+      'served_identity_invalid and adopts nothing', () async {
+    await expectLater(
+      provider.adoptServedAccount(
+        peerId,
+        identityKey: '%%% not base64 %%%',
+        authorization: served,
+      ),
+      throwsA(
+        isA<DeviceListVerificationException>().having(
+          (e) => e.reason,
+          'reason',
+          'served_identity_invalid',
+        ),
+      ),
+    );
+    expect(provider.cachedDeviceList(peerId), isNull);
+  });
 }
