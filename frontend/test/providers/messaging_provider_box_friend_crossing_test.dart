@@ -72,6 +72,18 @@ class _Enc extends EncryptionProvider {
   /// What was asked of the device-list cache, in order.
   final List<String> lookupLog = [];
 
+  /// Runs once inside the next [calmHoldEligible] (a hold may change while
+  /// the check waits).
+  Future<void> Function()? onEligibility;
+
+  @override
+  Future<bool> calmHoldEligible(int peerId) async {
+    final hook = onEligibility;
+    onEligibility = null;
+    await hook?.call();
+    return super.calmHoldEligible(peerId);
+  }
+
   @override
   void invalidateDeviceList(int userId, {bool byPerson = false}) {
     lookupLog.add('invalidate ${byPerson ? 'by person' : 'by event'}');
@@ -1707,8 +1719,9 @@ void main() {
         'late REFUSED answer is discarded, the new calm line stands',
         () async {
       await calmRestore();
-      b.other = a; // the server still serves the OLD key: refused
-      b.gate = Completer<void>();
+      b
+        ..other = a // the server still serves the OLD key: refused
+        ..gate = Completer<void>();
       final tapped = tap(b);
       await pumpEventQueue();
       expect(b.reader.calmHoldState(1), CalmHoldState.checking);
@@ -1810,7 +1823,7 @@ void main() {
     // old queue is still the address, so nothing is sent (P1-1) ----
 
     test('P1-1a: a message typed while the drain runs waits too, and goes '
-        "out once, after the earlier one, to the LEARNED queue", () async {
+        'out once, after the earlier one, to the LEARNED queue', () async {
       final restored = await calmRestore();
       final outbox = await boxForB();
       await writeFromB('earlier');
@@ -1896,6 +1909,66 @@ void main() {
             .deliveryStatus,
         MessageDeliveryStatus.failed,
       );
+    });
+
+    test('F7b: the account switches while the session is built: the key IS '
+        'accepted, but the calm hold is not released under the new account',
+        () async {
+      final restored = await calmRestore();
+      b.enc.encryptionService.debugBeforeAutoAcceptSwap =
+          () async => b.enc.onConnect(false);
+
+      await tap(b);
+
+      expect(await anchorOfA(), await idOf(restored), reason: 'accepted');
+      expect(
+        E2eDiagLog.entries.where((e) => e.contains('CALM_CONFIRMED')),
+        isEmpty,
+      );
+
+    });
+
+    test('F6b: the hold was replaced while the eligibility check waited: its '
+        'late "not eligible" answer is discarded, the new calm line stands',
+        () async {
+      await calmRestore();
+      b.enc.onEligibility = () async {
+        b.reader.onConnect(false); // clears the hold
+        await reoffer(b); // a NEW calm hold
+        b.enc.keyChangeWarnings = () => true; // now the old tap sees "no"
+      };
+
+      await tap(b);
+
+      expect(b.reader.calmHoldState(1), CalmHoldState.waiting);
+      expect(b.enc.peersWithChangedIdentity, isEmpty);
+    });
+
+    test('a frame of the key the anchor already reached settles the hold '
+        'and drops what waited: a later calm hold does not claim that row',
+        () async {
+      final restored = await calmRestore();
+      await boxForB();
+      final row = await writeFromB('stale');
+      expect(b.reader.sendWaitsForCalmHold(row.tempId), isTrue);
+      // The key is confirmed some other way than the provider's tap.
+      expect(
+        await b.enc.confirmCalmKey(
+          1,
+          1,
+          await idOf(restored),
+          noteAtMs: 0,
+        ),
+        CalmConfirm.confirmed,
+      );
+
+      await reoffer(b); // the held frame now matches: the hold is settled
+      expect(b.reader.calmHoldState(1), isNull);
+      b.emits.clear(); // the direct confirm above fetched a bundle
+      await handOffFrom(a); // the OLD key again: a new calm hold
+      expectCalm(b);
+
+      expect(b.reader.sendWaitsForCalmHold(row.tempId), isFalse);
     });
   });
 }
