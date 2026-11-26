@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:fireplace/services/encryption/signal_stores.dart';
 import 'package:fireplace/services/encryption_service.dart';
+import 'package:fireplace/utils/e2e_persistent_diag.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:libsignal_protocol_dart/libsignal_protocol_dart.dart';
@@ -293,6 +294,8 @@ void main() {
       });
 
       final svc = EncryptionService();
+      await E2ePersistentDiag.clear();
+      await E2ePersistentDiag.init();
       await svc.initialize(9, checkServerIdentity: () async => const ServerIdentityGuard(exists: false));
 
       expect(
@@ -310,6 +313,15 @@ void main() {
         await secure.read(key: 'e2e_9_identity_key_pair'),
         isNot(legacyPair(pair)),
         reason: 'the damaged legacy identity is replaced, not kept',
+      );
+      expect(
+        E2ePersistentDiag.entries.where(
+          (e) =>
+              e.contains('IDENTITY_MINTED') &&
+              e.contains('absent-residue-discarded-server-says-none'),
+        ),
+        hasLength(1),
+        reason: 'a mint that first wiped leftovers must not say "no residue"',
       );
 
       // And the service is usable again without consulting anyone.

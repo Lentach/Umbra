@@ -1660,6 +1660,8 @@ class EncryptionService {
       residue: residue,
       reason: guard.exists
           ? 'server-bundle-unlocked-remint'
+          : residue
+          ? 'absent-residue-discarded-server-says-none'
           : 'absent-no-residue-server-says-none',
     );
   }
