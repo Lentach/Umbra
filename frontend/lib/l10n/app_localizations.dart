@@ -266,6 +266,18 @@ abstract class AppLocalizations {
   /// **'Ładowanie…'**
   String get devicesLoading;
 
+  /// No description provided for @settingsDeviceWebBrowser.
+  ///
+  /// In pl, this message translates to:
+  /// **'Przeglądarka internetowa'**
+  String get settingsDeviceWebBrowser;
+
+  /// No description provided for @settingsDeviceNativeApp.
+  ///
+  /// In pl, this message translates to:
+  /// **'To urządzenie'**
+  String get settingsDeviceNativeApp;
+
   /// No description provided for @devicesExplainer.
   ///
   /// In pl, this message translates to:

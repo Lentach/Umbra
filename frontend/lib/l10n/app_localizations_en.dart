@@ -97,6 +97,12 @@ class AppLocalizationsEn extends AppLocalizations {
   String get devicesLoading => 'Loading…';
 
   @override
+  String get settingsDeviceWebBrowser => 'Web browser';
+
+  @override
+  String get settingsDeviceNativeApp => 'This device';
+
+  @override
   String get devicesExplainer =>
       'Add new devices from the primary device only.';
 

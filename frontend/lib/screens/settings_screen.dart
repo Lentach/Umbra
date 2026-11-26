@@ -41,7 +41,6 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  String? _deviceName;
   static final Uri _aboutFireplaceUri = Uri.parse(
     'https://fireplace.ignorelist.com/welcome/',
   );
@@ -51,7 +50,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
-    _loadDeviceName();
     _loadAppVersion();
     final userId = context.read<AuthProvider>().currentUser?.id;
     if (userId != null) {
@@ -67,27 +65,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
     } catch (e) {
       debugPrint('Error loading app version: $e');
-    }
-  }
-
-  Future<void> _loadDeviceName() async {
-    String name = 'Unknown Device';
-
-    try {
-      if (kIsWeb) {
-        name = 'Web Browser';
-      } else {
-        // Native platforms: generic name. Naming the real model would mean
-        // taking a device-info plugin back on as a dependency (device_info_plus
-        // was removed 2026-08-02 as unused) AND handling hardware identifiers.
-        name = 'Native Device';
-      }
-    } catch (e) {
-      debugPrint('Error loading device name: $e');
-    }
-
-    if (mounted) {
-      setState(() => _deviceName = name);
     }
   }
 
@@ -636,7 +613,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   SettingsConsoleRow(
                     glyph: ConsoleGlyph.devices,
                     title: l10n.devices,
-                    subtitle: _deviceName ?? l10n.devicesLoading,
+                    // A generic name: naming the real model would mean taking
+                    // a device-info plugin back on as a dependency
+                    // (device_info_plus was removed 2026-08-02 as unused) AND
+                    // handling hardware identifiers.
+                    subtitle: kIsWeb
+                        ? l10n.settingsDeviceWebBrowser
+                        : l10n.settingsDeviceNativeApp,
                     onTap: () {
                       Navigator.of(context).push(
                         MaterialPageRoute(

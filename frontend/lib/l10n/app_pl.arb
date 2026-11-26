@@ -28,6 +28,8 @@
   "passwordResetFailed": "Nie udało się zmienić hasła",
   "accountDeletionFailed": "Nie udało się usunąć konta",
   "devicesLoading": "Ładowanie…",
+  "settingsDeviceWebBrowser": "Przeglądarka internetowa",
+  "settingsDeviceNativeApp": "To urządzenie",
   "devicesExplainer": "Nowe urządzenie dodasz tylko z urządzenia głównego.",
   "devicesLinkedDeviceNote": "To urządzenie jest połączone. Nowe urządzenia dodaje się z urządzenia głównego.",
   "devicesNotEnrolled": "Łączenie urządzeń nie jest jeszcze włączone dla tego konta.",

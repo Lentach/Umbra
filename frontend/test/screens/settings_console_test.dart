@@ -428,4 +428,22 @@ void main() {
       expect(find.text('O projekcie'), findsOneWidget);
     });
   });
+
+  // A2-SET-4: the Devices row's subtitle was hardcoded English.
+  testWidgets('the Devices row names this install in the app language', (
+    tester,
+  ) async {
+    await tester.pumpWidget(_settingsApp(locale: const Locale('pl')));
+    await tester.pump();
+
+    final pl = await AppLocalizations.delegate.load(const Locale('pl'));
+    // The test host is native (not web).
+    await tester.scrollUntilVisible(
+      find.text(pl.settingsDeviceNativeApp),
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text(pl.settingsDeviceNativeApp), findsOneWidget);
+    expect(find.text('Native Device'), findsNothing);
+  });
 }

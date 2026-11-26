@@ -30,6 +30,8 @@
   "passwordResetFailed": "Password reset failed",
   "accountDeletionFailed": "Account deletion failed",
   "devicesLoading": "Loading…",
+  "settingsDeviceWebBrowser": "Web browser",
+  "settingsDeviceNativeApp": "This device",
   "devicesExplainer": "Add new devices from the primary device only.",
   "devicesLinkedDeviceNote": "This device is linked. New devices are added from the primary device.",
   "devicesNotEnrolled": "Device linking is not enabled for this account yet.",

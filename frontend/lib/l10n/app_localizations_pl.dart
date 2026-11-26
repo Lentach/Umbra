@@ -97,6 +97,12 @@ class AppLocalizationsPl extends AppLocalizations {
   String get devicesLoading => 'Ładowanie…';
 
   @override
+  String get settingsDeviceWebBrowser => 'Przeglądarka internetowa';
+
+  @override
+  String get settingsDeviceNativeApp => 'To urządzenie';
+
+  @override
   String get devicesExplainer =>
       'Nowe urządzenie dodasz tylko z urządzenia głównego.';
 
