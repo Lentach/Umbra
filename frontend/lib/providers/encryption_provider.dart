@@ -1479,7 +1479,9 @@ class EncryptionProvider extends ChangeNotifier {
     return completer.future;
   }
 
-  /// Box-only peers whose one lookup of this process is spent.
+  /// Friends whose list this process has looked up by handle ([_takeLookup]).
+  /// A spent one may be looked up again when an event buys it
+  /// ([_owedRelookup]).
   final Set<int> _boxListLookupSpent = {};
 
   /// Handler for the `deviceList` server event (answer to `getDeviceList`).
@@ -2067,9 +2069,9 @@ class EncryptionProvider extends ChangeNotifier {
   int _initEpoch = 0;
   int _e2eInitInFlightEpoch = 0;
 
-  /// CLAUDE.md gotcha: skips `_encryptionService.initialize()` when
-  /// `_e2eInitialized = true` (reconnect path) to prevent transient
-  /// mobile storage errors from setting `_e2eInitialized = false`.
+  /// Skips `_encryptionService.initialize()` when `_e2eInitialized = true`
+  /// (reconnect path) to prevent transient mobile storage errors from
+  /// setting `_e2eInitialized = false`.
   /// Never throws — every failure mode is caught and logged inside.
   Future<void> _initializeE2EInner(int userId) async {
     final epoch = _initEpoch;
@@ -2280,9 +2282,8 @@ class EncryptionProvider extends ChangeNotifier {
     } catch (e) {
       if (superseded()) return;
       debugPrint('[E2E] Initialization failed: $e');
-      // Only clear the flag if we hadn't initialized yet; don't undo a working
-      // reconnect just because the re-upload attempt threw.
-      if (!_e2eInitialized) _e2eInitialized = false;
+      // Never undo a working init: a reconnect whose re-upload attempt threw
+      // keeps `_e2eInitialized` as it was.
       _setIdentityCheckUnavailable(false);
       _e2eFlowLog('E2E_INIT_FAIL', {'error': e.toString()});
     } finally {
@@ -3601,7 +3602,7 @@ class EncryptionProvider extends ChangeNotifier {
   /// On fresh connect: resets all state.
   /// On reconnect (same user): preserves [_e2eInitialized] to avoid
   /// re-running initialize() which can cause transient mobile storage errors
-  /// (CLAUDE.md gotcha: `_initializeE2E()` skips when `_e2eInitialized = true`).
+  /// (`_initializeE2E()` skips when `_e2eInitialized = true`).
   void onConnect(bool isReconnect) {
     // (lxiv) final-review P1: the confirmed own-device id is a PER-SOCKET
     // fact — the new socket's id is unknown until ITS socketReady, and after a
