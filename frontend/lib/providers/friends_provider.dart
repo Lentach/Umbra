@@ -119,9 +119,7 @@ class FriendsProvider extends ChangeNotifier {
       _requests(ContactState.pendingIn);
   List<FriendRequestModel> get sentRequests =>
       _requests(ContactState.pendingOut);
-  int get pendingRequestsCount =>
-      _store?.all.where((r) => _isBoxRequest(r, ContactState.pendingIn)).length ??
-      0;
+  int get pendingRequestsCount => friendRequests.length;
   List<UserModel>? get searchResults => _searchResults;
 
   /// The raw entry for [userId] in the answer [searchResults] shows; null
