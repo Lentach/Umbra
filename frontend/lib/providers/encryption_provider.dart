@@ -1141,11 +1141,14 @@ class EncryptionProvider extends ChangeNotifier {
   /// becomes the account anchor when none is held — BEFORE the list is
   /// adopted, so a key another answer pinned meanwhile refuses this one
   /// without leaving its list (and version floor) behind. Throws, adopting
-  /// nothing, when another key is pinned (a key change is a human's call, (xlvi)) or
-  /// the list does not verify — unless [replaceStaleAnchor]: the caller
-  /// knows the account is no longer a contact at all (decision 112), so a
-  /// pinned key is a leftover of a friendship that ended, and the served key
-  /// replaces it once the list verifies under it.
+  /// nothing, when another key is pinned (a key change is a human's call,
+  /// (xlvi)), the list does not verify, or the account changed meanwhile —
+  /// unless [replaceStaleAnchor]: the caller knows the account is no longer a
+  /// contact at all (decision 112), so a pinned key is a leftover of a
+  /// friendship that ended, and the served key replaces it once the list
+  /// verifies under it. One exception to "adopting nothing": a list refused on
+  /// a version floor that another answer raised during the pin throws with
+  /// the anchor already pinned.
   Future<VerifiedDeviceList> adoptServedAccount(
     int userId, {
     required String identityKey,
