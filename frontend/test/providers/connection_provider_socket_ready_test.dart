@@ -117,6 +117,9 @@ class _NoIdentity implements LinkIdentityGateway {
 
   @override
   Future<void> discardProvisionedIdentity(int userId) async {}
+
+  @override
+  Future<void> settleProvisionedIdentity(int userId) async {}
 }
 
 /// Records calls; base SocketService methods are `_socket?.emit` null-safe

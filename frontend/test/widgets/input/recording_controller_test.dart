@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:fireplace/l10n/app_localizations.dart';
@@ -6,6 +8,7 @@ import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/widgets/input/recording_controller.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:record/record.dart';
@@ -266,6 +269,260 @@ void main() {
       state.debugSetStartingForTest(true);
       await state.startRecording(); // must return immediately
       expect(state.isRecording, isFalse);
+    });
+  });
+
+  // A3-CMP-04 (owner 2026-11-26): a recording is DISCARDED when the app goes
+  // to the background, never sent on return.
+  group('RecordingController app lifecycle', () {
+    tearDown(() {
+      TestWidgetsFlutterBinding.instance
+          .handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    });
+
+    Future<({RecordingControllerState state, List<int> sent})> pumpRecording(
+      WidgetTester tester,
+    ) async {
+      final sent = <int>[];
+      final state = await _pumpController(
+        tester,
+        onVoiceSent:
+            ({
+              required duration,
+              conversationId,
+              localAudioPath,
+              audioBytes,
+            }) async {
+          sent.add(duration);
+        },
+        onRecordingStateChanged: (_) {},
+      );
+      state
+        ..testSkipHardware = true
+        ..simulateRecordingForTest(elapsed: const Duration(seconds: 3));
+      await tester.pump();
+      return (state: state, sent: sent);
+    }
+
+    for (final away in [AppLifecycleState.paused, AppLifecycleState.hidden]) {
+      testWidgets('${away.name} discards the recording with its notice and '
+          'nothing is sent on return', (tester) async {
+        final r = await pumpRecording(tester);
+        // inactive precedes hidden/paused on every platform.
+        final binding = TestWidgetsFlutterBinding.instance
+          ..handleAppLifecycleStateChanged(AppLifecycleState.inactive)
+          ..handleAppLifecycleStateChanged(away);
+        await tester.pump();
+        binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+        await tester.pump();
+
+        expect(r.state.isRecording, isFalse);
+        expect(
+          find.text(AppLocalizations.of(tester.element(find.byType(Scaffold)))
+              .snackbarVoiceRecordingCanceled),
+          findsOneWidget,
+        );
+        await r.state.stopAndSend(); // a late auto-stop finds nothing
+        await tester.pump(const Duration(milliseconds: 2600));
+        expect(r.sent, isEmpty);
+      });
+    }
+
+    testWidgets('inactive alone (a web tab losing focus, a dialog) keeps '
+        'the recording', (tester) async {
+      final r = await pumpRecording(tester);
+
+      TestWidgetsFlutterBinding.instance
+          .handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      await tester.pump();
+
+      expect(r.state.isRecording, isTrue);
+      await r.state.cancelRecording();
+      await tester.pump(const Duration(milliseconds: 2600));
+    });
+
+    // The tests below drive the REAL startRecording. Off Android/iOS the mic
+    // permission step is skipped, so what runs is the temp-dir lookup and the
+    // recorder plugin (create / start / stop / dispose), both faked at their
+    // platform channels. `start` parks on [startGate].
+    ({List<String> calls, Completer<void> startGate}) fakeRecorderPlatform(
+      WidgetTester tester,
+    ) {
+      final messenger = tester.binding.defaultBinaryMessenger;
+      const recordChannel = MethodChannel('com.llfbandit.record/messages');
+      const pathChannel = MethodChannel('plugins.flutter.io/path_provider');
+      final calls = <String>[];
+      final startGate = Completer<void>();
+      messenger..setMockMethodCallHandler(recordChannel, (call) async {
+        calls.add(call.method);
+        switch (call.method) {
+          case 'create':
+            final id = (call.arguments as Map)['recorderId'] as String;
+            messenger.setMockStreamHandler(
+              EventChannel('com.llfbandit.record/events/$id'),
+              MockStreamHandler.inline(onListen: (_, _) {}),
+            );
+          case 'start':
+            await startGate.future;
+        }
+        return null;
+      })
+        ..setMockMethodCallHandler(
+          pathChannel,
+          (call) async => Directory.systemTemp.path,
+        );
+      addTearDown(() {
+        messenger
+          ..setMockMethodCallHandler(recordChannel, null)
+          ..setMockMethodCallHandler(pathChannel, null);
+      });
+      return (calls: calls, startGate: startGate);
+    }
+
+    // Platform replies and file IO complete in the real zone, the widget's
+    // continuations in the fake one: alternate real turns with pumps.
+    Future<void> settle(WidgetTester tester) async {
+      for (var i = 0; i < 6; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)),
+        );
+        await tester.pump();
+      }
+    }
+
+    Future<({RecordingControllerState state, List<int> sent, List<bool> ui})>
+    pumpIdle(WidgetTester tester) async {
+      final sent = <int>[];
+      final ui = <bool>[];
+      final state = await _pumpController(
+        tester,
+        onVoiceSent:
+            ({
+              required duration,
+              conversationId,
+              localAudioPath,
+              audioBytes,
+            }) async {
+          sent.add(duration);
+        },
+        onRecordingStateChanged: ui.add,
+      );
+      return (state: state, sent: sent, ui: ui);
+    }
+
+    String canceledNotice(WidgetTester tester) =>
+        AppLocalizations.of(tester.element(find.byType(Scaffold)))
+            .snackbarVoiceRecordingCanceled;
+
+    testWidgets('paused while the recorder is starting: the recording is '
+        'discarded before it goes live, never armed, never sent',
+        (tester) async {
+      final platform = fakeRecorderPlatform(tester);
+      final r = await pumpIdle(tester);
+      final binding = TestWidgetsFlutterBinding.instance;
+
+      final started = r.state.startRecording();
+      await settle(tester);
+      expect(platform.calls, contains('start'));
+      expect(r.state.isStarting, isTrue);
+
+      // The user presses Home / the power key while the recorder is opening.
+      binding
+        ..handleAppLifecycleStateChanged(AppLifecycleState.inactive)
+        ..handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      platform.startGate.complete();
+      await settle(tester);
+      await started;
+
+      expect(r.state.isRecording, isFalse);
+      expect(r.ui, isNot(contains(true)));
+      expect(platform.calls, containsAll(['stop', 'dispose']));
+      await tester.pump(const Duration(seconds: 121));
+      expect(r.sent, isEmpty);
+    });
+
+    testWidgets('inactive while the recorder is starting (the permission '
+        'prompt) keeps the recording that starts', (tester) async {
+      final platform = fakeRecorderPlatform(tester);
+      final r = await pumpIdle(tester);
+
+      final started = r.state.startRecording();
+      await settle(tester);
+      TestWidgetsFlutterBinding.instance
+          .handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      platform.startGate.complete();
+      await settle(tester);
+      await started;
+
+      expect(r.state.isRecording, isTrue);
+      expect(platform.calls, isNot(contains('stop')));
+      final canceled = r.state.cancelRecording();
+      await settle(tester);
+      await canceled;
+      await tester.pump(const Duration(milliseconds: 2600));
+    });
+
+    testWidgets('a paused that is already over (resumed) when the recorder '
+        'finishes starting keeps the recording', (tester) async {
+      final platform = fakeRecorderPlatform(tester);
+      final r = await pumpIdle(tester);
+      final binding = TestWidgetsFlutterBinding.instance;
+
+      final started = r.state.startRecording();
+      await settle(tester);
+      binding
+        ..handleAppLifecycleStateChanged(AppLifecycleState.inactive)
+        ..handleAppLifecycleStateChanged(AppLifecycleState.paused)
+        ..handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      platform.startGate.complete();
+      await settle(tester);
+      await started;
+
+      expect(r.state.isRecording, isTrue);
+      final canceled = r.state.cancelRecording();
+      await settle(tester);
+      await canceled;
+      await tester.pump(const Duration(milliseconds: 2600));
+    });
+
+    // N1: the toast lives 2.5 s, so one shown while the app is away expires
+    // unseen. The notice waits for the app to be resumed.
+    testWidgets('the canceled notice shows when the app is resumed, not '
+        'while it is away', (tester) async {
+      final r = await pumpIdle(tester);
+      r.state.testSkipHardware = true;
+      r.state.simulateRecordingForTest(elapsed: const Duration(seconds: 3));
+      await tester.pump();
+      final binding = TestWidgetsFlutterBinding.instance
+        ..handleAppLifecycleStateChanged(AppLifecycleState.inactive)
+        ..handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await tester.pump(const Duration(seconds: 3));
+      expect(r.state.isRecording, isFalse);
+      expect(find.text(canceledNotice(tester)), findsNothing);
+
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      expect(find.text(canceledNotice(tester)), findsOneWidget);
+      await tester.pump(const Duration(milliseconds: 2600));
+      expect(r.sent, isEmpty);
+    });
+
+    testWidgets('a discard while away is announced once, not on every '
+        'later resume', (tester) async {
+      final r = await pumpIdle(tester);
+      r.state.testSkipHardware = true;
+      r.state.simulateRecordingForTest(elapsed: const Duration(seconds: 3));
+      await tester.pump();
+      final binding = TestWidgetsFlutterBinding.instance
+        ..handleAppLifecycleStateChanged(AppLifecycleState.paused)
+        ..handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump(const Duration(milliseconds: 2600));
+      binding
+        ..handleAppLifecycleStateChanged(AppLifecycleState.paused)
+        ..handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+
+      expect(find.text(canceledNotice(tester)), findsNothing);
     });
   });
 }

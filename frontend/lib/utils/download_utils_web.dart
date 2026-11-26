@@ -8,6 +8,10 @@ Future<void> saveBytesAsDownload(List<int> bytes, String filename) async {
   await _saveBytesAsDownload(bytes, filename);
 }
 
+/// Web saves go through the browser's download manager, outside the app's
+/// reach: there is no saved copy of ours to delete.
+Future<bool> deleteSavedDownloads() async => true;
+
 Future<void> _saveBytesAsDownload(List<int> bytes, String filename) async {
   final u8 = bytes is Uint8List ? bytes : Uint8List.fromList(bytes);
   final blob = web.Blob([u8.toJS].toJS);

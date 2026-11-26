@@ -334,11 +334,14 @@ class ApiService {
   /// note is gone — read (burned) or expired; the caller disambiguates with
   /// the link's own `e=` clock. Throws on transport/HTTP failure so callers
   /// can fail open instead of falsely reporting a live note as destroyed.
-  Future<bool> isNoteAlive(String token, String noteToken) async {
-    final response = await _httpClient.get(
-      Uri.parse('$baseUrl/note/$noteToken/status'),
-      headers: {'Authorization': 'Bearer $token'},
-    ).timeout(_kDefaultTimeout);
+  ///
+  /// Deliberately sends NO headers: no `Authorization`, so a request log
+  /// cannot link the account that created the note to the accounts that poll
+  /// it (A3-MSG-B-04, owner decision 2026-11-26). The route is public.
+  Future<bool> isNoteAlive(String noteToken) async {
+    final response = await _httpClient
+        .get(Uri.parse('$baseUrl/note/$noteToken/status'))
+        .timeout(_kDefaultTimeout);
     if (response.statusCode != 200) {
       throw Exception('Note status check failed: ${response.statusCode}');
     }

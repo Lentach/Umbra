@@ -111,7 +111,7 @@ class RecordingController extends StatefulWidget {
 }
 
 class RecordingControllerState extends State<RecordingController>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   MessagingProvider? _messagingProvider;
   ConversationsProvider? _conversationsProvider;
 
@@ -139,6 +139,10 @@ class RecordingControllerState extends State<RecordingController>
   /// Re-entrancy across [stopAndSend] / [cancelRecording] / the 120 s timer,
   /// all reachable as discrete taps in the same frame.
   bool _isStopping = false;
+
+  /// A recording was discarded because the app went away; the user is told
+  /// when it comes back ([_announceDiscardedWhileAway]).
+  bool _discardedWhileAway = false;
 
   /// The chat the running recording started in. The composer is shared
   /// across chats on the desktop split view, so the open chat can change
@@ -198,9 +202,52 @@ class RecordingControllerState extends State<RecordingController>
     });
   }
 
+  /// A recording is DISCARDED when the app goes to the background (owner
+  /// 2026-11-26): after a call or a screen lock the wall-clock 120 s timer
+  /// would otherwise send a note the user never confirmed, over the cap.
+  /// Only `paused` / `hidden` count: `inactive` is a web tab losing focus or
+  /// a system dialog (the microphone permission prompt). A start still in
+  /// flight has no recording to discard here; [startRecording] reads the
+  /// state once the recorder is up and discards then.
+  ///
+  /// The "canceled" notice is shown on `resumed`, not now: its 2.5 s timer
+  /// would expire while nobody can see it.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _announceDiscardedWhileAway();
+      return;
+    }
+    if (state != AppLifecycleState.paused &&
+        state != AppLifecycleState.hidden) {
+      return;
+    }
+    if (_isRecording && !_isStopping) {
+      _discardedWhileAway = true;
+      unawaited(cancelRecording(announce: false));
+    }
+  }
+
+  bool get _appIsAway {
+    final state = WidgetsBinding.instance.lifecycleState;
+    return state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden;
+  }
+
+  void _announceDiscardedWhileAway() {
+    if (!_discardedWhileAway) return;
+    _discardedWhileAway = false;
+    if (!mounted) return;
+    showTopSnackBar(
+      context,
+      AppLocalizations.of(context).snackbarVoiceRecordingCanceled,
+    );
+  }
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     // Do NOT repeat() here — only while recording (idle spin wastes frames on web).
     _waveformController = AnimationController(
       vsync: this,
@@ -210,6 +257,7 @@ class RecordingControllerState extends State<RecordingController>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _conversationsProvider?.removeListener(_onConversationsChanged);
     _waveformController.dispose();
     _recordingTimer?.cancel();
@@ -431,6 +479,17 @@ class RecordingControllerState extends State<RecordingController>
         return;
       }
 
+      // The app went away while the recorder was opening (Home, power key):
+      // `paused` / `hidden` arrived with no recording to discard yet, and a
+      // live one would be auto-sent by the 120 s timer with nobody there.
+      // The CURRENT state decides, not a latched event: a `paused` that is
+      // already over, and `inactive` (the permission prompt), keep it.
+      if (_appIsAway) {
+        _discardedWhileAway = true;
+        await _releaseRecorderSilently();
+        return;
+      }
+
       _recordingStartTime = DateTime.now();
       messaging.setIsRecordingVoice(true);
       _recordingConversationId = _conversationsProvider?.activeConversationId;
@@ -591,7 +650,10 @@ class RecordingControllerState extends State<RecordingController>
   }
 
   /// Public: tap trash. Discards the in-progress recording.
-  Future<void> cancelRecording() async {
+  ///
+  /// [announce] false leaves the "canceled" notice to the caller: a discard
+  /// while the app is away is announced on return ([_discardedWhileAway]).
+  Future<void> cancelRecording({bool announce = true}) async {
     if (!_isRecording || _isStopping) return;
     if (_audioRecorder == null && !testSkipHardware) return;
     _isStopping = true;
@@ -632,7 +694,7 @@ class RecordingControllerState extends State<RecordingController>
         _recordingPath = null;
       });
       widget.onRecordingStateChanged(false);
-      _showNotSentSnackBar(canceledMessage);
+      if (announce) _showNotSentSnackBar(canceledMessage);
     } finally {
       _isStopping = false;
     }

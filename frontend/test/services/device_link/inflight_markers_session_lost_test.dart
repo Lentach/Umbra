@@ -40,6 +40,9 @@ class _Identity implements LinkIdentityGateway {
 
   @override
   Future<void> discardProvisionedIdentity(int userId) async {}
+
+  @override
+  Future<void> settleProvisionedIdentity(int userId) async {}
 }
 
 class _StubDakStore extends DakStore {

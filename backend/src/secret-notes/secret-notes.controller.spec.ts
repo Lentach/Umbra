@@ -1,5 +1,6 @@
 // backend/src/secret-notes/secret-notes.controller.spec.ts
 import { Test } from '@nestjs/testing';
+import { GUARDS_METADATA } from '@nestjs/common/constants';
 import { SecretNotesController } from './secret-notes.controller';
 import { SecretNotesService } from './secret-notes.service';
 
@@ -245,6 +246,36 @@ describe('SecretNotesController', () => {
         expect(service.findByToken).not.toHaveBeenCalled();
       },
     );
+
+    // A3-MSG-B-04 (owner decision 2026-11-26): the status poll carries no
+    // login. A JWT on it let a request log link the sender's POST /notes to
+    // the receiver's polls of the same token.
+    const handlerOf = (name: 'createNote' | 'noteStatus'): object => {
+      const handler: unknown = Object.getOwnPropertyDescriptor(
+        SecretNotesController.prototype,
+        name,
+      )?.value;
+      expect(typeof handler).toBe('function');
+      return handler as object;
+    };
+
+    it('is public: no auth guard on GET note/:token/status', () => {
+      expect(
+        Reflect.getMetadata(GUARDS_METADATA, handlerOf('noteStatus')),
+      ).toBeUndefined();
+    });
+
+    it('keeps its throttle now that nothing else limits the caller', () => {
+      expect(
+        Reflect.getMetadata('THROTTLER:LIMITdefault', handlerOf('noteStatus')),
+      ).toBe(120);
+    });
+
+    it('control: creating a note still needs a login', () => {
+      expect(
+        Reflect.getMetadata(GUARDS_METADATA, handlerOf('createNote')),
+      ).toBeDefined();
+    });
   });
 
   describe('revealNote', () => {

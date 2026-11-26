@@ -28,6 +28,18 @@ void main() {
     });
   });
 
+  /// A service whose keys and dismissal state are loaded: a server-origin
+  /// report reaches it at once. Before `initialize` ends it is held instead.
+  Future<EncryptionService> loadedService() async {
+    final service = EncryptionService();
+    await service.initialize(
+      90,
+      checkServerIdentity: () async =>
+          const ServerIdentityGuard(exists: false),
+    );
+    return service;
+  }
+
   group('reset ceremony state', () {
     test('a pending broadcast raises the countdown on every session', () {
       final deadline = DateTime.now().toUtc().add(const Duration(hours: 72));
@@ -300,7 +312,7 @@ void main() {
     test(
       'the upload that REPLACED the identity is marked as our own work',
       () async {
-        final service = EncryptionService();
+        final service = await loadedService();
         final own = EncryptionProvider(service: service);
 
         // The designed recovery path: the immediate self-publish is refused, the
@@ -326,7 +338,7 @@ void main() {
     );
 
     test('a routine same-identity re-upload claims nothing', () async {
-      final service = EncryptionService();
+      final service = await loadedService();
       final own = EncryptionProvider(service: service);
 
       // Stamping a watermark on every connect would keep a fresh one alive at
@@ -451,7 +463,7 @@ void main() {
 
   group('own-replacement hydration respects dismissal', () {
     test('a replacement reported at connect raises the banner', () async {
-      final service = EncryptionService();
+      final service = await loadedService();
       await service.recordOwnIdentityReplacedFromServer(
         '2026-08-18T00:00:00.000Z',
       );
@@ -460,7 +472,7 @@ void main() {
     });
 
     test('the SAME replacement never comes back after dismissal', () async {
-      final service = EncryptionService();
+      final service = await loadedService();
       await service.recordOwnIdentityReplaced('2026-08-18T00:00:00.000Z');
       await service.dismissOwnIdentityReplaced();
 
@@ -476,7 +488,7 @@ void main() {
     test(
       'a NEWER replacement still alarms after an earlier dismissal',
       () async {
-        final service = EncryptionService();
+        final service = await loadedService();
         await service.recordOwnIdentityReplaced('2026-08-18T00:00:00.000Z');
         await service.dismissOwnIdentityReplaced();
 
@@ -495,7 +507,7 @@ void main() {
         // keys, and reconnects. The server dutifully reports the audit row it
         // just wrote — but warning the user about the recovery they themselves
         // performed, on an install with no dismissal history, is a false alarm.
-        final service = EncryptionService();
+        final service = await loadedService();
         await service.markOwnIdentityPublished();
 
         await service.recordOwnIdentityReplacedFromServer(
@@ -515,7 +527,7 @@ void main() {
         // ONE service, shared with the provider: the watermark is written by
         // the dismissal and read by the hydration, so asserting against a
         // SEPARATE instance would pass with the bug fully intact.
-        final service = EncryptionService();
+        final service = await loadedService();
         final owner = EncryptionProvider(service: service);
         addTearDown(owner.dispose);
 
@@ -547,7 +559,7 @@ void main() {
     );
 
     test('an unparseable instant is ignored by the hydration path', () async {
-      final service = EncryptionService();
+      final service = await loadedService();
 
       await service.recordOwnIdentityReplacedFromServer('not-a-date');
 
@@ -559,7 +571,7 @@ void main() {
     });
 
     test('the self-publish suppression is ONE report, not a time window', () async {
-      final service = EncryptionService();
+      final service = await loadedService();
       await service.markOwnIdentityPublished();
 
       // Our own republish, reported back: suppressed.
@@ -641,6 +653,15 @@ void main() {
         'turns out to end at our own key', () async {
       final at = DateTime.now().toUtc().toIso8601String();
       final service = EncryptionService();
+      // The connect that precedes the gate: the init ends without keys.
+      await expectLater(
+        service.initialize(
+          94,
+          checkServerIdentity: () async =>
+              const ServerIdentityGuard(exists: true),
+        ),
+        throwsA(isA<E2eIdentityIncompleteException>()),
+      );
 
       // Hydration 1: no keys loaded yet — reported, as it must be.
       await service.recordOwnIdentityReplacedFromServer(

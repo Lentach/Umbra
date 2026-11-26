@@ -502,6 +502,11 @@ extension MessagingBoxActions on MessagingProvider {
 
   /// [_showBoxRow], then its record — the copy a restart reads (E19d).
   Future<void> _replaceBoxRow(MessageModel updated) async {
+    // A3-SVC-C-2: [updated] was built from a record read before an await, and
+    // a removal of this message can land in that gap (its purge already took
+    // its snapshot of pending saves). Saving now would rewrite the WHOLE
+    // record of a deleted message, so the removal wins.
+    if (_deletedMessageIds.contains(updated.id)) return;
     _showBoxRow(updated);
     await _persistDecryptedContent(updated);
   }

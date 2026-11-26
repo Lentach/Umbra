@@ -14,6 +14,9 @@ import '../services/push_service.dart';
 import '../services/session_refresh_exception.dart';
 import '../config/app_config.dart';
 import '../utils/contact_backup_prompt.dart';
+import '../utils/download_utils_web.dart'
+    if (dart.library.io) '../utils/download_utils_io.dart'
+    as download_utils;
 import '../utils/e2e_persistent_diag.dart';
 import 'auth/auth_status.dart';
 
@@ -194,11 +197,13 @@ class AuthProvider extends ChangeNotifier {
   /// (xxvi)): end the session and say why.
   ///
   /// Logout semantics, deliberately not a wipe: the local plaintext store and
-  /// the Signal key material are untouched, exactly as on every other logout
-  /// path — remote wipe of a revoked device's data is an explicit non-goal
-  /// (spec §1). Stored tokens DO go, because the server already deleted that
-  /// device's refresh sessions; keeping them would only produce a doomed
-  /// refresh on the next cold boot.
+  /// the Signal key material are untouched — remote wipe of a revoked
+  /// device's data is an explicit non-goal (spec §1). Stored tokens DO go,
+  /// because the server already deleted that device's refresh sessions;
+  /// keeping them would only produce a doomed refresh on the next cold boot.
+  /// The files the user saved out of chats are deleted too, as on every other
+  /// session end that wipes the token store (A3-MSG-A-04): they are plaintext
+  /// outside every store.
   ///
   /// [notice] is the localized explanation, passed in because only the widget
   /// layer holds the locale.

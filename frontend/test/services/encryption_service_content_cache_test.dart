@@ -736,5 +736,30 @@ void main() {
       expect(await service.getDecryptedContent(4050), isNotNull);
       expect(await service.wireIdIndex(), isEmpty);
     });
+
+    group('A3-SVC-C-2: a removal does not race a save of the same id', () {
+      // Fail-before: removeDecryptedContent neither waited for the id's save
+      // chain nor joined it, so a save already in flight (a reaction or a
+      // receipt re-persisting the row) committed its whole record AFTER the
+      // removal: a message the friend deleted for everyone came back.
+      test('a save parked at its commit lands before the removal, not after',
+          () async {
+        final kv = _CommitAfterAwaitKv(await service.contentKv);
+        service.debugSetContentKv(kv);
+        final release = Completer<void>();
+        kv
+          ..hold = release
+          ..parked = Completer<void>();
+        final save = service.saveDecryptedContent(7001, {'content': 'x'});
+        await kv.parked!.future;
+
+        final removal = service.removeDecryptedContent([7001]);
+        release.complete();
+        await Future.wait([save, removal]);
+
+        expect(await service.getDecryptedContent(7001), isNull,
+            reason: 'the deleted message must stay deleted');
+      });
+    });
   });
 }
