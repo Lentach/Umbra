@@ -97,4 +97,30 @@ describe('UsersService.deleteAccount – cascade', () => {
     // account is fully intact rather than a half-deleted zombie.
     expect(mockStorage.deleteAvatar).not.toHaveBeenCalled();
   });
+
+  it('tells the realtime layer after the row is removed, never on a failed removal', async () => {
+    (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+    mockRepo.findOne.mockResolvedValue(mockUser);
+    const deleted: number[] = [];
+    service.onAccountDeleted((id) => deleted.push(id));
+
+    mockRepo.remove.mockRejectedValueOnce(new Error('delete aborted'));
+    await expect(service.deleteAccount(7, 'correct-password')).rejects.toThrow();
+    expect(deleted).toEqual([]);
+
+    await service.deleteAccount(7, 'correct-password');
+    expect(deleted).toEqual([7]);
+  });
+
+  it('a failing listener does not fail the delete', async () => {
+    (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+    mockRepo.findOne.mockResolvedValue(mockUser);
+    service.onAccountDeleted(() => {
+      throw new Error('listener');
+    });
+
+    await expect(
+      service.deleteAccount(7, 'correct-password'),
+    ).resolves.toBeUndefined();
+  });
 });

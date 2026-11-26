@@ -54,6 +54,14 @@ export class UsersService {
     private refreshTokensService: RefreshTokensService,
   ) {}
 
+  private readonly accountDeletedListeners: Array<(userId: number) => void> =
+    [];
+
+  /** Called with the id right after an account's row is deleted. */
+  onAccountDeleted(listener: (userId: number) => void): void {
+    this.accountDeletedListeners.push(listener);
+  }
+
   async create(username: string, password: string): Promise<User> {
     const existing = await this.findByUsername(username);
     if (existing.length > 0) {
@@ -259,6 +267,16 @@ export class UsersService {
     // away by ON DELETE CASCADE when the user row is removed. The old chat
     // tables are gone (Phase 4 step 5), so this is one statement.
     await this.usersRepo.remove(user);
+
+    // The row is gone: tell the realtime layer (it drops the account's
+    // sockets). A listener failing must not undo or fail the delete.
+    for (const listener of this.accountDeletedListeners) {
+      try {
+        listener(userId);
+      } catch {
+        // best effort
+      }
+    }
 
     // Only after the account is durably gone do we run the irreversible
     // avatar unlinks. A failure here cannot resurrect the account.
