@@ -959,6 +959,31 @@ void main() {
       expect(b.enc.peerKeyChangeLog(1), isEmpty);
     });
 
+    test('K11: the fresh list answer says ENROLLED (the lookup fails its '
+        'check under the pinned key): refused, red, one lookup, no fetch, '
+        'the bundle is never read', () async {
+      final before = await anchorOfA();
+      var read = 0;
+      b.enc
+        ..isBoxOnlyPeer = ((_) => true)
+        ..servedBundleFor = ((_, _) {
+          read++;
+          return bundleOf(b.other, 1);
+        })
+        ..onForcedLookup = () async =>
+            throw const DeviceListVerificationException(1, 'enrolled');
+      await calmRestore();
+
+      await tap(b);
+
+      expectRed(b);
+      expect(b.enc.forcedLookups, [1]);
+      expect(b.fetches, 0);
+      expect(read, 0);
+      expect(await anchorOfA(), before);
+      expect(b.enc.peerKeyChangeLog(1), isEmpty);
+    });
+
     test('S1: killed between the build and the drain, the next start '
         'delivers the held frame: one note, no second request', () async {
       final restored = await calmRestore();
