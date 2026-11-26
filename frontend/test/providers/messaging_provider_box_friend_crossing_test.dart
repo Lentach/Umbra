@@ -1551,5 +1551,53 @@ void main() {
       expect(b.emits, isEmpty);
       expect(b.enc.lookupLog, isEmpty);
     });
+
+    test('F2: a reconnect between the write and the tap keeps the message '
+        'waiting; the tap sends it once, to the queue the handoff names',
+        () async {
+      final restored = await calmRestore();
+      final outbox = await boxForB();
+      final row = await writeFromB('before the reconnect');
+      expect(b.reader.sendWaitsForCalmHold(row.tempId), isTrue);
+
+      b.reader.onConnect(true);
+      await pumpEventQueue();
+
+      expectCalm(b);
+      expect(b.reader.sendWaitsForCalmHold(row.tempId), isTrue);
+      expect(outbox.delivered, isEmpty);
+
+      await tap(b);
+
+      expect(outbox.delivered, hasLength(1), reason: 'sent exactly once');
+      expect(outbox.delivered.single.$1.sid, restored.sid);
+      expect(
+        await readByRestored(restored, outbox.delivered.single.$2),
+        contains('before the reconnect'),
+      );
+    });
+
+    test('F4: the held messages go out one after the other: a first one '
+        'the box takes slowly is still delivered first', () async {
+      final restored = await calmRestore();
+      final outbox = await boxForB();
+      await writeFromB('first');
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+      await writeFromB('second');
+      outbox.beforeDeliver = (call) => call == 0
+          ? Future<void>.delayed(const Duration(milliseconds: 60))
+          : Future<void>.value();
+
+      await tap(b);
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+
+      expect(outbox.delivered, hasLength(2));
+      final read = [
+        for (final (_, frame) in outbox.delivered)
+          await readByRestored(restored, frame),
+      ];
+      expect(read[0], contains('first'));
+      expect(read[1], contains('second'));
+    });
   });
 }

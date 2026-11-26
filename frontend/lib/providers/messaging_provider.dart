@@ -1028,7 +1028,6 @@ class MessagingProvider extends ChangeNotifier {
       _pendingEdits.clear();
       _emittedSendTempIds.clear();
       _identityRefusedSendTempIds.clear();
-      _calmDeferredSends.clear();
       // A box send's retry must reuse its wire id, or a device the failed
       // attempt reached shows the message twice.
       _sendTokenByTempId.removeWhere(

@@ -595,7 +595,7 @@ extension MessagingSend on MessagingProvider {
         deliveryStatus: MessageDeliveryStatus.sending,
       );
       notifyListeners();
-      _encryptAndSend(
+      await _encryptAndSend(
         recipientId: recipientId,
         content: '',
         tempId: tempId,
@@ -616,7 +616,7 @@ extension MessagingSend on MessagingProvider {
           deliveryStatus: MessageDeliveryStatus.sending,
         );
         notifyListeners();
-        _encryptAndSend(
+        await _encryptAndSend(
           recipientId: recipientId,
           content: message.content,
           tempId: tempId,
@@ -676,7 +676,7 @@ extension MessagingSend on MessagingProvider {
       deliveryStatus: MessageDeliveryStatus.sending,
     );
     notifyListeners();
-    _encryptAndSend(
+    await _encryptAndSend(
       recipientId: recipientId,
       content: content,
       tempId: tempId,
