@@ -156,6 +156,12 @@ class EncryptionService {
   late SecureSignedPreKeyStore _signedPreKeyStore;
   late SecureSessionStore _sessionStore;
 
+  /// Test-only: the identity store [revokeForPasscodeLock] must empty. Every
+  /// public reader is gated on `_initialized`, which the revoke also drops, so
+  /// the in-RAM key pair is otherwise unobservable.
+  @visibleForTesting
+  SecureIdentityKeyStore get debugIdentityStore => _identityStore;
+
   /// The session store handed to SessionCipher/SessionBuilder. Same object as
   /// [_sessionStore] in production; race probes wrap it via
   /// [debugWrapSessionStore] to gate storeSession deterministically.
