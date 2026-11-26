@@ -321,12 +321,6 @@ class EncryptionService {
   /// destroy key material (T3 review invariant lock).
   bool _provisionalIdentityAdopted = false;
 
-  /// True once [initialize] refused to start because the server already holds
-  /// a bundle for this login's device while local identity material is missing
-  /// or incomplete. The way forward is the §5.1 link or the §6.2 reset; nothing
-  /// in this service mints over an enrolled identity (amendment (lxxi)).
-  bool identityIncomplete = false;
-
   /// Peers whose identity key changed under us, surfaced so the UI can warn
   /// instead of silently trusting the new key.
   ///
@@ -1648,7 +1642,6 @@ class EncryptionService {
       debugPrint(
         '[EncryptionService] Identity incomplete — refusing to regenerate',
       );
-      identityIncomplete = true;
       throw const E2eIdentityIncompleteException();
     }
 
@@ -1684,7 +1677,6 @@ class EncryptionService {
       final load = await _identityStore.loadFromStorage();
       if (load == IdentityLoadResult.loaded) {
         needsKeyUpload = _keysForUpload != null;
-        identityIncomplete = false;
         _initialized = true;
         return;
       }
@@ -1793,7 +1785,6 @@ class EncryptionService {
     await _storage.delete(key: _linkUnsettledKey(userId));
     await _generateKeys();
     needsKeyUpload = true;
-    identityIncomplete = false;
     _initialized = true;
   }
 
@@ -2004,8 +1995,9 @@ class EncryptionService {
   }) async {
     // Invariant lock (T3 review NOTE): adopting over a device that already
     // holds ANY identity would silently orphan every session keyed to it —
-    // the UI gates this flow on identityIncomplete, but the service must
-    // refuse on its own too. Both record shapes checked (atomic + legacy).
+    // the UI gates this flow on EncryptionProvider.needsDeviceLink, but the
+    // service must refuse on its own too. Both record shapes checked (atomic
+    // + legacy).
     // Amendment (lxv) carves out exactly ONE exception: a ceremony-authorized
     // disposal of (lxiv)-mismatched stale material.
     final existingPrefix = 'e2e_${userId}_';
@@ -2117,7 +2109,6 @@ class EncryptionService {
     }
 
     needsKeyUpload = true;
-    identityIncomplete = false;
     _initialized = true;
     E2ePersistentDiag.record('LINK_IDENTITY_ADOPTED', {'userId': userId});
   }
@@ -2406,7 +2397,6 @@ class EncryptionService {
     await _storage.write(key: '${p}setup_complete', value: 'true');
 
     needsKeyUpload = true;
-    identityIncomplete = false;
     _initialized = true;
     E2ePersistentDiag.record('RESTORE_IDENTITY_ADOPTED', {'userId': userId});
     // (lxxvi) clause 3: raw keys just landed — wrap them NOW on a device

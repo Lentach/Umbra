@@ -39,7 +39,6 @@ void main() {
       await svc.initialize(1, checkServerIdentity: () async => const ServerIdentityGuard(exists: false));
 
       expect(svc.needsKeyUpload, isTrue);
-      expect(svc.identityIncomplete, isFalse);
       expect(
         await secure.read(key: 'e2e_1_identity_record_v1'),
         isNotNull,
@@ -106,7 +105,6 @@ void main() {
         svc.initialize(2, checkServerIdentity: () async => const ServerIdentityGuard(exists: true)),
         throwsA(isA<E2eIdentityIncompleteException>()),
       );
-      expect(svc.identityIncomplete, isTrue);
       expect(
         await secure.read(key: 'e2e_2_identity_record_v1'),
         isNull,
@@ -176,7 +174,6 @@ void main() {
         svc.initialize(5, checkServerIdentity: () async => null),
         throwsA(isA<E2eIdentityCheckUnavailableException>()),
       );
-      expect(svc.identityIncomplete, isFalse);
       expect(await secure.read(key: 'e2e_5_identity_record_v1'), isNull);
       expect(await secure.read(key: 'e2e_5_session_49_1'), 'fake-record');
     });
@@ -193,7 +190,6 @@ void main() {
       await svc.initialize(8, checkServerIdentity: () async => const ServerIdentityGuard(exists: false));
 
       expect(svc.needsKeyUpload, isTrue);
-      expect(svc.identityIncomplete, isFalse);
     });
   });
 
@@ -210,7 +206,6 @@ void main() {
         svc.initialize(21, checkServerIdentity: () async => const ServerIdentityGuard(exists: true)),
         throwsA(isA<E2eIdentityIncompleteException>()),
       );
-      expect(svc.identityIncomplete, isTrue);
       expect(
         await secure.read(key: 'e2e_21_identity_record_v1'),
         isNull,
@@ -224,7 +219,6 @@ void main() {
       await svc.initialize(22, checkServerIdentity: () async => const ServerIdentityGuard(exists: false));
 
       expect(svc.needsKeyUpload, isTrue);
-      expect(svc.identityIncomplete, isFalse);
       expect(await secure.read(key: 'e2e_22_identity_record_v1'), isNotNull);
     });
 
@@ -233,12 +227,6 @@ void main() {
       await expectLater(
         svc.initialize(23, checkServerIdentity: () async => null),
         throwsA(isA<E2eIdentityCheckUnavailableException>()),
-      );
-      expect(
-        svc.identityIncomplete,
-        isFalse,
-        reason: 'UNKNOWN is transient — it must not raise the '
-            'destructive-recovery surface',
       );
       expect(await secure.read(key: 'e2e_23_identity_record_v1'), isNull);
     });
@@ -307,7 +295,6 @@ void main() {
       final svc = EncryptionService();
       await svc.initialize(9, checkServerIdentity: () async => const ServerIdentityGuard(exists: false));
 
-      expect(svc.identityIncomplete, isFalse);
       expect(
         svc.needsKeyUpload,
         isTrue,
