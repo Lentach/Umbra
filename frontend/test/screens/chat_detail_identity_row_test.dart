@@ -18,6 +18,8 @@
 // `test/providers/encryption_provider_identity_alarm_test.dart`. Faking it in
 // both places is what left this hole unguarded.
 
+import 'dart:async';
+
 import 'package:fireplace/l10n/app_localizations.dart';
 import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/providers/auth_provider.dart';
@@ -28,6 +30,7 @@ import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/providers/settings_provider.dart';
 import 'package:fireplace/screens/chat_detail_screen.dart';
 import 'package:fireplace/theme/rpg_theme.dart';
+import 'package:fireplace/widgets/calm_hold_line.dart';
 import 'package:fireplace/widgets/glass/glass_top_bar.dart';
 import 'package:fireplace/widgets/peer_identity_changed_row.dart';
 import 'package:flutter/material.dart';
@@ -55,6 +58,26 @@ class _AlarmedEncryption extends EncryptionProvider {
 
   /// Decision 152: instants (ms) of key changes accepted automatically.
   final List<int> keyChangeLog;
+
+  MessagingProvider? messaging;
+
+  /// What the tap on the calm line asked for: peer, device, frame identity.
+  final List<(int, int, String)> confirmCalls = [];
+
+  /// The answer a test holds back; null answers `confirmed` at once.
+  Completer<CalmConfirm>? confirmAnswer;
+
+  @override
+  Future<CalmConfirm> confirmCalmKey(
+    int peerId,
+    int deviceId,
+    String frameIdentityBase64, {
+    required int noteAtMs,
+    Duration timeout = const Duration(seconds: 10),
+  }) {
+    confirmCalls.add((peerId, deviceId, frameIdentityBase64));
+    return confirmAnswer?.future ?? Future.value(CalmConfirm.confirmed);
+  }
 
   @override
   List<int> peerKeyChangeLog(int peerId) => keyChangeLog;
@@ -148,6 +171,7 @@ Future<_AlarmedEncryption> _pumpChat(
   // ceremony while a given row bounced on something else entirely.
   bool rowRefusedForIdentity = false,
   List<int> keyChangeLog = const <int>[],
+  CalmHoldState? calmHold,
 }) async {
   SharedPreferences.setMockInitialValues({
     'key_change_warnings': keyChangeWarnings,
@@ -193,6 +217,12 @@ Future<_AlarmedEncryption> _pumpChat(
     refusedPeers: refused ? const {_peerId} : const <int>{},
     keyChangeLog: keyChangeLog,
   );
+  encryption.messaging = messaging;
+  if (calmHold != null) {
+    messaging
+      ..setEncryptionProvider(encryption)
+      ..seedCalmHoldForTest(_peerId, calmHold);
+  }
   await tester.pumpWidget(
     MultiProvider(
       providers: [
@@ -644,4 +674,82 @@ void main() {
           "peer's keys are why",
     );
   });
+
+  // ---- Decision 152 (option C): the calm line.
+
+  testWidgets('a calm hold shows the neutral line, in an empty chat and in a '
+      'populated one, and no red row', (tester) async {
+    for (final withMessages in [false, true]) {
+      await _pumpChat(
+        tester,
+        alarmed: false,
+        withMessages: withMessages,
+        keyChangeWarnings: false,
+        calmHold: CalmHoldState.waiting,
+      );
+
+      expect(find.byType(CalmHoldLine), findsOneWidget);
+      expect(find.text(l10n.calmHoldLine('bob')), findsOneWidget);
+      expect(find.byType(PeerIdentityChangedRow), findsNothing);
+    }
+  });
+
+  testWidgets('the RED row wins: a held friend whose hold is visible shows '
+      'no calm line even while a calm one is recorded', (tester) async {
+    await _pumpChat(
+      tester,
+      alarmed: true,
+      withMessages: true,
+      keyChangeWarnings: false,
+      calmHold: CalmHoldState.waiting,
+    );
+
+    expect(find.byType(PeerIdentityChangedRow), findsOneWidget);
+    expect(find.byType(CalmHoldLine), findsNothing);
+  });
+
+  testWidgets('no calm hold: no calm line', (tester) async {
+    await _pumpChat(
+      tester,
+      alarmed: false,
+      withMessages: true,
+      keyChangeWarnings: false,
+    );
+
+    expect(find.byType(CalmHoldLine), findsNothing);
+  });
+
+  testWidgets('a tap on the line asks the provider to confirm that friend\'s '
+      'key; while it checks the line says so and a second tap is ignored; a '
+      'transient failure leaves it tappable again', (tester) async {
+    final enc = await _pumpChat(
+      tester,
+      alarmed: false,
+      withMessages: true,
+      keyChangeWarnings: false,
+      calmHold: CalmHoldState.waiting,
+    );
+    enc.confirmAnswer = Completer<CalmConfirm>();
+
+    await tester.tap(find.byKey(const ValueKey('calm-hold-line')));
+    await tester.pump();
+
+    expect(enc.confirmCalls, [(_peerId, 1, 'seeded-identity')]);
+    expect(find.text(l10n.calmHoldChecking), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('calm-hold-line')));
+    await tester.pump();
+    expect(enc.confirmCalls, hasLength(1), reason: 'a tap while checking');
+
+    enc.confirmAnswer!.complete(CalmConfirm.transient);
+    await tester.pump();
+    await tester.pump();
+    expect(find.text(l10n.calmHoldFailed), findsOneWidget);
+
+    enc.confirmAnswer = Completer<CalmConfirm>();
+    await tester.tap(find.byKey(const ValueKey('calm-hold-line')));
+    await tester.pump();
+    expect(enc.confirmCalls, hasLength(2));
+  });
+
 }

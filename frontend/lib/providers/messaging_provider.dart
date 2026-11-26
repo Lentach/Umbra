@@ -622,6 +622,20 @@ class MessagingProvider extends ChangeNotifier {
     _conversationCache[conversationId] = List.from(messages);
   }
 
+  /// Test-only: a calm hold of [peerId] in [state] (the screen tests need one
+  /// without a real PreKey frame).
+  @visibleForTesting
+  void seedCalmHoldForTest(int peerId, CalmHoldState state) {
+    _calmHolds[peerId] = CalmHold(
+      identity: 'seeded-identity',
+      device: 1,
+      firstReceivedAt: DateTime.utc(2026, 1, 1),
+      ciphertext: '3:AAAA',
+      state: state,
+    );
+    notifyListeners();
+  }
+
   /// Test-only: the loaded rows INCLUDING the ones [messages] hides, so a test
   /// can prove a hidden row still exists (I8: a marker never destroys).
   @visibleForTesting
