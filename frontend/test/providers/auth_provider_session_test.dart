@@ -828,6 +828,7 @@ void main() {
     const base = 'http://localhost:3000';
     late int meStatus;
     late String meMessage;
+    var refreshMessage = 'Invalid refresh token';
     late int refreshStatus;
     late int meCalls;
     late int refreshCalls;
@@ -849,6 +850,7 @@ void main() {
       });
       meStatus = 200;
       meMessage = '';
+      refreshMessage = 'Invalid refresh token';
       refreshStatus = 201;
       meCalls = 0;
       refreshCalls = 0;
@@ -881,7 +883,7 @@ void main() {
                       201,
                     )
                   : http.Response(
-                      jsonEncode({'message': 'Invalid refresh token'}),
+                      jsonEncode({'message': refreshMessage}),
                       refreshStatus,
                     );
             }
@@ -914,7 +916,7 @@ void main() {
         'session and wipe the stored tokens', () async {
       final auth = await loggedIn();
       meStatus = 401;
-      meMessage = 'Unauthorized';
+      meMessage = 'Account not found';
       refreshStatus = 401;
 
       expect(await auth.endSessionIfAccountGone(), isTrue);
@@ -942,8 +944,33 @@ void main() {
         'session', () async {
       final auth = await loggedIn();
       meStatus = 401;
-      meMessage = 'Unauthorized';
+      meMessage = 'Account not found';
       refreshStatus = 201;
+
+      expect(await auth.endSessionIfAccountGone(), isFalse);
+
+      expect(auth.isLoggedIn, isTrue);
+    });
+
+    test('a bare Unauthorized (bad signature, clock skew) never signs out', () async {
+      final auth = await loggedIn();
+      meStatus = 401;
+      meMessage = 'Unauthorized';
+      refreshStatus = 401;
+
+      expect(await auth.endSessionIfAccountGone(), isFalse);
+
+      expect(auth.isLoggedIn, isTrue);
+      expect(refreshCalls, 0);
+    });
+
+    test('a missing account whose refresh answers Device revoked is the '
+        'revoke path, not an account that is gone', () async {
+      final auth = await loggedIn();
+      meStatus = 401;
+      meMessage = 'Account not found';
+      refreshStatus = 401;
+      refreshMessage = 'Device revoked';
 
       expect(await auth.endSessionIfAccountGone(), isFalse);
 
@@ -986,7 +1013,7 @@ void main() {
       expect(deleteReached, isTrue);
       // The delete just removed the row: the probe would see exactly this.
       meStatus = 401;
-      meMessage = 'Unauthorized';
+      meMessage = 'Account not found';
       refreshStatus = 401;
 
       expect(await auth.endSessionIfAccountGone(), isFalse);

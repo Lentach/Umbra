@@ -32,7 +32,7 @@ export class UsersController {
   @UseGuards(JwtAuthGuard)
   async getMe(@Request() req) {
     const user = await this.usersService.findProfileById(req.user.id);
-    if (!user) throw new UnauthorizedException();
+    if (!user) throw new UnauthorizedException('Account not found');
     return {
       id: user.id,
       username: user.username,

@@ -224,12 +224,13 @@ class AuthProvider extends ChangeNotifier {
   /// The account this session belongs to may have been deleted on another
   /// device. The server tells nobody: deleting an account revokes its refresh
   /// sessions and removes the user row, and that is all. What a device CAN
-  /// observe is a bare `401 Unauthorized` on an authenticated call made with
-  /// an access token that has not expired (a deleted user fails the JWT
-  /// strategy's lookup), followed by a refresh the server refuses. The other
-  /// 401 causes name themselves (`Device revoked`, `Token invalidated by
-  /// password change`) or leave the refresh working (a rotated signing
-  /// secret), so they never reach the sign-out.
+  /// observe is `401 {message: 'Account not found'}` on an authenticated call
+  /// made with an access token that has not expired (the JWT strategy and
+  /// `/users/me` name a missing user), followed by a refresh the server
+  /// refuses. A bare `Unauthorized` (bad signature after a secret rotation, a
+  /// clock that runs behind) or an older backend never matches, so a live
+  /// account is never wiped; `Device revoked` and `Token invalidated by
+  /// password change` name themselves.
   ///
   /// Ends the session and returns true only on that combination. A network
   /// failure, a 5xx, an expired access token (a refusal then proves nothing:
@@ -245,7 +246,9 @@ class AuthProvider extends ChangeNotifier {
       await _api.fetchMe(access);
       return false;
     } on ApiException catch (e) {
-      if (e.statusCode != 401 || e.message != 'Unauthorized') return false;
+      if (e.statusCode != 401 || e.message != 'Account not found') {
+        return false;
+      }
     } on Object {
       return false;
     }

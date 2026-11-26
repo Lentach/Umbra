@@ -32,7 +32,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }) {
     const user = await this.usersService.findById(payload.sub);
     if (!user) {
-      throw new UnauthorizedException();
+      // Named, so a device can tell a deleted account from a bad or expired
+      // token (both answer a bare Unauthorized): only this message lets it
+      // sign out and wipe.
+      throw new UnauthorizedException('Account not found');
     }
     if (user.passwordChangedAt) {
       const changedAtSeconds = Math.floor(
