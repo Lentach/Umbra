@@ -3047,6 +3047,47 @@ class EncryptionService {
     });
   }
 
+  /// What this device holds for one friend device — its session record and its
+  /// per-device identity row — so a frame that is decrypted PROVISIONALLY
+  /// (decision 152) and then refused leaves nothing behind: not a session that
+  /// reads the sender's later whispers, not the key the frame carried.
+  Future<FriendDeviceSnapshot> snapshotFriendDevice(int peerId, int deviceId) {
+    return _runSessionSerialized(peerId, deviceId, () async {
+      final address = SignalProtocolAddress(peerId.toString(), deviceId);
+      final had = await _sessionStore.containsSession(address);
+      return FriendDeviceSnapshot(
+        peerId: peerId,
+        deviceId: deviceId,
+        sessionBytes: had
+            ? (await _sessionStore.loadSession(address)).serialize()
+            : null,
+        identity: await _identityStore.getIdentity(address),
+      );
+    });
+  }
+
+  /// Puts [snapshot] back (the session deleted when there was none). Queued on
+  /// the peer's session chain AT THE CALL, so a send that starts later runs
+  /// after it.
+  Future<void> restoreFriendDevice(FriendDeviceSnapshot snapshot) {
+    return _runSessionSerialized(snapshot.peerId, snapshot.deviceId, () async {
+      final address = SignalProtocolAddress(
+        snapshot.peerId.toString(),
+        snapshot.deviceId,
+      );
+      final bytes = snapshot.sessionBytes;
+      if (bytes == null) {
+        await _sessionStore.deleteSession(address);
+      } else {
+        await _sessionStore.storeSession(
+          address,
+          SessionRecord.fromSerialized(bytes),
+        );
+      }
+      await _identityStore.restoreTrustedIdentity(address, snapshot.identity);
+    });
+  }
+
   /// Build a session with the given user from their pre-key bundle.
   ///
   /// [preKeyBundle] must contain: registrationId, identityPublicKey,
@@ -6705,4 +6746,23 @@ class AutoAccepted {
 
   /// [noteAtMs] of an accept that moved nothing: the key was already pinned.
   static const int alreadyPinned = -1;
+}
+
+/// See [EncryptionService.snapshotFriendDevice].
+class FriendDeviceSnapshot {
+  const FriendDeviceSnapshot({
+    required this.peerId,
+    required this.deviceId,
+    required this.sessionBytes,
+    required this.identity,
+  });
+
+  final int peerId;
+  final int deviceId;
+
+  /// The serialized session record, or null when none was held.
+  final Uint8List? sessionBytes;
+
+  /// The per-device identity row, or null when none was held.
+  final IdentityKey? identity;
 }

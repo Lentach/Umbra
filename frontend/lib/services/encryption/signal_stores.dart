@@ -867,6 +867,22 @@ class SecureIdentityKeyStore extends IdentityKeyStore {
     return true;
   }
 
+  /// Puts a per-device identity row back to [identity] (deleted when null).
+  /// Used when a provisional accept is reverted (decision 152).
+  Future<void> restoreTrustedIdentity(
+    SignalProtocolAddress address,
+    IdentityKey? identity,
+  ) async {
+    final key = _trustedKey(address);
+    if (identity == null) {
+      await _storage.delete(key: key);
+      _trustedMemo.remove(key);
+    } else {
+      await _storage.write(key: key, value: encodedOf(identity));
+      _trustedMemo[key] = identity;
+    }
+  }
+
   @override
   Future<IdentityKey?> getIdentity(SignalProtocolAddress address) async {
     final key = _trustedKey(address);

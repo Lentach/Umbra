@@ -9,6 +9,7 @@ import 'package:fireplace/services/contacts/contact_store.dart';
 import 'package:fireplace/services/device_list/device_list_cache.dart';
 import 'package:fireplace/services/device_list/device_list_canonical.dart';
 import 'package:fireplace/services/encryption/signal_stores.dart';
+import 'package:fireplace/services/encryption_service.dart';
 import 'package:fireplace/utils/e2e_diag_log.dart';
 import 'package:fireplace/utils/e2e_envelope.dart';
 import 'package:fireplace/utils/message_ids.dart';
@@ -517,6 +518,19 @@ void main() {
       );
     }
 
+    /// What [s] holds for its friend device: session record and key row.
+    Future<FriendDeviceSnapshot> holding(_Side s) => s.enc.encryptionService
+        .snapshotFriendDevice(s.peerId, s.peerDevice);
+
+    /// Nothing the refused frame brought survives: the session (so no later
+    /// whisper of its sender reads on it) and the per-device key row are
+    /// exactly what they were.
+    Future<void> expectUntouched(_Side s, FriendDeviceSnapshot before) async {
+      final now = await holding(s);
+      expect(now.sessionBytes, before.sessionBytes);
+      expect(now.identity?.serialize(), before.identity?.serialize());
+    }
+
     test('is HELD until we accept its new key (decision 143); then the '
         'handoff is taken and what we write reaches the restored device, '
         'both ways', () async {
@@ -662,6 +676,7 @@ void main() {
         'leaves the anchor, the note and the address untouched', () async {
       b.enc.peerEnrolled = true;
       onTheBox();
+      final held = await holding(b);
       final before = await anchorOfA();
       final restored = await restoreA();
 
@@ -676,6 +691,7 @@ void main() {
       // B's next message. The friend's real device (served on the rebuild)
       // reads it, the minting device does not.
       b.other = a;
+      await expectUntouched(b, held);
       await expectTraffic(b, a);
       expect(await anchorOfA(), before);
     });
@@ -690,15 +706,18 @@ void main() {
       expect(b.link.learned, restored.sid);
       expect(b.enc.peerKeyChangeLog(1), hasLength(1));
 
+      final before = await holding(b);
       await handOffFrom(a);
 
       expect(b.refusals, ['prekey_unasked']);
       expect(b.link.learned, restored.sid);
       expect(await anchorOfA(), await idOf(restored));
       expect(b.enc.peerKeyChangeLog(1), hasLength(1));
-      // The frame was decrypted before it was refused: B's session with that
-      // device is the OLD device's now. B's next message must still reach the
-      // restored device (the session is rebuilt from its bundle).
+      // INBOUND: what the refused frame left behind must not read the sender's
+      // later whispers.
+      await expectUntouched(b, before);
+      // OUTBOUND: B's session with that device was the frame's; B's next
+      // message must still reach the restored device.
       await expectTraffic(b, restored);
     });
   });

@@ -220,6 +220,14 @@ extension MessagingBox on MessagingProvider {
           });
       }
     }
+    // What this device holds for the sender BEFORE a provisional accept is
+    // decrypted: put back when the frame is refused or does not decrypt.
+    final snapshot = accepted == null
+        ? null
+        : await enc.snapshotFriendDevice(
+            msg.senderId,
+            msg.originDeviceId ?? 1,
+          );
     final String plaintext;
     try {
       plaintext = await enc.decrypt(
@@ -230,7 +238,10 @@ extension MessagingBox on MessagingProvider {
       );
     } on Object catch (e) {
       // The key this frame carried is unproven: take the accept back.
-      if (accepted != null) await enc.revertAutoAccept(msg.senderId, accepted);
+      if (accepted != null) {
+        await enc.revertAutoAccept(msg.senderId, accepted);
+        if (snapshot != null) await enc.restoreFriendDevice(snapshot);
+      }
       // A whisper of a friend with a frame held rides the session that frame
       // would build: it cannot read yet, and must neither be finished, nor
       // ask the friend to re-key, nor repair anything. Held in arrival
@@ -261,10 +272,14 @@ extension MessagingBox on MessagingProvider {
     if (accepted != null) {
       final sent = parsed.sentAt;
       final at = sent == null || sent.isAfter(receivedAt) ? receivedAt : sent;
-      await enc.alignKeyChangeNote(
-        msg.senderId,
-        accepted,
-        at.millisecondsSinceEpoch - 1,
+      // Not awaited: the refusal check below must follow the decrypt with no
+      // await in between (the RAM part runs now, the write follows).
+      unawaited(
+        enc.alignKeyChangeNote(
+          msg.senderId,
+          accepted,
+          at.millisecondsSinceEpoch - 1,
+        ),
       );
     }
     // Whether that device relays to the siblings a sender cannot address
@@ -304,15 +319,23 @@ extension MessagingBox on MessagingProvider {
           // A frame this very pass refuses must not keep the key it carried:
           // take the provisional accept back (anchor, note, intents).
           if (accepted != null) {
-            await enc.revertAutoAccept(msg.senderId, accepted);
             // The frame was decrypted BEFORE it was refused (its type is only
-            // known after): the session with that device is the frame's now.
-            // Nothing it brought may carry our next message — rebuild it from
-            // a bundle checked against the reverted anchor.
-            await enc.rebuildSessionDurably(
+            // known after): its session and its per-device key row are on disk.
+            // Nothing of it may survive — neither to send on nor to read the
+            // sender's later whispers. Both calls below act at once, before any
+            // await: the restore is queued on the peer's session chain and the
+            // rebuild mark is set in memory, so a send that starts now runs
+            // after the restore and on a rebuilt session.
+            final restoring = snapshot == null
+                ? Future<void>.value()
+                : enc.restoreFriendDevice(snapshot);
+            final rebuilding = enc.rebuildSessionDurably(
               msg.senderId,
               msg.originDeviceId ?? 1,
             );
+            await enc.revertAutoAccept(msg.senderId, accepted);
+            await restoring;
+            await rebuilding;
           }
           return true;
         }
