@@ -39,6 +39,16 @@ void main() {
       expect(provider.consumePendingFriendAccepted(), isNull);
     });
 
+    // A2-CON-4: "no answer" is a marker INSTANCE. A real empty answer, even one
+    // set through a canonical `const []`, is "no such account".
+    test('a real empty answer is never read as "no answer"', () {
+      final provider = FriendsProvider()
+        ..setSearchResultsForTest(const <UserModel>[]);
+
+      expect(provider.searchResults, isEmpty);
+      expect(provider.searchUnanswered, isFalse);
+    });
+
     test('with no contact store every list is empty', () {
       final provider = FriendsProvider()..setCurrentUserId(1);
 

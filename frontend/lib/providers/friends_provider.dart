@@ -122,15 +122,26 @@ class FriendsProvider extends ChangeNotifier {
   int get pendingRequestsCount => friendRequests.length;
   List<UserModel>? get searchResults => _searchResults;
 
-  /// The empty result a search publishes when no answer came in time. Never
-  /// identical to a real answer's list, so [searchUnanswered] needs no flag
-  /// to reset with the results.
-  static const List<UserModel> _kNoAnswer = [];
+  /// The empty result a search publishes when no answer came in time. A
+  /// dedicated NON-const instance: a const `[]` is one canonical object
+  /// program-wide, so a real empty answer could be mistaken for it. Compared
+  /// with [identical], so [searchUnanswered] needs no flag to reset with the
+  /// results.
+  // The list is never mutated; `final` (not const) is the point.
+  static final List<UserModel> _kNoAnswer = <UserModel>[];
 
   /// Whether the shown empty [searchResults] is a search nobody answered (the
   /// socket was down or the server failed it), not an answer of "no such
   /// account".
   bool get searchUnanswered => identical(_searchResults, _kNoAnswer);
+
+  /// Test seam: publishes [results] as the shown answer, the way a future
+  /// code path assigning a shared `const []` would.
+  @visibleForTesting
+  // A setter would need a getter (avoid_setters_without_getters).
+  // ignore: use_setters_to_change_properties
+  void setSearchResultsForTest(List<UserModel>? results) =>
+      _searchResults = results;
 
   /// The raw entry for [userId] in the answer [searchResults] shows; null
   /// once the results are cleared.
