@@ -701,10 +701,6 @@ class AppLocalizationsPl extends AppLocalizations {
   String get identityResetAnyMoment => 'lada chwila';
 
   @override
-  String get identityUploadLockedTitle =>
-      'Twoje nowe klucze szyfrowania nie zostały opublikowane';
-
-  @override
   String get identityResetStartAction => 'Rozpocznij reset';
 
   @override

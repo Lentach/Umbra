@@ -935,10 +935,10 @@ class EncryptionProvider extends ChangeNotifier {
   VerifiedDeviceList? cachedDeviceList(int userId) =>
       _deviceListCache.cached(userId);
 
-  /// Drop the cached list so the next old-path send refetches (e.g. on
-  /// `deviceListChanged` for the own account). The rollback pin survives.
-  /// Every drop goes through here so [onDeviceListInvalidated] sees it: a box
-  /// send never refetches, so the box refresh must.
+  /// Drop the cached list (e.g. on `deviceListChanged` for the own account).
+  /// The rollback pin survives. No send refetches it: every drop goes through
+  /// here so [onDeviceListInvalidated] sees it, and the box refresh behind
+  /// that callback does the refetch.
   ///
   /// A FRIEND's list ([listIsByHandle]) is refetched by one handle lookup, which
   /// spends a one-time pre-key of every live device of the friend (E114a), so
@@ -1138,8 +1138,10 @@ class EncryptionProvider extends ChangeNotifier {
   /// list is I7-verified under [identityKey] — or under the anchor held, which
   /// must BE [identityKey] — adopted as the list the server served (E50a's
   /// DAK pin), and kept across restarts (decision 51). Then [identityKey]
-  /// becomes the account anchor when none is held. Throws, adopting nothing,
-  /// when another key is pinned (a key change is a human's call, (xlvi)) or
+  /// becomes the account anchor when none is held — BEFORE the list is
+  /// adopted, so a key another answer pinned meanwhile refuses this one
+  /// without leaving its list (and version floor) behind. Throws, adopting
+  /// nothing, when another key is pinned (a key change is a human's call, (xlvi)) or
   /// the list does not verify — unless [replaceStaleAnchor]: the caller
   /// knows the account is no longer a contact at all (decision 112), so a
   /// pinned key is a leftover of a friendship that ended, and the served key
@@ -1175,6 +1177,19 @@ class EncryptionProvider extends ChangeNotifier {
     if (stale && !replaceStaleAnchor) {
       throw DeviceListVerificationException(userId, 'served_identity_mismatch');
     }
+    // No key held: pin the served key first, once its list passes the checks
+    // adopting would make. Adopting first left a refused key's list cached,
+    // and its version floor stored, when another answer's key won the pin in
+    // between, so the pinned key's own (lower) list read as a rollback. A list
+    // that fails the checks is left to the adopt below, which throws.
+    if (held == null && _listPassesAdoptChecks(userId, authorization, served)) {
+      if (!await _encryptionService.stageAccountAnchor(userId, served)) {
+        throw DeviceListVerificationException(
+          userId,
+          'served_identity_mismatch',
+        );
+      }
+    }
     final verified = await _adoptDeviceListAnswer(
       userId,
       authorization,
@@ -1182,12 +1197,27 @@ class EncryptionProvider extends ChangeNotifier {
     );
     if (stale) {
       await _encryptionService.replaceStaleAccountAnchor(userId, served);
-    } else if (held == null &&
-        !await _encryptionService.stageAccountAnchor(userId, served)) {
-      throw DeviceListVerificationException(userId, 'served_identity_mismatch');
     }
     unawaited(_encryptionService.recordPeerDeviceList(userId, authorization));
     return verified;
+  }
+
+  /// Whether [_deviceListCache] would adopt [authorization] under [anchor] now,
+  /// as far as a pure check can tell: the I7 chain, the version floor and the
+  /// enrolled-to-not-enrolled rule, nothing cached.
+  bool _listPassesAdoptChecks(
+    int userId,
+    Map<String, dynamic>? authorization,
+    String anchor,
+  ) {
+    final pinned = _deviceListCache.pinnedVersion(userId);
+    if (authorization == null) return pinned == null;
+    return DeviceAuthorityEngine.verifyPeerDeviceList(
+      authorization: authorization,
+      tofuIdentityKeyBase64: anchor,
+      expectedUserId: userId,
+      previousVersion: pinned == null ? null : pinned - 1,
+    ).ok;
   }
 
   /// Decision 51 / E50c: when this device finds itself off the box longer
@@ -1348,9 +1378,9 @@ class EncryptionProvider extends ChangeNotifier {
       });
       if (userId != _currentUserId) {
         _serverVerifiedAt[userId] = DateTime.now();
-        // Kept only for a box peer (decision 51): an old-path peer's list
-        // stays memory-only, so its first row after a restart is checked
-        // against a fresh lookup, as before slice (e).
+        // Kept only where [keepsDeviceListFor] says so (a box peer, decision
+        // 51): any other account's list stays memory-only and is looked up
+        // again after a restart.
         if (keepsDeviceListFor?.call(userId) ?? false) {
           unawaited(
             _encryptionService.recordPeerDeviceList(userId, authorization),
@@ -1479,7 +1509,9 @@ class EncryptionProvider extends ChangeNotifier {
     return completer.future;
   }
 
-  /// Box-only peers whose one lookup of this process is spent.
+  /// Friends whose list this process has looked up by handle ([_takeLookup]).
+  /// A spent one may be looked up again when an event buys it
+  /// ([_owedRelookup]).
   final Set<int> _boxListLookupSpent = {};
 
   /// Handler for the `deviceList` server event (answer to `getDeviceList`).
@@ -1498,7 +1530,8 @@ class EncryptionProvider extends ChangeNotifier {
   }
 
   /// Handler for `deviceListChanged` (own-account broadcast): drop the
-  /// cached own list so the next send re-fetches and re-verifies.
+  /// cached own list; the box refresh ([onDeviceListInvalidated]) re-fetches
+  /// and re-verifies it.
   void onDeviceListChanged(dynamic data) {
     if (data is! Map || data['userId'] is! int) return;
     final userId = data['userId'] as int;
@@ -2066,9 +2099,9 @@ class EncryptionProvider extends ChangeNotifier {
   int _initEpoch = 0;
   int _e2eInitInFlightEpoch = 0;
 
-  /// CLAUDE.md gotcha: skips `_encryptionService.initialize()` when
-  /// `_e2eInitialized = true` (reconnect path) to prevent transient
-  /// mobile storage errors from setting `_e2eInitialized = false`.
+  /// Skips `_encryptionService.initialize()` when `_e2eInitialized = true`
+  /// (reconnect path) to prevent transient mobile storage errors from
+  /// setting `_e2eInitialized = false`.
   /// Never throws — every failure mode is caught and logged inside.
   Future<void> _initializeE2EInner(int userId) async {
     final epoch = _initEpoch;
@@ -2279,9 +2312,8 @@ class EncryptionProvider extends ChangeNotifier {
     } catch (e) {
       if (superseded()) return;
       debugPrint('[E2E] Initialization failed: $e');
-      // Only clear the flag if we hadn't initialized yet; don't undo a working
-      // reconnect just because the re-upload attempt threw.
-      if (!_e2eInitialized) _e2eInitialized = false;
+      // Never undo a working init: a reconnect whose re-upload attempt threw
+      // keeps `_e2eInitialized` as it was.
       _setIdentityCheckUnavailable(false);
       _e2eFlowLog('E2E_INIT_FAIL', {'error': e.toString()});
     } finally {
@@ -2298,7 +2330,8 @@ class EncryptionProvider extends ChangeNotifier {
   /// Phase 0b: a `success:false` answer with `identity_locked` means the
   /// registration lock refused to replace this account's stored identity key.
   /// That is terminal for this attempt — retrying mints nothing and would just
-  /// loop. The user's route forward is the reset ceremony, so surface it.
+  /// loop. The user's route forward is the device link gate: the flag feeds
+  /// [linkDisposesStaleMaterial], so [needsDeviceLink] offers the link.
   ///
   /// A `success:true` answer carrying `identityChanged:true` means THIS
   /// upload is what replaced the stored identity, so the audit row the server
@@ -2319,10 +2352,10 @@ class EncryptionProvider extends ChangeNotifier {
         // This is the dangerous case for a user who just re-minted keys after
         // losing theirs: the local device now believes it is healthy, but the
         // server still publishes the PREVIOUS identity, so peers keep
-        // encrypting to keys this device cannot read. Recording it drives the
-        // banner that routes them to the reset ceremony — the only thing that
-        // can make these keys land — instead of leaving them silently
-        // unreachable behind a "recovered" UI.
+        // encrypting to keys this device cannot read. Recording it
+        // ([_identityUploadLocked]) opens the link gate, which disposes of
+        // this identity and adopts the live one, instead of leaving the
+        // account silently unreachable behind a "recovered" UI.
         _e2eFlowLog('KEY_BUNDLE_IDENTITY_LOCKED', {});
         E2ePersistentDiag.record('KEY_BUNDLE_IDENTITY_LOCKED', {});
         _identityUploadLocked = true;
@@ -2810,8 +2843,9 @@ class EncryptionProvider extends ChangeNotifier {
 
   /// Handler for the `deviceListUpdated` server event (answer to
   /// `updateDeviceList`). Only the restore machine emits that request from
-  /// this provider; the ceremony controller's mutations answer on their own
-  /// events.
+  /// this provider, but a device rename from the ceremony controller is
+  /// answered on this same event, which the connection provider forwards to
+  /// both listeners; each ignores an answer it has nothing in flight for.
   void onDeviceListUpdated(dynamic data) {
     final pending = _pendingDeviceListUpdateAck;
     if (pending == null || pending.isCompleted) return;
@@ -3587,9 +3621,8 @@ class EncryptionProvider extends ChangeNotifier {
     // Peer wedged after a phrase restore, 2026-09-22: a peer whose identity
     // moved to a NEW deviceId leaves us holding BOTH a dead session and the
     // verified list that keeps pointing every send and every accept-gate
-    // check at the device it abandoned. Invalidate only — the next old-path
-    // send (or inbound row) re-verifies through its own rate-limited
-    // refetch; a box-covered peer's list is looked up by the box refresh.
+    // check at the device it abandoned. Invalidate only: no send refetches,
+    // the box refresh ([onDeviceListInvalidated]) looks the list up again.
     invalidateDeviceList(fromUserId);
     _e2eFlowLog('SESSION_REBUILD_RECEIVED', {'fromUserId': fromUserId});
   }
@@ -3601,7 +3634,7 @@ class EncryptionProvider extends ChangeNotifier {
   /// On fresh connect: resets all state.
   /// On reconnect (same user): preserves [_e2eInitialized] to avoid
   /// re-running initialize() which can cause transient mobile storage errors
-  /// (CLAUDE.md gotcha: `_initializeE2E()` skips when `_e2eInitialized = true`).
+  /// (`_initializeE2E()` skips when `_e2eInitialized = true`).
   void onConnect(bool isReconnect) {
     // (lxiv) final-review P1: the confirmed own-device id is a PER-SOCKET
     // fact — the new socket's id is unknown until ITS socketReady, and after a

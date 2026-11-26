@@ -6,6 +6,7 @@ import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/services/device_link/identity_backup.dart';
 import 'package:fireplace/services/device_list/device_list_canonical.dart';
 import 'package:fireplace/services/encryption_service.dart';
+import 'package:fireplace/utils/e2e_persistent_diag.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:libsignal_protocol_dart/libsignal_protocol_dart.dart';
@@ -415,6 +416,110 @@ void main() {
     expect(byId[1]!.revokedAtMs, isNotNull);
     expect(byId[2]!.revokedAtMs, isNotNull);
     expect(byId[7]!.revokedAtMs, isNull);
+  });
+
+  /// A restore over a scripted socket whose `uploadKeyBundle` answers with
+  /// [acks], in order; returns the provider and the events it emitted.
+  Future<(EncryptionProvider, List<String>)> restoreWithAck(
+    List<Map<String, dynamic>> acks,
+  ) async {
+    final sealed = await arrangeSealedBackup();
+    final provider = await buildProvider();
+    addTearDown(provider.dispose);
+    final nonce = base64Encode(List<int>.generate(24, (i) => i));
+    final log = <String>[];
+    provider.setEmitCallback((event, data) {
+      log.add(event);
+      switch (event) {
+        case 'getIdentityBackup':
+          scheduleMicrotask(() => provider.onIdentityBackup({
+                'exists': true,
+                'blob': sealed.blob,
+                'salt': sealed.salt,
+                'iterations': sealed.iterations,
+                'version': sealed.version,
+              }));
+        case 'getRegistrationLockNonce':
+          scheduleMicrotask(
+            () => provider.onRegistrationLockNonce({'nonce': nonce}),
+          );
+        case 'uploadKeyBundle':
+          scheduleMicrotask(() => acks.forEach(provider.onKeyBundleUploaded));
+        case 'getDeviceList':
+          scheduleMicrotask(() => provider.onDeviceList({
+                'userId': userId,
+                'authorization': {'listCanonical': oldListCanonicalB64()},
+              }));
+        case 'updateDeviceList':
+          scheduleMicrotask(() => provider
+              .onDeviceListUpdated({'success': true, 'listVersion': 4}));
+      }
+    });
+    await provider.restoreFromPhrase(phrase);
+    return (provider, log);
+  }
+
+  Map<String, dynamic> restoredAck({Object? deviceId = 7, Object? version = 4}) =>
+      {
+        'success': true,
+        'identityChanged': false,
+        'restored': true,
+        'deviceId': deviceId,
+        'access_token': 'a',
+        'refresh_token': 'r',
+        'nextListVersion': version,
+      };
+
+  // A2-ENC-B-02 / A2-ENC-C-4: the server names the version the restored list
+  // is signed at; a number near the integer ceiling (or none, or no device id)
+  // would freeze the account's list, so the restore fails before signing
+  // anything. Mutations: delete the check, or raise its ceiling.
+  for (final (shape, ack) in [
+    ('a version past the ceiling', restoredAck(version: 1000001)),
+    ('a version near the integer limit', restoredAck(version: 2147483000)),
+    ('version zero', restoredAck(version: 0)),
+    ('no version', restoredAck(version: null)),
+    ('no device id', restoredAck(deviceId: null)),
+  ]) {
+    test('an implausible restore roster ($shape) fails the restore and '
+        'signs no list', () async {
+      await E2ePersistentDiag.clear();
+      final (provider, log) = await restoreWithAck([ack]);
+      await pumpEventQueue();
+
+      expect(provider.restoreStage, IdentityRestoreStage.failed);
+      expect(log, isNot(contains('updateDeviceList')));
+      expect(
+        E2ePersistentDiag.entries,
+        anyElement(contains('implausible restore roster')),
+      );
+    });
+  }
+
+  test('a restore roster at the ceiling itself (version 1000000) is signed',
+      () async {
+    final (provider, log) = await restoreWithAck([
+      restoredAck(version: 1000000),
+    ]);
+
+    expect(provider.restoreStage, IdentityRestoreStage.done);
+    expect(log, contains('updateDeviceList'));
+  });
+
+  // A2-ENC-B-03: the reconnect init can race a plain same-identity re-upload
+  // ack in while the restore waits; it is not the restore's answer.
+  // Mutation: delete the `restored != true` filter in
+  // `_restoreObserveUploadAck`, and the restore fails with `upload:null`.
+  test('a plain re-upload ack arriving during the restore wait is ignored, '
+      'and the restore still reaches done', () async {
+    final (provider, log) = await restoreWithAck([
+      {'success': true, 'identityChanged': false},
+      restoredAck(),
+    ]);
+
+    expect(provider.restoreStage, IdentityRestoreStage.done);
+    expect(provider.restoreFailure, isNull);
+    expect(log, contains('updateDeviceList'));
   });
 
   test('F10: a wrong phrase emits NO nonce request and NO upload', () async {

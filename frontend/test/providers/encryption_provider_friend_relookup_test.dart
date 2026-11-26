@@ -548,4 +548,107 @@ void main() {
       expect(provider.cachedDeviceList(peerId)?.liveDeviceIds, [5]);
     });
   });
+
+  // A2-ENC-A-3: `first_contact_accept` drops a request as `unverified` on this
+  // exception type and keeps it as `failed` on any other, so a garbage served
+  // key must surface as exactly this reason, with nothing adopted.
+  test('a served identity key that is not base64 is refused as '
+      'served_identity_invalid and adopts nothing', () async {
+    await expectLater(
+      provider.adoptServedAccount(
+        peerId,
+        identityKey: '%%% not base64 %%%',
+        authorization: served,
+      ),
+      throwsA(
+        isA<DeviceListVerificationException>().having(
+          (e) => e.reason,
+          'reason',
+          'served_identity_invalid',
+        ),
+      ),
+    );
+    expect(provider.cachedDeviceList(peerId), isNull);
+  });
+
+  // A2-ENC-A-1 [SUSPECT]: an answer for an account with no key pinned adopts
+  // its list, then pins its key; when ANOTHER key got pinned in between (a
+  // second first-contact answer for the same account), the first is refused.
+  // The refused one must leave nothing behind: not its list in the cache, and
+  // not its version floor, which would refuse the pinned key's real (lower)
+  // list as a rollback and raise the identity-changed warning.
+  test('two first-contact answers with different keys: the refused one '
+      'leaves no list and no version floor behind', () async {
+    const stranger = 43;
+    ({String key, Map<String, dynamic> list}) answer(int version, int device) {
+      final by = DeviceAuthorityEngine();
+      final identity = generateIdentityKeyPair();
+      final enrolled = by.mintEnrollment(
+        userId: stranger,
+        identity: identity,
+        createdAtMs: 1234567890,
+      );
+      final signed = by.signList(
+        DeviceList(
+          userId: stranger,
+          version: version,
+          devices: [
+            DeviceListEntry(
+              deviceId: device,
+              platform: 'web',
+              addedAtMs: device * 1000,
+            ),
+          ],
+        ),
+      );
+      return (
+        key: base64Encode(identity.getPublicKey().serialize()),
+        list: {
+          'dakPub': enrolled['dakPub'],
+          'enrollmentSig': enrolled['enrollmentSig'],
+          'enrollmentCreatedAt': enrolled['createdAt'],
+          'listVersion': version,
+          'listSignature': signed['listSignature'],
+          'listCanonical': signed['listCanonical'],
+        },
+      );
+    }
+
+    final refusedAnswer = answer(12, 1);
+    final pinnedAnswer = answer(9, 2);
+    // The other answer's key is being pinned as this one is checked.
+    final pinning = provider.encryptionService.stageAccountAnchor(
+      stranger,
+      pinnedAnswer.key,
+    );
+    final refused = provider
+        .adoptServedAccount(
+          stranger,
+          identityKey: refusedAnswer.key,
+          authorization: refusedAnswer.list,
+        )
+        .then<Object?>((v) => v, onError: (Object e) => e);
+    expect(await pinning, isTrue);
+    expect(
+      await refused,
+      isA<DeviceListVerificationException>().having(
+        (e) => e.reason,
+        'reason',
+        'served_identity_mismatch',
+      ),
+    );
+
+    expect(
+      provider.cachedDeviceList(stranger),
+      isNull,
+      reason: "the refused key's list must not stay cached",
+    );
+    // The pinned key's own list, served later at a lower version, is accepted.
+    final again = await provider.adoptServedAccount(
+      stranger,
+      identityKey: pinnedAnswer.key,
+      authorization: pinnedAnswer.list,
+    );
+    expect(again.liveDeviceIds, [2]);
+  });
 }

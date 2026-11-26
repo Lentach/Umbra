@@ -1238,12 +1238,6 @@ abstract class AppLocalizations {
   /// **'lada chwila'**
   String get identityResetAnyMoment;
 
-  /// No description provided for @identityUploadLockedTitle.
-  ///
-  /// In pl, this message translates to:
-  /// **'Twoje nowe klucze szyfrowania nie zostały opublikowane'**
-  String get identityUploadLockedTitle;
-
   /// No description provided for @identityResetStartAction.
   ///
   /// In pl, this message translates to:

@@ -284,7 +284,6 @@
     "placeholders": { "minutes": { "type": "int" } }
   },
   "identityResetAnyMoment": "any moment now",
-  "identityUploadLockedTitle": "Your new encryption keys were not published",
   "identityResetStartAction": "Start reset",
   "linkGateTitle": "Link this device",
   "linkGateBody": "This device has no account keys. Link it from the primary device.",
