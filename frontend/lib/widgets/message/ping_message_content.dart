@@ -25,7 +25,7 @@ class PingMessageContent extends StatelessWidget {
         PingGlyph(size: 18, color: textColor),
         const SizedBox(width: 6),
         Text(
-          AppLocalizations.of(context).ping,
+          AppLocalizations.of(context).pingBubbleLabel,
           style: RpgTheme.bodyFont(
             fontSize: 14,
             color: textColor,

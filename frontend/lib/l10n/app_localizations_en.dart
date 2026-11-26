@@ -952,6 +952,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get ping => 'Ping';
 
   @override
+  String get pingBubbleLabel => 'PING!';
+
+  @override
   String get attachment => 'Attachment';
 
   @override

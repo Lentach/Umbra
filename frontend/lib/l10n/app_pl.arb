@@ -376,6 +376,7 @@
   "voiceMessage": "Wiadomość głosowa",
   "image": "Obraz",
   "ping": "Ping",
+  "pingBubbleLabel": "PING!",
   "attachment": "Załącznik",
   "attachmentOptionDocument": "Dokument",
   "attachmentOptionGallery": "Galeria",

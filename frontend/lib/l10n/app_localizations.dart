@@ -1694,6 +1694,12 @@ abstract class AppLocalizations {
   /// **'Ping'**
   String get ping;
 
+  /// No description provided for @pingBubbleLabel.
+  ///
+  /// In pl, this message translates to:
+  /// **'PING!'**
+  String get pingBubbleLabel;
+
   /// No description provided for @attachment.
   ///
   /// In pl, this message translates to:
