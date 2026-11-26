@@ -843,7 +843,9 @@ class SecureIdentityKeyStore extends IdentityKeyStore {
     if (await _storage.read(key: key) != expectedCurrentBase64) return false;
     await _storage.write(key: key, value: encodedOf(previous));
     _trustedMemo[key] = previous;
-    if (restorePendingBase64 != null) {
+    // Only into an EMPTY slot: whatever is there now is newer evidence.
+    if (restorePendingBase64 != null &&
+        await _storage.read(key: _pendingKey(name)) == null) {
       await _storage.write(key: _pendingKey(name), value: restorePendingBase64);
     }
     return true;

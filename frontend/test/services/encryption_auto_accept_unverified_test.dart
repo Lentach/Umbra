@@ -554,4 +554,28 @@ void main() {
         reason: "the first tab's note survives the other tab's write");
     expect(fresh.keyChangeLogOf(malloryId), hasLength(1));
   });
+
+  test('R2: a revert never overwrites a candidate that is in the slot now',
+      () async {
+    final pinned = await pinBob();
+    alice.keyChangeWarnings = () => true;
+    await expectRefused(pinned, newBob); // candidate K1
+    alice.keyChangeWarnings = () => false;
+    final accepted = await alice.autoAcceptForeignFrame(
+      bobId,
+      await frameFrom(newBob),
+      deviceId: 1,
+    );
+    expect(accepted, isNotNull);
+    // A new piece of evidence lands in the (now empty) slot.
+    await alice.debugStagePending(bobId, identityOf(mallory));
+
+    await alice.revertAutoAccept(bobId, accepted!);
+
+    expect(
+      (await alice.peerIdentityVerification(bobId)).offeredIdentityBase64,
+      identityOf(mallory),
+      reason: 'evidence in the slot is never overwritten',
+    );
+  });
 }
