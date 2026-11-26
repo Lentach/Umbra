@@ -47,4 +47,23 @@ void main() {
     expect(service.activeUserId, isNull);
     expect(provider.isE2EReady, isFalse);
   });
+
+  test('a wipe for a named account removes its keys although the service was '
+      'never initialized (a device closed while the account was deleted)',
+      () async {
+    FlutterSecureStorage.setMockInitialValues({
+      'e2e_7_identity_record_v1': 'x',
+      'e2e_7_signed_pre_key_0': 'y',
+      'e2e_8_identity_record_v1': 'another-account',
+    });
+    final service = EncryptionService()
+      ..debugSetDualStorage(DualStorage(const FlutterSecureStorage()));
+    expect(service.activeUserId, isNull);
+
+    await EncryptionProvider(service: service).clearEncryptionKeys(userId: 7);
+
+    expect(await const FlutterSecureStorage().readAll(), {
+      'e2e_8_identity_record_v1': 'another-account',
+    });
+  });
 }

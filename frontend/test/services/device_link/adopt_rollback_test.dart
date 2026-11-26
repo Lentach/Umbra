@@ -403,9 +403,15 @@ void main() {
       final blob = mintBlobInputs();
       await adopt(first, blob);
       expect(locks.held, contains('fireplace-e2e-link-$_userId'));
+      final before = await secure.readAll();
+      final second = tab();
 
-      await startAgain(tab());
-
+      await expectLater(
+        startAgain(second),
+        throwsA(isA<E2eIdentityCheckUnavailableException>()),
+      );
+      expect(second.isInitialized, isFalse, reason: 'must not adopt A keys');
+      expect(await secure.readAll(), before, reason: 'no storage write');
       expect(
         await secure.read(key: '${_namespace}identity_record_v1'),
         isNotNull,
@@ -452,6 +458,24 @@ void main() {
       )..debugSetDualStorage(DualStorage(storage));
 
       await expectLater(adopt(service, mintBlobInputs()), throwsStateError);
+
+      expect(locks.held, isEmpty);
+    });
+
+    test('a discard whose delete fails still frees the lock', () async {
+      final storage = _FaultySecure()
+        ..undeletable = '${_namespace}link_unsettled_v1';
+      final service = EncryptionService(
+        linkLockHolder: locks.hold,
+        linkLockIfAvailable: locks.ifAvailable,
+      )..debugSetDualStorage(DualStorage(storage));
+      await adopt(service, mintBlobInputs());
+      expect(locks.held, isNotEmpty);
+
+      await expectLater(
+        service.discardProvisionedIdentity(_userId),
+        throwsStateError,
+      );
 
       expect(locks.held, isEmpty);
     });

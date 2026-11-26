@@ -1624,6 +1624,10 @@ class EncryptionService {
         E2ePersistentDiag.record('LINK_UNSETTLED_HELD_ELSEWHERE', {
           'userId': userId,
         });
+        // The adopted keys are another tab's unsettled ceremony: loading
+        // them would make this tab that identity. E2E stays down; the next
+        // connect retries.
+        throw const E2eIdentityCheckUnavailableException();
       }
     }
     // A THROWING read propagates: a storage error must never be read as "no
@@ -2228,11 +2232,16 @@ class EncryptionService {
         'discardProvisionedIdentity: no provisional identity to discard',
       );
     }
-    await _deleteAdoptedMaterial(userId);
+    try {
+      await _deleteAdoptedMaterial(userId);
+    } finally {
+      // A failed delete leaves the marker for the next start to finish; the
+      // lock must not outlive this ceremony either way.
+      _releaseLinkLock();
+    }
     _keysForUpload = null;
     needsKeyUpload = false;
     _provisionalIdentityAdopted = false;
-    _releaseLinkLock();
     _initialized = false;
     E2ePersistentDiag.record('LINK_IDENTITY_DISCARDED', {'userId': userId});
   }
@@ -5731,8 +5740,12 @@ class EncryptionService {
   /// `initialize` drops them when the account CHANGES ((lxxxiv) rider) —
   /// nulling `_userId` here is what makes the next login take that branch.
   /// A new per-account collection belongs on that list, not here.
-  Future<void> clearAllKeys() async {
-    final userId = _userId;
+  ///
+  /// [accountId] names the account to wipe when this service holds none (a
+  /// device that was closed while its account was deleted never initialized);
+  /// without it the wipe would be a silent no-op there.
+  Future<void> clearAllKeys({int? accountId}) async {
+    final userId = accountId ?? _userId;
     Object? signalError;
     StackTrace? signalStack;
     if (userId != null) {

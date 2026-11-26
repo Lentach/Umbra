@@ -1081,7 +1081,10 @@ class MessagingProvider extends ChangeNotifier {
   void onLocalHistoryWiped() {
     _messages = [];
     _conversationCache.clear();
-    _conversationsProvider?.clearLastMessages();
+    _replyingToMessage = null;
+    _editingMessage = null;
+    _pendingEdits.clear();
+    _conversationsProvider?.onLocalHistoryWiped();
     notifyListeners();
   }
 

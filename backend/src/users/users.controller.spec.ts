@@ -67,6 +67,13 @@ describe('UsersController', () => {
         profilePictureUrl: '/avatars/alice.jpg',
       });
     });
+
+    it('GET /users/me names a missing account, so a device can tell it from a bad token', async () => {
+      usersService.findProfileById.mockResolvedValue(null);
+      const res = await fetch(`${base}/users/me`);
+      expect(res.status).toBe(401);
+      expect(await res.json()).toMatchObject({ message: 'Account not found' });
+    });
   });
 
   describe('POST /users/verify-password', () => {

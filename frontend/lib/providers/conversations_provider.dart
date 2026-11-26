@@ -880,11 +880,24 @@ class ConversationsProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Drop every chat's last-message preview (the plaintext they copy was
-  /// wiped from this device).
-  void clearLastMessages() {
-    if (_lastMessages.isEmpty) return;
+  /// This device's stored plaintext was wiped: everything here that copies it
+  /// goes — the last-message previews, the pinned-message previews and the
+  /// unread counts of the wiped chats.
+  void onLocalHistoryWiped() {
     _lastMessages.clear();
+    _boxPinShown.clear();
+    _prePinState.clear();
+    _unreadCounts.clear();
+    _boxUnread.clear();
+    _conversations = [
+      for (final c in _conversations)
+        c.pinnedMessageId == null && c.pinnedMessagePreview == null
+            ? c
+            : c.copyWith(
+                clearPinnedMessageId: true,
+                clearPinnedMessagePreview: true,
+              ),
+    ];
     notifyListeners();
   }
 

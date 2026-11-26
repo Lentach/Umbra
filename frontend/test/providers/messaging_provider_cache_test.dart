@@ -3,6 +3,8 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
+import 'package:fireplace/services/contacts/contact_record.dart';
+import '../support/chat_seed.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/utils/message_ids.dart';
@@ -159,6 +161,39 @@ void main() {
       expect(provider.hasCachedMessages(11), isFalse);
       expect(conversations.lastMessages, isEmpty);
       expect(notified, 1);
+    });
+
+    test('a wipe also drops the reply and edit in progress, the pinned '
+        'preview and the unread counts of the wiped chats', () {
+      final conversations = ConversationsProvider()..onConnect(false);
+      seedConversations(conversations, [
+        {
+          'id': 10,
+          'userOne': {'id': 1, 'username': 'alice', 'tag': '0001'},
+          'userTwo': {'id': 2, 'username': 'bob', 'tag': '0002'},
+          'createdAt': DateTime.utc(2026, 1, 1).toIso8601String(),
+          'unreadCount': 3,
+        },
+      ]);
+      conversations.applyBoxPin(
+        10,
+        BoxPin(at: DateTime.utc(2026, 2), senderId: 1, wireId: 'w1'),
+        shown: _msg(kFirstLocalMessageId + 1, 10),
+      );
+      provider
+        ..setConversationsProvider(conversations)
+        ..setReplyingTo(_msg(1, 10))
+        ..beginEditMessage(_msg(2, 10));
+      expect(conversations.conversations.single.pinnedMessagePreview, isNotNull);
+      expect(conversations.getUnreadCount(10), 3);
+
+      provider.onLocalHistoryWiped();
+
+      expect(provider.replyingToMessage, isNull);
+      expect(provider.editingMessage, isNull);
+      expect(conversations.conversations.single.pinnedMessagePreview, isNull);
+      expect(conversations.conversations.single.pinnedMessageId, isNull);
+      expect(conversations.getUnreadCount(10), 0);
     });
   });
 
