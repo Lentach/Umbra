@@ -6,6 +6,7 @@ import {
   Unique,
   Index,
   OneToMany,
+  Check,
 } from 'typeorm';
 import { ProfilePhoto } from './profile-photo.entity';
 
@@ -16,6 +17,7 @@ import { ProfilePhoto } from './profile-photo.entity';
  * `synchronize: false`, which leaves the migration's index alone.
  */
 @Index('UQ_users_lower_username', { synchronize: false })
+@Check('CHK_users_about_max_code_points', 'char_length("about") <= 640')
 @Entity('users')
 @Unique(['username', 'tag'])
 export class User {
@@ -38,7 +40,11 @@ export class User {
   @Column({ type: 'varchar', nullable: true })
   profilePicturePublicId: string | null;
 
-  @Column({ type: 'varchar', length: 80, nullable: true })
+  /**
+   * Migration 0032: text + CHECK (640 code points). The DTO limits it to 80
+   * grapheme clusters; the CHECK is the backstop.
+   */
+  @Column({ type: 'text', nullable: true })
   about: string | null;
 
   @OneToMany(() => ProfilePhoto, (photo) => photo.user)

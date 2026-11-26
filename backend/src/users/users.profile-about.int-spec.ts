@@ -1,3 +1,4 @@
+import { readFileSync } from 'fs';
 import { randomBytes } from 'crypto';
 import { join } from 'path';
 import {
@@ -130,17 +131,101 @@ describeWithDb('PATCH /users/profile-about on real Postgres', () => {
     }
   });
 
-  it('answers 400, not 500, to 80 two-code-point emoji and keeps the stored text', async () => {
-    const kept = '\u{1F600}'.repeat(80);
-    const saved = await patchAbout(kept);
-    expect(saved.status).toBe(200);
-    expect(await storedAbout()).toBe(kept);
+  it.each([
+    ['80 hearts with a variation selector', '\u2764\uFE0F'.repeat(80)],
+    [
+      '80 family emoji',
+      '\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}'.repeat(80),
+    ],
+  ])(
+    'saves %s and reads it back identical (was a 500)',
+    async (_name, about) => {
+      const saved = await patchAbout(about);
+      expect(saved.status).toBe(200);
+      expect(await saved.json()).toEqual({ about });
+      expect(await storedAbout()).toBe(about);
+    },
+  );
 
-    const refused = await patchAbout('\u2764\uFE0F'.repeat(80));
+  it('answers 400, not 500, to 81 characters and keeps the stored text', async () => {
+    const kept = '\u2764\uFE0F'.repeat(80);
+    expect((await patchAbout(kept)).status).toBe(200);
+
+    const refused = await patchAbout('\u2764\uFE0F'.repeat(81));
     expect(refused.status).toBe(400);
     expect(await refused.json()).toMatchObject({
       message: ['about must be at most 80 characters'],
     });
     expect(await storedAbout()).toBe(kept);
+  });
+
+  it('answers 400, not 500, to one cluster of 700 code points', async () => {
+    const refused = await patchAbout('a' + '\u0301'.repeat(700));
+    expect(refused.status).toBe(400);
+  });
+
+  it('the column CHECK refuses 641 code points even past the DTO', async () => {
+    await expect(
+      db.query(
+        `UPDATE public.users SET about = repeat('x', 641) WHERE id = $1`,
+        [userId],
+      ),
+    ).rejects.toMatchObject({ code: '23514' });
+  });
+
+  describe('migration 0032 down and up', () => {
+    const migrationsDir = join(__dirname, '..', '..', 'migrations');
+    const up = readFileSync(
+      join(migrationsDir, '0032_users_about_text.sql'),
+      'utf8',
+    );
+    const down = readFileSync(
+      join(migrationsDir, 'down', '0032_users_about_text.down.sql'),
+      'utf8',
+    );
+
+    const column = async (): Promise<string> => {
+      const rows: Array<{ type: string }> = await db.query(
+        `SELECT data_type || coalesce('(' || character_maximum_length || ')', '') AS type
+           FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'about'`,
+      );
+      return rows[0].type;
+    };
+    const hasCheck = async (): Promise<boolean> => {
+      const rows: unknown[] = await db.query(
+        `SELECT 1 FROM pg_constraint WHERE conname = 'CHK_users_about_max_code_points'`,
+      );
+      return rows.length === 1;
+    };
+
+    it('round-trips on an empty table', async () => {
+      await db.query(`DELETE FROM public.users`);
+      expect(await column()).toBe('text');
+      expect(await hasCheck()).toBe(true);
+
+      await db.query(down);
+      expect(await column()).toBe('character varying(80)');
+      expect(await hasCheck()).toBe(false);
+
+      await db.query(up);
+      expect(await column()).toBe('text');
+      expect(await hasCheck()).toBe(true);
+    });
+
+    it('down refuses, and changes nothing, when a row has 100 code points', async () => {
+      await db.query(
+        `INSERT INTO public.users (username, tag, password, about) VALUES ('bob', '2222', 'x', repeat('x', 100))`,
+      );
+      await expect(db.query(down)).rejects.toThrow(
+        /cannot restore users\.about to varchar\(80\): 1 row\(s\) hold more than 80 code points/,
+      );
+      expect(await column()).toBe('text');
+      expect(await hasCheck()).toBe(true);
+      const rows: Array<{ length: number }> = await db.query(
+        `SELECT char_length(about) AS length FROM public.users WHERE username = 'bob'`,
+      );
+      expect(rows[0].length).toBe(100);
+    });
   });
 });
