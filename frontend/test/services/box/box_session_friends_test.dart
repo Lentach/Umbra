@@ -289,6 +289,9 @@ class _Device {
   /// Every `list_update` a friend device sent here (E50d/E50f).
   final List<Map<String, dynamic>> listUpdates = [];
 
+  /// Every body this device's reader decoded from the friend (test record).
+  final List<String> bodies = [];
+
   /// What `MessagingProvider.consumeBoxEntry` does with a friend's entry
   /// once decrypted: the reaction itself is the box's own
   /// [BoxSession.takeFriendHandoff] / [BoxSession.friendAcked].
@@ -296,6 +299,7 @@ class _Device {
     if (deaf || entry.peerUserId != friendId) return true;
     if (entry.carriedList case final list?) carried.add(list);
     final json = utf8.decode(base64Decode(entry.signal!.split(':')[1]));
+    bodies.add(json);
     final handoff = E2eEnvelope.parseQueueHandoff(json);
     if (handoff != null) {
       final taken = await session.takeFriendHandoff(
@@ -3047,6 +3051,79 @@ void main() {
         b.outboundOf(2)!.sid,
         isIn(a.friend.queues.map((q) => q.sid)),
         reason: 'b must never be left writing to a queue we deleted',
+      );
+    });
+
+    test("acked Z, then the friend's handoff arrives: our own queue is handed "
+        'again, Z is still read, and is retired only after the ack of our own '
+        'queue; a frame written to Z after the ack is delivered', () async {
+      await moved(bDeaf: true);
+      final z = zOf(a)!;
+      final lead = a.friend.queues.first;
+      // b (an old build) took Z, acked it under the anchor (the proof) and had
+      // acked our lead before: the lead is not due, the friend writes to Z.
+      await a.session.friendAcked(5, 3, z.sid, learnedUnder: 'B');
+      await a.store.update(
+        5,
+        (c) => c!.copyWith(
+          queues: [c.queues.first.withAck(3), ...c.queues.skip(1)],
+        ),
+      );
+      await b.session.takeFriendHandoff(
+        1,
+        2,
+        sid: z.sid,
+        sealPub: z.sealPub,
+        learnedUnder: null,
+      );
+      Future<void> bWritesToZ(String body) async {
+        final to = b.outboundOf(2)!;
+        expect(to.sid, z.sid, reason: 'b writes to Z');
+        final frame = await b.encrypt(1, 2, body);
+        await b.session.deliverFriend(
+          to,
+          frame!.encode(),
+          permit: b.session.permitFor(1, to: [to]),
+        );
+        await settle();
+      }
+
+      await bWritesToZ('{"t":"after-ack-1"}');
+      expect(a.bodies, contains('{"t":"after-ack-1"}'));
+      // b's own handoff arrives (a re-key, a rotation): a new address.
+      final fresh = boxB64(_bytes(32, 0x66));
+      final seal = QueueSeal.mintKeyPair();
+      expect(
+        await a.session.takeFriendHandoff(
+          5,
+          3,
+          sid: fresh,
+          sealPub: boxB64(seal.publicKey),
+          learnedUnder: 'B',
+        ),
+        FriendWrite.stored,
+      );
+      await settle();
+      final zNow = a.friend.queues.firstWhere((q) => q.sid == z.sid);
+      expect(zNow.retiredAt, isNull, reason: 'b may still write to Z');
+      expect(
+        a.friend.queues.first.ackedBy,
+        isNot(contains(3)),
+        reason: 'our own queue is due for b again',
+      );
+      expect(
+        a.friend.queues.first.handedAt.containsKey(3),
+        isTrue,
+        reason: 'and was handed to the new address',
+      );
+      await bWritesToZ('{"t":"after-ack-2"}');
+      expect(a.bodies, contains('{"t":"after-ack-2"}'), reason: 'Z still read');
+      // b takes our own queue: only now Z goes (kept read until the TTL).
+      await a.session.friendAcked(5, 3, lead.sid, learnedUnder: 'B');
+      expect(
+        a.friend.queues.firstWhere((q) => q.sid == z.sid).retiredAt,
+        isNotNull,
+        reason: 'retired after the ack of our own queue',
       );
     });
   });

@@ -141,6 +141,20 @@ class ContactQueue {
       ? this
       : _with(ackedBy: const [], handedAt: const {});
 
+  /// This queue as never handed to or acknowledged by the peer's [deviceId]:
+  /// that device may be writing somewhere else (a probe queue) until it has
+  /// taken this one again, so our handoff to it is due again.
+  ContactQueue withoutDevice(int deviceId) =>
+      !ackedBy.contains(deviceId) && !handedAt.containsKey(deviceId)
+      ? this
+      : _with(
+          ackedBy: [
+            for (final d in ackedBy)
+              if (d != deviceId) d,
+          ],
+          handedAt: {...handedAt}..remove(deviceId),
+        );
+
   ContactQueue _with({List<int>? ackedBy, Map<int, DateTime>? handedAt}) =>
       ContactQueue(
         rid: rid,

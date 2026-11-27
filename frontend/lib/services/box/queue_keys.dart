@@ -217,27 +217,40 @@ class QueueKeys {
   /// (`retired(now)`): they stay subscribed and read until the box TTL has
   /// passed (`BoxFriendHandoff._retireExpired` deletes them, server side
   /// included), so what the device already wrote there still arrives.
+  ///
+  /// A probe queue the device ACKED is one it may write to NOW. Unless
+  /// [leadTaken] (the device acked OUR lead, so it writes there) such a queue
+  /// is NOT retired: our lead is made due for that device again (its ack and
+  /// handoff time forgotten) and the retire waits for that ack, so the
+  /// device is never left writing to a queue that goes away.
   Future<void> softRetireProbes(
     int peerUserId,
     int device, {
     required DateTime now,
+    bool leadTaken = false,
   }) async {
     await _store.update(peerUserId, (record) {
-      if (record == null ||
-          !record.queues.any(
-            (q) => q.probeDevice == device && q.retiredAt == null,
-          )) {
-        return null;
-      }
-      return record.copyWith(
-        queues: [
-          for (final q in record.queues)
-            if (q.probeDevice == device && q.retiredAt == null)
-              q.retired(now)
-            else
-              q,
-        ],
-      );
+      if (record == null) return null;
+      bool deferred(ContactQueue q) =>
+          !leadTaken && q.probeDevice == device && q.ackedBy.contains(device);
+      final live = record.queues
+          .where((q) => q.probeDevice == device && q.retiredAt == null)
+          .toList();
+      if (live.isEmpty) return null;
+      final handBack = live.any(deferred);
+      final queues = [
+        for (var i = 0; i < record.queues.length; i++)
+          if (record.queues[i].probeDevice == device &&
+              record.queues[i].retiredAt == null)
+            deferred(record.queues[i])
+                ? record.queues[i]
+                : record.queues[i].retired(now)
+          else if (i == 0 && handBack)
+            record.queues[i].withoutDevice(device)
+          else
+            record.queues[i],
+      ];
+      return record.copyWith(queues: queues);
     });
   }
 

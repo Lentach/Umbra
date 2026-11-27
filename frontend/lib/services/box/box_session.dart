@@ -771,7 +771,12 @@ class BoxSession
         .where((o) => o.peerDeviceId == deviceId)
         .firstOrNull;
     if (tookLead && (held == null || !_gate.isStale(userId, held))) {
-      await _keys.softRetireProbes(userId, deviceId, now: _now());
+      await _keys.softRetireProbes(
+        userId,
+        deviceId,
+        now: _now(),
+        leadTaken: true,
+      );
     }
     return matched ? FriendWrite.stored : FriendWrite.refused;
   }
