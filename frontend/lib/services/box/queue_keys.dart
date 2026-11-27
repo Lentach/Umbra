@@ -195,6 +195,13 @@ class QueueKeys {
         kept = again;
         return null;
       }
+      // The friend's own handoff replaced the stale address while the queue
+      // was being made: nothing is probed any more, and Z is never kept.
+      if (!record.outbound.any(
+        (o) => o.peerDeviceId == device && o.sid == staleSid,
+      )) {
+        return null;
+      }
       kept = queue;
       return record.copyWith(queues: [...record.queues, queue]);
     });
