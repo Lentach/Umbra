@@ -2737,6 +2737,24 @@ void main() {
       );
       expect(a.friend.queues.first.ackedBy, [3]);
     });
+
+    test('N04: with no anchor pinned an ack counts under ANY identity, a '
+        'known one included (the rule compares only against a pin)', () async {
+      String? pin = 'A';
+      final lead = await metThenMoved(() => pin);
+      pin = null;
+      await a.store.update(
+        5,
+        (c) => c!.copyWith(
+          queues: [c.queues.first.withoutHandoffState(), ...c.queues.skip(1)],
+        ),
+      );
+      expect(
+        await a.session.friendAcked(5, 3, lead.sid, learnedUnder: 'C'),
+        FriendWrite.stored,
+      );
+      expect(a.friend.queues.first.ackedBy, [3]);
+    });
   });
 
   group('re-announce (decision B)', () {

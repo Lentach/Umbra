@@ -642,6 +642,51 @@ void main() {
     expect(await encryption.boxUnsentWaiting(1), isEmpty);
   });
 
+  // The reviewer's delete probe (review-final-3, kept as written): DELETE is
+  // isolated to the row it names. Kills mutant E5 (the pump's user-deleted
+  // branch treating the line as passing: `sent=0 left=1`).
+  test('REVIEW3 DELETE isolated: deleting the first of two waiting rows '
+      'leaves the second on screen, on disk, and it goes once', () async {
+    await typed('one');
+    await typed('two');
+    final one = rowOf('one');
+    final two = rowOf('two');
+    expect(one.tempId, isNot(two.tempId));
+    provider.deleteMessage(one.id, forEveryone: false);
+    await h.pump();
+    expect(provider.messages.map((m) => m.tempId), [two.tempId]);
+    expect((await encryption.boxUnsentWaiting(1)).keys, [two.tempId]);
+    expect(rowOf('two').waitingToSend, isTrue);
+    await open();
+    final texts = sent();
+    expect(texts, hasLength(1), reason: 'once: $texts');
+    expect(has([texts[0]], 'two'), isTrue);
+    expect(await encryption.boxUnsentWaiting(1), isEmpty);
+  });
+
+  test("REVIEW3 DELETE of row 1 between the pump's read and its send: row 2 "
+      'still goes, once, and the pump is not stuck', () async {
+    await typed('one');
+    await typed('two');
+    final one = rowOf('one');
+    final gate = encryption.afterRead = Completer<void>();
+    encryption.readDone = Completer<void>();
+    outbox.closed = false;
+    provider.kickSendPump(2);
+    await encryption.readDone!.future;
+    provider.deleteMessage(one.id, forEveryone: false);
+    gate.complete();
+    await h.pump(200);
+    final texts = sent();
+    // The probe's diagnostic line, kept as the reviewer wrote it.
+    // ignore: avoid_print
+    print('REVIEW3 del-mid sent=${texts.length} '
+        'left=${(await encryption.boxUnsentWaiting(1)).length}');
+    expect(texts, hasLength(1));
+    expect(has([texts[0]], 'two'), isTrue);
+    expect(provider.messages.where((m) => m.tempId == one.tempId), isEmpty);
+  });
+
   test('PRUNE: a waiting row stays past 30 days and past 200 newer '
       'ordinary rows (store-level test in the unsent store test file); the '
       'pump still sends such an old row', () async {

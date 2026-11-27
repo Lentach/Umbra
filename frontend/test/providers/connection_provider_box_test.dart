@@ -84,6 +84,14 @@ class _QuietEncryption extends EncryptionProvider {
   Future<bool?> stampedDeviceRevoked(int userId) async => stampRevoked;
 }
 
+/// E2E is ready from the start (a connect that finds the account's keys).
+class _ReadyEncryption extends _QuietEncryption {
+  _ReadyEncryption({super.service});
+
+  @override
+  bool get isE2EReady => true;
+}
+
 /// The queue rids the `subscribe` frames sent on [on] named.
 Set<Object?> _ridsSubscribedOn(Iterable<FakeBoxSocket> on) => {
   for (final socket in on)
@@ -1181,5 +1189,99 @@ void main() {
         expect(messaging.messages.map((m) => m.content), ['stored hello']);
       },
     );
+  });
+
+  // Decision B (a), review 3 (N18): the app hands the friends our queues
+  // again when the account identity was minted while the store is kept: the
+  // connect that finds E2E ready and the E2E-ready callback each consume the
+  // flag and tell the box.
+  group('a minted identity re-announces our queues (decision B a)', () {
+    final queueSealed = ContactQueue(
+      rid: boxB64(Uint8List(32)..fillRange(0, 32, 0x31)),
+      sid: boxB64(Uint8List(32)..fillRange(0, 32, 0x32)),
+      nid: boxB64(Uint8List(16)..fillRange(0, 16, 0x33)),
+      authPriv: boxB64(Uint8List(64)..fillRange(0, 64, 0x34)),
+      sealPriv: boxB64(Uint8List(32)..fillRange(0, 32, 0x35)),
+      sealPub: boxB64(Uint8List(32)..fillRange(0, 32, 0x36)),
+      ackedBy: const [3],
+    );
+
+    /// A friend whose device 3 acknowledged our queue, in the kept store.
+    Future<void> keptFriend() async {
+      await store.open(1);
+      await store.update(
+        5,
+        (_) => ContactRecord(
+          userId: 5,
+          username: 'bob',
+          tag: '0005',
+          state: ContactState.friend,
+          queues: [queueSealed],
+        ),
+      );
+    }
+
+    _RecordingConnection wired(EncryptionProvider enc) {
+      final conn = _RecordingConnection(socketService: account)
+        ..setProviders(
+          encryption: enc,
+          friends: FriendsProvider(),
+          conversations: ConversationsProvider(),
+          messaging: MessagingProvider(),
+          contactStore: store,
+          boxClient: (baseUrl) =>
+              BoxClient(baseUrl: baseUrl, socketFactory: sockets.call),
+        );
+      addTearDown(() => conn.disconnect(isLogout: true));
+      return conn;
+    }
+
+    test('the E2E-ready callback consumes the flag: the kept queue is handed '
+        'again (acknowledgements forgotten)', () async {
+      await keptFriend();
+      final enc = _QuietEncryption(
+        service: EncryptionService()..identityMinted = true,
+      )..storedSessionDeviceId = (() async => 2);
+      final conn = wired(enc);
+      await conn.connect(1, 'token', 'http://api.test');
+      account.serve('socketReady', {'deviceId': 2});
+      expect(store.byUserId(5)!.queues.first.ackedBy, [3]);
+
+      enc.onE2EReady!();
+      await pumpEventQueue(times: 100);
+
+      expect(store.byUserId(5)!.queues.first.ackedBy, isEmpty);
+      expect(store.byUserId(5)!.queues.first.sid, queueSealed.sid);
+      expect(enc.takeIdentityMinted(), isFalse, reason: 'consumed');
+    });
+
+    test('the connect that finds E2E ready consumes the flag too', () async {
+      await keptFriend();
+      final enc = _ReadyEncryption(
+        service: EncryptionService()..identityMinted = true,
+      )..storedSessionDeviceId = (() async => 2);
+      final conn = wired(enc);
+
+      await conn.connect(1, 'token', 'http://api.test');
+      await pumpEventQueue(times: 100);
+
+      expect(store.byUserId(5)!.queues.first.ackedBy, isEmpty);
+      expect(enc.takeIdentityMinted(), isFalse, reason: 'consumed');
+    });
+
+    test('no identity minted: nothing is forgotten (the one-shot record '
+        'flag is the only other writer)', () async {
+      await keptFriend();
+      // A record this build wrote is already flagged, so only a mint clears.
+      final enc = _QuietEncryption(service: EncryptionService())
+        ..storedSessionDeviceId = (() async => 2);
+      final conn = wired(enc);
+      await conn.connect(1, 'token', 'http://api.test');
+      account.serve('socketReady', {'deviceId': 2});
+      enc.onE2EReady!();
+      await pumpEventQueue(times: 100);
+
+      expect(store.byUserId(5)!.queues.first.ackedBy, [3]);
+    });
   });
 }
