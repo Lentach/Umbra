@@ -1025,11 +1025,21 @@ extension MessagingSend on MessagingProvider {
     });
   }
 
+  @visibleForTesting
+  void retrySendInPlaceForTest(String tempId) => _retrySendInPlace(tempId);
+
   void _retrySendInPlace(String tempId) {
     final idx = _messages.indexWhere((m) => m.tempId == tempId);
     if (idx == -1) return;
     final message = _messages[idx];
     if (message.deliveryStatus != MessageDeliveryStatus.failed) {
+      return;
+    }
+    // A waiting row belongs to the release pump (its record carries `q`): a
+    // second send path here would re-keep the record without it and leave a
+    // row that looks waiting with nothing waiting.
+    if (message.waitingToSend) {
+      kickSendPumps();
       return;
     }
     // Only auto-retry text and ping

@@ -267,6 +267,32 @@ void main() {
     expect(encryption.encryptCalls, hasLength(3), reason: 'each sealed once');
   });
 
+  test('P3-2: the 4 s timeout retry never touches a waiting row: the row keeps '
+      'its record WITH q, nothing is sealed, and the pump still sends it',
+      () async {
+    await typed('one');
+    final tempId = rowOf('one').tempId!;
+    expect(rowOf('one').waitingToSend, isTrue);
+
+    // The gate opened but the box refuses the write (a passing failure) and
+    // the 4 s timer of an earlier failed attempt fires on the waiting row.
+    outbox
+      ..closed = false
+      ..refuse.add(1);
+    provider.retrySendInPlaceForTest(tempId);
+    await h.pump(40);
+
+    expect(rowOf('one').waitingToSend, isTrue);
+    expect(rowOf('one').deliveryStatus, MessageDeliveryStatus.failed);
+    expect(
+      (await encryption.boxUnsentWaiting(1)).keys,
+      [tempId],
+      reason: 'a row that looks waiting has a waiting record',
+    );
+    await open();
+    expect(has(sent(), 'one'), isTrue);
+  });
+
   test('STRICT ORDER: row 1 fails for a passing reason: row 2 does NOT '
       'overtake it, both stay waiting and go later, in order', () async {
     await typed('one');
