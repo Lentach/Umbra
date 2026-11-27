@@ -521,7 +521,9 @@ extension MessagingBoxPump on MessagingProvider {
         ended.add(m.tempId!);
       }
     }
-    ended.forEach((t) => _setRowWaiting(t, waiting: false));
+    for (final t in ended) {
+      _setRowWaiting(t, waiting: false);
+    }
     if (enc == null || ids.isEmpty) return;
     final stored = <String>[];
     final waiting = await enc.boxUnsentWaiting(own);
@@ -531,7 +533,9 @@ extension MessagingBoxPump on MessagingProvider {
       await enc.setBoxUnsentWaiting(own, key, waiting: false);
     }
     if (_currentUserId == own) {
-      stored.forEach((t) => _setRowWaiting(t, waiting: false));
+      for (final t in stored) {
+        _setRowWaiting(t, waiting: false);
+      }
     }
   }
 }
