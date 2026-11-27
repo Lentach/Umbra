@@ -224,14 +224,11 @@ Future<_AlarmedEncryption> _pumpChat(
         ..._messageJson(1003, conversationId: messagesConversationId),
         'deliveryStatus': 'FAILED',
         'tempId': 'temp-1003',
-      }),
+      }).copyWith(waitingToSend: rowWaitsForCalm),
   ]);
   messaging.loadCachedMessages(10);
   if (failedOwnRow && rowRefusedForIdentity) {
     messaging.markSendRefusedForIdentityForTest('temp-1003');
-  }
-  if (failedOwnRow && rowWaitsForCalm) {
-    messaging.markSendWaitsForCalmHoldForTest('temp-1003', _peerId);
   }
 
   final auth = AuthProvider()..setAccessTokenForTest(_currentUserJwt);

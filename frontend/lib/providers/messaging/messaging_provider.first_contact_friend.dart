@@ -26,8 +26,13 @@ extension MessagingFirstContactFriend on MessagingProvider {
     for (final MapEntry(key: device, value: to)
         in outbox.addressesFor(peerUserId).entries) {
       final sealed = await _sealFriend(peerUserId, device, to, timer);
-      // A setting, not a message: quiet, no wake (decision 91). A closed
-      // gate leaves it unsent (the timer is sent again with the next change).
+      // A setting, not a message: quiet, no wake (decision 91). A closed gate
+      // leaves it unsent and OWED: the pump sends the current timer once
+      // when the gate opens.
+      if (sealed.permit == null) {
+        final own = _currentUserId;
+        if (own != null) _timerOwed.add((own, peerUserId));
+      }
       if (sealed.frame == null ||
           await _deliverFriend(
                 outbox,

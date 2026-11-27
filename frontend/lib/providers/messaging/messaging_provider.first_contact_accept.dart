@@ -266,6 +266,7 @@ extension MessagingFirstContactAccept on MessagingProvider {
     onBoxFriendshipMade?.call(userId, outgoing: outgoing);
     _conversationsProvider?.refreshChats();
     refreshBoxDeviceLists();
+    kickSendPump(userId);
     notifyListeners();
   }
 

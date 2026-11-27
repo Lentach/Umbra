@@ -93,10 +93,13 @@ void main() {
   });
 
   testWidgets('once the line is gone the row is plain again', (tester) async {
-    final row = await writeDuringHold(tester);
-    h.provider.onFriendshipEnded(2);
+    await writeDuringHold(tester);
+    await tester.runAsync(() async {
+      h.provider.onFriendshipEnded(2);
+      await h.pump();
+    });
 
-    await pumpRow(tester, message: row);
+    await pumpRow(tester, message: h.provider.messages.single);
 
     expect(find.text(l10n.messageSendWaitsForCalmHold), findsNothing);
   });

@@ -135,6 +135,12 @@ class MessageModel {
   /// Server-stamped time of the last edit; null = never edited. From REST/WS payload.
   final DateTime? editedAt;
 
+  /// An own message the friend write gate refused: it waits, persisted, and
+  /// goes out by itself when the gate opens (never a timer). Its
+  /// [deliveryStatus] stays `failed`, so delete works as for any failed row.
+  /// The reason it waits is `MessagingProvider.sendWaitReason`.
+  final bool waitingToSend;
+
   /// True when this row is a SELF-SYNC copy: our own account sent it, but a
   /// DIFFERENT one of our devices produced it (spec §5.4 + §12 amendment (xi)).
   ///
@@ -222,6 +228,7 @@ class MessageModel {
     this.mediaKey,
     this.mediaIv,
     this.editedAt,
+    this.waitingToSend = false,
   });
 
   factory MessageModel.fromJson(Map<String, dynamic> json) {
@@ -337,6 +344,7 @@ class MessageModel {
     String? mediaKey,
     String? mediaIv,
     DateTime? editedAt,
+    bool? waitingToSend,
     DateTime? createdAt,
   }) {
     return MessageModel(
@@ -374,6 +382,7 @@ class MessageModel {
       mediaKey: mediaKey ?? this.mediaKey,
       mediaIv: mediaIv ?? this.mediaIv,
       editedAt: editedAt ?? this.editedAt,
+      waitingToSend: waitingToSend ?? this.waitingToSend,
     );
   }
 }

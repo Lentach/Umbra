@@ -1,0 +1,394 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:fake_async/fake_async.dart';
+import 'package:fireplace/models/message_model.dart';
+import 'package:fireplace/providers/messaging_provider.dart';
+import 'package:fireplace/services/box/box_frame.dart';
+import 'package:fireplace/services/box/box_friend_gate.dart';
+import 'package:fireplace/services/box/box_outbox.dart';
+import 'package:fireplace/services/box/box_wire.dart';
+import 'package:fireplace/services/contacts/contact_record.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+import '../support/box_send_harness.dart';
+
+/// Invariant slice 3a: a message the friend write gate refused WAITS (a
+/// persisted `q` row) and one single-flight pump per friend sends it when a
+/// state change opens the gate. No timer, no timeout, no "end of drain".
+/// The gate here is a switch; the real gate's clauses are the crossing
+/// test's and the session tests'.
+
+/// The friend's gate as a switch (`closed`), over the scripted box.
+class _SwitchOutbox extends ScriptedSendOutbox implements BoxFriendGateOutbox {
+  bool closed = true;
+
+  @override
+  FriendPermit? permitFor(
+    int friend, {
+    Iterable<ContactOutbound> to = const [],
+    bool goodbye = false,
+  }) => closed ? null : FriendPermit.ungated(friend);
+
+  @override
+  Future<BoxSendOutcome> deliverFriend(
+    ContactOutbound to,
+    Uint8List body, {
+    BoxSendMode? mode,
+    FriendPermit? permit,
+  }) async => closed
+      ? BoxSendOutcome.failed
+      : deliver(to, body, mode: mode);
+
+  @override
+  Future<BoxResult<BoxMediaRef>> uploadMediaFriend(
+    ContactOutbound to,
+    Uint8List framed, {
+    FriendPermit? permit,
+  }) => uploadMedia(to, framed);
+}
+
+/// A text with `HUGE` in it seals to more than one frame: it can never go.
+class _PumpEncryption extends ScriptedSendEncryption {
+  _PumpEncryption(super.store);
+
+  @override
+  Future<String> encrypt(
+    int recipientId,
+    String plaintext, {
+    int deviceId = 1,
+    bool Function(String? remoteIdentity)? admit,
+  }) {
+    if (plaintext.contains('HUGE')) {
+      encryptCalls.add((recipientId, deviceId));
+      return Future.value(
+        '3:${base64Encode(Uint8List(BoxFrame.maxSignalBytes + 1))}',
+      );
+    }
+    return super.encrypt(
+      recipientId,
+      plaintext,
+      deviceId: deviceId,
+      admit: admit,
+    );
+  }
+}
+
+void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  late BoxSendHarness h;
+  late _PumpEncryption encryption;
+  late _SwitchOutbox outbox;
+
+  late MessagingProvider provider;
+
+  setUp(() async {
+    outbox = _SwitchOutbox();
+    h = await BoxSendHarness.create(
+      encryption: (store) => encryption = _PumpEncryption(store),
+      outbox: outbox,
+    );
+    provider = h.provider;
+    h.bob([1]);
+    await h.pump();
+  });
+
+  tearDown(() => h.dispose());
+
+  /// The texts written to Bob's queue so far, in order.
+  List<String> sent() => [
+    for (final (_, frame) in outbox.delivered) utf8.decode(frame.signal),
+  ];
+
+  bool has(List<String> texts, String word) =>
+      texts.where((t) => t.contains(word)).isNotEmpty;
+
+  Future<void> typed(String text) async {
+    provider.sendMessage(text);
+    await h.pump();
+    // Distinct milliseconds, so the order is the record's `at`.
+    await Future<void>.delayed(const Duration(milliseconds: 2));
+  }
+
+  MessageModel rowOf(String text) =>
+      provider.messages.lastWhere((m) => m.content == text);
+
+  /// A state change opened the gate: the gate switch flips and the pump is
+  /// kicked, as the app's wiring does.
+  Future<void> open() async {
+    outbox.closed = false;
+    provider.kickSendPump(2);
+    await h.pump(80);
+  }
+
+  test('a send the gate refuses WAITS: a failed row that says it waits, the '
+      'reason is the calm line only while one is pending, and the record '
+      'carries q', () async {
+    await typed('one');
+
+    final row = rowOf('one');
+    expect(row.deliveryStatus, MessageDeliveryStatus.failed);
+    expect(row.waitingToSend, isTrue);
+    expect(provider.sendWaitReason(row), SendWaitReason.other);
+    provider.seedCalmHoldForTest(2, CalmHoldState.waiting);
+    expect(provider.sendWaitReason(row), SendWaitReason.calmLineUntapped);
+    expect(outbox.delivered, isEmpty);
+    expect(encryption.encryptCalls, isEmpty);
+    final waiting = await encryption.boxUnsentWaiting(1);
+    expect(waiting.keys, [row.tempId]);
+  });
+
+  test('RESTART: the waiting rows survive a new provider on the same '
+      'storage, still wait with the chat NOT loaded, and go out by '
+      'themselves, in order, to the NEW queue once the gate opens; nothing '
+      'was ever written to the old one', () async {
+    await typed('one');
+    await typed('two');
+    expect(outbox.delivered, isEmpty);
+    provider.dispose();
+
+    // The app starts again; the friend's queue changed meanwhile (the
+    // handoff was read).
+    h.provider = h.newProvider();
+    provider = h.provider;
+    outbox.addresses[2] = {
+      1: const ContactOutbound(
+        peerDeviceId: 1,
+        sid: 'sid-new',
+        sealPub: 'seal-new',
+        idk: null,
+      ),
+    };
+    provider.refreshBoxDeviceLists(); // the connect's lookups, as at start
+    expect(provider.messages, isEmpty, reason: 'the chat is not loaded');
+    await h.pump();
+    expect(outbox.delivered, isEmpty, reason: 'still waiting, no timer');
+
+    await open();
+
+    expect(sent(), hasLength(2));
+    expect(has([sent()[0]], 'one'), isTrue);
+    expect(has([sent()[1]], 'two'), isTrue);
+    expect(
+      outbox.delivered.map((d) => d.$1.sid),
+      everyElement('sid-new'),
+      reason: 'the new queue, never the old one',
+    );
+    expect(await encryption.boxUnsentWaiting(1), isEmpty);
+  });
+
+  test('NO TIMER: with the gate never opened, an hour on the clock changes '
+      'nothing: the rows wait and nothing was written anywhere', () async {
+    await typed('one');
+    await typed('two');
+    final before = [...sent()];
+
+    fakeAsync((async) {
+      async
+        ..elapse(const Duration(hours: 1))
+        ..flushMicrotasks();
+    });
+    await h.pump(80);
+
+    expect(sent(), before);
+    expect(outbox.delivered, isEmpty);
+    expect(outbox.uploads, isEmpty);
+    expect(h.emitted, isEmpty);
+    expect(rowOf('one').waitingToSend, isTrue);
+    expect(rowOf('two').waitingToSend, isTrue);
+    expect(
+      (await encryption.boxUnsentWaiting(1)).length,
+      2,
+      reason: 'still on disk',
+    );
+  });
+
+  test('ORDER: two waiting rows and one typed while the first is going out '
+      'arrive 1, 2, 3; a Retry on row 2 meanwhile only kicks: each row is '
+      'sealed once', () async {
+    await typed('one');
+    await typed('two');
+    final two = rowOf('two');
+    outbox
+      ..hold = Completer<void>()
+      ..closed = false;
+    provider.kickSendPump(2);
+    await h.pump(80); // row 1 is in the box's hands
+
+    expect(sent(), hasLength(1));
+    await typed('three'); // joins the END of the line, no overtaking
+    await provider.retryFailedMessage(two.tempId!);
+    await h.pump();
+    expect(sent(), hasLength(1), reason: 'nothing overtook row 1');
+
+    outbox.hold!.complete();
+    outbox.hold = null;
+    await h.pump(120);
+
+    final texts = sent();
+    expect(texts, hasLength(3), reason: 'once each: $texts');
+    expect(has([texts[0]], 'one'), isTrue);
+    expect(has([texts[1]], 'two'), isTrue);
+    expect(has([texts[2]], 'three'), isTrue);
+    expect(encryption.encryptCalls, hasLength(3), reason: 'each sealed once');
+  });
+
+  test('STRICT ORDER: row 1 fails for a passing reason: row 2 does NOT '
+      'overtake it, both stay waiting and go later, in order', () async {
+    await typed('one');
+    await typed('two');
+    outbox.refuse.add(1); // the box refuses the write: a passing failure
+    outbox.closed = false;
+    provider.kickSendPump(2);
+    await h.pump(80);
+
+    expect(has(sent(), 'two'), isFalse, reason: 'two never got ahead of one');
+    expect(rowOf('one').waitingToSend, isTrue);
+    expect(rowOf('two').waitingToSend, isTrue);
+
+    outbox.refuse.clear();
+    outbox.delivered.clear();
+    provider.kickSendPump(2);
+    await h.pump(80);
+
+    final texts = sent();
+    expect(texts, hasLength(2));
+    expect(has([texts[0]], 'one'), isTrue);
+    expect(has([texts[1]], 'two'), isTrue);
+  });
+
+  test('a row that can never go (too long) becomes an ordinary failed row '
+      'and the pump goes on with the next', () async {
+    await typed('HUGE one');
+    await typed('two');
+    await open();
+
+    final huge = rowOf('HUGE one');
+    expect(huge.deliveryStatus, MessageDeliveryStatus.failed);
+    expect(huge.waitingToSend, isFalse);
+    expect(has(sent(), 'two'), isTrue);
+    expect(rowOf('two').deliveryStatus, MessageDeliveryStatus.sent);
+    final waiting = await encryption.boxUnsentWaiting(1);
+    expect(waiting, isEmpty, reason: 'the failed one no longer waits');
+    expect(
+      (await encryption.boxUnsent(1, 10)).keys,
+      contains(huge.tempId),
+      reason: 'but it is kept on the device, with its own Retry',
+    );
+  });
+
+  test('DUPLICATE GUARD: a record whose own copy is already stored is '
+      'dropped, not sent again', () async {
+    // A normal send, stored.
+    outbox.closed = false;
+    await typed('stored');
+    expect(sent(), hasLength(1));
+    final stored = rowOf('stored');
+    expect(stored.deliveryStatus, MessageDeliveryStatus.sent);
+    outbox.delivered.clear();
+
+    // The app died between the store and the drop: its waiting record is
+    // still on disk, with the same wire id.
+    await encryption.saveBoxUnsent(1, 'temp_dead_1', {
+      'c': 10,
+      'at': DateTime.now().millisecondsSinceEpoch,
+      'w': stored.wireId,
+      'type': 'TEXT',
+      'content': 'stored',
+      'q': 1,
+    });
+    provider.kickSendPump(2);
+    await h.pump(80);
+
+    expect(outbox.delivered, isEmpty, reason: 'not sent again');
+    expect(await encryption.boxUnsentWaiting(1), isEmpty);
+    expect((await encryption.boxUnsent(1, 10)).keys, isNot(contains('temp_dead_1')));
+  });
+
+  test("a waiting row ends with its chat's disappearing timer: the record "
+      'of a row past its timer is never sent', () async {
+    await encryption.saveBoxUnsent(1, 'temp_old_1', {
+      'c': 10,
+      'at': DateTime.now().millisecondsSinceEpoch - 120 * 1000,
+      'w': 'wire-old-1234',
+      'type': 'TEXT',
+      'content': 'too late',
+      'ttl': 60,
+      'q': 1,
+    });
+    await open();
+
+    expect(outbox.delivered, isEmpty);
+    expect(await encryption.boxUnsentWaiting(1), isEmpty);
+  });
+
+  test('UNFRIEND: the waiting rows become ordinary failed rows, kept for '
+      'their own Retry or delete; nothing is sent', () async {
+    await typed('one');
+    await typed('two');
+
+    provider.onFriendshipEnded(2, conversationIds: const [10]);
+    await h.pump(60);
+
+    for (final text in ['one', 'two']) {
+      final row = rowOf(text);
+      expect(row.deliveryStatus, MessageDeliveryStatus.failed);
+      expect(row.waitingToSend, isFalse);
+    }
+    expect(await encryption.boxUnsentWaiting(1), isEmpty);
+    expect((await encryption.boxUnsent(1, 10)).length, 2);
+    await open();
+    expect(outbox.delivered, isEmpty, reason: 'no waiting row is left');
+  });
+
+  test('ACCOUNT SWITCH mid-release stops the pump: nothing more is sent '
+      'for the old account', () async {
+    await typed('one');
+    await typed('two');
+    outbox
+      ..hold = Completer<void>()
+      ..closed = false;
+    provider.kickSendPump(2);
+    await h.pump(80);
+    expect(sent(), hasLength(1));
+
+    provider.setCurrentUserId(7); // another account signs in
+    outbox.hold!.complete();
+    outbox.hold = null;
+    await h.pump(120);
+
+    expect(sent(), hasLength(1), reason: 'row two was not sent for account 1');
+  });
+
+  test('DELETE works on a waiting row: its record and row are dropped', () async {
+    await typed('one');
+    final row = rowOf('one');
+
+    provider.deleteMessage(row.id, forEveryone: false);
+    await h.pump();
+
+    expect(provider.messages, isEmpty);
+    expect(await encryption.boxUnsentWaiting(1), isEmpty);
+    await open();
+    expect(outbox.delivered, isEmpty);
+  });
+
+  test('PRUNE: a waiting row stays past 30 days and past 200 newer '
+      'ordinary rows (store-level test in the unsent store test file); the '
+      'pump still sends such an old row', () async {
+    await encryption.saveBoxUnsent(1, 'temp_ancient_1', {
+      'c': 10,
+      'at': DateTime.now().millisecondsSinceEpoch -
+          const Duration(days: 31).inMilliseconds,
+      'w': 'wire-ancient-12',
+      'type': 'TEXT',
+      'content': 'ancient',
+      'q': 1,
+    });
+    await open();
+
+    expect(has(sent(), 'ancient'), isTrue);
+  });
+}

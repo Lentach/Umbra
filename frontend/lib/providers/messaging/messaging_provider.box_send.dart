@@ -345,9 +345,10 @@ extension MessagingBoxSend on MessagingProvider {
           _markMessageFailed(tempId, 'Could not send. Try again.');
           return false;
         case _BoxSealFailure.calmHeld:
-          _deferForCalmHold(recipientId, tempId);
+          await _holdForGate(recipientId, tempId);
           return false;
         case _BoxSealFailure.tooLong:
+          _sendNeverGoes.add(tempId);
           _e2eFlowLog('BOX_SEND_TOO_LONG', {
             'tempId': tempId,
             ...sealed.detail,
@@ -656,15 +657,5 @@ extension MessagingBoxSend on MessagingProvider {
     _e2eFlowLog('BOX_SEND_PEERS_FULL', {'tempId': tempId, 'peer': peer});
     _markMessageFailed(tempId, 'Could not send. Try again.');
     return true;
-  }
-
-  /// [tempId] waits for the tap on [peer]'s calm line: nothing was sealed or
-  /// uploaded for it. The row fails for now, says why
-  /// ([MessagingProvider.sendWaitsForCalmHold]) and is sent by
-  /// [MessagingBox.confirmCalmHold] once the key is confirmed.
-  void _deferForCalmHold(int peer, String tempId) {
-    _calmDeferredSends[tempId] = peer;
-    _e2eFlowLog('BOX_SEND_CALM_HELD', {'tempId': tempId, 'peer': peer});
-    _markMessageFailed(tempId, 'Could not send. Try again.');
   }
 }

@@ -406,6 +406,7 @@ class ConnectionProvider extends ChangeNotifier {
               if (_connectGeneration != generation) return;
               _friendsProvider?.onContactsChanged();
               _conversationsProvider?.hydrateFromStore();
+              _messagingProvider?.kickSendPumps();
               _box?.storeOpened();
               _refreshBoxDeviceLists();
             }),
@@ -415,6 +416,7 @@ class ConnectionProvider extends ChangeNotifier {
     }
     _friendsProvider?.onContactsChanged();
     _conversationsProvider?.hydrateFromStore();
+    _messagingProvider?.kickSendPumps();
 
     // 4c. PR2.4: drain the server-held backup into the store. This runs on
     // EVERY session with an open store, not only an empty one — `_adopt`
@@ -505,8 +507,11 @@ class ConnectionProvider extends ChangeNotifier {
         // anchor moves (a failed stamp refuses the move) and at a first pin.
         ..wireAnchorTags(
           beforeAnchorMoves: contacts.stampUntaggedAddresses,
-          anchorPinned: (peer, identity) =>
-              unawaited(contacts.stampUntaggedAddresses(peer, identity)),
+          anchorPinned: (peer, identity) => unawaited(
+            contacts
+                .stampUntaggedAddresses(peer, identity)
+                .then((_) => _messagingProvider?.kickSendPump(peer)),
+          ),
         );
       if (_box == null || _boxUserId != userId) {
         _box?.dispose();
@@ -576,6 +581,8 @@ class ConnectionProvider extends ChangeNotifier {
                 ) ??
                 false)
             ..onBoxReady = messaging.onBoxReady
+            // The journal was judged: the last clause of the gate.
+            ..onJournalJudged = messaging.kickSendPumps
             // Slice (g): one delivered receipt per drain (E61d).
             ..onReadsIdle = messaging.onBoxReadsIdle
             // Slice (f): a pending request that expired left the store.
@@ -633,11 +640,17 @@ class ConnectionProvider extends ChangeNotifier {
       // Decision 21: the device lists a box send reads are looked up here,
       // once per connect — never by a send.
       _refreshBoxDeviceLists();
+      // E2E ready is a state change the gate reads (a kick for every friend
+      // that has a waiting message).
+      _messagingProvider?.kickSendPumps();
     };
     // B3 (decision 143): a friend's frames held under a changed identity are
     // read again the moment the user accepts it.
     _encryptionProvider?.onHeldFramesReleased = (_) =>
         _box?.drainInboxSettled();
+    // The anchor moved (the key was confirmed): the pump looks again.
+    _encryptionProvider?.onAnchorMoved = (peer) =>
+        _messagingProvider?.kickSendPump(peer);
     _encryptionProvider?.onDeviceListInvalidated = (invalidated) {
       _messagingProvider?.onDeviceListInvalidated(invalidated);
       // The own list changed (a device linked or revoked): the siblings may
@@ -673,7 +686,10 @@ class ConnectionProvider extends ChangeNotifier {
       // The permanent accepted-key-change lines go with the contact's history.
       _encryptionProvider?.forgetKeyChangeLog(peerId: uid).ignore();
       // A frame waiting calmly for a tap goes with the friendship.
-      _messagingProvider?.onFriendshipEnded(uid);
+      _messagingProvider?.onFriendshipEnded(
+        uid,
+        conversationIds: removed ?? const <int>{},
+      );
       // Removing a contact must also destroy their decrypted history on this
       // device. Nothing did that before: the conversation vanished from the
       // list while every message stayed in memory and on disk, readable.

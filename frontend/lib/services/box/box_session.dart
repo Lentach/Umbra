@@ -139,7 +139,11 @@ class BoxSession
     _friends.gate = _gate;
     _inbox
       ..judgeable = (() => _e2eReady && _inbox.consumer != null)
-      ..onJudged = (() => _journalJudged = true);
+      ..onJudged = (() {
+        final first = !_journalJudged;
+        _journalJudged = true;
+        if (first) onJournalJudged?.call();
+      });
   }
 
   @override
@@ -218,6 +222,10 @@ class BoxSession
   /// Called when this device first counts as on the box ([onBox]): its
   /// request queue was published. The composer notice (decision 48) reads it.
   void Function()? onBoxReady;
+
+  /// Called when the journal was judged for the first time this session (the
+  /// last clause of the friend write gate): what the gate refused may go now.
+  void Function()? onJournalJudged;
 
   /// Friend devices whose request queue was asked for by handle this session
   /// ([rekeyFriend]), as `user:device`: once each, so a device the lookup

@@ -54,11 +54,10 @@ class FailedSendRetry extends StatelessWidget {
       peerRefusedIdentity &&
       context.read<MessagingProvider>().sendRefusedForIdentity(message.tempId);
 
-  /// True when THIS row was held back for the calm line's tap: a row of its
-  /// own, so a different failure in the same chat is never explained by it.
-  bool _waitsForCalmHold(BuildContext context) =>
-      peerRefusedIdentity &&
-      context.read<MessagingProvider>().sendWaitsForCalmHold(message.tempId);
+  /// True when THIS row waits to be sent (it was held back for the calm
+  /// line's tap): a row of its own, so a different failure in the same chat
+  /// is never explained by it.
+  bool get _waitsForCalmHold => peerRefusedIdentity && message.waitingToSend;
 
   @override
   Widget build(BuildContext context) {
@@ -68,7 +67,7 @@ class FailedSendRetry extends StatelessWidget {
     // "Retry" alone is a trap here: while the anchor is stale every attempt
     // fails the same way, so the row has to name the remedy.
     final refused = _mayNameTheRefusal(context);
-    final waits = !refused && _waitsForCalmHold(context);
+    final waits = !refused && _waitsForCalmHold;
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: isMine

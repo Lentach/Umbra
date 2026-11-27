@@ -64,7 +64,7 @@ void main() {
       expectNothingWentOut();
       final row = provider.messages.single;
       expect(row.deliveryStatus, MessageDeliveryStatus.failed);
-      expect(provider.sendWaitsForCalmHold(row.tempId), isTrue);
+      expect(row.waitingToSend, isTrue);
       expect(
         provider.sendRefusedForIdentity(row.tempId),
         isFalse,
@@ -118,6 +118,9 @@ void main() {
     final row = provider.messages.single;
 
     provider.onFriendshipEnded(2); // any end of the line frees the send path
+    await h.pump();
+    expect(provider.messages.single.waitingToSend, isFalse);
+    expect(provider.messages.single.deliveryStatus, MessageDeliveryStatus.failed);
     await provider.retryFailedMessage(row.tempId!);
     await h.pump();
 
@@ -130,6 +133,6 @@ void main() {
       provider.messages.single.deliveryStatus,
       MessageDeliveryStatus.sent,
     );
-    expect(provider.sendWaitsForCalmHold(row.tempId), isFalse);
+    expect(provider.messages.single.waitingToSend, isFalse);
   });
 }

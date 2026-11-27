@@ -207,7 +207,8 @@ extension MessagingBox on MessagingProvider {
           if (_calmHolds[msg.senderId]?.identity ==
               preKeyIdentityOf(msg.encryptedContent!)) {
             _calmHolds.remove(msg.senderId);
-            _takeCalmDeferred(msg.senderId); // settled: a plain Retry remains
+            // Settled: the row is no longer waiting for the tap.
+            kickSendPump(msg.senderId);
           }
         case FriendFrameIdentity.foreign:
           return _holdForeign(
@@ -501,57 +502,35 @@ extension MessagingBox on MessagingProvider {
     }
     notifyListeners();
     if (result == CalmConfirm.confirmed) {
-      // The held frames are read FIRST: the friend's handoff names the queue
-      // its new install reads, and a row sent before it goes to the old one.
-      final before = _boxQueuesOf(peerId);
-      var drained = false;
-      try {
-        await enc.drainReleasedFrames(peerId).timeout(calmDrainBound);
-        drained = true;
-      } on Object catch (e) {
-        _e2eFlowLog('CALM_DRAIN_INCOMPLETE', {'peer': peerId, 'error': '$e'});
-      }
-      // Whatever happened, the rows stop waiting here.
-      final rows = _takeCalmDeferred(peerId);
-      // A drain that failed before the friend's handoff was read leaves the
-      // send target at the OLD queue: those rows stay ordinary failed rows
-      // (their own Retry), never written there on the person's behalf. A
-      // drain that COMPLETED without a handoff releases them to the address
-      // already known (by design: the friend sent none).
-      if (!drained && setEquals(_boxQueuesOf(peerId), before)) return;
-      for (final tempId in rows) {
-        await retryFailedMessage(tempId);
-        // In order, or not at all: a later row never goes ahead of an
-        // earlier one that failed (it stays failed, with its own Retry).
-        final row = _messages.where((m) => m.tempId == tempId).firstOrNull;
-        if (row?.deliveryStatus == MessageDeliveryStatus.failed) break;
-      }
+      // The hold is over. The held frames are read again (unawaited, exactly
+      // as the red acknowledge does): the friend's handoff in them names the
+      // queue its new install reads. Nothing waits for that read: what was
+      // refused waits as a persisted row, and the pump sends it when the
+      // handoff is STORED (or any other state change opens the gate).
+      enc.drainReleasedFrames(peerId).ignore();
+      kickSendPump(peerId);
     }
   }
 
-  /// The queues the box would send [peerId]'s messages to now.
-  Set<String> _boxQueuesOf(int peerId) => {
-    for (final to in (boxOutbox?.addressesFor(peerId) ?? const {}).values)
-      to.sid,
-  };
-
   /// What waited for [peerId]'s calm line when it turns into the visible
   /// hold: those rows read as refused for a key change (as under a red-hold
-  /// refusal), and the chat names it for them ([peersRefusedIdentity]).
+  /// refusal) and stop waiting, and the chat names it for them
+  /// ([peersRefusedIdentity]).
   void _refuseCalmDeferred(int peerId, EncryptionProvider enc) {
-    final rows = _takeCalmDeferred(peerId);
-    if (rows.isEmpty) return;
-    _identityRefusedSendTempIds.addAll(rows);
-    enc.markRefusedIdentity(peerId);
-  }
-
-  /// Removes and returns, in the order written, what was held back for
-  /// [peerId]'s calm line (a row no longer loaded just stays failed).
-  List<String> _takeCalmDeferred(int peerId) {
-    return [
-      for (final MapEntry(:key, :value) in _calmDeferredSends.entries)
-        if (value == peerId) key,
-    ]..forEach(_calmDeferredSends.remove);
+    final loaded = _endLoadedWaiting(peerId, const []);
+    if (loaded.ended.isNotEmpty) {
+      _identityRefusedSendTempIds.addAll(loaded.ended);
+      enc.markRefusedIdentity(peerId);
+    }
+    // A record of a chat not on screen stops waiting a moment later, with
+    // the same verdict.
+    unawaited(
+      _endStoredWaiting(loaded.ids).then((more) {
+        if (more.isEmpty) return;
+        _identityRefusedSendTempIds.addAll(more);
+        enc.markRefusedIdentity(peerId);
+      }),
+    );
   }
 
   /// Holds friend frame [msg] (a PreKey message under a foreign identity)
@@ -602,18 +581,26 @@ extension MessagingBox on MessagingProvider {
     return true;
   }
 
-  /// The friendship with [peerId] ended (unfriend, block, their goodbye): a
-  /// calm line and the marks that keep its frames held go with it.
+  /// The friendship with [peerId] ended: a calm line and the marks that keep
+  /// its frames held go with it.
   void _clearCalmHold(int peerId) {
     if (_calmHolds.remove(peerId) != null) {
-      _takeCalmDeferred(peerId); // stay failed, with their own Retry
+      unawaited(_endWaitingOfFriend(peerId, const []));
       _encryptionProvider?.releaseCalm(peerId);
       notifyListeners();
     }
   }
 
-  /// Called when [peerId] stops being a friend.
-  void onFriendshipEnded(int peerId) => _clearCalmHold(peerId);
+  /// [peerId] stops being a friend (unfriend, block, their goodbye): a calm
+  /// line goes with it, and what waited to be sent becomes ordinary failed
+  /// rows ([conversationIds] names chats already taken off the list).
+  void onFriendshipEnded(
+    int peerId, {
+    Iterable<int> conversationIds = const [],
+  }) {
+    _clearCalmHold(peerId);
+    unawaited(_endWaitingOfFriend(peerId, conversationIds));
+  }
 
   /// Once per held frame per run (the caller's `_boxHeld` mark): peer and
   /// device only, never key material or content.

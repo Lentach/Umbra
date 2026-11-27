@@ -492,6 +492,11 @@ class _Link implements BoxFriendLink {
   Future<bool> announceOwnList(Map<String, dynamic> auth) async => false;
 }
 
+/// Whether the row [tempId] of [p] waits to be sent (persisted, sent by the
+/// pump when the friend's gate opens).
+bool _waits(MessagingProvider p, String? tempId) =>
+    p.messages.any((m) => m.tempId == tempId && m.waitingToSend);
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -869,12 +874,16 @@ void main() {
     /// confirmed the box drains again (what `onHeldFramesReleased` does).
     Future<void> tap(_Side side) async {
       var released = 0;
+      Future<void>? running;
       // What the app wires: the drain reads the held frames and completes.
-      side.enc.onHeldFramesReleased = (_) async {
+      // The tap no longer waits for it; the test does.
+      side.enc.onHeldFramesReleased = (_) {
         released++;
-        await reoffer(side);
+        return running = reoffer(side);
       };
       await side.reader.confirmCalmHold(side.peerId);
+      await pumpEventQueue(times: 100);
+      if (running != null) await running;
       await pumpEventQueue(); // the released rows' sends finish
       expect(released, lessThanOrEqualTo(1), reason: 'one release per key');
     }
@@ -1196,6 +1205,7 @@ void main() {
       final second = b.reader.confirmCalmHold(1);
       b.gate!.complete();
       await Future.wait([first, second]);
+      await pumpEventQueue(); // the release is unawaited now
 
       expect(b.fetches, 1);
       expect(released, 1, reason: 'the key was confirmed once');
@@ -1528,7 +1538,7 @@ void main() {
       expect(b.emits, isEmpty, reason: 'a send fetches no bundle');
       expect(b.enc.lookupLog, isEmpty, reason: 'a send looks nobody up');
       expect(row.deliveryStatus, MessageDeliveryStatus.failed);
-      expect(b.reader.sendWaitsForCalmHold(row.tempId), isTrue);
+      expect(_waits(b.reader, row.tempId), isTrue);
       expect(b.reader.sendRefusedForIdentity(row.tempId), isFalse);
       expectCalm(b);
 
@@ -1547,7 +1557,7 @@ void main() {
       );
       final sent = b.reader.messages.singleWhere((m) => m.tempId == row.tempId);
       expect(sent.deliveryStatus, MessageDeliveryStatus.sent);
-      expect(b.reader.sendWaitsForCalmHold(row.tempId), isFalse);
+      expect(_waits(b.reader, row.tempId), isFalse);
       await expectTraffic(b, restored);
       await expectTraffic(restored, b);
       expect(outbox.delivered, hasLength(1), reason: 'and not again');
@@ -1591,13 +1601,13 @@ void main() {
 
       final row = await writeFromB('into the refusal');
       expect(outbox.delivered, isEmpty);
-      expect(b.reader.sendWaitsForCalmHold(row.tempId), isTrue);
+      expect(_waits(b.reader, row.tempId), isTrue);
 
       await tap(b);
 
       expectRed(b);
       expect(outbox.delivered, isEmpty);
-      expect(b.reader.sendWaitsForCalmHold(row.tempId), isFalse);
+      expect(_waits(b.reader, row.tempId), isFalse);
       expect(b.reader.sendRefusedForIdentity(row.tempId), isTrue);
       expect(
         b.reader.messages.singleWhere((m) => m.tempId == row.tempId).deliveryStatus,
@@ -1616,7 +1626,7 @@ void main() {
 
       expect(b.reader.calmHoldState(1), CalmHoldState.failed);
       expect(outbox.delivered, isEmpty);
-      expect(b.reader.sendWaitsForCalmHold(row.tempId), isTrue);
+      expect(_waits(b.reader, row.tempId), isTrue);
 
       b.serve = (bundle) => bundle;
       await tap(b);
@@ -1664,13 +1674,13 @@ void main() {
       final restored = await calmRestore();
       final outbox = await boxForB();
       final row = await writeFromB('before the reconnect');
-      expect(b.reader.sendWaitsForCalmHold(row.tempId), isTrue);
+      expect(_waits(b.reader, row.tempId), isTrue);
 
       b.reader.onConnect(true);
       await pumpEventQueue();
 
       expectCalm(b);
-      expect(b.reader.sendWaitsForCalmHold(row.tempId), isTrue);
+      expect(_waits(b.reader, row.tempId), isTrue);
       expect(outbox.delivered, isEmpty);
 
       await tap(b);
@@ -1733,7 +1743,7 @@ void main() {
         expectRed(b);
         expect(await anchorOfA(), before);
         expect(outbox.delivered, isEmpty);
-        expect(b.reader.sendWaitsForCalmHold(row.tempId), isFalse);
+        expect(_waits(b.reader, row.tempId), isFalse);
         expect(b.reader.sendRefusedForIdentity(row.tempId), isTrue);
         expect(b.enc.peersRefusedIdentity, contains(1));
       });
@@ -1749,7 +1759,7 @@ void main() {
       await reoffer(b);
 
       expectRed(b);
-      expect(b.reader.sendWaitsForCalmHold(row.tempId), isFalse);
+      expect(_waits(b.reader, row.tempId), isFalse);
       expect(b.reader.sendRefusedForIdentity(row.tempId), isTrue);
       expect(outbox.delivered, isEmpty);
     });
@@ -1837,31 +1847,40 @@ void main() {
     /// A tap whose drain is [drain] (what the app wires, replaced).
     Future<void> tapWithDrain(
       _Side side,
-      Future<void> Function() drain,
-    ) async {
-      side.enc.onHeldFramesReleased = (_) => drain();
+      Future<void> Function() drain, {
+      bool awaitDrain = true,
+    }) async {
+      Future<void>? running;
+      side.enc.onHeldFramesReleased = (_) => running = drain();
       await side.reader.confirmCalmHold(side.peerId);
+      await pumpEventQueue();
+      if (awaitDrain && running != null) {
+        try {
+          await running;
+        } on Object {
+          // a drain that throws is the case under test
+        }
+      }
       await pumpEventQueue();
     }
 
     test('2b-a: the drain throws and no handoff was learned: the message '
-        'leaves the waiting state, nothing is written to the old queue, '
-        'the tap does not throw', () async {
-      await calmRestore();
+        'keeps waiting, nothing is written to the old queue, the tap does '
+        'not throw, and the handoff read later releases it', () async {
+      final restored = await calmRestore();
       final outbox = await boxForB();
       final row = await writeFromB('stuck');
 
       await tapWithDrain(b, () async => throw StateError('drain broke'));
 
       expect(outbox.delivered, isEmpty, reason: 'the old queue is not used');
-      expect(b.reader.sendWaitsForCalmHold(row.tempId), isFalse);
-      expect(
-        b.reader.messages.singleWhere((m) => m.tempId == row.tempId)
-            .deliveryStatus,
-        MessageDeliveryStatus.failed,
-        reason: 'an ordinary failed row, with its own Retry',
-      );
+      expect(_waits(b.reader, row.tempId), isTrue);
       expect(b.reader.sendRefusedForIdentity(row.tempId), isFalse);
+
+      await reoffer(b);
+
+      expect(outbox.delivered, hasLength(1));
+      expect(outbox.delivered.single.$1.sid, restored.sid);
     });
 
     test('2b-a2: the drain throws AFTER the handoff was learned: the message '
@@ -1879,23 +1898,27 @@ void main() {
       expect(outbox.delivered.single.$1.sid, restored.sid);
     });
 
-    test('2b-b: the drain never completes: after the bound the message '
-        'leaves the waiting state and nothing is written to the old queue',
-        () async {
-      await calmRestore();
+    test('2b-b: the drain never completes: the message keeps waiting, '
+        'nothing is written to the old queue, and the handoff read later '
+        'releases it (no dependence on the end of the drain)', () async {
+      final restored = await calmRestore();
       final outbox = await boxForB();
       final row = await writeFromB('stalled');
-      b.reader.calmDrainBound = const Duration(milliseconds: 50);
 
-      await tapWithDrain(b, () => Completer<void>().future);
+      await tapWithDrain(
+        b,
+        () => Completer<void>().future,
+        awaitDrain: false,
+      );
 
       expect(outbox.delivered, isEmpty);
-      expect(b.reader.sendWaitsForCalmHold(row.tempId), isFalse);
-      expect(
-        b.reader.messages.singleWhere((m) => m.tempId == row.tempId)
-            .deliveryStatus,
-        MessageDeliveryStatus.failed,
-      );
+      expect(_waits(b.reader, row.tempId), isTrue);
+
+      await reoffer(b); // the handoff is read some other way
+
+      expect(outbox.delivered, hasLength(1));
+      expect(outbox.delivered.single.$1.sid, restored.sid);
+      expect(_waits(b.reader, row.tempId), isFalse);
     });
 
     test('2b-c: a slow drain that completes within the bound: the message '
@@ -1952,7 +1975,7 @@ void main() {
       var during = -1;
 
       await tapWithDrain(b, () async {
-        waits = b.reader.sendWaitsForCalmHold(row.tempId);
+        waits = _waits(b.reader, row.tempId);
         await b.reader.retryFailedMessage(row.tempId!);
         await pumpEventQueue();
         during = outbox.delivered.length;
@@ -2109,35 +2132,41 @@ void main() {
       });
     }
 
-    for (final bound in [true, false]) {
+    for (final neverEnds in [true, false]) {
       for (final retrying in [false, true]) {
-        test('window 3a: ${bound ? 'bound fires' : 'drain throws'} with the '
-            'handoff unread: ${retrying ? 'a Retry' : 'a new send'}',
-            () async {
+        test('window 3a: the drain ${neverEnds ? 'never ends' : 'throws'} '
+            'with the handoff unread: '
+            '${retrying ? 'a Retry' : 'a new send'}', () async {
           final restored = await calmRestore();
           final outbox = await boxForB();
           final held = await writeFromB('held row');
-          if (bound) b.reader.calmDrainBound = const Duration(milliseconds: 50);
 
           await tapWithDrain(
             b,
-            () => bound
+            () => neverEnds
                 ? Completer<void>().future
                 : Future<void>.error(StateError('drain broke')),
+            awaitDrain: !neverEnds,
           );
 
-          // The rows stopped waiting; the handoff is still unread.
-          final row = retrying ? held : await writeFromB('typed after');
-          if (retrying) await retry(held);
+          // Nothing depends on the end of the drain: the rows keep waiting
+          // (a Retry on one only kicks the pump) and the new send joins.
+          if (retrying) {
+            await retry(held);
+          } else {
+            await writeFromB('typed after');
+          }
           expect(onOld(outbox), isEmpty, reason: 'the old queue stays unused');
           expect(outbox.delivered, isEmpty);
+          expect(_waits(b.reader, held.tempId), isTrue);
 
-          // The drain (or the journal's re-offer) reads the handoff later.
+          // The journal's re-offer reads the handoff later: the pump sends.
           await reoffer(b);
-          expect(onOld(outbox), isEmpty);
-          await retry(row);
 
-          await arrivedOnceOnNew(outbox, restored, [row.content]);
+          await arrivedOnceOnNew(outbox, restored, [
+            'held row',
+            if (!retrying) 'typed after',
+          ]);
         });
       }
     }
@@ -2226,9 +2255,13 @@ void main() {
 
       expect(onOld(outbox), hasLength(attempts), reason: 'no new old write');
       expect(onNew(outbox, restored), isEmpty);
+      expect(
+        _waits(b.reader, row.tempId),
+        isTrue,
+        reason: 'the Retry became a waiting row',
+      );
 
-      await reoffer(b); // the handoff is read
-      await retry(row);
+      await reoffer(b); // the handoff is read: the pump sends, no Retry
 
       // The one old-queue write is the first attempt, which the box refused
       // before the acknowledge; nothing was added to it since.
@@ -2336,7 +2369,7 @@ void main() {
       final restored = await calmRestore();
       await boxForB();
       final row = await writeFromB('stale');
-      expect(b.reader.sendWaitsForCalmHold(row.tempId), isTrue);
+      expect(_waits(b.reader, row.tempId), isTrue);
       // The key is confirmed some other way than the provider's tap.
       expect(
         await b.enc.confirmCalmKey(
@@ -2354,7 +2387,7 @@ void main() {
       await handOffFrom(a); // the OLD key again: a new calm hold
       expectCalm(b);
 
-      expect(b.reader.sendWaitsForCalmHold(row.tempId), isFalse);
+      expect(_waits(b.reader, row.tempId), isFalse);
     });
   });
 }

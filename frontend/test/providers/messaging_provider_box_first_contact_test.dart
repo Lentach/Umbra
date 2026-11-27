@@ -745,6 +745,28 @@ void main() {
     },
   );
 
+  test(
+    'a chat timer refused while the gate was closed is sent as it stands '
+    'when the gate opens, with no further timer change and no timer',
+    () async {
+      await befriend();
+      var held = true;
+      alice.session.calmHeld = (_) => held;
+      final at = DateTime.now().toUtc();
+      await alice.chats.applyLocalChatTimer(5, 3600, at);
+
+      await alice.reader.sendBoxChatTimer(5, 3600, at);
+      await settle();
+      expect(bob.recordOf(1)!.settings.disappearingTimer, isNull);
+
+      held = false;
+      alice.reader.kickSendPump(5); // the state change that opens the gate
+      await settle();
+
+      expect(bob.recordOf(1)!.settings.disappearingTimer, 3600);
+    },
+  );
+
   /// Both records turned into a friendship the SERVER also knows (made
   /// before the box, chat 10) that later got a box route (item 5): the
   /// shape of every prod pair (Phase 4 step 1, decision 107).

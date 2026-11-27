@@ -5445,7 +5445,11 @@ class EncryptionService {
           jsonEncode(entry),
         );
         final read = _readBoxUnsent(prefs, userId);
-        final kept = read.live.entries.toList()
+        // A waiting entry is never counted by the cap (nor pruned by age):
+        // it is a message the person was told will go out.
+        final kept = read.live.entries
+            .where((e) => !boxUnsentWaits(e.value))
+            .toList()
           ..sort(
             (a, b) => _boxUnsentAt(b.value).compareTo(_boxUnsentAt(a.value)),
           );
@@ -5488,6 +5492,77 @@ class EncryptionService {
       for (final MapEntry(:key, :value) in live.entries)
         if (value['c'] == conversationId) key: value,
     };
+  }
+
+  /// The key marking an entry as WAITING to be sent (the friend write gate
+  /// refused it): `q: 1`. Its place among the waiting ones is `qa` (ms) when
+  /// it joined the end later than it was written (a Retry while the gate was
+  /// closed), else its `at`.
+  static const String boxUnsentWaitingKey = 'q';
+  static const String boxUnsentQueuedAtKey = 'qa';
+
+  /// Whether [entry] waits to be sent ([boxUnsentWaitingKey]).
+  static bool boxUnsentWaits(Map<String, dynamic> entry) =>
+      entry[boxUnsentWaitingKey] == 1;
+
+  /// Every WAITING entry of [userId], any chat, by tempId. Entries past
+  /// their own timer are destroyed on the way.
+  Future<Map<String, Map<String, dynamic>>> boxUnsentWaiting(int userId) async {
+    var live = const <String, Map<String, dynamic>>{};
+    await _boxUnsentWrite(userId, () async {
+      try {
+        final prefs = await _sharedPrefs;
+        await _reloadPrefsForCrossContext(prefs);
+        final read = _readBoxUnsent(prefs, userId);
+        live = read.live;
+        for (final key in read.dead) {
+          await prefs.remove(key);
+        }
+      } on Object catch (_) {
+        live = const {};
+      }
+    });
+    return {
+      for (final MapEntry(:key, :value) in live.entries)
+        if (boxUnsentWaits(value)) key: value,
+    };
+  }
+
+  /// Marks [userId]'s entry for [tempId] as waiting (at [queuedAt] among the
+  /// waiting ones when given) or as an ordinary one that did not go out.
+  /// Nothing when the entry is gone: it was sent or deleted meanwhile.
+  Future<void> setBoxUnsentWaiting(
+    int userId,
+    String tempId, {
+    required bool waiting,
+    int? queuedAt,
+  }) async {
+    await _boxUnsentWrite(userId, () async {
+      try {
+        final prefs = await _sharedPrefs;
+        await _reloadPrefsForCrossContext(prefs);
+        final key = '${_boxUnsentPrefix(userId)}$tempId';
+        final raw = prefs.getString(key);
+        if (raw == null) return;
+        final decoded = jsonDecode(raw);
+        if (decoded is! Map<String, dynamic>) return;
+        // A waiting entry keeps its place (`qa`) unless it is given a new one.
+        if (!waiting || queuedAt != null) {
+          decoded.remove(boxUnsentQueuedAtKey);
+        }
+        if (waiting) {
+          decoded[boxUnsentWaitingKey] = 1;
+          if (queuedAt != null) decoded[boxUnsentQueuedAtKey] = queuedAt;
+        } else {
+          decoded.remove(boxUnsentWaitingKey);
+        }
+        await prefs.setString(key, jsonEncode(decoded));
+      } on Object catch (e) {
+        E2ePersistentDiag.record('BOX_UNSENT_WRITE_FAILED', {
+          'error': e.runtimeType.toString(),
+        });
+      }
+    });
   }
 
   /// Drops what [userId] keeps for [tempId]: it went out, or the user
@@ -5558,8 +5633,11 @@ class EncryptionService {
         continue;
       }
       if (decoded case {'c': int _, 'at': final int at}) {
-        final ttl = (decoded as Map<String, dynamic>)['ttl'];
-        if (at < oldest || (ttl is int && at + ttl * 1000 <= now)) {
+        final fields = decoded as Map<String, dynamic>;
+        final ttl = fields['ttl'];
+        // A waiting entry outlives the 30 days; its own timer still ends it.
+        final aged = at < oldest && !boxUnsentWaits(fields);
+        if (aged || (ttl is int && at + ttl * 1000 <= now)) {
           dead.add(key);
         } else {
           live[key.substring(prefix.length)] = decoded;

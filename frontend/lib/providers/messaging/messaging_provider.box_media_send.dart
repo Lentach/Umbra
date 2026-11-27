@@ -63,6 +63,26 @@ extension MessagingBoxMediaSend on MessagingProvider {
       );
       final outbox = boxOutbox;
       final addresses = outbox?.addressesFor(recipientId) ?? const {};
+      // A send to a friend that has a line of waiting messages, or a pump
+      // running, joins the END of it (no overtaking); the held bytes wait in
+      // this process.
+      final owner = _currentUserId;
+      final conversationId =
+          row?.conversationId ??
+          _conversationsProvider?.conversations
+              .where(
+                (c) => conv_helpers.getOtherUserId(c, owner) == recipientId,
+              )
+              .firstOrNull
+              ?.id;
+      if (owner != null &&
+          conversationId != null &&
+          !_pumpOwned.contains(tempId) &&
+          await _friendQueueBusy(owner, recipientId, conversationId)) {
+        if (bytes != null) await _holdBoxMedia(tempId, bytes, recording);
+        await _holdForGate(recipientId, tempId);
+        return false;
+      }
       if (outbox == null || addresses.isEmpty) {
         if (bytes != null) await _holdBoxMedia(tempId, bytes, recording);
         _e2eFlowLog('BOX_RETRY_NO_ROUTE', {'tempId': tempId});
@@ -92,10 +112,11 @@ extension MessagingBoxMediaSend on MessagingProvider {
       // Before the upload: a closed gate (a calm hold, a stale address) takes
       // no file for the old key either.
       if (_friendPermit(recipientId, to: route.targets) == null) {
-        _deferForCalmHold(recipientId, tempId);
+        await _holdForGate(recipientId, tempId);
         return false;
       }
       if (effectiveReplyToId != null && _boxQuoteOf(atSend.replyTo) == null) {
+        _sendNeverGoes.add(tempId);
         _e2eFlowLog('BOX_MEDIA_NO_QUOTE', {'tempId': tempId});
         _markMessageFailed(tempId, 'Could not send. Try again.');
         return false;
@@ -169,7 +190,7 @@ extension MessagingBoxMediaSend on MessagingProvider {
     // its own permit, in the step before it.
     final permit = _friendPermit(recipientId, to: [route.targets.first]);
     if (permit == null) {
-      _deferForCalmHold(recipientId, tempId);
+      await _holdForGate(recipientId, tempId);
       return false;
     }
     final outbox = route.outbox;

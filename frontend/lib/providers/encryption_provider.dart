@@ -246,6 +246,11 @@ class EncryptionProvider extends ChangeNotifier {
   /// dropped: the box reader offers the journal again.
   FutureOr<void> Function(int peerId)? onHeldFramesReleased;
 
+  /// The account anchor of `peerId` moved (the person confirmed the key): an
+  /// address tagged with the new identity may now be current, so the send
+  /// pump looks again.
+  void Function(int peerId)? onAnchorMoved;
+
   /// Reads the frames a confirmed calm hold of [peerId] kept back, and
   /// completes once they are read (the friend's handoff included).
   Future<void> drainReleasedFrames(int peerId) async =>
@@ -1990,6 +1995,23 @@ class EncryptionProvider extends ChangeNotifier {
   /// Delegates to [EncryptionService.dropBoxUnsent] (decision 104).
   Future<void> dropBoxUnsent(int userId, String tempId) =>
       _encryptionService.dropBoxUnsent(userId, tempId);
+
+  /// Delegates to [EncryptionService.boxUnsentWaiting].
+  Future<Map<String, Map<String, dynamic>>> boxUnsentWaiting(int userId) =>
+      _encryptionService.boxUnsentWaiting(userId);
+
+  /// Delegates to [EncryptionService.setBoxUnsentWaiting].
+  Future<void> setBoxUnsentWaiting(
+    int userId,
+    String tempId, {
+    required bool waiting,
+    int? queuedAt,
+  }) => _encryptionService.setBoxUnsentWaiting(
+    userId,
+    tempId,
+    waiting: waiting,
+    queuedAt: queuedAt,
+  );
 
   /// Delegates to [EncryptionService.clearBoxUnsent] (decision 104).
   Future<void> clearBoxUnsent(int userId) =>
@@ -4099,6 +4121,7 @@ class EncryptionProvider extends ChangeNotifier {
         'rebuiltAddresses': addresses.toList(),
       });
       if (wasHeld) onHeldFramesReleased?.call(peerId);
+      onAnchorMoved?.call(peerId);
     } else {
       // Explicitly refused: nothing advanced, so nothing is poisoned and the
       // speculative intent above names no real damage. Only the addresses THIS

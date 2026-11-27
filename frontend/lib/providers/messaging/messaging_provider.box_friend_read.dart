@@ -348,6 +348,8 @@ extension MessagingBoxFriendRead on MessagingProvider {
       case FriendWrite.stored:
         refreshBoxDeviceLists();
         notifyListeners();
+        // The address changed or was re-tagged: the gate may be open now.
+        kickSendPump(userId);
         return true;
     }
   }
@@ -525,6 +527,7 @@ extension MessagingBoxFriendRead on MessagingProvider {
   /// absence that just ended asks a sibling to catch up (decision 102).
   void onBoxReady() {
     notifyListeners();
+    kickSendPumps();
     unawaited(catchUpTick());
     // Decision 138: the migration and the weekly upload need a box that
     // takes an upload.
