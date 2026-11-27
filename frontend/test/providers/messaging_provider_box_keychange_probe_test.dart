@@ -142,16 +142,11 @@ class _RoutingBox {
     sockets.respond = (socket, f) {
       switch (f.event) {
         case 'createQueue':
-          final n = ++_queues;
-          final rid = boxB64(_bytes(n));
-          final sid = boxB64(_bytes(0x80 + n));
-          _ridOfSid[sid] = rid;
-          return {
-            'ok': true,
-            'rid': rid,
-            'sid': sid,
-            'nid': boxB64(_bytes(0x40 + n).sublist(0, 16)),
-          };
+          if (holdCreateOn == socket) {
+            held.add(f);
+            return null;
+          }
+          return _created();
         case 'subscribe':
           for (final s in f.frame['subs']! as List<Object?>) {
             _reader[(s! as Map)['rid']! as String] = socket;
@@ -170,6 +165,32 @@ class _RoutingBox {
           return {'ok': true};
       }
     };
+  }
+
+  Map<String, Object?> _created() {
+    final n = ++_queues;
+    final rid = boxB64(_bytes(n));
+    final sid = boxB64(_bytes(0x80 + n));
+    _ridOfSid[sid] = rid;
+    return {
+      'ok': true,
+      'rid': rid,
+      'sid': sid,
+      'nid': boxB64(_bytes(0x40 + n).sublist(0, 16)),
+    };
+  }
+
+  /// While set, a `createQueue` of that socket is left pending in [held].
+  FakeBoxSocket? holdCreateOn;
+  final List<EmittedFrame> held = [];
+
+  /// The box finally makes the queues it was holding.
+  void answerHeld() {
+    holdCreateOn = null;
+    for (final f in held) {
+      f.answer(_created());
+    }
+    held.clear();
   }
 
   static List<int> _bytes(int n) => List.generate(32, (i) => (n + i) & 0xff);
@@ -499,13 +520,19 @@ void main() {
     bob.session.dispose();
     box.deaf.add(bob.socket);
     await settle();
-    final again = _Side(
-      5,
-      'bob',
-      box,
-      kv: keptQueue ? bob.kv : null,
-      keys: _MemoryStorage(),
-    );
+    // A wiped install starts from an empty contact store but, as the shipped
+    // wipe does (`EncryptionService._wipeAccountNamespace`, decision 14),
+    // keeps the local message-id counter, so no id of the new life names a
+    // plaintext record of the old one. The harness keeps those records in
+    // the process-wide prefs mock (same user id 5): without the counter the
+    // new install's first ids collide with them and `recordExists` finishes
+    // the delivery unread.
+    final kv = keptQueue ? bob.kv : _MemKv();
+    if (!keptQueue) {
+      final counter = ContactStore.localIdCounterKey(5);
+      await kv.setString(counter, bob.kv.getString(counter)!);
+    }
+    final again = _Side(5, 'bob', box, kv: kv, keys: _MemoryStorage());
     started.add(again);
     again
       ..answer = ((_) => [alice.searchEntry])
@@ -607,12 +634,7 @@ void main() {
 
   test('wiped friend with a probe outstanding: no ack ever; its own handoff '
       'stores B, the waiting rows go to B in order, Z is retired and nothing '
-      'but the probe ever reached the dead address A',
-      skip: 'DEFECT: the wiped friend never reads the FIRST waiting row. '
-          'Alice writes both rows to B and marks both sent; bob2 consumes '
-          'three entries on B but only decrypts two (the ack and the second '
-          'row). Unexplained: real loss or harness artifact; needs an owner '
-          'decision (see handoff Slice 4c).', () async {
+      'but the probe ever reached the dead address A', () async {
     final a = alice.addressOf(5);
     final bob2 = await calmBob(keptQueue: false);
     final before = alice.writesTo(a.sid);
@@ -671,6 +693,52 @@ void main() {
     );
     expect(_count(bob2.readOff(rid), 'first words'), 0);
     expect(_count(bob2.readOff(rid), 'second words'), 0);
+  });
+
+  test('wiped friend: its own handoff lands while the probe queue is still '
+      'being made: no Z is kept for the address it replaced, no probe goes '
+      'out and the rows go to B', () async {
+    final a = alice.addressOf(5);
+    final bob2 = await calmBob(keptQueue: false);
+    await alice.type('first words');
+    await alice.type('second words');
+    final before = alice.writesTo(a.sid);
+    box.holdCreateOn = alice.socket;
+    await tap(bob2);
+    await release(); // heard: the probe starts, its queue is being made
+    await settleUntil(() => box.held.isNotEmpty);
+    expect(box.held, hasLength(1), reason: 'the box has not made Z yet');
+
+    alice.session.friendSessionStarted(5, 1);
+    bob2.session.e2eReady();
+    await settleUntil(() => alice.addressOf(5).sid != a.sid);
+    expect(alice.addressOf(5).sid, isNot(a.sid), reason: 'B was stored');
+
+    box.answerHeld(); // the box makes Z after the address is gone
+    await settleUntil(
+      () =>
+          alice.row('first words').deliveryStatus ==
+              MessageDeliveryStatus.sent &&
+          alice.row('second words').deliveryStatus ==
+              MessageDeliveryStatus.sent,
+    );
+    await settle();
+
+    expect(
+      alice.probeQueueOf(5),
+      isNull,
+      reason: 'Z is never kept for an address that no longer exists',
+    );
+    expect(alice.probes, isEmpty);
+    expect(alice.writesTo(a.sid), before, reason: 'nothing reached A');
+    final rid = box.ridOf(alice.addressOf(5).sid)!;
+    await settleUntil(
+      () =>
+          _count(bob2.readOn(rid), 'first words') > 0 &&
+          _count(bob2.readOn(rid), 'second words') > 0,
+    );
+    expect(_count(bob2.readOn(rid), 'first words'), 1);
+    expect(_count(bob2.readOn(rid), 'second words'), 1);
   });
 
   test('heard trigger: a frame authenticated under the pinned identity, read '
