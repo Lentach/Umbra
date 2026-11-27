@@ -1672,7 +1672,7 @@ void main() {
       expect(_waits(b.reader, first.tempId), isTrue);
     });
 
-    test('P3-1 window, refused tap (the served key is not the frame\'s): '
+    test("P3-1 window, refused tap (the served key is not the frame's): "
         'between the refusal and the red hold no row goes out', () async {
       final restored = await calmRestore();
       await tap(b);

@@ -567,7 +567,9 @@ class BoxFriendHandoff {
     unawaited(
       _pass().whenComplete(() {
         _running = false;
-        mine.forEach((c) => c.complete());
+        for (final c in mine) {
+          c.complete();
+        }
         if (_again && !_disposed) {
           _again = false;
           run();

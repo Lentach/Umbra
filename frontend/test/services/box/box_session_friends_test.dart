@@ -2855,7 +2855,7 @@ void main() {
             return a.friendLive;
           })
           ..cachedFriendLiveDevices = ((_) async => a.friendLive)
-          ..friendSessionUsable = ((_, __) async => usable);
+          ..friendSessionUsable = ((_, _) async => usable);
         await settle();
         // The store open's own ordinary pass looks lists up like every
         // connect's: measured on a record that is not legacy, the one-shot
