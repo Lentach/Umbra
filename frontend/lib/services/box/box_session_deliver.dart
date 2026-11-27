@@ -31,12 +31,19 @@ extension BoxSessionDeliver on BoxSession {
       return null;
     }
     final p = friend == null || !request ? permit : _gate.requestPermit(friend);
-    if (friend != null && _gate.refusalOf(p, to.sid) != null) return null;
+    final early = friend == null ? null : _gate.refusalOf(p, to.sid);
+    if (early != null) {
+      E2eDiagLog.add('BOX_FRIEND_WRITE_REFUSED', {'why': early.name});
+      return null;
+    }
     final blob = await _seal.seal(sealPub, body);
     if (blob == null || _disposed) return null;
     // After the last await, in the step of the write.
-    if (friend != null && _gate.refusalOf(p, to.sid) != null) {
-      E2eDiagLog.add('BOX_FRIEND_WRITE_REFUSED', {'why': 'at_write'});
+    final late = friend == null ? null : _gate.refusalOf(p, to.sid);
+    if (late != null) {
+      E2eDiagLog.add('BOX_FRIEND_WRITE_REFUSED', {
+        'why': 'at_write_${late.name}',
+      });
       return null;
     }
     return _box.send(sid, blob, mode: mode);

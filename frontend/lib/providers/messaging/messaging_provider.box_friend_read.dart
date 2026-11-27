@@ -409,8 +409,20 @@ extension MessagingBoxFriendRead on MessagingProvider {
     if (enc == null || !enc.isE2EReady) return null;
     final userId = permit.friend;
     final deviceId = permit.device;
-    if (!await _friendDeviceIsLive(userId, deviceId)) {
-      _e2eFlowLog('BOX_FRIEND_NOT_LIVE', {'peer': userId, 'device': deviceId});
+    // The probe NEVER fetches (decision 153: a frame, a trigger or a probe
+    // causes no lookup): it seals only on a session that exists, is not
+    // marked for rebuild, with a list already held; else it skips and the
+    // next trigger retries. Whether the session's remote identity is the
+    // pinned one is the permit's `admit`, inside the encrypt.
+    final held = enc.cachedDeviceList(userId);
+    if (held == null ||
+        !held.isLiveDevice(deviceId) ||
+        enc.needsSessionRebuild(userId, deviceId: deviceId) ||
+        !await enc.hasSessionWith(userId, deviceId: deviceId)) {
+      _e2eFlowLog('BOX_FRIEND_PROBE_SKIPPED', {
+        'peer': userId,
+        'device': deviceId,
+      });
       return null;
     }
     return _sealOnSession(
@@ -419,6 +431,7 @@ extension MessagingBoxFriendRead on MessagingProvider {
       permit.handoffJson,
       fresh: false,
       admit: permit.admitsSession,
+      mayFetch: false,
     );
   }
 
@@ -428,6 +441,7 @@ extension MessagingBoxFriendRead on MessagingProvider {
     String json, {
     required bool fresh,
     required bool Function(String? remoteIdentity) admit,
+    bool mayFetch = true,
   }) async {
     final enc = _encryptionProvider;
     if (enc == null) return null;
@@ -442,7 +456,7 @@ extension MessagingBoxFriendRead on MessagingProvider {
       final started =
           fresh || !await enc.hasSessionWith(userId, deviceId: deviceId);
       if (fresh) enc.markSessionRebuild(userId, deviceId: deviceId);
-      await enc.ensureSession(userId, deviceId: deviceId);
+      if (mayFetch) await enc.ensureSession(userId, deviceId: deviceId);
       // A frame to a friend's device says whether this device relays
       // (decision 101 A, E101b).
       final frame = BoxFrame.fromSignalCiphertext(

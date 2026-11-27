@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/services/box/box_frame.dart';
+import 'package:fireplace/services/box/box_friend_gate.dart';
 import 'package:fireplace/services/box/box_friends.dart';
 import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/services/contacts/contact_store.dart';
@@ -559,4 +560,72 @@ void main() {
       expect(link.learned, [_sid('Q')]);
     },
   );
+
+  group('the probe never fetches (P2-1)', () {
+    /// A probe permit for friend 5's device 3 whose stale address was learned
+    /// under another identity than the one pinned now ([identity]).
+    ProbePermit permit(String identity) {
+      const stale = ContactOutbound(
+        peerDeviceId: 3,
+        sid: '${'S'}AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+        sealPub: 'x',
+        idk: 'OLD',
+      );
+      final gate = FriendGate(
+        addressesOf: (_) => [stale],
+        anchorOf: (_) => identity,
+        journalJudged: () => true,
+      );
+      return gate.probePermitFor(
+        _friend,
+        stale: stale,
+        handoffSid: _sid('Z'),
+        handoffSealPub: _sealPub,
+      )!;
+    }
+
+    /// F's identity as S's trusted memo holds it once a session exists.
+    Future<String> withSession() async {
+      await s.sealForFriend(_friend, 3, jsonEncode(handoff(_sid('S'))));
+      final pinned = enc.accountAnchorSync(_friend);
+      expect(pinned, isNotNull, reason: 'the session pinned the friend');
+      bundleFetches = 0;
+      enc.listLookups = 0;
+      return pinned!;
+    }
+
+    test('on an existing session, with a held list, it seals and fetches '
+        'nothing', () async {
+      final pin = await withSession();
+      final frame = await s.encryptProbeForFriend(permit(pin));
+      expect(frame, isNotNull);
+      expect(bundleFetches, 0);
+      expect(enc.listLookups, 0);
+    });
+
+    test('a device marked for rebuild: skipped, no bundle fetch, mark kept',
+        () async {
+      final pin = await withSession();
+      enc.markSessionRebuild(_friend, deviceId: 3);
+      expect(await s.encryptProbeForFriend(permit(pin)), isNull);
+      expect(bundleFetches, 0, reason: 'no fetchPreKeyBundle');
+      expect(enc.listLookups, 0);
+      expect(enc.needsSessionRebuild(_friend, deviceId: 3), isTrue);
+    });
+
+    test('no session with the device: skipped, no bundle fetch', () async {
+      expect(await s.encryptProbeForFriend(permit('ANY')), isNull);
+      expect(bundleFetches, 0, reason: 'no fetchPreKeyBundle');
+      expect(enc.listLookups, 0);
+    });
+
+    test('no cached device list: skipped, no list lookup, no bundle fetch',
+        () async {
+      final pin = await withSession();
+      enc.friendListHeld = false;
+      expect(await s.encryptProbeForFriend(permit(pin)), isNull);
+      expect(enc.listLookups, 0, reason: 'no getVerifiedDeviceList');
+      expect(bundleFetches, 0);
+    });
+  });
 }

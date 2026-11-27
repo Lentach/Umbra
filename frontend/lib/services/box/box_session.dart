@@ -526,15 +526,11 @@ class BoxSession
     // request queue, a known sibling); any other sid is refused. No await
     // sits between this check and the upload.
     final friend = permit != null || _friendOfSid(to.sid) != null;
-    final refused = friend
-        ? _gate.refusalOf(permit, to.sid) != null
-        : !_isOwnLaneSid(to.sid);
-    if (refused) {
-      if (!friend) {
-        E2eDiagLog.add('BOX_FRIEND_WRITE_REFUSED', {
-          'why': 'no_permit_unknown_sid',
-        });
-      }
+    final why = friend
+        ? _gate.refusalOf(permit, to.sid)?.name
+        : (_isOwnLaneSid(to.sid) ? null : 'no_permit_unknown_sid');
+    if (why != null) {
+      E2eDiagLog.add('BOX_FRIEND_WRITE_REFUSED', {'why': 'upload_$why'});
       return const BoxRefused(BoxCode.invalidPayload);
     }
     return _box.uploadMedia(sid, framed);
