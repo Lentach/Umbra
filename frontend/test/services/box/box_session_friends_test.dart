@@ -64,8 +64,11 @@ class _MemKv implements ContentKv {
   @override
   Set<String> getKeys() => _rows.keys.toSet();
 
+  bool failWrites = false;
+
   @override
   Future<bool> setString(String key, String value) async {
+    if (failWrites) return false;
     _rows[key] = value;
     return true;
   }
@@ -187,13 +190,20 @@ class _LabelStore extends ContactStore {
   Completer<void>? labelGate;
   bool labelThrows = false;
 
+  /// Returns false WITHOUT tagging anything (a record whose write is
+  /// refused), while set.
+  bool labelFalse = false;
+  int labelCalls = 0;
+
   @override
   Future<bool> tagUntaggedAddresses(
     String? Function(int peerId) anchorOf,
   ) async {
+    labelCalls++;
     final gate = labelGate;
     if (gate != null) await gate.future;
     if (labelThrows) throw StateError('labelling failed');
+    if (labelFalse) return false;
     return super.tagUntaggedAddresses(anchorOf);
   }
 }
@@ -2517,6 +2527,91 @@ void main() {
     });
   });
 
+  group('re-announce (decision B)', () {
+    int handoffsToB() => b.bodies
+        .where((json) => E2eEnvelope.parseQueueHandoff(json) != null)
+        .length;
+
+    Future<void> met() async {
+      await a.start();
+      await b.start();
+      a.session.runPass();
+      b.session.runPass();
+      await settle();
+      expect(a.friend.queues.first.ackedBy, [3], reason: 'met and acked');
+    }
+
+    Future<void> makeLegacy() => a.store.update(
+      5,
+      (c) => c!.copyWith(reannounced: false),
+    );
+
+    test('upgrade one-shot: the first start hands every friend once, the '
+        'second hands nobody; a fresh install hands nobody; no lookup',
+        () async {
+      await met();
+      final before = handoffsToB();
+      a.lookups.clear();
+      await a.restart();
+      await settle();
+      expect(handoffsToB(), before, reason: 'a fresh install: nobody');
+      await makeLegacy();
+      final sid = a.friend.queues.first.sid;
+      await a.restart();
+      await settle();
+      expect(handoffsToB(), before + 1, reason: 'the upgrade hands once');
+      expect(a.friend.reannounced, isTrue);
+      expect(a.friend.queues.first.sid, sid, reason: 'the SAME queue');
+      await a.restart();
+      await settle();
+      expect(handoffsToB(), before + 1, reason: 'the second start: nobody');
+      expect(a.lookups, isEmpty);
+    });
+
+    test('a kill between clearing and the flag cannot lose the re-announce '
+        'or repeat it forever: they are ONE write', () async {
+      await met();
+      await makeLegacy();
+      final before = handoffsToB();
+      final kv = a.kv as _MemKv;
+      kv.failWrites = true;
+      await a.restart();
+      await settle();
+      expect(a.friend.reannounced, isFalse, reason: 'the write was refused');
+      expect(a.friend.queues.first.ackedBy, [3], reason: 'and nothing cleared');
+      expect(handoffsToB(), before);
+      kv.failWrites = false;
+      a.session.storeOpened();
+      await settle();
+      expect(a.friend.reannounced, isTrue);
+      expect(handoffsToB(), before + 1, reason: 'not lost');
+      await a.restart();
+      await settle();
+      expect(handoffsToB(), before + 1, reason: 'not repeated');
+    });
+
+    test('an identity re-minted while the store is kept hands every queue '
+        'again, the same sid; an unchanged queue changes nothing on the '
+        'receiver and is acked; no lookup', () async {
+      await met();
+      final sid = a.friend.queues.first.sid;
+      final before = handoffsToB();
+      final held = jsonEncode([for (final o in b.friend.outbound) o.toJson()]);
+      a.lookups.clear();
+      a.session.identityReminted();
+      await settle();
+      expect(handoffsToB(), before + 1);
+      expect(a.friend.queues.first.sid, sid);
+      expect(
+        jsonEncode([for (final o in b.friend.outbound) o.toJson()]),
+        held,
+        reason: 'nothing changed on the receiver',
+      );
+      expect(a.friend.queues.first.ackedBy, [3], reason: 'and it was acked');
+      expect(a.lookups, isEmpty);
+    });
+  });
+
   group('labelling, the gate and the write window (after decision A)', () {
     var pin = 'A';
 
@@ -2687,6 +2782,91 @@ void main() {
       expect(a.outboundOf(3)!.idk, 'A');
       expect(kicks, 1, reason: 'what waited is kicked once');
       expect(a.session.permitFor(5, to: [a.outboundOf(3)!]), isNotNull);
+    });
+
+    test('N10/N11/N12: a labelling that RETURNS false (a record refused): the '
+        'friends tagged are open, the untagged one waits, and every kick '
+        '(account ready, store open, box ready) retries until it succeeds',
+        () async {
+      await untagged();
+      var kicks = 0;
+      a
+        ..labelled = (() => kicks++)
+        ..store.labelFalse = true;
+      await a.restart();
+      await settle();
+      expect(a.outboundOf(3)!.idk, isNull, reason: 'refused: untagged');
+      expect(a.session.permitFor(5), isNotNull, reason: 'the others are open');
+      expect(
+        a.session.permitFor(5, to: [a.outboundOf(3)!]),
+        isNull,
+        reason: 'the untagged friend waits',
+      );
+      expect(kicks, greaterThan(0), reason: 'the pump looks again');
+      a.store.labelCalls = 0;
+      a.session.accountReady(2);
+      await settle();
+      expect(a.store.labelCalls, 1, reason: 'N12: retried at account ready');
+      a.session.storeOpened();
+      await settle();
+      expect(a.store.labelCalls, 2, reason: 'retried at store open');
+      a.socket.serverDrop();
+      a.session.resume();
+      a.socket = box.sockets.last;
+      a.socket.serverConnect('S1.2');
+      await settle();
+      expect(a.store.labelCalls, 3, reason: 'N11: retried at box ready');
+      a.store.labelFalse = false;
+      a.session.storeOpened();
+      await settle();
+      expect(a.outboundOf(3)!.idk, 'A');
+      expect(a.session.permitFor(5, to: [a.outboundOf(3)!]), isNotNull);
+      final calls = a.store.labelCalls;
+      a.session
+        ..accountReady(2)
+        ..storeOpened();
+      await settle();
+      expect(a.store.labelCalls, calls, reason: 'done: no more retries');
+    });
+
+    test('N05/N06: an address that is untagged AFTER the labelling is never '
+        'sent to, nothing else is written to it, and no permit reaches it',
+        () async {
+      await untagged();
+      await a.restart();
+      await settle();
+      expect(a.outboundOf(3)!.idk, 'A', reason: 'labelled');
+      // A restored pre-tag record lands after the labelling.
+      await a.store.update(
+        5,
+        (c) => c!.copyWith(
+          outbound: [
+            for (final o in c.outbound)
+              ContactOutbound(
+                peerDeviceId: o.peerDeviceId,
+                sid: o.sid,
+                sealPub: o.sealPub,
+                idk: null,
+                relays: o.relays,
+              ),
+          ],
+        ),
+      );
+      final to = a.outboundOf(3)!;
+      box.sent.clear();
+      a.lookups.clear();
+      a.session
+        ..runPass()
+        ..handOffTo(5)
+        ..friendHeard(5, 3);
+      await settle();
+      expect(a.session.permitFor(5, to: [to]), isNull);
+      expect(
+        await a.session.deliverFriend(to, Uint8List(1)),
+        BoxSendOutcome.failed,
+      );
+      expect(writesTo(to.sid), 0, reason: 'nothing at all is written to it');
+      expect(a.lookups, isEmpty);
     });
 
     /// [a] and [b] are friends, a's address of b is tagged 'A' and 'A' is the

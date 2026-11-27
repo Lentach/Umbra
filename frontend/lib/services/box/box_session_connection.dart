@@ -22,6 +22,7 @@ extension BoxSessionConnection on BoxSession {
         // The journal is judged by the first drain after E2E ready, the empty
         // one included and with no box connection (the write gate's clause).
         unawaited(_inbox.drain());
+        unawaited(_reannounce());
       }),
     );
   }
@@ -30,30 +31,80 @@ extension BoxSessionConnection on BoxSession {
   /// ([ContactStore.tagUntaggedAddresses]) on an OPEN store; one run at a
   /// time. Completes without error: a closed store or a failed write leaves
   /// the gate closed and the next trigger (E2E ready, box or account ready,
-  /// store opened) runs it again. The first success kicks what waited.
+  /// store opened) runs it again. It works per record: a record whose write
+  /// was refused stays untagged (stale: that friend waits), the others are
+  /// open, and every later trigger retries until all are tagged.
   Future<void> _label() {
     // The anchors are loaded at E2E init: before it the mirror knows none and
     // a "labelling" would tag nothing yet count as done. A closed store has
     // nothing to label ([storeOpened] runs it again).
-    if (_labelled || _disposed || !_e2eReady || !_store.isOpen) {
+    if (_labelComplete || _disposed || !_e2eReady || !_store.isOpen) {
       return Future.value();
     }
     return _labelling ??= _runLabel().whenComplete(() => _labelling = null);
   }
 
   Future<void> _runLabel() async {
+    final bool complete;
     try {
       final anchorOf = _anchorOf;
-      if (anchorOf != null && !await _store.tagUntaggedAddresses(anchorOf)) {
-        return;
-      }
+      complete = anchorOf == null || await _store.tagUntaggedAddresses(anchorOf);
     } on Object catch (error) {
       E2eDiagLog.add('BOX_LABELLING_FAILED', {'error': error.runtimeType});
       return;
     }
     if (_disposed || !_store.isOpen) return;
+    if (!complete) E2eDiagLog.add('BOX_LABELLING_INCOMPLETE', const {});
+    _labelComplete = complete;
     _labelled = true;
     onAddressesLabelled?.call();
+  }
+
+  /// Our own account identity was re-minted while the contact store and the
+  /// queues were kept (decision B a): every friend is handed our queues
+  /// again (same sids), as soon as the store is open.
+  void identityReminted() {
+    if (_disposed) return;
+    _remintPending = true;
+    final running = _reannouncing;
+    // A run already in flight may have read the flag before it was set: one
+    // more follows it (bounded: nothing re-arms it but a refused write).
+    unawaited(
+      running == null ? _reannounce() : running.then((_) => _reannounce()),
+    );
+  }
+
+  /// Decision B: the re-announce, for a re-mint ([identityReminted], every
+  /// friend) and the one-time upgrade (the records a build before this one
+  /// wrote). Our queues forget their handoff state and the existing pass
+  /// hands them; no lookup is made for it. One run at a time; a refused
+  /// write keeps the request for the next trigger.
+  Future<void> _reannounce() {
+    if (_disposed || !_e2eReady || !_store.isOpen) return Future.value();
+    return _reannouncing ??= _runReannounce().whenComplete(
+      () => _reannouncing = null,
+    );
+  }
+
+  Future<void> _runReannounce() async {
+    final everyone = _remintPending;
+    _remintPending = false;
+    try {
+      final done = await _store.reannounceOwn(everyone: everyone);
+      for (final friend in done.changed) {
+        _friends.friendChanged(friend);
+      }
+      if (!done.complete && everyone) _remintPending = true;
+      if (done.changed.isNotEmpty) {
+        E2eDiagLog.add('BOX_REANNOUNCE', {
+          'friends': done.changed.length,
+          'remint': everyone,
+        });
+      }
+    } on Object catch (error) {
+      if (everyone) _remintPending = true;
+      E2eDiagLog.add('BOX_REANNOUNCE_FAILED', {'error': error.runtimeType});
+    }
   }
 
   /// The own verified device list was dropped (a device linked or revoked).
@@ -169,6 +220,7 @@ extension BoxSessionConnection on BoxSession {
       _label().then((_) {
         if (_disposed || _revoked) return;
         unawaited(_receive());
+        unawaited(_reannounce());
       }),
     );
   }

@@ -583,6 +583,9 @@ class ConnectionProvider extends ChangeNotifier {
             ..onBoxReady = messaging.onBoxReady
             // The journal was judged: the last clause of the gate.
             ..onJournalJudged = messaging.kickSendPumps
+            // The labelling of untagged addresses ended: what waited for it
+            // goes out by itself (review P2-1).
+            ..onAddressesLabelled = messaging.kickSendPumps
             // Slice (g): one delivered receipt per drain (E61d).
             ..onReadsIdle = messaging.onBoxReadsIdle
             // Slice (f): a pending request that expired left the store.
@@ -607,6 +610,9 @@ class ConnectionProvider extends ChangeNotifier {
           _encryptionProvider?.lookupBoxPeerList = messaging.lookupBoxPeerList;
         }
         if (_encryptionProvider?.isE2EReady == true) {
+          if (_encryptionProvider?.takeIdentityMinted() ?? false) {
+            _box!.identityReminted();
+          }
           _box!
             ..start()
             ..e2eReady();
@@ -634,6 +640,11 @@ class ConnectionProvider extends ChangeNotifier {
       // Issue #205: the box is followed from the first E2E-ready on; a
       // device on the link gate never gets here. Sibling queues: a handoff
       // can be encrypted now.
+      // Decision B a: an identity minted while the store is kept re-hands
+      // every friend our queues.
+      if (_encryptionProvider?.takeIdentityMinted() ?? false) {
+        _box?.identityReminted();
+      }
       _box
         ?..start()
         ..e2eReady();

@@ -400,10 +400,14 @@ class ContactStore {
   /// The one migration: every FRIEND whose anchor is pinned ([anchorOf],
   /// null when none) has its untagged addresses tagged with it; a friend
   /// with no anchor yet is tagged at its first pin
-  /// ([stampUntaggedAddresses]). Idempotent, one write per changed record,
-  /// so a kill half way leaves the rest for the next run. True when every
-  /// write committed.
-  Future<bool> tagUntaggedAddresses(String? Function(int peerId) anchorOf) {
+  /// ([stampUntaggedAddresses]). Idempotent and PER RECORD: one update per
+  /// changed record, each guarded on its own, so a record whose write is
+  /// refused (or throws) never stops the others; it stays untagged (closed
+  /// for messages) and the next run retries it. True when every record is
+  /// tagged.
+  Future<bool> tagUntaggedAddresses(
+    String? Function(int peerId) anchorOf,
+  ) async {
     final due = [
       for (final r in all)
         if (r.state == ContactState.friend &&
@@ -411,13 +415,69 @@ class ContactStore {
             _tagged(r, '') != null)
           r.userId,
     ];
-    if (due.isEmpty) return Future.value(true);
-    return reconcile(due, (peerId, current) {
-      final anchor = anchorOf(peerId);
-      if (current == null || anchor == null) return null;
-      if (current.state != ContactState.friend) return null;
-      return _tagged(current, anchor);
-    });
+    var complete = true;
+    for (final peerId in due) {
+      try {
+        final ok = await update(peerId, (current) {
+          final anchor = anchorOf(peerId);
+          if (current == null || anchor == null) return null;
+          if (current.state != ContactState.friend) return null;
+          return _tagged(current, anchor);
+        });
+        if (!ok) complete = false;
+      } on Object {
+        complete = false;
+      }
+    }
+    return complete;
+  }
+
+  /// Decision B, the re-announce: our own queues for a friend forget what
+  /// was acknowledged or handed (so the handoff pass finds them due again)
+  /// and the record's [ContactRecord.reannounced] is set, in ONE write per
+  /// record. [everyone]: every friend (our identity was re-minted while the
+  /// store was kept); otherwise only the records a build before this one
+  /// wrote (`reannounced` false: the one-time upgrade). Returns the friends
+  /// whose record changed and whether every write committed.
+  Future<({List<int> changed, bool complete})> reannounceOwn({
+    required bool everyone,
+  }) async {
+    final due = [
+      for (final r in all)
+        if (r.state == ContactState.friend && (everyone || !r.reannounced))
+          r.userId,
+    ];
+    final changed = <int>[];
+    var complete = true;
+    for (final peerId in due) {
+      var touched = false;
+      try {
+        final ok = await update(peerId, (current) {
+          if (current == null || current.state != ContactState.friend) {
+            return null;
+          }
+          if (!everyone && current.reannounced) return null;
+          final queues = [
+            for (final q in current.queues) q.withoutHandoffState(),
+          ];
+          final cleared = [
+            for (var i = 0; i < queues.length; i++)
+              if (!identical(queues[i], current.queues[i])) i,
+          ].isNotEmpty;
+          if (!cleared && current.reannounced) return null;
+          touched = cleared;
+          return current.copyWith(queues: queues, reannounced: true);
+        });
+        if (!ok) {
+          complete = false;
+        } else if (touched) {
+          changed.add(peerId);
+        }
+      } on Object {
+        complete = false;
+      }
+    }
+    return (changed: changed, complete: complete);
   }
 
   /// [update] for a whole server list, plus the membership decision, in ONE

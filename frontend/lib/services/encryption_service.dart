@@ -338,6 +338,11 @@ class EncryptionService {
   /// True if keys were just generated and need to be uploaded to the server.
   bool needsKeyUpload = false;
 
+  /// This process minted a new account identity ([_discardResidueAndMint]);
+  /// the contact store and queues are kept. Consumed once by the box
+  /// (`takeIdentityMinted`): our queues are handed to every friend again.
+  bool identityMinted = false;
+
   /// Public key data to upload to the server (set after key generation).
   Map<String, dynamic>? _keysForUpload;
 
@@ -2331,6 +2336,7 @@ class EncryptionService {
     await _storage.delete(key: _linkUnsettledKey(userId));
     await _generateKeys();
     needsKeyUpload = true;
+    identityMinted = true;
     _initialized = true;
   }
 

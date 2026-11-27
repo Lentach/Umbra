@@ -581,6 +581,7 @@ class ContactRecord {
     this.queues = const [],
     this.legacy = const ContactLegacy(),
     this.boxOrigin,
+    this.reannounced = true,
   });
 
   factory ContactRecord.fromUser(UserModel user, ContactState state) =>
@@ -623,6 +624,7 @@ class ContactRecord {
         j['legacy'] as Map<String, dynamic>? ?? const {},
       ),
       boxOrigin: ContactBoxOrigin.fromJson(j['box']),
+      reannounced: j['ra'] == true,
     );
   }
 
@@ -653,6 +655,14 @@ class ContactRecord {
   /// Set when the friendship was made over the box (slice (f)); null for
   /// every friendship the server knows of.
   final ContactBoxOrigin? boxOrigin;
+
+  /// This record's queues were handed to the friend under THIS build's rules
+  /// (the one-time re-announce after the upgrade, decision B). A record a
+  /// build before it wrote reads false; a record created by this build is
+  /// born true. Cleared handoff state and this flag go in ONE write
+  /// ([ContactStore.reannounceOwn]), so a kill can neither lose the
+  /// re-announce nor repeat it. Device-local: the backup drops it.
+  final bool reannounced;
 
   /// The chat of this contact: its server conversation, else — a friendship
   /// made over the box (owner decision 52) — its local id. The contact
@@ -685,6 +695,7 @@ class ContactRecord {
     if (queues.isNotEmpty) 'queues': queues.map((q) => q.toJson()).toList(),
     'legacy': legacy.toJson(),
     if (boxOrigin != null) 'box': boxOrigin!.toJson(),
+    if (reannounced) 'ra': true,
   };
 
   /// The half of this record another device of the same account could hold —
@@ -704,6 +715,7 @@ class ContactRecord {
   Map<String, dynamic> toBackupJson() {
     final json = toJson()
       ..remove('queues')
+      ..remove('ra')
       ..['settings'] = (settings.toJson()..remove(ContactSettings.boxPinKey));
     // Of `legacy`, only the chat id: a friend from before the box keeps its
     // chat after a restore once no server list re-supplies it (Phase 4 step
@@ -748,6 +760,7 @@ class ContactRecord {
     ContactLegacy? legacy,
     ContactBoxOrigin? boxOrigin,
     bool clearBoxOrigin = false,
+    bool? reannounced,
   }) => ContactRecord(
     userId: userId,
     username: username ?? this.username,
@@ -761,6 +774,7 @@ class ContactRecord {
     queues: queues ?? this.queues,
     legacy: legacy ?? this.legacy,
     boxOrigin: clearBoxOrigin ? null : boxOrigin ?? this.boxOrigin,
+    reannounced: reannounced ?? this.reannounced,
   );
 
   /// Profile fields from a fresh server [user], everything else kept.

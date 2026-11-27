@@ -176,6 +176,17 @@ class BoxSession
   bool _labelled = false;
   Future<void>? _labelling;
 
+  /// Every friend's addresses were tagged: false while some record's write
+  /// was refused (that friend stays closed for messages, the others are
+  /// open) and the labelling is retried on the next kick.
+  bool _labelComplete = false;
+
+  /// Our account identity was re-minted while the store was kept: every
+  /// friend is handed our queues again once the store is open
+  /// ([BoxSessionConnection.identityReminted]).
+  bool _remintPending = false;
+  Future<void>? _reannouncing;
+
   /// What the friend write gate calls a friend's address: the stored one per
   /// device and the request addresses already served.
   Iterable<ContactOutbound> _friendAddresses(int friend) => _disposed

@@ -193,6 +193,15 @@ class EncryptionProvider extends ChangeNotifier {
   /// storage loss). All messages encrypted for the old identity are unrecoverable.
   bool get hadIdentityReset => _encryptionService.needsKeyUpload;
 
+  /// Whether a new account identity was minted since this was last asked
+  /// (our queues must be handed to every friend again, decision B); asking
+  /// consumes it.
+  bool takeIdentityMinted() {
+    final minted = _encryptionService.identityMinted;
+    _encryptionService.identityMinted = false;
+    return minted;
+  }
+
   /// True when initialization REFUSED to start because the server already
   /// holds a bundle for this login's device while the stored identity is
   /// missing or damaged. E2E is down and stays down until the device is linked
