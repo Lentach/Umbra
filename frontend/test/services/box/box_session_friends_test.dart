@@ -140,6 +140,9 @@ class _RoutingBox {
   Map<String, Object?>? deleteRefusal;
   final Map<String, FakeBoxSocket> _reader = {};
   int _queues = 0;
+
+  /// How many queues the box created for anybody so far.
+  int get queuesCreated => _queues;
   int _messages = 0;
   Map<String, Object?>? createRefusal;
 
@@ -157,6 +160,19 @@ class _RoutingBox {
   int normalCreates(FakeBoxSocket socket) => socket.emitted
       .where((f) => f.event == 'createQueue' && f.frame['kind'] == 'normal')
       .length;
+}
+
+/// Seals like the real one but awaits first and then runs [onSeal]: a state
+/// change that lands while a frame is being sealed.
+class _HookSealer extends PointyGcmSealer {
+  void Function()? onSeal;
+
+  @override
+  Future<Uint8List?> seal(Uint8List key, Uint8List plaintext) async {
+    await Future<void>.delayed(Duration.zero);
+    onSeal?.call();
+    return super.seal(key, plaintext);
+  }
 }
 
 /// A [ContactStore] whose one migration a test can hold ([labelGate]) or make
@@ -201,6 +217,10 @@ class _Device {
   late BoxSession session;
   late FakeBoxSocket socket;
   bool started = false;
+
+  /// The seal of this device's session; [_HookSealer.onSeal] runs DURING the
+  /// seal's await, the window a write-time check exists for.
+  final _HookSealer sealer = _HookSealer();
 
   /// What the friend's VERIFIED list names live; null = not known now.
   Set<int>? friendLive;
@@ -415,7 +435,7 @@ class _Device {
       ),
       store: store,
       emit: (event, _) => emitted.add(event),
-      seal: QueueSeal(cipher: PointyGcmSealer()),
+      seal: QueueSeal(cipher: sealer),
       now: () => clock,
       anchorOf: anchorOf,
     )..start();
@@ -3125,6 +3145,90 @@ void main() {
         isNotNull,
         reason: 'retired after the ack of our own queue',
       );
+    });
+
+    /// [a] and [b] are friends, a's address of b is tagged 'A' and 'A' is the
+    /// pin (no move yet).
+    Future<ContactOutbound> pinnedA() async {
+      pin = 'A';
+      a.anchorOf = (_) => pin;
+      await a.start();
+      await b.start();
+      a.session.runPass();
+      b.session.runPass();
+      await settle();
+      await a.store.update(
+        5,
+        (c) => c!.copyWith(
+          outbound: [for (final o in c.outbound) o.copyWith(idk: 'A')],
+        ),
+      );
+      box.sent.clear();
+      a.probes.clear();
+      return a.outboundOf(3)!;
+    }
+
+    test('S38: the pin moves WHILE a message is being sealed: the write-time '
+        'check refuses it, nothing reaches the queue', () async {
+      final to = await pinnedA();
+      final permit = a.session.permitFor(5, to: [to]);
+      expect(permit, isNotNull);
+      a.sealer.onSeal = () {
+        pin = 'B';
+        a.sealer.onSeal = null;
+      };
+      expect(
+        await a.session.deliverFriend(to, Uint8List(1), permit: permit),
+        BoxSendOutcome.failed,
+      );
+      expect(writesTo(to.sid), 0);
+    });
+
+    test("H482: the pin moves WHILE our ack of the friend's handoff is being "
+        'sealed: the handoff send refuses it at the write', () async {
+      await pinnedA();
+      final fresh = boxB64(_bytes(32, 0x71));
+      final seal = QueueSeal.mintKeyPair();
+      a.sealer.onSeal = () {
+        pin = 'B';
+        a.sealer.onSeal = null;
+      };
+      await a.session.takeFriendHandoff(
+        5,
+        3,
+        sid: fresh,
+        sealPub: boxB64(seal.publicKey),
+        learnedUnder: 'A',
+      );
+      await settle();
+      expect(writesTo(fresh), 0, reason: 'sealed under A, written under B');
+    });
+
+    test('H507: the pin moves again WHILE the probe is being sealed: the '
+        'probe is refused at the write, nothing reaches the stale queue',
+        () async {
+      a.sealer.onSeal = () {
+        if (pin == 'B') {
+          pin = 'C';
+          a.sealer.onSeal = null;
+        }
+      };
+      final stale = await moved(bDeaf: true);
+      expect(writesTo(stale.sid), 0);
+    });
+
+    test('Q181: N triggers make ONE probe queue on the server, none created '
+        'and deleted per trigger', () async {
+      await moved(bDeaf: true);
+      final created = box.queuesCreated;
+      for (var i = 0; i < 3; i++) {
+        await a.restart();
+        await settle();
+        a.session.friendAuthenticated(5);
+        await settle();
+      }
+      expect(a.probes.length, greaterThan(3));
+      expect(box.queuesCreated, created, reason: 'no queue per trigger');
     });
   });
 }

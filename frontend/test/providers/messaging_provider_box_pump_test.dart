@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:fireplace/models/message_model.dart';
+import 'package:fireplace/providers/encryption_provider.dart' show CalmConfirm;
 import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/services/box/box_frame.dart';
 import 'package:fireplace/services/box/box_friend_gate.dart';
@@ -62,6 +63,23 @@ class _PumpEncryption extends ScriptedSendEncryption {
   /// ([readDone] says it did; the pump goes on when [afterRead] completes).
   Completer<void>? afterRead;
   Completer<void>? readDone;
+
+  /// The calm tap's eligibility check and key confirmation, as a confirmed
+  /// tap (the real ones are the crossing test's).
+  @override
+  Future<bool> calmHoldEligible(int userId) async => true;
+
+  @override
+  Future<CalmConfirm> confirmCalmKey(
+    int peerId,
+    int deviceId,
+    String frameIdentityBase64, {
+    required int noteAtMs,
+    Duration timeout = const Duration(seconds: 10),
+  }) async => CalmConfirm.confirmed;
+
+  @override
+  Future<void> drainReleasedFrames(int peerId) async {}
 
   @override
   Future<Map<String, Map<String, dynamic>>> boxUnsentWaiting(int userId) async {
@@ -332,6 +350,43 @@ void main() {
     expect(rowOf('one').waitingToSend, isFalse);
     expect(rowOf('one').deliveryStatus, MessageDeliveryStatus.failed);
     expect((await encryption.boxUnsentWaiting(1)).keys, isEmpty);
+  });
+
+  test('P424: Retry on an ordinary failed row while the gate is closed joins '
+      'the END of the line (a waiting row), it is not attempted', () async {
+    outbox
+      ..closed = false
+      ..refuse.add(1);
+    await typed('one');
+    expect(rowOf('one').waitingToSend, isFalse, reason: 'an ordinary failure');
+    expect(rowOf('one').deliveryStatus, MessageDeliveryStatus.failed);
+    outbox
+      ..refuse.clear()
+      ..closed = true
+      ..delivered.clear();
+
+    await provider.retryFailedMessage(rowOf('one').tempId!);
+    await h.pump(40);
+
+    expect(rowOf('one').waitingToSend, isTrue);
+    expect(outbox.delivered, isEmpty, reason: 'nothing attempted');
+    final record = (await encryption.boxUnsentWaiting(1))[rowOf('one').tempId];
+    expect(record, isNotNull);
+    expect(record!['qa'], isNotNull, reason: 'it was given a place at the END');
+  });
+
+  test('K521: confirming the calm tap kicks the pump: the waiting row goes '
+      'with no other state change', () async {
+    await typed('one');
+    provider.seedCalmHoldForTest(2, CalmHoldState.waiting);
+    outbox.closed = false;
+    expect(outbox.delivered, isEmpty);
+
+    await provider.confirmCalmHold(2);
+    await h.pump(80);
+
+    expect(has(sent(), 'one'), isTrue);
+    expect(rowOf('one').waitingToSend, isFalse);
   });
 
   test('STRICT ORDER: row 1 fails for a passing reason: row 2 does NOT '
