@@ -2486,6 +2486,136 @@ void main() {
       expect(b.reader.sendRefusedForIdentity(row.tempId), isFalse);
     });
 
+    // ---- Decision B: a friend whose identity is re-minted while it KEEPS
+    // its queues and sid. The restored install holds the same queue sid and
+    // re-announces it (its handoff of the SAME sid, under the new identity);
+    // the receiver re-tags that address instead of replacing it ----
+
+    /// The kept-queue friend: a new identity, the SAME queue sid, the
+    /// contact (B's queue) kept; its re-announce reaches B.
+    Future<_Side> keptRestore() async {
+      onTheBox();
+      final restored = await restoreA(sid: a.sid);
+      expect(restored.sid, a.sid, reason: 'the queue is kept');
+      await restored.link.restart(); // the re-announce of the same queue
+      await pump();
+      return restored;
+    }
+
+    /// Frames written to the queue [sid].
+    List<BoxFrame> onSid(SendOutbox o, String sid) => [
+      for (final (to, frame) in o.delivered)
+        if (to.sid == sid) frame,
+    ];
+
+    test('KEPT1 (calm): the re-announce under the new identity is held '
+        'calmly; after the tap the address is re-tagged and the waiting '
+        'messages go to that SAME sid, once each, in order, with no lookup',
+        () async {
+      final restored = await keptRestore();
+      expectCalm(b);
+      final outbox = await boxForB();
+      expect(outbox.addressesFor(1)[1]!.sid, a.sid);
+      await writeFromB('first');
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+      await writeFromB('second');
+      expect(outbox.delivered, isEmpty, reason: 'the tag is stale: it waits');
+
+      await tap(b);
+
+      expect(outbox.delivered, hasLength(2), reason: 'once each, nowhere else');
+      expect(onSid(outbox, a.sid), hasLength(2), reason: 'the SAME sid');
+      expect(b.link.learned, a.sid);
+      expect(b.link.learnedIdk, await idOf(restored), reason: 're-tagged');
+      final read = [
+        for (final (_, frame) in outbox.delivered)
+          await readByRestored(restored, frame),
+      ];
+      expect(read[0], contains('first'));
+      expect(read[1], contains('second'));
+      expect(b.enc.lookupLog, isEmpty);
+      expect(b.enc.forcedLookups, isEmpty);
+    });
+
+    test('KEPT2 (red): the same, ended by the red acknowledge: the rows wait '
+        'during the bar (same sid, stale tag), and after the accept and the '
+        're-announce read they go to that SAME sid once each, in order',
+        () async {
+      b.enc.keyChangeWarnings = () => true;
+      final restored = await keptRestore();
+      expectRed(b);
+      b.enc.onRedHoldEnded = (peer) => b.reader.kickSendPump(peer);
+      final outbox = await boxForB();
+      await writeFromB('first');
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+      await writeFromB('second');
+      expect(outbox.delivered, isEmpty, reason: 'the red bar closes the gate');
+
+      expect(await b.enc.acknowledgePeerIdentity(b.peerId), isTrue);
+      await b.enc.ensureSession(b.peerId, deviceId: b.peerDevice);
+      await pumpEventQueue();
+      expect(outbox.delivered, isEmpty, reason: 'the tag is stale until read');
+
+      await reoffer(b); // the re-announce is read: the address is re-tagged
+
+      expect(outbox.delivered, hasLength(2), reason: 'once each, nowhere else');
+      expect(onSid(outbox, a.sid), hasLength(2), reason: 'the SAME sid');
+      expect(b.link.learnedIdk, await idOf(restored));
+      final read = [
+        for (final (_, frame) in outbox.delivered)
+          await readByRestored(restored, frame),
+      ];
+      expect(read[0], contains('first'));
+      expect(read[1], contains('second'));
+      // The acknowledge's own "by person" invalidation is the person's act;
+      // no lookup was made for it, for a hold, a send or the pump.
+      expect(b.enc.lookupLog.where((e) => e == 'lookup'), isEmpty);
+      expect(b.enc.forcedLookups, isEmpty);
+    });
+
+    test('KEPT3: a re-announce of an unchanged queue under an unchanged '
+        'identity changes nothing on the receiver and is acked', () async {
+      onTheBox();
+      final outbox = await boxForB();
+      final before = (
+        learned: b.link.learned,
+        idk: b.link.learnedIdk,
+        anchor: await anchorOfA(),
+      );
+      // The friend's queue goes due again (what `reannounceOwn` does) and
+      // its pass hands the SAME sid.
+      a.link
+        ..acked = false
+        ..handedAt = null;
+
+      await a.link.reconnect();
+      await pump();
+
+      expect(b.link.learned, before.learned);
+      expect(b.link.learned, a.sid);
+      expect(b.link.learnedIdk, anyOf(before.idk, before.anchor));
+      expect(await anchorOfA(), before.anchor, reason: 'no anchor moved');
+      expect(b.held, isEmpty);
+      expect(b.reader.hasCalmHold(1), isFalse);
+      expect(b.enc.redBarShows(1), isFalse);
+      expect(b.refusals, isEmpty);
+      expect(b.emits, isEmpty, reason: 'no bundle fetch');
+      expect(b.enc.lookupLog, isEmpty);
+      expect(a.link.acked, isTrue, reason: 'the friend acked it');
+      // The gate stays open: a message goes to the same sid at once.
+      await writeFromB('after the re-announce');
+      expect(outbox.delivered, hasLength(1));
+      expect(onSid(outbox, a.sid), hasLength(1));
+      expect(
+        await a.enc.encryptionService.decrypt(
+          5,
+          outbox.delivered.single.$2.signalCiphertext,
+          deviceId: 3,
+        ),
+        contains('after the re-announce'),
+      );
+    });
+
     test('sealed before accept, written after', () async {
       onTheBox();
       // The friend reinstalled and kept its queue: the same address, learned
