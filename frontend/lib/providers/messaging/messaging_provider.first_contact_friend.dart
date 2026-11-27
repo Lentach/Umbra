@@ -25,13 +25,16 @@ extension MessagingFirstContactFriend on MessagingProvider {
     final timer = jsonEncode(E2eEnvelope.buildTimer(ttl: seconds, sentAt: at));
     for (final MapEntry(key: device, value: to)
         in outbox.addressesFor(peerUserId).entries) {
-      final frame = await encryptForFriend(peerUserId, device, timer);
-      // A setting, not a message: quiet, no wake (decision 91).
-      if (frame == null ||
-          await outbox.deliver(
+      final sealed = await _sealFriend(peerUserId, device, to, timer);
+      // A setting, not a message: quiet, no wake (decision 91). A closed
+      // gate leaves it unsent (the timer is sent again with the next change).
+      if (sealed.frame == null ||
+          await _deliverFriend(
+                outbox,
                 to,
-                frame.encode(),
+                sealed.frame!.encode(),
                 mode: BoxSendMode.quiet,
+                permit: sealed.permit,
               ) !=
               BoxSendOutcome.taken) {
         _firstContactLog('BOX_TIMER_NOT_SENT', peerUserId, {'device': device});

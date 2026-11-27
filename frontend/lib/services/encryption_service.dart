@@ -3283,6 +3283,7 @@ class EncryptionService {
     int recipientUserId,
     String plaintext, {
     int deviceId = _deviceId,
+    bool Function(String? remoteIdentity)? admit,
   }) {
     final key = (recipientUserId, deviceId);
     final inFlight = _encryptInFlight[key] ?? 0;
@@ -3298,7 +3299,16 @@ class EncryptionService {
     final result = _runSessionSerialized(
       recipientUserId,
       deviceId,
-      () => _encryptSerialized(recipientUserId, deviceId, plaintext),
+      () async {
+        // The session's remote identity is compared with the permit's in the
+        // SAME serialized step that seals (a whisper of an old install can
+        // bring an old session state back): a mismatch seals nothing.
+        if (admit != null &&
+            !admit(await _remoteIdentityOf(recipientUserId, deviceId))) {
+          throw StateError('session_identity_mismatch');
+        }
+        return _encryptSerialized(recipientUserId, deviceId, plaintext);
+      },
     );
     // Error-swallowed continuation as the decrement hook, so a failed encrypt
     // never leaks an unhandled async error (the owning caller still sees it
@@ -3348,8 +3358,15 @@ class EncryptionService {
     String ciphertextStr, {
     int? messageId,
     int deviceId = _deviceId,
+    void Function(String? remoteIdentity)? onIdentity,
   }) {
     return _runSessionSerialized(senderUserId, deviceId, () async {
+      // Handed back from the same step the decrypt ran in.
+      Future<String> done(String plaintext) async {
+        onIdentity?.call(await _remoteIdentityOf(senderUserId, deviceId));
+        return plaintext;
+      }
+
       if (messageId != null) {
         final replay = await _loadRawDecryptedContent(messageId, ciphertextStr);
         if (replay != null) {
@@ -3357,7 +3374,7 @@ class EncryptionService {
             'msgId': messageId,
             'senderId': senderUserId,
           });
-          return replay;
+          return done(replay);
         }
       }
 
@@ -3369,7 +3386,7 @@ class EncryptionService {
       if (messageId != null) {
         await _saveRawDecryptedContent(messageId, ciphertextStr, plaintext);
       }
-      return plaintext;
+      return done(plaintext);
     });
   }
 
@@ -3858,18 +3875,26 @@ class EncryptionService {
     int deviceId = _deviceId,
   }) async {
     if (!_initialized) return null;
-    return _runSessionSerialized(peerId, deviceId, () async {
-      try {
-        final record = await _cipherSessionStore.loadSession(
-          SignalProtocolAddress(peerId.toString(), deviceId),
-        );
-        if (record.isFresh()) return null;
-        final key = record.sessionState.getRemoteIdentityKey();
-        return key == null ? null : base64Encode(key.serialize());
-      } on Object {
-        return null;
-      }
-    });
+    return _runSessionSerialized(
+      peerId,
+      deviceId,
+      () => _remoteIdentityOf(peerId, deviceId),
+    );
+  }
+
+  /// The remote identity of the session record; call it only inside
+  /// [_runSessionSerialized].
+  Future<String?> _remoteIdentityOf(int peerId, int deviceId) async {
+    try {
+      final record = await _cipherSessionStore.loadSession(
+        SignalProtocolAddress(peerId.toString(), deviceId),
+      );
+      if (record.isFresh()) return null;
+      final key = record.sessionState.getRemoteIdentityKey();
+      return key == null ? null : base64Encode(key.serialize());
+    } on Object {
+      return null;
+    }
   }
 
   /// Awaits [onBeforeAnchorMoves] with the anchor [peerId] is about to leave

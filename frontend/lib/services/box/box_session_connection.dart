@@ -13,6 +13,9 @@ extension BoxSessionConnection on BoxSession {
     _swap.e2eReady();
     _rotation.run();
     _friends.e2eReady();
+    // The journal is judged by the first drain after E2E ready, the empty
+    // one included and with no box connection (the write gate's clause).
+    unawaited(_inbox.drain());
     // The anchors are loaded by now: the one migration tags every address
     // learned before the tag existed (a kill half way, or a closed store, is
     // harmless: the next E2E-ready runs it again).

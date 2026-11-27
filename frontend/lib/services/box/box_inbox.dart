@@ -109,21 +109,39 @@ class BoxInbox {
   /// read of every journaled delivery the app has not finished with. Run
   /// whenever a reader may have become able to read — the box is ready, the
   /// store opened, E2E became ready — or a refused ack may be retried.
-  Future<void> drain() => _chain(() async {
-    for (final delivery in _held.values.toList()) {
-      if (_disposed) return;
-      await _intake(delivery);
-    }
-    if (!_store.isOpen) return;
-    await _store.pruneInbox(_now());
-    for (final entry in _store.unackedInbox) {
-      if (_disposed) return;
-      final auth = _authFor(entry.rid);
-      final id = boxB64Decode(entry.id, kBoxMsgIdBytes);
-      if (auth != null && id != null) await _ack(entry, auth, id);
-    }
-    _store.pendingInbox.forEach(_queueRead);
-  });
+  Future<void> drain() async {
+    // Whether this drain may judge the journal: E2E ready and a reader wired
+    // when it STARTS (a drain that began earlier saw rows refused).
+    final judging = judgeable?.call() ?? false;
+    var reached = false;
+    await _chain(() async {
+      for (final delivery in _held.values.toList()) {
+        if (_disposed) return;
+        await _intake(delivery);
+      }
+      if (!_store.isOpen) return;
+      await _store.pruneInbox(_now());
+      for (final entry in _store.unackedInbox) {
+        if (_disposed) return;
+        final auth = _authFor(entry.rid);
+        final id = boxB64Decode(entry.id, kBoxMsgIdBytes);
+        if (auth != null && id != null) await _ack(entry, auth, id);
+      }
+      _store.pendingInbox.forEach(_queueRead);
+      reached = true;
+    });
+    if (!judging || !reached || _disposed || consumer == null) return;
+    // Outside the chain: a read may ask for another drain.
+    await _reads;
+    if (!_disposed) onJudged?.call();
+  }
+
+  /// Whether a drain that starts now may judge the journal (E2E ready).
+  bool Function()? judgeable;
+
+  /// The end of the first drain that judged the journal, its reads done and
+  /// the EMPTY journal included (the friend write gate opens on it).
+  void Function()? onJudged;
 
   void dispose() {
     _disposed = true;

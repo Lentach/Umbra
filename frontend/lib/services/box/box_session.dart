@@ -10,6 +10,7 @@ import '../contacts/contact_store.dart';
 import 'box_client.dart';
 import 'box_first_contact.dart';
 import 'box_friend_handoff.dart';
+import 'box_friend_gate.dart';
 import 'box_friends.dart';
 import 'box_inbox.dart';
 import 'box_notifiers.dart';
@@ -77,7 +78,12 @@ const Duration kRequestQueueRetry = Duration(minutes: 1);
 /// queue gets a notifier ([BoxNotifiers]) once the box is ready and the
 /// store open, and again whenever the push target changes.
 class BoxSession
-    implements BoxOutbox, BoxSiblingLink, BoxFriendLink, BoxFirstContactLink {
+    implements
+        BoxOutbox,
+        BoxFriendGateOutbox,
+        BoxSiblingLink,
+        BoxFriendLink,
+        BoxFirstContactLink {
   BoxSession({
     required BoxClient box,
     required ContactStore store,
@@ -125,6 +131,15 @@ class BoxSession
       queueCreated: _registerPush,
     );
     firstContact = BoxFirstContact(store: store, now: now);
+    _gate = FriendGate(
+      addressesOf: _friendAddresses,
+      anchorOf: anchorOf,
+      journalJudged: () => _journalJudged,
+    );
+    _friends.gate = _gate;
+    _inbox
+      ..judgeable = (() => _e2eReady && _inbox.consumer != null)
+      ..onJudged = (() => _journalJudged = true);
   }
 
   @override
@@ -140,6 +155,45 @@ class BoxSession
   late final BoxNotifiers? _notifiers;
   late final BoxPushNids? _nids;
   late final BoxFriendHandoff _friends;
+  late final FriendGate _gate;
+
+  /// The journal was judged once this session: the end of the first
+  /// [BoxInbox.drain] after E2E ready with the reader wired (the friend
+  /// write gate's start-up clause; an empty journal counts).
+  bool _journalJudged = false;
+
+  /// What the friend write gate calls a friend's address: the stored one per
+  /// device and the request addresses already served.
+  Iterable<ContactOutbound> _friendAddresses(int friend) => _disposed
+      ? const []
+      : [
+          ...?_store.byUserId(friend)?.outbound,
+          ..._friends.requestAddresses(friend),
+        ];
+
+  /// The friend whose address [sid] is, or null: a sibling or own self-queue
+  /// is no friend address, and its writes are never gated.
+  int? _friendOfSid(String sid) {
+    for (final peer in _store.all) {
+      if (peer.outbound.any((o) => o.sid == sid) ||
+          (peer.boxOrigin?.addresses.any((a) => a.sid == sid) ?? false) ||
+          _friends.requestAddresses(peer.userId).any((a) => a.sid == sid)) {
+        return peer.userId;
+      }
+    }
+    return null;
+  }
+
+  /// Whether a calm hold is pending for a friend (`MessagingProvider`);
+  /// only a calm hold closes the gate on its own.
+  set calmHeld(bool Function(int friend)? check) => _gate.calmHeld = check;
+
+  @override
+  FriendPermit? permitFor(
+    int friend, {
+    Iterable<ContactOutbound> to = const [],
+    bool goodbye = false,
+  }) => _disposed ? null : _gate.permitFor(friend, to: to, goodbye: goodbye);
 
   /// The pinned account identity (base64) of a friend, answered without an
   /// await from the Signal store's trusted memo; null when none is pinned
@@ -235,12 +289,16 @@ class BoxSession
     if (_disposed || encrypt == null || target == null || target.viaRequest) {
       return false;
     }
+    final permit = _friends.gate?.permitFor(userId, to: [target.to]);
+    if (permit == null) return false;
     final frame = await encrypt(
       userId,
       deviceId,
       jsonEncode(E2eEnvelope.buildListUpdate(auth)),
+      permit: permit,
     );
-    return frame != null && await _friends.send(target, frame) is BoxOk;
+    return frame != null &&
+        await _friends.send(target, frame, permit: permit) is BoxOk;
   }
 
   @override
@@ -375,7 +433,15 @@ class BoxSession
     ContactOutbound to,
     Uint8List body, {
     BoxSendMode? mode,
-  }) async => switch (await _sealAndSend(to, body, mode)) {
+  }) => deliverFriend(to, body, mode: mode);
+
+  @override
+  Future<BoxSendOutcome> deliverFriend(
+    ContactOutbound to,
+    Uint8List body, {
+    BoxSendMode? mode,
+    FriendPermit? permit,
+  }) async => switch (await _sealAndSend(to, body, mode, permit: permit)) {
     BoxOk() => BoxSendOutcome.taken,
     BoxRefused(code: BoxCode.queueFull) => BoxSendOutcome.full,
     BoxRefused() || BoxUnknown() || null => BoxSendOutcome.failed,
@@ -385,7 +451,7 @@ class BoxSession
   Future<BoxRequestSend> deliverRequest(
     ContactOutbound to,
     Uint8List body,
-  ) async => switch (await _sealAndSend(to, body, null)) {
+  ) async => switch (await _sealAndSend(to, body, null, request: true)) {
     BoxOk() => BoxRequestSend.taken,
     BoxRefused(code: BoxCode.quotaExceeded) => BoxRequestSend.busy,
     BoxRefused() || BoxUnknown() || null => BoxRequestSend.failed,
@@ -395,13 +461,27 @@ class BoxSession
   Future<BoxResult<BoxMediaRef>> uploadMedia(
     ContactOutbound to,
     Uint8List framed,
-  ) async {
+  ) => uploadMediaFriend(to, framed);
+
+  @override
+  Future<BoxResult<BoxMediaRef>> uploadMediaFriend(
+    ContactOutbound to,
+    Uint8List framed, {
+    FriendPermit? permit,
+  }) async {
     // Refused here, never thrown: the client throws on both, and the send
     // path fails the row on any refusal (E17b).
     final sid = boxB64Decode(to.sid, kBoxSidBytes);
     if (sid == null) return const BoxRefused(BoxCode.invalidPayload);
     if (!kBoxMediaLadder.contains(framed.length)) {
       return const BoxRefused(BoxCode.badSize);
+    }
+    // Friend lane only: a write to our own self-queue (profile photos) or a
+    // sibling's is never gated. No await sits between this check and the
+    // upload.
+    if (_friendOfSid(to.sid) != null &&
+        _gate.refusalOf(permit, to.sid) != null) {
+      return const BoxRefused(BoxCode.invalidPayload);
     }
     return _box.uploadMedia(sid, framed);
   }
@@ -612,6 +692,9 @@ class BoxSession
       target = _friends.targetOf(userId, deviceId);
       if (target == null) return;
     }
+    // The gate is checked BEFORE the once-per-session mark: a closed gate
+    // gives the re-key up for now, not for the session.
+    if (_friends.gate?.permitFor(userId, to: [target.to]) == null) return;
     _friendRekeyed.add(key);
     final ensured = await _keys.ensureInbound(userId);
     if (ensured is! InboundQueueCreated || _disposed) {
@@ -624,6 +707,11 @@ class BoxSession
     // The fresh session counts as asked (`friendSessionStarted`, set by the
     // encrypt side): two devices that re-key each other at once read each
     // other's re-key (decision 49).
+    final permit = _friends.gate?.permitFor(userId, to: [target.to]);
+    if (permit == null) {
+      _friendRekeyed.remove(key);
+      return;
+    }
     final frame = await encrypt(
       userId,
       deviceId,
@@ -631,8 +719,11 @@ class BoxSession
         E2eEnvelope.buildQueueHandoff(sid: queue.sid, sealPub: queue.sealPub),
       ),
       fresh: true,
+      permit: permit,
     );
-    final sent = frame != null && await _friends.send(target, frame) is BoxOk;
+    final sent =
+        frame != null &&
+        await _friends.send(target, frame, permit: permit) is BoxOk;
     if (sent) _friends.noteHanded(userId, deviceId, queue.sid);
     E2eDiagLog.add('BOX_FRIEND_REKEYED', {'device': deviceId, 'sent': sent});
   }

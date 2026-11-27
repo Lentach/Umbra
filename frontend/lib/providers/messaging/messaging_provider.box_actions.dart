@@ -233,6 +233,7 @@ extension MessagingBoxActions on MessagingProvider {
     final json = build();
     final copyJson = build(to: peer);
     final List<(ContactOutbound, Uint8List)> frames;
+    final FriendPermit? permit;
     try {
       final sealed = await _sealBoxFrames(
         route,
@@ -245,6 +246,7 @@ extension MessagingBoxActions on MessagingProvider {
         return false;
       }
       frames = sealed.frames;
+      permit = sealed.permit;
     } on Object catch (e) {
       // An encrypt that threw: nothing went out, so the action is undone
       // and reported like any other that no device took.
@@ -257,6 +259,7 @@ extension MessagingBoxActions on MessagingProvider {
       frames,
       peerFrames: route.targets.length,
       message: false,
+      permit: permit,
     );
     _e2eFlowLog('BOX_ACTION_SEND', {
       't': type,
@@ -369,6 +372,7 @@ extension MessagingBoxActions on MessagingProvider {
       sealed.frames,
       peerFrames: targets.length,
       message: retry.message,
+      permit: sealed.permit,
     );
     for (var i = 0; i < answers.length; i++) {
       // Taken, or full: a full queue is paused, never owed (E93a).

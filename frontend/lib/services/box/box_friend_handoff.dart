@@ -8,6 +8,7 @@ import '../contacts/contact_record.dart';
 import '../contacts/contact_store.dart';
 import 'box_client.dart';
 import 'box_frame.dart';
+import 'box_friend_gate.dart';
 import 'box_friends.dart';
 import 'box_wire.dart';
 import 'queue_keys.dart';
@@ -86,6 +87,24 @@ class BoxFriendHandoff {
   /// The Signal side and the verified lists; nothing is handed until both
   /// are wired.
   FriendEncrypt? encrypt;
+
+  /// The friend write gate; every friend-lane write here passes it. Null
+  /// only for a bare handoff under test.
+  FriendGate? gate;
+
+  /// The permit to seal for [userId] toward [to], or null while the gate is
+  /// closed ([gateClosed]).
+  FriendPermit? _permit(int userId, ContactOutbound to) =>
+      gate?.permitFor(userId, to: [to]);
+
+  bool _gateClosed(FriendPermit? permit) => gate != null && permit == null;
+
+  /// Request addresses already served for [userId] (the tap's lookup, a
+  /// search answer): where a frame may go besides the stored address.
+  Iterable<ContactOutbound> requestAddresses(int userId) => [
+    ...?_served[userId]?.values,
+    ...?_store.byUserId(userId)?.boxOrigin?.addresses,
+  ];
   FriendLiveDevices? liveDevices;
 
   /// This account's device list as its authorization record, carried
@@ -389,6 +408,7 @@ class BoxFriendHandoff {
   Future<BoxResult<void>?> send(
     ({ContactOutbound to, bool viaRequest}) target,
     BoxFrame frame,
+    {FriendPermit? permit,}
   ) async {
     final own = _store.userId;
     final sid = boxB64Decode(target.to.sid, kBoxSidBytes);
@@ -419,6 +439,15 @@ class BoxFriendHandoff {
         : frame.encode();
     final blob = await _seal.seal(sealPub, body);
     if (blob == null || _disposed) return null;
+    // The gate runs here, after every await, in the step of the write.
+    final g = gate;
+    if (g != null) {
+      final why = g.refusalOf(permit, target.to.sid);
+      if (why != null) {
+        E2eDiagLog.add('BOX_FRIEND_WRITE_REFUSED', {'why': why.name});
+        return null;
+      }
+    }
     // A handoff carries no message: quiet, so it never wakes the friend's
     // closed device with an empty "new message" card (decision 91).
     return _box.send(sid, blob, mode: BoxSendMode.quiet);
@@ -652,10 +681,20 @@ class BoxFriendHandoff {
         if (!live.contains(to.peerDeviceId)) continue;
         final key = '${record.userId}:${to.peerDeviceId}:$version';
         if (_announced.contains(key)) continue;
-        final frame = await seal(record.userId, to.peerDeviceId, json);
+        final permit = _permit(record.userId, to);
+        if (_gateClosed(permit)) {
+          all = false;
+          continue;
+        }
+        final frame = await seal(
+          record.userId,
+          to.peerDeviceId,
+          json,
+          permit: permit,
+        );
         final answer = frame == null
             ? null
-            : await send((to: to, viaRequest: false), frame);
+            : await send((to: to, viaRequest: false), frame, permit: permit);
         if (answer is BoxOk) {
           _announced.add(key);
         } else {
@@ -690,12 +729,14 @@ class BoxFriendHandoff {
       final key = '$userId:$device:${queue.sid}';
       final seal = encrypt;
       if (_disposed || seal == null) return false;
-      final frame = await seal(userId, device, handoff);
+      final permit = _permit(userId, target.to);
+      if (_gateClosed(permit)) continue;
+      final frame = await seal(userId, device, handoff, permit: permit);
       if (frame == null) {
         _failed('encrypt', 'no_frame', userId: userId, device: device);
         continue;
       }
-      final answer = await send(target, frame);
+      final answer = await send(target, frame, permit: permit);
       if (answer is BoxOk) {
         _handed.add(key);
         await _markHanded(userId, device, queue.sid);

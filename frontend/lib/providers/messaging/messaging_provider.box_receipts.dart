@@ -278,7 +278,12 @@ extension MessagingBoxReceipts on MessagingProvider {
       // counting as one frame not taken.
       final answers = await Future.wait([
         for (final (to, body) in sealed.frames)
-          route.outbox.deliver(to, body, mode: mode),
+          _deliverBoxFrame(
+            route.outbox,
+            (to, body),
+            mode: mode,
+            permit: sealed.permit,
+          ),
       ]);
       // A `live` frame is answered ok even when the box dropped it (E61a):
       // it proves nothing about the device's queue (E93a).

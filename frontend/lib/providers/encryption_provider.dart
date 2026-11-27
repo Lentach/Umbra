@@ -443,12 +443,14 @@ class EncryptionProvider extends ChangeNotifier {
     int recipientId,
     String plaintext, {
     int deviceId = 1,
+    bool Function(String? remoteIdentity)? admit,
   }) async {
     try {
       return await _encryptionService.encrypt(
         recipientId,
         plaintext,
         deviceId: deviceId,
+        admit: admit,
       );
     } catch (_) {
       notifyListeners();
@@ -469,6 +471,7 @@ class EncryptionProvider extends ChangeNotifier {
     String ciphertext, {
     int? messageId,
     int deviceId = 1,
+    void Function(String? remoteIdentity)? onIdentity,
   }) async {
     try {
       return await _encryptionService.decrypt(
@@ -476,6 +479,7 @@ class EncryptionProvider extends ChangeNotifier {
         ciphertext,
         messageId: messageId,
         deviceId: deviceId,
+        onIdentity: onIdentity,
       );
     } catch (_) {
       notifyListeners();

@@ -89,8 +89,9 @@ extension MessagingBoxMediaSend on MessagingProvider {
       if (body == null) throw StateError('no held attachment');
       // After the hold: the retry uploads what is held here.
       if (_peersAllPaused(route, recipientId, tempId)) return false;
-      // Before the upload: a calm hold takes no file for the old key either.
-      if (_calmWaits(recipientId)) {
+      // Before the upload: a closed gate (a calm hold, a stale address) takes
+      // no file for the old key either.
+      if (_friendPermit(recipientId, to: route.targets) == null) {
         _deferForCalmHold(recipientId, tempId);
         return false;
       }
@@ -164,10 +165,23 @@ extension MessagingBoxMediaSend on MessagingProvider {
     int? mediaHeight,
     String? mediaThumbHash,
   }) async {
-    final answer = await route.outbox.uploadMedia(
-      route.targets.first,
-      frameMediaToRung(body.ciphertext),
-    );
+    // The upload is a write to the friend's queue (its budget pays): it takes
+    // its own permit, in the step before it.
+    final permit = _friendPermit(recipientId, to: [route.targets.first]);
+    if (permit == null) {
+      _deferForCalmHold(recipientId, tempId);
+      return false;
+    }
+    final outbox = route.outbox;
+    final framed = frameMediaToRung(body.ciphertext);
+    final answer = switch (outbox) {
+      final BoxFriendGateOutbox gate => await gate.uploadMediaFriend(
+        route.targets.first,
+        framed,
+        permit: permit,
+      ),
+      _ => await outbox.uploadMedia(route.targets.first, framed),
+    };
     final Uint8List id;
     final Uint8List? secret;
     switch (answer) {

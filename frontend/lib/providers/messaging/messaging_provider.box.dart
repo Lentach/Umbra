@@ -220,12 +220,14 @@ extension MessagingBox on MessagingProvider {
       }
     }
     final String plaintext;
+    String? sessionIdentity;
     try {
       plaintext = await enc.decrypt(
         msg.senderId,
         msg.encryptedContent!,
         messageId: msg.id,
         deviceId: msg.originDeviceId ?? 1,
+        onIdentity: (identity) => sessionIdentity = identity,
       );
     } on Object catch (e) {
       // A whisper of a friend with a frame held rides the session that frame
@@ -300,12 +302,7 @@ extension MessagingBox on MessagingProvider {
           msg.senderId,
           device,
           plaintext,
-          learnedUnder: await _frameIdentity(
-            enc,
-            msg.senderId,
-            device,
-            msg.encryptedContent!,
-          ),
+          learnedUnder: _frameIdentity(msg.encryptedContent!, sessionIdentity),
         );
       case E2eEnvelope.typeQueueHandoffAck when link != null:
         final sid = E2eEnvelope.parseQueueHandoffAck(plaintext);
@@ -491,8 +488,8 @@ extension MessagingBox on MessagingProvider {
     switch (result) {
       case CalmConfirm.confirmed:
         // The hold ends, but the friend's handoff is not read yet: until it
-        // is, the address is still the old queue, so sends keep waiting.
-        _calmDraining.add(peerId);
+        // is, the address is still the old queue, which the gate sees as
+        // stale (its tag is not the pinned identity), so sends keep waiting.
         _calmHolds.remove(peerId);
       case CalmConfirm.refused:
         _calmHolds.remove(peerId);
@@ -513,8 +510,6 @@ extension MessagingBox on MessagingProvider {
         drained = true;
       } on Object catch (e) {
         _e2eFlowLog('CALM_DRAIN_INCOMPLETE', {'peer': peerId, 'error': '$e'});
-      } finally {
-        _calmDraining.remove(peerId);
       }
       // Whatever happened, the rows stop waiting here.
       final rows = _takeCalmDeferred(peerId);

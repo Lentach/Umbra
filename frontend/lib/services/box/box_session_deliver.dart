@@ -9,13 +9,25 @@ extension BoxSessionDeliver on BoxSession {
   Future<BoxResult<void>?> _sealAndSend(
     ContactOutbound to,
     Uint8List body,
-    BoxSendMode? mode,
-  ) async {
+    BoxSendMode? mode, {
+    FriendPermit? permit,
+    bool request = false,
+  }) async {
     final sid = boxB64Decode(to.sid, kBoxSidBytes);
     final sealPub = boxB64Decode(to.sealPub, 32);
     if (_disposed || sid == null || sealPub == null) return null;
+    // Friend lane only: a self-queue or sibling address is never gated. A
+    // first-contact request takes the permit its own sealed PreKey made.
+    final friend = _friendOfSid(to.sid);
+    final p = friend == null || !request ? permit : _gate.requestPermit(friend);
+    if (friend != null && _gate.refusalOf(p, to.sid) != null) return null;
     final blob = await _seal.seal(sealPub, body);
     if (blob == null || _disposed) return null;
+    // After the last await, in the step of the write.
+    if (friend != null && _gate.refusalOf(p, to.sid) != null) {
+      E2eDiagLog.add('BOX_FRIEND_WRITE_REFUSED', {'why': 'at_write'});
+      return null;
+    }
     return _box.send(sid, blob, mode: mode);
   }
 
@@ -160,7 +172,15 @@ extension BoxSessionDeliver on BoxSession {
     final encrypt = _friends.encrypt;
     final target = _friends.targetOf(userId, deviceId);
     if (_disposed || encrypt == null || target == null) return false;
-    final frame = await encrypt(userId, deviceId, jsonEncode(envelope));
-    return frame != null && await _friends.send(target, frame) is BoxOk;
+    final permit = _friends.gate?.permitFor(userId, to: [target.to]);
+    if (permit == null) return false;
+    final frame = await encrypt(
+      userId,
+      deviceId,
+      jsonEncode(envelope),
+      permit: permit,
+    );
+    return frame != null &&
+        await _friends.send(target, frame, permit: permit) is BoxOk;
   }
 }

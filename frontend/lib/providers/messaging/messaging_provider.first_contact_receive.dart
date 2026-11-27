@@ -116,12 +116,14 @@ extension MessagingFirstContactReceive on MessagingProvider {
       return true;
     }
     final String plaintext;
+    String? sessionIdentity;
     try {
       plaintext = await enc.decrypt(
         user,
         signal,
         messageId: entry.localId,
         deviceId: device,
+        onIdentity: (identity) => sessionIdentity = identity,
       );
     } on Object catch (e) {
       refused('decrypt_${e.runtimeType}');
@@ -149,7 +151,7 @@ extension MessagingFirstContactReceive on MessagingProvider {
       sid: offered.sid,
       sealPub: offered.sealPub,
       profile: me,
-      learnedUnder: await _frameIdentity(enc, user, device, signal),
+      learnedUnder: _frameIdentity(signal, sessionIdentity),
     );
     link.firstContactFriend(user);
     await _relayFriendship(user);

@@ -1,5 +1,6 @@
 import '../contacts/contact_record.dart';
 import 'box_frame.dart';
+import 'box_friend_gate.dart';
 
 /// Encrypts [json] for device [deviceId] of friend [userId] (the box asks
 /// only for friends) and answers the frame from THIS device (kind, this
@@ -16,6 +17,7 @@ typedef FriendEncrypt =
       int deviceId,
       String json, {
       bool fresh,
+      FriendPermit? permit,
     });
 
 /// The device ids friend [userId]'s VERIFIED list names live, or null when

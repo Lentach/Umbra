@@ -29,8 +29,19 @@ enum FriendGateRefusal {
 /// identity pinned for the friend at that moment; the write lets a frame out
 /// only while that is still the pinned one.
 final class FriendPermit {
-  FriendPermit._(this.friend, this._identity, {required this.goodbye})
-    : firstPin = _identity == null;
+  FriendPermit._(
+    this.friend,
+    this._identity, {
+    required this.goodbye,
+    bool? firstPin,
+  }) : firstPin = firstPin ?? _identity == null;
+
+  /// The permit of a stand-in outbox that has no gate (a test double that is
+  /// not the box session): it adopts whatever session it seals on.
+  FriendPermit.ungated(this.friend)
+    : _identity = null,
+      firstPin = true,
+      goodbye = true;
 
   /// A permit for [friend] captured under [identity], for a test's stand-in
   /// box.
@@ -117,6 +128,16 @@ final class FriendGate {
     }
     return FriendPermit._(friend, anchor, goodbye: goodbye);
   }
+
+  /// The permit of a first-contact request, taken once its PreKey is sealed
+  /// (the pin that encrypt made is the anchor now): the null-anchor rule
+  /// (an untagged address is accepted), no journal clause.
+  FriendPermit requestPermit(int friend) => FriendPermit._(
+    friend,
+    _anchorOf?.call(friend),
+    goodbye: true,
+    firstPin: true,
+  );
 
   /// Why a frame sealed under [permit] may NOT be written to [sid] now;
   /// null when it may. Called after every await, in the same synchronous

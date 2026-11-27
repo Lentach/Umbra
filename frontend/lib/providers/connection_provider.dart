@@ -559,6 +559,8 @@ class ConnectionProvider extends ChangeNotifier {
             ..ownLiveDevices = messaging.ownLiveDevices
             // Item 5: existing friendships move onto the box.
             ..encryptForFriend = messaging.encryptForFriend
+            // Option C: a calm hold closes the friend write gate.
+            ..calmHeld = messaging.hasCalmHold
             ..friendLiveDevices = messaging.friendLiveDevices
             // E114b: a friend's request queues come from a handle lookup.
             ..friendAddressLookup = messaging.lookupFriendAddresses

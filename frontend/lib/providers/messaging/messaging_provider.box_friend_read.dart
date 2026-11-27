@@ -117,12 +117,14 @@ extension MessagingBoxFriendRead on MessagingProvider {
       return true;
     }
     final String plaintext;
+    String? sessionIdentity;
     try {
       plaintext = await enc.decrypt(
         user,
         signal,
         messageId: entry.localId,
         deviceId: device,
+        onIdentity: (identity) => sessionIdentity = identity,
       );
     } on Object catch (e) {
       refused('decrypt_${e.runtimeType}');
@@ -135,7 +137,7 @@ extension MessagingBoxFriendRead on MessagingProvider {
       user,
       device,
       plaintext,
-      learnedUnder: await _frameIdentity(enc, user, device, signal),
+      learnedUnder: _frameIdentity(signal, sessionIdentity),
     );
   }
 
@@ -314,6 +316,18 @@ extension MessagingBoxFriendRead on MessagingProvider {
     }
     // The first handoff of an account we asked over the box is its accept:
     // the record becomes a friend before the handoff is taken (E15d/E15e).
+    // A handoff learned under a foreign identity is refused BEFORE it can
+    // befriend a pendingOut request (the store refuses it again, with the
+    // same rule, once the record is a friend).
+    final anchor = _encryptionProvider?.accountAnchorSync(userId);
+    if (learnedUnder != null && anchor != null && learnedUnder != anchor) {
+      _e2eFlowLog('BOX_FRIEND_HANDOFF_REFUSED', {
+        'peer': userId,
+        'device': device,
+        'why': 'learned_under_other_identity',
+      });
+      return true;
+    }
     if (!await _befriendOnHandoff(userId, plaintext)) return false;
     switch (await link.takeFriendHandoff(
       userId,
@@ -338,19 +352,13 @@ extension MessagingBoxFriendRead on MessagingProvider {
     }
   }
 
-  /// The account identity (base64) that authenticated friend [user]'s
-  /// [device] frame [signal], read after it decrypted: a PreKey message
-  /// carries it, a whisper's is the remote identity of the session it was
-  /// decrypted on ([EncryptionProvider.sessionRemoteIdentity]). Null when
-  /// neither can say; the handoff is then stored untagged, never refused.
-  Future<String?> _frameIdentity(
-    EncryptionProvider enc,
-    int user,
-    int device,
-    String signal,
-  ) async =>
-      preKeyIdentityOf(signal) ??
-      await enc.sessionRemoteIdentity(user, deviceId: device);
+  /// The account identity (base64) that authenticated a friend frame
+  /// [signal]: a PreKey message carries it, a whisper's is the remote
+  /// identity of the session it was decrypted on, handed back by the decrypt
+  /// itself in its serialized step ([sessionIdentity]). Null when neither
+  /// can say; the handoff is then stored untagged, never refused.
+  String? _frameIdentity(String signal, String? sessionIdentity) =>
+      preKeyIdentityOf(signal) ?? sessionIdentity;
 
   /// Encrypts [json] for friend [userId]'s [deviceId] and frames it as from
   /// THIS device — the [FriendEncrypt] the box's friend handoff uses (the
@@ -366,14 +374,15 @@ extension MessagingBoxFriendRead on MessagingProvider {
     int deviceId,
     String json, {
     bool fresh = false,
+    FriendPermit? permit,
   }) async {
     final enc = _encryptionProvider;
     if (enc == null || !enc.isE2EReady) return null;
-    // A calm hold (option C): the session held belongs to the key being
-    // replaced. Nothing is written on it and no bundle is fetched for it
-    // until the person's tap.
-    if (_calmHolds.containsKey(userId)) {
-      _e2eFlowLog('BOX_FRIEND_CALM_HELD', {'peer': userId, 'device': deviceId});
+    // The permit was taken before this call (the gate: a calm hold, an
+    // unjudged journal, a stale address all refuse it). A caller without one
+    // fails closed, and nothing is sealed.
+    if (permit == null) {
+      _e2eFlowLog('BOX_FRIEND_NO_PERMIT', {'peer': userId, 'device': deviceId});
       return null;
     }
     if (!await _friendDeviceIsLive(userId, deviceId)) {
@@ -399,6 +408,7 @@ extension MessagingBoxFriendRead on MessagingProvider {
           userId,
           E2eEnvelope.toFriend(json, relays: _vouchesRelay),
           deviceId: deviceId,
+          admit: permit.admitsSession,
         ),
         senderDeviceId: enc.ownDeviceId,
       );
@@ -414,6 +424,57 @@ extension MessagingBoxFriendRead on MessagingProvider {
       });
       return null;
     }
+  }
+
+  /// A permit to seal for friend [userId] (optionally toward [to]), from the
+  /// box's gate; null while it is closed. A stand-in outbox that is not the
+  /// box session has no gate and gives an open permit.
+  FriendPermit? _friendPermit(
+    int userId, {
+    Iterable<ContactOutbound> to = const [],
+    bool goodbye = false,
+  }) {
+    // A calm hold waits for the person's tap (option C): the session held
+    // belongs to the key being replaced, so nothing is sealed on it.
+    if (_calmHolds.containsKey(userId)) {
+      _e2eFlowLog('BOX_FRIEND_CALM_HELD', {'peer': userId});
+      return null;
+    }
+    final outbox = boxOutbox;
+    if (outbox case final BoxFriendGateOutbox gate) {
+      return gate.permitFor(userId, to: to, goodbye: goodbye);
+    }
+    return FriendPermit.ungated(userId);
+  }
+
+  /// Takes a permit for friend [user]'s [device] at [to], BEFORE Signal
+  /// seals [json] under it: a closed gate seals nothing and moves no ratchet.
+  Future<({BoxFrame? frame, FriendPermit? permit})> _sealFriend(
+    int user,
+    int device,
+    ContactOutbound to,
+    String json, {
+    bool exemptJournal = false,
+  }) async {
+    final permit = _friendPermit(user, to: [to], goodbye: exemptJournal);
+    if (permit == null) return (frame: null, permit: null);
+    final frame = await encryptForFriend(user, device, json, permit: permit);
+    return (frame: frame, permit: permit);
+  }
+
+  /// [BoxOutbox.deliver] for a friend's queue, under [permit] when the outbox
+  /// is the box session (a stand-in outbox has no gate).
+  Future<BoxSendOutcome> _deliverFriend(
+    BoxOutbox outbox,
+    ContactOutbound to,
+    Uint8List body, {
+    BoxSendMode? mode,
+    FriendPermit? permit,
+  }) {
+    if (outbox case final BoxFriendGateOutbox gate) {
+      return gate.deliverFriend(to, body, mode: mode, permit: permit);
+    }
+    return outbox.deliver(to, body, mode: mode);
   }
 
   /// The device ids friend [userId]'s VERIFIED list names live — the

@@ -20,6 +20,7 @@ import '../services/box/box_device_pause.dart';
 import '../services/box/box_envelope.dart';
 import '../services/box/box_first_contact.dart';
 import '../services/box/box_frame.dart';
+import '../services/box/box_friend_gate.dart';
 import '../services/box/box_friends.dart';
 import '../services/box/box_media_fetcher.dart';
 import '../services/box/box_media_frame.dart';
@@ -238,20 +239,16 @@ class MessagingProvider extends ChangeNotifier {
   @visibleForTesting
   Duration calmDrainBound = const Duration(seconds: 20);
 
-  /// True while [tempId] waits for the tap on its friend's calm line. Read
-  /// by the failed bubble, which then names the line instead of a failure.
+  /// True while [tempId] waits for the friend's gate to open (the tap on a
+  /// calm line, or the handoff not read yet): it is in the deferral list
+  /// until the release loop or a refusal takes it. Read by the failed
+  /// bubble, which then names the line instead of a failure.
   bool sendWaitsForCalmHold(String? tempId) =>
-      _calmWaits(_calmDeferredSends[tempId]);
+      _calmDeferredSends.containsKey(tempId);
 
-  /// Friends whose calm key was confirmed while the held frames are still
-  /// being read: the friend's handoff is not taken yet, so the address is
-  /// still the old queue. Treated like a calm hold by every seal, except
-  /// `encryptForFriend` (the handoff acknowledgement must go out).
-  final Set<int> _calmDraining = {};
-
-  /// Whether nothing may be sealed for [peerId] right now.
-  bool _calmWaits(int? peerId) =>
-      _calmHolds.containsKey(peerId) || _calmDraining.contains(peerId);
+  /// Whether a calm hold is pending for friend [peerId]: the friend write
+  /// gate closes on it (a red hold before the acknowledge does not).
+  bool hasCalmHold(int peerId) => _calmHolds.containsKey(peerId);
 
   /// Test-only: the verdict the send path writes for a row refused under a
   /// calm hold of [peerId] (the widget tests have no box to send over).
@@ -1023,7 +1020,6 @@ class MessagingProvider extends ChangeNotifier {
       _boxSessionEpoch++;
       _boxHeld.clear();
       _calmHolds.clear();
-      _calmDraining.clear();
       _profileSent.clear();
       _profileFilesChecked = false;
       _profileMigrateTriedAt = null;
@@ -1091,7 +1087,6 @@ class MessagingProvider extends ChangeNotifier {
     _boxSessionEpoch++;
     _boxHeld.clear();
     _calmHolds.clear();
-    _calmDraining.clear();
     _profileSent.clear();
     _profileFilesChecked = false;
     _profileMigrateTriedAt = null;
