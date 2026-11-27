@@ -110,7 +110,7 @@ class _Outbox implements BoxOutbox {
 
   @override
   Map<int, ContactOutbound> addressesFor(int peerUserId) => const {
-    1: ContactOutbound(peerDeviceId: 1, sid: 'sid', sealPub: 'pub'),
+    1: ContactOutbound(peerDeviceId: 1, sid: 'sid', sealPub: 'pub', idk: null),
   };
 
   @override

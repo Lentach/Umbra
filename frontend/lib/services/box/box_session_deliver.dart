@@ -54,14 +54,32 @@ extension BoxSessionDeliver on BoxSession {
   /// Store → ack → hand-back (item 5): [userId]'s [deviceId] address, on a
   /// record already `friend`; our hand-back carries [profile] when this is
   /// the accept of a first contact (slice (f), decision 55).
+  ///
+  /// [learnedUnder]: the account identity (base64) that authenticated the
+  /// frame the address came from; it becomes the address's `idk`. A handoff
+  /// learned under another identity than the friend's pinned anchor is
+  /// FINISHED and stores nothing (an old device of the friend, read on a
+  /// session of the old identity, must not replace a current address). Null
+  /// means the frame's identity is unknown: nothing is refused and an
+  /// address of another sid is stored untagged (tagged at the next pin).
   Future<FriendWrite> _takeHandoff(
     int userId,
     int deviceId, {
     required String sid,
     required String sealPub,
+    required String? learnedUnder,
     E2eProfile? profile,
   }) async {
     if (_disposed) return FriendWrite.retryLater;
+    final anchor = _anchorOf?.call(userId);
+    if (learnedUnder != null && anchor != null && learnedUnder != anchor) {
+      E2eDiagLog.add('BOX_FRIEND_HANDOFF_REFUSED', {
+        'peer': userId,
+        'device': deviceId,
+        'why': 'learned_under_other_identity',
+      });
+      return FriendWrite.refused;
+    }
     var friend = false;
     final committed = await _store.update(userId, (current) {
       if (current == null || current.state != ContactState.friend) return null;
@@ -72,9 +90,13 @@ extension BoxSessionDeliver on BoxSession {
       // What the device last said about relaying (decision 101 A, E101b)
       // holds on its new queue; the frame that said it may be this handoff.
       final relays = _friendRelays[(userId, deviceId)] ?? held?.relays ?? false;
+      final idk = learnedUnder ?? (held?.sid == sid ? held?.idk : null);
+      // The same queue re-announced under a NEW identity is re-tagged, so
+      // the shortcut compares the tag too.
       if (held?.sid == sid &&
           held?.sealPub == sealPub &&
-          held?.relays == relays) {
+          held?.relays == relays &&
+          held?.idk == idk) {
         return null;
       }
       return current.copyWith(
@@ -85,6 +107,7 @@ extension BoxSessionDeliver on BoxSession {
             peerDeviceId: deviceId,
             sid: sid,
             sealPub: sealPub,
+            idk: idk,
             relays: relays,
           ),
         ],

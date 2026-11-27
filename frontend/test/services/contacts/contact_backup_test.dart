@@ -17,7 +17,7 @@ ContactRecord _record(int id) => ContactRecord(
   state: ContactState.friend,
   devices: const [1, 2],
   outbound: const [
-    ContactOutbound(peerDeviceId: 2, sid: 'SID', sealPub: 'PUB'),
+    ContactOutbound(peerDeviceId: 2, sid: 'SID', sealPub: 'PUB', idk: 'IDK-A'),
   ],
   settings: const ContactSettings(disappearingTimer: 60, muted: true),
   queues: const [
@@ -60,6 +60,43 @@ void main() {
       expect(peer.outbound.single.sid, 'SID');
       expect(peer.settings.disappearingTimer, 60);
       expect(peer.settings.muted, isTrue);
+      // The identity the address was learned under travels with it
+      // (invariant decision Q5): a restore must not read a re-minted
+      // friend's dead queue as current.
+      expect(peer.outbound.single.idk, 'IDK-A');
+    });
+
+    test('an address keeps its identity tag through JSON, and a record '
+        'written before the tag existed loads untagged', () {
+      const tagged = ContactOutbound(
+        peerDeviceId: 2,
+        sid: 'SID',
+        sealPub: 'PUB',
+        relays: true,
+        idk: 'IDK-A',
+      );
+      final back = ContactOutbound.fromJson(
+        jsonDecode(jsonEncode(tagged.toJson())) as Map<String, dynamic>,
+      );
+      expect(back.idk, 'IDK-A');
+      expect(back.relays, isTrue);
+
+      final old = ContactOutbound.fromJson(const {
+        'peerDeviceId': 2,
+        'sid': 'SID',
+        'sealPub': 'PUB',
+      });
+      expect(old.idk, isNull);
+      expect(old.toJson().containsKey(ContactOutbound.idkKey), isFalse);
+
+      expect(tagged.copyWith(relays: false).idk, 'IDK-A');
+      expect(tagged.copyWith(relays: false).relays, isFalse);
+      expect(tagged.copyWith(idk: 'IDK-B').idk, 'IDK-B');
+      expect(tagged.copyWith(idk: 'IDK-B').sid, 'SID');
+
+      // The backup half keeps the tag while it drops `rl`.
+      final backup = _record(42).toBackupJson()['outbound'] as List;
+      expect((backup.single as Map)[ContactOutbound.idkKey], 'IDK-A');
     });
 
     test('the blob carries NO queue private keys and no request ids, but the '

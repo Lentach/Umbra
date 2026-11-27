@@ -86,6 +86,7 @@ class _Link implements BoxFriendLink {
     int deviceId, {
     required String sid,
     required String sealPub,
+    required String? learnedUnder,
   }) async {
     learned.add(sid);
     return FriendWrite.stored;

@@ -61,12 +61,16 @@ abstract interface class BoxFriendLink {
   /// before it reads our handoff and never answers ours with another. A lost
   /// ack or hand-back costs nothing: the next connect hands off again.
   /// [FriendWrite.stored] once the address is stored, whatever became of
-  /// the sends.
+  /// the sends. [learnedUnder] is the account identity (base64) that
+  /// authenticated the frame the address came from: stored as the address's
+  /// tag, and a handoff learned under another identity than the friend's
+  /// pinned anchor is [FriendWrite.refused] (null: unknown, never refused).
   Future<FriendWrite> takeFriendHandoff(
     int userId,
     int deviceId, {
     required String sid,
     required String sealPub,
+    required String? learnedUnder,
   });
 
   /// Device [deviceId] of friend [userId] acknowledged our queue [sid].

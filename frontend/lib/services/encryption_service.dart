@@ -444,6 +444,21 @@ class EncryptionService {
   /// anchor moves. Set by the provider.
   Set<int> Function(int peerId)? knownAddressesOf;
 
+  /// Stamp-before-move: awaited by [acknowledgePeerIdentity] and
+  /// [replaceStaleAccountAnchor] right BEFORE a friend's anchor moves, with
+  /// the anchor it is leaving (base64). The contact store tags that friend's
+  /// untagged addresses with it (an address learned before the tag existed
+  /// was learned under the anchor pinned then). False, or a throw, refuses
+  /// the move: it would leave an address that reads as learned under the NEW
+  /// identity. Set by the provider.
+  Future<bool> Function(int peerId, String oldAnchorBase64)?
+  onBeforeAnchorMoves;
+
+  /// A friend's anchor was pinned for the FIRST time (never a move), with the
+  /// identity pinned (base64): the addresses learned before it are tagged
+  /// with it. Not awaited. Set by the provider.
+  void Function(int peerId, String identityBase64)? onAccountAnchorPinned;
+
   /// Test seam: runs after the note and intents are written, right before
   /// the anchor swap.
   @visibleForTesting
@@ -983,6 +998,13 @@ class EncryptionService {
   }) async {
     if (!_peersWithChangedIdentity.contains(peerId)) return false;
     final name = peerId.toString();
+    if (!await _stampBeforeAnchorMoves(peerId)) {
+      E2ePersistentDiag.record('PEER_IDENTITY_ADOPT_REFUSED', {
+        'peerId': peerId,
+        'reason': 'stamp_failed',
+      });
+      return false;
+    }
     final supplied = adoptIdentityBase64;
     final bool advanced;
     final String source;
@@ -1965,7 +1987,10 @@ class EncryptionService {
         // key the muted demotion may acknowledge.
         _demoteLocalDetection(peerId).ignore();
       },
-    );
+    )..onAccountPinned = (name, identityBase64) {
+      final peerId = int.tryParse(name);
+      if (peerId != null) onAccountAnchorPinned?.call(peerId, identityBase64);
+    };
     _preKeyStore = SecurePreKeyStore(_storage, p);
     _signedPreKeyStore = SecureSignedPreKeyStore(_storage, p);
     _sessionStore = SecureSessionStore(_storage, p);
@@ -1985,6 +2010,7 @@ class EncryptionService {
     _ownAlarmLoaded = false;
     try {
       await _initialize(userId, checkServerIdentity: checkServerIdentity);
+      await _loadAnchorMirror();
     } finally {
       await _releaseHeldOwnReplaced();
     }
@@ -3634,6 +3660,9 @@ class EncryptionService {
       );
     }
     final name = peerId.toString();
+    if (!await _stampBeforeAnchorMoves(peerId)) {
+      throw StateError('account anchor of $peerId not stamped before a move');
+    }
     final pending = await _identityStore.pendingAccountIdentity(name);
     await _identityStore.adoptAccountIdentity(
       name,
@@ -3796,6 +3825,66 @@ class EncryptionService {
         return false;
       }
     });
+  }
+
+  /// Loads every friend's pinned anchor into the synchronous mirror (E2E
+  /// init). A failed read leaves the mirror without it (a caller then sees no
+  /// anchor, which nothing in the box layer treats as a pin).
+  Future<void> _loadAnchorMirror() async {
+    if (!_initialized) return;
+    try {
+      await _identityStore.loadAccountAnchors();
+    } on Object catch (e) {
+      E2ePersistentDiag.record('ANCHOR_MIRROR_LOAD_FAILED', {
+        'error': e.runtimeType.toString(),
+      });
+    }
+  }
+
+  /// [peerId]'s pinned account identity (base64), answered WITHOUT an await
+  /// from the Signal store's trusted memo; null before init, and when none is
+  /// pinned. Loaded for every friend at init; the movers set it before their
+  /// storage write.
+  String? accountAnchorSync(int peerId) =>
+      _initialized ? _identityStore.accountAnchorSync(peerId.toString()) : null;
+
+  /// The identity (base64) the session with [peerId]'s [deviceId] holds for
+  /// the remote end, read under the per-address lock so it is not read
+  /// between a decrypt's load and store. For a whisper this is the identity
+  /// the message was authenticated under. Null before init, with no session,
+  /// and when the record cannot be read now.
+  Future<String?> sessionRemoteIdentity(
+    int peerId, {
+    int deviceId = _deviceId,
+  }) async {
+    if (!_initialized) return null;
+    return _runSessionSerialized(peerId, deviceId, () async {
+      try {
+        final record = await _cipherSessionStore.loadSession(
+          SignalProtocolAddress(peerId.toString(), deviceId),
+        );
+        if (record.isFresh()) return null;
+        final key = record.sessionState.getRemoteIdentityKey();
+        return key == null ? null : base64Encode(key.serialize());
+      } on Object {
+        return null;
+      }
+    });
+  }
+
+  /// Awaits [onBeforeAnchorMoves] with the anchor [peerId] is about to leave
+  /// (the stored one, not the memo). True when there is nothing to stamp (no
+  /// hook, or no anchor yet: a first pin is not a move) or the stamp landed.
+  Future<bool> _stampBeforeAnchorMoves(int peerId) async {
+    final hook = onBeforeAnchorMoves;
+    if (hook == null) return true;
+    try {
+      final old = await _identityStore.getAccountIdentity(peerId.toString());
+      if (old == null) return true;
+      return await hook(peerId, base64Encode(old.serialize()));
+    } on Object {
+      return false;
+    }
   }
 
   /// Who can have sealed friend [userId]'s frame [ciphertextStr] into our

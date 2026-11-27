@@ -130,7 +130,13 @@ extension MessagingBoxFriendRead on MessagingProvider {
     }
     link.friendRekeyAnswered(user, device);
     _noteFriendRelaysIn(user, device, plaintext);
-    return _takeFriendHandoff(link, user, device, plaintext);
+    return _takeFriendHandoff(
+      link,
+      user,
+      device,
+      plaintext,
+      learnedUnder: await _frameIdentity(enc, user, device, signal),
+    );
   }
 
   /// Whether friend [userId]'s VERIFIED list names [deviceId] live: the held
@@ -294,8 +300,9 @@ extension MessagingBoxFriendRead on MessagingProvider {
     BoxFriendLink link,
     int userId,
     int device,
-    String plaintext,
-  ) async {
+    String plaintext, {
+    required String? learnedUnder,
+  }) async {
     final address = E2eEnvelope.parseQueueHandoff(plaintext);
     if (address == null) {
       _e2eFlowLog('BOX_FRIEND_HANDOFF_REFUSED', {
@@ -313,6 +320,7 @@ extension MessagingBoxFriendRead on MessagingProvider {
       device,
       sid: address.sid,
       sealPub: address.sealPub,
+      learnedUnder: learnedUnder,
     )) {
       case FriendWrite.retryLater:
         return false;
@@ -329,6 +337,20 @@ extension MessagingBoxFriendRead on MessagingProvider {
         return true;
     }
   }
+
+  /// The account identity (base64) that authenticated friend [user]'s
+  /// [device] frame [signal], read after it decrypted: a PreKey message
+  /// carries it, a whisper's is the remote identity of the session it was
+  /// decrypted on ([EncryptionProvider.sessionRemoteIdentity]). Null when
+  /// neither can say; the handoff is then stored untagged, never refused.
+  Future<String?> _frameIdentity(
+    EncryptionProvider enc,
+    int user,
+    int device,
+    String signal,
+  ) async =>
+      preKeyIdentityOf(signal) ??
+      await enc.sessionRemoteIdentity(user, deviceId: device);
 
   /// Encrypts [json] for friend [userId]'s [deviceId] and frames it as from
   /// THIS device — the [FriendEncrypt] the box's friend handoff uses (the

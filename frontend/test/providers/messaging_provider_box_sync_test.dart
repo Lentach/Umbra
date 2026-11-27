@@ -241,6 +241,7 @@ const ContactOutbound _selfQueue3 = ContactOutbound(
   peerDeviceId: 3,
   sid: 'self-3',
   sealPub: 'seal',
+  idk: null,
 );
 
 void main() {

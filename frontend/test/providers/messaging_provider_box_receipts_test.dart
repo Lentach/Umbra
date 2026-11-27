@@ -199,11 +199,19 @@ VerifiedDeviceList _enrolled(List<int> live) => VerifiedDeviceList.enrolled(
   ],
 );
 
-ContactOutbound _address(int device) =>
-    ContactOutbound(peerDeviceId: device, sid: 'sid-$device', sealPub: 'seal');
+ContactOutbound _address(int device) => ContactOutbound(
+  peerDeviceId: device,
+  sid: 'sid-$device',
+  sealPub: 'seal',
+  idk: null,
+);
 
-ContactOutbound _selfQueue(int device) =>
-    ContactOutbound(peerDeviceId: device, sid: 'self-$device', sealPub: 'seal');
+ContactOutbound _selfQueue(int device) => ContactOutbound(
+  peerDeviceId: device,
+  sid: 'self-$device',
+  sealPub: 'seal',
+  idk: null,
+);
 
 const Map<String, dynamic> _bobConv = {
   'id': 10,

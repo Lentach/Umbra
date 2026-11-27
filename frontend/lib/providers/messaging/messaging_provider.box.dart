@@ -295,7 +295,18 @@ extension MessagingBox on MessagingProvider {
           });
         }
         link.friendRekeyAnswered(msg.senderId, device);
-        return _takeFriendHandoff(link, msg.senderId, device, plaintext);
+        return _takeFriendHandoff(
+          link,
+          msg.senderId,
+          device,
+          plaintext,
+          learnedUnder: await _frameIdentity(
+            enc,
+            msg.senderId,
+            device,
+            msg.encryptedContent!,
+          ),
+        );
       case E2eEnvelope.typeQueueHandoffAck when link != null:
         final sid = E2eEnvelope.parseQueueHandoffAck(plaintext);
         if (sid == null) {

@@ -484,12 +484,14 @@ class _RetireSpy implements BoxFirstContactLink {
     required String sid,
     required String sealPub,
     required E2eProfile profile,
+    required String? learnedUnder,
   }) => _inner.acceptFirstContact(
     userId,
     deviceId,
     sid: sid,
     sealPub: sealPub,
     profile: profile,
+    learnedUnder: learnedUnder,
   );
 
   @override

@@ -153,6 +153,7 @@ class _LearnedOutbox extends SendOutbox {
             peerDeviceId: 1,
             sid: _queue(),
             sealPub: boxAddress(1).sealPub,
+            idk: null,
           ),
         }
       : const {};
@@ -330,6 +331,7 @@ class _Link implements BoxFriendLink {
     int deviceId, {
     required String sid,
     required String sealPub,
+    required String? learnedUnder,
   }) async {
     learned = sid;
     await _send(jsonEncode(E2eEnvelope.buildQueueHandoffAck(sid: sid)));

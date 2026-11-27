@@ -231,11 +231,16 @@ ContactOutbound _address(int device, {bool relays = false}) => ContactOutbound(
   peerDeviceId: device,
   sid: 'sid-$device',
   sealPub: 'seal',
+  idk: null,
   relays: relays,
 );
 
-ContactOutbound _selfQueue(int device) =>
-    ContactOutbound(peerDeviceId: device, sid: 'self-$device', sealPub: 'seal');
+ContactOutbound _selfQueue(int device) => ContactOutbound(
+  peerDeviceId: device,
+  sid: 'self-$device',
+  sealPub: 'seal',
+  idk: null,
+);
 
 const Map<String, dynamic> _conv = {
   'id': 10,

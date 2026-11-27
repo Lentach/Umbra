@@ -178,6 +178,7 @@ ContactOutbound _address(int device) => ContactOutbound(
   peerDeviceId: device,
   sid: '${String.fromCharCode(0x40 + device) * 42}E',
   sealPub: '${'b' * 42}w',
+  idk: null,
 );
 
 void main() {

@@ -153,11 +153,18 @@ class ContactQueue {
 /// it covers the account. Learned from its frames, so the contact backup
 /// drops it ([ContactRecord.toBackupJson]): a capability learned must not
 /// move the backup's `rev`.
+///
+/// [idk]: the account identity (base64) that authenticated the frame this
+/// address was learned from. REQUIRED so no rebuild can drop it silently;
+/// null only for an address not yet migrated, or learned before the friend's
+/// anchor was pinned (it is tagged at its first pin). The contact backup
+/// carries it. Nothing reads it to decide a send yet.
 class ContactOutbound {
   const ContactOutbound({
     required this.peerDeviceId,
     required this.sid,
     required this.sealPub,
+    required this.idk,
     this.relays = false,
   });
 
@@ -165,21 +172,37 @@ class ContactOutbound {
     peerDeviceId: j['peerDeviceId'] as int,
     sid: j['sid'] as String,
     sealPub: j['sealPub'] as String,
+    idk: j[idkKey] as String?,
     relays: j[relaysKey] == true,
   );
 
   /// Its key: [ContactRecord.toBackupJson] drops it.
   static const String relaysKey = 'rl';
 
+  /// The key of [idk] in the JSON.
+  static const String idkKey = 'idk';
+
   final int peerDeviceId;
   final String sid;
   final String sealPub;
+  final String? idk;
   final bool relays;
+
+  /// A copy with the named fields replaced; [idk] cannot be cleared, only
+  /// kept or set.
+  ContactOutbound copyWith({String? idk, bool? relays}) => ContactOutbound(
+    peerDeviceId: peerDeviceId,
+    sid: sid,
+    sealPub: sealPub,
+    idk: idk ?? this.idk,
+    relays: relays ?? this.relays,
+  );
 
   Map<String, dynamic> toJson() => {
     'peerDeviceId': peerDeviceId,
     'sid': sid,
     'sealPub': sealPub,
+    if (idk != null) idkKey: idk,
     if (relays) relaysKey: true,
   };
 }

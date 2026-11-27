@@ -656,6 +656,7 @@ void main() {
               peerDeviceId: 2,
               sid: old.sid,
               sealPub: old.sealPub,
+              idk: null,
             ),
             BoxFrame(
               kind: BoxFrameKind.whisper,

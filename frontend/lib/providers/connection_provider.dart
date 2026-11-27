@@ -499,7 +499,15 @@ class ConnectionProvider extends ChangeNotifier {
         // is never named to the server by a lookup of this device.
         ..isBoxOnlyPeer = ((peer) => contacts.byUserId(peer)?.boxOrigin != null)
         ..servedBundleFor = ((peer, device) =>
-            contacts.byUserId(peer)?.boxOrigin?.bundles[device]);
+            contacts.byUserId(peer)?.boxOrigin?.bundles[device])
+        // Invariant slice 1: an address learned before its identity tag
+        // existed is tagged with the anchor it was learned under, before that
+        // anchor moves (a failed stamp refuses the move) and at a first pin.
+        ..wireAnchorTags(
+          beforeAnchorMoves: contacts.stampUntaggedAddresses,
+          anchorPinned: (peer, identity) =>
+              unawaited(contacts.stampUntaggedAddresses(peer, identity)),
+        );
       if (_box == null || _boxUserId != userId) {
         _box?.dispose();
         _boxMedia?.dispose();
@@ -515,6 +523,9 @@ class ConnectionProvider extends ChangeNotifier {
           emit: emit,
           // E9: box push registration on every contact queue.
           push: PushBoxSource(),
+          // The synchronous mirror of a friend's pinned identity: what a
+          // handoff must have been learned under (invariant slice 1).
+          anchorOf: _encryptionProvider?.accountAnchorSync,
         );
         // Issue #206: no queue is subscribed before this connect's account
         // socket confirmed the session (`socketReady`); the connect gate

@@ -237,6 +237,7 @@ class _Device {
         entry.senderDeviceId,
         sid: handoff.sid,
         sealPub: handoff.sealPub,
+        learnedUnder: null,
       );
       return taken != FriendWrite.retryLater;
     }
@@ -292,6 +293,7 @@ class _Device {
           peerDeviceId: peer.deviceId,
           sid: peer.store.requestQueue!.sid,
           sealPub: peer.store.requestQueue!.sealPub,
+          idk: null,
         ),
   ];
 
@@ -800,6 +802,7 @@ void main() {
               ..[0] = 0xEE
               ..[1] = f,
           ),
+          idk: null,
         );
       }
       final session = BoxSession(
@@ -1012,6 +1015,7 @@ void main() {
         peerDeviceId: 3,
         sid: boxB64(_bytes(32, 0xEE)),
         sealPub: boxB64(_bytes(32, 0xEF)),
+        idk: null,
       );
       await a.store.update(5, (c) => c!.copyWith(outbound: [held]));
 
@@ -1048,6 +1052,7 @@ void main() {
         peerDeviceId: 3,
         sid: boxB64(_bytes(32, 0xEE)),
         sealPub: boxB64(_bytes(32, 0xEF)),
+        idk: null,
       );
       await a.store.update(5, (c) => c!.copyWith(outbound: [held]));
       a.session
@@ -1075,6 +1080,7 @@ void main() {
         peerDeviceId: 3,
         sid: boxB64(_bytes(32, 0xEE)),
         sealPub: boxB64(_bytes(32, 0xEF)),
+        idk: null,
       );
       await a.store.update(5, (c) => c!.copyWith(outbound: [held]));
       a.session
@@ -1449,6 +1455,7 @@ void main() {
           3,
           sid: handoff.sid,
           sealPub: handoff.sealPub,
+          learnedUnder: null,
         ),
         FriendWrite.stored,
       );
@@ -1462,6 +1469,7 @@ void main() {
         3,
         sid: handoff.sid,
         sealPub: handoff.sealPub,
+        learnedUnder: null,
       );
       a.session.runPass();
       await settle();

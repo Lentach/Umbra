@@ -13,6 +13,11 @@ extension BoxSessionConnection on BoxSession {
     _swap.e2eReady();
     _rotation.run();
     _friends.e2eReady();
+    // The anchors are loaded by now: the one migration tags every address
+    // learned before the tag existed (a kill half way, or a closed store, is
+    // harmless: the next E2E-ready runs it again).
+    final anchorOf = _anchorOf;
+    if (anchorOf != null) unawaited(_store.tagUntaggedAddresses(anchorOf));
   }
 
   /// The own verified device list was dropped (a device linked or revoked).

@@ -526,6 +526,29 @@ class EncryptionProvider extends ChangeNotifier {
     String ciphertext,
   ) => _encryptionService.friendFrameIdentityOf(userId, ciphertext);
 
+  /// The remote identity (base64) of the session with [peerId]'s [deviceId]:
+  /// for a whisper, the identity it was authenticated under. Delegates to
+  /// [EncryptionService.sessionRemoteIdentity].
+  Future<String?> sessionRemoteIdentity(int peerId, {int deviceId = 1}) =>
+      _encryptionService.sessionRemoteIdentity(peerId, deviceId: deviceId);
+
+  /// [peerId]'s pinned account identity (base64) without an await; null when
+  /// none. Delegates to [EncryptionService.accountAnchorSync].
+  String? accountAnchorSync(int peerId) =>
+      _encryptionService.accountAnchorSync(peerId);
+
+  /// Wires [EncryptionService.onBeforeAnchorMoves] (stamp-before-move) and
+  /// [EncryptionService.onAccountAnchorPinned] (tag at first pin).
+  void wireAnchorTags({
+    required Future<bool> Function(int peerId, String oldAnchorBase64)
+    beforeAnchorMoves,
+    required void Function(int peerId, String identityBase64) anchorPinned,
+  }) {
+    _encryptionService
+      ..onBeforeAnchorMoves = beforeAnchorMoves
+      ..onAccountAnchorPinned = anchorPinned;
+  }
+
   /// Ensure a Signal session exists with [recipientId]'s [deviceId]
   /// (default 1 — the pre-multi-device address). If not, fetches that
   /// device's pre-key bundle from the server (via emit callback) and builds a

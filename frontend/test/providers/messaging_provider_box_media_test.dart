@@ -505,6 +505,7 @@ void main() {
         peerDeviceId: 1,
         sid: 'sid-1',
         sealPub: 'seal-1',
+        idk: null,
       );
       provider.refreshBoxDeviceLists();
       final ok = await provider.sendImageMessage(

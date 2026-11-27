@@ -85,12 +85,14 @@ class BoxSession
     QueueSeal? seal,
     BoxPushSource? push,
     DateTime Function()? now,
+    String? Function(int peerId)? anchorOf,
   }) : _box = box,
        _store = store,
        _keys = QueueKeys(box: box, store: store),
        _seal = seal ?? QueueSeal(),
        _emit = emit,
-       _now = now ?? DateTime.now {
+       _now = now ?? DateTime.now,
+       _anchorOf = anchorOf {
     _inbox = BoxInbox(box: box, store: store, seal: _seal, now: now);
     _notifiers = push == null
         ? null
@@ -138,6 +140,13 @@ class BoxSession
   late final BoxNotifiers? _notifiers;
   late final BoxPushNids? _nids;
   late final BoxFriendHandoff _friends;
+
+  /// The pinned account identity (base64) of a friend, answered without an
+  /// await from the Signal store's trusted memo; null when none is pinned
+  /// (or no mirror is wired). What a handoff must have been learned under
+  /// ([_takeHandoff]) and what the migration tags untagged addresses with
+  /// ([ContactStore.tagUntaggedAddresses]).
+  final String? Function(int peerId)? _anchorOf;
 
   /// Friend devices re-keyed this session ([rekeyFriend]), as `user:device`:
   /// once each, whether or not the re-key left (decision 70: a forged frame
@@ -346,6 +355,8 @@ class BoxSession
             peerDeviceId: s.deviceId,
             sid: sid,
             sealPub: sealPub,
+            // A sibling's self-queue is no friend address: no identity.
+            idk: null,
           ),
     };
   }
@@ -429,6 +440,7 @@ class BoxSession
       peerDeviceId: deviceId,
       sid: sid,
       sealPub: sealPub,
+      idk: null,
     );
     final ack = E2eEnvelope.buildQueueHandoffAck(sid: sid);
     final acked = await _sendToSibling(selfQueue, ack);
@@ -535,7 +547,14 @@ class BoxSession
     int deviceId, {
     required String sid,
     required String sealPub,
-  }) => _takeHandoff(userId, deviceId, sid: sid, sealPub: sealPub);
+    required String? learnedUnder,
+  }) => _takeHandoff(
+    userId,
+    deviceId,
+    sid: sid,
+    sealPub: sealPub,
+    learnedUnder: learnedUnder,
+  );
 
   @override
   Future<FriendWrite> acceptFirstContact(
@@ -544,11 +563,13 @@ class BoxSession
     required String sid,
     required String sealPub,
     required E2eProfile profile,
+    required String? learnedUnder,
   }) => _takeHandoff(
     userId,
     deviceId,
     sid: sid,
     sealPub: sealPub,
+    learnedUnder: learnedUnder,
     profile: profile,
   );
 
@@ -666,12 +687,7 @@ class BoxSession
             if (o.peerDeviceId != deviceId)
               o
             else
-              ContactOutbound(
-                peerDeviceId: deviceId,
-                sid: o.sid,
-                sealPub: o.sealPub,
-                relays: relays,
-              ),
+              o.copyWith(relays: relays),
         ],
       );
     });

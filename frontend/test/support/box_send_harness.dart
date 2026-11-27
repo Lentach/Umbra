@@ -396,6 +396,7 @@ ContactOutbound boxAddress(int device) => ContactOutbound(
   peerDeviceId: device,
   sid: 'sid-$device',
   sealPub: 'seal-$device',
+  idk: null,
 );
 
 VerifiedDeviceList enrolledList(

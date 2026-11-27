@@ -33,12 +33,15 @@ abstract interface class BoxFirstContactLink {
   /// its request offered is stored as that device's address, acked, and
   /// ours handed into it with our [profile] (decision 55) — the item-5
   /// handoff's store → ack → hand-back, on a record already `friend`.
+  /// [learnedUnder]: the identity the request was authenticated under, as in
+  /// [BoxFriendLink.takeFriendHandoff].
   Future<FriendWrite> acceptFirstContact(
     int userId,
     int deviceId, {
     required String sid,
     required String sealPub,
     required E2eProfile profile,
+    required String? learnedUnder,
   });
 
   /// A pending request of [userId]'s expired (E15i): this device's queues
@@ -150,6 +153,9 @@ class FirstContactPeer {
                     peerDeviceId: deviceId,
                     sid: sid,
                     sealPub: sealPub,
+                    // The identity this served device's bundle carries: the
+                    // key the lookup's answer was verified under.
+                    idk: bundle['identityPublicKey'] as String,
                   )
                 : null,
           ));

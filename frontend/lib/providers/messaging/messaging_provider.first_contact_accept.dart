@@ -223,6 +223,9 @@ extension MessagingFirstContactAccept on MessagingProvider {
         sid: queue.sid,
         sealPub: queue.sealPub,
         profile: me,
+        // The identity the accept just pinned and the kept request frame
+        // carries (`_openKept` read only frames under it).
+        learnedUnder: peer.identityKey,
       );
     }
     link.firstContactFriend(peer.userId);

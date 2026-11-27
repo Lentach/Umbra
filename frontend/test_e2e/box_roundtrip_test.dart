@@ -302,6 +302,7 @@ class _AppSide {
             entry.senderDeviceId,
             sid: handoff.sid,
             sealPub: handoff.sealPub,
+            learnedUnder: null,
           ) !=
           FriendWrite.retryLater;
     }
@@ -425,6 +426,7 @@ class _FirstContactSide {
             entry.senderDeviceId,
             sid: handoff.sid,
             sealPub: handoff.sealPub,
+            learnedUnder: null,
           ) !=
           FriendWrite.retryLater;
     }
@@ -872,6 +874,7 @@ void main() {
               sid: offered.sid,
               sealPub: offered.sealPub,
               profile: b.profile,
+              learnedUnder: null,
             ),
             FriendWrite.stored,
           );

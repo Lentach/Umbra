@@ -149,7 +149,12 @@ class _Encryption extends EncryptionProvider {
 
 class _Outbox implements BoxOutbox {
   final Map<int, ContactOutbound> bob = {
-    1: const ContactOutbound(peerDeviceId: 1, sid: 'sid-1', sealPub: 'seal'),
+    1: const ContactOutbound(
+      peerDeviceId: 1,
+      sid: 'sid-1',
+      sealPub: 'seal',
+      idk: null,
+    ),
   };
   final List<BoxFrame> delivered = [];
   int _next = kFirstLocalMessageId + 500;

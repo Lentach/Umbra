@@ -149,6 +149,7 @@ extension MessagingFirstContactReceive on MessagingProvider {
       sid: offered.sid,
       sealPub: offered.sealPub,
       profile: me,
+      learnedUnder: await _frameIdentity(enc, user, device, signal),
     );
     link.firstContactFriend(user);
     await _relayFriendship(user);

@@ -405,6 +405,7 @@ void main() {
       peerDeviceId: 2,
       sid: boxB64(_bytes(32, 0x70)),
       sealPub: boxB64(sealKeys.publicKey),
+      idk: null,
     );
 
     Future<void> friend({ContactState state = ContactState.friend}) =>
@@ -560,8 +561,18 @@ void main() {
       () async {
         await boxUp('S1');
         for (final bad in [
-          ContactOutbound(peerDeviceId: 2, sid: 'short', sealPub: address.sealPub),
-          ContactOutbound(peerDeviceId: 2, sid: address.sid, sealPub: 'short'),
+          ContactOutbound(
+            peerDeviceId: 2,
+            sid: 'short',
+            sealPub: address.sealPub,
+            idk: null,
+          ),
+          ContactOutbound(
+            peerDeviceId: 2,
+            sid: address.sid,
+            sealPub: 'short',
+            idk: null,
+          ),
         ]) {
           expect(
             await session.deliver(bad, Uint8List(4)),
@@ -648,6 +659,7 @@ void main() {
           peerDeviceId: 2,
           sid: 'short',
           sealPub: address.sealPub,
+          idk: null,
         );
         expect(
           await session.uploadMedia(bad, frameMediaToRung(Uint8List(1))),

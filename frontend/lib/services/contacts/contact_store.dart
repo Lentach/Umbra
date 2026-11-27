@@ -369,6 +369,57 @@ class ContactStore {
     ContactRecord? Function(ContactRecord? current) mutate,
   ) => reconcile([peerUserId], (_, current) => mutate(current));
 
+  /// [record] with [idk] on every address it holds untagged, else null (no
+  /// write). Both lists: the addresses a friend handed us and the request
+  /// addresses a first contact served.
+  static ContactRecord? _tagged(ContactRecord record, String idk) {
+    final origin = record.boxOrigin;
+    final outboundUntagged = record.outbound.any((o) => o.idk == null);
+    final servedUntagged = origin?.addresses.any((a) => a.idk == null) ?? false;
+    if (!outboundUntagged && !servedUntagged) return null;
+    ContactOutbound tag(ContactOutbound o) =>
+        o.idk == null ? o.copyWith(idk: idk) : o;
+    return record.copyWith(
+      outbound: [for (final o in record.outbound) tag(o)],
+      boxOrigin: servedUntagged
+          ? origin!.copyWith(addresses: [for (final a in origin.addresses) tag(a)])
+          : null,
+    );
+  }
+
+  /// Stamp-before-move and first-pin tagging: [peerUserId]'s untagged
+  /// addresses get [idk] (the anchor they were learned under: the OLD one
+  /// when the anchor is about to move, the new pin at a first pin). One
+  /// store update, idempotent; true when the write committed (or there was
+  /// nothing to write), false for a closed store or a failed write.
+  Future<bool> stampUntaggedAddresses(int peerUserId, String idk) =>
+      update(peerUserId, (current) {
+        return current == null ? null : _tagged(current, idk);
+      });
+
+  /// The one migration: every FRIEND whose anchor is pinned ([anchorOf],
+  /// null when none) has its untagged addresses tagged with it; a friend
+  /// with no anchor yet is tagged at its first pin
+  /// ([stampUntaggedAddresses]). Idempotent, one write per changed record,
+  /// so a kill half way leaves the rest for the next run. True when every
+  /// write committed.
+  Future<bool> tagUntaggedAddresses(String? Function(int peerId) anchorOf) {
+    final due = [
+      for (final r in all)
+        if (r.state == ContactState.friend &&
+            anchorOf(r.userId) != null &&
+            _tagged(r, '') != null)
+          r.userId,
+    ];
+    if (due.isEmpty) return Future.value(true);
+    return reconcile(due, (peerId, current) {
+      final anchor = anchorOf(peerId);
+      if (current == null || anchor == null) return null;
+      if (current.state != ContactState.friend) return null;
+      return _tagged(current, anchor);
+    });
+  }
+
   /// [update] for a whole server list, plus the membership decision, in ONE
   /// lock over ONE ground-truth read: every listed peer goes through
   /// [mutate]; every OTHER readable record on disk goes through [sweep],
