@@ -93,6 +93,16 @@ class _Enc extends EncryptionProvider {
     return super.drainReleasedFrames(peerId);
   }
 
+  /// Runs first inside [holdForeignFrame], the await the red hold takes to
+  /// be set (review 3, P3-1): the window between the refusal and the bar.
+  Future<void> Function()? onHoldForeign;
+
+  @override
+  Future<void> holdForeignFrame(int userId, String ciphertext) async {
+    await onHoldForeign?.call();
+    return super.holdForeignFrame(userId, ciphertext);
+  }
+
   /// While set, an encrypt for the friend waits for it AFTER Signal sealed
   /// (the ratchet moved), before the frame is handed back: a seal in flight.
   Completer<void>? afterSeal;
@@ -1628,6 +1638,58 @@ void main() {
       expect(b.reader.sendWaitReason(row), SendWaitReason.redBarPending);
       expect(b.reader.sendRefusedForIdentity(row.tempId), isFalse);
       expect((await b.enc.boxUnsentWaiting(b.userId)).keys, [row.tempId]);
+    });
+
+    /// A pump kick in the window of the refusal: the calm hold still closes
+    /// the gate, and not one row is written (review 3, P3-1).
+    ({bool? calmHeld, int? delivered}) inWindow = (calmHeld: null, delivered: null);
+
+    void watchWindow(_Side side, SendOutbox outbox) {
+      side.enc.onHoldForeign = () async {
+        side.reader.kickSendPump(side.peerId);
+        await pumpEventQueue(times: 50);
+        inWindow = (
+          calmHeld: side.reader.hasCalmHold(side.peerId),
+          delivered: outbox.delivered.length,
+        );
+      };
+    }
+
+    test('P3-1 window, refused tap (key no longer eligible): between the '
+        'refusal and the red hold no row goes out', () async {
+      await calmRestore();
+      final outbox = await boxForB();
+      final first = await writeFromB('first');
+      b.enc.keyChangeWarnings = () => true;
+      watchWindow(b, outbox);
+
+      await tap(b);
+
+      expect(inWindow.calmHeld, isTrue, reason: 'the calm hold closed the gate');
+      expect(inWindow.delivered, 0, reason: 'nothing written in the window');
+      expectRed(b);
+      expect(outbox.delivered, isEmpty);
+      expect(_waits(b.reader, first.tempId), isTrue);
+    });
+
+    test('P3-1 window, refused tap (the served key is not the frame\'s): '
+        'between the refusal and the red hold no row goes out', () async {
+      final restored = await calmRestore();
+      await tap(b);
+      expect(await anchorOfA(), await idOf(restored));
+      final outbox = await boxForB();
+      await handOffFrom(a);
+      expectCalm(b);
+      final row = await writeFromB('into the refusal');
+      watchWindow(b, outbox);
+
+      await tap(b);
+
+      expect(inWindow.calmHeld, isTrue, reason: 'the calm hold closed the gate');
+      expect(inWindow.delivered, 0, reason: 'nothing written in the window');
+      expectRed(b);
+      expect(outbox.delivered, isEmpty);
+      expect(_waits(b.reader, row.tempId), isTrue);
     });
 
     test('E4: a transient failure of the tap keeps the message waiting, '

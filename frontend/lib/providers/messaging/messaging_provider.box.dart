@@ -450,8 +450,11 @@ extension MessagingBox on MessagingProvider {
       notifyListeners();
       return false;
     }
+    // The calm hold goes only AFTER the red hold is set: it closes the gate
+    // for the await in between (review 3, P3-1).
+    final held2 = await _holdForeignFrame(msg, enc, peer, remint: remint);
     _calmHolds.remove(msg.senderId);
-    return _holdForeignFrame(msg, enc, peer, remint: remint);
+    return held2;
   }
 
   /// What a calm hold of [peerId] shows, or null when none waits.
@@ -472,8 +475,8 @@ extension MessagingBox on MessagingProvider {
     // no request at all (a lookup spends one of the friend's pre-keys).
     if (!await enc.calmHoldEligible(peerId)) {
       if (!identical(_calmHolds[peerId], hold)) return;
-      _calmHolds.remove(peerId);
       await enc.holdForeignFrame(peerId, hold.ciphertext);
+      if (identical(_calmHolds[peerId], hold)) _calmHolds.remove(peerId);
       notifyListeners();
       return;
     }
@@ -493,8 +496,8 @@ extension MessagingBox on MessagingProvider {
       case CalmConfirm.refused:
         // The red hold takes over; what waited stays waiting under the red
         // bar and goes out after the acknowledge.
-        _calmHolds.remove(peerId);
         await enc.holdForeignFrame(peerId, hold.ciphertext);
+        if (identical(_calmHolds[peerId], hold)) _calmHolds.remove(peerId);
       case CalmConfirm.transient:
         hold.state = CalmHoldState.failed;
     }
