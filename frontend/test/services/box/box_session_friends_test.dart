@@ -1995,6 +1995,38 @@ void main() {
         expect(a.store.byUserId(5), isNull);
       });
 
+      test('P2-2: a revoke first seen AFTER a re-announce still rotates our '
+          'lead away: the revoked device loses it', () async {
+        final old = a.friend.queues.single;
+        // The re-announce clears what was acked and handed; the red hold
+        // keeps it from being handed again.
+        a.session.redHeld = (_) => true;
+        a.session.identityReminted();
+        await settle();
+        expect(a.friend.queues.single.ackedBy, isEmpty);
+        expect(a.friend.queues.single.handedAt, isEmpty);
+        a
+          ..friendLive = {4}
+          ..friendRevoked = {3};
+        a.session.friendDevicesChanged(5);
+        await settle();
+        final queues = a.friend.queues;
+        expect(queues, hasLength(2), reason: 'the lead rotated');
+        expect(queues.first.sid, isNot(old.sid));
+        expect(queues.last.rid, old.rid);
+        expect(queues.last.retiredAt, isNotNull);
+        expect(a.outboundOf(3), isNull);
+        a.session.redHeld = (_) => false;
+        a.session.friendDevicesChanged(5);
+        await settle();
+        expect(b2.outboundOf(2)?.sid, a.friend.queues.first.sid);
+        expect(
+          b.outboundOf(2)?.sid,
+          old.sid,
+          reason: 'the revoked device never learns the new queue',
+        );
+      });
+
       test(
         'our list goes as a list_update to every live device of the friend '
         'we hold an address for, and only a box that took every frame '
