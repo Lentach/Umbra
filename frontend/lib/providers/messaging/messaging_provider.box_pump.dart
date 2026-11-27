@@ -204,7 +204,6 @@ extension MessagingBoxPump on MessagingProvider {
         ),
     ]..sort(_byWaitingOrder);
     for (final w in all) {
-      if (_refusingChats.contains(w.conversationId)) continue;
       if (_friendOfConversation(w.conversationId, own) == friend) return w;
     }
     return null;
@@ -494,16 +493,17 @@ extension MessagingBoxPump on MessagingProvider {
     );
   }
 
-  /// The loaded rows and RAM-only attachments that waited for [friend] stop
-  /// waiting NOW (synchronously, like the deferral list this replaces), and
-  /// become ordinary failed rows. [conversationIds] adds chats already taken
-  /// off the list. Returns their tempIds and the chats of the friend.
-  ({Set<int> ids, List<String> ended}) _endLoadedWaiting(
+  /// The friendship with [friend] ended: everything that waited for it (the
+  /// loaded rows, RAM-only attachments and the stored records of its chats,
+  /// [conversationIds] adding chats already taken off the list) becomes an
+  /// ordinary failed row, the person's to delete or retry.
+  Future<void> _endWaitingOfFriend(
     int friend,
     Iterable<int> conversationIds,
-  ) {
+  ) async {
     final own = _currentUserId;
-    if (own == null) return (ids: const <int>{}, ended: const <String>[]);
+    final enc = _encryptionProvider;
+    if (own == null) return;
     final ids = <int>{
       ...conversationIds,
       for (final c in [...?_conversationsProvider?.conversations])
@@ -521,40 +521,17 @@ extension MessagingBoxPump on MessagingProvider {
         ended.add(m.tempId!);
       }
     }
-    for (final t in ended) {
-      _setRowWaiting(t, waiting: false);
-    }
-    return (ids: ids, ended: ended.toList());
-  }
-
-  /// The waiting records of the chats [ids] stop waiting; returns their
-  /// tempIds.
-  Future<List<String>> _endStoredWaiting(Set<int> ids) async {
-    final own = _currentUserId;
-    final enc = _encryptionProvider;
-    if (own == null || enc == null || ids.isEmpty) return const [];
-    final ended = <String>[];
+    ended.forEach((t) => _setRowWaiting(t, waiting: false));
+    if (enc == null || ids.isEmpty) return;
+    final stored = <String>[];
     final waiting = await enc.boxUnsentWaiting(own);
     for (final MapEntry(:key, :value) in waiting.entries) {
       if (!ids.contains(value['c'])) continue;
-      ended.add(key);
+      stored.add(key);
       await enc.setBoxUnsentWaiting(own, key, waiting: false);
     }
     if (_currentUserId == own) {
-      for (final t in ended) {
-        _setRowWaiting(t, waiting: false);
-      }
+      stored.forEach((t) => _setRowWaiting(t, waiting: false));
     }
-    return ended;
-  }
-
-  /// The friendship with [friend] ended: everything that waited for it
-  /// becomes an ordinary failed row, the person's to delete or retry.
-  Future<void> _endWaitingOfFriend(
-    int friend,
-    Iterable<int> conversationIds,
-  ) async {
-    final loaded = _endLoadedWaiting(friend, conversationIds);
-    await _endStoredWaiting(loaded.ids);
   }
 }

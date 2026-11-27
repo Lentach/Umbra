@@ -367,24 +367,6 @@ void main() {
     expect(rowOf('one').waitingToSend, isFalse);
   });
 
-  test('P3-4: a refused tap ends the stored waiting records in the same step '
-      'as the rows: a pump kick in between never sends a refused record',
-      () async {
-    await typed('one');
-    expect(rowOf('one').waitingToSend, isTrue);
-    outbox.closed = false;
-    // The tap is refused and, in the same turn, a state change kicks the pump.
-    provider
-      ..refuseCalmDeferredForTest(2)
-      ..kickSendPump(2);
-    await h.pump(80);
-
-    expect(outbox.delivered, isEmpty, reason: 'a refused record is not sent');
-    expect(rowOf('one').waitingToSend, isFalse);
-    expect(rowOf('one').deliveryStatus, MessageDeliveryStatus.failed);
-    expect((await encryption.boxUnsentWaiting(1)).keys, isEmpty);
-  });
-
   test('P424: Retry on an ordinary failed row while the gate is closed joins '
       'the END of the line (a waiting row), it is not attempted', () async {
     outbox

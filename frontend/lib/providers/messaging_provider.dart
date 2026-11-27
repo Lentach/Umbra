@@ -230,7 +230,7 @@ class MessagingProvider extends ChangeNotifier {
       _identityRefusedSendTempIds.add(tempId);
 
   /// Whether a calm hold is pending for friend [peerId]: the friend write
-  /// gate closes on it (a red hold before the acknowledge does not).
+  /// gate closes on it, as the red bar does.
   bool hasCalmHold(int peerId) => _calmHolds.containsKey(peerId);
 
   // The send pump's state (`messaging_provider.box_pump.dart`). A message the
@@ -249,10 +249,6 @@ class MessagingProvider extends ChangeNotifier {
   /// only in RAM. They wait in this process; after a restart they are gone
   /// like any failed attachment.
   final Map<String, ({int conversationId, int at})> _ramWaiting = {};
-
-  /// Chats whose stored waiting records a refused calm tap is still ending
-  /// ([_refuseCalmDeferred]): the pump sends none of them meanwhile.
-  final Set<int> _refusingChats = {};
 
   /// tempIds whose last attempt failed for a reason that never passes (too
   /// long, quote gone): the pump turns them into ordinary failed rows.

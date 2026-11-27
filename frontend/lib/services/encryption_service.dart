@@ -901,12 +901,6 @@ class EncryptionService {
     if (held || calm) onPeerIdentityChanged?.call(peerId);
   }
 
-  /// A calm hold turned visible while messages waited on it: the chat names
-  /// the refusal for them (cleared with the ceremony, as any refusal).
-  void markRefusedIdentity(int peerId) {
-    if (_peersRefusedIdentity.add(peerId)) onPeerIdentityChanged?.call(peerId);
-  }
-
   /// Ends the calm hold (the key was confirmed and the frames drain, or it
   /// turned into the visible hold).
   void releaseCalm(int peerId) {

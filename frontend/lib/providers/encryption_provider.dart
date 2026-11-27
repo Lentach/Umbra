@@ -303,12 +303,6 @@ class EncryptionProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Delegates to [EncryptionService.markRefusedIdentity].
-  void markRefusedIdentity(int userId) {
-    _encryptionService.markRefusedIdentity(userId);
-    notifyListeners();
-  }
-
   /// Friends whose calm key is being confirmed by the person's tap right now:
   /// the lookup that tap made is the one lookup it owes.
   final Set<int> _calmConfirming = <int>{};

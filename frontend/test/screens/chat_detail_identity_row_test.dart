@@ -94,13 +94,9 @@ class _AlarmedEncryption extends EncryptionProvider {
   @override
   Future<bool> calmHoldEligible(int userId) async => true;
 
-  /// What the red-turn path told the chat: the peer is named refused, and
-  /// its frame is held visibly.
   @override
-  void markRefusedIdentity(int userId) {
-    refusedPeers.add(userId);
-    notifyListeners();
-  }
+  bool redBarShows(int peerId) =>
+      refusedPeers.contains(peerId) || changedPeers.contains(peerId);
 
   @override
   Future<void> holdForeignFrame(int userId, String ciphertext) async {
@@ -733,9 +729,9 @@ void main() {
   });
 
   for (final embedded in [false, true]) {
-    testWidgets('a held row names the wait, and after a REFUSED tap names the '
-        'key-change refusal exactly as a red-hold row does, never a bare '
-        'Retry (${embedded ? 'embedded' : 'full'} layout)', (tester) async {
+    testWidgets('a held row names the wait, and after a REFUSED tap keeps '
+        'waiting under the red bar with its words, never a bare Retry '
+        '(${embedded ? 'embedded' : 'full'} layout)', (tester) async {
       final en = await AppLocalizations.delegate.load(const Locale('en'));
       final enc = await _pumpChat(
         tester,
@@ -757,9 +753,10 @@ void main() {
       await tester.pump();
 
       expect(find.byType(PeerIdentityChangedRow), findsOneWidget);
-      expect(find.text(en.messageSendBlockedKeysChanged), findsOneWidget);
+      expect(find.text(en.messageWaitingAcceptRedBar), findsOneWidget);
+      expect(find.text(en.messageSendBlockedKeysChanged), findsNothing);
       expect(find.text(en.messageWaitingTapCalmLine), findsNothing);
-      expect(find.text(en.messageRetrySend), findsOneWidget);
+      expect(find.text(en.messageRetrySend), findsNothing);
     });
   }
 

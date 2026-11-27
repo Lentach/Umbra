@@ -1607,8 +1607,8 @@ void main() {
     });
 
     test("E3: the tap is refused (the served key is not the frame's): the "
-        'waiting message reads as refused for a key change, like a red-hold '
-        'refusal, and nothing was sent on the old session', () async {
+        'waiting message KEEPS waiting under the red bar (its words are the '
+        "red bar's), nothing is written anywhere", () async {
       final restored = await calmRestore();
       await tap(b);
       expect(await anchorOfA(), await idOf(restored));
@@ -1624,12 +1624,10 @@ void main() {
 
       expectRed(b);
       expect(outbox.delivered, isEmpty);
-      expect(_waits(b.reader, row.tempId), isFalse);
-      expect(b.reader.sendRefusedForIdentity(row.tempId), isTrue);
-      expect(
-        b.reader.messages.singleWhere((m) => m.tempId == row.tempId).deliveryStatus,
-        MessageDeliveryStatus.failed,
-      );
+      expect(_waits(b.reader, row.tempId), isTrue);
+      expect(b.reader.sendWaitReason(row), SendWaitReason.redBarPending);
+      expect(b.reader.sendRefusedForIdentity(row.tempId), isFalse);
+      expect((await b.enc.boxUnsentWaiting(b.userId)).keys, [row.tempId]);
     });
 
     test('E4: a transient failure of the tap keeps the message waiting, '
@@ -1738,7 +1736,7 @@ void main() {
     for (final warnings in [false, true]) {
       test('F5: the friend became ${warnings ? 'warned about (warnings ON)' : 'verified'} '
           'while the line waited: the tap turns the hold red with no lookup '
-          'and no bundle fetch, and the waiting message reads as refused',
+          'and no bundle fetch, and the waiting message keeps waiting',
           () async {
         await calmRestore();
         final outbox = await boxForB();
@@ -1760,14 +1758,15 @@ void main() {
         expectRed(b);
         expect(await anchorOfA(), before);
         expect(outbox.delivered, isEmpty);
-        expect(_waits(b.reader, row.tempId), isFalse);
-        expect(b.reader.sendRefusedForIdentity(row.tempId), isTrue);
-        expect(b.enc.peersRefusedIdentity, contains(1));
+        expect(_waits(b.reader, row.tempId), isTrue);
+        expect(b.reader.sendWaitReason(row), SendWaitReason.redBarPending);
+        expect(b.reader.sendRefusedForIdentity(row.tempId), isFalse);
+        expect((await b.enc.boxUnsentWaiting(b.userId)).keys, [row.tempId]);
       });
     }
 
     test('a re-offer that finds the line no longer eligible turns it red '
-        'and the waiting message reads as refused, not stuck', () async {
+        'and the waiting message keeps waiting under the red bar', () async {
       await calmRestore();
       final outbox = await boxForB();
       final row = await writeFromB('waiting');
@@ -1776,8 +1775,9 @@ void main() {
       await reoffer(b);
 
       expectRed(b);
-      expect(_waits(b.reader, row.tempId), isFalse);
-      expect(b.reader.sendRefusedForIdentity(row.tempId), isTrue);
+      expect(_waits(b.reader, row.tempId), isTrue);
+      expect(b.reader.sendWaitReason(row), SendWaitReason.redBarPending);
+      expect(b.reader.sendRefusedForIdentity(row.tempId), isFalse);
       expect(outbox.delivered, isEmpty);
     });
 
@@ -2328,6 +2328,46 @@ void main() {
 
       expect(onOld(outbox), isEmpty);
       expect(outbox.delivered, hasLength(3), reason: 'once each, nowhere else');
+      final read = [
+        for (final f in onNew(outbox, restored))
+          await readByRestored(restored, f),
+      ];
+      expect(read, hasLength(3));
+      expect(read[0], contains('first'));
+      expect(read[1], contains('second'));
+      expect(read[2], contains('third'));
+    });
+
+    test('a refused tap keeps the rows WAITING under the red bar (nothing '
+        'written, nothing ended); the red acknowledge and the handoff read '
+        'send them once, in order, to the NEW queue; a row typed after the '
+        'refusal joins the end', () async {
+      final restored = await calmRestore();
+      final outbox = await boxForB();
+      final first = await writeFromB('first');
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+      await writeFromB('second');
+      b.enc.keyChangeWarnings = () => true; // no longer eligible: the tap is refused
+      b.enc.onRedHoldEnded = (peer) => b.reader.kickSendPump(peer);
+
+      await tap(b);
+
+      expectRed(b);
+      expect(outbox.delivered, isEmpty, reason: 'zero frames written');
+      expect(_waits(b.reader, first.tempId), isTrue);
+      expect(b.reader.sendWaitReason(first), SendWaitReason.redBarPending);
+      expect((await b.enc.boxUnsentWaiting(b.userId)).keys, hasLength(2));
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+      await writeFromB('third'); // typed after the refusal
+      expect(outbox.delivered, isEmpty);
+
+      expect(await b.enc.acknowledgePeerIdentity(b.peerId), isTrue);
+      await b.enc.ensureSession(b.peerId, deviceId: b.peerDevice);
+      await pumpEventQueue();
+      await reoffer(b);
+
+      expect(onOld(outbox), isEmpty);
+      expect(outbox.delivered, hasLength(3), reason: 'once each');
       final read = [
         for (final f in onNew(outbox, restored))
           await readByRestored(restored, f),

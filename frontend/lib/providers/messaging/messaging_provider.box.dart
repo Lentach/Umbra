@@ -450,9 +450,7 @@ extension MessagingBox on MessagingProvider {
       notifyListeners();
       return false;
     }
-    if (_calmHolds.remove(msg.senderId) != null) {
-      _refuseCalmDeferred(msg.senderId, enc);
-    }
+    _calmHolds.remove(msg.senderId);
     return _holdForeignFrame(msg, enc, peer, remint: remint);
   }
 
@@ -475,7 +473,6 @@ extension MessagingBox on MessagingProvider {
     if (!await enc.calmHoldEligible(peerId)) {
       if (!identical(_calmHolds[peerId], hold)) return;
       _calmHolds.remove(peerId);
-      _refuseCalmDeferred(peerId, enc);
       await enc.holdForeignFrame(peerId, hold.ciphertext);
       notifyListeners();
       return;
@@ -494,9 +491,9 @@ extension MessagingBox on MessagingProvider {
         // stale (its tag is not the pinned identity), so sends keep waiting.
         _calmHolds.remove(peerId);
       case CalmConfirm.refused:
+        // The red hold takes over; what waited stays waiting under the red
+        // bar and goes out after the acknowledge.
         _calmHolds.remove(peerId);
-        // The red hold takes over, and so does its refusal for what waited.
-        _refuseCalmDeferred(peerId, enc);
         await enc.holdForeignFrame(peerId, hold.ciphertext);
       case CalmConfirm.transient:
         hold.state = CalmHoldState.failed;
@@ -511,35 +508,6 @@ extension MessagingBox on MessagingProvider {
       enc.drainReleasedFrames(peerId).ignore();
       kickSendPump(peerId);
     }
-  }
-
-  @visibleForTesting
-  void refuseCalmDeferredForTest(int peerId) =>
-      _refuseCalmDeferred(peerId, _encryptionProvider!);
-
-  /// What waited for [peerId]'s calm line when it turns into the visible
-  /// hold: those rows read as refused for a key change (as under a red-hold
-  /// refusal) and stop waiting, and the chat names it for them
-  /// ([peersRefusedIdentity]).
-  void _refuseCalmDeferred(int peerId, EncryptionProvider enc) {
-    final loaded = _endLoadedWaiting(peerId, const []);
-    if (loaded.ended.isNotEmpty) {
-      _identityRefusedSendTempIds.addAll(loaded.ended);
-      enc.markRefusedIdentity(peerId);
-    }
-    // A record of a chat not on screen stops waiting a moment later, with
-    // the same verdict; until then the pump leaves those chats alone, so a
-    // kick in between never sends a refused record.
-    _refusingChats.addAll(loaded.ids);
-    unawaited(
-      _endStoredWaiting(loaded.ids)
-          .then((more) {
-            if (more.isEmpty) return;
-            _identityRefusedSendTempIds.addAll(more);
-            enc.markRefusedIdentity(peerId);
-          })
-          .whenComplete(() => _refusingChats.removeAll(loaded.ids)),
-    );
   }
 
   /// Holds friend frame [msg] (a PreKey message under a foreign identity)
