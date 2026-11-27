@@ -33,6 +33,8 @@ class ContactQueue {
     this.ackedBy = const [],
     this.handedAt = const {},
     this.retiredAt,
+    this.probeDevice,
+    this.probeSid,
   });
 
   factory ContactQueue.fromJson(Map<String, dynamic> j) => ContactQueue(
@@ -58,6 +60,8 @@ class ContactQueue {
             isUtc: true,
           )
         : null,
+    probeDevice: j['pd'] as int?,
+    probeSid: j['ps'] as String?,
   );
 
   final String rid;
@@ -87,6 +91,19 @@ class ContactQueue {
   /// Additive, like [ackedBy].
   final DateTime? retiredAt;
 
+  /// Set only on a PROBE queue (key-change invariant, item 9): the friend
+  /// device whose stale address [probeSid] this queue was minted for. One
+  /// per (device, stale sid); never the lead of [ContactRecord.queues].
+  /// Additive, like [ackedBy].
+  final int? probeDevice;
+
+  /// The stale address sid a probe queue was minted for ([probeDevice]).
+  final String? probeSid;
+
+  /// Whether this is a live (not retired) probe of [device]'s address [sid].
+  bool isProbeOf(int device, String sid) =>
+      retiredAt == null && probeDevice == device && probeSid == sid;
+
   /// This queue, retired at [at] (E50e).
   ContactQueue retired(DateTime at) => ContactQueue(
     rid: rid,
@@ -98,6 +115,8 @@ class ContactQueue {
     ackedBy: ackedBy,
     handedAt: handedAt,
     retiredAt: at,
+    probeDevice: probeDevice,
+    probeSid: probeSid,
   );
 
   /// This queue, acknowledged by the peer's [deviceId] as well.
@@ -133,7 +152,24 @@ class ContactQueue {
         ackedBy: ackedBy ?? this.ackedBy,
         handedAt: handedAt ?? this.handedAt,
         retiredAt: retiredAt,
+        probeDevice: probeDevice,
+        probeSid: probeSid,
       );
+
+  /// This queue as the probe of [device]'s stale address [staleSid].
+  ContactQueue asProbe(int device, String staleSid) => ContactQueue(
+    rid: rid,
+    sid: sid,
+    nid: nid,
+    authPriv: authPriv,
+    sealPriv: sealPriv,
+    sealPub: sealPub,
+    ackedBy: ackedBy,
+    handedAt: handedAt,
+    retiredAt: retiredAt,
+    probeDevice: device,
+    probeSid: staleSid,
+  );
 
   Map<String, dynamic> toJson() => {
     'rid': rid,
@@ -149,6 +185,8 @@ class ContactQueue {
           '$key': value.millisecondsSinceEpoch,
       },
     if (retiredAt != null) 'retiredAt': retiredAt!.millisecondsSinceEpoch,
+    if (probeDevice != null) 'pd': probeDevice,
+    if (probeSid != null) 'ps': probeSid,
   };
 }
 

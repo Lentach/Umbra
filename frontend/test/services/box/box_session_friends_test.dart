@@ -191,6 +191,41 @@ class _Device {
   /// Every encrypt fails: no session could be built.
   bool encryptFails = false;
 
+  /// No reader is wired (the journal is never judged) while false.
+  bool journalWired = true;
+
+  /// A calm hold is pending for the friend.
+  bool calmHold = false;
+
+  /// The identity (base64) the frames this device reads are authenticated
+  /// under, as the messaging reader hands it to the box (null: unknown).
+  String? readIdentity;
+
+  /// The remote identity of the session a probe is sealed on; null: the
+  /// pinned one (`anchorOf`).
+  String? sessionIdentity;
+
+  /// Every probe frame sealed, as the handoff it carried.
+  final List<({int device, String sid})> probes = [];
+
+  /// `MessagingProvider.encryptProbeForFriend`: the permit's handoff, on a
+  /// session whose identity the permit admits.
+  Future<BoxFrame?> encryptProbe(ProbePermit permit) async {
+    final live = friendLive;
+    if (encryptFails || live == null || !live.contains(permit.device)) {
+      return null;
+    }
+    if (!permit.admitsSession(sessionIdentity ?? anchorOf?.call(friendId))) {
+      return null;
+    }
+    probes.add((device: permit.device, sid: permit.handoffSid));
+    return BoxFrame(
+      kind: BoxFrameKind.whisper,
+      senderDeviceId: deviceId,
+      signal: Uint8List.fromList(utf8.encode(permit.handoffJson)),
+    );
+  }
+
   /// This device's clock.
   DateTime clock = DateTime.utc(2026, 9, 26, 12);
 
@@ -242,7 +277,7 @@ class _Device {
         entry.senderDeviceId,
         sid: handoff.sid,
         sealPub: handoff.sealPub,
-        learnedUnder: null,
+        learnedUnder: readIdentity,
       );
       return taken != FriendWrite.retryLater;
     }
@@ -258,6 +293,7 @@ class _Device {
             entry.peerUserId,
             entry.senderDeviceId,
             acked,
+            learnedUnder: readIdentity,
           ) !=
           FriendWrite.retryLater;
     }
@@ -355,8 +391,10 @@ class _Device {
     )..start();
     socket = box.sockets.last;
     session
-      ..consumer = read
+      ..consumer = journalWired ? read : null
+      ..calmHeld = ((_) => calmHold)
       ..encryptForFriend = encrypt
+      ..encryptProbeForFriend = encryptProbe
       ..friendLiveDevices = ((user) async =>
           user == friendId ? friendLive : null)
       ..friendRevokedDevices = ((user) async =>
@@ -934,7 +972,12 @@ void main() {
   test('an ack naming a queue we do not hold is refused', () async {
     await a.start();
     expect(
-      await a.session.friendAcked(5, 3, boxB64(_bytes(32, 0x7f))),
+      await a.session.friendAcked(
+        5,
+        3,
+        boxB64(_bytes(32, 0x7f)),
+        learnedUnder: null,
+      ),
       FriendWrite.refused,
     );
   });
@@ -2259,20 +2302,29 @@ void main() {
         await settle();
         expect(a.friend.queues.first.ackedBy, isEmpty, reason: 'due again');
         expect(a.friend.queues.first.handedAt, isEmpty, reason: 'due again');
-        expect(box.sent, isEmpty, reason: 'nothing served: not at all');
+        expect(
+          box.sent.where((s) => s == stale.sid),
+          [stale.sid],
+          reason: 'nothing served: only the probe is written to the stale '
+              'queue (b answers into a queue of ours)',
+        );
         expect(a.lookups, isEmpty, reason: 'and no lookup asked for it');
 
         a.session.takeServedAddresses(5, [requestOf(b, 'B')]);
         a.lookups.clear();
+        box.sent.clear();
         a.session.handOffTo(5);
         await settle();
         // The handoff left through b's REQUEST queue; what follows is b's own
         // ack and hand-back, written into OUR queue (not a's writes).
         expect(box.sent.first, b.store.requestQueue!.sid);
         expect(
-          box.sent.skip(1).toSet(),
-          {a.friend.queues.first.sid},
-          reason: 'b answers into a queue, never a write of a to the stale one',
+          box.sent.skip(1).toSet().difference({
+            for (final q in a.friend.queues) q.sid,
+          }),
+          isEmpty,
+          reason: 'b answers into a queue of ours (the lead or the probe '
+              'queue), never a write of a to the stale one',
         );
         expect(box.sent, isNot(contains(stale.sid)));
         expect(a.lookups, isEmpty);
@@ -2282,7 +2334,7 @@ void main() {
           'record no lookup at all', () async {
         var pin = 'A';
         await metWithAnchor(() => pin);
-        await tagged('A');
+        final stale = await tagged('A');
         await a.store.update(
           5,
           (c) => c!.copyWith(
@@ -2305,11 +2357,399 @@ void main() {
         await settle();
         expect(a.lookups, isEmpty);
         expect(
-          box.sent,
-          isEmpty,
-          reason: 'nothing is written to the stale queue',
+          box.sent.where((s) => s == stale.sid),
+          [stale.sid],
+          reason: 'only the probe is written to the stale queue',
         );
       });
+    });
+  });
+
+  group('slice 4b: re-tag on PROOF (the probe queue Z)', () {
+    var pin = 'A';
+
+    ContactQueue? zOf(_Device d) =>
+        d.friend.queues.where((q) => q.probeDevice != null).firstOrNull;
+
+    int writesTo(String sid) => box.sent.where((s) => s == sid).length;
+
+    List<ContactQueue> probeQueues(_Device d) =>
+        [...d.friend.queues.where((q) => q.probeDevice != null)];
+
+    int deletes(_Device d) =>
+        d.socket.emitted.where((f) => f.event == 'deleteQueue').length;
+
+    /// [a] and [b] met under 'A' (address tagged 'A'); then the pin moves to
+    /// 'B' and a's address of b is stale. [bDeaf] makes b read nothing from
+    /// then on (a dead queue); [journal] false wires no reader on [a]
+    /// (the journal is never judged); [calm] holds a calm hold on the friend.
+    Future<ContactOutbound> moved({
+      bool bDeaf = false,
+      bool journal = true,
+      bool calm = false,
+      String? readAs,
+    }) async {
+      pin = 'A';
+      a.anchorOf = (_) => pin;
+      await a.start();
+      await b.start();
+      a.session.runPass();
+      b.session.runPass();
+      await settle();
+      await a.store.update(
+        5,
+        (c) => c!.copyWith(
+          outbound: [for (final o in c.outbound) o.copyWith(idk: 'A')],
+        ),
+      );
+      final stale = a.friend.outbound.single;
+      if (!journal) {
+        // A new process with no reader wired: its journal is never judged.
+        a.journalWired = false;
+        await a.restart();
+        await settle();
+      }
+      b.deaf = bDeaf;
+      a
+        ..readIdentity = readAs
+        ..calmHold = calm;
+      box.sent.clear();
+      a.lookups.clear();
+      a.probes.clear();
+      pin = 'B';
+      await a.session.anchorMoved(5);
+      await settle();
+      return stale;
+    }
+
+    test('kept-queue friend: the probe is the ONLY frame written to the stale '
+        'address; the ack of Z under the anchor re-tags it, then a message '
+        'goes to it', () async {
+      final stale = await moved(bDeaf: true);
+      expect(a.probes, hasLength(1), reason: 'one handoff of Z');
+      final z = zOf(a)!;
+      expect(a.probes.single.sid, z.sid, reason: 'it names Z');
+      expect(z.probeSid, stale.sid);
+      expect(z.probeDevice, 3);
+      expect(
+        box.sent.where((s) => s != z.sid),
+        [stale.sid],
+        reason: 'the probe is the only frame written to the stale queue',
+      );
+      final to = a.outboundOf(3)!;
+      expect(a.session.permitFor(5, to: [to]), isNull, reason: 'a message waits');
+      expect(
+        await a.session.deliverFriend(to, Uint8List(1)),
+        BoxSendOutcome.failed,
+        reason: 'and is refused if offered',
+      );
+      expect(writesTo(stale.sid), 1);
+      // The friend kept its queue and reads Z: its ack arrives under B.
+      await a.session.friendAcked(5, 3, z.sid, learnedUnder: 'B');
+      expect(a.outboundOf(3)!.idk, 'B');
+      final permit = a.session.permitFor(5, to: [a.outboundOf(3)!]);
+      expect(permit, isNotNull, reason: 'the gate is open: the pump releases');
+      expect(
+        await a.session.deliverFriend(
+          a.outboundOf(3)!,
+          Uint8List(1),
+          permit: permit,
+        ),
+        BoxSendOutcome.taken,
+      );
+      expect(writesTo(stale.sid), 2, reason: 'the waiting message, once');
+      expect(a.lookups, isEmpty);
+    });
+
+    test('kept-queue friend end to end: b reads Z, acks it under the anchor; '
+        'a is re-tagged and Z retires once b took our own queue', () async {
+      await moved(readAs: 'B');
+      expect(a.probes, hasLength(1));
+      expect(a.outboundOf(3)!.idk, 'B', reason: 'b acked Z: re-tagged');
+      expect(a.session.permitFor(5, to: [a.outboundOf(3)!]), isNotNull);
+      expect(probeQueues(a).every((q) => q.retiredAt != null), isTrue);
+      expect(a.lookups, isEmpty);
+    });
+
+    test('wiped friend: the probe goes to the dead address, no ack; the '
+        "friend's own handoff stores B and retires Z (server side too)",
+        () async {
+      final stale = await moved(bDeaf: true);
+      final z = zOf(a)!;
+      expect(a.probes, hasLength(1));
+      expect(a.outboundOf(3)!.idk, 'A', reason: 'a dead queue never acks');
+      expect(a.session.permitFor(5, to: [a.outboundOf(3)!]), isNull);
+      final seal = QueueSeal.mintKeyPair();
+      final fresh = boxB64(_bytes(32, 0x55));
+      final before = deletes(a);
+      expect(
+        await a.session.takeFriendHandoff(
+          5,
+          3,
+          sid: fresh,
+          sealPub: boxB64(seal.publicKey),
+          learnedUnder: 'B',
+        ),
+        FriendWrite.stored,
+      );
+      expect(a.outboundOf(3)!.sid, fresh);
+      expect(
+        a.friend.queues.firstWhere((q) => q.rid == z.rid).retiredAt,
+        isNotNull,
+      );
+      expect(writesTo(fresh), greaterThan(0), reason: 'messages go to B');
+      // Past the box TTL the pass deletes it, server side included.
+      a.clock = a.clock.add(const Duration(days: 31));
+      a.session.runPass();
+      await settle();
+      expect(probeQueues(a), isEmpty);
+      expect(deletes(a), greaterThan(before));
+      expect(
+        writesTo(stale.sid),
+        1,
+        reason: 'nothing but the probe was ever written to the dead queue',
+      );
+      expect(a.lookups, isEmpty);
+    });
+
+    test('N connects with no ack: ONE Z and N+1 handoffs naming it; a restart '
+        'keeps the same Z', () async {
+      final stale = await moved(bDeaf: true);
+      final z = zOf(a)!;
+      for (var i = 0; i < 3; i++) {
+        await a.restart();
+        await settle();
+      }
+      expect(probeQueues(a), hasLength(1), reason: 'never another Z');
+      expect(zOf(a)!.rid, z.rid);
+      expect(a.probes, hasLength(4), reason: 'the move + 3 connects');
+      expect(a.probes.map((p) => p.sid).toSet(), {z.sid});
+      expect(writesTo(stale.sid), 4);
+      expect(a.lookups, isEmpty);
+    });
+
+    test('an ack of Z under the OLD identity, a third identity or none, an '
+        'ack naming another queue, or from another device proves nothing',
+        () async {
+      final stale = await moved(bDeaf: true);
+      final z = zOf(a)!;
+      final lead = a.friend.queues.first;
+      Future<void> ack(String sid, int device, String? under) async {
+        await a.session.friendAcked(5, device, sid, learnedUnder: under);
+        expect(a.outboundOf(3)!.idk, 'A', reason: '$sid/$device/$under');
+      }
+
+      await ack(z.sid, 3, 'A');
+      await ack(z.sid, 3, 'C');
+      await ack(z.sid, 3, null);
+      await ack(lead.sid, 3, 'B');
+      await ack(z.sid, 9, 'B');
+      expect(a.session.permitFor(5, to: [a.outboundOf(3)!]), isNull);
+      await a.session.friendAcked(5, 3, z.sid, learnedUnder: 'B');
+      expect(a.outboundOf(3)!.idk, 'B');
+      expect(a.outboundOf(3)!.sid, stale.sid);
+      expect(a.lookups, isEmpty);
+    });
+
+    test('unfriend retires Z, server side too', () async {
+      await moved(bDeaf: true);
+      final z = zOf(a)!;
+      final before = deletes(a);
+      await a.session.endBoxFriendship(5, block: false);
+      expect(
+        (a.store.byUserId(5)?.queues ?? const []).where((q) => q.rid == z.rid),
+        isEmpty,
+        reason: 'the record is gone with its queues',
+      );
+      expect(deletes(a), greaterThanOrEqualTo(before + 2), reason: 'lead + Z');
+    });
+
+    test('block retires Z', () async {
+      await moved(bDeaf: true);
+      final z = zOf(a)!;
+      await a.session.endBoxFriendship(5, block: true);
+      expect(
+        a.store.byUserId(5)?.queues.where((q) => q.rid == z.rid),
+        isEmpty,
+      );
+    });
+
+    test('a revoked device retires its Z, server side too', () async {
+      await moved(bDeaf: true);
+      expect(zOf(a), isNotNull);
+      final before = deletes(a);
+      a
+        ..friendRevoked = {3}
+        ..friendLive = {3};
+      a.session.runPass();
+      await settle();
+      expect(probeQueues(a), isEmpty);
+      expect(a.outboundOf(3), isNull, reason: 'its address is dropped too');
+      expect(deletes(a), greaterThan(before));
+    });
+
+    test('the probe permit is not a message permit: every message path '
+        'refuses it by TYPE', () async {
+      final held = ContactOutbound(
+        peerDeviceId: 3,
+        sid: boxB64(_bytes(32, 1)),
+        sealPub: boxB64(_bytes(32, 2)),
+        idk: 'A',
+      );
+      final gate = FriendGate(
+        addressesOf: (_) => [held],
+        anchorOf: (_) => 'B',
+        journalJudged: () => true,
+      );
+      final probe = gate.probePermitFor(
+        5,
+        stale: held,
+        handoffSid: boxB64(_bytes(32, 3)),
+        handoffSealPub: boxB64(_bytes(32, 4)),
+      )!;
+      await a.start();
+      // A message, a receipt, a typing frame, a timer or a profile frame is
+      // written by deliverFriend; its media by uploadMediaFriend; sealed by
+      // encryptForFriend: none takes anything but a FriendPermit, so the
+      // probe permit is a TypeError there (not a runtime clause).
+      final session = a.session;
+      await expectLater(
+        () async => Function.apply(
+          session.deliverFriend,
+          [held, Uint8List(1)],
+          {#permit: probe},
+        ),
+        throwsA(isA<TypeError>()),
+      );
+      await expectLater(
+        () async => Function.apply(
+          session.uploadMediaFriend,
+          [held, Uint8List(1)],
+          {#permit: probe},
+        ),
+        throwsA(isA<TypeError>()),
+      );
+      await expectLater(
+        () async => Function.apply(
+          session.encryptForFriend!,
+          [5, 3, '{}'],
+          {#permit: probe},
+        ),
+        throwsA(isA<TypeError>()),
+      );
+      // And the only plaintext a probe permit seals is the handoff of Z.
+      expect(
+        E2eEnvelope.parseQueueHandoff(probe.handoffJson)!.sid,
+        probe.handoffSid,
+      );
+      // A message permit still cannot reach the stale address.
+      expect(
+        gate.refusalOf(FriendPermit.forTest(5, identity: 'B'), held.sid),
+        FriendGateRefusal.staleAddress,
+      );
+    });
+
+    test('the probe gate clauses: wrong sid, pin moved again, address '
+        're-tagged, no calm hold, journal judged', () {
+      var anchor = 'B';
+      var calm = false;
+      var judged = true;
+      var held = ContactOutbound(
+        peerDeviceId: 3,
+        sid: boxB64(_bytes(32, 1)),
+        sealPub: boxB64(_bytes(32, 2)),
+        idk: 'A',
+      );
+      final gate = FriendGate(
+        addressesOf: (_) => [held],
+        anchorOf: (_) => anchor,
+        journalJudged: () => judged,
+      )..calmHeld = (_) => calm;
+      ProbePermit? take() => gate.probePermitFor(
+        5,
+        stale: held,
+        handoffSid: 'z',
+        handoffSealPub: 'p',
+      );
+      final permit = take()!;
+      expect(gate.refusalOfProbe(permit, held.sid), isNull);
+      expect(
+        gate.refusalOfProbe(permit, boxB64(_bytes(32, 9))),
+        FriendGateRefusal.unknownAddress,
+      );
+      calm = true;
+      expect(take(), isNull);
+      expect(gate.refusalOfProbe(permit, held.sid), FriendGateRefusal.calmHeld);
+      calm = false;
+      judged = false;
+      expect(take(), isNull);
+      expect(
+        gate.refusalOfProbe(permit, held.sid),
+        FriendGateRefusal.journalUnjudged,
+      );
+      judged = true;
+      anchor = 'C';
+      expect(
+        gate.refusalOfProbe(permit, held.sid),
+        FriendGateRefusal.permitIdentity,
+      );
+      anchor = 'B';
+      held = held.copyWith(idk: 'B');
+      expect(take(), isNull, reason: 'nothing to prove');
+      expect(gate.refusalOfProbe(permit, held.sid), FriendGateRefusal.notStale);
+      expect(permit.admitsSession('A'), isFalse);
+      expect(permit.admitsSession(null), isFalse);
+      expect(permit.admitsSession('B'), isTrue);
+    });
+
+    test('no probe, no Z minted, while a calm hold is pending; it goes when '
+        'the hold ends and a frame under the anchor arrives', () async {
+      final stale = await moved(bDeaf: true, calm: true);
+      expect(a.probes, isEmpty);
+      expect(zOf(a), isNull, reason: 'nothing minted while the gate is shut');
+      expect(writesTo(stale.sid), 0);
+      a.calmHold = false;
+      a.session.friendAuthenticated(5);
+      await settle();
+      expect(a.probes, hasLength(1));
+      expect(writesTo(stale.sid), 1);
+      expect(a.lookups, isEmpty);
+    });
+
+    test('no probe before the journal is judged; the first judgement sends '
+        'it', () async {
+      final stale = await moved(bDeaf: true, journal: false);
+      expect(a.probes, isEmpty);
+      expect(zOf(a), isNull);
+      expect(writesTo(stale.sid), 0);
+      a.session.consumer = a.read;
+      await settle();
+      expect(a.probes, hasLength(1));
+      expect(writesTo(stale.sid), 1);
+    });
+
+    test('a session of another identity than the pin seals no probe', () async {
+      a.sessionIdentity = 'A';
+      final stale = await moved(bDeaf: true);
+      expect(a.probes, isEmpty);
+      expect(writesTo(stale.sid), 0);
+    });
+
+    test('RESIDUAL (send-path accept): a probe an old build refuses is sent '
+        'again, as a whisper, when a frame under the anchor arrives, once '
+        'per session; the same Z', () async {
+      final stale = await moved(bDeaf: true);
+      final z = zOf(a)!;
+      expect(a.probes, hasLength(1), reason: 'refused by the old build');
+      a.session
+        ..friendAuthenticated(5)
+        ..friendAuthenticated(5);
+      await settle();
+      expect(a.probes, hasLength(2), reason: 'one more for this trigger');
+      expect(a.probes.map((p) => p.sid).toSet(), {z.sid});
+      expect(writesTo(stale.sid), 2);
+      expect(probeQueues(a), hasLength(1));
+      expect(a.lookups, isEmpty);
     });
   });
 }

@@ -78,7 +78,23 @@ abstract interface class BoxFriendLink {
   /// Device [deviceId] of friend [userId] acknowledged our queue [sid].
   /// [FriendWrite.refused] when no queue of ours for [userId] has that sid
   /// (an older one): the current one is handed to it on the next pass.
-  Future<FriendWrite> friendAcked(int userId, int deviceId, String sid);
+  /// [learnedUnder] is the account identity (base64) that authenticated the
+  /// ack's frame (a PreKey's identity, else the whisper session's remote
+  /// identity; null: unknown). An ack naming the probe queue Z of a stale
+  /// address, under the friend's PINNED identity, proves the holder of that
+  /// address reads under the new key and re-tags it; under any other
+  /// identity it proves nothing.
+  Future<FriendWrite> friendAcked(
+    int userId,
+    int deviceId,
+    String sid, {
+    required String? learnedUnder,
+  });
+
+  /// A frame authenticated under friend [userId]'s PINNED identity was read
+  /// from it: a stale unproven address of it is probed again (a whisper now,
+  /// which an old build reads even where our first probe was a PreKey).
+  void friendAuthenticated(int userId);
 
   /// Hand our queue for [userId] to its device [deviceId] on a FRESH
   /// session ([FriendEncrypt]'s `fresh`): it sent a PreKey message that would

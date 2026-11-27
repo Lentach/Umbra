@@ -13,6 +13,7 @@ extension BoxSessionConnection on BoxSession {
     _swap.e2eReady();
     _rotation.run();
     _friends.e2eReady();
+    _probe.runAll(ProbeTrigger.connect);
     // The journal is judged by the first drain after E2E ready, the empty
     // one included and with no box connection (the write gate's clause).
     unawaited(_inbox.drain());
@@ -56,6 +57,7 @@ extension BoxSessionConnection on BoxSession {
           _rotation.run();
           _registerPush();
           _friends.run();
+          _probe.runAll(ProbeTrigger.connect);
         }),
       )
       ..add(_box.lostQueues.listen(_onLost));
@@ -114,6 +116,7 @@ extension BoxSessionConnection on BoxSession {
     // `socketReady` is what confirms this device's id for the own list.
     _rotation.run();
     if (deviceId != null) _friends.accountReady();
+    _probe.runAll(ProbeTrigger.connect);
   }
 
   /// The contact store (re)opened — a web vault that booted locked was just
@@ -129,6 +132,7 @@ extension BoxSessionConnection on BoxSession {
     _rotation.run();
     _registerPush();
     _friends.run();
+    _probe.runAll(ProbeTrigger.connect);
   }
 
   /// A queue appeared, or the box is ready: every contact queue gets its
@@ -156,6 +160,8 @@ extension BoxSessionConnection on BoxSession {
     _rekeyed.clear();
     _swap.accountLost();
     _friends.accountLost();
+    // The next connect owes the connect probe again.
+    _probe.connected();
   }
 
   /// Subscribes every contact queue the box is not already following, then

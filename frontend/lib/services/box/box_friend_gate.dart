@@ -1,5 +1,8 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 
+import '../../utils/e2e_envelope.dart';
 import '../contacts/contact_record.dart';
 
 /// Why [FriendGate] kept a friend frame from being written.
@@ -22,6 +25,9 @@ enum FriendGateRefusal {
 
   /// The address was learned under another identity than the one pinned.
   staleAddress,
+
+  /// The address is no longer stale (a probe has nothing to prove).
+  notStale,
 }
 
 /// The right to seal ONE round of frames for a friend, taken synchronously
@@ -78,6 +84,45 @@ final class FriendPermit {
   }
 }
 
+/// The right to write THE probe of a stale address: one `queue_handoff` of a
+/// fresh queue to that address and nothing else. It is NOT a [FriendPermit]
+/// (type-level): every message, receipt, typing, timer, profile and upload
+/// path takes a [FriendPermit], so none can be offered this one; the only
+/// seal that takes it builds the handoff itself ([handoffJson]).
+final class ProbePermit {
+  ProbePermit._(
+    this.friend,
+    this.identity, {
+    required this.device,
+    required this.targetSid,
+    required this.handoffSid,
+    required this.handoffSealPub,
+  });
+
+  final int friend;
+
+  /// The pinned identity (base64) this probe seals under.
+  final String identity;
+  final int device;
+
+  /// The stale address the probe is written to.
+  final String targetSid;
+
+  /// The queue handed over (Z) and its seal key.
+  final String handoffSid;
+  final String handoffSealPub;
+
+  /// The only plaintext this permit seals.
+  String get handoffJson => jsonEncode(
+    E2eEnvelope.buildQueueHandoff(sid: handoffSid, sealPub: handoffSealPub),
+  );
+
+  /// Asked inside the encrypt's serialized step with the remote identity of
+  /// the session about to seal: only a session of the pinned identity seals.
+  bool admitsSession(String? sessionIdentity) =>
+      sessionIdentity != null && sessionIdentity == identity;
+}
+
 /// The one rule for writing to a friend's queue: a frame leaves only when
 /// its target is current for the friend's pinned identity. Pure and
 /// synchronous, so the check and the write share one step.
@@ -125,6 +170,59 @@ final class FriendGate {
       if (_stale(anchor, held)) return null;
     }
     return FriendPermit._(friend, anchor, goodbye: goodbye);
+  }
+
+  /// Whether a probe of [stale] may be prepared now: no calm hold pending,
+  /// the journal judged, an anchor pinned and [stale] still held, stale and
+  /// unproven. Asked BEFORE a probe queue is minted, so a closed gate mints
+  /// nothing.
+  bool probeOpen(int friend, ContactOutbound stale) {
+    if (calmHeld?.call(friend) ?? false) return false;
+    if (!_journalJudged()) return false;
+    final anchor = _anchorOf?.call(friend);
+    final held = _held(friend, stale.sid);
+    return anchor != null && held != null && _stale(anchor, held);
+  }
+
+  /// The permit of THE probe: the handoff of `z` (a queue minted for it) to
+  /// the stale [stale] address, sealed on the session under the pinned
+  /// identity. Null while [probeOpen] is false. It can carry nothing else
+  /// ([ProbePermit]).
+  ProbePermit? probePermitFor(
+    int friend, {
+    required ContactOutbound stale,
+    required String handoffSid,
+    required String handoffSealPub,
+  }) {
+    if (!probeOpen(friend, stale)) return null;
+    return ProbePermit._(
+      friend,
+      _anchorOf!(friend)!,
+      device: stale.peerDeviceId,
+      targetSid: stale.sid,
+      handoffSid: handoffSid,
+      handoffSealPub: handoffSealPub,
+    );
+  }
+
+  /// Why the probe under [permit] may NOT be written now; null when it may.
+  /// The probe is the ONLY write allowed to a stale address, so this is not
+  /// [refusalOf]: the target must still be that very stale address, with a
+  /// calm hold not pending, the journal judged and the permit's identity the
+  /// pinned one.
+  FriendGateRefusal? refusalOfProbe(ProbePermit permit, String sid) {
+    final friend = permit.friend;
+    if (sid != permit.targetSid) return FriendGateRefusal.unknownAddress;
+    final held = _held(friend, sid);
+    if (held == null) return FriendGateRefusal.unknownAddress;
+    if (calmHeld?.call(friend) ?? false) return FriendGateRefusal.calmHeld;
+    if (!_journalJudged()) return FriendGateRefusal.journalUnjudged;
+    final anchor = _anchorOf?.call(friend);
+    if (anchor == null || permit.identity != anchor) {
+      return FriendGateRefusal.permitIdentity;
+    }
+    if (!_stale(anchor, held)) return FriendGateRefusal.notStale;
+    return null;
   }
 
   bool _stale(String? anchor, ContactOutbound held) =>

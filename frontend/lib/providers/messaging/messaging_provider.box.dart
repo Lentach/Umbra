@@ -247,6 +247,13 @@ extension MessagingBox on MessagingProvider {
     _rebuildRequestedPeers.remove(msg.senderId);
     // A friend device that writes to us may have lost our handoff (item 5).
     boxFriends?.friendHeard(msg.senderId, msg.originDeviceId ?? 1);
+    // A frame authenticated under the PINNED identity: a stale unproven
+    // address of this friend is probed again (the probe's third trigger).
+    final frameIdentity = _frameIdentity(msg.encryptedContent!, sessionIdentity);
+    if (frameIdentity != null &&
+        frameIdentity == _encryptionProvider?.accountAnchorSync(msg.senderId)) {
+      boxFriends?.friendAuthenticated(msg.senderId);
+    }
 
     final E2eEnvelopeFields parsed;
     try {
@@ -311,14 +318,17 @@ extension MessagingBox on MessagingProvider {
           _e2eFlowLog('BOX_ENVELOPE_UNREADABLE', {'msgId': msg.id});
           return true;
         }
-        return switch (await link.friendAcked(
+        final acked = await link.friendAcked(
           msg.senderId,
           msg.originDeviceId ?? 1,
           sid,
-        )) {
-          FriendWrite.retryLater => false,
-          FriendWrite.stored || FriendWrite.refused => true,
-        };
+          learnedUnder: frameIdentity,
+        );
+        if (acked == FriendWrite.retryLater) return false;
+        // An ack naming the probe queue under the pinned identity re-tags a
+        // stale address: the gate may be open now.
+        kickSendPump(msg.senderId);
+        return true;
       // The friend's device list, from one of its live devices (slice (e):
       // a revoke announced by a survivor, E50d, or its answer to our stale
       // view, E50f). Adopted only under the DAK the server served (E50a);

@@ -58,6 +58,14 @@ extension BoxSessionWiring on BoxSession {
       ..run();
   }
 
+  /// The Signal side of THE probe to a stale address (`MessagingProvider`).
+  FriendProbeEncrypt? get encryptProbeForFriend => _probe.encrypt;
+
+  set encryptProbeForFriend(FriendProbeEncrypt? encrypt) {
+    _probe.encrypt = encrypt;
+    _probe.runAll(ProbeTrigger.connect);
+  }
+
   /// Friends' verified lists, for the friend handoff (`MessagingProvider`).
   FriendLiveDevices? get friendLiveDevices => _friends.liveDevices;
 

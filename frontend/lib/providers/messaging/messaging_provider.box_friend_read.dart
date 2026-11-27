@@ -391,6 +391,46 @@ extension MessagingBoxFriendRead on MessagingProvider {
       _e2eFlowLog('BOX_FRIEND_NOT_LIVE', {'peer': userId, 'device': deviceId});
       return null;
     }
+    return _sealOnSession(
+      userId,
+      deviceId,
+      json,
+      fresh: fresh,
+      admit: permit.admitsSession,
+    );
+  }
+
+  /// The `FriendProbeEncrypt` of the box's probe: seals the ONE handoff the
+  /// [ProbePermit] stands for on the session that exists, admitted only when
+  /// that session's remote identity is the permit's (the pinned one). A
+  /// permit that is not a [FriendPermit] cannot reach any other seal.
+  Future<BoxFrame?> encryptProbeForFriend(ProbePermit permit) async {
+    final enc = _encryptionProvider;
+    if (enc == null || !enc.isE2EReady) return null;
+    final userId = permit.friend;
+    final deviceId = permit.device;
+    if (!await _friendDeviceIsLive(userId, deviceId)) {
+      _e2eFlowLog('BOX_FRIEND_NOT_LIVE', {'peer': userId, 'device': deviceId});
+      return null;
+    }
+    return _sealOnSession(
+      userId,
+      deviceId,
+      permit.handoffJson,
+      fresh: false,
+      admit: permit.admitsSession,
+    );
+  }
+
+  Future<BoxFrame?> _sealOnSession(
+    int userId,
+    int deviceId,
+    String json, {
+    required bool fresh,
+    required bool Function(String? remoteIdentity) admit,
+  }) async {
+    final enc = _encryptionProvider;
+    if (enc == null) return null;
     try {
       // A session built where there was NONE, or a re-key's fresh one, makes
       // this device the one that asked: that device's own PreKey answer may
@@ -410,7 +450,7 @@ extension MessagingBoxFriendRead on MessagingProvider {
           userId,
           E2eEnvelope.toFriend(json, relays: _vouchesRelay),
           deviceId: deviceId,
-          admit: permit.admitsSession,
+          admit: admit,
         ),
         senderDeviceId: enc.ownDeviceId,
       );

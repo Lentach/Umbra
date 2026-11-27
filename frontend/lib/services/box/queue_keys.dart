@@ -158,6 +158,82 @@ class QueueKeys {
     });
   }
 
+  /// The ONE probe queue Z of [peerUserId]'s [device] for its stale address
+  /// [staleSid] (key-change invariant, item 9): the live one the record
+  /// already holds, else a new normal queue minted and stored AFTER the
+  /// record's lead (it never leads, so nothing handed to anyone else changes)
+  /// with the marker that names the device and the stale sid. Persisted
+  /// before this answers, so a restart finds the same Z and no trigger ever
+  /// mints a second. Null when nothing could be minted or kept: the box did
+  /// not create one, the record holds no lead queue yet, or a write failed.
+  /// A new Z is NOT subscribed here: the caller does it before handing it.
+  Future<ContactQueue?> ensureProbe(
+    int peerUserId, {
+    required int device,
+    required String staleSid,
+  }) async {
+    ContactQueue? live() => _store
+        .byUserId(peerUserId)
+        ?.queues
+        .where((q) => q.isProbeOf(device, staleSid))
+        .firstOrNull;
+    final held = live();
+    if (held != null) return held;
+    if (_store.byUserId(peerUserId)?.queues.isEmpty ?? true) return null;
+    final auth = _signer.mint();
+    final seal = QueueSeal.mintKeyPair();
+    final created = await _box.createQueue(QueueKind.normal, auth);
+    if (created is! BoxOk<QueueAddress>) return null;
+    final queue = _material(created.value, auth, seal).asProbe(device, staleSid);
+    ContactQueue? kept;
+    final committed = await _store.update(peerUserId, (record) {
+      if (record == null || record.queues.isEmpty) return null;
+      final again = record.queues
+          .where((q) => q.isProbeOf(device, staleSid))
+          .firstOrNull;
+      if (again != null) {
+        kept = again;
+        return null;
+      }
+      kept = queue;
+      return record.copyWith(queues: [...record.queues, queue]);
+    });
+    final stored = kept;
+    if (!committed || stored == null || stored.rid != queue.rid) {
+      await _box.deleteQueue(BoxQueueAuth(rid: created.value.rid, key: auth));
+      return committed ? stored : null;
+    }
+    return queue;
+  }
+
+  /// Stops [device]'s probe queues of [peerUserId] being the ones handed
+  /// (`retired(now)`): they stay subscribed and read until the box TTL has
+  /// passed (`BoxFriendHandoff._retireExpired` deletes them, server side
+  /// included), so what the device already wrote there still arrives.
+  Future<void> softRetireProbes(
+    int peerUserId,
+    int device, {
+    required DateTime now,
+  }) async {
+    await _store.update(peerUserId, (record) {
+      if (record == null ||
+          !record.queues.any(
+            (q) => q.probeDevice == device && q.retiredAt == null,
+          )) {
+        return null;
+      }
+      return record.copyWith(
+        queues: [
+          for (final q in record.queues)
+            if (q.probeDevice == device && q.retiredAt == null)
+              q.retired(now)
+            else
+              q,
+        ],
+      );
+    });
+  }
+
   /// This DEVICE's request queue (design §4.4; wire.md "First contact"): the
   /// one a stranger who searched this account seals a friend request into.
   /// Loaded from the store, or created, stored and only then subscribed, the
