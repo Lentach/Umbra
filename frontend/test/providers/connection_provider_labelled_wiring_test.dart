@@ -29,23 +29,14 @@ void main() {
     );
   });
 
-  // Owner decision C: the red bar closes the gate, and its end kicks the pump.
-  test('the red key-change bar closes the friend write gate in the app '
-      'wiring, by the same predicate the bar is drawn from', () {
-    expect(
-      RegExp(
-        r'\.\.redHeld\s*=\s*\(\(peer\)\s*=>\s*_encryptionProvider\?\.redBarShows\(peer\)',
-      ).allMatches(source),
-      hasLength(1),
-    );
+  // Owner reversal 2026-11-27: the red key-change bar never closes the
+  // friend write gate and has no pump hook; only the calm hold closes it.
+  test('the app wiring gives the friend write gate no red-bar clause', () {
+    expect(source, isNot(contains('redHeld')));
+    expect(source, isNot(contains('redBarShows')));
   });
 
-  test('the end of the red bar kicks the send pump in the app wiring', () {
-    expect(
-      RegExp(
-        r'_encryptionProvider\?\.onRedHoldEnded\s*=\s*\(peer\)\s*=>\s*_messagingProvider\?\.kickSendPump\(peer\)',
-      ).allMatches(source),
-      hasLength(1),
-    );
+  test('the app wiring has no red-bar-ended pump kick', () {
+    expect(source, isNot(contains('onRedHoldEnded')));
   });
 }

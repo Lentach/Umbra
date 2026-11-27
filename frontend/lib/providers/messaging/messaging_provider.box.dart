@@ -451,9 +451,10 @@ extension MessagingBox on MessagingProvider {
       return false;
     }
     // The calm hold goes only AFTER the red hold is set: it closes the gate
-    // for the await in between (review 3, P3-1).
+    // for the await in between (review 3, P3-1). The red bar holds nothing:
+    // what waited for the calm line goes out to the pinned identity's queue.
     final held2 = await _holdForeignFrame(msg, enc, peer, remint: remint);
-    _calmHolds.remove(msg.senderId);
+    if (_calmHolds.remove(msg.senderId) != null) kickSendPump(msg.senderId);
     return held2;
   }
 
@@ -476,7 +477,10 @@ extension MessagingBox on MessagingProvider {
     if (!await enc.calmHoldEligible(peerId)) {
       if (!identical(_calmHolds[peerId], hold)) return;
       await enc.holdForeignFrame(peerId, hold.ciphertext);
-      if (identical(_calmHolds[peerId], hold)) _calmHolds.remove(peerId);
+      if (identical(_calmHolds[peerId], hold)) {
+        _calmHolds.remove(peerId);
+        kickSendPump(peerId);
+      }
       notifyListeners();
       return;
     }
@@ -494,10 +498,14 @@ extension MessagingBox on MessagingProvider {
         // stale (its tag is not the pinned identity), so sends keep waiting.
         _calmHolds.remove(peerId);
       case CalmConfirm.refused:
-        // The red hold takes over; what waited stays waiting under the red
-        // bar and goes out after the acknowledge.
+        // The red hold takes over. It holds nothing: the pinned identity is
+        // unchanged, so what waited for the calm line goes out to its queue
+        // (the kick), as on 0.2.111.
         await enc.holdForeignFrame(peerId, hold.ciphertext);
-        if (identical(_calmHolds[peerId], hold)) _calmHolds.remove(peerId);
+        if (identical(_calmHolds[peerId], hold)) {
+          _calmHolds.remove(peerId);
+          kickSendPump(peerId);
+        }
       case CalmConfirm.transient:
         hold.state = CalmHoldState.failed;
     }

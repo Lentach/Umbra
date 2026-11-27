@@ -775,36 +775,6 @@ void main() {
     },
   );
 
-  test(
-    'a chat timer during a RED hold is not written and is owed; it is sent '
-    'as it stands once the red bar is gone and the pump looks again '
-    '(decision C)',
-    () async {
-      await befriend();
-      var red = true;
-      alice.session.redHeld = (_) => red;
-      final at = DateTime.now().toUtc();
-      await alice.chats.applyLocalChatTimer(5, 3600, at);
-
-      await alice.reader.sendBoxChatTimer(5, 3600, at);
-      await settle();
-      expect(bob.recordOf(1)!.settings.disappearingTimer, isNull);
-
-      alice.reader.kickSendPump(5);
-      await settle();
-      expect(
-        bob.recordOf(1)!.settings.disappearingTimer,
-        isNull,
-        reason: 'a kick does not open a closed gate',
-      );
-
-      red = false;
-      alice.reader.kickSendPump(5);
-      await settle();
-      expect(bob.recordOf(1)!.settings.disappearingTimer, 3600);
-    },
-  );
-
   /// Both records turned into a friendship the SERVER also knows (made
   /// before the box, chat 10) that later got a box route (item 5): the
   /// shape of every prod pair (Phase 4 step 1, decision 107).

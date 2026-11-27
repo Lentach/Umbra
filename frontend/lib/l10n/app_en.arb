@@ -194,8 +194,6 @@
   "@messageWaitingTapCalmLine": {"description": "Under an own message that waits to be sent while the friend's new-device line (the calm line, decision 152) is still untapped. Calm on purpose: grey, a clock, no Retry; the app sends it by itself after the tap. Also the row's screen-reader label."},
   "messageWaitingToSend": "Waiting to send",
   "@messageWaitingToSend": {"description": "Under an own message that waits to be sent for any reason other than an untapped new-device line (the friend's current address is not known yet, a restart, the box offline). Grey, a clock, no Retry; the app sends it by itself. Also the row's screen-reader label."},
-  "messageWaitingAcceptRedBar": "Waiting: accept the new key on the red bar",
-  "@messageWaitingAcceptRedBar": {"description": "Under an own message that waits to be sent while the red key-change bar is up for the friend (the new key is not accepted yet). Calm on purpose: grey, a clock, no Retry; the app sends it by itself after the accept. Also the row's screen-reader label."},
   "authStatusSavedSessionUnreadable": "Could not read the session. Restart the app.",
   "@authStatusSavedSessionUnreadable": {"description": "Auth surface status, localized from an AuthStatusCode."},
   "authStatusRegisterSucceeded": "Account created. Sign in to continue.",

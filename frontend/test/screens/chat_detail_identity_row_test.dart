@@ -95,10 +95,6 @@ class _AlarmedEncryption extends EncryptionProvider {
   Future<bool> calmHoldEligible(int userId) async => true;
 
   @override
-  bool redBarShows(int peerId) =>
-      refusedPeers.contains(peerId) || changedPeers.contains(peerId);
-
-  @override
   Future<void> holdForeignFrame(int userId, String ciphertext) async {
     changedPeers.add(userId);
     notifyListeners();
@@ -729,8 +725,9 @@ void main() {
   });
 
   for (final embedded in [false, true]) {
-    testWidgets('a held row names the wait, and after a REFUSED tap keeps '
-        'waiting under the red bar with its words, never a bare Retry '
+    testWidgets('a held row names the wait, and after a REFUSED tap the calm '
+        'line is gone and the red bar holds nothing: the row waits with the '
+        'ordinary words, never a bare Retry '
         '(${embedded ? 'embedded' : 'full'} layout)', (tester) async {
       final en = await AppLocalizations.delegate.load(const Locale('en'));
       final enc = await _pumpChat(
@@ -753,7 +750,7 @@ void main() {
       await tester.pump();
 
       expect(find.byType(PeerIdentityChangedRow), findsOneWidget);
-      expect(find.text(en.messageWaitingAcceptRedBar), findsOneWidget);
+      expect(find.text(en.messageWaitingToSend), findsOneWidget);
       expect(find.text(en.messageSendBlockedKeysChanged), findsNothing);
       expect(find.text(en.messageWaitingTapCalmLine), findsNothing);
       expect(find.text(en.messageRetrySend), findsNothing);

@@ -14,9 +14,6 @@ enum FriendGateRefusal {
   /// A calm hold waits for the person's tap.
   calmHeld,
 
-  /// The red key-change bar is up: the new key is not accepted yet.
-  redHeld,
-
   /// The one labelling of untagged addresses has not run on an open store.
   unlabelled,
 
@@ -116,27 +113,26 @@ final class FriendGate {
 
   bool get _unlabelled => _labelled != null && !_labelled();
 
-  /// Whether a calm hold is pending for a friend (`MessagingProvider`).
+  /// Whether a calm hold is pending for a friend (`MessagingProvider`). A
+  /// red key-change bar NEVER closes the gate (owner decision 2026-11-27: it
+  /// can be raised by whoever can write into our queue for the friend, so a
+  /// hold on it would let a forged bar silence the chat; a calm line is the
+  /// person's own one tap away, so it may hold).
   bool Function(int friend)? calmHeld;
-
-  /// Whether the red key-change bar is up for a friend
-  /// (`EncryptionProvider.redBarShows`, owner decision C).
-  bool Function(int friend)? redHeld;
 
   ContactOutbound? _held(int friend, String sid) =>
       _addressesOf(friend).where((a) => a.sid == sid).firstOrNull;
 
   /// A permit to seal for [friend], or null while the gate is closed (then
-  /// nothing is sealed and no ratchet moves): a calm hold or the red
-  /// key-change bar is up, the journal is unjudged (a [goodbye] is exempt
-  /// from that), or one of [to] is not a current address of the friend.
+  /// nothing is sealed and no ratchet moves): a calm hold is pending, the
+  /// journal is unjudged (a [goodbye] is exempt from that), or one of [to]
+  /// is not a current address of the friend.
   FriendPermit? permitFor(
     int friend, {
     Iterable<ContactOutbound> to = const [],
     bool goodbye = false,
   }) {
     if (calmHeld?.call(friend) ?? false) return null;
-    if (redHeld?.call(friend) ?? false) return null;
     if (!goodbye && (!_journalJudged() || _unlabelled)) return null;
     final anchor = _anchorOf?.call(friend);
     for (final target in to) {
@@ -175,7 +171,6 @@ final class FriendGate {
     final held = _held(friend, sid);
     if (held == null) return FriendGateRefusal.unknownAddress;
     if (calmHeld?.call(friend) ?? false) return FriendGateRefusal.calmHeld;
-    if (redHeld?.call(friend) ?? false) return FriendGateRefusal.redHeld;
     if (!permit.goodbye && (!_journalJudged() || _unlabelled)) {
       return _unlabelled
           ? FriendGateRefusal.unlabelled

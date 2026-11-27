@@ -248,17 +248,6 @@ class EncryptionProvider extends ChangeNotifier {
   /// onPeerIdentityChanged wire, same as the warning set.
   Set<int> get peersRefusedIdentity => _encryptionService.peersRefusedIdentity;
 
-  /// Whether the red key-change bar is up for [peerId]
-  /// (`EncryptionService.redHoldPending`): the chat's bar, the friend write
-  /// gate and a waiting row's words all read this one predicate.
-  bool redBarShows(int peerId) => _encryptionService.redHoldPending(peerId);
-
-  /// The red bar of `peerId` is not up after a change of the identity state
-  /// (the key was accepted, the anchor was replaced, ...): the send pump
-  /// looks again. Fired from the service's identity-change wire whenever
-  /// [redBarShows] is false then, so a missed pairing costs one cheap kick.
-  void Function(int peerId)? onRedHoldEnded;
-
   /// Friends with a frame held unread under an identity other than their
   /// pinned one (plan B3): the chat says messages wait until it is accepted.
   Set<int> get peersWithHeldMessages => _encryptionService.peersHeldForIdentity;
@@ -2380,12 +2369,7 @@ class EncryptionProvider extends ChangeNotifier {
       if (!_e2eInitialized) {
         // Rebuild the UI when a peer's identity key changes so the warning can
         // appear without waiting for the next message.
-        _encryptionService.onPeerIdentityChanged = (peerId) {
-          notifyListeners();
-          // Every way the red bar comes down ends here (the accept, a
-          // replaced anchor, an auto-accept): the send pump looks again.
-          if (!redBarShows(peerId)) onRedHoldEnded?.call(peerId);
-        };
+        _encryptionService.onPeerIdentityChanged = (_) => notifyListeners();
         // Same for the account-level own-identity-replaced alarm.
         _encryptionService.onOwnIdentityReplaced = notifyListeners;
         // Fresh session: load keys from storage (or generate on first install).

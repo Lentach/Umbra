@@ -11,39 +11,10 @@ ContactOutbound _addr(String sid, String? idk, {int device = 1}) =>
     );
 
 void main() {
-  // Owner decision C: the red key-change bar closes the gate as a calm hold.
-  group('red hold (decision C)', () {
-    final redHeld = [_addr('OLD', 'A')];
-    var red = false;
-    late FriendGate redGate;
-
-    setUp(() {
-      red = false;
-      redGate = FriendGate(
-        addressesOf: (_) => redHeld,
-        anchorOf: (_) => 'A',
-        journalJudged: () => true,
-      )..redHeld = (friend) => red && friend == 1;
-    });
-
-    test('a red hold closes the gate, before and after the permit', () {
-      red = true;
-      expect(redGate.permitFor(1, to: redHeld), isNull);
-      expect(redGate.permitFor(1), isNull);
-      red = false;
-      final permit = redGate.permitFor(1, to: redHeld)!;
-      red = true;
-      expect(redGate.refusalOf(permit, 'OLD'), FriendGateRefusal.redHeld);
-      red = false;
-      expect(redGate.refusalOf(permit, 'OLD'), isNull, reason: 'bar down');
-    });
-
-    test('it is per friend', () {
-      red = true;
-      expect(redGate.permitFor(1, to: redHeld), isNull);
-      expect(redGate.permitFor(2, to: redHeld), isNotNull);
-    });
-  });
+  // Owner reversal 2026-11-27: the red key-change bar never closes the gate
+  // (a forged bar must not silence a chat); only a calm hold does. The gate
+  // has no red clause to test: the app wiring is pinned by
+  // `connection_provider_labelled_wiring_test`.
 
   late List<ContactOutbound> held;
   String? anchor;

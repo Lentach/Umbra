@@ -521,10 +521,6 @@ class AppLocalizationsPl extends AppLocalizations {
   String get messageWaitingToSend => 'Czeka na wysłanie';
 
   @override
-  String get messageWaitingAcceptRedBar =>
-      'Czeka: zaakceptuj nowy klucz na czerwonym pasku';
-
-  @override
   String get authStatusSavedSessionUnreadable =>
       'Nie udało się odczytać sesji. Uruchom aplikację ponownie.';
 

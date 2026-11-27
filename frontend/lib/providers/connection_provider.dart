@@ -564,12 +564,9 @@ class ConnectionProvider extends ChangeNotifier {
             ..ownLiveDevices = messaging.ownLiveDevices
             // Item 5: existing friendships move onto the box.
             ..encryptForFriend = messaging.encryptForFriend
-            // Option C: a calm hold closes the friend write gate, and so
-            // does the red key-change bar (decision C: the very predicate
-            // the chat's bar is drawn from).
+            // Option C: a calm hold closes the friend write gate (the red
+            // key-change bar never does: owner decision 2026-11-27).
             ..calmHeld = messaging.hasCalmHold
-            ..redHeld = ((peer) =>
-                _encryptionProvider?.redBarShows(peer) ?? false)
             ..friendLiveDevices = messaging.friendLiveDevices
             ..cachedFriendLiveDevices = messaging.cachedFriendLiveDevices
             ..friendSessionUsable = messaging.friendSessionUsable
@@ -674,11 +671,6 @@ class ConnectionProvider extends ChangeNotifier {
           .whenComplete(() => _messagingProvider?.kickSendPump(peer))
           .ignore();
     };
-    // Decision C: whatever ends the red bar (the accept, an auto-accept, a
-    // replaced anchor) makes the pump look again: rows that waited on it
-    // may go once the friend's new mailbox is known.
-    _encryptionProvider?.onRedHoldEnded = (peer) =>
-        _messagingProvider?.kickSendPump(peer);
     _encryptionProvider?.onDeviceListInvalidated = (invalidated) {
       _messagingProvider?.onDeviceListInvalidated(invalidated);
       // The own list changed (a device linked or revoked): the siblings may

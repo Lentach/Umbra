@@ -61,13 +61,6 @@ class SendEncryption extends EncryptionProvider {
   /// What every encrypt throws, when set.
   Object? encryptError;
 
-  /// Friends whose red key-change bar is up (a test's switch for
-  /// [redBarShows], the predicate the gate and a waiting row's words read).
-  final Set<int> redPeers = {};
-
-  @override
-  bool redBarShows(int peerId) => redPeers.contains(peerId);
-
   @override
   bool get isE2EReady => ready;
 

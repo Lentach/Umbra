@@ -603,39 +603,6 @@ void main() {
     expect(moved, [peerId]);
   });
 
-  // Decision C: the red bar closes the friend write gate, so every way it
-  // comes down must kick the send pump (here: the other anchor mover).
-  test('replacing a stale account anchor takes the red bar down and fires '
-      'onRedHoldEnded for that friend', () async {
-    expect(await provider.encryptionService.stageAccountAnchor(
-      peerId,
-      identityKey,
-    ), isTrue);
-    await provider.encryptionService.recordPeerIdentityChangedFromServer(
-      peerId,
-    );
-    expect(provider.redBarShows(peerId), isTrue);
-    final ended = <int>[];
-    provider.onRedHoldEnded = ended.add;
-    final newEngine = DeviceAuthorityEngine();
-    final newIdentity = generateIdentityKeyPair();
-    final newEnrollment = newEngine.mintEnrollment(
-      userId: peerId,
-      identity: newIdentity,
-      createdAtMs: 1234567891,
-    );
-
-    await provider.adoptServedAccount(
-      peerId,
-      identityKey: base64Encode(newIdentity.getPublicKey().serialize()),
-      authorization: listOf(newEngine, newEnrollment, 1, [1]),
-      replaceStaleAnchor: true,
-    );
-
-    expect(provider.redBarShows(peerId), isFalse);
-    expect(ended.toSet(), {peerId});
-  });
-
   // A2-ENC-A-3: `first_contact_accept` drops a request as `unverified` on this
   // exception type and keeps it as `failed` on any other, so a garbage served
   // key must surface as exactly this reason, with nothing adopted.

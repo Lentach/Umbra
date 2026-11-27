@@ -145,61 +145,6 @@ void main() {
     expect(pl.messageWaitingToSend, 'Czeka na wysłanie');
   });
 
-  testWidgets('red bar pending: the accept text in EN and PL, the calm look '
-      '(clock, no Retry, nothing red), and it wins over the calm line', (
-    tester,
-  ) async {
-    final row = await waitingRow(tester); // the calm line is seeded too
-    h.encryption.redPeers.add(2);
-
-    await pumpRow(tester, row);
-
-    expect(l10n.messageWaitingAcceptRedBar,
-        'Waiting: accept the new key on the red bar');
-    expect(find.text(l10n.messageWaitingAcceptRedBar), findsOneWidget);
-    expect(find.text(l10n.messageWaitingTapCalmLine), findsNothing);
-    expect(find.byIcon(Icons.schedule), findsOneWidget);
-    expect(retry, findsNothing);
-    expect(find.byIcon(Icons.refresh), findsNothing);
-    expect(failedDot, findsNothing);
-    expect(redThings(tester.element(find.byType(ChatMessageBubble))),
-        findsNothing);
-
-    await pumpRow(tester, row, locale: const Locale('pl'));
-    expect(pl.messageWaitingAcceptRedBar,
-        'Czeka: zaakceptuj nowy klucz na czerwonym pasku');
-    expect(find.text(pl.messageWaitingAcceptRedBar), findsOneWidget);
-  });
-
-  testWidgets('red bar pending at 320 px, Polish: wraps, no overflow', (
-    tester,
-  ) async {
-    final row = await waitingRow(tester);
-    h.encryption.redPeers.add(2);
-
-    await pumpRow(tester, row, locale: const Locale('pl'), width: 320);
-
-    expect(tester.takeException(), isNull);
-    final text = tester.widget<Text>(find.text(pl.messageWaitingAcceptRedBar));
-    expect(text.overflow, isNull);
-    expect(text.maxLines, isNull);
-  });
-
-  testWidgets('after the accept the text switches to "Waiting to send"', (
-    tester,
-  ) async {
-    final row = await waitingRow(tester);
-    h.provider.clearCalmHoldForTest(2);
-    h.encryption.redPeers.add(2);
-    await pumpRow(tester, row);
-    expect(find.text(l10n.messageWaitingAcceptRedBar), findsOneWidget);
-
-    h.encryption.redPeers.clear();
-    await pumpRow(tester, row);
-
-    expect(find.text(l10n.messageWaitingToSend), findsOneWidget);
-    expect(find.text(l10n.messageWaitingAcceptRedBar), findsNothing);
-  });
   testWidgets('the text follows the reason while the row is on screen', (
     tester,
   ) async {

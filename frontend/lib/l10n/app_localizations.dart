@@ -986,12 +986,6 @@ abstract class AppLocalizations {
   /// **'Czeka na wysłanie'**
   String get messageWaitingToSend;
 
-  /// Under an own message that waits to be sent while the red key-change bar is up for the friend (the new key is not accepted yet). Calm on purpose: grey, a clock, no Retry; the app sends it by itself after the accept. Also the row's screen-reader label.
-  ///
-  /// In pl, this message translates to:
-  /// **'Czeka: zaakceptuj nowy klucz na czerwonym pasku'**
-  String get messageWaitingAcceptRedBar;
-
   /// Auth surface status, localized from an AuthStatusCode.
   ///
   /// In pl, this message translates to:

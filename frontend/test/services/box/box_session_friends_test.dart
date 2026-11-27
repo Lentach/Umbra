@@ -1856,16 +1856,17 @@ void main() {
         },
       );
 
-      // REVIEW3 probe: a RED bar standing while the friend's live device
-      // still writes to our lead (forged frame / server event, identity
-      // unchanged), and the friend revokes another device that had our
-      // queue: our rotation hands the new lead to nobody (the red clause
-      // closes the handoff) and the old lead is deleted after the box TTL
-      // while the live device still writes to it. 0.2.111: handed (not gated).
-      test('REVIEW3 rotation under the red bar must not delete the queue a '
+      // REVIEW3 probe: a hold standing while the friend's live device still
+      // writes to our lead (identity unchanged), and the friend revokes
+      // another device that had our queue: our rotation hands the new lead
+      // to nobody (the hold closes the handoff) and, before the P1 fix, the
+      // old lead was deleted after the box TTL while the live device still
+      // wrote to it. Written against the red clause, which is gone (a red
+      // bar holds nothing): driven through the CALM hold, the one hold left.
+      test('REVIEW3 rotation under a calm hold must not delete the queue a '
           'live device still writes to', () async {
         final old = a.friend.queues.single;
-        a.session.redHeld = (_) => true;
+        a.session.calmHeld = (_) => true;
         a
           ..friendLive = {4}
           ..friendRevoked = {3};
@@ -1903,16 +1904,12 @@ void main() {
           if (f.event == 'deleteQueue') f.frame['rid'],
       ];
 
-      /// The friend revokes device 3 while [hold] keeps our handoff to its
-      /// live device 4 closed: our lead rotates, 4 still writes to the old
-      /// one. The old queue.
-      Future<ContactQueue> rotatedUnderAHold({required bool calm}) async {
+      /// The friend revokes device 3 while a calm hold keeps our handoff to
+      /// its live device 4 closed: our lead rotates, 4 still writes to the
+      /// old one. The old queue.
+      Future<ContactQueue> rotatedUnderAHold() async {
         final old = a.friend.queues.single;
-        if (calm) {
-          a.session.calmHeld = (_) => true;
-        } else {
-          a.session.redHeld = (_) => true;
-        }
+        a.session.calmHeld = (_) => true;
         a
           ..friendLive = {4}
           ..friendRevoked = {3};
@@ -1932,7 +1929,7 @@ void main() {
 
       test('P1 CALM: a calm hold nobody taps never costs the queue the live '
           'device still writes to', () async {
-        final old = await rotatedUnderAHold(calm: true);
+        final old = await rotatedUnderAHold();
         await past30Days();
         expect(deletedRids(), isNot(contains(old.rid)));
         expect(a.friend.queues.map((q) => q.rid), contains(old.rid));
@@ -1947,8 +1944,8 @@ void main() {
 
       test('P1: the hold ends within 30 d: the new lead is handed and the old '
           'queue is deleted once the device acks it', () async {
-        final old = await rotatedUnderAHold(calm: false);
-        a.session.redHeld = (_) => false;
+        final old = await rotatedUnderAHold();
+        a.session.calmHeld = (_) => false;
         a.session.friendDevicesChanged(5);
         await settle();
         final lead = a.friend.queues.first;
@@ -1962,10 +1959,10 @@ void main() {
 
       test('P1: the hold ends AFTER 30 d: the old queue is kept until the '
           'device acks the new lead, then deleted on the next pass', () async {
-        final old = await rotatedUnderAHold(calm: false);
+        final old = await rotatedUnderAHold();
         await past30Days();
         expect(deletedRids(), isEmpty);
-        a.session.redHeld = (_) => false;
+        a.session.calmHeld = (_) => false;
         a.session.friendDevicesChanged(5);
         await settle();
         expect(b2.outboundOf(2)?.sid, a.friend.queues.first.sid);
@@ -1977,7 +1974,7 @@ void main() {
 
       test("P1: a revoked device's queue is still deleted: the device that "
           'never took the new lead is revoked too', () async {
-        final old = await rotatedUnderAHold(calm: false);
+        final old = await rotatedUnderAHold();
         a
           ..friendLive = {}
           ..friendRevoked = {3, 4};
@@ -1988,7 +1985,7 @@ void main() {
 
       test('P1: friendship ended: every queue goes, a kept retired one too',
           () async {
-        final old = await rotatedUnderAHold(calm: false);
+        final old = await rotatedUnderAHold();
         await past30Days();
         final lead = a.friend.queues.first;
         expect(deletedRids(), isEmpty);
@@ -2000,9 +1997,9 @@ void main() {
       test('P2-2: a revoke first seen AFTER a re-announce still rotates our '
           'lead away: the revoked device loses it', () async {
         final old = a.friend.queues.single;
-        // The re-announce clears what was acked and handed; the red hold
+        // The re-announce clears what was acked and handed; a calm hold
         // keeps it from being handed again.
-        a.session.redHeld = (_) => true;
+        a.session.calmHeld = (_) => true;
         a.session.identityReminted();
         await settle();
         expect(a.friend.queues.single.ackedBy, isEmpty);
@@ -2018,7 +2015,7 @@ void main() {
         expect(queues.last.rid, old.rid);
         expect(queues.last.retiredAt, isNotNull);
         expect(a.outboundOf(3), isNull);
-        a.session.redHeld = (_) => false;
+        a.session.calmHeld = (_) => false;
         a.session.friendDevicesChanged(5);
         await settle();
         expect(b2.outboundOf(2)?.sid, a.friend.queues.first.sid);
@@ -2295,20 +2292,19 @@ void main() {
       );
     });
 
-    test('a RED hold closes the gate too (decision C): no permit, a permit '
-        'taken before it is not written during it, an upload is refused, '
+    test('a calm hold also refuses an upload on a permit taken before it, '
         'and the own lane is not gated', () async {
       await metWithAnchor(() => 'A');
       final to = await tagged('A');
-      var red = false;
-      a.session.redHeld = (_) => red;
+      var held = false;
+      a.session.calmHeld = (_) => held;
       final permit = a.session.permitFor(5, to: [to])!;
-      red = true;
+      held = true;
       expect(a.session.permitFor(5, to: [to]), isNull, reason: 'none given');
       expect(
         await write(to, permit),
         BoxSendOutcome.failed,
-        reason: 'sealed before the bar, written during it',
+        reason: 'sealed before the hold, written during it',
       );
       final framed = Uint8List.fromList(List.filled(kBoxMediaLadder.first, 1));
       expect(
@@ -2326,11 +2322,11 @@ void main() {
         await a.session.deliver(own, Uint8List.fromList([1])),
         BoxSendOutcome.taken,
       );
-      red = false;
+      held = false;
       expect(
         await write(to, permit),
         BoxSendOutcome.taken,
-        reason: 'the bar came down',
+        reason: 'the hold ended',
       );
     });
 
