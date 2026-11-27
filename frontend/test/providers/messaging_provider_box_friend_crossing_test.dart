@@ -2389,11 +2389,10 @@ void main() {
       b.reader.dispose();
       b.reader = newReader(b);
       b.enc.onRedHoldEnded = (peer) => b.reader.kickSendPump(peer);
-      outbox = await boxForB();
       // The RAM part of the red state (the refusal set, the held mark) is
       // not rebuilt until the journal is offered again: the bar is not
       // known yet, and only the journal clause keeps the gate shut.
-      outbox
+      outbox = (await boxForB())
         ..judged = false
         ..redHeld = (_) => false;
       b.reader.kickSendPumps();
@@ -2737,7 +2736,7 @@ void main() {
         'settles the hold, and only the pump kick of that settle releases the '
         'waiting row, once', () async {
       final restored = await calmRestore();
-      final outbox = await boxForB() as _LearnedOutbox;
+      final outbox = await boxForB();
       final row = await writeFromB('waits for the settle');
       expect(_waits(b.reader, row.tempId), isTrue);
       expectCalm(b);

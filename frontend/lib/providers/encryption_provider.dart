@@ -249,11 +249,11 @@ class EncryptionProvider extends ChangeNotifier {
   Set<int> get peersRefusedIdentity => _encryptionService.peersRefusedIdentity;
 
   /// Whether the red key-change bar is up for [peerId]
-  /// ([EncryptionService.redHoldPending]): the chat's bar, the friend write
+  /// (`EncryptionService.redHoldPending`): the chat's bar, the friend write
   /// gate and a waiting row's words all read this one predicate.
   bool redBarShows(int peerId) => _encryptionService.redHoldPending(peerId);
 
-  /// The red bar of [peerId] is not up after a change of the identity state
+  /// The red bar of `peerId` is not up after a change of the identity state
   /// (the key was accepted, the anchor was replaced, ...): the send pump
   /// looks again. Fired from the service's identity-change wire whenever
   /// [redBarShows] is false then, so a missed pairing costs one cheap kick.

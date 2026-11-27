@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/services/box/box_frame.dart';
-import 'package:fireplace/services/box/box_friend_gate.dart';
 import 'package:fireplace/services/box/box_friends.dart';
 import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/services/contacts/contact_store.dart';
