@@ -2122,6 +2122,45 @@ void main() {
       );
     });
 
+    test('a RED hold closes the gate too (decision C): no permit, a permit '
+        'taken before it is not written during it, an upload is refused, '
+        'and the own lane is not gated', () async {
+      await metWithAnchor(() => 'A');
+      final to = await tagged('A');
+      var red = false;
+      a.session.redHeld = (_) => red;
+      final permit = a.session.permitFor(5, to: [to])!;
+      red = true;
+      expect(a.session.permitFor(5, to: [to]), isNull, reason: 'none given');
+      expect(
+        await write(to, permit),
+        BoxSendOutcome.failed,
+        reason: 'sealed before the bar, written during it',
+      );
+      final framed = Uint8List.fromList(List.filled(kBoxMediaLadder.first, 1));
+      expect(
+        await a.session.uploadMediaFriend(to, framed, permit: permit),
+        isA<BoxRefused<BoxMediaRef>>(),
+      );
+      final self = a.store.selfQueue!;
+      final own = ContactOutbound(
+        peerDeviceId: 9,
+        sid: self.sid,
+        sealPub: self.sealPub,
+        idk: null,
+      );
+      expect(
+        await a.session.deliver(own, Uint8List.fromList([1])),
+        BoxSendOutcome.taken,
+      );
+      red = false;
+      expect(
+        await write(to, permit),
+        BoxSendOutcome.taken,
+        reason: 'the bar came down',
+      );
+    });
+
     test('an address the friend no longer holds gets no permit and no '
         'write, though it was current when the permit was taken', () async {
       await metWithAnchor(() => 'A');

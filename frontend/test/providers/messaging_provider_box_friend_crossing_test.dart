@@ -16,6 +16,8 @@ import 'package:fireplace/services/contacts/contact_store.dart';
 import 'package:fireplace/services/device_list/device_list_cache.dart';
 import 'package:fireplace/services/device_list/device_list_canonical.dart';
 import 'package:fireplace/services/encryption/signal_stores.dart';
+import 'package:fireplace/services/encryption_service.dart'
+    show AccountIdentityMismatch;
 import 'package:fireplace/utils/e2e_diag_log.dart';
 import 'package:fireplace/utils/e2e_envelope.dart';
 import 'package:fireplace/utils/message_ids.dart';
@@ -186,8 +188,10 @@ class _LearnedOutbox extends SendOutbox implements BoxFriendGateOutbox {
     _gate = FriendGate(
       addressesOf: (friend) => addressesFor(friend).values,
       anchorOf: (_) => _anchor(),
-      journalJudged: () => true,
-    )..calmHeld = (friend) => calmHeld?.call(friend) ?? false;
+      journalJudged: () => judged,
+    )
+      ..calmHeld = ((friend) => calmHeld?.call(friend) ?? false)
+      ..redHeld = ((friend) => redHeld?.call(friend) ?? false);
   }
 
   final String Function() _queue;
@@ -202,6 +206,12 @@ class _LearnedOutbox extends SendOutbox implements BoxFriendGateOutbox {
   /// What the app wires from the provider (`connection_provider`): the
   /// gate's own calm clause.
   bool Function(int friend)? calmHeld;
+
+  /// The same for the red key-change bar (`EncryptionProvider.redBarShows`).
+  bool Function(int friend)? redHeld;
+
+  /// Whether the journal was judged this session (the gate's last clause).
+  bool judged = true;
 
   @override
   FriendPermit? permitFor(
@@ -1484,7 +1494,7 @@ void main() {
     /// B's chat with the friend over a fake box outbox, with local device
     /// lists (the send reads the lists a connect verified; here nothing may
     /// be looked up for it).
-    Future<SendOutbox> boxForB() async {
+    Future<_LearnedOutbox> boxForB() async {
       final chats = ConversationsProvider()..setCurrentUserId(5);
       seedConversations(chats, [
         {
@@ -1502,7 +1512,9 @@ void main() {
         () => b.link.learned!,
         () => b.link.learnedIdk ?? oldAnchor,
         () => b.enc.accountAnchorSync(1),
-      )..calmHeld = b.reader.hasCalmHold;
+      )
+        ..calmHeld = b.reader.hasCalmHold
+        ..redHeld = b.enc.redBarShows;
       b.enc.localLists = true;
       b.reader
         ..setConversationsProvider(chats)
@@ -2257,49 +2269,221 @@ void main() {
       () => midFlightSend('between'),
     );
 
-    test('red hold: Retry right after the acknowledge, before the handoff '
-        'is read', () async {
-      b.enc.keyChangeWarnings = () => true; // the visible hold
+    // ---- Decision C: the red bar closes the gate; rows wait ----
+
+    /// The red bar is up for B: its friend came back under a new identity
+    /// and warnings are ON (the visible hold). The bar's end kicks the pump,
+    /// as `connection_provider` wires it.
+    Future<_Side> redRestore() async {
+      b.enc.keyChangeWarnings = () => true;
       onTheBox();
       final restored = await restoreA();
       await restored.link.restart();
       await pump();
       expectRed(b);
+      b.enc.onRedHoldEnded = (peer) => b.reader.kickSendPump(peer);
+      return restored;
+    }
+
+    test('RED1: a message written while the red bar is up WAITS: not one '
+        'frame on the old queue or on any queue, no lookup, no bundle '
+        'fetch; the row says what it waits for', () async {
+      await redRestore();
       final outbox = await boxForB();
-      // Before the acknowledge a send does not wait (design Q1): it goes to
-      // the address the friend still reads; here the box refuses it.
-      outbox.refuse.add(1);
-      final row = await writeFromB('before the accept');
+
+      final row = await writeFromB('during the red bar');
+
+      expect(outbox.delivered, isEmpty, reason: 'nothing on ANY queue');
+      expect(b.emits, isEmpty);
+      expect(b.enc.lookupLog, isEmpty);
       expect(row.deliveryStatus, MessageDeliveryStatus.failed);
-      final attempts = onOld(outbox).length;
-      outbox.refuse.clear();
+      expect(_waits(b.reader, row.tempId), isTrue);
+      expect(b.reader.sendWaitReason(row), SendWaitReason.redBarPending);
+      expect(b.reader.sendRefusedForIdentity(row.tempId), isFalse);
+      expect((await b.enc.boxUnsentWaiting(b.userId)).keys, [row.tempId]);
+    });
+
+    test('RED2: the accept, then the handoff read: the waiting rows and a '
+        'row typed after the accept go out in order, exactly once each, to '
+        'the NEW queue; the words switch at the accept', () async {
+      final restored = await redRestore();
+      final outbox = await boxForB();
+      final first = await writeFromB('first');
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+      await writeFromB('second');
+      expect(outbox.delivered, isEmpty);
 
       expect(await b.enc.acknowledgePeerIdentity(b.peerId), isTrue);
-      // The box's pre-build (decision 38) gives the device a usable session
-      // right after the key moved, so only the gate stands between the
-      // Retry and the old queue.
       await b.enc.ensureSession(b.peerId, deviceId: b.peerDevice);
-      await retry(row); // the handoff is not read yet
+      await pumpEventQueue();
 
-      expect(onOld(outbox), hasLength(attempts), reason: 'no new old write');
-      expect(onNew(outbox, restored), isEmpty);
+      expect(outbox.delivered, isEmpty, reason: 'the old address is stale');
+      expect(_waits(b.reader, first.tempId), isTrue);
+      expect(b.reader.sendWaitReason(first), SendWaitReason.other);
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+      await writeFromB('third'); // typed after the accept, before the handoff
+      expect(outbox.delivered, isEmpty);
+
+      await reoffer(b); // the handoff is read: the pump sends
+
+      expect(onOld(outbox), isEmpty);
+      expect(outbox.delivered, hasLength(3), reason: 'once each, nowhere else');
+      final read = [
+        for (final f in onNew(outbox, restored))
+          await readByRestored(restored, f),
+      ];
+      expect(read, hasLength(3));
+      expect(read[0], contains('first'));
+      expect(read[1], contains('second'));
+      expect(read[2], contains('third'));
+    });
+
+    test('RED3: never accepted: every kick fired several times, a reconnect, '
+        'a list refresh and the journal offered again change nothing: the '
+        'row keeps waiting and nothing is written anywhere', () async {
+      await redRestore();
+      final outbox = await boxForB();
+      final row = await writeFromB('never accepted');
+
+      // The pump's own kicks and a journal offered again look nobody up.
+      for (var i = 0; i < 3; i++) {
+        b.reader
+          ..kickSendPumps()
+          ..kickSendPump(1);
+        await pumpEventQueue();
+        await reoffer(b);
+      }
+      expect(b.enc.lookupLog, isEmpty, reason: 'a hold or a kick asks nobody');
+      expect(b.emits, isEmpty);
+
+      // A reconnect and a list refresh make their own lookups, and change
+      // nothing for the row.
+      for (var i = 0; i < 3; i++) {
+        b.reader
+          ..onConnect(true)
+          ..refreshBoxDeviceLists();
+        await pumpEventQueue();
+        await reoffer(b);
+      }
+
+      expect(outbox.delivered, isEmpty);
+      expect(_waits(b.reader, row.tempId), isTrue);
+      expectRed(b);
+      expect(await b.enc.boxUnsentWaiting(b.userId), hasLength(1));
+    });
+
+    test('RED4: a restart while red: the persisted warning still closes the '
+        'gate, the journal clause covers the RAM part until the journal is '
+        'judged, the row still waits, and the accept then sends it once to '
+        'the NEW queue', () async {
+      final restored = await redRestore();
+      var outbox = await boxForB();
+      await writeFromB('before the restart');
+      final prefs = await SharedPreferences.getInstance();
       expect(
-        _waits(b.reader, row.tempId),
-        isTrue,
-        reason: 'the Retry became a waiting row',
+        jsonDecode(prefs.getString('e2e_5_peer_identity_changed_v1')!),
+        contains(1),
+        reason: 'the warning set is persisted',
       );
 
-      await reoffer(b); // the handoff is read: the pump sends, no Retry
+      b.reader.dispose();
+      b.reader = newReader(b);
+      b.enc.onRedHoldEnded = (peer) => b.reader.kickSendPump(peer);
+      outbox = await boxForB();
+      // The RAM part of the red state (the refusal set, the held mark) is
+      // not rebuilt until the journal is offered again: the bar is not
+      // known yet, and only the journal clause keeps the gate shut.
+      outbox
+        ..judged = false
+        ..redHeld = (_) => false;
+      b.reader.kickSendPumps();
+      await pumpEventQueue();
+      expect(outbox.delivered, isEmpty, reason: 'journal not judged yet');
 
-      // The one old-queue write is the first attempt, which the box refused
-      // before the acknowledge; nothing was added to it since.
-      expect(onOld(outbox), hasLength(attempts));
+      outbox
+        ..judged = true
+        ..redHeld = b.enc.redBarShows;
+      b.reader.kickSendPumps();
+      await pumpEventQueue();
+      await reoffer(b);
+      expectRed(b);
+      expect(outbox.delivered, isEmpty, reason: 'red closes it from the start');
+      expect(await b.enc.boxUnsentWaiting(b.userId), hasLength(1));
+
+      expect(await b.enc.acknowledgePeerIdentity(b.peerId), isTrue);
+      await b.enc.ensureSession(b.peerId, deviceId: b.peerDevice);
+      await reoffer(b);
+
+      expect(onOld(outbox), isEmpty);
       final frames = onNew(outbox, restored);
       expect(frames, hasLength(1), reason: 'exactly once on the new queue');
       expect(
         await readByRestored(restored, frames.single),
-        contains('before the accept'),
+        contains('before the restart'),
       );
+    });
+
+    test('RED5: background frames during the red bar are not written: no '
+        'typing, no re-key answer, no frame on the old session', () async {
+      await redRestore();
+      final outbox = await boxForB();
+      b.reader.receiptsAndTyping = () => true;
+
+      b.reader.sendTypingIndicator(1, 10);
+      await pumpEventQueue();
+      final rekey = await b.reader.sealForFriend(
+        1,
+        1,
+        '{"t":"x"}',
+        fresh: true,
+      );
+      final plain = await b.reader.sealForFriend(1, 1, '{"t":"x"}');
+
+      expect(rekey, isNull);
+      expect(plain, isNull);
+      expect(outbox.delivered, isEmpty);
+      expect(b.emits, isEmpty);
+      expect(b.enc.lookupLog, isEmpty);
+    });
+
+    test('RED6: an ordinary failed row (the box refused it, no red bar) is '
+        'unchanged: failed, not waiting, with Retry', () async {
+      onTheBox();
+      final outbox = await boxForB();
+      outbox.refuse.add(1);
+
+      final row = await writeFromB('refused by the box');
+
+      expect(outbox.delivered, hasLength(1), reason: 'the gate was open');
+      expect(row.deliveryStatus, MessageDeliveryStatus.failed);
+      expect(_waits(b.reader, row.tempId), isFalse);
+      expect(await b.enc.boxUnsentWaiting(b.userId), isEmpty);
+      expect(b.enc.peersWithChangedIdentity, isEmpty);
+    });
+
+    test('RED7: the send-path mismatch (a session build bounces on the '
+        'anchor, warnings ON): the red bar shows by the same predicate, so '
+        'the next message waits under it instead of being refused', () async {
+      onTheBox();
+      b.enc.keyChangeWarnings = () => true;
+      final restored = await restoreA();
+      final outbox = await boxForB();
+      b.enc.markSessionRebuild(b.peerId, deviceId: b.peerDevice);
+
+      await expectLater(
+        b.enc.ensureSession(b.peerId, deviceId: b.peerDevice),
+        throwsA(isA<AccountIdentityMismatch>()),
+      );
+      expect(b.enc.redBarShows(b.peerId), isTrue);
+      expect(b.enc.peersRefusedIdentity, contains(b.peerId));
+      expect(restored.sid, isNot(a.sid));
+
+      final row = await writeFromB('after the bounce');
+
+      expect(outbox.delivered, isEmpty);
+      expect(_waits(b.reader, row.tempId), isTrue);
+      expect(b.reader.sendWaitReason(row), SendWaitReason.redBarPending);
+      expect(b.reader.sendRefusedForIdentity(row.tempId), isFalse);
     });
 
     test('sealed before accept, written after', () async {

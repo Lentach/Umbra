@@ -392,6 +392,16 @@ class EncryptionService {
   final Set<int> _peersRefusedIdentity = <int>{};
   Set<int> get peersRefusedIdentity => Set.unmodifiable(_peersRefusedIdentity);
 
+  /// Whether the red key-change bar is up for [peerId]: THE predicate the
+  /// chat draws the bar from (`chat_detail_screen`: refused OR changed) and
+  /// the friend write gate closes on (owner decision C), so a waiting row's
+  /// words are always true. [_peersWithChangedIdentity] is persisted and
+  /// loaded at [initialize]; [_peersRefusedIdentity] lives in RAM only
+  /// (a refusal re-fires on the next build attempt).
+  bool redHoldPending(int peerId) =>
+      _peersRefusedIdentity.contains(peerId) ||
+      _peersWithChangedIdentity.contains(peerId);
+
   /// Peers with a friend's frame HELD unread because it carried an identity
   /// other than the pinned one (plan B3, decision 143; `holdForeignFrame`).
   /// In memory: the held frames wait in the box journal, whose next read

@@ -517,6 +517,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get messageWaitingToSend => 'Waiting to send';
 
   @override
+  String get messageWaitingAcceptRedBar =>
+      'Waiting: accept the new key on the red bar';
+
+  @override
   String get authStatusSavedSessionUnreadable =>
       'Could not read the session. Restart the app.';
 

@@ -186,6 +186,33 @@ void main() {
     expect(waiting.keys, [row.tempId]);
   });
 
+  test('the waiting reason: the red bar first, then the untapped calm line, '
+      'then any other; it is read live', () async {
+    await typed('one');
+    final row = rowOf('one');
+    expect(provider.sendWaitReason(row), SendWaitReason.other);
+
+    provider.seedCalmHoldForTest(2, CalmHoldState.waiting);
+    expect(provider.sendWaitReason(row), SendWaitReason.calmLineUntapped);
+
+    encryption.redPeers.add(2);
+    expect(
+      provider.sendWaitReason(row),
+      SendWaitReason.redBarPending,
+      reason: 'the red bar wins over an untapped calm line',
+    );
+
+    provider.clearCalmHoldForTest(2);
+    expect(provider.sendWaitReason(row), SendWaitReason.redBarPending);
+
+    encryption.redPeers.clear();
+    expect(
+      provider.sendWaitReason(row),
+      SendWaitReason.other,
+      reason: 'after the accept, while the mailbox is still unknown',
+    );
+  });
+
   test('RESTART: the waiting rows survive a new provider on the same '
       'storage, still wait with the chat NOT loaded, and go out by '
       'themselves, in order, to the NEW queue once the gate opens; nothing '

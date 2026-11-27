@@ -218,11 +218,18 @@ class BoxSession
       _store.requestQueue?.sid == sid ||
       _store.siblings.any((s) => s.sid == sid);
 
-  /// Whether a calm hold is pending for a friend (`MessagingProvider`);
-  /// only a calm hold closes the gate on its own.
+  /// Whether a calm hold is pending for a friend (`MessagingProvider`).
+  /// Closes the gate, as the red bar does ([redHeld]).
   bool Function(int friend)? get calmHeld => _gate.calmHeld;
 
   set calmHeld(bool Function(int friend)? check) => _gate.calmHeld = check;
+
+  /// Whether the red key-change bar is up for a friend
+  /// (`EncryptionProvider.redBarShows`); it closes the gate as a calm hold
+  /// does.
+  bool Function(int friend)? get redHeld => _gate.redHeld;
+
+  set redHeld(bool Function(int friend)? check) => _gate.redHeld = check;
 
   @override
   FriendPermit? permitFor(

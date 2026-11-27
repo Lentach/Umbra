@@ -6,6 +6,10 @@ part of '../messaging_provider.dart';
 /// Why an own message waits to be sent ([MessageModel.waitingToSend]); the row
 /// draws its words from it.
 enum SendWaitReason {
+  /// The red key-change bar is up for the friend: the new key is not
+  /// accepted yet. Wins over every other reason.
+  redBarPending,
+
   /// A calm hold is pending for the friend: the person has not tapped the
   /// line about the new device yet.
   calmLineUntapped,
@@ -46,12 +50,18 @@ enum _WaiterResult {
 /// refresh, conversations loaded, a new waiting message); a missed kick is
 /// healed by the next. No timer, no timeout and no "end of drain" anywhere.
 extension MessagingBoxPump on MessagingProvider {
-  /// Why [row] waits now (read live: the calm line may be tapped meanwhile).
+  /// Why [row] waits now (read live: the red bar or the calm line may go
+  /// meanwhile). When several hold: the red bar, then the untapped calm
+  /// line, then any other.
   SendWaitReason sendWaitReason(MessageModel row) {
     final own = _currentUserId;
     if (own == null) return SendWaitReason.other;
     final friend = _friendOfConversation(row.conversationId, own);
-    return friend != null && hasCalmHold(friend)
+    if (friend == null) return SendWaitReason.other;
+    if (_encryptionProvider?.redBarShows(friend) ?? false) {
+      return SendWaitReason.redBarPending;
+    }
+    return hasCalmHold(friend)
         ? SendWaitReason.calmLineUntapped
         : SendWaitReason.other;
   }

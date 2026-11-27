@@ -65,9 +65,11 @@ class FailedSendRetry extends StatelessWidget {
     final reason = context.select<MessagingProvider, SendWaitReason>(
       (p) => p.sendWaitReason(message),
     );
-    final text = reason == SendWaitReason.calmLineUntapped
-        ? l10n.messageWaitingTapCalmLine
-        : l10n.messageWaitingToSend;
+    final text = switch (reason) {
+      SendWaitReason.redBarPending => l10n.messageWaitingAcceptRedBar,
+      SendWaitReason.calmLineUntapped => l10n.messageWaitingTapCalmLine,
+      SendWaitReason.other => l10n.messageWaitingToSend,
+    };
     // The timestamp's own colour: muted, and legible on the bubble fill.
     final color = RpgTheme.messageBubbleMetaColor(
       context,

@@ -28,4 +28,24 @@ void main() {
       hasLength(1),
     );
   });
+
+  // Owner decision C: the red bar closes the gate, and its end kicks the pump.
+  test('the red key-change bar closes the friend write gate in the app '
+      'wiring, by the same predicate the bar is drawn from', () {
+    expect(
+      RegExp(
+        r'\.\.redHeld\s*=\s*\(\(peer\)\s*=>\s*_encryptionProvider\?\.redBarShows\(peer\)',
+      ).allMatches(source),
+      hasLength(1),
+    );
+  });
+
+  test('the end of the red bar kicks the send pump in the app wiring', () {
+    expect(
+      RegExp(
+        r'_encryptionProvider\?\.onRedHoldEnded\s*=\s*\(peer\)\s*=>\s*_messagingProvider\?\.kickSendPump\(peer\)',
+      ).allMatches(source),
+      hasLength(1),
+    );
+  });
 }
