@@ -233,6 +233,9 @@ class _AppSide {
       // webcrypto's native library does not load under `flutter test` on
       // every box; the seal is the same AES-256-GCM either way.
       seal: QueueSeal(cipher: PointyGcmSealer()),
+      // The app's mirror of a friend's pinned identity
+      // (`connection_provider.dart`): the friend write gate judges against it.
+      anchorOf: me.encryption.accountAnchorSync,
     )..start();
     session
       ..consumer = _read
@@ -269,6 +272,8 @@ class _AppSide {
     return true;
   }
 
+  /// `encryptForFriend` as the app wires it: nothing is sealed without a
+  /// permit, and the session sealed on must be of the permit's identity.
   Future<BoxFrame?> _encrypt(
     int user,
     int device,
@@ -276,6 +281,7 @@ class _AppSide {
     bool fresh = false,
     FriendPermit? permit,
   }) async {
+    if (permit == null) return null;
     if (!await me.encryption.hasSession(user, deviceId: device)) {
       await me.encryption.buildSession(
         user,
@@ -285,18 +291,44 @@ class _AppSide {
       );
     }
     return BoxFrame.fromSignalCiphertext(
-      await me.encryption.encrypt(user, json, deviceId: device),
+      await me.encryption.encrypt(
+        user,
+        json,
+        deviceId: device,
+        admit: permit.admitsSession,
+      ),
       senderDeviceId: 1,
     );
   }
 
+  /// A chat message to the friend's stored address, as the app's send path
+  /// does it: the permit is taken BEFORE Signal seals and travels with the
+  /// write.
+  Future<BoxSendOutcome> send(String text) async {
+    final to = address!;
+    final permit = session.permitFor(friend.userId, to: [to]);
+    final frame = await _encrypt(
+      friend.userId,
+      to.peerDeviceId,
+      jsonEncode(E2eEnvelope.build(text)),
+      permit: permit,
+    );
+    if (frame == null) return BoxSendOutcome.failed;
+    return session.deliverFriend(to, frame.encode(), permit: permit);
+  }
+
   Future<bool> _read(BoxInboxEntry entry) async {
     if (entry.peerUserId != friend.userId) return true;
+    // The identity that authenticated the frame, as the app's reader takes
+    // it: a PreKey message carries it, a whisper's is its session's.
+    String? sessionIdentity;
     final json = await me.encryption.decrypt(
       entry.peerUserId,
       entry.signal!,
       deviceId: entry.senderDeviceId,
+      onIdentity: (identity) => sessionIdentity = identity,
     );
+    final learnedUnder = preKeyIdentityOf(entry.signal!) ?? sessionIdentity;
     final handoff = E2eEnvelope.parseQueueHandoff(json);
     if (handoff != null) {
       return await session.takeFriendHandoff(
@@ -304,7 +336,7 @@ class _AppSide {
             entry.senderDeviceId,
             sid: handoff.sid,
             sealPub: handoff.sealPub,
-            learnedUnder: null,
+            learnedUnder: learnedUnder,
           ) !=
           FriendWrite.retryLater;
     }
@@ -315,7 +347,7 @@ class _AppSide {
             entry.peerUserId,
             entry.senderDeviceId,
             acked,
-            learnedUnder: null,
+            learnedUnder: learnedUnder,
           ) !=
           FriendWrite.retryLater;
     }
@@ -360,6 +392,7 @@ class _FirstContactSide {
       store: store,
       emit: (event, data) => me.socketService.socket!.emit(event, data),
       seal: QueueSeal(cipher: PointyGcmSealer()),
+      anchorOf: me.encryption.accountAnchorSync,
     )..start();
     session
       ..consumer = _read
@@ -397,10 +430,33 @@ class _FirstContactSide {
     String json, {
     bool fresh = false,
     FriendPermit? permit,
-  }) async => BoxFrame.fromSignalCiphertext(
-    await me.encryption.encrypt(user, json, deviceId: device),
-    senderDeviceId: 1,
-  );
+  }) async => permit == null
+      ? null
+      : BoxFrame.fromSignalCiphertext(
+          await me.encryption.encrypt(
+            user,
+            json,
+            deviceId: device,
+            admit: permit.admitsSession,
+          ),
+          senderDeviceId: 1,
+        );
+
+  /// A chat message to the friend's stored address, as the app's send path
+  /// does it: the permit is taken BEFORE Signal seals and travels with the
+  /// write.
+  Future<BoxSendOutcome> send(String text) async {
+    final to = record!.outbound.single;
+    final permit = session.permitFor(peer.userId, to: [to]);
+    final frame = await _encrypt(
+      peer.userId,
+      to.peerDeviceId,
+      jsonEncode(E2eEnvelope.build(text)),
+      permit: permit,
+    );
+    if (frame == null) return BoxSendOutcome.failed;
+    return session.deliverFriend(to, frame.encode(), permit: permit);
+  }
 
   /// A request is kept undecrypted (E15c); from the account we asked, a
   /// handoff is the accept (E15d) and an ack is taken; a message is read.
@@ -415,11 +471,14 @@ class _FirstContactSide {
       );
       return true;
     }
+    String? sessionIdentity;
     final json = await me.encryption.decrypt(
       entry.peerUserId,
       entry.signal!,
       deviceId: entry.senderDeviceId,
+      onIdentity: (identity) => sessionIdentity = identity,
     );
+    final learnedUnder = preKeyIdentityOf(entry.signal!) ?? sessionIdentity;
     if (E2eEnvelope.parseQueueHandoff(json) case final handoff?) {
       await session.firstContact.befriend(
         entry.peerUserId,
@@ -430,7 +489,7 @@ class _FirstContactSide {
             entry.senderDeviceId,
             sid: handoff.sid,
             sealPub: handoff.sealPub,
-            learnedUnder: null,
+            learnedUnder: learnedUnder,
           ) !=
           FriendWrite.retryLater;
     }
@@ -439,7 +498,7 @@ class _FirstContactSide {
             entry.peerUserId,
             entry.senderDeviceId,
             acked,
-            learnedUnder: null,
+            learnedUnder: learnedUnder,
           ) !=
           FriendWrite.retryLater;
     }
@@ -740,15 +799,7 @@ void main() {
 
           // A box message now round-trips on the addresses the handoff gave.
           final text = 'box-${_randomIp()}';
-          final frame = (await a._encrypt(
-            bob.userId,
-            1,
-            jsonEncode(E2eEnvelope.build(text)),
-          ))!;
-          expect(
-            await a.session.deliver(a.address!, frame.encode()),
-            BoxSendOutcome.taken,
-          );
+          expect(await a.send(text), BoxSendOutcome.taken);
           await _until(() => b.read.contains(text), 'bob reads it');
 
           // Nothing of the migration or the message names an account.
@@ -825,21 +876,24 @@ void main() {
             senderDeviceId: 1,
           )!;
           expect(signal.kind, BoxFrameKind.preKey);
+          final requestBody = BoxFrame(
+            kind: signal.kind,
+            senderDeviceId: 1,
+            senderUserId: alice.userId,
+            signal: signal.signal,
+            carriedClaim: BoxFirstContact.encodeClaim((
+              username: alice.username,
+              tag: alice.tag,
+            )),
+          ).encode();
+          // The app's request write (`_sendRequestFrame`): the request lane,
+          // under the permit the sealed PreKey's own pin made.
           expect(
-            await a.session.deliver(
+            await a.session.deliverRequest(
               bobServed.addresses.single,
-              BoxFrame(
-                kind: signal.kind,
-                senderDeviceId: 1,
-                senderUserId: alice.userId,
-                signal: signal.signal,
-                carriedClaim: BoxFirstContact.encodeClaim((
-                  username: alice.username,
-                  tag: alice.tag,
-                )),
-              ).encode(),
+              requestBody,
             ),
-            BoxSendOutcome.taken,
+            BoxRequestSend.taken,
           );
 
           // B's inbox journals it; the request is KEPT, not decrypted.
@@ -879,7 +933,9 @@ void main() {
               sid: offered.sid,
               sealPub: offered.sealPub,
               profile: b.profile,
-              learnedUnder: null,
+              // The identity the accept checked the kept frame against and
+              // pinned (`first_contact_accept.dart`).
+              learnedUnder: aliceServed.identityKey,
             ),
             FriendWrite.stored,
           );
@@ -897,27 +953,8 @@ void main() {
           // A message each way on the addresses first contact gave.
           final hello = 'fc-${_randomIp()}';
           final back = 'fc-${_randomIp()}';
-          final toBob = (await a._encrypt(
-            bob.userId,
-            1,
-            jsonEncode(E2eEnvelope.build(hello)),
-          ))!;
-          expect(
-            await a.session.deliver(a.record!.outbound.single, toBob.encode()),
-            BoxSendOutcome.taken,
-          );
-          final toAlice = (await b._encrypt(
-            alice.userId,
-            1,
-            jsonEncode(E2eEnvelope.build(back)),
-          ))!;
-          expect(
-            await b.session.deliver(
-              b.record!.outbound.single,
-              toAlice.encode(),
-            ),
-            BoxSendOutcome.taken,
-          );
+          expect(await a.send(hello), BoxSendOutcome.taken);
+          expect(await b.send(back), BoxSendOutcome.taken);
           await _until(
             () => b.read.contains(hello) && a.read.contains(back),
             'a message each way',
