@@ -717,6 +717,34 @@ void main() {
     },
   );
 
+  test(
+    'a chat timer during the closed gate is not written; the next one, '
+    'after it opens, is',
+    () async {
+      await befriend();
+      var held = true;
+      alice.session.calmHeld = (_) => held;
+      final at = DateTime.now().toUtc();
+
+      await alice.reader.sendBoxChatTimer(5, 3600, at);
+      await settle();
+      expect(
+        bob.recordOf(1)!.settings.disappearingTimer,
+        isNull,
+        reason: 'nothing written while the gate is closed',
+      );
+
+      held = false;
+      await alice.reader.sendBoxChatTimer(
+        5,
+        3600,
+        at.add(const Duration(minutes: 1)),
+      );
+      await settle();
+      expect(bob.recordOf(1)!.settings.disappearingTimer, 3600);
+    },
+  );
+
   /// Both records turned into a friendship the SERVER also knows (made
   /// before the box, chat 10) that later got a box route (item 5): the
   /// shape of every prod pair (Phase 4 step 1, decision 107).

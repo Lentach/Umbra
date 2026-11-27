@@ -15,6 +15,8 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../support/box_send_harness.dart';
+
 /// Metadata-privacy item 5 (decision 47, E20c) on REAL Signal: this device S
 /// is account 1's device 2 — the shipped reader (`consumeBoxEntry`) and the
 /// friend encrypt path (`encryptForFriend`) over a real
@@ -274,7 +276,7 @@ void main() {
     () async {
       // Our pass handed F our queue first: a session we initiated, pinning
       // F's identity from its bundle, never answered.
-      final ours = (await s.encryptForFriend(
+      final ours = (await s.sealForFriend(
         _friend,
         3,
         jsonEncode(handoff(_sid('S'))),
@@ -298,7 +300,7 @@ void main() {
       expect(link.rekeyed, isEmpty);
       expect(link.awaiting, isEmpty, reason: 'answered');
       // S now speaks on F's session: F reads what S sends next.
-      final ack = (await s.encryptForFriend(
+      final ack = (await s.sealForFriend(
         _friend,
         3,
         jsonEncode(E2eEnvelope.buildQueueHandoffAck(sid: _sid('F'))),
@@ -317,7 +319,7 @@ void main() {
     'read after ONE lookup, not refused: its next one would come a day later '
     '(accepted residual, decision 68: a forged frame can time that lookup)',
     () async {
-      await s.encryptForFriend(_friend, 3, jsonEncode(handoff(_sid('S'))));
+      await s.sealForFriend(_friend, 3, jsonEncode(handoff(_sid('S'))));
       final theirs = await fromFreshF(handoff(_sid('F')), 0);
       enc.friendListHeld = false;
 
@@ -333,10 +335,10 @@ void main() {
     "device's replacing PreKey that follows it is read — two friends that "
     're-key each other at once converge',
     () async {
-      await s.encryptForFriend(_friend, 3, '{"t":"x"}');
+      await s.sealForFriend(_friend, 3, '{"t":"x"}');
       link.awaiting.clear();
 
-      final rekey = (await s.encryptForFriend(
+      final rekey = (await s.sealForFriend(
         _friend,
         3,
         jsonEncode(handoff(_sid('K'))),
@@ -356,10 +358,10 @@ void main() {
     'again (the 24 h resend) — is refused and re-keyed, on the request queue '
     'and on our own queue alike: only a first session or a re-key asks',
     () async {
-      await s.encryptForFriend(_friend, 3, '{"t":"x"}');
+      await s.sealForFriend(_friend, 3, '{"t":"x"}');
       // The window closed: the session is old, unanswered, not "asked".
       link.awaiting.clear();
-      await s.encryptForFriend(_friend, 3, jsonEncode(handoff(_sid('K'))));
+      await s.sealForFriend(_friend, 3, jsonEncode(handoff(_sid('K'))));
       expect(link.awaiting, isEmpty);
 
       final viaRequest = await fromFreshF(handoff(_sid('R')), 0);
@@ -379,7 +381,7 @@ void main() {
     () async {
       // Established: S starts (pinning F's identity from its bundle), F
       // reads it and answers, S reads the answer.
-      final pinned = (await s.encryptForFriend(_friend, 3, '{"t":"x"}'))!;
+      final pinned = (await s.sealForFriend(_friend, 3, '{"t":"x"}'))!;
       expect(pinned.kind, BoxFrameKind.preKey);
       await f.decrypt(1, pinned.signalCiphertext, deviceId: 2);
       final reply = await f.encrypt(
@@ -413,7 +415,7 @@ void main() {
     "a stranger's PreKey frame naming the friend is finished before Signal "
     'sees it, and the session with the real friend stands',
     () async {
-      await s.encryptForFriend(_friend, 3, '{"t":"x"}');
+      await s.sealForFriend(_friend, 3, '{"t":"x"}');
       final x = EncryptionService();
       await x.initialize(
         77,
@@ -437,7 +439,7 @@ void main() {
       expect(link.learned, isEmpty);
       expect(link.rekeyed, isEmpty);
       expect(link.handedOffTo, isEmpty);
-      final next = (await s.encryptForFriend(_friend, 3, '{"t":"y"}'))!;
+      final next = (await s.sealForFriend(_friend, 3, '{"t":"y"}'))!;
       expect(
         await f.decrypt(1, next.signalCiphertext, deviceId: 2),
         E2eEnvelope.toFriend('{"t":"y"}', relays: false),
@@ -446,7 +448,7 @@ void main() {
   );
 
   test('nothing but a handoff is read from the request queue', () async {
-    await s.encryptForFriend(_friend, 3, '{"t":"x"}');
+    await s.sealForFriend(_friend, 3, '{"t":"x"}');
     final message = await fromFreshF({
       'content': 'hi',
       'msgId': 'wire-00001',
@@ -462,7 +464,7 @@ void main() {
     "a handoff naming a device the friend's verified list does not name live "
     'is not read, even under the right identity',
     () async {
-      await s.encryptForFriend(_friend, 3, '{"t":"x"}');
+      await s.sealForFriend(_friend, 3, '{"t":"x"}');
       // A fresh PreKey under the friend's own identity: first contact for
       // the (5, 4) address, so only the list can refuse it.
       final signal = await fromFreshF(handoff(_sid('R')), 0);
@@ -478,7 +480,7 @@ void main() {
     'our queue for it is taken, and a message is HELD — neither shown nor '
     'dropped — and read once the chat is linked (found in the drive)',
     () async {
-      await s.encryptForFriend(_friend, 3, '{"t":"x"}');
+      await s.sealForFriend(_friend, 3, '{"t":"x"}');
       final signal = await fromFreshF(handoff(_sid('Q')), 0);
 
       expect(await deliver(signal, viaRequest: false), isTrue);
@@ -513,7 +515,7 @@ void main() {
 
   test('a replacing PreKey handoff on the request queue from an account we '
       'asked over the box is its accept (E15f)', () async {
-    await s.encryptForFriend(_friend, 3, '{"t":"x"}');
+    await s.sealForFriend(_friend, 3, '{"t":"x"}');
     link.awaiting.clear();
     final asked = ContactRecord(
       userId: _friend,
@@ -532,7 +534,7 @@ void main() {
   test(
     'the same handoff over our own queue for it is taken too (E15f)',
     () async {
-      await s.encryptForFriend(_friend, 3, '{"t":"x"}');
+    await s.sealForFriend(_friend, 3, '{"t":"x"}');
       link.awaiting.clear();
       final asked = ContactRecord(
         userId: _friend,

@@ -80,6 +80,45 @@ class _Enc extends EncryptionProvider {
   /// the check waits).
   Future<void> Function()? onEligibility;
 
+  /// Runs first inside [drainReleasedFrames] (the drain after a tap), before
+  /// the box reads anything: the moment between the key being confirmed and
+  /// the drain starting.
+  Future<void> Function()? beforeDrain;
+
+  @override
+  Future<void> drainReleasedFrames(int peerId) async {
+    await beforeDrain?.call();
+    return super.drainReleasedFrames(peerId);
+  }
+
+  /// While set, an encrypt for the friend waits for it AFTER Signal sealed
+  /// (the ratchet moved), before the frame is handed back: a seal in flight.
+  Completer<void>? afterSeal;
+
+  /// Signals that an encrypt reached [afterSeal].
+  Completer<void>? sealing;
+
+  @override
+  Future<String> encrypt(
+    int recipientId,
+    String plaintext, {
+    int deviceId = 1,
+    bool Function(String? remoteIdentity)? admit,
+  }) async {
+    final sealed = await super.encrypt(
+      recipientId,
+      plaintext,
+      deviceId: deviceId,
+      admit: admit,
+    );
+    final wait = afterSeal;
+    if (wait != null && recipientId == _peer) {
+      sealing?.complete();
+      await wait.future;
+    }
+    return sealed;
+  }
+
   @override
   Future<bool> calmHoldEligible(int peerId) async {
     final hook = onEligibility;
@@ -148,7 +187,7 @@ class _LearnedOutbox extends SendOutbox implements BoxFriendGateOutbox {
       addressesOf: (friend) => addressesFor(friend).values,
       anchorOf: (_) => _anchor(),
       journalJudged: () => true,
-    );
+    )..calmHeld = (friend) => calmHeld?.call(friend) ?? false;
   }
 
   final String Function() _queue;
@@ -159,6 +198,10 @@ class _LearnedOutbox extends SendOutbox implements BoxFriendGateOutbox {
   /// The friend's pinned identity now.
   final String? Function() _anchor;
   late final FriendGate _gate;
+
+  /// What the app wires from the provider (`connection_provider`): the
+  /// gate's own calm clause.
+  bool Function(int friend)? calmHeld;
 
   @override
   FriendPermit? permitFor(
@@ -315,7 +358,7 @@ class _Link implements BoxFriendLink {
   bool _handed = false;
 
   Future<bool> _send(String json, {bool fresh = false}) async {
-    final frame = await side.reader.encryptForFriend(
+    final frame = await side.reader.sealForFriend(
       side.peerId,
       side.peerDevice,
       json,
@@ -568,9 +611,9 @@ void main() {
     await wire(b);
     // Sessions already established: a wrote to b, b answered — an established
     // session each way, and no window open on either side.
-    final first = (await a.reader.encryptForFriend(5, 3, '{"t":"x"}'))!;
+    final first = (await a.reader.sealForFriend(5, 3, '{"t":"x"}'))!;
     await b.enc.encryptionService.decrypt(1, first.signalCiphertext);
-    final reply = (await b.reader.encryptForFriend(1, 1, '{"t":"y"}'))!;
+    final reply = (await b.reader.sealForFriend(1, 1, '{"t":"y"}'))!;
     await a.enc.encryptionService.decrypt(
       5,
       reply.signalCiphertext,
@@ -611,7 +654,7 @@ void main() {
       for (var i = 0; i < 3; i++) {
         for (final (from, to) in [(a, b), (b, a)]) {
           final text = '{"t":"m","n":$i,"from":${from.userId}}';
-          final frame = (await from.reader.encryptForFriend(
+          final frame = (await from.reader.sealForFriend(
             from.peerId,
             from.peerDevice,
             text,
@@ -657,8 +700,8 @@ void main() {
     /// its own (`toBackupJson` drops `queues`), so it holds a new one for B,
     /// handed to nobody yet. Its storage is its own: [a] goes on holding the
     /// OLD identity, as a device that never lost it would.
-    Future<_Side> restoreA() async {
-      final restored = _Side(1, 1, 5, 3, _sid('C'))..other = b;
+    Future<_Side> restoreA({String? sid}) async {
+      final restored = _Side(1, 1, 5, 3, sid ?? _sid('C'))..other = b;
       restored.enc.encryptionService.debugSetDualStorage(_MemoryStorage());
       b.other = restored;
       await wire(restored);
@@ -670,7 +713,7 @@ void main() {
     /// [from] writes to [to] on the session the handoffs left; [to] reads it.
     Future<void> expectTraffic(_Side from, _Side to) async {
       const text = '{"t":"m"}';
-      final frame = (await from.reader.encryptForFriend(
+      final frame = (await from.reader.sealForFriend(
         from.peerId,
         from.peerDevice,
         text,
@@ -761,7 +804,7 @@ void main() {
     /// [device] — holding A's identity, but not the restored install — hands
     /// B a queue of its own (sid R) on a fresh session, unasked.
     Future<void> handOffFrom(_Side device) async {
-      final frame = (await device.reader.encryptForFriend(
+      final frame = (await device.reader.sealForFriend(
         5,
         3,
         jsonEncode(
@@ -974,7 +1017,7 @@ void main() {
     test('K7: two frames under the same new key share ONE calm hold; one '
         'tap takes the key once and both frames drain', () async {
       final restored = await calmRestore();
-      final second = (await restored.reader.encryptForFriend(
+      final second = (await restored.reader.sealForFriend(
         5,
         3,
         jsonEncode(
@@ -1254,7 +1297,7 @@ void main() {
       final earlier = b.held.single.receivedAt.subtract(
         const Duration(seconds: 5),
       );
-      final second = (await restored.reader.encryptForFriend(
+      final second = (await restored.reader.sealForFriend(
         5,
         3,
         jsonEncode(
@@ -1444,7 +1487,7 @@ void main() {
         () => b.link.learned!,
         () => b.link.learnedIdk ?? oldAnchor,
         () => b.enc.accountAnchorSync(1),
-      );
+      )..calmHeld = b.reader.hasCalmHold;
       b.enc.localLists = true;
       b.reader
         ..setConversationsProvider(chats)
@@ -1590,7 +1633,7 @@ void main() {
       await calmRestore();
       b.emits.clear();
 
-      final frame = await b.reader.encryptForFriend(
+      final frame = await b.reader.sealForFriend(
         1,
         1,
         '{"t":"x"}',
@@ -1960,6 +2003,298 @@ void main() {
             .deliveryStatus,
         MessageDeliveryStatus.failed,
       );
+    });
+
+    // ---- Slice 2b: the named window regressions of the write gate. Each
+    // asserts the QUEUE: nothing is written to the OLD queue, and the message
+    // arrives exactly once on the NEW one after the handoff is read ----
+
+    /// Frames written to the friend's OLD queue.
+    List<BoxFrame> onOld(SendOutbox o) => [
+      for (final (to, frame) in o.delivered)
+        if (to.sid == a.sid) frame,
+    ];
+
+    /// Frames written to the restored install's NEW queue.
+    List<BoxFrame> onNew(SendOutbox o, _Side restored) => [
+      for (final (to, frame) in o.delivered)
+        if (to.sid == restored.sid) frame,
+    ];
+
+    /// The person's Retry of [row], settled.
+    Future<void> retry(MessageModel row) async {
+      await b.reader.retryFailedMessage(row.tempId!);
+      await pumpEventQueue();
+    }
+
+    MessageModel rowOf(String text) =>
+        b.reader.messages.lastWhere((m) => m.content == text);
+
+    /// Nothing is on the old queue; each of [texts] arrived exactly once on
+    /// the new queue, and nothing else did; the restored install READS them
+    /// (each frame is decrypted once: Signal refuses a replay).
+    Future<void> arrivedOnceOnNew(
+      SendOutbox outbox,
+      _Side restored,
+      List<String> texts,
+    ) async {
+      expect(onOld(outbox), isEmpty, reason: 'nothing on the old queue');
+      final read = [
+        for (final f in onNew(outbox, restored))
+          await readByRestored(restored, f),
+      ];
+      expect(read, hasLength(texts.length), reason: 'once each: $read');
+      for (final text in texts) {
+        expect(
+          read.where((r) => r.contains(text)),
+          hasLength(1),
+          reason: '"$text" arrives exactly once on the new queue (got $read)',
+        );
+      }
+    }
+
+    test('encryptForFriend without a permit seals nothing', () async {
+      expect(await a.reader.encryptForFriend(5, 3, '{"t":"x"}'), isNull);
+      expect(
+        E2eDiagLog.entries.where((e) => e.contains('BOX_FRIEND_NO_PERMIT')),
+        isNotEmpty,
+      );
+    });
+
+    test('window 1: released before the drain', () async {
+      final restored = await calmRestore();
+      final outbox = await boxForB();
+      final held = await writeFromB('held row');
+      var during = -1;
+      b.enc.beforeDrain = () async {
+        // The key is confirmed and the hold is gone, but the drain has not
+        // read the handoff: the stored address is the old queue.
+        await writeFromB('typed before the drain');
+        await retry(held);
+        during = outbox.delivered.length;
+      };
+
+      await tap(b);
+
+      expect(during, 0, reason: 'nothing written before the drain');
+      await arrivedOnceOnNew(outbox, restored, [
+        'held row',
+        'typed before the drain',
+      ]);
+    });
+
+    for (final retrying in [false, true]) {
+      test('window 2: guard off during the drain: '
+          '${retrying ? 'a Retry' : 'a new send'}', () async {
+        final restored = await calmRestore();
+        final outbox = await boxForB();
+        final held = await writeFromB('held row');
+        var during = -1;
+
+        await tapWithDrain(b, () async {
+          if (retrying) {
+            await retry(held);
+          } else {
+            await writeFromB('typed during the drain');
+          }
+          during = outbox.delivered.length;
+          await reoffer(b);
+        });
+
+        expect(during, 0, reason: 'nothing written while the drain runs');
+        await arrivedOnceOnNew(outbox, restored, [
+          'held row',
+          if (!retrying) 'typed during the drain',
+        ]);
+      });
+    }
+
+    for (final bound in [true, false]) {
+      for (final retrying in [false, true]) {
+        test('window 3a: ${bound ? 'bound fires' : 'drain throws'} with the '
+            'handoff unread: ${retrying ? 'a Retry' : 'a new send'}',
+            () async {
+          final restored = await calmRestore();
+          final outbox = await boxForB();
+          final held = await writeFromB('held row');
+          if (bound) b.reader.calmDrainBound = const Duration(milliseconds: 50);
+
+          await tapWithDrain(
+            b,
+            () => bound
+                ? Completer<void>().future
+                : Future<void>.error(StateError('drain broke')),
+          );
+
+          // The rows stopped waiting; the handoff is still unread.
+          final row = retrying ? held : await writeFromB('typed after');
+          if (retrying) await retry(held);
+          expect(onOld(outbox), isEmpty, reason: 'the old queue stays unused');
+          expect(outbox.delivered, isEmpty);
+
+          // The drain (or the journal's re-offer) reads the handoff later.
+          await reoffer(b);
+          expect(onOld(outbox), isEmpty);
+          await retry(row);
+
+          await arrivedOnceOnNew(outbox, restored, [row.content]);
+        });
+      }
+    }
+
+    /// A send that is mid-flight (it waits for the own device list) when the
+    /// hold lands: the route it read holds the OLD address. [stage] says
+    /// when its lookup finishes.
+    Future<void> midFlightSend(String stage) async {
+      onTheBox();
+      final restored = await restoreA();
+      final lookup = Completer<void>();
+      b.enc.onForcedLookup = () => lookup.future;
+      final outbox = await boxForB();
+      b.reader.sendMessage('mid-flight');
+      await pumpEventQueue();
+      expect(outbox.delivered, isEmpty, reason: 'it waits for the own list');
+
+      void release() => lookup.complete();
+      await restored.link.restart();
+      await pump(); // the hold lands
+      expectCalm(b);
+      switch (stage) {
+        case 'pending':
+          release();
+          await pumpEventQueue();
+          expect(outbox.delivered, isEmpty);
+          await tap(b);
+        case 'between':
+          b.enc.beforeDrain = () async {
+            release();
+            await pumpEventQueue();
+          };
+          await tap(b);
+        default:
+          await tap(b);
+          expect(b.link.learned, restored.sid, reason: 'handoff read');
+          release();
+          await pumpEventQueue();
+      }
+
+      expect(onOld(outbox), isEmpty, reason: 'nothing on the old queue');
+      final row = rowOf('mid-flight');
+      if (row.deliveryStatus == MessageDeliveryStatus.failed) await retry(row);
+      await arrivedOnceOnNew(outbox, restored, ['mid-flight']);
+    }
+
+    test(
+      'window 3b: address read before the guard',
+      () => midFlightSend('after'),
+    );
+
+    test(
+      'window 3b: address read before the guard, hold pending',
+      () => midFlightSend('pending'),
+    );
+
+    test(
+      'window 3b: address read before the guard, between the tap and the '
+      'handoff',
+      () => midFlightSend('between'),
+    );
+
+    test('red hold: Retry right after the acknowledge, before the handoff '
+        'is read', () async {
+      b.enc.keyChangeWarnings = () => true; // the visible hold
+      onTheBox();
+      final restored = await restoreA();
+      await restored.link.restart();
+      await pump();
+      expectRed(b);
+      final outbox = await boxForB();
+      // Before the acknowledge a send does not wait (design Q1): it goes to
+      // the address the friend still reads; here the box refuses it.
+      outbox.refuse.add(1);
+      final row = await writeFromB('before the accept');
+      expect(row.deliveryStatus, MessageDeliveryStatus.failed);
+      final attempts = onOld(outbox).length;
+      outbox.refuse.clear();
+
+      expect(await b.enc.acknowledgePeerIdentity(b.peerId), isTrue);
+      // The box's pre-build (decision 38) gives the device a usable session
+      // right after the key moved, so only the gate stands between the
+      // Retry and the old queue.
+      await b.enc.ensureSession(b.peerId, deviceId: b.peerDevice);
+      await retry(row); // the handoff is not read yet
+
+      expect(onOld(outbox), hasLength(attempts), reason: 'no new old write');
+      expect(onNew(outbox, restored), isEmpty);
+
+      await reoffer(b); // the handoff is read
+      await retry(row);
+
+      // The one old-queue write is the first attempt, which the box refused
+      // before the acknowledge; nothing was added to it since.
+      expect(onOld(outbox), hasLength(attempts));
+      final frames = onNew(outbox, restored);
+      expect(frames, hasLength(1), reason: 'exactly once on the new queue');
+      expect(
+        await readByRestored(restored, frames.single),
+        contains('before the accept'),
+      );
+    });
+
+    test('sealed before accept, written after', () async {
+      onTheBox();
+      // The friend reinstalled and kept its queue: the same address, learned
+      // again under the new identity (the re-tag), so the stale-tag clause
+      // has nothing to say; only the permit's identity can refuse.
+      final restored = await restoreA(sid: a.sid);
+      final outbox = await boxForB();
+      b.enc
+        ..afterSeal = Completer<void>()
+        ..sealing = Completer<void>();
+      b.reader.sendMessage('sealed under the old key');
+      await b.enc.sealing!.future; // sealed, not written
+
+      await restored.link.restart();
+      await pump();
+      await tap(b); // accepted; the handoff re-tags the same queue
+      expect(b.link.learnedIdk, await idOf(restored));
+      b.enc.afterSeal!.complete();
+      b.enc.afterSeal = null;
+      await pumpEventQueue();
+
+      expect(outbox.delivered, isEmpty, reason: 'sealed under the old key');
+      final row = rowOf('sealed under the old key');
+      expect(row.deliveryStatus, MessageDeliveryStatus.failed);
+      await retry(row);
+      expect(outbox.delivered, hasLength(1));
+      expect(
+        await readByRestored(restored, outbox.delivered.single.$2),
+        contains('sealed under the old key'),
+      );
+    });
+
+    test('sealed before the calm hold, written during it', () async {
+      onTheBox();
+      final restored = await restoreA();
+      final outbox = await boxForB();
+      b.enc
+        ..afterSeal = Completer<void>()
+        ..sealing = Completer<void>();
+      b.reader.sendMessage('sealed before the hold');
+      await b.enc.sealing!.future;
+
+      await restored.link.restart();
+      await pump(); // the hold lands while the frame is sealed
+      expectCalm(b);
+      b.enc.afterSeal!.complete();
+      b.enc.afterSeal = null;
+      await pumpEventQueue();
+
+      expect(outbox.delivered, isEmpty, reason: 'not written during the hold');
+      await tap(b);
+      final row = rowOf('sealed before the hold');
+      if (row.deliveryStatus == MessageDeliveryStatus.failed) await retry(row);
+      await arrivedOnceOnNew(outbox, restored, ['sealed before the hold']);
     });
 
     test('F7b: the account switches while the session is built: the key IS '

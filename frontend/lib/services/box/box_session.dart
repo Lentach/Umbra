@@ -479,9 +479,10 @@ class BoxSession
       return const BoxRefused(BoxCode.badSize);
     }
     // Friend lane only: a write to our own self-queue (profile photos) or a
-    // sibling's is never gated. No await sits between this check and the
-    // upload.
-    if (_friendOfSid(to.sid) != null &&
+    // sibling's is never gated; one that carries a permit is a friend write
+    // (the address it was sealed for may be gone). No await sits between
+    // this check and the upload.
+    if ((permit != null || _friendOfSid(to.sid) != null) &&
         _gate.refusalOf(permit, to.sid) != null) {
       return const BoxRefused(BoxCode.invalidPayload);
     }

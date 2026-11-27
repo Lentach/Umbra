@@ -19,6 +19,27 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'chat_seed.dart';
 
+/// `encryptForFriend` as a friend sealer calls it: under a permit taken
+/// first, in the same step (null while the gate is closed).
+extension FriendSeal on MessagingProvider {
+  Future<BoxFrame?> sealForFriend(
+    int userId,
+    int deviceId,
+    String json, {
+    bool fresh = false,
+  }) {
+    final permit = friendPermitForTest(userId);
+    if (permit == null) return Future.value();
+    return encryptForFriend(
+      userId,
+      deviceId,
+      json,
+      fresh: fresh,
+      permit: permit,
+    );
+  }
+}
+
 /// The real plaintext store; Signal and the device-list round trip are
 /// faked. A "ciphertext" is `3:` + base64(the plaintext), so a frame the
 /// box was handed can be read back.

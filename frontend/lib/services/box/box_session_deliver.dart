@@ -17,8 +17,11 @@ extension BoxSessionDeliver on BoxSession {
     final sealPub = boxB64Decode(to.sealPub, 32);
     if (_disposed || sid == null || sealPub == null) return null;
     // Friend lane only: a self-queue or sibling address is never gated. A
+    // write that carries a permit is a friend write whatever the stored
+    // addresses say now (the handoff may have replaced the one it was sealed
+    // for: then it is refused, not let through as "nobody's"). A
     // first-contact request takes the permit its own sealed PreKey made.
-    final friend = _friendOfSid(to.sid);
+    final friend = permit?.friend ?? _friendOfSid(to.sid);
     final p = friend == null || !request ? permit : _gate.requestPermit(friend);
     if (friend != null && _gate.refusalOf(p, to.sid) != null) return null;
     final blob = await _seal.seal(sealPub, body);

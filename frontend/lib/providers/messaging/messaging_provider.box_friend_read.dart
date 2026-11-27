@@ -378,11 +378,9 @@ extension MessagingBoxFriendRead on MessagingProvider {
   }) async {
     final enc = _encryptionProvider;
     if (enc == null || !enc.isE2EReady) return null;
-    // The permit is taken BEFORE anything is sealed (the gate: a calm hold,
-    // an unjudged journal, a stale address all refuse it). The box passes its
-    // own; a direct caller gets one here, now. A closed gate seals nothing,
-    // and the write itself refuses a frame that carries none.
-    permit ??= _friendPermit(userId);
+    // Fails closed: the caller takes the permit BEFORE any await of its own
+    // (the gate: a calm hold, an unjudged journal, a stale address all
+    // refuse it) and carries it to the write. None taken seals nothing.
     if (permit == null) {
       _e2eFlowLog('BOX_FRIEND_NO_PERMIT', {'peer': userId, 'device': deviceId});
       return null;
@@ -448,6 +446,10 @@ extension MessagingBoxFriendRead on MessagingProvider {
     }
     return FriendPermit.ungated(userId);
   }
+
+  /// [_friendPermit] for a test that calls [encryptForFriend] itself.
+  @visibleForTesting
+  FriendPermit? friendPermitForTest(int userId) => _friendPermit(userId);
 
   /// Takes a permit for friend [user]'s [device] at [to], BEFORE Signal
   /// seals [json] under it: a closed gate seals nothing and moves no ratchet.

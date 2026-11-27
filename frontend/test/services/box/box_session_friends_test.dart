@@ -1310,6 +1310,33 @@ void main() {
     },
   );
 
+  // Mutation: `rekeyFriend` sets the once-per-session `_friendRekeyed` mark
+  // BEFORE it asks the gate: a re-key refused while the gate was closed is
+  // then given up for the whole session.
+  test(
+    'a re-key during the closed gate is not sent and not marked: it goes '
+    'out, once, when the gate opens',
+    () async {
+      await a.start();
+      await b.start();
+      var held = true;
+      a.session.calmHeld = (_) => held;
+
+      await a.session.rekeyFriend(5, 3);
+      await settle();
+      expect(a.freshFor, isEmpty, reason: 'nothing sealed while closed');
+
+      held = false;
+      await a.session.rekeyFriend(5, 3);
+      await settle();
+      expect(a.freshFor, [3], reason: 'not marked while closed');
+
+      await a.session.rekeyFriend(5, 3);
+      await settle();
+      expect(a.freshFor, [3], reason: 'once per session after that');
+    },
+  );
+
   // Mutation: `rekeyFriend` keeps `_friendAddressAsked` when the lookup
   // answers false (drop the `remove`): a re-key provoked while E2E was not
   // ready is given up for the session.
@@ -1983,6 +2010,125 @@ void main() {
         isNot(equals(null)),
       );
       s.dispose();
+    });
+
+    /// The connected session of [a], with the friend's pin read from
+    /// [anchor].
+    Future<void> metWithAnchor(String Function() anchor) async {
+      a.anchorOf = (_) => anchor();
+      await met();
+    }
+
+    Future<BoxSendOutcome> write(ContactOutbound to, FriendPermit? permit) =>
+        a.session.deliverFriend(
+          to,
+          Uint8List.fromList([9]),
+          permit: permit,
+        );
+
+    test('a permit sealed under the old pin is not written once the SAME '
+        'address is re-tagged under the new one', () async {
+      var pin = 'A';
+      await metWithAnchor(() => pin);
+      var to = await tagged('A');
+      final permit = a.session.permitFor(5, to: [to])!;
+      expect(
+        await write(to, permit),
+        BoxSendOutcome.taken,
+        reason: 'the session writes while nothing moved',
+      );
+      // The friend kept its queue and announced it again under B (the
+      // re-tag): the address is current for B, only the permit is old.
+      pin = 'B';
+      to = await tagged('B');
+      expect(a.session.permitFor(5, to: [to]), isNotNull, reason: 'current');
+      expect(
+        await write(to, permit),
+        BoxSendOutcome.failed,
+        reason: 'sealed under A, written after the pin moved to B',
+      );
+    });
+
+    test('a calm hold closes the gate, and a permit taken before it is not '
+        'written during it', () async {
+      await metWithAnchor(() => 'A');
+      final to = await tagged('A');
+      var held = false;
+      a.session.calmHeld = (_) => held;
+      final permit = a.session.permitFor(5, to: [to])!;
+      held = true;
+      expect(a.session.permitFor(5, to: [to]), isNull, reason: 'none held');
+      expect(
+        await write(to, permit),
+        BoxSendOutcome.failed,
+        reason: 'sealed before the hold, written during it',
+      );
+      held = false;
+      expect(
+        await write(to, permit),
+        BoxSendOutcome.taken,
+        reason: 'the hold ended',
+      );
+    });
+
+    test('an address the friend no longer holds gets no permit and no '
+        'write, though it was current when the permit was taken', () async {
+      await metWithAnchor(() => 'A');
+      final to = await tagged('A');
+      final permit = a.session.permitFor(5, to: [to])!;
+      // The friend's handoff replaced the address: the old sid is nobody's
+      // now.
+      final replaced = ContactOutbound(
+        peerDeviceId: to.peerDeviceId,
+        sid: boxB64(Uint8List(32)..fillRange(0, 32, 7)),
+        sealPub: to.sealPub,
+        idk: 'A',
+      );
+      await a.store.update(5, (c) => c!.copyWith(outbound: [replaced]));
+      expect(a.session.permitFor(5, to: [to]), isNull, reason: 'not held');
+      expect(
+        await write(to, permit),
+        BoxSendOutcome.failed,
+        reason: "the old queue is no longer the friend's",
+      );
+      final framed = Uint8List.fromList(List.filled(kBoxMediaLadder.first, 1));
+      expect(
+        await a.session.uploadMediaFriend(to, framed, permit: permit),
+        isA<BoxRefused>(),
+        reason: 'nor is a media upload charged to it',
+      );
+    });
+
+    test('with the gate closed for a friend, a write and an upload to the '
+        'own queue (a sibling lane) still go through', () async {
+      await metWithAnchor(() => 'A');
+      final friendTo = await tagged('A');
+      a.session.calmHeld = (_) => true;
+      expect(a.session.permitFor(5, to: [friendTo]), isNull, reason: 'closed');
+      expect(
+        await write(friendTo, null),
+        BoxSendOutcome.failed,
+        reason: 'a friend write is refused',
+      );
+      final self = a.store.selfQueue!;
+      final own = ContactOutbound(
+        peerDeviceId: 9,
+        sid: self.sid,
+        sealPub: self.sealPub,
+        idk: null,
+      );
+      expect(
+        await a.session.deliver(own, Uint8List.fromList([1])),
+        BoxSendOutcome.taken,
+      );
+      final framed = Uint8List.fromList(List.filled(kBoxMediaLadder.first, 1));
+      // The fake box has no media route (an unknown answer): what matters is
+      // that the gate did not refuse it.
+      expect(
+        await a.session.uploadMedia(own, framed),
+        isNot(isA<BoxRefused>()),
+        reason: 'an own-queue upload is never gated',
+      );
     });
   });
 }
