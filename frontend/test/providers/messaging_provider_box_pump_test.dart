@@ -12,6 +12,7 @@ import 'package:fireplace/services/box/box_wire.dart';
 import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/utils/e2e_diag_log.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../support/box_send_harness.dart';
 
@@ -64,6 +65,9 @@ class _PumpEncryption extends ScriptedSendEncryption {
   Completer<void>? afterRead;
   Completer<void>? readDone;
 
+  /// The re-offer of the held frames fails ([drainReleasedFrames] throws).
+  bool drainThrows = false;
+
   /// The calm tap's eligibility check and key confirmation, as a confirmed
   /// tap (the real ones are the crossing test's).
   @override
@@ -79,7 +83,9 @@ class _PumpEncryption extends ScriptedSendEncryption {
   }) async => CalmConfirm.confirmed;
 
   @override
-  Future<void> drainReleasedFrames(int peerId) async {}
+  Future<void> drainReleasedFrames(int peerId) async {
+    if (drainThrows) throw StateError('re-offer failed');
+  }
 
   @override
   Future<Map<String, Map<String, dynamic>>> boxUnsentWaiting(int userId) async {
@@ -387,6 +393,66 @@ void main() {
 
     expect(has(sent(), 'one'), isTrue);
     expect(rowOf('one').waitingToSend, isFalse);
+  });
+
+  test('P3-5: the unawaited re-offer of the held frames THROWS: the tap '
+      'still ends the hold, nothing is stuck, the row keeps waiting and the '
+      'next kick releases it', () async {
+    await typed('one');
+    provider.seedCalmHoldForTest(2, CalmHoldState.waiting);
+    encryption.drainThrows = true;
+
+    await provider.confirmCalmHold(2);
+    await h.pump(20);
+
+    expect(provider.hasCalmHold(2), isFalse, reason: 'the hold ended');
+    expect(rowOf('one').waitingToSend, isTrue, reason: 'still waiting');
+    expect(outbox.delivered, isEmpty);
+    expect((await encryption.boxUnsentWaiting(1)).keys, hasLength(1));
+
+    await open(); // the next state change kicks the pump
+
+    expect(has(sent(), 'one'), isTrue, reason: 'released at the next kick');
+    expect(rowOf('one').waitingToSend, isFalse);
+  });
+
+  test('P3-3: a RAM-only picture whose upload went but whose frames failed '
+      'for a PASSING reason stays WAITING (its record names the box: url): '
+      'the next kick sends the frames from it, with no second upload', () async {
+    outbox.closed = true;
+    final ok = await provider.sendImageMessage(
+      XFile.fromData(
+        Uint8List.fromList(List<int>.generate(5000, (i) => i % 251)),
+        name: 'a.jpg',
+      ),
+      2,
+    );
+    await h.pump();
+    expect(ok, isFalse, reason: 'the gate was closed');
+    expect(outbox.uploads, isEmpty, reason: 'nothing uploaded for a closed gate');
+    final tempId = provider.messages.single.tempId!;
+    expect(provider.messages.single.waitingToSend, isTrue);
+
+    // The gate opens, the upload goes, the box refuses the frames: passing.
+    outbox.refuse.add(1);
+    await open();
+    expect(outbox.uploads, hasLength(1));
+    var row = provider.messages.single;
+    expect(row.waitingToSend, isTrue, reason: 'passing failure: still waiting');
+    expect(row.deliveryStatus, MessageDeliveryStatus.failed);
+
+    // The box takes frames again: the next kick sends it, never re-uploads.
+    outbox.refuse.clear();
+    outbox.delivered.clear();
+    provider.kickSendPump(2);
+    await h.pump(80);
+
+    row = provider.messages.single;
+    expect(outbox.uploads, hasLength(1), reason: 'the file is never re-sent');
+    expect(outbox.delivered, isNotEmpty, reason: 'the frames went');
+    expect(row.deliveryStatus, MessageDeliveryStatus.sent);
+    expect(row.waitingToSend, isFalse);
+    expect(row.tempId, tempId);
   });
 
   test('STRICT ORDER: row 1 fails for a passing reason: row 2 does NOT '

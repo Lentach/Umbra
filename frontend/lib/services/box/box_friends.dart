@@ -96,6 +96,12 @@ abstract interface class BoxFriendLink {
   /// which an old build reads even where our first probe was a PreKey).
   void friendAuthenticated(int userId);
 
+  /// The calm hold of friend [userId] ENDED (the tap confirmed it, or a frame
+  /// of the key that waited settled it): the move trigger of the probe, which
+  /// was skipped while the hold was set, is due now. A level check, never a
+  /// lookup and never a timer.
+  void calmHoldEnded(int userId);
+
   /// Hand our queue for [userId] to its device [deviceId] on a FRESH
   /// session ([FriendEncrypt]'s `fresh`): it sent a PreKey message that would
   /// replace the session we hold and we did not ask for one. The handoff is a

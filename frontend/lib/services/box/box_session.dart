@@ -783,6 +783,11 @@ class BoxSession
   }
 
   @override
+  void calmHoldEnded(int userId) {
+    if (!_disposed) unawaited(_probe.run(userId, ProbeTrigger.move));
+  }
+
+  @override
   Future<void> rekeyFriend(int userId, int deviceId) async {
     final key = '$userId:$deviceId';
     final encrypt = _friends.encrypt;

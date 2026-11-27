@@ -107,6 +107,9 @@ class _Link implements BoxFriendLink {
   void friendAuthenticated(int userId) {}
 
   @override
+  void calmHoldEnded(int userId) {}
+
+  @override
   Future<void> rekeyFriend(int userId, int deviceId) async =>
       rekeyed.add((userId, deviceId));
 

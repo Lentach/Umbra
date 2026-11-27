@@ -294,11 +294,19 @@ extension MessagingBoxPump on MessagingProvider {
   }
 
   /// An attachment whose bytes live only in RAM goes through the row's own
-  /// retry path; it needs its row and its held bytes, or it can never go.
+  /// retry path. It needs its row and either its held bytes (not uploaded
+  /// yet) or the `box:` url and keys the upload gave it (uploaded: only the
+  /// frames go, and the row's record names the same url); with neither it can
+  /// never go.
   Future<_WaiterResult> _sendRamWaiter(int own, int friend, _Waiter w) async {
     final tempId = w.tempId;
     final row = _messages.where((m) => m.tempId == tempId).firstOrNull;
-    if (row == null || !_boxMediaBodies.containsKey(tempId)) {
+    if (row == null) return _WaiterResult.never;
+    final uploaded =
+        isBoxMediaUrl(row.mediaUrl) &&
+        row.mediaKey != null &&
+        row.mediaIv != null;
+    if (!uploaded && !_boxMediaBodies.containsKey(tempId)) {
       return _WaiterResult.never;
     }
     _pumpOwned.add(tempId);

@@ -237,6 +237,9 @@ class _Side {
   /// How often the reader told the session a friend was authenticated.
   int otp = 0;
 
+  /// How often this device asked the server for a pre-key bundle.
+  int bundleFetches = 0;
+
   String get tag => '000$userId';
 
   Future<void> start() async {
@@ -253,6 +256,7 @@ class _Side {
         );
       }
       if (event == 'fetchPreKeyBundle' && data is Map) {
+        bundleFetches++;
         final peer = data['userId'] as int;
         final bundle = bundleOf?.call(peer);
         if (bundle != null) {
@@ -600,7 +604,12 @@ void main() {
 
     final z = alice.probeQueueOf(5);
     expect(z, isNotNull, reason: 'the probe queue was minted');
-    expect(alice.probes, hasLength(1));
+    expect(alice.probes, isNotEmpty);
+    expect(
+      alice.probes.every((p) => p.handoffJson.contains(z!.sid)),
+      isTrue,
+      reason: 'every probe names the one Z',
+    );
     expect(alice.addressOf(5).sid, a.sid, reason: 'the address is A still');
     expect(alice.addressOf(5).idk, anchor, reason: 're-tagged on proof');
     final onA = bob2.readOn(aRid);
@@ -642,11 +651,11 @@ void main() {
     await alice.type('second words');
     await tap(bob2);
     await release(); // heard: the probe goes to the (dead) A
-    await settleUntil(() => alice.probes.isNotEmpty);
+    await settleUntil(() => alice.probes.length > 1);
     final z = alice.probeQueueOf(5);
     expect(z, isNotNull, reason: 'a probe queue was minted');
     expect(z!.retiredAt, isNull, reason: 'Z is outstanding');
-    expect(alice.probes, hasLength(1));
+    expect(alice.probes, hasLength(2), reason: 'move at the tap, then heard');
     expect(alice.addressOf(5).sid, a.sid, reason: 'no ack, no handoff yet');
     expect(alice.row('second words').waitingToSend, isTrue);
 
@@ -668,11 +677,11 @@ void main() {
       reason: "the friend's handoff retired Z",
     );
 
-    expect(alice.probes, hasLength(1));
+    expect(alice.probes, hasLength(2), reason: 'move, then heard');
     expect(
       alice.writesTo(a.sid) - before,
-      1,
-      reason: 'nothing but the probe reached the dead address',
+      2,
+      reason: 'nothing but the probe (its two triggers) reached the dead A',
     );
     final b = alice.addressOf(5);
     expect(b.sid, isNot(a.sid));
@@ -741,9 +750,10 @@ void main() {
     expect(_count(bob2.readOn(rid), 'second words'), 1);
   });
 
-  test('heard trigger: a frame authenticated under the pinned identity, read '
-      'through the real reader, hands the SAME Z to the stale address once; '
-      'a second such frame does not hand it again', () async {
+  test('heard trigger: the tap sends the probe (move trigger, P3-5); a frame '
+      'authenticated under the pinned identity, read through the real reader, '
+      'hands the SAME Z to the stale address once more; a second such frame '
+      'does not hand it again', () async {
     final a = alice.addressOf(5);
     final bob2 = await calmBob(keptQueue: true);
     // Nobody acks: whatever alice writes to bob2's queues is lost.
@@ -751,23 +761,62 @@ void main() {
     await alice.type('waiting words');
     final before = alice.writesTo(a.sid);
     await tap(bob2);
-    expect(alice.probes, isEmpty, reason: 'the calm hold was still on at the move');
-    expect(alice.writesTo(a.sid), before);
+    expect(alice.probes, hasLength(1), reason: 'the move trigger, at the tap');
+    expect(alice.writesTo(a.sid) - before, 1);
 
     await release(); // the held frame is read: heard
-    await settleUntil(() => alice.probes.isNotEmpty);
+    await settleUntil(() => alice.probes.length > 1);
 
     final z = alice.probeQueueOf(5);
-    expect(alice.probes, hasLength(1));
-    expect(alice.probes.single.handoffJson, contains(z!.sid));
-    expect(alice.writesTo(a.sid) - before, 1, reason: 'one handoff of Z on A');
+    expect(alice.probes, hasLength(2), reason: 'move, then heard');
+    expect(alice.probes.every((p) => p.handoffJson.contains(z!.sid)), isTrue);
+    expect(alice.writesTo(a.sid) - before, 2, reason: 'two handoffs of Z on A');
     expect(alice.addressOf(5).idk, isNot(alice.enc.accountAnchorSync(5)));
 
     await bob2.type('and another one');
     await settle();
-    expect(alice.probes, hasLength(1), reason: 'once per session');
-    expect(alice.writesTo(a.sid) - before, 1);
-    expect(alice.probeQueueOf(5)!.rid, z.rid, reason: 'never another Z');
+    expect(alice.probes, hasLength(2), reason: 'once per trigger');
+    expect(alice.writesTo(a.sid) - before, 2);
+    expect(alice.probeQueueOf(5)!.rid, z!.rid, reason: 'never another Z');
     expect(alice.row('waiting words').waitingToSend, isTrue);
+  });
+
+  test('P3-5: the calm tap makes the probe due when its hold ENDS: for a '
+      'kept-queue friend the probe is written to the old address A in the '
+      "tap's own flow, with no reconnect, no further frame from the friend "
+      'and no fetch of its own', () async {
+    final a = alice.addressOf(5);
+    final bob2 = await calmBob(keptQueue: true);
+    // Nothing more comes from the friend: what alice writes is lost, and the
+    // held frames are not read again ([tap] leaves the drain out).
+    box.deaf.add(bob2.socket);
+    await alice.type('waiting words');
+    final before = alice.writesTo(a.sid);
+    final connects = box.sockets.sockets.length;
+    final readBefore = alice.enc.read.length;
+
+    await tap(bob2);
+    final fetches = alice.bundleFetches;
+    await settle();
+
+    expect(alice.probes, hasLength(1), reason: 'due when the hold ended');
+    final z = alice.probeQueueOf(5);
+    expect(z, isNotNull, reason: 'ONE probe queue');
+    expect(alice.probes.single.handoffJson, contains(z!.sid));
+    expect(alice.writesTo(a.sid) - before, 1, reason: 'the probe, on A');
+    expect(alice.addressOf(5).sid, a.sid);
+    expect(alice.enc.read, hasLength(readBefore), reason: 'no frame was read');
+    expect(box.sockets.sockets, hasLength(connects), reason: 'no reconnect');
+    expect(alice.lookups, hasLength(1), reason: "the tap's own lookup only");
+    expect(alice.bundleFetches, fetches, reason: 'the probe fetched nothing');
+    expect(alice.row('waiting words').waitingToSend, isTrue);
+
+    // The held frame is read now (heard): the SAME Z, never another.
+    await release();
+    expect(alice.probeQueueOf(5)!.rid, z.rid, reason: 'still one Z');
+    expect(
+      alice.recordOf(5)!.queues.where((q) => q.probeDevice != null),
+      hasLength(1),
+    );
   });
 }

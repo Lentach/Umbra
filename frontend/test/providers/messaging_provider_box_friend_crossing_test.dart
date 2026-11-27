@@ -442,6 +442,9 @@ class _Link implements BoxFriendLink {
   void friendAuthenticated(int userId) {}
 
   @override
+  void calmHoldEnded(int userId) {}
+
+  @override
   Future<void> rekeyFriend(int userId, int deviceId) async {
     if (!_rekeyed.add(deviceId)) return;
     if (await _send(_handoff, fresh: true)) {
@@ -2418,6 +2421,62 @@ void main() {
       await handOffFrom(a); // the OLD key again: a new calm hold
       expectCalm(b);
 
+      expect(_waits(b.reader, row.tempId), isFalse);
+    });
+
+    test('K211: the anchor reached the key that waits (address re-tagged, '
+        'nothing else moves); a PreKey frame of that key with NO handoff '
+        'settles the hold, and only the pump kick of that settle releases the '
+        'waiting row, once', () async {
+      final restored = await calmRestore();
+      final outbox = await boxForB() as _LearnedOutbox;
+      final row = await writeFromB('waits for the settle');
+      expect(_waits(b.reader, row.tempId), isTrue);
+      expectCalm(b);
+
+      // The key is confirmed some other way than the provider's tap, and the
+      // address already carries it: the calm hold is the ONLY thing closing
+      // the gate. Nothing wires a kick for this (no anchor-moved callback).
+      expect(
+        await b.enc.confirmCalmKey(1, 1, await idOf(restored), noteAtMs: 0),
+        CalmConfirm.confirmed,
+      );
+      b.link.learnedIdk = await idOf(restored);
+      await pumpEventQueue(times: 50);
+      expect(b.reader.calmHoldState(1), CalmHoldState.waiting);
+      expect(_waits(b.reader, row.tempId), isTrue, reason: 'the hold keeps it');
+      expect(outbox.delivered, isEmpty);
+
+      // A frame of the restored install, still a PreKey message, carrying no
+      // handoff: no handoff is stored, nothing acks, nothing else kicks.
+      final frame = (await restored.reader.sealForFriend(
+        5,
+        3,
+        '{"t":"x"}',
+      ))!;
+      expect(
+        frame.signalCiphertext,
+        startsWith('${BoxFrameKind.preKey.byte}:'),
+        reason: 'a PreKey frame, so the reader judges its identity',
+      );
+      final entry = BoxInboxEntry(
+        rid: 'friend-rid',
+        id: 'k211',
+        localId: nextLocal++,
+        peerUserId: 1,
+        senderDeviceId: 1,
+        signal: frame.signalCiphertext,
+        receivedAt: DateTime.now().toUtc(),
+        acked: true,
+      );
+      // Its payload is of no use here (the reader holds it for a later offer);
+      // what matters is the identity judgement that comes BEFORE the decrypt.
+      await b.reader.consumeBoxEntry(entry, b.peerRecord);
+      await pumpEventQueue(times: 100);
+
+      expect(b.reader.calmHoldState(1), isNull, reason: 'the hold settled');
+      expect(outbox.delivered, hasLength(1), reason: 'released, exactly once');
+      expect(outbox.delivered.single.$1.sid, b.link.learned);
       expect(_waits(b.reader, row.tempId), isFalse);
     });
   });

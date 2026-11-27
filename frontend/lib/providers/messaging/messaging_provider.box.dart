@@ -519,6 +519,8 @@ extension MessagingBox on MessagingProvider {
       // handoff is STORED (or any other state change opens the gate).
       enc.drainReleasedFrames(peerId).ignore();
       kickSendPump(peerId);
+      // The probe's move trigger was skipped while the hold was set: due now.
+      boxFriends?.calmHoldEnded(peerId);
     }
   }
 
