@@ -253,6 +253,10 @@ class _Device {
   /// A calm hold is pending for the friend.
   bool calmHold = false;
 
+  /// `friendSessionUsable` of every session this device connects, wired
+  /// BEFORE the connect's own pass (a restart included); null: not wired.
+  Future<bool> Function(int user, int device)? usableSession;
+
   /// The identity (base64) the frames this device reads are authenticated
   /// under, as the messaging reader hands it to the box (null: unknown).
   String? readIdentity;
@@ -433,8 +437,14 @@ class _Device {
           user == friendId ? friendLive : null)
       ..friendRevokedDevices = ((user) async =>
           user == friendId ? friendRevoked : null)
-      ..onAddressesLabelled = (() => labelled?.call())
-      ..e2eReady();
+      ..onAddressesLabelled = (() => labelled?.call());
+    if (usableSession case final usable?) {
+      session
+        ..friendSessionUsable = usable
+        ..cachedFriendLiveDevices = ((user) async =>
+            user == friendId ? friendLive : null);
+    }
+    session.e2eReady();
     if (lookupAtStart) session.friendAddressLookup = _lookup;
     started = true;
     socket.serverConnect('S$userId.$deviceId');
@@ -1958,7 +1968,7 @@ void main() {
       });
 
       test('P1: the hold ends AFTER 30 d: the old queue is kept until the '
-          'device acks the new lead, then deleted on the next pass', () async {
+          'device acks the new lead, and deleted a full TTL after that', () async {
         final old = await rotatedUnderAHold();
         await past30Days();
         expect(deletedRids(), isEmpty);
@@ -1968,8 +1978,40 @@ void main() {
         expect(b2.outboundOf(2)?.sid, a.friend.queues.first.sid);
         a.session.friendDevicesChanged(5);
         await settle();
+        expect(deletedRids(), isEmpty, reason: 'not on the next pass');
+        expect(a.friend.queues, hasLength(2));
+        await past30Days();
         expect(deletedRids(), [old.rid]);
         expect(a.friend.queues, hasLength(1));
+      });
+
+      // Review 4, P3-1: the box delivers a window of frames in flight, so
+      // the ack of the new lead can be read while the old queue still holds
+      // what the device wrote before it moved. The delete comes a full box
+      // TTL after the last pass that saw the device not yet on the lead.
+      test('a kept queue is not deleted on the pass right after the ack',
+          () async {
+        final old = await rotatedUnderAHold();
+        await past30Days();
+        expect(deletedRids(), isEmpty);
+        a.session.calmHeld = (_) => false;
+        a.session.friendDevicesChanged(5);
+        await settle();
+        final lead = a.friend.queues.first;
+        expect(b2.outboundOf(2)?.sid, lead.sid);
+        expect(lead.ackedBy, [4]);
+        a.clock = a.clock.add(const Duration(minutes: 1));
+        a.session.friendDevicesChanged(5);
+        await settle();
+        expect(deletedRids(), isEmpty, reason: 'the pass right after the ack');
+        expect(a.friend.queues, hasLength(2));
+        a.clock = a.clock.add(kBoxRedeliveryWindow - const Duration(minutes: 1));
+        a.session.friendDevicesChanged(5);
+        await settle();
+        expect(deletedRids(), isEmpty, reason: 'a full TTL has not passed');
+        await past30Days();
+        expect(deletedRids(), [old.rid]);
+        expect(a.friend.queues.single.sid, lead.sid);
       });
 
       test("P1: a revoked device's queue is still deleted: the device that "
@@ -2865,6 +2907,110 @@ void main() {
         fetches = 0;
         a.lookups.clear();
       }
+
+      // Review 4, P2-1: the reviewer's probe, as written.
+      test('REVIEW4 the one-shot skip is not deferred to the next ordinary '
+          'pass', () async {
+        await legacyAndWired();
+        usable = false;
+        final before = handoffsToB();
+        a.session.storeOpened();
+        await settle();
+        expect(handoffsToB(), before, reason: 'skipped');
+        fetches = 0;
+        // Any ordinary pass later in the session (a list change, a
+        // connect): no frame from b in between.
+        a.session.friendDevicesChanged(5);
+        await settle();
+        expect(handoffsToB(), before,
+            reason: 'sealed on an UNUSABLE session (prod: a bundle fetch) '
+                'only because the one-shot cleared the ack');
+      });
+
+      /// The one-shot ran while device 3 had no usable session: skipped.
+      /// Every later session of this device reads [usable] from its start.
+      Future<int> skippedByTheOneShot() async {
+        await legacyAndWired();
+        usable = false;
+        a.usableSession = (_, _) async => usable;
+        final before = handoffsToB();
+        a.session.storeOpened();
+        await settle();
+        expect(a.friend.reannounced, isTrue);
+        expect(handoffsToB(), before, reason: 'skipped');
+        return before;
+      }
+
+      test('after a restart the skipped device is still not handed on an '
+          'unusable session', () async {
+        final before = await skippedByTheOneShot();
+        await a.restart();
+        await settle();
+        expect(handoffsToB(), before, reason: "the start's own pass");
+        a.session.friendDevicesChanged(5);
+        await settle();
+        expect(handoffsToB(), before, reason: 'a later ordinary pass');
+        expect(a.lookups, isEmpty);
+      });
+
+      test('once the session becomes usable it is handed exactly once',
+          () async {
+        final before = await skippedByTheOneShot();
+        a.session.friendDevicesChanged(5);
+        await settle();
+        expect(handoffsToB(), before, reason: 'unusable: an ordinary pass');
+        await a.restart();
+        await settle();
+        expect(handoffsToB(), before, reason: 'unusable: after a restart');
+        usable = true;
+        a.session.friendDevicesChanged(5);
+        await settle();
+        expect(handoffsToB(), before + 1, reason: 'usable: handed');
+        expect(a.friend.queues.first.ackedBy, [3]);
+        usable = false;
+        a.session.friendDevicesChanged(5);
+        await settle();
+        await a.restart();
+        await settle();
+        expect(handoffsToB(), before + 1, reason: 'exactly once');
+        expect(a.lookups, isEmpty);
+      });
+
+      test('a skipped device no address is held for causes no handle lookup '
+          'in a later ordinary pass or after a restart', () async {
+        await legacyAndWired();
+        usable = false;
+        a.usableSession = (_, _) async => usable;
+        await a.store.update(5, (c) => c!.copyWith(outbound: const []));
+        // The 24 h since the last lookup of this friend have passed: a pass
+        // that finds the device due and no address MAY ask now.
+        a.clock = a.clock.add(const Duration(days: 2));
+        await a.restart(lookupAtStart: true);
+        await settle();
+        expect(a.friend.reannounced, isTrue, reason: 'the one-shot ran');
+        a.session.friendDevicesChanged(5);
+        await settle();
+        await a.restart(lookupAtStart: true);
+        await settle();
+        expect(a.lookups, isEmpty);
+      });
+
+      test('an anchor move ends the skip: the new identity of the friend '
+          'holds nothing of ours, so its handoff is due whatever the session',
+          () async {
+        final before = await skippedByTheOneShot();
+        await a.session.anchorMoved(5);
+        await settle();
+        expect(handoffsToB(), before + 1);
+      });
+
+      test('a re-mint ends the skip: every queue is handed again whatever '
+          'the session', () async {
+        final before = await skippedByTheOneShot();
+        a.session.identityReminted();
+        await settle();
+        expect(handoffsToB(), before + 1);
+      });
 
       test('the upgrade one-shot seals only on a usable session: no fetch, '
           'the device is skipped, and its next frame hands it', () async {

@@ -29,6 +29,24 @@ void main() {
     );
   });
 
+  // Review 4: with no check wired, `sessionUsable ?? true` counts every
+  // session as usable and the one-shot's no-fetch promise is silently gone.
+  test('the app wires the held friend list for the quiet handoff', () {
+    expect(
+      RegExp(r'\.\.cachedFriendLiveDevices\s*=\s*messaging\.cachedFriendLiveDevices')
+          .allMatches(source),
+      hasLength(1),
+    );
+  });
+
+  test('the app wires the session-usable check for the quiet handoff', () {
+    expect(
+      RegExp(r'\.\.friendSessionUsable\s*=\s*messaging\.friendSessionUsable')
+          .allMatches(source),
+      hasLength(1),
+    );
+  });
+
   // Owner reversal 2026-11-27: the red key-change bar never closes the
   // friend write gate and has no pump hook; only the calm hold closes it.
   test('the app wiring gives the friend write gate no red-bar clause', () {

@@ -1706,6 +1706,23 @@ void main() {
       expect(_waits(b.reader, row.tempId), isFalse);
     });
 
+    test('P3-1 window, FRAME site (a re-offer finds the line no longer '
+        'eligible): no row goes out before the red hold is set', () async {
+      await calmRestore();
+      final outbox = await boxForB();
+      final row = await writeFromB('waiting');
+      b.enc.keyChangeWarnings = () => true;
+      watchWindow(b, outbox);
+
+      await reoffer(b);
+
+      expect(inWindow.calmHeld, isTrue, reason: 'the calm hold closed the gate');
+      expect(inWindow.delivered, 0, reason: 'nothing written in the window');
+      expectRed(b);
+      expect(outbox.delivered, hasLength(1), reason: 'sent after the red hold');
+      expect(_waits(b.reader, row.tempId), isFalse);
+    });
+
     test('E4: a transient failure of the tap keeps the message waiting, '
         'unsent; the next tap that succeeds sends it once', () async {
       final restored = await calmRestore();

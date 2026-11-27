@@ -101,6 +101,18 @@ void main() {
     );
   });
 
+  test('the one-shot records the devices it cleared in the same write; a '
+      're-mint records none (review 4, P2-1)', () async {
+    await store.reannounceOwn(everyone: false);
+    expect(store.byUserId(42)!.queues.first.quietCleared, [3]);
+    await store.update(
+      42,
+      (c) => c!.copyWith(queues: [c.queues.first.withAck(3)]),
+    );
+    await store.reannounceOwn(everyone: true);
+    expect(store.byUserId(42)!.queues.first.quietCleared, isEmpty);
+  });
+
   test('a re-mint clears every record, flagged or not', () async {
     await store.reannounceOwn(everyone: false);
     await store.update(

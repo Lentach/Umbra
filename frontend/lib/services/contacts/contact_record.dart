@@ -34,6 +34,7 @@ class ContactQueue {
     this.handedAt = const {},
     this.takenBy = const [],
     this.retiredAt,
+    this.quietCleared = const [],
   });
 
   factory ContactQueue.fromJson(Map<String, dynamic> j) => ContactQueue(
@@ -70,6 +71,10 @@ class ContactQueue {
             isUtc: true,
           )
         : null,
+    quietCleared: [
+      for (final d in j['qs'] as List<dynamic>? ?? const [])
+        if (d is int) d,
+    ],
   );
 
   final String rid;
@@ -108,6 +113,16 @@ class ContactQueue {
   /// Additive, like [ackedBy].
   final DateTime? retiredAt;
 
+  /// The devices the upgrade one-shot's re-announce cleared (review 4,
+  /// P2-1) and that no handoff or ack has covered since: a handoff to one
+  /// is made only on a session that is usable with what is held, by ANY
+  /// pass and after a restart too, so the one-shot never makes a session
+  /// (a bundle fetch) a later ordinary pass would. Ended by a handoff or an
+  /// ack of the device ([withHanded], [withAck]) and by a plain
+  /// [withoutHandoffState] (an anchor move, a re-mint: its own fetches). A
+  /// record written before this field reads it empty. Additive (`qs`).
+  final List<int> quietCleared;
+
   /// This queue, retired at [at] (E50e).
   ContactQueue retired(DateTime at) => ContactQueue(
     rid: rid,
@@ -120,6 +135,7 @@ class ContactQueue {
     handedAt: handedAt,
     takenBy: takenBy,
     retiredAt: at,
+    quietCleared: quietCleared,
   );
 
   /// This queue, acknowledged by the peer's [deviceId] as well.
@@ -128,16 +144,25 @@ class ContactQueue {
       : _with(
           ackedBy: [...ackedBy, deviceId],
           takenBy: _taken(deviceId),
+          quietCleared: _unquiet(deviceId),
         );
 
   /// This queue, handed to the peer's [deviceId] at [at].
   ContactQueue withHanded(int deviceId, DateTime at) => _with(
     handedAt: {...handedAt, deviceId: at},
     takenBy: _taken(deviceId),
+    quietCleared: _unquiet(deviceId),
   );
 
   List<int> _taken(int deviceId) =>
       takenBy.contains(deviceId) ? takenBy : [...takenBy, deviceId];
+
+  List<int> _unquiet(int deviceId) => quietCleared.contains(deviceId)
+      ? [
+          for (final d in quietCleared)
+            if (d != deviceId) d,
+        ]
+      : quietCleared;
 
   /// This queue, its last handoff to the peer's [deviceId] forgotten: that
   /// device is heard from, so the day between handoffs no longer applies.
@@ -147,15 +172,32 @@ class ContactQueue {
 
   /// This queue as never handed or acknowledged by any device: the peer's
   /// identity moved, so what it acknowledged under the old one proves
-  /// nothing and our handoff is due again.
-  ContactQueue withoutHandoffState() => ackedBy.isEmpty && handedAt.isEmpty
-      ? this
-      : _with(ackedBy: const [], handedAt: const {});
+  /// nothing and our handoff is due again. [quiet]: the upgrade one-shot,
+  /// which records the devices it cleared in [quietCleared]; otherwise that
+  /// set is dropped too.
+  ContactQueue withoutHandoffState({bool quiet = false}) {
+    final cleared = ackedBy.isNotEmpty || handedAt.isNotEmpty;
+    if (quiet) {
+      return cleared
+          ? _with(
+              ackedBy: const [],
+              handedAt: const {},
+              quietCleared: [
+                ...{...ackedBy, ...handedAt.keys},
+              ],
+            )
+          : this;
+    }
+    return !cleared && quietCleared.isEmpty
+        ? this
+        : _with(ackedBy: const [], handedAt: const {}, quietCleared: const []);
+  }
 
   ContactQueue _with({
     List<int>? ackedBy,
     Map<int, DateTime>? handedAt,
     List<int>? takenBy,
+    List<int>? quietCleared,
   }) =>
       ContactQueue(
         rid: rid,
@@ -168,6 +210,7 @@ class ContactQueue {
         handedAt: handedAt ?? this.handedAt,
         takenBy: takenBy ?? this.takenBy,
         retiredAt: retiredAt,
+        quietCleared: quietCleared ?? this.quietCleared,
       );
 
   Map<String, dynamic> toJson() => {
@@ -179,6 +222,7 @@ class ContactQueue {
     'sealPub': sealPub,
     if (ackedBy.isNotEmpty) 'ackedBy': ackedBy,
     if (takenBy.isNotEmpty) 'tb': takenBy,
+    if (quietCleared.isNotEmpty) 'qs': quietCleared,
     if (handedAt.isNotEmpty)
       'handedAt': {
         for (final MapEntry(:key, :value) in handedAt.entries)

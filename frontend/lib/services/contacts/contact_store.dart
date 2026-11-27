@@ -458,7 +458,8 @@ class ContactStore {
           }
           if (!everyone && current.reannounced) return null;
           final queues = [
-            for (final q in current.queues) q.withoutHandoffState(),
+            for (final q in current.queues)
+              q.withoutHandoffState(quiet: !everyone),
           ];
           final cleared = [
             for (var i = 0; i < queues.length; i++)

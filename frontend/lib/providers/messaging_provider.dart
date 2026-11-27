@@ -230,7 +230,7 @@ class MessagingProvider extends ChangeNotifier {
       _identityRefusedSendTempIds.add(tempId);
 
   /// Whether a calm hold is pending for friend [peerId]: the friend write
-  /// gate closes on it, as the red bar does.
+  /// gate closes on it (the red key-change bar never does).
   bool hasCalmHold(int peerId) => _calmHolds.containsKey(peerId);
 
   // The send pump's state (`messaging_provider.box_pump.dart`). A message the

@@ -47,4 +47,38 @@ void main() {
     });
     expect(q.takenBy, unorderedEquals([3, 4]));
   });
+
+  // Review 4, P2-1: the devices the upgrade one-shot cleared (`qs`) are
+  // handed by any later pass only on a usable session.
+  test('qs survives a write and a read, a retire and an old record reads it '
+      'empty', () {
+    final q = queue.withAck(3).withoutHandoffState(quiet: true);
+    expect(q.quietCleared, [3]);
+    expect(ContactQueue.fromJson(q.toJson()).quietCleared, [3]);
+    expect(q.retired(at).quietCleared, [3]);
+    expect(queue.toJson().containsKey('qs'), isFalse);
+    expect(
+      ContactQueue.fromJson({
+        'rid': 'r',
+        'sid': 's',
+        'nid': 'n',
+        'authPriv': 'ap',
+        'sealPriv': 'sp',
+        'sealPub': 'pub',
+      }).quietCleared,
+      isEmpty,
+    );
+  });
+
+  test('a handoff or an ack of the device removes it from qs; an anchor '
+      'move or a re-mint (a plain clear) removes them all', () {
+    final q = queue
+        .withAck(3)
+        .withHanded(4, at)
+        .withoutHandoffState(quiet: true);
+    expect(q.quietCleared, unorderedEquals([3, 4]));
+    expect(q.withHanded(3, at).quietCleared, [4]);
+    expect(q.withAck(4).quietCleared, [3]);
+    expect(q.withoutHandoffState().quietCleared, isEmpty);
+  });
 }
