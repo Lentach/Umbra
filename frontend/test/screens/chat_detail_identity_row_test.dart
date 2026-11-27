@@ -702,8 +702,8 @@ void main() {
 
   // ---- Decision 152 (option C): the calm line.
 
-  testWidgets('a row held back for the calm line names it, in neutral '
-      'words; an ordinary failed row in the same chat does not', (tester) async {
+  testWidgets('a row held back for the calm line waits calmly, with no Retry; '
+      'an ordinary failed row in the same chat keeps its Retry', (tester) async {
     final en = await AppLocalizations.delegate.load(const Locale('en'));
     await _pumpChat(
       tester,
@@ -715,9 +715,9 @@ void main() {
       rowWaitsForCalm: true,
     );
 
-    expect(find.text(en.messageSendWaitsForCalmHold), findsOneWidget);
+    expect(find.text(en.messageWaitingTapCalmLine), findsOneWidget);
     expect(find.text(en.messageSendBlockedKeysChanged), findsNothing);
-    expect(find.text(en.messageRetrySend), findsOneWidget);
+    expect(find.text(en.messageRetrySend), findsNothing);
 
     await _pumpChat(
       tester,
@@ -728,7 +728,7 @@ void main() {
       calmHold: CalmHoldState.waiting,
     );
 
-    expect(find.text(en.messageSendWaitsForCalmHold), findsNothing);
+    expect(find.text(en.messageWaitingTapCalmLine), findsNothing);
     expect(find.text(en.messageRetrySend), findsOneWidget);
   });
 
@@ -747,7 +747,7 @@ void main() {
         rowWaitsForCalm: true,
         embedded: embedded,
       );
-      expect(find.text(en.messageSendWaitsForCalmHold), findsOneWidget);
+      expect(find.text(en.messageWaitingTapCalmLine), findsOneWidget);
       enc.confirmAnswer = Completer<CalmConfirm>();
 
       await tester.tap(find.byKey(const ValueKey('calm-hold-line')));
@@ -758,7 +758,7 @@ void main() {
 
       expect(find.byType(PeerIdentityChangedRow), findsOneWidget);
       expect(find.text(en.messageSendBlockedKeysChanged), findsOneWidget);
-      expect(find.text(en.messageSendWaitsForCalmHold), findsNothing);
+      expect(find.text(en.messageWaitingTapCalmLine), findsNothing);
       expect(find.text(en.messageRetrySend), findsOneWidget);
     });
   }

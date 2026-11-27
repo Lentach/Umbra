@@ -31,6 +31,9 @@ class MessageMetadataRow extends StatelessWidget {
   /// Icon colors follow bubble luminance (see [RpgTheme.messageBubbleDeliveryTickColors]).
   Widget _buildDeliveryIcon(BuildContext context) {
     if (!isMine) return const SizedBox.shrink();
+    // A message that only WAITS to be sent says so under the bubble (the
+    // calm line of `FailedSendRetry`); no red dot here.
+    if (message.waitingToSend) return const SizedBox.shrink();
 
     if (message.deliveryStatus == MessageDeliveryStatus.failed) {
       return Icon(Icons.error, size: 12, color: Theme.of(context).colorScheme.error);

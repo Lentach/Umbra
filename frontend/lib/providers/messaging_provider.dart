@@ -258,12 +258,18 @@ class MessagingProvider extends ChangeNotifier {
   /// timer is sent once when it opens.
   final Set<(int, int)> _timerOwed = {};
 
+  /// tempIds the person deleted in this process (written synchronously by
+  /// `deleteMessage`). The pump read its record before the delete may have
+  /// run; [_claimWaiter] refuses such a row, so it is never sealed or sent.
+  final Set<String> _userDeletedTempIds = {};
+
   void _clearPumpState() {
     _pumping.clear();
     _pumpAgain.clear();
     _pumpOwned.clear();
     _ramWaiting.clear();
     _sendNeverGoes.clear();
+    _userDeletedTempIds.clear();
     _timerOwed.clear();
   }
 
@@ -675,6 +681,14 @@ class MessagingProvider extends ChangeNotifier {
       ciphertext: '3:AAAA',
       state: state,
     );
+    notifyListeners();
+  }
+
+  /// Test-only: the calm hold of [peerId] ends (the person tapped the line),
+  /// without the kick the real confirmation fires.
+  @visibleForTesting
+  void clearCalmHoldForTest(int peerId) {
+    _calmHolds.remove(peerId);
     notifyListeners();
   }
 

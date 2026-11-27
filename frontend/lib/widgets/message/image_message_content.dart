@@ -61,10 +61,12 @@ class _ImageMessageContentState extends State<ImageMessageContent> {
         builder: (context, snap) {
           // Our own photo still uploading has no media yet: it is on its
           // way, not broken (owner report 2026-11-20: a red "failed to
-          // load" showed for a few seconds on every send).
+          // load" showed for a few seconds on every send). A photo that
+          // WAITS to be sent (`waitingToSend`) is on its way the same way.
           if (snap.connectionState != ConnectionState.done ||
-              (widget.message.deliveryStatus ==
-                      MessageDeliveryStatus.sending &&
+              ((widget.message.deliveryStatus ==
+                          MessageDeliveryStatus.sending ||
+                      widget.message.waitingToSend) &&
                   (widget.message.mediaUrl?.isEmpty ?? true))) {
             return const Center(
               child: CircularProgressIndicator(strokeWidth: 2),

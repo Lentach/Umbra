@@ -974,11 +974,17 @@ abstract class AppLocalizations {
   /// **'Nie wysłano: klucze bezpieczeństwa tego kontaktu się zmieniły. Otwórz czerwone ostrzeżenie w tym czacie i porównajcie odciski, a potem ponów.'**
   String get messageSendBlockedKeysChanged;
 
-  /// Sits on a failed own message that was held back because the friend's new key still waits for the person's tap (the calm line, decision 152). Neutral on purpose: nothing is wrong and nothing changed for the worse. Direction-free like messageSendBlockedKeysChanged: the line renders below the newest bubble.
+  /// Under an own message that waits to be sent while the friend's new-device line (the calm line, decision 152) is still untapped. Calm on purpose: grey, a clock, no Retry; the app sends it by itself after the tap. Also the row's screen-reader label.
   ///
   /// In pl, this message translates to:
-  /// **'Jeszcze nie wysłano: najpierw dotknij linii o nowym urządzeniu w tym czacie. Ta wiadomość wyjdzie zaraz potem.'**
-  String get messageSendWaitsForCalmHold;
+  /// **'Czeka: dotknij linii o nowym urządzeniu'**
+  String get messageWaitingTapCalmLine;
+
+  /// Under an own message that waits to be sent for any reason other than an untapped new-device line (the friend's current address is not known yet, a restart, the box offline). Grey, a clock, no Retry; the app sends it by itself. Also the row's screen-reader label.
+  ///
+  /// In pl, this message translates to:
+  /// **'Czeka na wysłanie'**
+  String get messageWaitingToSend;
 
   /// Auth surface status, localized from an AuthStatusCode.
   ///

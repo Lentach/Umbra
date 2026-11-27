@@ -228,7 +228,13 @@ extension MessagingBoxPump on MessagingProvider {
     if (!_pumpLive(own)) return _WaiterResult.passing;
     // The one synchronous flip a Retry shares: from here on nobody else may
     // seal this row.
-    if (!_claimWaiter(tempId)) return _WaiterResult.passing;
+    if (!_claimWaiter(tempId)) {
+      if (!_userDeletedTempIds.contains(tempId)) return _WaiterResult.passing;
+      // The person deleted it after the pump read its record: the record
+      // goes (again, harmless) and the line goes on without it.
+      await _encryptionProvider?.dropBoxUnsent(own, tempId);
+      return _WaiterResult.sent;
+    }
     try {
       _sendNeverGoes.remove(tempId);
       _sendTokenByTempId[tempId] = wire;
@@ -307,7 +313,9 @@ extension MessagingBoxPump on MessagingProvider {
   /// `sending`, so a Retry (which needs a failed row) and a second pump
   /// attempt both stand aside.
   bool _claimWaiter(String tempId) {
-    if (_boxInFlight.contains(tempId) || _emittedSendTempIds.contains(tempId)) {
+    if (_userDeletedTempIds.contains(tempId) ||
+        _boxInFlight.contains(tempId) ||
+        _emittedSendTempIds.contains(tempId)) {
       return false;
     }
     _pumpOwned.add(tempId);

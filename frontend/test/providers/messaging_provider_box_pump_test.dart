@@ -53,6 +53,23 @@ class _SwitchOutbox extends ScriptedSendOutbox implements BoxFriendGateOutbox {
 class _PumpEncryption extends ScriptedSendEncryption {
   _PumpEncryption(super.store);
 
+  /// A test holds the pump right AFTER it read the waiting records
+  /// ([readDone] says it did; the pump goes on when [afterRead] completes).
+  Completer<void>? afterRead;
+  Completer<void>? readDone;
+
+  @override
+  Future<Map<String, Map<String, dynamic>>> boxUnsentWaiting(int userId) async {
+    final records = await super.boxUnsentWaiting(userId);
+    final gate = afterRead;
+    if (gate != null) {
+      afterRead = null;
+      readDone?.complete();
+      await gate.future;
+    }
+    return records;
+  }
+
   @override
   Future<String> encrypt(
     int recipientId,
@@ -373,6 +390,26 @@ void main() {
     expect(await encryption.boxUnsentWaiting(1), isEmpty);
     await open();
     expect(outbox.delivered, isEmpty);
+  });
+
+  test("DELETE between the pump's read and its send: nothing is sealed or "
+      'sent, nothing written, the record stays gone', () async {
+    await typed('one');
+    final row = rowOf('one');
+    final gate = encryption.afterRead = Completer<void>();
+    encryption.readDone = Completer<void>();
+    outbox.closed = false;
+    provider.kickSendPump(2);
+    await encryption.readDone!.future; // the pump holds the record now
+
+    provider.deleteMessage(row.id, forEveryone: false);
+    gate.complete();
+    await h.pump(120);
+
+    expect(outbox.delivered, isEmpty);
+    expect(encryption.encryptCalls, isEmpty);
+    expect(provider.messages, isEmpty);
+    expect(await encryption.boxUnsentWaiting(1), isEmpty);
   });
 
   test('PRUNE: a waiting row stays past 30 days and past 200 newer '

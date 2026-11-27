@@ -1407,6 +1407,9 @@ class EncryptionProvider extends ChangeNotifier {
     );
     if (stale) {
       await _encryptionService.replaceStaleAccountAnchor(userId, served);
+      // The pinned identity moved, as under an acknowledgement: the send
+      // pump looks again for what waited on the old pin.
+      onAnchorMoved?.call(userId);
     }
     unawaited(_encryptionService.recordPeerDeviceList(userId, authorization));
     return verified;

@@ -71,28 +71,32 @@ void main() {
     return row;
   }
 
-  testWidgets('the held-back row names the line in neutral words and keeps '
-      'its Retry', (tester) async {
+  testWidgets('the held-back row is calm: the waiting words, no Retry', (
+    tester,
+  ) async {
     final row = await writeDuringHold(tester);
 
     await pumpRow(tester, message: row);
 
-    expect(find.text(l10n.messageSendWaitsForCalmHold), findsOneWidget);
+    expect(find.text(l10n.messageWaitingTapCalmLine), findsOneWidget);
     expect(find.text(l10n.messageSendBlockedKeysChanged), findsNothing);
-    expect(find.text(l10n.messageRetrySend), findsOneWidget);
+    expect(find.text(l10n.messageRetrySend), findsNothing);
   });
 
-  testWidgets('without a calm line in the chat the row says nothing about '
-      'it', (tester) async {
+  testWidgets('a waiting row is calm whether or not a ceremony is open', (
+    tester,
+  ) async {
     final row = await writeDuringHold(tester);
 
     await pumpRow(tester, message: row, ceremony: false);
 
-    expect(find.text(l10n.messageSendWaitsForCalmHold), findsNothing);
-    expect(find.text(l10n.messageRetrySend), findsOneWidget);
+    expect(find.text(l10n.messageWaitingTapCalmLine), findsOneWidget);
+    expect(find.text(l10n.messageRetrySend), findsNothing);
   });
 
-  testWidgets('once the line is gone the row is plain again', (tester) async {
+  testWidgets('once the line is gone the row is an ordinary failed row', (
+    tester,
+  ) async {
     await writeDuringHold(tester);
     await tester.runAsync(() async {
       h.provider.onFriendshipEnded(2);
@@ -101,18 +105,19 @@ void main() {
 
     await pumpRow(tester, message: h.provider.messages.single);
 
-    expect(find.text(l10n.messageSendWaitsForCalmHold), findsNothing);
+    expect(find.text(l10n.messageWaitingTapCalmLine), findsNothing);
+    expect(find.text(l10n.messageWaitingToSend), findsNothing);
+    expect(find.text(l10n.messageRetrySend), findsOneWidget);
   });
 
-  testWidgets('a refusal for a key change wins over the neutral line', (
-    tester,
-  ) async {
-    final row = await writeDuringHold(tester);
+  testWidgets('a row refused for a key change names the refusal, not the '
+      'wait', (tester) async {
+    final row = (await writeDuringHold(tester)).copyWith(waitingToSend: false);
     h.provider.markSendRefusedForIdentityForTest(row.tempId!);
 
     await pumpRow(tester, message: row);
 
     expect(find.text(l10n.messageSendBlockedKeysChanged), findsOneWidget);
-    expect(find.text(l10n.messageSendWaitsForCalmHold), findsNothing);
+    expect(find.text(l10n.messageWaitingTapCalmLine), findsNothing);
   });
 }

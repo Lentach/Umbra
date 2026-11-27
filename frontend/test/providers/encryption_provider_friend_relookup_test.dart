@@ -549,6 +549,36 @@ void main() {
     });
   });
 
+  // Invariant slice 3b: a friend's pinned key replaced by the served one (an
+  // account that is no longer a contact, decision 112) is an ANCHOR MOVE
+  // like an acknowledgement: the send pump is kicked, or a message waiting
+  // on the old pin would wait for the next unrelated kick.
+  test('replacing a stale account anchor fires onAnchorMoved, once, for that '
+      'friend', () async {
+    expect(await provider.encryptionService.stageAccountAnchor(
+      peerId,
+      identityKey,
+    ), isTrue);
+    final moved = <int>[];
+    provider.onAnchorMoved = moved.add;
+    final newEngine = DeviceAuthorityEngine();
+    final newIdentity = generateIdentityKeyPair();
+    final newEnrollment = newEngine.mintEnrollment(
+      userId: peerId,
+      identity: newIdentity,
+      createdAtMs: 1234567891,
+    );
+
+    await provider.adoptServedAccount(
+      peerId,
+      identityKey: base64Encode(newIdentity.getPublicKey().serialize()),
+      authorization: listOf(newEngine, newEnrollment, 1, [1]),
+      replaceStaleAnchor: true,
+    );
+
+    expect(moved, [peerId]);
+  });
+
   // A2-ENC-A-3: `first_contact_accept` drops a request as `unverified` on this
   // exception type and keeps it as `failed` on any other, so a garbage served
   // key must surface as exactly this reason, with nothing adopted.
