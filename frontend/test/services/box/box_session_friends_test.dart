@@ -3030,7 +3030,6 @@ void main() {
         now: () => a.clock,
         anchorOf: a.anchorOf,
       )..start();
-      a.socket = box.sockets.last;
       a.session
         ..consumer = a.read
         ..calmHeld = ((_) => false)
@@ -3039,6 +3038,7 @@ void main() {
         ..friendLiveDevices = ((user) async => user == 5 ? {3} : null)
         ..friendRevokedDevices = ((user) async => user == 5 ? <int>{} : null)
         ..e2eReady();
+      a.socket = box.sockets.last;
       a.socket.serverConnect('S1.2');
       await settle();
       a.session.accountReady(2);
@@ -3047,8 +3047,6 @@ void main() {
       a.session.storeOpened();
       await settle();
       final z = zOf(a);
-      // ignore: avoid_print
-      print('REVIEW-PROBE probes=${a.probes} z=${z?.sid} bHolds=${b.outboundOf(2)?.sid} lead=${lead.sid} aIdk=${a.outboundOf(3)?.idk}');
       if (z != null) {
         // b rotates its own queue later (a re-key, E50e): its handoff arrives.
         final seal = QueueSeal.mintKeyPair();
@@ -3063,8 +3061,6 @@ void main() {
         a.clock = a.clock.add(const Duration(days: 31));
         a.session.runPass();
         await settle();
-        // ignore: avoid_print
-        print('REVIEW-PROBE after: aQueues=${a.friend.queues.map((q) => q.sid).toList()} bHolds=${b.outboundOf(2)?.sid} zDeleted=${!a.friend.queues.any((q) => q.sid == z.sid)}');
       }
       expect(a.probes, isEmpty, reason: 'no probe to an address that is current');
       expect(

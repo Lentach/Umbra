@@ -303,7 +303,7 @@ void main() {
       ..closed = false
       ..refuse.add(1);
     provider.retrySendInPlaceForTest(tempId);
-    await h.pump(40);
+    await h.pump();
 
     expect(rowOf('one').waitingToSend, isTrue);
     expect(rowOf('one').deliveryStatus, MessageDeliveryStatus.failed);
@@ -366,7 +366,7 @@ void main() {
       ..delivered.clear();
 
     await provider.retryFailedMessage(rowOf('one').tempId!);
-    await h.pump(40);
+    await h.pump();
 
     expect(rowOf('one').waitingToSend, isTrue);
     expect(outbox.delivered, isEmpty, reason: 'nothing attempted');
