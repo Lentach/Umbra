@@ -346,7 +346,7 @@ void main() {
       session
         ..accountReady(1)
         ..e2eReady();
-      await pumpEventQueue();
+      await pumpEventQueue(times: 50);
 
       expect(held(5, 3).idk, _idkX);
     });

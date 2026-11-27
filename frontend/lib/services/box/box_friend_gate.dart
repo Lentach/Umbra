@@ -17,6 +17,9 @@ enum FriendGateRefusal {
   /// A calm hold waits for the person's tap.
   calmHeld,
 
+  /// The one labelling of untagged addresses has not run on an open store.
+  unlabelled,
+
   /// The journal has not been judged once this session.
   journalUnjudged,
 
@@ -131,9 +134,11 @@ final class FriendGate {
     required Iterable<ContactOutbound> Function(int friend) addressesOf,
     required String? Function(int friend)? anchorOf,
     required bool Function() journalJudged,
+    bool Function()? labelled,
   }) : _addressesOf = addressesOf,
        _anchorOf = anchorOf,
-       _journalJudged = journalJudged;
+       _journalJudged = journalJudged,
+       _labelled = labelled;
 
   /// Every address held for a friend NOW: the stored one per device and the
   /// request addresses already served.
@@ -144,6 +149,14 @@ final class FriendGate {
   final String? Function(int friend)? _anchorOf;
 
   final bool Function() _journalJudged;
+
+  /// Whether the one labelling of untagged addresses ran on an OPEN store in
+  /// this process. Until it did, a missing tag means "not yet labelled", not
+  /// "learned under another identity": messages wait and nothing is probed.
+  /// Null (a bare test session): no such clause.
+  final bool Function()? _labelled;
+
+  bool get _unlabelled => _labelled != null && !_labelled();
 
   /// Whether a calm hold is pending for a friend (`MessagingProvider`). A
   /// red hold before the acknowledge does NOT close the gate.
@@ -162,7 +175,7 @@ final class FriendGate {
     bool goodbye = false,
   }) {
     if (calmHeld?.call(friend) ?? false) return null;
-    if (!goodbye && !_journalJudged()) return null;
+    if (!goodbye && (!_journalJudged() || _unlabelled)) return null;
     final anchor = _anchorOf?.call(friend);
     for (final target in to) {
       final held = _held(friend, target.sid);
@@ -178,10 +191,10 @@ final class FriendGate {
   /// nothing.
   bool probeOpen(int friend, ContactOutbound stale) {
     if (calmHeld?.call(friend) ?? false) return false;
-    if (!_journalJudged()) return false;
+    if (!_journalJudged() || _unlabelled) return false;
     final anchor = _anchorOf?.call(friend);
     final held = _held(friend, stale.sid);
-    return anchor != null && held != null && _stale(anchor, held);
+    return anchor != null && held != null && _foreign(anchor, held);
   }
 
   /// The permit of THE probe: the handoff of `z` (a queue minted for it) to
@@ -221,18 +234,33 @@ final class FriendGate {
     if (anchor == null || permit.identity != anchor) {
       return FriendGateRefusal.permitIdentity;
     }
-    if (!_stale(anchor, held)) return FriendGateRefusal.notStale;
+    if (_unlabelled) return FriendGateRefusal.unlabelled;
+    if (!_foreign(anchor, held)) return FriendGateRefusal.notStale;
     return null;
   }
 
   bool _stale(String? anchor, ContactOutbound held) =>
       _anchorOf != null && anchor != null && held.idk != anchor;
 
+  /// Learned under ANOTHER identity: a tag that differs from the pin. An
+  /// untagged address is not foreign (not yet labelled): only a foreign one
+  /// may ever be probed.
+  bool _foreign(String? anchor, ContactOutbound held) =>
+      _anchorOf != null &&
+      anchor != null &&
+      held.idk != null &&
+      held.idk != anchor;
+
   /// Whether [address] was learned under another identity than the one
   /// pinned for [friend] now: it is stale, and only a request address
   /// already served may stand in for it (no lookup is made for it).
   bool isStale(int friend, ContactOutbound address) =>
       _stale(_anchorOf?.call(friend), address);
+
+  /// Whether [address] carries a tag that differs from the pin: the only
+  /// kind a probe may be sent to.
+  bool isForeign(int friend, ContactOutbound address) =>
+      _foreign(_anchorOf?.call(friend), address);
 
   /// The permit of a first-contact request, taken once its PreKey is sealed
   /// (the pin that encrypt made is the anchor now): the null-anchor rule
@@ -253,8 +281,10 @@ final class FriendGate {
     final held = _held(friend, sid);
     if (held == null) return FriendGateRefusal.unknownAddress;
     if (calmHeld?.call(friend) ?? false) return FriendGateRefusal.calmHeld;
-    if (!permit.goodbye && !_journalJudged()) {
-      return FriendGateRefusal.journalUnjudged;
+    if (!permit.goodbye && (!_journalJudged() || _unlabelled)) {
+      return _unlabelled
+          ? FriendGateRefusal.unlabelled
+          : FriendGateRefusal.journalUnjudged;
     }
     final anchorOf = _anchorOf;
     if (anchorOf == null) return null;

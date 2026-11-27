@@ -13,15 +13,49 @@ extension BoxSessionConnection on BoxSession {
     _swap.e2eReady();
     _rotation.run();
     _friends.e2eReady();
+    // The one migration runs BEFORE anything judges an address: the journal
+    // drain, every probe and (through the gate) every permit wait for it.
+    // On a closed store it does nothing and [storeOpened] runs it again.
+    unawaited(
+      _label().then((_) {
+        if (_disposed) return;
+        _probe.runAll(ProbeTrigger.connect);
+        // The journal is judged by the first drain after E2E ready, the empty
+        // one included and with no box connection (the write gate's clause).
+        unawaited(_inbox.drain());
+      }),
+    );
+  }
+
+  /// Tags every untagged address with the anchor pinned now
+  /// ([ContactStore.tagUntaggedAddresses]) on an OPEN store; one run at a
+  /// time. Completes without error: a closed store or a failed write leaves
+  /// the gate closed and the next trigger (E2E ready, box or account ready,
+  /// store opened) runs it again. The first success kicks what waited.
+  Future<void> _label() {
+    // The anchors are loaded at E2E init: before it the mirror knows none and
+    // a "labelling" would tag nothing yet count as done. A closed store has
+    // nothing to label ([storeOpened] runs it again).
+    if (_labelled || _disposed || !_e2eReady || !_store.isOpen) {
+      return Future.value();
+    }
+    return _labelling ??= _runLabel().whenComplete(() => _labelling = null);
+  }
+
+  Future<void> _runLabel() async {
+    try {
+      final anchorOf = _anchorOf;
+      if (anchorOf != null && !await _store.tagUntaggedAddresses(anchorOf)) {
+        return;
+      }
+    } on Object catch (error) {
+      E2eDiagLog.add('BOX_LABELLING_FAILED', {'error': error.runtimeType});
+      return;
+    }
+    if (_disposed || !_store.isOpen) return;
+    _labelled = true;
+    onAddressesLabelled?.call();
     _probe.runAll(ProbeTrigger.connect);
-    // The journal is judged by the first drain after E2E ready, the empty
-    // one included and with no box connection (the write gate's clause).
-    unawaited(_inbox.drain());
-    // The anchors are loaded by now: the one migration tags every address
-    // learned before the tag existed (a kill half way, or a closed store, is
-    // harmless: the next E2E-ready runs it again).
-    final anchorOf = _anchorOf;
-    if (anchorOf != null) unawaited(_store.tagUntaggedAddresses(anchorOf));
   }
 
   /// The own verified device list was dropped (a device linked or revoked).
@@ -57,6 +91,7 @@ extension BoxSessionConnection on BoxSession {
           _rotation.run();
           _registerPush();
           _friends.run();
+          unawaited(_label());
           _probe.runAll(ProbeTrigger.connect);
         }),
       )
@@ -116,6 +151,7 @@ extension BoxSessionConnection on BoxSession {
     // `socketReady` is what confirms this device's id for the own list.
     _rotation.run();
     if (deviceId != null) _friends.accountReady();
+    unawaited(_label());
     _probe.runAll(ProbeTrigger.connect);
   }
 
@@ -127,12 +163,19 @@ extension BoxSessionConnection on BoxSession {
     if (_request == null) unawaited(_ensure());
     if (_self == null) unawaited(_ensureSelf());
     if (_box.state == BoxState.ready) unawaited(_deleteOwedQueues());
-    unawaited(_receive());
     _swap.run();
     _rotation.run();
     _registerPush();
     _friends.run();
-    _probe.runAll(ProbeTrigger.connect);
+    // The migration first: the drain judges the journal and the probe reads
+    // tags, neither before the store's addresses are labelled.
+    unawaited(
+      _label().then((_) {
+        if (_disposed || _revoked) return;
+        unawaited(_receive());
+        _probe.runAll(ProbeTrigger.connect);
+      }),
+    );
   }
 
   /// A queue appeared, or the box is ready: every contact queue gets its

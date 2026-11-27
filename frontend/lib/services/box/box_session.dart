@@ -136,6 +136,7 @@ class BoxSession
       addressesOf: _friendAddresses,
       anchorOf: anchorOf,
       journalJudged: () => _journalJudged,
+      labelled: () => _labelled,
     );
     _friends.gate = _gate;
     _probe = BoxFriendProbe(
@@ -178,6 +179,13 @@ class BoxSession
   /// [BoxInbox.drain] after E2E ready with the reader wired (the friend
   /// write gate's start-up clause; an empty journal counts).
   bool _journalJudged = false;
+
+  /// The one labelling of untagged addresses ([ContactStore.
+  /// tagUntaggedAddresses]) completed on an OPEN store in this process. Until
+  /// then the gate is closed for messages and nothing is probed: a missing
+  /// tag is "not yet labelled", a different state from a foreign tag.
+  bool _labelled = false;
+  Future<void>? _labelling;
 
   /// What the friend write gate calls a friend's address: the stored one per
   /// device and the request addresses already served.
@@ -248,6 +256,10 @@ class BoxSession
   /// Called when the journal was judged for the first time this session (the
   /// last clause of the friend write gate): what the gate refused may go now.
   void Function()? onJournalJudged;
+
+  /// Called when the labelling of untagged addresses completed for the first
+  /// time in this process ([_label]): the gate it kept closed may be open.
+  void Function()? onAddressesLabelled;
 
   /// Friend devices whose request queue was asked for by handle this session
   /// ([rekeyFriend]), as `user:device`: once each, so a device the lookup

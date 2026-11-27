@@ -130,7 +130,8 @@ class BoxFriendProbe {
     final record = _store.byUserId(friend);
     if (record == null || record.state != ContactState.friend) return;
     for (final stale in [...record.outbound]) {
-      if (!gate.isStale(friend, stale)) continue;
+      // An untagged address is "not yet labelled", never probed.
+      if (!gate.isForeign(friend, stale)) continue;
       final key = '$friend:${stale.peerDeviceId}:${stale.sid}:${trigger.name}';
       if (_sent.contains(key) || !gate.probeOpen(friend, stale)) continue;
       if (await _send(friend, stale, gate)) {
