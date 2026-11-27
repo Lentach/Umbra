@@ -122,12 +122,19 @@ final class FriendGate {
     for (final target in to) {
       final held = _held(friend, target.sid);
       if (held == null) return null;
-      if (_anchorOf != null && anchor != null && held.idk != anchor) {
-        return null;
-      }
+      if (_stale(anchor, held)) return null;
     }
     return FriendPermit._(friend, anchor, goodbye: goodbye);
   }
+
+  bool _stale(String? anchor, ContactOutbound held) =>
+      _anchorOf != null && anchor != null && held.idk != anchor;
+
+  /// Whether [address] was learned under another identity than the one
+  /// pinned for [friend] now: it is stale, and only a request address
+  /// already served may stand in for it (no lookup is made for it).
+  bool isStale(int friend, ContactOutbound address) =>
+      _stale(_anchorOf?.call(friend), address);
 
   /// The permit of a first-contact request, taken once its PreKey is sealed
   /// (the pin that encrypt made is the anchor now): the null-anchor rule

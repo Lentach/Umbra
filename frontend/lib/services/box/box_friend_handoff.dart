@@ -286,6 +286,25 @@ class BoxFriendHandoff {
     });
   }
 
+  /// Friend [userId]'s pinned identity moved (both movers): what its devices
+  /// acknowledged or were handed under the old identity proves nothing, so
+  /// every queue of ours for it forgets both and our handoff is due again.
+  /// It goes only where [targetOf] allows for a stale address: a request
+  /// address already served, else nowhere (no lookup, E114c's included).
+  Future<void> anchorMoved(int userId) async {
+    if (_disposed) return;
+    await _store.update(userId, (current) {
+      if (current == null) return null;
+      final queues = [for (final q in current.queues) q.withoutHandoffState()];
+      final changed = [
+        for (var i = 0; i < queues.length; i++)
+          if (!identical(queues[i], current.queues[i])) i,
+      ];
+      return changed.isEmpty ? null : current.copyWith(queues: queues);
+    });
+    friendChanged(userId);
+  }
+
   /// [userId]'s devices may have changed, or it must be handed our queue
   /// again now ([BoxFriendLink.handOffTo]).
   void friendChanged(int userId) {
@@ -391,6 +410,14 @@ class BoxFriendHandoff {
     for (final device in live) {
       final target = targetOf(userId, device);
       if (target == null) continue;
+      // A held address learned under another identity than the pinned one
+      // is stale: only a request address ALREADY served stands in for it,
+      // else the device gets nothing now (never a lookup for it).
+      if (!target.viaRequest && _staleHeld(userId, device)) {
+        final request = _requestOf(userId, device);
+        if (request != null) targets[device] = (to: request, viaRequest: true);
+        continue;
+      }
       if (requireAnswer != null &&
           !target.viaRequest &&
           !await requireAnswer(userId, device)) {
@@ -401,6 +428,16 @@ class BoxFriendHandoff {
       targets[device] = target;
     }
     return targets;
+  }
+
+  /// Whether the address held for [userId]'s [device] is stale.
+  bool _staleHeld(int userId, int device) {
+    final held = _store
+        .byUserId(userId)
+        ?.outbound
+        .where((o) => o.peerDeviceId == device)
+        .firstOrNull;
+    return held != null && (gate?.isStale(userId, held) ?? false);
   }
 
   /// Seals [frame] to [target] — as an account-bearing frame of this
@@ -535,7 +572,14 @@ class BoxFriendHandoff {
       // already ran, which took its addresses — and not within
       // [kFriendLookupInterval] of the last lookup of this friend by any
       // process (decision 120, E114n).
-      if (live.any((d) => !targets.containsKey(d) && _handoffDue(userId, d)) &&
+      // A device whose held address is merely STALE is not "no address":
+      // staleness never causes a lookup (only the person's tap does).
+      if (live.any(
+            (d) =>
+                !targets.containsKey(d) &&
+                !_staleHeld(userId, d) &&
+                _handoffDue(userId, d),
+          ) &&
           addressLookup != null &&
           !_addressesAsked.contains(userId) &&
           _lookupDue(userId)) {

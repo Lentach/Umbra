@@ -1819,6 +1819,29 @@ void main() {
       );
     });
 
+    test('F8: the contact store is closed when the anchor is to move (the '
+        'stamp cannot be written): the accept is TRANSIENT, the calm line '
+        'shows failed and can be tapped again, and no red hold is raised',
+        () async {
+      final restored = await calmRestore();
+      final before = await anchorOfA();
+      var stampOk = false;
+      b.enc.encryptionService.onBeforeAnchorMoves = (_, _) async => stampOk;
+
+      await tap(b);
+
+      expect(await anchorOfA(), before, reason: 'the anchor did not move');
+      expect(b.reader.calmHoldState(1), CalmHoldState.failed);
+      expect(b.enc.peersWithChangedIdentity, isEmpty, reason: 'no red pill');
+      expect(b.enc.peersCalmHeld, contains(1), reason: 'still the calm line');
+      expect(b.enc.peersWithHeldMessages, contains(1));
+
+      stampOk = true; // the store is open again: the same line, tapped again
+      await tap(b);
+      expect(await anchorOfA(), await idOf(restored), reason: 'accepted');
+      expect(b.reader.calmHoldState(1), isNull);
+    });
+
     test('F6: the hold was cleared and re-created while the tap waited: its '
         'late REFUSED answer is discarded, the new calm line stands',
         () async {

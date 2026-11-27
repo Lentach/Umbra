@@ -86,9 +86,11 @@ class EncryptionProvider extends ChangeNotifier {
         ..remove(deviceId);
       // The tap's own accept (`confirmCalmKey`) just refreshed this list:
       // dropping it again would owe a second lookup of the friend, and each
-      // lookup spends one of its one-time pre-keys.
+      // lookup spends one of its one-time pre-keys. On the SEND path (no tap
+      // is running) the drop is an ordinary event's, under the floor and the
+      // cap: only a tap is a person's act that may owe an unfloored lookup.
       if (!_calmConfirming.contains(peerId)) {
-        invalidateDeviceList(peerId, byPerson: true);
+        invalidateDeviceList(peerId);
       }
       for (final other in others) {
         markSessionRebuild(peerId, deviceId: other);

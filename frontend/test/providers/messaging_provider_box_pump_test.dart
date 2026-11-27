@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:fake_async/fake_async.dart';
 import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/services/box/box_frame.dart';
@@ -10,6 +9,7 @@ import 'package:fireplace/services/box/box_friend_gate.dart';
 import 'package:fireplace/services/box/box_outbox.dart';
 import 'package:fireplace/services/box/box_wire.dart';
 import 'package:fireplace/services/contacts/contact_record.dart';
+import 'package:fireplace/utils/e2e_diag_log.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../support/box_send_harness.dart';
@@ -183,7 +183,12 @@ void main() {
     await h.pump();
     expect(outbox.delivered, isEmpty, reason: 'still waiting, no timer');
 
-    await open();
+    // The gate opens (the friend's handoff was stored) and the REAL
+    // start-up kick runs: it finds the stored records, since no chat is
+    // loaded to name the friend. No direct `kickSendPump` here.
+    outbox.closed = false;
+    provider.kickSendPumps();
+    await h.pump(80);
 
     expect(sent(), hasLength(2));
     expect(has([sent()[0]], 'one'), isTrue);
@@ -196,23 +201,33 @@ void main() {
     expect(await encryption.boxUnsentWaiting(1), isEmpty);
   });
 
-  test('NO TIMER: with the gate never opened, an hour on the clock changes '
-      'nothing: the rows wait and nothing was written anywhere', () async {
+  test('NO TIMER, NO LOOKUP: with the handoff of the friend never read, '
+      'every kick except an address store (reconnect, list refresh, box '
+      'ready, '
+      'journal judged, conversations loaded, E2E ready) leaves the rows '
+      'waiting: nothing is written to ANY queue and nothing is looked up',
+      () async {
     await typed('one');
     await typed('two');
-    final before = [...sent()];
+    final lookups = [...encryption.forcedFetches];
+    final emitted = [...h.emitted];
 
-    fakeAsync((async) {
-      async
-        ..elapse(const Duration(hours: 1))
-        ..flushMicrotasks();
-    });
-    await h.pump(80);
+    for (var round = 0; round < 3; round++) {
+      provider
+        ..refreshBoxDeviceLists() // a reconnect and a finished list refresh
+        ..onBoxReady()
+        ..kickSendPumps() // journal judged, conversations loaded, E2E ready
+        ..kickSendPump(2);
+      await h.pump(80);
+    }
 
-    expect(sent(), before);
-    expect(outbox.delivered, isEmpty);
+    expect(outbox.delivered, isEmpty, reason: 'no queue was written');
     expect(outbox.uploads, isEmpty);
-    expect(h.emitted, isEmpty);
+    expect(outbox.deletes, isEmpty);
+    expect(outbox.modes, isEmpty);
+    expect(encryption.forcedFetches, lookups, reason: 'no lookup');
+    expect(h.emitted, emitted, reason: 'nothing asked of the server');
+    expect(encryption.encryptCalls, isEmpty, reason: 'nothing was sealed');
     expect(rowOf('one').waitingToSend, isTrue);
     expect(rowOf('two').waitingToSend, isTrue);
     expect(
@@ -362,6 +377,7 @@ void main() {
 
   test('ACCOUNT SWITCH mid-release stops the pump: nothing more is sent '
       'for the old account', () async {
+    E2eDiagLog.clear(); // the log is process-wide: count this test only
     await typed('one');
     await typed('two');
     outbox
@@ -377,6 +393,23 @@ void main() {
     await h.pump(120);
 
     expect(sent(), hasLength(1), reason: 'row two was not sent for account 1');
+    expect(
+      E2eDiagLog.entries.where((e) => e.contains('BOX_RETRY_NO_ROUTE')),
+      isEmpty,
+      reason: 'row two was not attempted under the new account: that would '
+          'fail it as a row with no route',
+    );
+    expect(
+      E2eDiagLog.entries.where((e) => e.contains('SEND_START')),
+      hasLength(3),
+      reason: 'two typed rows and the pump send of row one, no more',
+    );
+    expect(rowOf('two').waitingToSend, isTrue, reason: 'still waiting');
+    expect(
+      encryption.encryptCalls,
+      hasLength(1),
+      reason: 'row two was not even sealed for the old account',
+    );
   });
 
   test('DELETE works on a waiting row: its record and row are dropped', () async {

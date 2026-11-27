@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:fireplace/services/box/box_client.dart';
+import 'package:fireplace/services/box/box_first_contact.dart'
+    show BoxRequestSend;
 import 'package:fireplace/services/box/box_frame.dart';
 import 'package:fireplace/services/box/box_friend_gate.dart';
 import 'package:fireplace/services/box/box_friend_handoff.dart'
@@ -1988,30 +1990,6 @@ void main() {
       );
     });
 
-    test('a write to a sibling or own queue is never gated', () async {
-      await met();
-      final other = ContactOutbound(
-        peerDeviceId: 9,
-        sid: a.friend.outbound.single.sid,
-        sealPub: a.friend.outbound.single.sealPub,
-        idk: null,
-      );
-      // Not a stored friend address of anyone else: an unknown sid with no
-      // owner is the sibling/self lane, which the gate leaves alone.
-      final foreign = ContactOutbound(
-        peerDeviceId: 9,
-        sid: boxB64(Uint8List(32)),
-        sealPub: other.sealPub,
-        idk: null,
-      );
-      final s = gated((_) => 'A', wired: false);
-      expect(
-        await s.deliver(foreign, Uint8List.fromList([1])),
-        isNot(equals(null)),
-      );
-      s.dispose();
-    });
-
     /// The connected session of [a], with the friend's pin read from
     /// [anchor].
     Future<void> metWithAnchor(String Function() anchor) async {
@@ -2094,7 +2072,7 @@ void main() {
       final framed = Uint8List.fromList(List.filled(kBoxMediaLadder.first, 1));
       expect(
         await a.session.uploadMediaFriend(to, framed, permit: permit),
-        isA<BoxRefused>(),
+        isA<BoxRefused<BoxMediaRef>>(),
         reason: 'nor is a media upload charged to it',
       );
     });
@@ -2126,9 +2104,212 @@ void main() {
       // that the gate did not refuse it.
       expect(
         await a.session.uploadMedia(own, framed),
-        isNot(isA<BoxRefused>()),
+        isNot(isA<BoxRefused<BoxMediaRef>>()),
         reason: 'an own-queue upload is never gated',
       );
+    });
+
+    group('item 13: the ungated lane is positive', () {
+      final body = Uint8List.fromList([1, 2, 3]);
+      final framed = Uint8List.fromList(List.filled(kBoxMediaLadder.first, 1));
+
+      /// [a] met [b]; then the friend's handoff replaced the address: the
+      /// returned OLD one is nobody's now.
+      Future<ContactOutbound> replacedOld() async {
+        await metWithAnchor(() => 'A');
+        final old = await tagged('A');
+        final replaced = ContactOutbound(
+          peerDeviceId: old.peerDeviceId,
+          sid: boxB64(_bytes(32, 7)),
+          sealPub: old.sealPub,
+          idk: 'A',
+        );
+        await a.store.update(5, (c) => c!.copyWith(outbound: [replaced]));
+        box.sent.clear();
+        return old;
+      }
+
+      test('deliver with no permit to the replaced old sid is refused', () async {
+        final old = await replacedOld();
+        expect(await a.session.deliver(old, body), BoxSendOutcome.failed);
+        expect(box.sent, isNot(contains(old.sid)), reason: 'the OLD queue');
+        expect(box.sent, isEmpty);
+      });
+
+      test('upload with no permit to the replaced old sid is refused', () async {
+        final old = await replacedOld();
+        expect(
+          await a.session.uploadMedia(old, framed),
+          isA<BoxRefused<BoxMediaRef>>(),
+        );
+      });
+
+      test('deliver, request and upload with no permit to a random sid are '
+          'refused', () async {
+        final old = await replacedOld();
+        final random = ContactOutbound(
+          peerDeviceId: 9,
+          sid: boxB64(_bytes(32, 0x33)),
+          sealPub: old.sealPub,
+          idk: null,
+        );
+        expect(await a.session.deliver(random, body), BoxSendOutcome.failed);
+        expect(
+          await a.session.deliverRequest(random, body),
+          BoxRequestSend.failed,
+        );
+        expect(
+          await a.session.uploadMedia(random, framed),
+          isA<BoxRefused<BoxMediaRef>>(),
+        );
+        expect(box.sent, isEmpty, reason: 'no queue was written');
+      });
+
+      test('own self queue, own request queue and a known sibling still take '
+          'a write and an upload with no permit', () async {
+        final old = await replacedOld();
+        final self = a.store.selfQueue!;
+        final request = a.store.requestQueue!;
+        final siblingSid = boxB64(_bytes(32, 0x44));
+        expect(
+          await a.store.learnSibling(9, sid: siblingSid, sealPub: old.sealPub),
+          SiblingWrite.stored,
+        );
+        final own = [
+          for (final (sid, sealPub) in [
+            (self.sid, self.sealPub),
+            (request.sid, request.sealPub),
+            (siblingSid, old.sealPub),
+          ])
+            ContactOutbound(
+              peerDeviceId: 9,
+              sid: sid,
+              sealPub: sealPub,
+              idk: null,
+            ),
+        ];
+        for (final to in own) {
+          expect(await a.session.deliver(to, body), BoxSendOutcome.taken);
+          // The fake box has no media route (an unknown answer): what
+          // matters is that the session did not refuse it.
+          expect(
+            await a.session.uploadMedia(to, framed),
+            isNot(isA<BoxRefused<BoxMediaRef>>()),
+          );
+        }
+        expect(box.sent, [self.sid, request.sid, siblingSid]);
+      });
+
+      test('a first-contact request to a served request address still goes '
+          'out on its request permit', () async {
+        await replacedOld();
+        final theirs = b.store.requestQueue!;
+        final to = ContactOutbound(
+          peerDeviceId: 3,
+          sid: theirs.sid,
+          sealPub: theirs.sealPub,
+          idk: null,
+        );
+        a.session.takeServedAddresses(5, [to]);
+        expect(await a.session.deliverRequest(to, body), BoxRequestSend.taken);
+        expect(box.sent, [theirs.sid]);
+      });
+    });
+
+    group('item 7: a stale address never causes a lookup', () {
+      /// [a] and [b] met under 'A'; then the pin moved to 'B' and the
+      /// friend's stored address (still tagged 'A') is stale.
+      Future<void> staleAfterMove(String Function() pin) async {
+        await metWithAnchor(pin);
+        await tagged('A');
+        box.sent.clear();
+        a.lookups.clear();
+      }
+
+      /// Our queue for the friend: handed to and acked by device 3, as a
+      /// pair that has talked leaves it.
+      Future<void> markHandedAndAcked() async {
+        await a.store.update(
+          5,
+          (c) => c!.copyWith(
+            queues: [
+              for (final q in c.queues) q.withAck(3).withHanded(3, a.clock),
+            ],
+          ),
+        );
+      }
+
+      ContactOutbound requestOf(_Device d, String idk) => ContactOutbound(
+        peerDeviceId: d.deviceId,
+        sid: d.store.requestQueue!.sid,
+        sealPub: d.store.requestQueue!.sealPub,
+        idk: idk,
+      );
+
+      test('an anchor move makes our handoff due again, and it goes only to '
+          'an already-served request address, never the stale queue',
+          () async {
+        var pin = 'A';
+        await staleAfterMove(() => pin);
+        final stale = a.friend.outbound.single;
+        await markHandedAndAcked();
+        expect(a.friend.queues.first.ackedBy, [3], reason: 'acked before');
+        pin = 'B';
+        await a.session.anchorMoved(5);
+        await settle();
+        expect(a.friend.queues.first.ackedBy, isEmpty, reason: 'due again');
+        expect(a.friend.queues.first.handedAt, isEmpty, reason: 'due again');
+        expect(box.sent, isEmpty, reason: 'nothing served: not at all');
+        expect(a.lookups, isEmpty, reason: 'and no lookup asked for it');
+
+        a.session.takeServedAddresses(5, [requestOf(b, 'B')]);
+        a.lookups.clear();
+        a.session.handOffTo(5);
+        await settle();
+        // The handoff left through b's REQUEST queue; what follows is b's own
+        // ack and hand-back, written into OUR queue (not a's writes).
+        expect(box.sent.first, b.store.requestQueue!.sid);
+        expect(
+          box.sent.skip(1).toSet(),
+          {a.friend.queues.first.sid},
+          reason: 'b answers into a queue, never a write of a to the stale one',
+        );
+        expect(box.sent, isNot(contains(stale.sid)));
+        expect(a.lookups, isEmpty);
+      });
+
+      test('connect, handoff passes and pump kicks with a stale address '
+          'record no lookup at all', () async {
+        var pin = 'A';
+        await metWithAnchor(() => pin);
+        await tagged('A');
+        await a.store.update(
+          5,
+          (c) => c!.copyWith(
+            queues: [for (final q in c.queues) q.withoutHandoffState()],
+          ),
+        );
+        pin = 'B';
+        // Past the 24 h floor: the floor is no reason for there being no
+        // lookup.
+        a.clock = a.clock.add(const Duration(days: 2));
+        box.sent.clear();
+        a.lookups.clear();
+        await a.restart(lookupAtStart: true);
+        a.session
+          ..runPass()
+          ..handOffTo(5)
+          ..friendHeard(5, 3);
+        await settle();
+        a.session.runPass();
+        await settle();
+        expect(a.lookups, isEmpty);
+        expect(
+          box.sent,
+          isEmpty,
+          reason: 'nothing is written to the stale queue',
+        );
+      });
     });
   });
 }

@@ -103,6 +103,22 @@ class AccountIdentityMismatch implements Exception {
       'deviceId=$deviceId carries an identity key that is not the account\'s';
 }
 
+/// The anchor was about to move (an unverified friend's new key, accepted at
+/// the person's tap) but the stamp-before-move could not be written: the
+/// contact store is closed or its write failed. TRANSIENT by design (invariant
+/// item 12): nothing moved, no refusal is recorded and no red hold is raised;
+/// the calm line shows failed and is tappable again.
+class AccountIdentityStampFailed implements Exception {
+  const AccountIdentityStampFailed({required this.peerId});
+
+  final int peerId;
+
+  @override
+  String toString() =>
+      'AccountIdentityStampFailed: the stamp for peer $peerId could not be '
+      'written, so its anchor did not move';
+}
+
 /// A message's wire identity (metadata-privacy PR2.1): the sender's wire id
 /// (`E2eEnvelope.msgId`) is unique only per SENDER — the server enforces
 /// `UNIQUE(senderId, sendToken)` and nothing more — so it never identifies a
@@ -774,6 +790,17 @@ class EncryptionService {
       }
       if (keyChangeWarnings() || pinned == null) return false;
       if (await isPeerVerified(peerId)) return false;
+      // The stamp-before-move comes first: with the contact store closed it
+      // cannot be written, and that is a transient failure (the calm line
+      // shows failed and is tappable again), never the refusal below that
+      // raises a red hold.
+      if (!await _stampBeforeAnchorMoves(peerId)) {
+        E2ePersistentDiag.record('PEER_IDENTITY_ADOPT_REFUSED', {
+          'peerId': peerId,
+          'reason': 'stamp_failed',
+        });
+        throw AccountIdentityStampFailed(peerId: peerId);
+      }
       await debugAfterAutoAcceptDecision?.call();
       final pending = await _identityStore.pendingAccountIdentity(name);
       if (pending == null) {
@@ -821,6 +848,8 @@ class EncryptionService {
       onPeerAutoAccepted?.call(peerId, deviceId);
       onPeerIdentityChanged?.call(peerId);
       return true;
+    } on AccountIdentityStampFailed {
+      rethrow;
     } on Object catch (e) {
       debugPrint('[EncryptionService] auto-accept failed: $e');
       return false;

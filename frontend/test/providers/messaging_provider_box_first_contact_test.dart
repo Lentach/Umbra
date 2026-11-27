@@ -59,6 +59,10 @@ class _Enc extends EncryptionProvider {
   Completer<void>? decryptGate;
   final Completer<void> decryptParked = Completer<void>();
 
+  /// Set: the identity every decrypt reports as its session's remote
+  /// identity (what libsignal's session state says for a whisper).
+  String? reportIdentity;
+
   @override
   Future<String> decrypt(
     int senderId,
@@ -73,7 +77,11 @@ class _Enc extends EncryptionProvider {
       decryptParked.complete();
       await gate.future;
     }
-    return _decrypt(senderId, ciphertext, messageId, deviceId);
+    final plain = await _decrypt(senderId, ciphertext, messageId, deviceId);
+    // The reader of the session's remote identity, as a whisper's decrypt
+    // hands it back in its serialized step (a test sets what it says).
+    if (reportIdentity case final identity?) onIdentity?.call(identity);
+    return plain;
   }
 
   Future<String> _decrypt(
@@ -878,6 +886,35 @@ void main() {
       expect(bob.recordOf(1), isNull);
       expect(await bob.enc.hasSessionWith(1), isFalse);
       expect(alice.recordOf(5)?.state, ContactState.pendingOut);
+    },
+  );
+
+  test(
+    'foreign-identity handoff does not befriend a pendingOut: the friend '
+    'frame decrypted on a session of another identity than the pinned '
+    'anchor is refused BEFORE the record becomes a friend',
+    () async {
+      expect(
+        await alice.reader.sendBoxFriendRequest(bob.searchEntry),
+        FirstContactSend.sent,
+      );
+      await settle();
+      expect(alice.recordOf(5)?.state, ContactState.pendingOut);
+
+      alice.enc.reportIdentity = base64Encode(List.filled(33, 7));
+      bob.answer = (_) => [alice.searchEntry];
+      expect(
+        await bob.reader.acceptBoxFriendRequest(1),
+        FirstContactAccept.accepted,
+      );
+      await settle();
+
+      expect(
+        alice.recordOf(5)?.state,
+        ContactState.pendingOut,
+        reason: 'a handoff learned under another identity befriends nobody',
+      );
+      expect(alice.recordOf(5)?.outbound, isEmpty);
     },
   );
 

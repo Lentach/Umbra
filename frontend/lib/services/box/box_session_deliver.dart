@@ -16,12 +16,20 @@ extension BoxSessionDeliver on BoxSession {
     final sid = boxB64Decode(to.sid, kBoxSidBytes);
     final sealPub = boxB64Decode(to.sealPub, 32);
     if (_disposed || sid == null || sealPub == null) return null;
-    // Friend lane only: a self-queue or sibling address is never gated. A
-    // write that carries a permit is a friend write whatever the stored
-    // addresses say now (the handoff may have replaced the one it was sealed
-    // for: then it is refused, not let through as "nobody's"). A
-    // first-contact request takes the permit its own sealed PreKey made.
+    // Friend lane: a write that carries a permit is a friend write whatever
+    // the stored addresses say now (the handoff may have replaced the one it
+    // was sealed for: then it is refused, not let through as "nobody's"). A
+    // first-contact request takes the permit its own sealed PreKey made, and
+    // must target an address of a record. With no permit the target must
+    // positively be OUR lane (own self queue, own request queue, a known
+    // sibling); any other sid is refused.
     final friend = permit?.friend ?? _friendOfSid(to.sid);
+    if (friend == null && (request || !_isOwnLaneSid(to.sid))) {
+      E2eDiagLog.add('BOX_FRIEND_WRITE_REFUSED', {
+        'why': 'no_permit_unknown_sid',
+      });
+      return null;
+    }
     final p = friend == null || !request ? permit : _gate.requestPermit(friend);
     if (friend != null && _gate.refusalOf(p, to.sid) != null) return null;
     final blob = await _seal.seal(sealPub, body);

@@ -649,8 +649,14 @@ class ConnectionProvider extends ChangeNotifier {
     _encryptionProvider?.onHeldFramesReleased = (_) =>
         _box?.drainInboxSettled();
     // The anchor moved (the key was confirmed): the pump looks again.
-    _encryptionProvider?.onAnchorMoved = (peer) =>
-        _messagingProvider?.kickSendPump(peer);
+    _encryptionProvider?.onAnchorMoved = (peer) {
+      // Both movers end here: our handoff to that friend is due again (the
+      // acks it gave under the old identity are forgotten), then the pump
+      // looks again. No lookup is made for it.
+      (_box?.anchorMoved(peer) ?? Future<void>.value())
+          .whenComplete(() => _messagingProvider?.kickSendPump(peer))
+          .ignore();
+    };
     _encryptionProvider?.onDeviceListInvalidated = (invalidated) {
       _messagingProvider?.onDeviceListInvalidated(invalidated);
       // The own list changed (a device linked or revoked): the siblings may

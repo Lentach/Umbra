@@ -188,6 +188,15 @@ class BoxSession
     return null;
   }
 
+  /// Whether [sid] is positively OUR lane: our own self queue, our own
+  /// request queue or a known sibling's self queue. The only targets a write
+  /// or an upload may reach with no permit (decision item 13); every other
+  /// sid with no permit is refused.
+  bool _isOwnLaneSid(String sid) =>
+      _store.selfQueue?.sid == sid ||
+      _store.requestQueue?.sid == sid ||
+      _store.siblings.any((s) => s.sid == sid);
+
   /// Whether a calm hold is pending for a friend (`MessagingProvider`);
   /// only a calm hold closes the gate on its own.
   bool Function(int friend)? get calmHeld => _gate.calmHeld;
@@ -486,12 +495,21 @@ class BoxSession
     if (!kBoxMediaLadder.contains(framed.length)) {
       return const BoxRefused(BoxCode.badSize);
     }
-    // Friend lane only: a write to our own self-queue (profile photos) or a
-    // sibling's is never gated; one that carries a permit is a friend write
-    // (the address it was sealed for may be gone). No await sits between
-    // this check and the upload.
-    if ((permit != null || _friendOfSid(to.sid) != null) &&
-        _gate.refusalOf(permit, to.sid) != null) {
+    // Friend lane: one that carries a permit, or targets a friend's address,
+    // is a friend write (the address it was sealed for may be gone). With no
+    // permit the target must positively be OUR lane (own self queue, own
+    // request queue, a known sibling); any other sid is refused. No await
+    // sits between this check and the upload.
+    final friend = permit != null || _friendOfSid(to.sid) != null;
+    final refused = friend
+        ? _gate.refusalOf(permit, to.sid) != null
+        : !_isOwnLaneSid(to.sid);
+    if (refused) {
+      if (!friend) {
+        E2eDiagLog.add('BOX_FRIEND_WRITE_REFUSED', {
+          'why': 'no_permit_unknown_sid',
+        });
+      }
       return const BoxRefused(BoxCode.invalidPayload);
     }
     return _box.uploadMedia(sid, framed);
@@ -798,6 +816,13 @@ class BoxSession
   @override
   void handOffTo(int userId) {
     if (!_disposed) _friends.friendChanged(userId);
+  }
+
+  /// Friend [friend]'s pinned identity moved (the acknowledge and the stale
+  /// anchor replacement both end here): our handoff to that friend is due
+  /// again ([BoxFriendHandoff.anchorMoved]).
+  Future<void> anchorMoved(int friend) async {
+    if (!_disposed) await _friends.anchorMoved(friend);
   }
 
   @override

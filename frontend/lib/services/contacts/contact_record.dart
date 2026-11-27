@@ -115,6 +115,13 @@ class ContactQueue {
       ? _with(handedAt: {...handedAt}..remove(deviceId))
       : this;
 
+  /// This queue as never handed or acknowledged by any device: the peer's
+  /// identity moved, so what it acknowledged under the old one proves
+  /// nothing and our handoff is due again.
+  ContactQueue withoutHandoffState() => ackedBy.isEmpty && handedAt.isEmpty
+      ? this
+      : _with(ackedBy: const [], handedAt: const {});
+
   ContactQueue _with({List<int>? ackedBy, Map<int, DateTime>? handedAt}) =>
       ContactQueue(
         rid: rid,
