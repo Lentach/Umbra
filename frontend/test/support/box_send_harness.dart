@@ -74,6 +74,7 @@ class SendEncryption extends EncryptionProvider {
     int recipientId,
     String plaintext, {
     int deviceId = 1,
+    bool Function(String? remoteIdentity)? admit,
   }) async {
     final error = encryptError;
     if (error != null) throw error;
@@ -171,6 +172,7 @@ class ScriptedSendEncryption extends SendEncryption {
     int recipientId,
     String plaintext, {
     int deviceId = 1,
+    bool Function(String? remoteIdentity)? admit,
   }) async {
     encryptCalls.add((recipientId, deviceId));
     final error = encryptError;

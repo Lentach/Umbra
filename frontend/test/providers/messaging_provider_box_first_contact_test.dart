@@ -65,6 +65,7 @@ class _Enc extends EncryptionProvider {
     String ciphertext, {
     int? messageId,
     int deviceId = 1,
+    void Function(String? remoteIdentity)? onIdentity,
   }) async {
     final gate = decryptGate;
     if (gate != null) {
@@ -427,6 +428,8 @@ class _Side {
   /// box send frames it (the routing is under test here, not the composer).
   Future<void> sendText(int peer, String text) async {
     final to = store.byUserId(peer)!.outbound.single;
+    final permit = session.permitFor(peer, to: [to]);
+    expect(permit, isNotNull, reason: '$name: the gate is open for $peer');
     final frame = await reader.encryptForFriend(
       peer,
       to.peerDeviceId,
@@ -437,9 +440,13 @@ class _Side {
           sentAt: DateTime.now().toUtc(),
         ),
       ),
+      permit: permit,
     );
     expect(frame, isNotNull, reason: '$name encrypts to $peer');
-    expect(await session.deliver(to, frame!.encode()), BoxSendOutcome.taken);
+    expect(
+      await session.deliverFriend(to, frame!.encode(), permit: permit),
+      BoxSendOutcome.taken,
+    );
   }
 
   /// The texts [peer] sent this device, as their stored records hold them,

@@ -87,6 +87,7 @@ class _BoxEncryption extends EncryptionProvider {
     String ciphertext, {
     int? messageId,
     int deviceId = 1,
+    void Function(String? remoteIdentity)? onIdentity,
   }) async {
     decryptedIds.add(messageId);
     final answer = inbound;

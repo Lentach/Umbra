@@ -1,12 +1,16 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:fireplace/models/message_model.dart';
 import 'package:fireplace/providers/conversations_provider.dart';
 import 'package:fireplace/providers/encryption_provider.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/services/box/box_frame.dart';
+import 'package:fireplace/services/box/box_friend_gate.dart';
 import 'package:fireplace/services/box/box_friends.dart';
+import 'package:fireplace/services/box/box_outbox.dart';
+import 'package:fireplace/services/box/box_wire.dart';
 import 'package:fireplace/services/contacts/contact_record.dart';
 import 'package:fireplace/services/contacts/contact_store.dart';
 import 'package:fireplace/services/device_list/device_list_cache.dart';
@@ -138,11 +142,47 @@ class _Enc extends EncryptionProvider {
 
 /// A box whose address for the friend is the queue the contact record holds
 /// NOW (the handoff moves it), as the real outbox reads it.
-class _LearnedOutbox extends SendOutbox {
-  _LearnedOutbox(this._queue);
+class _LearnedOutbox extends SendOutbox implements BoxFriendGateOutbox {
+  _LearnedOutbox(this._queue, this._idk, this._anchor) {
+    _gate = FriendGate(
+      addressesOf: (friend) => addressesFor(friend).values,
+      anchorOf: (_) => _anchor(),
+      journalJudged: () => true,
+    );
+  }
 
   final String Function() _queue;
 
+  /// The identity the address was learned under (its `idk`).
+  final String? Function() _idk;
+
+  /// The friend's pinned identity now.
+  final String? Function() _anchor;
+  late final FriendGate _gate;
+
+  @override
+  FriendPermit? permitFor(
+    int friend, {
+    Iterable<ContactOutbound> to = const [],
+    bool goodbye = false,
+  }) => _gate.permitFor(friend, to: to, goodbye: goodbye);
+
+  @override
+  Future<BoxSendOutcome> deliverFriend(
+    ContactOutbound to,
+    Uint8List body, {
+    BoxSendMode? mode,
+    FriendPermit? permit,
+  }) async => _gate.refusalOf(permit, to.sid) != null
+      ? BoxSendOutcome.failed
+      : deliver(to, body, mode: mode);
+
+  @override
+  Future<BoxResult<BoxMediaRef>> uploadMediaFriend(
+    ContactOutbound to,
+    Uint8List framed, {
+    FriendPermit? permit,
+  }) => uploadMedia(to, framed);
 
   @override
   Iterable<int> coveredPeers() => const [1];
@@ -153,7 +193,7 @@ class _LearnedOutbox extends SendOutbox {
             peerDeviceId: 1,
             sid: _queue(),
             sealPub: boxAddress(1).sealPub,
-            idk: null,
+            idk: _idk(),
           ),
         }
       : const {};
@@ -252,6 +292,9 @@ class _Link implements BoxFriendLink {
   /// The peer queue this side holds, once taken (`outbound`).
   String? learned;
 
+  /// The identity the held address was learned under.
+  String? learnedIdk;
+
   /// The peer device acked our queue (`ContactQueue.ackedBy`).
   bool acked = false;
 
@@ -334,6 +377,7 @@ class _Link implements BoxFriendLink {
     required String? learnedUnder,
   }) async {
     learned = sid;
+    learnedIdk = learnedUnder ?? learnedIdk;
     await _send(jsonEncode(E2eEnvelope.buildQueueHandoffAck(sid: sid)));
     if (!acked && await _send(_handoff)) _noteHanded();
     return FriendWrite.stored;
@@ -1395,7 +1439,12 @@ void main() {
         },
       ]);
       chats.openConversation(10);
-      final outbox = _LearnedOutbox(() => b.link.learned!);
+      final oldAnchor = b.enc.accountAnchorSync(1);
+      final outbox = _LearnedOutbox(
+        () => b.link.learned!,
+        () => b.link.learnedIdk ?? oldAnchor,
+        () => b.enc.accountAnchorSync(1),
+      );
       b.enc.localLists = true;
       b.reader
         ..setConversationsProvider(chats)

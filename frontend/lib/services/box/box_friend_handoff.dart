@@ -93,7 +93,7 @@ class BoxFriendHandoff {
   FriendGate? gate;
 
   /// The permit to seal for [userId] toward [to], or null while the gate is
-  /// closed ([gateClosed]).
+  /// closed (`_gateClosed`).
   FriendPermit? _permit(int userId, ContactOutbound to) =>
       gate?.permitFor(userId, to: [to]);
 

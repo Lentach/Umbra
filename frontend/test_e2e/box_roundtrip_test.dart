@@ -54,6 +54,7 @@ import 'package:fireplace/models/user_model.dart';
 import 'package:fireplace/services/box/box_client.dart';
 import 'package:fireplace/services/box/box_first_contact.dart';
 import 'package:fireplace/services/box/box_frame.dart';
+import 'package:fireplace/services/box/box_friend_gate.dart';
 import 'package:fireplace/services/box/box_friends.dart';
 import 'package:fireplace/services/box/box_outbox.dart';
 import 'package:fireplace/services/box/box_session.dart';
@@ -273,6 +274,7 @@ class _AppSide {
     int device,
     String json, {
     bool fresh = false,
+    FriendPermit? permit,
   }) async {
     if (!await me.encryption.hasSession(user, deviceId: device)) {
       await me.encryption.buildSession(
@@ -393,6 +395,7 @@ class _FirstContactSide {
     int device,
     String json, {
     bool fresh = false,
+    FriendPermit? permit,
   }) async => BoxFrame.fromSignalCiphertext(
     await me.encryption.encrypt(user, json, deviceId: device),
     senderDeviceId: 1,

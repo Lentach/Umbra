@@ -86,6 +86,7 @@ class _SiblingEncryption extends EncryptionProvider {
     String ciphertext, {
     int? messageId,
     int deviceId = 1,
+    void Function(String? remoteIdentity)? onIdentity,
   }) async {
     decrypts.add((senderId, deviceId, messageId));
     final answer = inbound;
@@ -103,6 +104,7 @@ class _SiblingEncryption extends EncryptionProvider {
     int recipientId,
     String plaintext, {
     int deviceId = 1,
+    bool Function(String? remoteIdentity)? admit,
   }) async {
     encrypts.add((recipientId, deviceId));
     return '2:${base64Encode(utf8.encode(plaintext))}';

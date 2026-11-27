@@ -9,8 +9,8 @@ import '../contacts/contact_record.dart';
 import '../contacts/contact_store.dart';
 import 'box_client.dart';
 import 'box_first_contact.dart';
-import 'box_friend_handoff.dart';
 import 'box_friend_gate.dart';
+import 'box_friend_handoff.dart';
 import 'box_friends.dart';
 import 'box_inbox.dart';
 import 'box_notifiers.dart';
@@ -186,6 +186,8 @@ class BoxSession
 
   /// Whether a calm hold is pending for a friend (`MessagingProvider`);
   /// only a calm hold closes the gate on its own.
+  bool Function(int friend)? get calmHeld => _gate.calmHeld;
+
   set calmHeld(bool Function(int friend)? check) => _gate.calmHeld = check;
 
   @override

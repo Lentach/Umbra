@@ -74,7 +74,7 @@ abstract interface class BoxOutbox {
 
 /// The friend lane of the send side (the write gate, `box_friend_gate.dart`):
 /// a permit is taken BEFORE Signal seals and travels with every write to a
-/// friend's queue. [BoxSession] is the one implementation; a stand-in outbox
+/// friend's queue. `BoxSession` is the one implementation; a stand-in outbox
 /// that is not one is not gated.
 abstract interface class BoxFriendGateOutbox {
   /// A permit to seal for [friend], or null while the gate is closed.

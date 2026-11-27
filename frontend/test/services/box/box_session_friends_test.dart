@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:fireplace/services/box/box_client.dart';
 import 'package:fireplace/services/box/box_frame.dart';
+import 'package:fireplace/services/box/box_friend_gate.dart';
 import 'package:fireplace/services/box/box_friend_handoff.dart'
     show kFriendLookupInterval;
 import 'package:fireplace/services/box/box_friends.dart';
@@ -201,6 +202,7 @@ class _Device {
     int toDevice,
     String json, {
     bool fresh = false,
+    FriendPermit? permit,
   }) async {
     final live = friendLive;
     if (encryptFails ||
@@ -818,7 +820,7 @@ void main() {
       final socket = box.sockets.last;
       session
         ..consumer = ((_) async => true)
-        ..encryptForFriend = ((user, device, json, {fresh = false}) async =>
+        ..encryptForFriend = ((user, device, json, {fresh = false, permit}) async =>
             BoxFrame(
               kind: BoxFrameKind.whisper,
               senderDeviceId: 2,
