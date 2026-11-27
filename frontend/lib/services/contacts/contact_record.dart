@@ -660,7 +660,7 @@ class ContactRecord {
   /// (the one-time re-announce after the upgrade, decision B). A record a
   /// build before it wrote reads false; a record created by this build is
   /// born true. Cleared handoff state and this flag go in ONE write
-  /// ([ContactStore.reannounceOwn]), so a kill can neither lose the
+  /// (`ContactStore.reannounceOwn`), so a kill can neither lose the
   /// re-announce nor repeat it. Device-local: the backup drops it.
   final bool reannounced;
 

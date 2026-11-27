@@ -183,7 +183,7 @@ class BoxSession
 
   /// Our account identity was re-minted while the store was kept: every
   /// friend is handed our queues again once the store is open
-  /// ([BoxSessionConnection.identityReminted]).
+  /// (`BoxSessionConnection.identityReminted`).
   bool _remintPending = false;
   Future<void>? _reannouncing;
 

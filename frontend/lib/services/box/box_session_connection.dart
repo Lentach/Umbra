@@ -91,9 +91,7 @@ extension BoxSessionConnection on BoxSession {
     _remintPending = false;
     try {
       final done = await _store.reannounceOwn(everyone: everyone);
-      for (final friend in done.changed) {
-        _friends.friendChanged(friend);
-      }
+      done.changed.forEach(_friends.friendChanged);
       if (!done.complete && everyone) _remintPending = true;
       if (done.changed.isNotEmpty) {
         E2eDiagLog.add('BOX_REANNOUNCE', {

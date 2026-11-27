@@ -51,8 +51,15 @@ class _CountingKv implements ContentKv {
   @override
   Set<String> getKeys() => _inner.getKeys();
 
+  Set<String> refuse = {};
+  bool refuseThrows = false;
+
   @override
   Future<bool> setString(String key, String value) {
+    if (refuse.contains(key)) {
+      if (refuseThrows) throw StateError('write failed');
+      return Future.value(false);
+    }
     writes++;
     return _inner.setString(key, value);
   }
@@ -321,6 +328,27 @@ void main() {
       expect(await store.stampUntaggedAddresses(7, _idkY), isTrue);
       expect(held(7, 3).idk, _idkY);
     });
+
+    for (final throws in [false, true]) {
+      test('per record: a record whose write is ${throws ? 'THROWN' : 'refused'} '
+          'stops no other; it stays untagged and the next run retries it',
+          () async {
+        await friend(5, outbound: [addr(3, 0x70)]);
+        await friend(6, outbound: [addr(3, 0x72)]);
+        anchors
+          ..[5] = _idkX
+          ..[6] = _idkX;
+        kv
+          ..refuse = {ContactStore.recordKey(1, 5)}
+          ..refuseThrows = throws;
+        expect(await store.tagUntaggedAddresses((p) => anchors[p]), isFalse);
+        expect(held(5, 3).idk, isNull, reason: 'refused: stays untagged');
+        expect(held(6, 3).idk, _idkX, reason: 'the others are tagged');
+        kv.refuse = {};
+        expect(await store.tagUntaggedAddresses((p) => anchors[p]), isTrue);
+        expect(held(5, 3).idk, _idkX);
+      });
+    }
 
     test('a migration killed half way leaves the rest for the next run',
         () async {

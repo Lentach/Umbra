@@ -2573,8 +2573,7 @@ void main() {
       await met();
       await makeLegacy();
       final before = handoffsToB();
-      final kv = a.kv as _MemKv;
-      kv.failWrites = true;
+      final kv = (a.kv as _MemKv)..failWrites = true;
       await a.restart();
       await settle();
       expect(a.friend.reannounced, isFalse, reason: 'the write was refused');
