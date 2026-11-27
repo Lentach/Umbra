@@ -318,6 +318,7 @@ class _Device {
             entry.peerUserId,
             entry.senderDeviceId,
             acked,
+            learnedUnder: readIdentity,
           ) !=
           FriendWrite.retryLater;
     }
@@ -996,7 +997,7 @@ void main() {
   test('an ack naming a queue we do not hold is refused', () async {
     await a.start();
     expect(
-      await a.session.friendAcked(5, 3, boxB64(_bytes(32, 0x7f))),
+      await a.session.friendAcked(5, 3, boxB64(_bytes(32, 0x7f)), learnedUnder: null),
       FriendWrite.refused,
     );
   });
@@ -2439,6 +2440,80 @@ void main() {
         BoxSendOutcome.failed,
       );
       expect(box.sent, isEmpty);
+    });
+  });
+
+  group('an ack counts only under the pinned identity', () {
+    Future<ContactQueue> metThenMoved(String? Function() pin) async {
+      a.anchorOf = (_) => pin();
+      await a.start();
+      await b.start();
+      a.session.runPass();
+      b.session.runPass();
+      await settle();
+      await a.store.update(
+        5,
+        (c) => c!.copyWith(
+          outbound: [for (final o in c.outbound) o.copyWith(idk: 'A')],
+        ),
+      );
+      await a.store.update(
+        5,
+        (c) => c!.copyWith(
+          queues: [
+            for (final q in c.queues) q.withAck(3).withHanded(3, a.clock),
+          ],
+        ),
+      );
+      expect(a.friend.queues.first.ackedBy, [3], reason: 'acked before');
+      a.lookups.clear();
+      return a.friend.queues.first;
+    }
+
+    test('anchor moves, our queue is due again, a late ack under the OLD '
+        'identity arrives: ackedBy stays clear and the handoff is still due; '
+        'the ack under the NEW identity marks it', () async {
+      var pin = 'A';
+      final lead = await metThenMoved(() => pin);
+      pin = 'B';
+      await a.session.anchorMoved(5);
+      await settle();
+      expect(a.friend.queues.first.ackedBy, isEmpty, reason: 'due again');
+      expect(
+        await a.session.friendAcked(5, 3, lead.sid, learnedUnder: 'A'),
+        FriendWrite.refused,
+        reason: 'a late ack of the old install',
+      );
+      expect(a.friend.queues.first.ackedBy, isEmpty);
+      expect(
+        await a.session.friendAcked(5, 3, lead.sid, learnedUnder: null),
+        FriendWrite.refused,
+        reason: 'an ack of unknown identity does not count either',
+      );
+      expect(a.friend.queues.first.ackedBy, isEmpty);
+      expect(
+        await a.session.friendAcked(5, 3, lead.sid, learnedUnder: 'B'),
+        FriendWrite.stored,
+      );
+      expect(a.friend.queues.first.ackedBy, [3]);
+      expect(a.lookups, isEmpty);
+    });
+
+    test('with no anchor pinned an ack counts (null-anchor rule)', () async {
+      String? pin = 'A';
+      final lead = await metThenMoved(() => pin);
+      pin = null;
+      await a.store.update(
+        5,
+        (c) => c!.copyWith(
+          queues: [c.queues.first.withoutHandoffState(), ...c.queues.skip(1)],
+        ),
+      );
+      expect(
+        await a.session.friendAcked(5, 3, lead.sid, learnedUnder: null),
+        FriendWrite.stored,
+      );
+      expect(a.friend.queues.first.ackedBy, [3]);
     });
   });
 

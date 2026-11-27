@@ -315,6 +315,7 @@ extension MessagingBox on MessagingProvider {
           msg.senderId,
           msg.originDeviceId ?? 1,
           sid,
+          learnedUnder: _frameIdentity(msg.encryptedContent!, sessionIdentity),
         )) {
           FriendWrite.retryLater => false,
           FriendWrite.stored || FriendWrite.refused => true,

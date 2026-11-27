@@ -78,7 +78,18 @@ abstract interface class BoxFriendLink {
   /// Device [deviceId] of friend [userId] acknowledged our queue [sid].
   /// [FriendWrite.refused] when no queue of ours for [userId] has that sid
   /// (an older one): the current one is handed to it on the next pass.
-  Future<FriendWrite> friendAcked(int userId, int deviceId, String sid);
+  ///
+  /// [learnedUnder] is the account identity (base64) that authenticated the
+  /// ack's frame (a PreKey's identity, else the whisper session's remote
+  /// identity; null: unknown). The ack counts (marks `ackedBy`) only when it
+  /// was authenticated under the friend's currently PINNED anchor: a late ack
+  /// of an OLD install must not make us believe the new one holds our queue.
+  Future<FriendWrite> friendAcked(
+    int userId,
+    int deviceId,
+    String sid, {
+    required String? learnedUnder,
+  });
 
   /// Hand our queue for [userId] to its device [deviceId] on a FRESH
   /// session ([FriendEncrypt]'s `fresh`): it sent a PreKey message that would

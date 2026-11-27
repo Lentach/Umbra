@@ -693,8 +693,25 @@ class BoxSession
   );
 
   @override
-  Future<FriendWrite> friendAcked(int userId, int deviceId, String sid) async {
+  Future<FriendWrite> friendAcked(
+    int userId,
+    int deviceId,
+    String sid, {
+    required String? learnedUnder,
+  }) async {
     if (_disposed) return FriendWrite.retryLater;
+    // An ack counts only when its frame was authenticated under the identity
+    // pinned now (no anchor pinned: it counts). A late ack of an OLD install
+    // must not make us believe the new one holds our queue.
+    final anchor = _anchorOf?.call(userId);
+    if (anchor != null && learnedUnder != anchor) {
+      E2eDiagLog.add('BOX_FRIEND_ACK_IGNORED', {
+        'peer': userId,
+        'device': deviceId,
+        'why': 'learned_under_other_identity',
+      });
+      return FriendWrite.refused;
+    }
     var matched = false;
     final committed = await _store.update(userId, (current) {
       if (current == null) return null;

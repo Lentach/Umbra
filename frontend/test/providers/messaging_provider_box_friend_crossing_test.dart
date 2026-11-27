@@ -427,7 +427,12 @@ class _Link implements BoxFriendLink {
   }
 
   @override
-  Future<FriendWrite> friendAcked(int userId, int deviceId, String sid) async {
+  Future<FriendWrite> friendAcked(
+    int userId,
+    int deviceId,
+    String sid, {
+    required String? learnedUnder,
+  }) async {
     if (sid != side.sid) return FriendWrite.refused;
     acked = true;
     return FriendWrite.stored;
