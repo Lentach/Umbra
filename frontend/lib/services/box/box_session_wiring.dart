@@ -67,6 +67,22 @@ extension BoxSessionWiring on BoxSession {
       ..run();
   }
 
+  /// Friends' lists from the HELD list only, and whether a device can be
+  /// sealed for with no fetch: what the upgrade one-shot's quiet pass reads
+  /// (review 3, P2-1; `MessagingProvider`).
+  FriendLiveDevices? get cachedFriendLiveDevices => _friends.cachedLiveDevices;
+
+  set cachedFriendLiveDevices(FriendLiveDevices? lookup) {
+    _friends.cachedLiveDevices = lookup;
+  }
+
+  Future<bool> Function(int userId, int device)? get friendSessionUsable =>
+      _friends.sessionUsable;
+
+  set friendSessionUsable(Future<bool> Function(int userId, int device)? f) {
+    _friends.sessionUsable = f;
+  }
+
   /// This account's device list, carried on request-queue frames to
   /// friends (slice (e), decision 50; `MessagingProvider`).
   Future<Map<String, dynamic>?> Function()? get ownDeviceList =>

@@ -107,6 +107,15 @@ class BoxFriendHandoff {
   ];
   FriendLiveDevices? liveDevices;
 
+  /// [liveDevices] from the HELD list only, never a fetch: what a quiet
+  /// friend ([holdQuiet]) is read by. Null: [liveDevices] stands in.
+  FriendLiveDevices? cachedLiveDevices;
+
+  /// Whether a handoff to friend `userId`'s `device` can be sealed with no
+  /// server fetch: a session that needs no (re)build and a held list that
+  /// names it live. Null: always (a bare handoff under test).
+  Future<bool> Function(int userId, int device)? sessionUsable;
+
   /// This account's device list as its authorization record, carried
   /// outside Signal on every request-queue frame (slice (e), decision 50):
   /// a newly linked device announces itself to a friend whose list predates
@@ -153,6 +162,18 @@ class BoxFriendHandoff {
   /// session ([friendHeard]).
   final Set<String> _heard = {};
 
+  /// Friends whose handoff is QUIET until their next handoff step has run,
+  /// in ANY pass: no list, bundle or handle lookup is fetched for them, and
+  /// a device that cannot be sealed for with what is held is skipped
+  /// ([_skipped]). The upgrade one-shot's re-announce holds it BEFORE it
+  /// clears the handoff state, so no pass can find the devices due first
+  /// (review 3, P2-1: a re-announce is no reason to ask the server).
+  final Set<int> _quiet = {};
+
+  /// `user:device` a quiet pass skipped: its next frame hands it our queue
+  /// ([friendHeard]), as then a session exists.
+  final Set<String> _skipped = {};
+
   /// `user:device:listVersion` our own list was announced to (E50d).
   final Set<String> _announced = {};
 
@@ -167,6 +188,10 @@ class BoxFriendHandoff {
   bool _e2eReady = false;
   bool _running = false;
   bool _again = false;
+
+  /// Completed by the next pass that STARTS after they were added
+  /// ([handQuietly]).
+  List<Completer<void>> _passWaiters = [];
   bool _disposed = false;
   Timer? _retry;
 
@@ -305,6 +330,28 @@ class BoxFriendHandoff {
     friendChanged(userId);
   }
 
+  /// Friends [users] are handed quietly from now ([_quiet]); ended by
+  /// [handQuietly], or [releaseQuiet] when nothing was cleared.
+  void holdQuiet(Iterable<int> users) => _quiet.addAll(users);
+
+  /// Quiet no more for [users].
+  void releaseQuiet(Iterable<int> users) => _quiet.removeAll(users);
+
+  /// [changed] must be handed our queue again (as [friendChanged]) by a pass
+  /// that starts now, quietly: [held] stay quiet ([holdQuiet]) until that
+  /// pass has run, and not a pass of an earlier moment may end it (one
+  /// already running could otherwise finish its step first and find the
+  /// devices due only after the quiet mark was gone).
+  void handQuietly(Iterable<int> changed, {required Iterable<int> held}) {
+    for (final userId in changed) {
+      _handed.removeWhere((key) => key.startsWith('$userId:'));
+    }
+    final done = Completer<void>();
+    _passWaiters.add(done);
+    unawaited(done.future.then((_) => releaseQuiet(held)));
+    run();
+  }
+
   /// [userId]'s devices may have changed, or it must be handed our queue
   /// again now ([BoxFriendLink.handOffTo]).
   void friendChanged(int userId) {
@@ -321,14 +368,18 @@ class BoxFriendHandoff {
     if (_disposed) return;
     final record = _store.byUserId(userId);
     final queue = record?.queues.firstOrNull;
+    final skipped = _skipped.contains('$userId:$deviceId');
     if (record?.state != ContactState.friend ||
         queue == null ||
         queue.ackedBy.contains(deviceId) ||
-        !queue.handedAt.containsKey(deviceId) ||
+        !(skipped || queue.handedAt.containsKey(deviceId)) ||
         _handed.contains('$userId:$deviceId:${queue.sid}') ||
         !_heard.add('$userId:$deviceId')) {
       return;
     }
+    // A frame is no reason to ask the server either: the device was just
+    // read, so a session exists, and a pass that finds none skips it.
+    if (skipped) _quiet.add(userId);
     unawaited(
       _store
           .update(userId, (current) {
@@ -340,7 +391,11 @@ class BoxFriendHandoff {
                 ..[i] = current.queues[i].withoutHanded(deviceId),
             );
           })
-          .then((_) => friendChanged(userId)),
+          .then(
+            (_) => skipped
+                ? handQuietly([userId], held: [userId])
+                : friendChanged(userId),
+          ),
     );
   }
 
@@ -507,9 +562,12 @@ class BoxFriendHandoff {
       return;
     }
     _running = true;
+    final mine = _passWaiters;
+    _passWaiters = [];
     unawaited(
       _pass().whenComplete(() {
         _running = false;
+        mine.forEach((c) => c.complete());
         if (_again && !_disposed) {
           _again = false;
           run();
@@ -538,7 +596,11 @@ class BoxFriendHandoff {
     await _store.pruneFriendLookups(friends.toSet());
     // Every lookup starts in this one turn, so a connect's lists leave as
     // one batched frame (E20a).
-    final lists = await Future.wait([for (final f in friends) lookup(f)]);
+    // A quiet friend is read from the held list only: no fetch.
+    final cached = cachedLiveDevices ?? lookup;
+    final lists = await Future.wait([
+      for (final f in friends) _quiet.contains(f) ? cached(f) : lookup(f),
+    ]);
     // Every queue the pass hands is made first, so its new ones go out in
     // ONE subscribe frame (chunked by the client past 256): the box counts
     // subscribe frames, 60 per 15 min per IP.
@@ -552,8 +614,18 @@ class BoxFriendHandoff {
     for (var i = 0; i < friends.length; i++) {
       if (_disposed || !_accountReady) return;
       final live = lists[i];
-      if (live == null) continue;
       final userId = friends[i];
+      if (live == null) {
+        // A quiet pass with no held list hands nobody; each device's next
+        // frame does ([friendHeard]).
+        if (_quiet.contains(userId)) {
+          final held = _store.byUserId(userId)?.outbound;
+          for (final o in held ?? const <ContactOutbound>[]) {
+            _skipped.add('$userId:${o.peerDeviceId}');
+          }
+        }
+        continue;
+      }
       // Slice (e): a device the friend revoked loses its address here and,
       // when it held our queue, our queue moves on without it (E50e).
       final revoked = await revokedDevices?.call(userId);
@@ -581,6 +653,7 @@ class BoxFriendHandoff {
                 _handoffDue(userId, d),
           ) &&
           addressLookup != null &&
+          !_quiet.contains(userId) &&
           !_addressesAsked.contains(userId) &&
           _lookupDue(userId)) {
         await lookupAddresses(userId);
@@ -785,6 +858,11 @@ class BoxFriendHandoff {
       final key = '$userId:$device:${queue.sid}';
       final seal = encrypt;
       if (_disposed || seal == null) return false;
+      if (_quiet.contains(userId) &&
+          !await (sessionUsable?.call(userId, device) ?? true)) {
+        _skipped.add('$userId:$device');
+        continue;
+      }
       final permit = _permit(userId, target.to);
       if (_gateClosed(permit)) continue;
       final frame = await seal(userId, device, handoff, permit: permit);
@@ -795,6 +873,7 @@ class BoxFriendHandoff {
       final answer = await send(target, frame, permit: permit);
       if (answer is BoxOk) {
         _handed.add(key);
+        _skipped.remove('$userId:$device');
         await _markHanded(userId, device, queue.sid);
         E2eDiagLog.add('BOX_FRIEND_HANDOFF_SENT', {
           'device': device,

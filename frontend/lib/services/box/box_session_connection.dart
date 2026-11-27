@@ -89,9 +89,26 @@ extension BoxSessionConnection on BoxSession {
   Future<void> _runReannounce() async {
     final everyone = _remintPending;
     _remintPending = false;
+    // The upgrade one-shot asks the server for nothing: its friends are held
+    // quiet BEFORE the state is cleared, or a pass already running would
+    // find the devices due and seal with fetches. A re-mint's new identity
+    // has no session with any friend device, which one bundle fetch per
+    // device builds (review 3, P2-1).
+    final quiet = everyone
+        ? const <int>[]
+        : [
+            for (final r in _store.all)
+              if (r.state == ContactState.friend && !r.reannounced) r.userId,
+          ];
+    _friends.holdQuiet(quiet);
     try {
       final done = await _store.reannounceOwn(everyone: everyone);
-      done.changed.forEach(_friends.friendChanged);
+      _friends.releaseQuiet(quiet.where((u) => !done.changed.contains(u)));
+      if (everyone) {
+        done.changed.forEach(_friends.friendChanged);
+      } else if (done.changed.isNotEmpty) {
+        _friends.handQuietly(done.changed, held: done.changed);
+      }
       if (!done.complete && everyone) _remintPending = true;
       if (done.changed.isNotEmpty) {
         E2eDiagLog.add('BOX_REANNOUNCE', {
@@ -100,6 +117,7 @@ extension BoxSessionConnection on BoxSession {
         });
       }
     } on Object catch (error) {
+      _friends.releaseQuiet(quiet);
       if (everyone) _remintPending = true;
       E2eDiagLog.add('BOX_REANNOUNCE_FAILED', {'error': error.runtimeType});
     }

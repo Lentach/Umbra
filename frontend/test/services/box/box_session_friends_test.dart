@@ -1872,6 +1872,7 @@ void main() {
         a.session.friendDevicesChanged(5);
         await settle();
         final queues = a.friend.queues;
+        // The probe's diagnostic line, kept as the reviewer wrote it.
         // ignore: avoid_print
         print('REVIEW3 lead=${queues.first.sid.substring(0, 6)} '
             'old=${old.sid.substring(0, 6)} '
@@ -1884,6 +1885,7 @@ void main() {
             .where((f) => f.event == 'deleteQueue')
             .map((f) => f.frame['rid'])
             .toList();
+        // The probe's diagnostic line, kept as the reviewer wrote it.
         // ignore: avoid_print
         print('REVIEW3 after31d queues=${a.friend.queues.length} '
             'oldDeleted=${deleted.contains(old.rid)} '
@@ -2818,6 +2820,81 @@ void main() {
       );
       expect(a.friend.queues.first.ackedBy, [3], reason: 'and it was acked');
       expect(a.lookups, isEmpty);
+    });
+
+    group('re-announce fetches (review 3, P2-1)', () {
+      var fetches = 0;
+      var control = 0;
+      var usable = false;
+
+      /// A pre-upgrade record whose friend lists are counted: [fetches] is
+      /// every list the pass asked the SERVER for; the held list is free.
+      Future<void> legacyAndWired() async {
+        await met();
+        a.session
+          ..friendLiveDevices = ((_) async {
+            fetches++;
+            return a.friendLive;
+          })
+          ..cachedFriendLiveDevices = ((_) async => a.friendLive)
+          ..friendSessionUsable = ((_, __) async => usable);
+        await settle();
+        // The store open's own ordinary pass looks lists up like every
+        // connect's: measured on a record that is not legacy, the one-shot
+        // adds nothing to it.
+        fetches = 0;
+        a.session.storeOpened();
+        await settle();
+        control = fetches;
+        expect(control, greaterThan(0), reason: 'the control pass looks up');
+        await makeLegacy();
+        fetches = 0;
+        a.lookups.clear();
+      }
+
+      test('the upgrade one-shot seals only on a usable session: no fetch, '
+          'the device is skipped, and its next frame hands it', () async {
+        await legacyAndWired();
+        usable = false;
+        final before = handoffsToB();
+        a.session.storeOpened();
+        await settle();
+        expect(a.friend.reannounced, isTrue);
+        expect(a.friend.queues.first.ackedBy, isEmpty);
+        expect(handoffsToB(), before, reason: 'no session: skipped');
+        expect(fetches, lessThanOrEqualTo(control), reason: 'one-shot: none');
+        expect(a.lookups, isEmpty);
+        usable = true;
+        a.session.friendHeard(5, 3);
+        await settle();
+        expect(handoffsToB(), before + 1, reason: 'its frame hands it');
+        expect(a.friend.queues.first.ackedBy, [3]);
+        expect(fetches, lessThanOrEqualTo(control), reason: 'a frame: none');
+        expect(a.lookups, isEmpty);
+      });
+
+      test('the upgrade one-shot on a usable session hands once and '
+          'fetches nothing', () async {
+        await legacyAndWired();
+        usable = true;
+        final before = handoffsToB();
+        a.session.storeOpened();
+        await settle();
+        expect(handoffsToB(), before + 1);
+        expect(fetches, lessThanOrEqualTo(control));
+        expect(a.lookups, isEmpty);
+      });
+
+      test('a re-mint keeps its fetches: a new identity has no session, so '
+          'the pass is not quiet and hands whatever the session state', () async {
+        await legacyAndWired();
+        usable = false;
+        final before = handoffsToB();
+        a.session.identityReminted();
+        await settle();
+        expect(handoffsToB(), before + 1);
+        expect(fetches, greaterThan(0), reason: 'the re-mint pass looks up');
+      });
     });
   });
 

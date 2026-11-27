@@ -571,6 +571,8 @@ class ConnectionProvider extends ChangeNotifier {
             ..redHeld = ((peer) =>
                 _encryptionProvider?.redBarShows(peer) ?? false)
             ..friendLiveDevices = messaging.friendLiveDevices
+            ..cachedFriendLiveDevices = messaging.cachedFriendLiveDevices
+            ..friendSessionUsable = messaging.friendSessionUsable
             // E114b: a friend's request queues come from a handle lookup.
             ..friendAddressLookup = messaging.lookupFriendAddresses
             // Slice (e): a new device's handoff carries its account's list.

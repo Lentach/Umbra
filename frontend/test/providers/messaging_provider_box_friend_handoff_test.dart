@@ -556,4 +556,29 @@ void main() {
       expect(link.learned, [_sid('Q')]);
     },
   );
+
+  test('the quiet reads of the upgrade one-shot ask the server for nothing: '
+      'no list lookup, no pre-key bundle (review 3, P2-1)', () async {
+    enc.friendListHeld = false;
+    expect(await s.cachedFriendLiveDevices(_friend), isNull);
+    expect(await s.friendSessionUsable(_friend, 3), isFalse, reason: 'no list');
+    enc.friendListHeld = true;
+    expect(await s.cachedFriendLiveDevices(_friend), {3});
+    expect(await s.friendSessionUsable(_friend, 3), isFalse, reason: 'no session');
+    expect(bundleFetches, 0);
+    expect(enc.listLookups, 0);
+    // A session (built by an ordinary handoff, which may fetch) is usable.
+    await s.sealForFriend(_friend, 3, jsonEncode(handoff(_sid('S'))));
+    expect(bundleFetches, 1);
+    expect(await s.friendSessionUsable(_friend, 3), isTrue);
+    expect(await s.friendSessionUsable(_friend, 4), isFalse, reason: 'not live');
+    enc.markSessionRebuild(_friend, deviceId: 3);
+    expect(
+      await s.friendSessionUsable(_friend, 3),
+      isFalse,
+      reason: 'a rebuild mark would fetch a bundle',
+    );
+    expect(bundleFetches, 1, reason: 'the usable check itself fetched nothing');
+    expect(enc.listLookups, 0);
+  });
 }

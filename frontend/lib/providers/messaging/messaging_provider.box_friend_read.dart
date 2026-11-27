@@ -517,6 +517,32 @@ extension MessagingBoxFriendRead on MessagingProvider {
     }
   }
 
+  /// [friendLiveDevices] from the HELD list only: never a fetch (the
+  /// upgrade one-shot's quiet pass).
+  Future<Set<int>?> cachedFriendLiveDevices(int userId) async {
+    final enc = _encryptionProvider;
+    if (enc == null || !enc.isE2EReady) return null;
+    return enc.cachedDeviceList(userId)?.liveDeviceIds.toSet();
+  }
+
+  /// Whether a handoff to friend [userId]'s [deviceId] can be sealed with
+  /// NO server fetch: a held list names it live and its session exists and
+  /// needs no rebuild ([encryptForFriend] then asks no list and builds no
+  /// session).
+  Future<bool> friendSessionUsable(int userId, int deviceId) async {
+    final enc = _encryptionProvider;
+    if (enc == null || !enc.isE2EReady) return false;
+    try {
+      final list = enc.cachedDeviceList(userId);
+      return list != null &&
+          list.isLiveDevice(deviceId) &&
+          !enc.needsSessionRebuild(userId, deviceId: deviceId) &&
+          await enc.hasSessionWith(userId, deviceId: deviceId);
+    } on Object {
+      return false;
+    }
+  }
+
   /// Whether the chat with [peerUserId] shows the "older app" notice (owner
   /// decision 48): this device is on the box, [peerUserId] is a friend, and
   /// its messages cannot go out because some live device of the
