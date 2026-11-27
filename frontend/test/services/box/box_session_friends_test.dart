@@ -8,6 +8,7 @@ import 'package:fireplace/services/box/box_friend_gate.dart';
 import 'package:fireplace/services/box/box_friend_handoff.dart'
     show kFriendLookupInterval;
 import 'package:fireplace/services/box/box_friends.dart';
+import 'package:fireplace/services/box/box_outbox.dart';
 import 'package:fireplace/services/box/box_session.dart';
 import 'package:fireplace/services/box/box_signer.dart';
 import 'package:fireplace/services/box/box_wire.dart';
@@ -280,6 +281,9 @@ class _Device {
   /// different set.
   List<ContactOutbound> Function()? serves;
 
+  /// The pinned-identity mirror handed to the session; null: none wired.
+  String? Function(int)? anchorOf;
+
   /// Every lookup throws, as a spent or unanswered one does.
   bool lookupFails = false;
 
@@ -345,6 +349,7 @@ class _Device {
       emit: (event, _) => emitted.add(event),
       seal: QueueSeal(cipher: PointyGcmSealer()),
       now: () => clock,
+      anchorOf: anchorOf,
     )..start();
     socket = box.sockets.last;
     session
@@ -1848,6 +1853,136 @@ void main() {
           expect(b2.listUpdates, hasLength(1));
         },
       );
+    });
+  });
+
+  group('the friend write gate (slice 2)', () {
+    /// A second session on [a]'s store whose pinned identity is [anchor].
+    BoxSession gated(String? Function(int) anchor, {bool wired = true}) {
+      final s = BoxSession(
+        box: BoxClient(
+          baseUrl: 'http://box.test',
+          socketFactory: box.sockets.call,
+        ),
+        store: a.store,
+        emit: (event, _) {},
+        seal: QueueSeal(cipher: PointyGcmSealer()),
+        now: () => a.clock,
+        anchorOf: anchor,
+      )..start();
+      if (wired) {
+        s
+          ..consumer = ((_) async => true)
+          ..e2eReady();
+      }
+      return s;
+    }
+
+    Future<ContactOutbound> tagged(String idk) async {
+      await a.store.update(
+        5,
+        (c) => c!.copyWith(
+          outbound: [for (final o in c.outbound) o.copyWith(idk: idk)],
+        ),
+      );
+      return a.friend.outbound.single;
+    }
+
+    Future<void> met() async {
+      await a.start();
+      await b.start();
+      a.session.runPass();
+      b.session.runPass();
+      await settle();
+    }
+
+    test('deliver without permit is refused', () async {
+      await met();
+      final to = a.friend.outbound.single;
+      expect(
+        await a.session.deliver(to, Uint8List.fromList([1, 2, 3])),
+        BoxSendOutcome.failed,
+      );
+      final permit = a.session.permitFor(5, to: [to]);
+      expect(permit, isNotNull);
+      expect(
+        await a.session.deliverFriend(
+          to,
+          Uint8List.fromList([1, 2, 3]),
+          permit: permit,
+        ),
+        BoxSendOutcome.taken,
+      );
+    });
+
+    test('send between E2E ready and the first journal drain waits; the '
+        'empty journal opens the gate', () async {
+      await met();
+      final to = await tagged('A');
+      final s = gated((_) => 'A', wired: false)..e2eReady();
+      expect(s.permitFor(5, to: [to]), isNull, reason: 'no reader wired yet');
+      s.consumer = (_) async => true;
+      await settle();
+      expect(s.permitFor(5, to: [to]), isNotNull, reason: 'empty journal');
+      s.dispose();
+    });
+
+    test('an address tagged with another identity than the pin is refused, '
+        'and a permit sealed before the pin moved is not written', () async {
+      await met();
+      final to = await tagged('A');
+      var anchor = 'A';
+      final s = gated((_) => anchor);
+      await settle();
+      final permit = s.permitFor(5, to: [to])!;
+      anchor = 'B';
+      expect(s.permitFor(5, to: [to]), isNull, reason: 'old address is stale');
+      expect(
+        await s.deliverFriend(to, Uint8List.fromList([9]), permit: permit),
+        BoxSendOutcome.failed,
+        reason: 'sealed under A, written after the move to B',
+      );
+      s.dispose();
+    });
+
+    test('first message to a friend with no anchor goes out', () async {
+      a.anchorOf = (_) => null;
+      await met();
+      final to = a.friend.outbound.single;
+      final permit = a.session.permitFor(5, to: [to])!;
+      expect(permit.firstPin, isTrue);
+      expect(
+        await a.session.deliverFriend(
+          to,
+          Uint8List.fromList([9]),
+          permit: permit,
+        ),
+        BoxSendOutcome.taken,
+      );
+    });
+
+    test('a write to a sibling or own queue is never gated', () async {
+      await met();
+      final other = ContactOutbound(
+        peerDeviceId: 9,
+        sid: a.friend.outbound.single.sid,
+        sealPub: a.friend.outbound.single.sealPub,
+        idk: null,
+      );
+      // Not a stored friend address of anyone else: an unknown sid with no
+      // owner is the sibling/self lane, which the gate leaves alone.
+      final foreign = ContactOutbound(
+        peerDeviceId: 9,
+        sid: boxB64(Uint8List(32)),
+        sealPub: other.sealPub,
+        idk: null,
+      );
+      final s = gated((_) => 'A', wired: false);
+      expect(
+        await s.deliver(foreign, Uint8List.fromList([1])),
+        isNot(equals(null)),
+      );
+      s.dispose();
     });
   });
 }
