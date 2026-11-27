@@ -560,7 +560,7 @@ class BoxFriendHandoff {
       if (revoked != null && revoked.isNotEmpty) {
         await _rotateAwayFromRevoked(userId, revoked);
       }
-      await _retireExpired(userId);
+      await _retireExpired(userId, live.difference(revoked ?? const {}));
       var targets = await _handoffTargets(
         userId,
         live,
@@ -666,7 +666,7 @@ class BoxFriendHandoff {
     final lead = record.queues.firstOrNull;
     if (lead != null &&
         lead.retiredAt == null &&
-        {...lead.ackedBy, ...lead.handedAt.keys}.any(revoked.contains)) {
+        lead.takenBy.any(revoked.contains)) {
       final next = await _keys.rotateInbound(userId, lead, now: _now());
       if (next != null) {
         if (QueueKeys.authOf(next) case final auth?) {
@@ -679,14 +679,26 @@ class BoxFriendHandoff {
   }
 
   /// Deletes friend [userId]'s queues retired more than the box TTL ago
-  /// (E50e): nothing a live device sent there can still arrive.
-  Future<void> _retireExpired(int userId) async {
+  /// (E50e): nothing a live device sent there can still arrive. A queue a
+  /// device in [live] took ([ContactQueue.takenBy]) stays until that device
+  /// has acknowledged the lead, or leaves the list (revoke), or the
+  /// friendship ends: the box answers `ok` for a deleted queue, so what the
+  /// device still writes there would be lost without a sign (review 3, P1;
+  /// a hold can keep the lead from being handed for longer than the TTL).
+  Future<void> _retireExpired(int userId, Set<int> live) async {
     final queues = _store.byUserId(userId)?.queues ?? const <ContactQueue>[];
+    final lead = queues.firstOrNull;
     for (final queue in queues.skip(1)) {
       final at = queue.retiredAt;
-      if (at != null && _now().difference(at) > kBoxRedeliveryWindow) {
-        await _keys.retireInbound(userId, queue);
+      if (at == null || _now().difference(at) <= kBoxRedeliveryWindow) {
+        continue;
       }
+      if (queue.takenBy.any(
+        (d) => live.contains(d) && !(lead?.ackedBy.contains(d) ?? false),
+      )) {
+        continue;
+      }
+      await _keys.retireInbound(userId, queue);
     }
   }
 

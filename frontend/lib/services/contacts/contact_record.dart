@@ -32,6 +32,7 @@ class ContactQueue {
     required this.sealPub,
     this.ackedBy = const [],
     this.handedAt = const {},
+    this.takenBy = const [],
     this.retiredAt,
   });
 
@@ -52,6 +53,17 @@ class ContactQueue {
         if (int.tryParse(key) case final int device when value is int)
           device: DateTime.fromMillisecondsSinceEpoch(value, isUtc: true),
     },
+    takenBy: [
+      ...{
+        for (final d in j['tb'] as List<dynamic>? ?? const [])
+          if (d is int) d,
+        for (final d in j['ackedBy'] as List<dynamic>? ?? const [])
+          if (d is int) d,
+        for (final key
+            in (j['handedAt'] as Map<String, dynamic>? ?? const {}).keys)
+          if (int.tryParse(key) case final int device) device,
+      },
+    ],
     retiredAt: j['retiredAt'] is int
         ? DateTime.fromMillisecondsSinceEpoch(
             j['retiredAt'] as int,
@@ -80,6 +92,15 @@ class ContactQueue {
   /// one is a blob left in that device's queue. Additive, like [ackedBy].
   final Map<int, DateTime> handedAt;
 
+  /// Every device of the peer that EVER acknowledged or was handed this queue
+  /// (review 3, P1/P2-2): it may still write into it, so a retired queue is
+  /// not deleted while a live one of them has not taken the lead, and a
+  /// revoke of one rotates our lead away. Never cleared by
+  /// [withoutHandoffState] (an anchor move, a re-announce), which only makes
+  /// our handoff due again. A record written before this field reads it as
+  /// the union of [ackedBy] and [handedAt]. Additive (`tb`).
+  final List<int> takenBy;
+
   /// When this queue stopped being the one handed out, because the peer
   /// revoked a device that held it (slice (e), E50e): a newer queue leads
   /// [ContactRecord.queues], and this one stays subscribed and read until
@@ -97,17 +118,26 @@ class ContactQueue {
     sealPub: sealPub,
     ackedBy: ackedBy,
     handedAt: handedAt,
+    takenBy: takenBy,
     retiredAt: at,
   );
 
   /// This queue, acknowledged by the peer's [deviceId] as well.
   ContactQueue withAck(int deviceId) => ackedBy.contains(deviceId)
       ? this
-      : _with(ackedBy: [...ackedBy, deviceId]);
+      : _with(
+          ackedBy: [...ackedBy, deviceId],
+          takenBy: _taken(deviceId),
+        );
 
   /// This queue, handed to the peer's [deviceId] at [at].
-  ContactQueue withHanded(int deviceId, DateTime at) =>
-      _with(handedAt: {...handedAt, deviceId: at});
+  ContactQueue withHanded(int deviceId, DateTime at) => _with(
+    handedAt: {...handedAt, deviceId: at},
+    takenBy: _taken(deviceId),
+  );
+
+  List<int> _taken(int deviceId) =>
+      takenBy.contains(deviceId) ? takenBy : [...takenBy, deviceId];
 
   /// This queue, its last handoff to the peer's [deviceId] forgotten: that
   /// device is heard from, so the day between handoffs no longer applies.
@@ -122,7 +152,11 @@ class ContactQueue {
       ? this
       : _with(ackedBy: const [], handedAt: const {});
 
-  ContactQueue _with({List<int>? ackedBy, Map<int, DateTime>? handedAt}) =>
+  ContactQueue _with({
+    List<int>? ackedBy,
+    Map<int, DateTime>? handedAt,
+    List<int>? takenBy,
+  }) =>
       ContactQueue(
         rid: rid,
         sid: sid,
@@ -132,6 +166,7 @@ class ContactQueue {
         sealPub: sealPub,
         ackedBy: ackedBy ?? this.ackedBy,
         handedAt: handedAt ?? this.handedAt,
+        takenBy: takenBy ?? this.takenBy,
         retiredAt: retiredAt,
       );
 
@@ -143,6 +178,7 @@ class ContactQueue {
     'sealPriv': sealPriv,
     'sealPub': sealPub,
     if (ackedBy.isNotEmpty) 'ackedBy': ackedBy,
+    if (takenBy.isNotEmpty) 'tb': takenBy,
     if (handedAt.isNotEmpty)
       'handedAt': {
         for (final MapEntry(:key, :value) in handedAt.entries)

@@ -1856,6 +1856,145 @@ void main() {
         },
       );
 
+      // REVIEW3 probe: a RED bar standing while the friend's live device
+      // still writes to our lead (forged frame / server event, identity
+      // unchanged), and the friend revokes another device that had our
+      // queue: our rotation hands the new lead to nobody (the red clause
+      // closes the handoff) and the old lead is deleted after the box TTL
+      // while the live device still writes to it. 0.2.111: handed (not gated).
+      test('REVIEW3 rotation under the red bar must not delete the queue a '
+          'live device still writes to', () async {
+        final old = a.friend.queues.single;
+        a.session.redHeld = (_) => true;
+        a
+          ..friendLive = {4}
+          ..friendRevoked = {3};
+        a.session.friendDevicesChanged(5);
+        await settle();
+        final queues = a.friend.queues;
+        // ignore: avoid_print
+        print('REVIEW3 lead=${queues.first.sid.substring(0, 6)} '
+            'old=${old.sid.substring(0, 6)} '
+            'b2Holds=${b2.outboundOf(2)?.sid.substring(0, 6)} '
+            'oldRetiredAt=${queues.last.retiredAt}');
+        a.clock = a.clock.add(kBoxRedeliveryWindow + const Duration(minutes: 1));
+        a.session.friendDevicesChanged(5);
+        await settle();
+        final deleted = a.socket.emitted
+            .where((f) => f.event == 'deleteQueue')
+            .map((f) => f.frame['rid'])
+            .toList();
+        // ignore: avoid_print
+        print('REVIEW3 after31d queues=${a.friend.queues.length} '
+            'oldDeleted=${deleted.contains(old.rid)} '
+            'b2Holds=${b2.outboundOf(2)?.sid.substring(0, 6)}');
+        expect(
+          b2.outboundOf(2)?.sid == old.sid && deleted.contains(old.rid),
+          isFalse,
+          reason: 'b2 still writes to the deleted queue: lost',
+        );
+      });
+
+      /// The rids this device asked the box to delete.
+      List<Object?> deletedRids() => [
+        for (final f in a.socket.emitted)
+          if (f.event == 'deleteQueue') f.frame['rid'],
+      ];
+
+      /// The friend revokes device 3 while [hold] keeps our handoff to its
+      /// live device 4 closed: our lead rotates, 4 still writes to the old
+      /// one. The old queue.
+      Future<ContactQueue> rotatedUnderAHold({required bool calm}) async {
+        final old = a.friend.queues.single;
+        if (calm) {
+          a.session.calmHeld = (_) => true;
+        } else {
+          a.session.redHeld = (_) => true;
+        }
+        a
+          ..friendLive = {4}
+          ..friendRevoked = {3};
+        a.session.friendDevicesChanged(5);
+        await settle();
+        expect(a.friend.queues, hasLength(2));
+        expect(a.friend.queues.last.rid, old.rid);
+        expect(b2.outboundOf(2)?.sid, old.sid, reason: 'not handed: held');
+        return old;
+      }
+
+      Future<void> past30Days() async {
+        a.clock = a.clock.add(kBoxRedeliveryWindow + const Duration(minutes: 1));
+        a.session.friendDevicesChanged(5);
+        await settle();
+      }
+
+      test('P1 CALM: a calm hold nobody taps never costs the queue the live '
+          'device still writes to', () async {
+        final old = await rotatedUnderAHold(calm: true);
+        await past30Days();
+        expect(deletedRids(), isNot(contains(old.rid)));
+        expect(a.friend.queues.map((q) => q.rid), contains(old.rid));
+        // Still kept on every later pass and after a restart.
+        a.calmHold = true;
+        await a.restart();
+        a.session.friendDevicesChanged(5);
+        await settle();
+        expect(deletedRids(), isNot(contains(old.rid)));
+        expect(a.friend.queues.map((q) => q.rid), contains(old.rid));
+      });
+
+      test('P1: the hold ends within 30 d: the new lead is handed and the old '
+          'queue is deleted once the device acks it', () async {
+        final old = await rotatedUnderAHold(calm: false);
+        a.session.redHeld = (_) => false;
+        a.session.friendDevicesChanged(5);
+        await settle();
+        final lead = a.friend.queues.first;
+        expect(b2.outboundOf(2)?.sid, lead.sid, reason: 'handed the new lead');
+        expect(lead.ackedBy, [4]);
+        expect(deletedRids(), isEmpty, reason: 'not past the box TTL yet');
+        await past30Days();
+        expect(deletedRids(), [old.rid]);
+        expect(a.friend.queues.single.sid, lead.sid);
+      });
+
+      test('P1: the hold ends AFTER 30 d: the old queue is kept until the '
+          'device acks the new lead, then deleted on the next pass', () async {
+        final old = await rotatedUnderAHold(calm: false);
+        await past30Days();
+        expect(deletedRids(), isEmpty);
+        a.session.redHeld = (_) => false;
+        a.session.friendDevicesChanged(5);
+        await settle();
+        expect(b2.outboundOf(2)?.sid, a.friend.queues.first.sid);
+        a.session.friendDevicesChanged(5);
+        await settle();
+        expect(deletedRids(), [old.rid]);
+        expect(a.friend.queues, hasLength(1));
+      });
+
+      test("P1: a revoked device's queue is still deleted: the device that "
+          'never took the new lead is revoked too', () async {
+        final old = await rotatedUnderAHold(calm: false);
+        a
+          ..friendLive = {}
+          ..friendRevoked = {3, 4};
+        await past30Days();
+        expect(deletedRids(), [old.rid]);
+        expect(a.friend.queues, hasLength(1));
+      });
+
+      test('P1: friendship ended: every queue goes, a kept retired one too',
+          () async {
+        final old = await rotatedUnderAHold(calm: false);
+        await past30Days();
+        final lead = a.friend.queues.first;
+        expect(deletedRids(), isEmpty);
+        await a.session.endBoxFriendship(5, block: false);
+        expect(deletedRids(), unorderedEquals([old.rid, lead.rid]));
+        expect(a.store.byUserId(5), isNull);
+      });
+
       test(
         'our list goes as a list_update to every live device of the friend '
         'we hold an address for, and only a box that took every frame '
