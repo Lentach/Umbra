@@ -522,6 +522,10 @@ extension MessagingBox on MessagingProvider {
     }
   }
 
+  @visibleForTesting
+  void refuseCalmDeferredForTest(int peerId) =>
+      _refuseCalmDeferred(peerId, _encryptionProvider!);
+
   /// What waited for [peerId]'s calm line when it turns into the visible
   /// hold: those rows read as refused for a key change (as under a red-hold
   /// refusal) and stop waiting, and the chat names it for them
@@ -533,13 +537,17 @@ extension MessagingBox on MessagingProvider {
       enc.markRefusedIdentity(peerId);
     }
     // A record of a chat not on screen stops waiting a moment later, with
-    // the same verdict.
+    // the same verdict; until then the pump leaves those chats alone, so a
+    // kick in between never sends a refused record.
+    _refusingChats.addAll(loaded.ids);
     unawaited(
-      _endStoredWaiting(loaded.ids).then((more) {
-        if (more.isEmpty) return;
-        _identityRefusedSendTempIds.addAll(more);
-        enc.markRefusedIdentity(peerId);
-      }),
+      _endStoredWaiting(loaded.ids)
+          .then((more) {
+            if (more.isEmpty) return;
+            _identityRefusedSendTempIds.addAll(more);
+            enc.markRefusedIdentity(peerId);
+          })
+          .whenComplete(() => _refusingChats.removeAll(loaded.ids)),
     );
   }
 

@@ -24,12 +24,17 @@ import '../support/box_send_harness.dart';
 class _SwitchOutbox extends ScriptedSendOutbox implements BoxFriendGateOutbox {
   bool closed = true;
 
+  /// Devices whose stored address is stale: a permit naming one is refused.
+  final Set<int> staleDevices = {};
+
   @override
   FriendPermit? permitFor(
     int friend, {
     Iterable<ContactOutbound> to = const [],
     bool goodbye = false,
-  }) => closed ? null : FriendPermit.ungated(friend);
+  }) => closed || to.any((a) => staleDevices.contains(a.peerDeviceId))
+      ? null
+      : FriendPermit.ungated(friend);
 
   @override
   Future<BoxSendOutcome> deliverFriend(
@@ -291,6 +296,42 @@ void main() {
     );
     await open();
     expect(has(sent(), 'one'), isTrue);
+  });
+
+  test('P3-1: a stale address of a device that is NOT live cannot hold the '
+      'line: the pump judges the same targets a send uses (the live ones)',
+      () async {
+    // Device 9 holds an address of ours but is no live device of the friend.
+    h.bob([1], addressed: [1, 9]);
+    await h.pump();
+    await typed('one');
+    expect(rowOf('one').waitingToSend, isTrue);
+    outbox
+      ..closed = false
+      ..staleDevices.add(9);
+    provider.kickSendPump(2);
+    await h.pump(80);
+
+    expect(has(sent(), 'one'), isTrue, reason: 'it goes to the live device');
+    expect(rowOf('one').waitingToSend, isFalse);
+  });
+
+  test('P3-4: a refused tap ends the stored waiting records in the same step '
+      'as the rows: a pump kick in between never sends a refused record',
+      () async {
+    await typed('one');
+    expect(rowOf('one').waitingToSend, isTrue);
+    outbox.closed = false;
+    // The tap is refused and, in the same turn, a state change kicks the pump.
+    provider
+      ..refuseCalmDeferredForTest(2)
+      ..kickSendPump(2);
+    await h.pump(80);
+
+    expect(outbox.delivered, isEmpty, reason: 'a refused record is not sent');
+    expect(rowOf('one').waitingToSend, isFalse);
+    expect(rowOf('one').deliveryStatus, MessageDeliveryStatus.failed);
+    expect((await encryption.boxUnsentWaiting(1)).keys, isEmpty);
   });
 
   test('STRICT ORDER: row 1 fails for a passing reason: row 2 does NOT '

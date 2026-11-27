@@ -250,6 +250,10 @@ class MessagingProvider extends ChangeNotifier {
   /// like any failed attachment.
   final Map<String, ({int conversationId, int at})> _ramWaiting = {};
 
+  /// Chats whose stored waiting records a refused calm tap is still ending
+  /// ([_refuseCalmDeferred]): the pump sends none of them meanwhile.
+  final Set<int> _refusingChats = {};
+
   /// tempIds whose last attempt failed for a reason that never passes (too
   /// long, quote gone): the pump turns them into ordinary failed rows.
   final Set<String> _sendNeverGoes = {};

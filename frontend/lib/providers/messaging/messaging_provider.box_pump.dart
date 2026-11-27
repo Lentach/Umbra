@@ -121,12 +121,20 @@ extension MessagingBoxPump on MessagingProvider {
     }
   }
 
-  /// Whether the gate is open for [friend] now: a permit for its stored
-  /// addresses (a calm hold, the journal and a stale address close it).
+  /// Whether the gate is open for [friend] now: a permit for the addresses a
+  /// send would write to, the LIVE devices' (a calm hold, the journal and a
+  /// stale address of a live device close it; a stale address of a device
+  /// that is not live is no target and must not hold the line). Without a
+  /// held list every stored address counts.
   bool _gateOpenFor(int friend) {
     final addresses = boxOutbox?.addressesFor(friend) ?? const {};
-    if (addresses.isEmpty) return false;
-    return _friendPermit(friend, to: addresses.values) != null;
+    final list = _encryptionProvider?.cachedDeviceList(friend);
+    final targets = [
+      for (final MapEntry(:key, :value) in addresses.entries)
+        if (list == null || list.isLiveDevice(key)) value,
+    ];
+    if (targets.isEmpty) return false;
+    return _friendPermit(friend, to: targets) != null;
   }
 
   /// `while the gate is open for the friend and a waiting message exists:
@@ -186,6 +194,7 @@ extension MessagingBoxPump on MessagingProvider {
         ),
     ]..sort(_byWaitingOrder);
     for (final w in all) {
+      if (_refusingChats.contains(w.conversationId)) continue;
       if (_friendOfConversation(w.conversationId, own) == friend) return w;
     }
     return null;
