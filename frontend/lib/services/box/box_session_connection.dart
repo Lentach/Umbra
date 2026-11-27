@@ -14,12 +14,11 @@ extension BoxSessionConnection on BoxSession {
     _rotation.run();
     _friends.e2eReady();
     // The one migration runs BEFORE anything judges an address: the journal
-    // drain, every probe and (through the gate) every permit wait for it.
+    // drain and (through the gate) every permit wait for it.
     // On a closed store it does nothing and [storeOpened] runs it again.
     unawaited(
       _label().then((_) {
         if (_disposed) return;
-        _probe.runAll(ProbeTrigger.connect);
         // The journal is judged by the first drain after E2E ready, the empty
         // one included and with no box connection (the write gate's clause).
         unawaited(_inbox.drain());
@@ -55,7 +54,6 @@ extension BoxSessionConnection on BoxSession {
     if (_disposed || !_store.isOpen) return;
     _labelled = true;
     onAddressesLabelled?.call();
-    _probe.runAll(ProbeTrigger.connect);
   }
 
   /// The own verified device list was dropped (a device linked or revoked).
@@ -92,7 +90,6 @@ extension BoxSessionConnection on BoxSession {
           _registerPush();
           _friends.run();
           unawaited(_label());
-          _probe.runAll(ProbeTrigger.connect);
         }),
       )
       ..add(_box.lostQueues.listen(_onLost));
@@ -152,7 +149,6 @@ extension BoxSessionConnection on BoxSession {
     _rotation.run();
     if (deviceId != null) _friends.accountReady();
     unawaited(_label());
-    _probe.runAll(ProbeTrigger.connect);
   }
 
   /// The contact store (re)opened — a web vault that booted locked was just
@@ -167,13 +163,12 @@ extension BoxSessionConnection on BoxSession {
     _rotation.run();
     _registerPush();
     _friends.run();
-    // The migration first: the drain judges the journal and the probe reads
-    // tags, neither before the store's addresses are labelled.
+    // The migration first: the drain judges the journal, and not before the
+    // store's addresses are labelled.
     unawaited(
       _label().then((_) {
         if (_disposed || _revoked) return;
         unawaited(_receive());
-        _probe.runAll(ProbeTrigger.connect);
       }),
     );
   }
@@ -203,8 +198,6 @@ extension BoxSessionConnection on BoxSession {
     _rekeyed.clear();
     _swap.accountLost();
     _friends.accountLost();
-    // The next connect owes the connect probe again.
-    _probe.connected();
   }
 
   /// Subscribes every contact queue the box is not already following, then

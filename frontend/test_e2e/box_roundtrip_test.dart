@@ -347,7 +347,6 @@ class _AppSide {
             entry.peerUserId,
             entry.senderDeviceId,
             acked,
-            learnedUnder: learnedUnder,
           ) !=
           FriendWrite.retryLater;
     }
@@ -498,7 +497,6 @@ class _FirstContactSide {
             entry.peerUserId,
             entry.senderDeviceId,
             acked,
-            learnedUnder: learnedUnder,
           ) !=
           FriendWrite.retryLater;
     }

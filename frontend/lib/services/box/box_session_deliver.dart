@@ -145,10 +145,6 @@ extension BoxSessionDeliver on BoxSession {
     });
     if (!committed) return FriendWrite.retryLater;
     if (!friend) return FriendWrite.refused;
-    // The friend's OWN handoff stored a current address for this device: its
-    // probe queue Z has nothing left to prove. It stops being the one handed
-    // and goes with the box TTL (still read until then).
-    await _keys.softRetireProbes(userId, deviceId, now: _now());
     _friends.noteRoutes();
     final acked = await _sendToFriend(
       userId,

@@ -400,48 +400,12 @@ extension MessagingBoxFriendRead on MessagingProvider {
     );
   }
 
-  /// The `FriendProbeEncrypt` of the box's probe: seals the ONE handoff the
-  /// [ProbePermit] stands for on the session that exists, admitted only when
-  /// that session's remote identity is the permit's (the pinned one). A
-  /// permit that is not a [FriendPermit] cannot reach any other seal.
-  Future<BoxFrame?> encryptProbeForFriend(ProbePermit permit) async {
-    final enc = _encryptionProvider;
-    if (enc == null || !enc.isE2EReady) return null;
-    final userId = permit.friend;
-    final deviceId = permit.device;
-    // The probe NEVER fetches (decision 153: a frame, a trigger or a probe
-    // causes no lookup): it seals only on a session that exists, is not
-    // marked for rebuild, with a list already held; else it skips and the
-    // next trigger retries. Whether the session's remote identity is the
-    // pinned one is the permit's `admit`, inside the encrypt.
-    final held = enc.cachedDeviceList(userId);
-    if (held == null ||
-        !held.isLiveDevice(deviceId) ||
-        enc.needsSessionRebuild(userId, deviceId: deviceId) ||
-        !await enc.hasSessionWith(userId, deviceId: deviceId)) {
-      _e2eFlowLog('BOX_FRIEND_PROBE_SKIPPED', {
-        'peer': userId,
-        'device': deviceId,
-      });
-      return null;
-    }
-    return _sealOnSession(
-      userId,
-      deviceId,
-      permit.handoffJson,
-      fresh: false,
-      admit: permit.admitsSession,
-      mayFetch: false,
-    );
-  }
-
   Future<BoxFrame?> _sealOnSession(
     int userId,
     int deviceId,
     String json, {
     required bool fresh,
     required bool Function(String? remoteIdentity) admit,
-    bool mayFetch = true,
   }) async {
     final enc = _encryptionProvider;
     if (enc == null) return null;
@@ -456,7 +420,7 @@ extension MessagingBoxFriendRead on MessagingProvider {
       final started =
           fresh || !await enc.hasSessionWith(userId, deviceId: deviceId);
       if (fresh) enc.markSessionRebuild(userId, deviceId: deviceId);
-      if (mayFetch) await enc.ensureSession(userId, deviceId: deviceId);
+      await enc.ensureSession(userId, deviceId: deviceId);
       // A frame to a friend's device says whether this device relays
       // (decision 101 A, E101b).
       final frame = BoxFrame.fromSignalCiphertext(

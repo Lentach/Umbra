@@ -11,7 +11,6 @@ import 'box_client.dart';
 import 'box_first_contact.dart';
 import 'box_friend_gate.dart';
 import 'box_friend_handoff.dart';
-import 'box_friend_probe.dart';
 import 'box_friends.dart';
 import 'box_inbox.dart';
 import 'box_notifiers.dart';
@@ -139,13 +138,6 @@ class BoxSession
       labelled: () => _labelled,
     );
     _friends.gate = _gate;
-    _probe = BoxFriendProbe(
-      box: box,
-      store: store,
-      keys: _keys,
-      friends: _friends,
-      queueCreated: _registerPush,
-    );
     _inbox
       ..judgeable = (() => _e2eReady && _inbox.consumer != null)
       ..onJudged = (() {
@@ -153,8 +145,6 @@ class BoxSession
         _journalJudged = true;
         if (first) {
           onJournalJudged?.call();
-          // The last clause of the probe's gate opened: level check.
-          _probe.runAll(ProbeTrigger.connect);
         }
       });
   }
@@ -171,7 +161,6 @@ class BoxSession
   late final BoxSiblingRotation _rotation;
   late final BoxNotifiers? _notifiers;
   late final BoxPushNids? _nids;
-  late final BoxFriendProbe _probe;
   late final BoxFriendHandoff _friends;
   late final FriendGate _gate;
 
@@ -182,7 +171,7 @@ class BoxSession
 
   /// The one labelling of untagged addresses ([ContactStore.
   /// tagUntaggedAddresses]) completed on an OPEN store in this process. Until
-  /// then the gate is closed for messages and nothing is probed: a missing
+  /// then the gate is closed for messages: a missing
   /// tag is "not yet labelled", a different state from a foreign tag.
   bool _labelled = false;
   Future<void>? _labelling;
@@ -704,87 +693,22 @@ class BoxSession
   );
 
   @override
-  Future<FriendWrite> friendAcked(
-    int userId,
-    int deviceId,
-    String sid, {
-    required String? learnedUnder,
-  }) async {
+  Future<FriendWrite> friendAcked(int userId, int deviceId, String sid) async {
     if (_disposed) return FriendWrite.retryLater;
     var matched = false;
-    var proven = false;
-    var tookLead = false;
-    final anchor = _anchorOf?.call(userId);
     final committed = await _store.update(userId, (current) {
       if (current == null) return null;
       final i = current.queues.indexWhere((q) => q.sid == sid);
       if (i < 0) return null;
       matched = true;
       final queue = current.queues[i];
-      var next = current;
-      final staleSid = queue.probeSid;
-      if (staleSid == null) {
-        tookLead = true;
-      } else if (queue.retiredAt == null &&
-          queue.probeDevice == deviceId &&
-          anchor != null &&
-          learnedUnder == anchor) {
-        // PROOF: the holder of the stale address read the probe and answered
-        // under the pinned identity, so it reads under the new key.
-        final held = current.outbound
-            .where((o) => o.peerDeviceId == deviceId && o.sid == staleSid)
-            .firstOrNull;
-        if (held != null && held.idk != anchor) {
-          proven = true;
-          next = next.copyWith(
-            outbound: [
-              for (final o in current.outbound)
-                if (identical(o, held)) o.copyWith(idk: anchor) else o,
-            ],
-          );
-        }
-      }
-      if (!queue.ackedBy.contains(deviceId)) {
-        next = next.copyWith(
-          queues: [...next.queues]..[i] = queue.withAck(deviceId),
-        );
-      }
-      return identical(next, current) ? null : next;
+      if (queue.ackedBy.contains(deviceId)) return null;
+      return current.copyWith(
+        queues: [...current.queues]..[i] = queue.withAck(deviceId),
+      );
     });
     if (!committed) return FriendWrite.retryLater;
-    if (proven) {
-      E2eDiagLog.add('BOX_FRIEND_PROBE_PROVEN', {'device': deviceId});
-      // The address is current now: our lead is handed to it by the pass.
-      _friends.friendChanged(userId);
-    }
-    // The device took our own queue AND its address is current: what it
-    // wrote to its probe queue Z is all that will ever arrive there, so Z
-    // stops being handed and goes with the box TTL (until then still read).
-    // While its address is still stale Z is kept: it is the ONE probe.
-    final held = _store
-        .byUserId(userId)
-        ?.outbound
-        .where((o) => o.peerDeviceId == deviceId)
-        .firstOrNull;
-    if (tookLead && (held == null || !_gate.isStale(userId, held))) {
-      await _keys.softRetireProbes(
-        userId,
-        deviceId,
-        now: _now(),
-        leadTaken: true,
-      );
-    }
     return matched ? FriendWrite.stored : FriendWrite.refused;
-  }
-
-  @override
-  void friendAuthenticated(int userId) {
-    if (!_disposed) unawaited(_probe.run(userId, ProbeTrigger.heard));
-  }
-
-  @override
-  void calmHoldEnded(int userId) {
-    if (!_disposed) unawaited(_probe.run(userId, ProbeTrigger.move));
   }
 
   @override
@@ -909,10 +833,7 @@ class BoxSession
   /// again ([BoxFriendHandoff.anchorMoved]).
   Future<void> anchorMoved(int friend) async {
     if (_disposed) return;
-    _probe.moved(friend);
     await _friends.anchorMoved(friend);
-    // Level trigger: the address held for a device is stale now and unproven.
-    unawaited(_probe.run(friend, ProbeTrigger.move));
   }
 
   @override
@@ -1015,7 +936,6 @@ class BoxSession
     _swap.dispose();
     _rotation.dispose();
     _friends.dispose();
-    _probe.dispose();
     _notifiers?.dispose();
     for (final s in _subscriptions) {
       unawaited(s.cancel());

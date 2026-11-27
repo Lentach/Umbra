@@ -490,28 +490,6 @@ class BoxFriendHandoff {
     return _box.send(sid, blob, mode: BoxSendMode.quiet);
   }
 
-  /// Writes THE probe [frame] (sealed under [permit]) to the stale address
-  /// [to]: the only friend-lane write a stale address ever takes. The gate's
-  /// probe clauses run here, after every await, in the step of the write.
-  Future<BoxResult<void>?> sendProbe(
-    ProbePermit permit,
-    ContactOutbound to,
-    BoxFrame frame,
-  ) async {
-    final sid = boxB64Decode(to.sid, kBoxSidBytes);
-    final sealPub = boxB64Decode(to.sealPub, 32);
-    final g = gate;
-    if (_disposed || g == null || sid == null || sealPub == null) return null;
-    final blob = await _seal.seal(sealPub, frame.encode());
-    if (blob == null || _disposed) return null;
-    final why = g.refusalOfProbe(permit, to.sid);
-    if (why != null) {
-      E2eDiagLog.add('BOX_FRIEND_WRITE_REFUSED', {'why': 'probe_${why.name}'});
-      return null;
-    }
-    return _box.send(sid, blob, mode: BoxSendMode.quiet);
-  }
-
   /// Runs a pass once every gate is open; one at a time, and a request made
   /// meanwhile runs another after it.
   void run() {
@@ -684,11 +662,6 @@ class BoxFriendHandoff {
             ? null
             : current.copyWith(outbound: kept);
       });
-    }
-    // The probe queue of a revoked device goes with its address (hard: that
-    // device must be shut out, E50e / decision 29).
-    for (final q in [...record.queues]) {
-      if (revoked.contains(q.probeDevice)) await _keys.retireInbound(userId, q);
     }
     final lead = record.queues.firstOrNull;
     if (lead != null &&
