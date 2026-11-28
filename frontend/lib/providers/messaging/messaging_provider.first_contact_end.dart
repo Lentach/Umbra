@@ -36,14 +36,17 @@ extension MessagingFirstContactEnd on MessagingProvider {
       final goodbye = jsonEncode(E2eEnvelope.buildGoodbye());
       for (final MapEntry(key: device, value: to)
           in outbox.addressesFor(userId).entries) {
-        final frame = await encryptForFriend(userId, device, goodbye);
-        // No message in a goodbye: quiet, no wake (decision 91).
+        final sealed = await _sealFriend(userId, device, to, goodbye);
+        // No message in a goodbye: quiet, no wake (decision 91). A closed
+        // gate drops it: the old queue is dead, the record still ends here.
         final sent =
-            frame != null &&
-            await outbox.deliver(
+            sealed.frame != null &&
+            await _deliverFriend(
+                  outbox,
                   to,
-                  frame.encode(),
+                  sealed.frame!.encode(),
                   mode: BoxSendMode.quiet,
+                  permit: sealed.permit,
                 ) ==
                 BoxSendOutcome.taken;
         if (!sent) {
@@ -80,6 +83,7 @@ extension MessagingFirstContactEnd on MessagingProvider {
   /// above (or the caller's), never refreshed first.
   void _afterBoxFriendshipEnded(int userId) {
     _firstContactLog('BOX_FRIENDSHIP_ENDED', userId);
+    _clearCalmHold(userId);
     onBoxContactsChanged?.call();
     notifyListeners();
   }
@@ -127,13 +131,23 @@ extension MessagingFirstContactEnd on MessagingProvider {
                 in outbox.addressesFor(userId).entries) {
               var sent = false;
               try {
-                final frame = await encryptForFriend(userId, device, goodbye);
+                // The account-delete goodbye is exempt from the journal
+                // clause only.
+                final sealed = await _sealFriend(
+                  userId,
+                  device,
+                  to,
+                  goodbye,
+                  exemptJournal: true,
+                );
                 sent =
-                    frame != null &&
-                    await outbox.deliver(
+                    sealed.frame != null &&
+                    await _deliverFriend(
+                          outbox,
                           to,
-                          frame.encode(),
+                          sealed.frame!.encode(),
                           mode: BoxSendMode.quiet,
+                          permit: sealed.permit,
                         ) ==
                         BoxSendOutcome.taken;
               } on Object {

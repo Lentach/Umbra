@@ -234,7 +234,8 @@ extension MessagingProfile on MessagingProvider {
           user: own,
           to: to,
           rev: rev,
-          seal: () => encryptForOwnDevice(device, json),
+          json: json,
+          sibling: true,
         )) {
           all = false;
         }
@@ -260,7 +261,7 @@ extension MessagingProfile on MessagingProvider {
           user: peer,
           to: to,
           rev: rev,
-          seal: () => encryptForFriend(peer, device, json),
+          json: json,
         )) {
           all = false;
         }
@@ -278,7 +279,8 @@ extension MessagingProfile on MessagingProvider {
     required int user,
     required ContactOutbound to,
     required int rev,
-    required Future<BoxFrame?> Function() seal,
+    required String json,
+    bool sibling = false,
   }) async {
     final device = to.peerDeviceId;
     final key = '$user:$device:$rev';
@@ -296,15 +298,23 @@ extension MessagingProfile on MessagingProvider {
         skipped('paused');
         return false;
       }
-      final frame = await seal();
+      // The gate is asked BEFORE the sent mark below: a refused frame stays
+      // owed, never marked sent.
+      // A sibling's frame is sealed by the sibling path and never gated.
+      final sealed = sibling
+          ? (frame: await encryptForOwnDevice(device, json), permit: null)
+          : await _sealFriend(user, device, to, json);
+      final frame = sealed.frame;
       if (frame == null || frame.signal.length > BoxFrame.maxSignalBytes) {
         skipped('seal');
         return false;
       }
-      final outcome = await outbox.deliver(
+      final outcome = await _deliverFriend(
+        outbox,
         to,
         frame.encode(),
         mode: BoxSendMode.quiet,
+        permit: sealed.permit,
       );
       _noteBoxAnswer(user, device, outcome);
       if (outcome != BoxSendOutcome.taken) return false;

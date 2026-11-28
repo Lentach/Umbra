@@ -2,6 +2,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fireplace/services/encryption_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../support/verify_pinned.dart';
 
 /// Amendment (lxxix): the peer key-change surface is DEMOTED by default.
 ///
@@ -218,6 +219,7 @@ void main() {
     await alice.buildSession(bobId, flatBundleFrom(bob),
         expectedIdentityBase64: null);
     final pinned = await alice.peerTofuIdentityBase64(bobId);
+    await alice.verifyPinned(bobId); // decision 152: unverified is accepted
 
     // The (xxxix)/(lv) gate: the served bundle carries a foreign identity.
     await expectLater(
@@ -304,6 +306,7 @@ void main() {
     await alice.buildSession(bobId, flatBundleFrom(bob),
         expectedIdentityBase64: null);
     final pinned = await alice.peerTofuIdentityBase64(bobId);
+    await alice.verifyPinned(bobId); // decision 152: unverified is accepted
     await expectLater(
       alice.buildSession(bobId, flatBundleFrom(mallory),
           expectedIdentityBase64: pinned),

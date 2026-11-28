@@ -47,7 +47,8 @@ class MessageContextMenuBubbleHighlight extends StatelessWidget {
           deliveryIcon = Icons.done_all;
           break;
         case MessageDeliveryStatus.failed:
-          deliveryIcon = Icons.error;
+          // A waiting row is calm: no red dot (see `FailedSendRetry`).
+          deliveryIcon = message.waitingToSend ? null : Icons.error;
           break;
       }
     }

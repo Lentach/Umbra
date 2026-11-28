@@ -974,6 +974,18 @@ abstract class AppLocalizations {
   /// **'Nie wysłano: klucze bezpieczeństwa tego kontaktu się zmieniły. Otwórz czerwone ostrzeżenie w tym czacie i porównajcie odciski, a potem ponów.'**
   String get messageSendBlockedKeysChanged;
 
+  /// Under an own message that waits to be sent while the friend's new-device line (the calm line, decision 152) is still untapped. Calm on purpose: grey, a clock, no Retry; the app sends it by itself after the tap. Also the row's screen-reader label.
+  ///
+  /// In pl, this message translates to:
+  /// **'Czeka: dotknij linii o nowym urządzeniu'**
+  String get messageWaitingTapCalmLine;
+
+  /// Under an own message that waits to be sent for any reason other than an untapped new-device line (the friend's current address is not known yet, a restart, the box offline). Grey, a clock, no Retry; the app sends it by itself. Also the row's screen-reader label.
+  ///
+  /// In pl, this message translates to:
+  /// **'Czeka na wysłanie'**
+  String get messageWaitingToSend;
+
   /// Auth surface status, localized from an AuthStatusCode.
   ///
   /// In pl, this message translates to:
@@ -1135,6 +1147,24 @@ abstract class AppLocalizations {
   /// In pl, this message translates to:
   /// **'Odciski się zgadzają'**
   String get peerIdentityMarkVerifiedAction;
+
+  /// No description provided for @peerIdentityMarkFriendVerifiedAction.
+  ///
+  /// In pl, this message translates to:
+  /// **'Oznacz jako zweryfikowane'**
+  String get peerIdentityMarkFriendVerifiedAction;
+
+  /// No description provided for @peerIdentityVerifiedState.
+  ///
+  /// In pl, this message translates to:
+  /// **'Zweryfikowano'**
+  String get peerIdentityVerifiedState;
+
+  /// No description provided for @peerIdentityKeyChangedWhileOpen.
+  ///
+  /// In pl, this message translates to:
+  /// **'Klucz zmienił się w trakcie. Porównaj ponownie.'**
+  String get peerIdentityKeyChangedWhileOpen;
 
   /// No description provided for @peerIdentityVerifyMenuAction.
   ///
@@ -3890,6 +3920,30 @@ abstract class AppLocalizations {
   /// **'{name}: nowe urządzenie lub przeglądarka — klucze zaktualizowane.'**
   String peerIdentityChangedSystemLine(String name);
 
+  /// No description provided for @calmHoldLine.
+  ///
+  /// In pl, this message translates to:
+  /// **'{name} pisze z nowego urządzenia lub przeglądarki. Dotknij, aby odebrać.'**
+  String calmHoldLine(String name);
+
+  /// No description provided for @calmHoldChecking.
+  ///
+  /// In pl, this message translates to:
+  /// **'Sprawdzam klucz…'**
+  String get calmHoldChecking;
+
+  /// No description provided for @calmHoldFailed.
+  ///
+  /// In pl, this message translates to:
+  /// **'Nie udało się sprawdzić. Spróbuj ponownie.'**
+  String get calmHoldFailed;
+
+  /// No description provided for @calmHoldListPreview.
+  ///
+  /// In pl, this message translates to:
+  /// **'Nowe urządzenie — dotknij, aby odebrać'**
+  String get calmHoldListPreview;
+
   /// No description provided for @settingsKeyChangeWarnings.
   ///
   /// In pl, this message translates to:
@@ -3899,7 +3953,7 @@ abstract class AppLocalizations {
   /// No description provided for @settingsKeyChangeWarningsSubtitle.
   ///
   /// In pl, this message translates to:
-  /// **'Domyślnie nowe klucze są przyjmowane, a w czacie pojawia się krótka notatka.'**
+  /// **'Domyślnie nowe klucze są przyjmowane, a w czacie pojawia się krótka notatka. Zweryfikowane kontakty zawsze czekają na Twoją decyzję.'**
   String get settingsKeyChangeWarningsSubtitle;
 
   /// Privacy & Safety switch (metadata-privacy decision 62, E61c): read receipts, delivered ticks and typing on chats that moved to the box. Device-local, default off.

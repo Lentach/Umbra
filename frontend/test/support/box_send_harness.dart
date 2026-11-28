@@ -19,6 +19,27 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'chat_seed.dart';
 
+/// `encryptForFriend` as a friend sealer calls it: under a permit taken
+/// first, in the same step (null while the gate is closed).
+extension FriendSeal on MessagingProvider {
+  Future<BoxFrame?> sealForFriend(
+    int userId,
+    int deviceId,
+    String json, {
+    bool fresh = false,
+  }) {
+    final permit = friendPermitForTest(userId);
+    if (permit == null) return Future.value();
+    return encryptForFriend(
+      userId,
+      deviceId,
+      json,
+      fresh: fresh,
+      permit: permit,
+    );
+  }
+}
+
 /// The real plaintext store; Signal and the device-list round trip are
 /// faked. A "ciphertext" is `3:` + base64(the plaintext), so a frame the
 /// box was handed can be read back.
@@ -74,6 +95,7 @@ class SendEncryption extends EncryptionProvider {
     int recipientId,
     String plaintext, {
     int deviceId = 1,
+    bool Function(String? remoteIdentity)? admit,
   }) async {
     final error = encryptError;
     if (error != null) throw error;
@@ -171,6 +193,7 @@ class ScriptedSendEncryption extends SendEncryption {
     int recipientId,
     String plaintext, {
     int deviceId = 1,
+    bool Function(String? remoteIdentity)? admit,
   }) async {
     encryptCalls.add((recipientId, deviceId));
     final error = encryptError;
@@ -230,6 +253,11 @@ class SendOutbox implements BoxOutbox {
   /// Peer devices whose `send` the box refuses.
   final Set<int> refuse = {};
 
+  /// A slow box: awaited before a frame is taken, with the number of the
+  /// call (0 first).
+  Future<void> Function(int call)? beforeDeliver;
+  int _deliverCalls = 0;
+
   /// Every `POST /box/media`, with the queue it was charged to.
   final List<(ContactOutbound, Uint8List)> uploads = [];
 
@@ -257,6 +285,8 @@ class SendOutbox implements BoxOutbox {
     Uint8List body, {
     BoxSendMode? mode,
   }) async {
+    final wait = beforeDeliver;
+    if (wait != null) await wait(_deliverCalls++);
     delivered.add((to, BoxFrame.decode(body)!));
     return refuse.contains(to.peerDeviceId)
         ? BoxSendOutcome.failed
@@ -389,6 +419,7 @@ ContactOutbound boxAddress(int device) => ContactOutbound(
   peerDeviceId: device,
   sid: 'sid-$device',
   sealPub: 'seal-$device',
+  idk: null,
 );
 
 VerifiedDeviceList enrolledList(

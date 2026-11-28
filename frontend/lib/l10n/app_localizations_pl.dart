@@ -514,6 +514,13 @@ class AppLocalizationsPl extends AppLocalizations {
       'Nie wysłano: klucze bezpieczeństwa tego kontaktu się zmieniły. Otwórz czerwone ostrzeżenie w tym czacie i porównajcie odciski, a potem ponów.';
 
   @override
+  String get messageWaitingTapCalmLine =>
+      'Czeka: dotknij linii o nowym urządzeniu';
+
+  @override
+  String get messageWaitingToSend => 'Czeka na wysłanie';
+
+  @override
   String get authStatusSavedSessionUnreadable =>
       'Nie udało się odczytać sesji. Uruchom aplikację ponownie.';
 
@@ -608,6 +615,17 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get peerIdentityMarkVerifiedAction => 'Odciski się zgadzają';
+
+  @override
+  String get peerIdentityMarkFriendVerifiedAction =>
+      'Oznacz jako zweryfikowane';
+
+  @override
+  String get peerIdentityVerifiedState => 'Zweryfikowano';
+
+  @override
+  String get peerIdentityKeyChangedWhileOpen =>
+      'Klucz zmienił się w trakcie. Porównaj ponownie.';
 
   @override
   String get peerIdentityVerifyMenuAction => 'Zweryfikuj klucze bezpieczeństwa';
@@ -2265,12 +2283,26 @@ class AppLocalizationsPl extends AppLocalizations {
   }
 
   @override
+  String calmHoldLine(String name) {
+    return '$name pisze z nowego urządzenia lub przeglądarki. Dotknij, aby odebrać.';
+  }
+
+  @override
+  String get calmHoldChecking => 'Sprawdzam klucz…';
+
+  @override
+  String get calmHoldFailed => 'Nie udało się sprawdzić. Spróbuj ponownie.';
+
+  @override
+  String get calmHoldListPreview => 'Nowe urządzenie — dotknij, aby odebrać';
+
+  @override
   String get settingsKeyChangeWarnings =>
       'Ostrzegaj o zmianie kluczy kontaktów';
 
   @override
   String get settingsKeyChangeWarningsSubtitle =>
-      'Domyślnie nowe klucze są przyjmowane, a w czacie pojawia się krótka notatka.';
+      'Domyślnie nowe klucze są przyjmowane, a w czacie pojawia się krótka notatka. Zweryfikowane kontakty zawsze czekają na Twoją decyzję.';
 
   @override
   String get privacyReceiptsAndTyping => 'Potwierdzenia odczytu i pisanie';

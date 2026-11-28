@@ -45,7 +45,9 @@ extension MessagingActions on MessagingProvider {
     if (unsent != null &&
         owner != null &&
         unsent.deliveryStatus == MessageDeliveryStatus.failed &&
-        _boxUnsentTempIds.remove(unsent.tempId)) {
+        (_boxUnsentTempIds.remove(unsent.tempId) |
+            (_ramWaiting.remove(unsent.tempId) != null))) {
+      _userDeletedTempIds.add(unsent.tempId!);
       _messages.remove(unsent);
       _encryptionProvider?.dropBoxUnsent(owner, unsent.tempId!).ignore();
       if (_conversationCache.containsKey(unsent.conversationId)) {

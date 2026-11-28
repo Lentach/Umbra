@@ -8,6 +8,7 @@ import '../contacts/contact_record.dart';
 import '../contacts/contact_store.dart';
 import 'box_client.dart';
 import 'box_frame.dart';
+import 'box_friend_gate.dart';
 import 'box_friends.dart';
 import 'box_wire.dart';
 import 'queue_keys.dart';
@@ -86,7 +87,34 @@ class BoxFriendHandoff {
   /// The Signal side and the verified lists; nothing is handed until both
   /// are wired.
   FriendEncrypt? encrypt;
+
+  /// The friend write gate; every friend-lane write here passes it. Null
+  /// only for a bare handoff under test.
+  FriendGate? gate;
+
+  /// The permit to seal for [userId] toward [to], or null while the gate is
+  /// closed (`_gateClosed`).
+  FriendPermit? _permit(int userId, ContactOutbound to) =>
+      gate?.permitFor(userId, to: [to]);
+
+  bool _gateClosed(FriendPermit? permit) => gate != null && permit == null;
+
+  /// Request addresses already served for [userId] (the tap's lookup, a
+  /// search answer): where a frame may go besides the stored address.
+  Iterable<ContactOutbound> requestAddresses(int userId) => [
+    ...?_served[userId]?.values,
+    ...?_store.byUserId(userId)?.boxOrigin?.addresses,
+  ];
   FriendLiveDevices? liveDevices;
+
+  /// [liveDevices] from the HELD list only, never a fetch: what a quiet
+  /// friend ([holdQuiet]) is read by. Null: [liveDevices] stands in.
+  FriendLiveDevices? cachedLiveDevices;
+
+  /// Whether a handoff to friend `userId`'s `device` can be sealed with no
+  /// server fetch: a session that needs no (re)build and a held list that
+  /// names it live. Null: always (a bare handoff under test).
+  Future<bool> Function(int userId, int device)? sessionUsable;
 
   /// This account's device list as its authorization record, carried
   /// outside Signal on every request-queue frame (slice (e), decision 50):
@@ -134,6 +162,15 @@ class BoxFriendHandoff {
   /// session ([friendHeard]).
   final Set<String> _heard = {};
 
+  /// Friends whose handoff is QUIET until their next handoff step has run,
+  /// in ANY pass: no list, bundle or handle lookup is fetched for them, and
+  /// a device that cannot be sealed for with what is held is skipped. The
+  /// upgrade one-shot's re-announce holds it BEFORE it clears the handoff
+  /// state, so no pass can find the devices due first (review 3, P2-1: a
+  /// re-announce is no reason to ask the server). What it cleared stays
+  /// quiet after this mark ends, durably: [ContactQueue.quietCleared].
+  final Set<int> _quiet = {};
+
   /// `user:device:listVersion` our own list was announced to (E50d).
   final Set<String> _announced = {};
 
@@ -148,6 +185,10 @@ class BoxFriendHandoff {
   bool _e2eReady = false;
   bool _running = false;
   bool _again = false;
+
+  /// Completed by the next pass that STARTS after they were added
+  /// ([handQuietly]).
+  List<Completer<void>> _passWaiters = [];
   bool _disposed = false;
   Timer? _retry;
 
@@ -267,6 +308,47 @@ class BoxFriendHandoff {
     });
   }
 
+  /// Friend [userId]'s pinned identity moved (both movers): what its devices
+  /// acknowledged or were handed under the old identity proves nothing, so
+  /// every queue of ours for it forgets both and our handoff is due again.
+  /// It goes only where [targetOf] allows for a stale address: a request
+  /// address already served, else nowhere (no lookup, E114c's included).
+  Future<void> anchorMoved(int userId) async {
+    if (_disposed) return;
+    await _store.update(userId, (current) {
+      if (current == null) return null;
+      final queues = [for (final q in current.queues) q.withoutHandoffState()];
+      final changed = [
+        for (var i = 0; i < queues.length; i++)
+          if (!identical(queues[i], current.queues[i])) i,
+      ];
+      return changed.isEmpty ? null : current.copyWith(queues: queues);
+    });
+    friendChanged(userId);
+  }
+
+  /// Friends [users] are handed quietly from now ([_quiet]); ended by
+  /// [handQuietly], or [releaseQuiet] when nothing was cleared.
+  void holdQuiet(Iterable<int> users) => _quiet.addAll(users);
+
+  /// Quiet no more for [users].
+  void releaseQuiet(Iterable<int> users) => _quiet.removeAll(users);
+
+  /// [changed] must be handed our queue again (as [friendChanged]) by a pass
+  /// that starts now, quietly: [held] stay quiet ([holdQuiet]) until that
+  /// pass has run, and not a pass of an earlier moment may end it (one
+  /// already running could otherwise finish its step first and find the
+  /// devices due only after the quiet mark was gone).
+  void handQuietly(Iterable<int> changed, {required Iterable<int> held}) {
+    for (final userId in changed) {
+      _handed.removeWhere((key) => key.startsWith('$userId:'));
+    }
+    final done = Completer<void>();
+    _passWaiters.add(done);
+    unawaited(done.future.then((_) => releaseQuiet(held)));
+    run();
+  }
+
   /// [userId]'s devices may have changed, or it must be handed our queue
   /// again now ([BoxFriendLink.handOffTo]).
   void friendChanged(int userId) {
@@ -283,14 +365,18 @@ class BoxFriendHandoff {
     if (_disposed) return;
     final record = _store.byUserId(userId);
     final queue = record?.queues.firstOrNull;
+    final skipped = queue?.quietCleared.contains(deviceId) ?? false;
     if (record?.state != ContactState.friend ||
         queue == null ||
         queue.ackedBy.contains(deviceId) ||
-        !queue.handedAt.containsKey(deviceId) ||
+        !(skipped || queue.handedAt.containsKey(deviceId)) ||
         _handed.contains('$userId:$deviceId:${queue.sid}') ||
         !_heard.add('$userId:$deviceId')) {
       return;
     }
+    // A frame is no reason to ask the server either: the device was just
+    // read, so a session exists, and a pass that finds none skips it.
+    if (skipped) _quiet.add(userId);
     unawaited(
       _store
           .update(userId, (current) {
@@ -302,7 +388,11 @@ class BoxFriendHandoff {
                 ..[i] = current.queues[i].withoutHanded(deviceId),
             );
           })
-          .then((_) => friendChanged(userId)),
+          .then(
+            (_) => skipped
+                ? handQuietly([userId], held: [userId])
+                : friendChanged(userId),
+          ),
     );
   }
 
@@ -372,6 +462,14 @@ class BoxFriendHandoff {
     for (final device in live) {
       final target = targetOf(userId, device);
       if (target == null) continue;
+      // A held address learned under another identity than the pinned one
+      // is stale: only a request address ALREADY served stands in for it,
+      // else the device gets nothing now (never a lookup for it).
+      if (!target.viaRequest && _staleHeld(userId, device)) {
+        final request = _requestOf(userId, device);
+        if (request != null) targets[device] = (to: request, viaRequest: true);
+        continue;
+      }
       if (requireAnswer != null &&
           !target.viaRequest &&
           !await requireAnswer(userId, device)) {
@@ -384,11 +482,22 @@ class BoxFriendHandoff {
     return targets;
   }
 
+  /// Whether the address held for [userId]'s [device] is stale.
+  bool _staleHeld(int userId, int device) {
+    final held = _store
+        .byUserId(userId)
+        ?.outbound
+        .where((o) => o.peerDeviceId == device)
+        .firstOrNull;
+    return held != null && (gate?.isStale(userId, held) ?? false);
+  }
+
   /// Seals [frame] to [target] — as an account-bearing frame of this
   /// account on a request queue — and sends it; the box's answer.
   Future<BoxResult<void>?> send(
     ({ContactOutbound to, bool viaRequest}) target,
     BoxFrame frame,
+    {FriendPermit? permit,}
   ) async {
     final own = _store.userId;
     final sid = boxB64Decode(target.to.sid, kBoxSidBytes);
@@ -419,6 +528,15 @@ class BoxFriendHandoff {
         : frame.encode();
     final blob = await _seal.seal(sealPub, body);
     if (blob == null || _disposed) return null;
+    // The gate runs here, after every await, in the step of the write.
+    final g = gate;
+    if (g != null) {
+      final why = g.refusalOf(permit, target.to.sid);
+      if (why != null) {
+        E2eDiagLog.add('BOX_FRIEND_WRITE_REFUSED', {'why': why.name});
+        return null;
+      }
+    }
     // A handoff carries no message: quiet, so it never wakes the friend's
     // closed device with an empty "new message" card (decision 91).
     return _box.send(sid, blob, mode: BoxSendMode.quiet);
@@ -441,9 +559,14 @@ class BoxFriendHandoff {
       return;
     }
     _running = true;
+    final mine = _passWaiters;
+    _passWaiters = [];
     unawaited(
       _pass().whenComplete(() {
         _running = false;
+        for (final c in mine) {
+          c.complete();
+        }
         if (_again && !_disposed) {
           _again = false;
           run();
@@ -472,7 +595,11 @@ class BoxFriendHandoff {
     await _store.pruneFriendLookups(friends.toSet());
     // Every lookup starts in this one turn, so a connect's lists leave as
     // one batched frame (E20a).
-    final lists = await Future.wait([for (final f in friends) lookup(f)]);
+    // A quiet friend is read from the held list only: no fetch.
+    final cached = cachedLiveDevices ?? lookup;
+    final lists = await Future.wait([
+      for (final f in friends) _quiet.contains(f) ? cached(f) : lookup(f),
+    ]);
     // Every queue the pass hands is made first, so its new ones go out in
     // ONE subscribe frame (chunked by the client past 256): the box counts
     // subscribe frames, 60 per 15 min per IP.
@@ -486,15 +613,17 @@ class BoxFriendHandoff {
     for (var i = 0; i < friends.length; i++) {
       if (_disposed || !_accountReady) return;
       final live = lists[i];
-      if (live == null) continue;
       final userId = friends[i];
+      // A quiet pass with no held list hands nobody; each device's next
+      // frame does ([friendHeard]).
+      if (live == null) continue;
       // Slice (e): a device the friend revoked loses its address here and,
       // when it held our queue, our queue moves on without it (E50e).
       final revoked = await revokedDevices?.call(userId);
       if (revoked != null && revoked.isNotEmpty) {
         await _rotateAwayFromRevoked(userId, revoked);
       }
-      await _retireExpired(userId);
+      await _retireExpired(userId, live.difference(revoked ?? const {}));
       var targets = await _handoffTargets(
         userId,
         live,
@@ -506,8 +635,23 @@ class BoxFriendHandoff {
       // already ran, which took its addresses — and not within
       // [kFriendLookupInterval] of the last lookup of this friend by any
       // process (decision 120, E114n).
-      if (live.any((d) => !targets.containsKey(d) && _handoffDue(userId, d)) &&
+      // A device whose held address is merely STALE is not "no address":
+      // staleness never causes a lookup (only the person's tap does).
+      if (live.any(
+            (d) =>
+                !targets.containsKey(d) &&
+                !_staleHeld(userId, d) &&
+                _handoffDue(userId, d) &&
+                !(_store
+                        .byUserId(userId)
+                        ?.queues
+                        .firstOrNull
+                        ?.quietCleared
+                        .contains(d) ??
+                    false),
+          ) &&
           addressLookup != null &&
+          !_quiet.contains(userId) &&
           !_addressesAsked.contains(userId) &&
           _lookupDue(userId)) {
         await lookupAddresses(userId);
@@ -593,7 +737,7 @@ class BoxFriendHandoff {
     final lead = record.queues.firstOrNull;
     if (lead != null &&
         lead.retiredAt == null &&
-        {...lead.ackedBy, ...lead.handedAt.keys}.any(revoked.contains)) {
+        lead.takenBy.any(revoked.contains)) {
       final next = await _keys.rotateInbound(userId, lead, now: _now());
       if (next != null) {
         if (QueueKeys.authOf(next) case final auth?) {
@@ -606,14 +750,40 @@ class BoxFriendHandoff {
   }
 
   /// Deletes friend [userId]'s queues retired more than the box TTL ago
-  /// (E50e): nothing a live device sent there can still arrive.
-  Future<void> _retireExpired(int userId) async {
+  /// (E50e): nothing a live device sent there can still arrive. A queue a
+  /// device in [live] took ([ContactQueue.takenBy]) stays until that device
+  /// has acknowledged the lead, or leaves the list (revoke), or the
+  /// friendship ends: the box answers `ok` for a deleted queue, so what the
+  /// device still writes there would be lost without a sign (review 3, P1;
+  /// a hold can keep the lead from being handed for longer than the TTL).
+  /// When the TTL has run out and it still stays, its retirement is
+  /// re-stamped to now (review 4, P3-1): the box delivers a window of
+  /// frames in flight, so the ack of the lead can be read while the old
+  /// queue still holds what the device wrote before it moved; the delete
+  /// comes one full TTL after the last re-stamp (a pass inside the TTL
+  /// writes nothing).
+  Future<void> _retireExpired(int userId, Set<int> live) async {
     final queues = _store.byUserId(userId)?.queues ?? const <ContactQueue>[];
+    final lead = queues.firstOrNull;
     for (final queue in queues.skip(1)) {
       final at = queue.retiredAt;
-      if (at != null && _now().difference(at) > kBoxRedeliveryWindow) {
-        await _keys.retireInbound(userId, queue);
+      if (at == null || _now().difference(at) <= kBoxRedeliveryWindow) {
+        continue;
       }
+      if (queue.takenBy.any(
+        (d) => live.contains(d) && !(lead?.ackedBy.contains(d) ?? false),
+      )) {
+        final now = _now();
+        await _store.update(userId, (current) {
+          final i = current?.queues.indexWhere((q) => q.rid == queue.rid) ?? -1;
+          if (current == null || i < 1) return null;
+          return current.copyWith(
+            queues: [...current.queues]..[i] = current.queues[i].retired(now),
+          );
+        });
+        continue;
+      }
+      await _keys.retireInbound(userId, queue);
     }
   }
 
@@ -652,10 +822,20 @@ class BoxFriendHandoff {
         if (!live.contains(to.peerDeviceId)) continue;
         final key = '${record.userId}:${to.peerDeviceId}:$version';
         if (_announced.contains(key)) continue;
-        final frame = await seal(record.userId, to.peerDeviceId, json);
+        final permit = _permit(record.userId, to);
+        if (_gateClosed(permit)) {
+          all = false;
+          continue;
+        }
+        final frame = await seal(
+          record.userId,
+          to.peerDeviceId,
+          json,
+          permit: permit,
+        );
         final answer = frame == null
             ? null
-            : await send((to: to, viaRequest: false), frame);
+            : await send((to: to, viaRequest: false), frame, permit: permit);
         if (answer is BoxOk) {
           _announced.add(key);
         } else {
@@ -690,12 +870,21 @@ class BoxFriendHandoff {
       final key = '$userId:$device:${queue.sid}';
       final seal = encrypt;
       if (_disposed || seal == null) return false;
-      final frame = await seal(userId, device, handoff);
+      // The one-shot's cleared devices stay quiet in EVERY later pass and
+      // after a restart (review 4, P2-1): a session that is not usable is
+      // never made for them here.
+      if ((_quiet.contains(userId) || queue.quietCleared.contains(device)) &&
+          !await (sessionUsable?.call(userId, device) ?? true)) {
+        continue;
+      }
+      final permit = _permit(userId, target.to);
+      if (_gateClosed(permit)) continue;
+      final frame = await seal(userId, device, handoff, permit: permit);
       if (frame == null) {
         _failed('encrypt', 'no_frame', userId: userId, device: device);
         continue;
       }
-      final answer = await send(target, frame);
+      final answer = await send(target, frame, permit: permit);
       if (answer is BoxOk) {
         _handed.add(key);
         await _markHanded(userId, device, queue.sid);

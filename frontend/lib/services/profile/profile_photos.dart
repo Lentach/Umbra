@@ -161,7 +161,12 @@ class ProfilePhotos {
         return ProfilePhotoOutcome.failed;
       }
       answer = await outbox.uploadMedia(
-        ContactOutbound(peerDeviceId: 0, sid: queue.sid, sealPub: queue.sealPub),
+        ContactOutbound(
+          peerDeviceId: 0,
+          sid: queue.sid,
+          sealPub: queue.sealPub,
+          idk: null,
+        ),
         frameMediaToRung(sealed.ciphertext),
       );
     } on Object {

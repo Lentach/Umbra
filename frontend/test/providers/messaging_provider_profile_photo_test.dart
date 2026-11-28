@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:fireplace/models/profile_photo.dart';
 import 'package:fireplace/providers/messaging_provider.dart';
 import 'package:fireplace/services/box/box_frame.dart';
+import 'package:fireplace/services/box/box_friend_gate.dart';
 import 'package:fireplace/services/box/box_media_fetcher.dart';
 import 'package:fireplace/services/box/box_media_store.dart';
 import 'package:fireplace/services/box/box_outbox.dart';
@@ -35,6 +36,37 @@ class _ModeOutbox extends SendOutbox {
   }
 }
 
+/// [_ModeOutbox] with the friend gate of `BoxSession` at the test's will: a
+/// closed gate gives no permit and writes nothing for a friend (the own
+/// self-queue upload never asks it).
+class _GatedOutbox extends _ModeOutbox implements BoxFriendGateOutbox {
+  bool closed = false;
+
+  @override
+  FriendPermit? permitFor(
+    int friend, {
+    Iterable<ContactOutbound> to = const [],
+    bool goodbye = false,
+  }) => closed ? null : FriendPermit.forTest(friend);
+
+  @override
+  Future<BoxSendOutcome> deliverFriend(
+    ContactOutbound to,
+    Uint8List body, {
+    BoxSendMode? mode,
+    FriendPermit? permit,
+  }) => permit == null || closed
+      ? Future.value(BoxSendOutcome.failed)
+      : deliver(to, body, mode: mode);
+
+  @override
+  Future<BoxResult<BoxMediaRef>> uploadMediaFriend(
+    ContactOutbound to,
+    Uint8List framed, {
+    FriendPermit? permit,
+  }) => uploadMedia(to, framed);
+}
+
 ContactQueue _selfQueue() => ContactQueue(
   rid: boxB64(Uint8List(32)..fillRange(0, 32, 0x10)),
   sid: boxB64(Uint8List(32)..fillRange(0, 32, 0x11)),
@@ -53,13 +85,13 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   late BoxSendHarness h;
-  late _ModeOutbox outbox;
+  late _GatedOutbox outbox;
   late ContactStore store;
   late ProfilePhotos photos;
 
   setUp(() async {
     h = await BoxSendHarness.create();
-    outbox = _ModeOutbox()
+    outbox = _GatedOutbox()
       ..addresses[2] = {1: boxAddress(1), 2: boxAddress(2)};
     store = await openContactStore(
       [contactRecord(2, 'bob', ContactState.friend)],
@@ -163,6 +195,47 @@ void main() {
       expect(ref.isCleared, isTrue);
       expect(ref.rev, greaterThan(before));
     }
+  });
+
+  /// What a profile frame to a friend device is, as the box session lets it
+  /// out: [outbox] closed means no permit and no write for a friend.
+  Iterable<int> profileDevices() => {
+    for (final d in outbox.delivered)
+      if (_profileOf(d.$2) != null) d.$1.peerDeviceId,
+  };
+
+  test('profile frames during the closed gate are not written and not '
+      'marked sent; they are sent once after the gate opens', () async {
+    outbox.closed = true;
+
+    await h.provider.setOwnProfilePhoto(fakeJpeg(5));
+    await h.pump();
+
+    expect(profileDevices(), isEmpty, reason: 'nothing written while closed');
+    expect(photos.ownPending, isTrue, reason: 'the debt stays');
+
+    outbox.closed = false;
+    await h.provider.syncOwnPhoto();
+    await h.pump();
+
+    final sent = [
+      for (final d in outbox.delivered)
+        if (_profileOf(d.$2) != null) d.$1.peerDeviceId,
+    ]..sort();
+    expect(sent, [1, 2], reason: 'each device once: it was never marked');
+  });
+
+  test('profile photo upload to the own queue still works with the gate '
+      'closed for a friend', () async {
+    outbox.closed = true;
+
+    final outcome = await h.provider.setOwnProfilePhoto(fakeJpeg(6));
+    await h.pump();
+
+    expect(outcome, ProfilePhotoOutcome.done);
+    expect(outbox.uploads, hasLength(1));
+    expect(outbox.uploads.single.$1.sid, store.selfQueue!.sid);
+    expect(photos.own!.hasPhoto, isTrue);
   });
 
   group('migration of the server photo (release A)', () {

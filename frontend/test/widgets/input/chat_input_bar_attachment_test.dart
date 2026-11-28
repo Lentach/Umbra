@@ -121,6 +121,7 @@ class _SendEncryption extends EncryptionProvider {
     int recipientId,
     String plaintext, {
     int deviceId = 1,
+    bool Function(String? remoteIdentity)? admit,
   }) async => '3:${base64Encode(utf8.encode(plaintext))}';
 
   // The records a send keeps are not what these tests are about.
@@ -159,6 +160,7 @@ class _Outbox implements BoxOutbox {
     peerDeviceId: 2,
     sid: 'sid-2',
     sealPub: 'seal-2',
+    idk: null,
   );
   final Map<String, Uint8List> media = {};
   int _next = kFirstLocalMessageId + 40;

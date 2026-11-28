@@ -59,12 +59,17 @@ class _Enc extends EncryptionProvider {
   Completer<void>? decryptGate;
   final Completer<void> decryptParked = Completer<void>();
 
+  /// Set: the identity every decrypt reports as its session's remote
+  /// identity (what libsignal's session state says for a whisper).
+  String? reportIdentity;
+
   @override
   Future<String> decrypt(
     int senderId,
     String ciphertext, {
     int? messageId,
     int deviceId = 1,
+    void Function(String? remoteIdentity)? onIdentity,
   }) async {
     final gate = decryptGate;
     if (gate != null) {
@@ -72,7 +77,11 @@ class _Enc extends EncryptionProvider {
       decryptParked.complete();
       await gate.future;
     }
-    return _decrypt(senderId, ciphertext, messageId, deviceId);
+    final plain = await _decrypt(senderId, ciphertext, messageId, deviceId);
+    // The reader of the session's remote identity, as a whisper's decrypt
+    // hands it back in its serialized step (a test sets what it says).
+    if (reportIdentity case final identity?) onIdentity?.call(identity);
+    return plain;
   }
 
   Future<String> _decrypt(
@@ -427,6 +436,8 @@ class _Side {
   /// box send frames it (the routing is under test here, not the composer).
   Future<void> sendText(int peer, String text) async {
     final to = store.byUserId(peer)!.outbound.single;
+    final permit = session.permitFor(peer, to: [to]);
+    expect(permit, isNotNull, reason: '$name: the gate is open for $peer');
     final frame = await reader.encryptForFriend(
       peer,
       to.peerDeviceId,
@@ -437,9 +448,13 @@ class _Side {
           sentAt: DateTime.now().toUtc(),
         ),
       ),
+      permit: permit,
     );
     expect(frame, isNotNull, reason: '$name encrypts to $peer');
-    expect(await session.deliver(to, frame!.encode()), BoxSendOutcome.taken);
+    expect(
+      await session.deliverFriend(to, frame!.encode(), permit: permit),
+      BoxSendOutcome.taken,
+    );
   }
 
   /// The texts [peer] sent this device, as their stored records hold them,
@@ -484,12 +499,14 @@ class _RetireSpy implements BoxFirstContactLink {
     required String sid,
     required String sealPub,
     required E2eProfile profile,
+    required String? learnedUnder,
   }) => _inner.acceptFirstContact(
     userId,
     deviceId,
     sid: sid,
     sealPub: sealPub,
     profile: profile,
+    learnedUnder: learnedUnder,
   );
 
   @override
@@ -708,6 +725,56 @@ void main() {
     },
   );
 
+  test(
+    'a chat timer during the closed gate is not written; the next one, '
+    'after it opens, is',
+    () async {
+      await befriend();
+      var held = true;
+      alice.session.calmHeld = (_) => held;
+      final at = DateTime.now().toUtc();
+
+      await alice.reader.sendBoxChatTimer(5, 3600, at);
+      await settle();
+      expect(
+        bob.recordOf(1)!.settings.disappearingTimer,
+        isNull,
+        reason: 'nothing written while the gate is closed',
+      );
+
+      held = false;
+      await alice.reader.sendBoxChatTimer(
+        5,
+        3600,
+        at.add(const Duration(minutes: 1)),
+      );
+      await settle();
+      expect(bob.recordOf(1)!.settings.disappearingTimer, 3600);
+    },
+  );
+
+  test(
+    'a chat timer refused while the gate was closed is sent as it stands '
+    'when the gate opens, with no further timer change and no timer',
+    () async {
+      await befriend();
+      var held = true;
+      alice.session.calmHeld = (_) => held;
+      final at = DateTime.now().toUtc();
+      await alice.chats.applyLocalChatTimer(5, 3600, at);
+
+      await alice.reader.sendBoxChatTimer(5, 3600, at);
+      await settle();
+      expect(bob.recordOf(1)!.settings.disappearingTimer, isNull);
+
+      held = false;
+      alice.reader.kickSendPump(5); // the state change that opens the gate
+      await settle();
+
+      expect(bob.recordOf(1)!.settings.disappearingTimer, 3600);
+    },
+  );
+
   /// Both records turned into a friendship the SERVER also knows (made
   /// before the box, chat 10) that later got a box route (item 5): the
   /// shape of every prod pair (Phase 4 step 1, decision 107).
@@ -819,6 +886,35 @@ void main() {
       expect(bob.recordOf(1), isNull);
       expect(await bob.enc.hasSessionWith(1), isFalse);
       expect(alice.recordOf(5)?.state, ContactState.pendingOut);
+    },
+  );
+
+  test(
+    'foreign-identity handoff does not befriend a pendingOut: the friend '
+    'frame decrypted on a session of another identity than the pinned '
+    'anchor is refused BEFORE the record becomes a friend',
+    () async {
+      expect(
+        await alice.reader.sendBoxFriendRequest(bob.searchEntry),
+        FirstContactSend.sent,
+      );
+      await settle();
+      expect(alice.recordOf(5)?.state, ContactState.pendingOut);
+
+      alice.enc.reportIdentity = base64Encode(List.filled(33, 7));
+      bob.answer = (_) => [alice.searchEntry];
+      expect(
+        await bob.reader.acceptBoxFriendRequest(1),
+        FirstContactAccept.accepted,
+      );
+      await settle();
+
+      expect(
+        alice.recordOf(5)?.state,
+        ContactState.pendingOut,
+        reason: 'a handoff learned under another identity befriends nobody',
+      );
+      expect(alice.recordOf(5)?.outbound, isEmpty);
     },
   );
 

@@ -70,6 +70,9 @@ class _PeerIdentityFingerprintDialogState
   /// explanation of why nothing happened.
   bool _staleOffer = false;
 
+  /// "Mark as verified" was refused: the pinned key is no longer the one shown.
+  bool _keyChangedWhileOpen = false;
+
   @override
   void initState() {
     super.initState();
@@ -99,6 +102,8 @@ class _PeerIdentityFingerprintDialogState
     final adopted = await encryption.acknowledgePeerIdentity(
       widget.peerId,
       adoptIdentityBase64: adoptIdentityBase64,
+      // Comparing the new fingerprint IS verifying it: re-bind the flag.
+      markVerified: true,
     );
     if (!mounted) return;
     if (adopted) {
@@ -110,6 +115,23 @@ class _PeerIdentityFingerprintDialogState
     // warning that silently did not clear.
     setState(() {
       _staleOffer = true;
+      _loading = true;
+    });
+    await _load();
+  }
+
+  Future<void> _markFriendVerified() async {
+    final shown = _verification?.pinnedIdentityBase64;
+    if (shown == null) return;
+    // Binds to the key that was DISPLAYED; refused when the anchor moved
+    // while this dialog was open.
+    final marked = await context.read<EncryptionProvider>().markPeerVerified(
+      widget.peerId,
+      expectedIdentityBase64: shown,
+    );
+    if (!mounted) return;
+    setState(() {
+      _keyChangedWhileOpen = !marked;
       _loading = true;
     });
     await _load();
@@ -150,6 +172,16 @@ class _PeerIdentityFingerprintDialogState
                     const SizedBox(height: 12),
                     Text(
                       l10n.peerIdentityFingerprintOfferChanged(widget.peerName),
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                  ],
+                  if (_keyChangedWhileOpen) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      l10n.peerIdentityKeyChangedWhileOpen,
+                      key: const ValueKey('peer-identity-key-changed-open'),
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: Theme.of(context).colorScheme.error,
                       ),
@@ -214,6 +246,14 @@ class _PeerIdentityFingerprintDialogState
                       value: verification?.pinnedFingerprint,
                       missing: l10n.peerIdentityFingerprintNoStoredKey,
                     ),
+                    if (verification?.verified == true && !hasStandingWarning) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        l10n.peerIdentityVerifiedState,
+                        key: const ValueKey('peer-identity-verified-state'),
+                        style: Theme.of(context).textTheme.labelLarge,
+                      ),
+                    ],
                   ],
                   const SizedBox(height: 16),
                   _FingerprintBlock(
@@ -236,6 +276,19 @@ class _PeerIdentityFingerprintDialogState
           TextButton(
             onPressed: () => _confirm(offeredKey),
             child: Text(l10n.peerIdentityMarkVerifiedAction),
+          ),
+        // No standing change and not verified yet: the user compared the
+        // number above with the friend's own and says so. Bound to this key.
+        if (!hasStandingWarning &&
+            !_loading &&
+            verification != null &&
+            verification.pinnedFingerprint != null &&
+            !verification.verified &&
+            !verification.verifiedUnknown)
+          TextButton(
+            key: const ValueKey('peer-identity-mark-friend-verified'),
+            onPressed: _markFriendVerified,
+            child: Text(l10n.peerIdentityMarkFriendVerifiedAction),
           ),
       ],
     );

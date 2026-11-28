@@ -6,10 +6,14 @@ import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/message_model.dart';
 import '../../providers/messaging_provider.dart';
+import '../../providers/settings_provider.dart';
 import '../../theme/rpg_theme.dart';
 
 /// The row under an own message whose send failed: the red "Retry" button,
 /// and, when THIS row was refused for a changed key, the line saying so.
+/// A row that merely WAITS to be sent ([MessageModel.waitingToSend], status
+/// still failed) is drawn calm instead: a clock and grey words by the reason
+/// (`MessagingProvider.sendWaitReason`), no Retry, nothing red.
 /// Shared by every bubble type (text, media, voice) so none can lack it.
 ///
 /// Empty for a message that is not mine or did not fail.
@@ -32,9 +36,11 @@ class FailedSendRetry extends StatelessWidget {
   /// Widest the keys-changed line may grow.
   final double maxWidth;
 
-  /// True when the account-anchor gate is still refusing sends to this chat's
-  /// peer (`EncryptionProvider.peersRefusedIdentity`), i.e. the fingerprint
-  /// ceremony is outstanding.
+  /// True when a ceremony is outstanding for this chat's peer: the
+  /// account-anchor gate is still refusing sends
+  /// (`EncryptionProvider.peersRefusedIdentity`), i.e. the fingerprint
+  /// ceremony is outstanding, or the peer's new key waits for the tap on its
+  /// calm line (decision 152).
   final bool peerRefusedIdentity;
 
   /// True when THIS row may tell the user their peer's keys changed.
@@ -52,11 +58,64 @@ class FailedSendRetry extends StatelessWidget {
       peerRefusedIdentity &&
       context.read<MessagingProvider>().sendRefusedForIdentity(message.tempId);
 
+  /// The calm line of a waiting row. The reason is read live, so the words
+  /// change when the person taps the calm line while the row is on screen.
+  Widget _buildWaiting(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final reason = context.select<MessagingProvider, SendWaitReason>(
+      (p) => p.sendWaitReason(message),
+    );
+    final text = reason == SendWaitReason.calmLineUntapped
+        ? l10n.messageWaitingTapCalmLine
+        : l10n.messageWaitingToSend;
+    // The timestamp's own colour: muted, and legible on the bubble fill.
+    final color = RpgTheme.messageBubbleMetaColor(
+      context,
+      isMine: isMine,
+      themePreference: context.read<SettingsProvider>().themePreference,
+    );
+    return Semantics(
+      label: text,
+      excludeSemantics: true,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: isMine
+            ? CrossAxisAlignment.end
+            : CrossAxisAlignment.start,
+        children: [
+          const SizedBox(height: 4),
+          ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: maxWidth),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(top: 1),
+                  child: Icon(Icons.schedule, size: 12, color: color),
+                ),
+                const SizedBox(width: 4),
+                Flexible(
+                  child: Text(
+                    text,
+                    textAlign: isMine ? TextAlign.end : TextAlign.start,
+                    style: RpgTheme.bodyFont(fontSize: 12, color: color),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (!isMine || message.deliveryStatus != MessageDeliveryStatus.failed) {
       return const SizedBox.shrink();
     }
+    if (message.waitingToSend) return _buildWaiting(context);
     // "Retry" alone is a trap here: while the anchor is stale every attempt
     // fails the same way, so the row has to name the remedy.
     final refused = _mayNameTheRefusal(context);

@@ -9,6 +9,7 @@ import '../contacts/contact_record.dart';
 import '../contacts/contact_store.dart';
 import 'box_client.dart';
 import 'box_first_contact.dart';
+import 'box_friend_gate.dart';
 import 'box_friend_handoff.dart';
 import 'box_friends.dart';
 import 'box_inbox.dart';
@@ -77,7 +78,12 @@ const Duration kRequestQueueRetry = Duration(minutes: 1);
 /// queue gets a notifier ([BoxNotifiers]) once the box is ready and the
 /// store open, and again whenever the push target changes.
 class BoxSession
-    implements BoxOutbox, BoxSiblingLink, BoxFriendLink, BoxFirstContactLink {
+    implements
+        BoxOutbox,
+        BoxFriendGateOutbox,
+        BoxSiblingLink,
+        BoxFriendLink,
+        BoxFirstContactLink {
   BoxSession({
     required BoxClient box,
     required ContactStore store,
@@ -85,12 +91,14 @@ class BoxSession
     QueueSeal? seal,
     BoxPushSource? push,
     DateTime Function()? now,
+    String? Function(int peerId)? anchorOf,
   }) : _box = box,
        _store = store,
        _keys = QueueKeys(box: box, store: store),
        _seal = seal ?? QueueSeal(),
        _emit = emit,
-       _now = now ?? DateTime.now {
+       _now = now ?? DateTime.now,
+       _anchorOf = anchorOf {
     _inbox = BoxInbox(box: box, store: store, seal: _seal, now: now);
     _notifiers = push == null
         ? null
@@ -123,6 +131,22 @@ class BoxSession
       queueCreated: _registerPush,
     );
     firstContact = BoxFirstContact(store: store, now: now);
+    _gate = FriendGate(
+      addressesOf: _friendAddresses,
+      anchorOf: anchorOf,
+      journalJudged: () => _journalJudged,
+      labelled: () => _labelled,
+    );
+    _friends.gate = _gate;
+    _inbox
+      ..judgeable = (() => _e2eReady && _inbox.consumer != null)
+      ..onJudged = (() {
+        final first = !_journalJudged;
+        _journalJudged = true;
+        if (first) {
+          onJournalJudged?.call();
+        }
+      });
   }
 
   @override
@@ -138,6 +162,81 @@ class BoxSession
   late final BoxNotifiers? _notifiers;
   late final BoxPushNids? _nids;
   late final BoxFriendHandoff _friends;
+  late final FriendGate _gate;
+
+  /// The journal was judged once this session: the end of the first
+  /// [BoxInbox.drain] after E2E ready with the reader wired (the friend
+  /// write gate's start-up clause; an empty journal counts).
+  bool _journalJudged = false;
+
+  /// The one labelling of untagged addresses ([ContactStore.
+  /// tagUntaggedAddresses]) completed on an OPEN store in this process. Until
+  /// then the gate is closed for messages: a missing
+  /// tag is "not yet labelled", a different state from a foreign tag.
+  bool _labelled = false;
+  Future<void>? _labelling;
+
+  /// Every friend's addresses were tagged: false while some record's write
+  /// was refused (that friend stays closed for messages, the others are
+  /// open) and the labelling is retried on the next kick.
+  bool _labelComplete = false;
+
+  /// Our account identity was re-minted while the store was kept: every
+  /// friend is handed our queues again once the store is open
+  /// (`BoxSessionConnection.identityReminted`).
+  bool _remintPending = false;
+  Future<void>? _reannouncing;
+
+  /// What the friend write gate calls a friend's address: the stored one per
+  /// device and the request addresses already served.
+  Iterable<ContactOutbound> _friendAddresses(int friend) => _disposed
+      ? const []
+      : [
+          ...?_store.byUserId(friend)?.outbound,
+          ..._friends.requestAddresses(friend),
+        ];
+
+  /// The friend whose address [sid] is, or null: a sibling or own self-queue
+  /// is no friend address, and its writes are never gated.
+  int? _friendOfSid(String sid) {
+    for (final peer in _store.all) {
+      if (peer.outbound.any((o) => o.sid == sid) ||
+          (peer.boxOrigin?.addresses.any((a) => a.sid == sid) ?? false) ||
+          _friends.requestAddresses(peer.userId).any((a) => a.sid == sid)) {
+        return peer.userId;
+      }
+    }
+    return null;
+  }
+
+  /// Whether [sid] is positively OUR lane: our own self queue, our own
+  /// request queue or a known sibling's self queue. The only targets a write
+  /// or an upload may reach with no permit (decision item 13); every other
+  /// sid with no permit is refused.
+  bool _isOwnLaneSid(String sid) =>
+      _store.selfQueue?.sid == sid ||
+      _store.requestQueue?.sid == sid ||
+      _store.siblings.any((s) => s.sid == sid);
+
+  /// Whether a calm hold is pending for a friend (`MessagingProvider`);
+  /// only a calm hold closes the gate on its own (never the red bar).
+  bool Function(int friend)? get calmHeld => _gate.calmHeld;
+
+  set calmHeld(bool Function(int friend)? check) => _gate.calmHeld = check;
+
+  @override
+  FriendPermit? permitFor(
+    int friend, {
+    Iterable<ContactOutbound> to = const [],
+    bool goodbye = false,
+  }) => _disposed ? null : _gate.permitFor(friend, to: to, goodbye: goodbye);
+
+  /// The pinned account identity (base64) of a friend, answered without an
+  /// await from the Signal store's trusted memo; null when none is pinned
+  /// (or no mirror is wired). What a handoff must have been learned under
+  /// ([_takeHandoff]) and what the migration tags untagged addresses with
+  /// ([ContactStore.tagUntaggedAddresses]).
+  final String? Function(int peerId)? _anchorOf;
 
   /// Friend devices re-keyed this session ([rekeyFriend]), as `user:device`:
   /// once each, whether or not the re-key left (decision 70: a forged frame
@@ -153,6 +252,14 @@ class BoxSession
   /// Called when this device first counts as on the box ([onBox]): its
   /// request queue was published. The composer notice (decision 48) reads it.
   void Function()? onBoxReady;
+
+  /// Called when the journal was judged for the first time this session (the
+  /// last clause of the friend write gate): what the gate refused may go now.
+  void Function()? onJournalJudged;
+
+  /// Called when the labelling of untagged addresses completed for the first
+  /// time in this process ([_label]): the gate it kept closed may be open.
+  void Function()? onAddressesLabelled;
 
   /// Friend devices whose request queue was asked for by handle this session
   /// ([rekeyFriend]), as `user:device`: once each, so a device the lookup
@@ -226,12 +333,16 @@ class BoxSession
     if (_disposed || encrypt == null || target == null || target.viaRequest) {
       return false;
     }
+    final permit = _friends.gate?.permitFor(userId, to: [target.to]);
+    if (permit == null) return false;
     final frame = await encrypt(
       userId,
       deviceId,
       jsonEncode(E2eEnvelope.buildListUpdate(auth)),
+      permit: permit,
     );
-    return frame != null && await _friends.send(target, frame) is BoxOk;
+    return frame != null &&
+        await _friends.send(target, frame, permit: permit) is BoxOk;
   }
 
   @override
@@ -346,6 +457,8 @@ class BoxSession
             peerDeviceId: s.deviceId,
             sid: sid,
             sealPub: sealPub,
+            // A sibling's self-queue is no friend address: no identity.
+            idk: null,
           ),
     };
   }
@@ -364,7 +477,15 @@ class BoxSession
     ContactOutbound to,
     Uint8List body, {
     BoxSendMode? mode,
-  }) async => switch (await _sealAndSend(to, body, mode)) {
+  }) => deliverFriend(to, body, mode: mode);
+
+  @override
+  Future<BoxSendOutcome> deliverFriend(
+    ContactOutbound to,
+    Uint8List body, {
+    BoxSendMode? mode,
+    FriendPermit? permit,
+  }) async => switch (await _sealAndSend(to, body, mode, permit: permit)) {
     BoxOk() => BoxSendOutcome.taken,
     BoxRefused(code: BoxCode.queueFull) => BoxSendOutcome.full,
     BoxRefused() || BoxUnknown() || null => BoxSendOutcome.failed,
@@ -374,7 +495,7 @@ class BoxSession
   Future<BoxRequestSend> deliverRequest(
     ContactOutbound to,
     Uint8List body,
-  ) async => switch (await _sealAndSend(to, body, null)) {
+  ) async => switch (await _sealAndSend(to, body, null, request: true)) {
     BoxOk() => BoxRequestSend.taken,
     BoxRefused(code: BoxCode.quotaExceeded) => BoxRequestSend.busy,
     BoxRefused() || BoxUnknown() || null => BoxRequestSend.failed,
@@ -384,13 +505,33 @@ class BoxSession
   Future<BoxResult<BoxMediaRef>> uploadMedia(
     ContactOutbound to,
     Uint8List framed,
-  ) async {
+  ) => uploadMediaFriend(to, framed);
+
+  @override
+  Future<BoxResult<BoxMediaRef>> uploadMediaFriend(
+    ContactOutbound to,
+    Uint8List framed, {
+    FriendPermit? permit,
+  }) async {
     // Refused here, never thrown: the client throws on both, and the send
     // path fails the row on any refusal (E17b).
     final sid = boxB64Decode(to.sid, kBoxSidBytes);
     if (sid == null) return const BoxRefused(BoxCode.invalidPayload);
     if (!kBoxMediaLadder.contains(framed.length)) {
       return const BoxRefused(BoxCode.badSize);
+    }
+    // Friend lane: one that carries a permit, or targets a friend's address,
+    // is a friend write (the address it was sealed for may be gone). With no
+    // permit the target must positively be OUR lane (own self queue, own
+    // request queue, a known sibling); any other sid is refused. No await
+    // sits between this check and the upload.
+    final friend = permit != null || _friendOfSid(to.sid) != null;
+    final why = friend
+        ? _gate.refusalOf(permit, to.sid)?.name
+        : (_isOwnLaneSid(to.sid) ? null : 'no_permit_unknown_sid');
+    if (why != null) {
+      E2eDiagLog.add('BOX_FRIEND_WRITE_REFUSED', {'why': 'upload_$why'});
+      return const BoxRefused(BoxCode.invalidPayload);
     }
     return _box.uploadMedia(sid, framed);
   }
@@ -429,6 +570,7 @@ class BoxSession
       peerDeviceId: deviceId,
       sid: sid,
       sealPub: sealPub,
+      idk: null,
     );
     final ack = E2eEnvelope.buildQueueHandoffAck(sid: sid);
     final acked = await _sendToSibling(selfQueue, ack);
@@ -535,7 +677,14 @@ class BoxSession
     int deviceId, {
     required String sid,
     required String sealPub,
-  }) => _takeHandoff(userId, deviceId, sid: sid, sealPub: sealPub);
+    required String? learnedUnder,
+  }) => _takeHandoff(
+    userId,
+    deviceId,
+    sid: sid,
+    sealPub: sealPub,
+    learnedUnder: learnedUnder,
+  );
 
   @override
   Future<FriendWrite> acceptFirstContact(
@@ -544,17 +693,36 @@ class BoxSession
     required String sid,
     required String sealPub,
     required E2eProfile profile,
+    required String? learnedUnder,
   }) => _takeHandoff(
     userId,
     deviceId,
     sid: sid,
     sealPub: sealPub,
+    learnedUnder: learnedUnder,
     profile: profile,
   );
 
   @override
-  Future<FriendWrite> friendAcked(int userId, int deviceId, String sid) async {
+  Future<FriendWrite> friendAcked(
+    int userId,
+    int deviceId,
+    String sid, {
+    required String? learnedUnder,
+  }) async {
     if (_disposed) return FriendWrite.retryLater;
+    // An ack counts only when its frame was authenticated under the identity
+    // pinned now (no anchor pinned: it counts). A late ack of an OLD install
+    // must not make us believe the new one holds our queue.
+    final anchor = _anchorOf?.call(userId);
+    if (anchor != null && learnedUnder != anchor) {
+      E2eDiagLog.add('BOX_FRIEND_ACK_IGNORED', {
+        'peer': userId,
+        'device': deviceId,
+        'why': 'learned_under_other_identity',
+      });
+      return FriendWrite.refused;
+    }
     var matched = false;
     final committed = await _store.update(userId, (current) {
       if (current == null) return null;
@@ -591,6 +759,9 @@ class BoxSession
       target = _friends.targetOf(userId, deviceId);
       if (target == null) return;
     }
+    // The gate is checked BEFORE the once-per-session mark: a closed gate
+    // gives the re-key up for now, not for the session.
+    if (_friends.gate?.permitFor(userId, to: [target.to]) == null) return;
     _friendRekeyed.add(key);
     final ensured = await _keys.ensureInbound(userId);
     if (ensured is! InboundQueueCreated || _disposed) {
@@ -603,6 +774,11 @@ class BoxSession
     // The fresh session counts as asked (`friendSessionStarted`, set by the
     // encrypt side): two devices that re-key each other at once read each
     // other's re-key (decision 49).
+    final permit = _friends.gate?.permitFor(userId, to: [target.to]);
+    if (permit == null) {
+      _friendRekeyed.remove(key);
+      return;
+    }
     final frame = await encrypt(
       userId,
       deviceId,
@@ -610,8 +786,11 @@ class BoxSession
         E2eEnvelope.buildQueueHandoff(sid: queue.sid, sealPub: queue.sealPub),
       ),
       fresh: true,
+      permit: permit,
     );
-    final sent = frame != null && await _friends.send(target, frame) is BoxOk;
+    final sent =
+        frame != null &&
+        await _friends.send(target, frame, permit: permit) is BoxOk;
     if (sent) _friends.noteHanded(userId, deviceId, queue.sid);
     E2eDiagLog.add('BOX_FRIEND_REKEYED', {'device': deviceId, 'sent': sent});
   }
@@ -666,12 +845,7 @@ class BoxSession
             if (o.peerDeviceId != deviceId)
               o
             else
-              ContactOutbound(
-                peerDeviceId: deviceId,
-                sid: o.sid,
-                sealPub: o.sealPub,
-                relays: relays,
-              ),
+              o.copyWith(relays: relays),
         ],
       );
     });
@@ -680,6 +854,14 @@ class BoxSession
   @override
   void handOffTo(int userId) {
     if (!_disposed) _friends.friendChanged(userId);
+  }
+
+  /// Friend [friend]'s pinned identity moved (the acknowledge and the stale
+  /// anchor replacement both end here): our handoff to that friend is due
+  /// again ([BoxFriendHandoff.anchorMoved]).
+  Future<void> anchorMoved(int friend) async {
+    if (_disposed) return;
+    await _friends.anchorMoved(friend);
   }
 
   @override

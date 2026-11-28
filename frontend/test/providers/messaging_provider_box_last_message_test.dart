@@ -45,6 +45,7 @@ class _Encryption extends EncryptionProvider {
     String ciphertext, {
     int? messageId,
     int deviceId = 1,
+    void Function(String? remoteIdentity)? onIdentity,
   }) async => inbound;
 }
 

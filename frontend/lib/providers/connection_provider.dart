@@ -406,6 +406,7 @@ class ConnectionProvider extends ChangeNotifier {
               if (_connectGeneration != generation) return;
               _friendsProvider?.onContactsChanged();
               _conversationsProvider?.hydrateFromStore();
+              _messagingProvider?.kickSendPumps();
               _box?.storeOpened();
               _refreshBoxDeviceLists();
             }),
@@ -415,6 +416,7 @@ class ConnectionProvider extends ChangeNotifier {
     }
     _friendsProvider?.onContactsChanged();
     _conversationsProvider?.hydrateFromStore();
+    _messagingProvider?.kickSendPumps();
 
     // 4c. PR2.4: drain the server-held backup into the store. This runs on
     // EVERY session with an open store, not only an empty one — `_adopt`
@@ -499,7 +501,18 @@ class ConnectionProvider extends ChangeNotifier {
         // is never named to the server by a lookup of this device.
         ..isBoxOnlyPeer = ((peer) => contacts.byUserId(peer)?.boxOrigin != null)
         ..servedBundleFor = ((peer, device) =>
-            contacts.byUserId(peer)?.boxOrigin?.bundles[device]);
+            contacts.byUserId(peer)?.boxOrigin?.bundles[device])
+        // Invariant slice 1: an address learned before its identity tag
+        // existed is tagged with the anchor it was learned under, before that
+        // anchor moves (a failed stamp refuses the move) and at a first pin.
+        ..wireAnchorTags(
+          beforeAnchorMoves: contacts.stampUntaggedAddresses,
+          anchorPinned: (peer, identity) => unawaited(
+            contacts
+                .stampUntaggedAddresses(peer, identity)
+                .then((_) => _messagingProvider?.kickSendPump(peer)),
+          ),
+        );
       if (_box == null || _boxUserId != userId) {
         _box?.dispose();
         _boxMedia?.dispose();
@@ -515,6 +528,9 @@ class ConnectionProvider extends ChangeNotifier {
           emit: emit,
           // E9: box push registration on every contact queue.
           push: PushBoxSource(),
+          // The synchronous mirror of a friend's pinned identity: what a
+          // handoff must have been learned under (invariant slice 1).
+          anchorOf: _encryptionProvider?.accountAnchorSync,
         );
         // Issue #206: no queue is subscribed before this connect's account
         // socket confirmed the session (`socketReady`); the connect gate
@@ -548,7 +564,12 @@ class ConnectionProvider extends ChangeNotifier {
             ..ownLiveDevices = messaging.ownLiveDevices
             // Item 5: existing friendships move onto the box.
             ..encryptForFriend = messaging.encryptForFriend
+            // Option C: a calm hold closes the friend write gate (the red
+            // key-change bar never does: owner decision 2026-11-27).
+            ..calmHeld = messaging.hasCalmHold
             ..friendLiveDevices = messaging.friendLiveDevices
+            ..cachedFriendLiveDevices = messaging.cachedFriendLiveDevices
+            ..friendSessionUsable = messaging.friendSessionUsable
             // E114b: a friend's request queues come from a handle lookup.
             ..friendAddressLookup = messaging.lookupFriendAddresses
             // Slice (e): a new device's handoff carries its account's list.
@@ -563,6 +584,11 @@ class ConnectionProvider extends ChangeNotifier {
                 ) ??
                 false)
             ..onBoxReady = messaging.onBoxReady
+            // The journal was judged: the last clause of the gate.
+            ..onJournalJudged = messaging.kickSendPumps
+            // The labelling of untagged addresses ended: what waited for it
+            // goes out by itself (review P2-1).
+            ..onAddressesLabelled = messaging.kickSendPumps
             // Slice (g): one delivered receipt per drain (E61d).
             ..onReadsIdle = messaging.onBoxReadsIdle
             // Slice (f): a pending request that expired left the store.
@@ -587,6 +613,9 @@ class ConnectionProvider extends ChangeNotifier {
           _encryptionProvider?.lookupBoxPeerList = messaging.lookupBoxPeerList;
         }
         if (_encryptionProvider?.isE2EReady == true) {
+          if (_encryptionProvider?.takeIdentityMinted() ?? false) {
+            _box!.identityReminted();
+          }
           _box!
             ..start()
             ..e2eReady();
@@ -614,16 +643,34 @@ class ConnectionProvider extends ChangeNotifier {
       // Issue #205: the box is followed from the first E2E-ready on; a
       // device on the link gate never gets here. Sibling queues: a handoff
       // can be encrypted now.
+      // Decision B a: an identity minted while the store is kept re-hands
+      // every friend our queues.
+      if (_encryptionProvider?.takeIdentityMinted() ?? false) {
+        _box?.identityReminted();
+      }
       _box
         ?..start()
         ..e2eReady();
       // Decision 21: the device lists a box send reads are looked up here,
       // once per connect — never by a send.
       _refreshBoxDeviceLists();
+      // E2E ready is a state change the gate reads (a kick for every friend
+      // that has a waiting message).
+      _messagingProvider?.kickSendPumps();
     };
     // B3 (decision 143): a friend's frames held under a changed identity are
     // read again the moment the user accepts it.
-    _encryptionProvider?.onHeldFramesReleased = (_) => _box?.drainInbox();
+    _encryptionProvider?.onHeldFramesReleased = (_) =>
+        _box?.drainInboxSettled();
+    // The anchor moved (the key was confirmed): the pump looks again.
+    _encryptionProvider?.onAnchorMoved = (peer) {
+      // Both movers end here: our handoff to that friend is due again (the
+      // acks it gave under the old identity are forgotten), then the pump
+      // looks again. No lookup is made for it.
+      (_box?.anchorMoved(peer) ?? Future<void>.value())
+          .whenComplete(() => _messagingProvider?.kickSendPump(peer))
+          .ignore();
+    };
     _encryptionProvider?.onDeviceListInvalidated = (invalidated) {
       _messagingProvider?.onDeviceListInvalidated(invalidated);
       // The own list changed (a device linked or revoked): the siblings may
@@ -656,6 +703,13 @@ class ConnectionProvider extends ChangeNotifier {
     }
     _friendsProvider?.onRemoveConversationsForUser = (uid) {
       final removed = _conversationsProvider?.removeConversationsForUser(uid);
+      // The permanent accepted-key-change lines go with the contact's history.
+      _encryptionProvider?.forgetKeyChangeLog(peerId: uid).ignore();
+      // A frame waiting calmly for a tap goes with the friendship.
+      _messagingProvider?.onFriendshipEnded(
+        uid,
+        conversationIds: removed ?? const <int>{},
+      );
       // Removing a contact must also destroy their decrypted history on this
       // device. Nothing did that before: the conversation vanished from the
       // list while every message stayed in memory and on disk, readable.

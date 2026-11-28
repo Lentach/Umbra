@@ -137,6 +137,7 @@ class VoiceMessageContent extends StatelessWidget {
 
   Widget _buildDeliveryIcon(BuildContext context) {
     if (!isMine) return const SizedBox.shrink();
+    if (message.waitingToSend) return const SizedBox.shrink();
     if (message.deliveryStatus == MessageDeliveryStatus.failed) {
       return Icon(
         Icons.error,

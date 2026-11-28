@@ -126,6 +126,7 @@ class _Encryption extends EncryptionProvider {
     int recipientId,
     String plaintext, {
     int deviceId = 1,
+    bool Function(String? remoteIdentity)? admit,
   }) async => '3:${base64Encode(utf8.encode(plaintext))}';
 
   @override
@@ -134,6 +135,7 @@ class _Encryption extends EncryptionProvider {
     String ciphertext, {
     int? messageId,
     int deviceId = 1,
+    void Function(String? remoteIdentity)? onIdentity,
   }) async => inbound;
 
   @override
@@ -149,7 +151,12 @@ class _Encryption extends EncryptionProvider {
 
 class _Outbox implements BoxOutbox {
   final Map<int, ContactOutbound> bob = {
-    1: const ContactOutbound(peerDeviceId: 1, sid: 'sid-1', sealPub: 'seal'),
+    1: const ContactOutbound(
+      peerDeviceId: 1,
+      sid: 'sid-1',
+      sealPub: 'seal',
+      idk: null,
+    ),
   };
   final List<BoxFrame> delivered = [];
   int _next = kFirstLocalMessageId + 500;

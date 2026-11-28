@@ -311,6 +311,8 @@ extension _ChatDetailScroll on _ChatDetailScreenState {
     required bool peerHeld,
     required bool peerRefused,
     required bool peerKeyChangeNoted,
+    required CalmHoldState? calmHoldState,
+    required List<int> keyChangeLogMs,
     required int currentUserId,
   }) {
     // Wallpaper runs full-bleed behind the floating top chrome
@@ -337,9 +339,13 @@ extension _ChatDetailScroll on _ChatDetailScreenState {
     // the muted one-shot note. The flags are computed (and subscribed) in
     // build() — this helper also runs inside ChatComposerViewport's build,
     // where context.select is illegal.
-    final identityRowOffset = (peerIdentityChanged || peerKeyChangeNoted)
+    final identityRowOffset =
+        (peerIdentityChanged || peerKeyChangeNoted || calmHoldState != null)
         ? 1
         : 0;
+    // Decision 152: each key change this device accepted by itself is a
+    // permanent system line at its own time, between the messages around it.
+    final entries = _timelineEntries(messages, keyChangeLogMs);
     return ChatBackgroundPattern(
       backgroundColor: messagesAreaBg,
       layer: settings.resolvedChatBackground,
@@ -367,11 +373,20 @@ extension _ChatDetailScroll on _ChatDetailScreenState {
                       peerName: _getContactName(),
                       held: peerHeld,
                     )
+                  else if (calmHoldState != null)
+                    CalmHoldLine(
+                      peerName: _getContactName(),
+                      state: calmHoldState,
+                      onTap: () => context
+                          .read<MessagingProvider>()
+                          .confirmCalmHold(peer!.id),
+                    )
                   else if (peerKeyChangeNoted)
                     PeerIdentityChangedNote(
                       peerId: peer!.id,
                       peerName: _getContactName(),
                     ),
+                  for (final ms in keyChangeLogMs) _keyChangeLogLine(ms, peer!),
                   Expanded(
                     child: Center(
                       child: Text(
@@ -410,7 +425,8 @@ extension _ChatDetailScroll on _ChatDetailScreenState {
                           (m) => m.id == key.value,
                         );
                         if (idx == -1) return null;
-                        return messages.length - 1 - idx + identityRowOffset;
+                        final at = entries.indexWhere((e) => e.msgIndex == idx);
+                        return entries.length - 1 - at + identityRowOffset;
                       }
                       return null;
                     },
@@ -420,7 +436,7 @@ extension _ChatDetailScroll on _ChatDetailScreenState {
                       top: topClearance,
                       bottom: 8 + listBottomPadding,
                     ),
-                    itemCount: messages.length + identityRowOffset,
+                    itemCount: entries.length + identityRowOffset,
                     itemBuilder: (context, index) {
                       if (peerIdentityChanged && index == 0) {
                         return PeerIdentityChangedRow(
@@ -431,14 +447,26 @@ extension _ChatDetailScroll on _ChatDetailScreenState {
                           held: peerHeld,
                         );
                       }
+                      if (calmHoldState != null && index == 0) {
+                        return CalmHoldLine(
+                          peerName: _getContactName(),
+                          state: calmHoldState,
+                          onTap: () => context
+                              .read<MessagingProvider>()
+                              .confirmCalmHold(peer!.id),
+                        );
+                      }
                       if (peerKeyChangeNoted && index == 0) {
                         return PeerIdentityChangedNote(
                           peerId: peer!.id,
                           peerName: _getContactName(),
                         );
                       }
-                      final effIndex = index - identityRowOffset;
-                      final msgIndex = messages.length - 1 - effIndex;
+                      final entry =
+                          entries[entries.length - 1 - (index - identityRowOffset)];
+                      final noteMs = entry.noteMs;
+                      if (noteMs != null) return _keyChangeLogLine(noteMs, peer!);
+                      final msgIndex = entry.msgIndex!;
                       final msg = messages[msgIndex];
                       final showDate =
                           msgIndex == 0 ||
@@ -447,7 +475,7 @@ extension _ChatDetailScroll on _ChatDetailScreenState {
                             msg.createdAt,
                           );
                       return _buildMessageListItem(
-                        listIndex: effIndex,
+                        listIndex: messages.length - 1 - msgIndex,
                         msg: msg,
                         showDate: showDate,
                         isMine: msg.senderId == currentUserId,
@@ -460,4 +488,34 @@ extension _ChatDetailScroll on _ChatDetailScreenState {
             ),
     );
   }
+
+  /// The ascending timeline: every message, with each accepted-key-change
+  /// instant ([notesMs], ascending) slotted before the first message stamped
+  /// after it.
+  static List<({int? msgIndex, int? noteMs})> _timelineEntries(
+    List<MessageModel> messages,
+    List<int> notesMs,
+  ) {
+    final out = <({int? msgIndex, int? noteMs})>[];
+    var n = 0;
+    for (var i = 0; i < messages.length; i++) {
+      final at = messages[i].createdAt.millisecondsSinceEpoch;
+      while (n < notesMs.length && notesMs[n] < at) {
+        out.add((msgIndex: null, noteMs: notesMs[n++]));
+      }
+      out.add((msgIndex: i, noteMs: null));
+    }
+    while (n < notesMs.length) {
+      out.add((msgIndex: null, noteMs: notesMs[n++]));
+    }
+    return out;
+  }
+
+  Widget _keyChangeLogLine(int atMs, UserModel peer) => KeyedSubtree(
+    key: ValueKey('peer-key-change-log-$atMs'),
+    child: PeerIdentityChangedNote(
+      peerId: peer.id,
+      peerName: _getContactName(),
+    ),
+  );
 }

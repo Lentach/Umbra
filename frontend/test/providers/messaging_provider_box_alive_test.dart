@@ -82,6 +82,7 @@ class _Encryption extends EncryptionProvider {
     int recipientId,
     String plaintext, {
     int deviceId = 1,
+    bool Function(String? remoteIdentity)? admit,
   }) async => '2:${base64Encode(utf8.encode(plaintext))}';
 
   @override
@@ -90,6 +91,7 @@ class _Encryption extends EncryptionProvider {
     String ciphertext, {
     int? messageId,
     int deviceId = 1,
+    void Function(String? remoteIdentity)? onIdentity,
   }) async => inbound;
 
   @override
@@ -178,6 +180,7 @@ ContactOutbound _address(int device) => ContactOutbound(
   peerDeviceId: device,
   sid: '${String.fromCharCode(0x40 + device) * 42}E',
   sealPub: '${'b' * 42}w',
+  idk: null,
 );
 
 void main() {

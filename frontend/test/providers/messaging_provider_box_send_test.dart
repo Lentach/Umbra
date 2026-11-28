@@ -169,6 +169,7 @@ void main() {
     peerDeviceId: device,
     sid: 'self-$device',
     sealPub: 'self-seal-$device',
+    idk: null,
   );
 
   test(

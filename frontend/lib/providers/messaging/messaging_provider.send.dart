@@ -548,19 +548,41 @@ extension MessagingSend on MessagingProvider {
     sendTypingIndicator(recipientId, activeConversationId);
   }
 
-  /// Retry sending a failed message (any type).
+  /// Retry sending a failed message (any type). A waiting row only kicks the
+  /// pump; an ordinary failed row joins the end of the line while the gate is
+  /// closed for its friend or a line exists; otherwise it is sent now.
   Future<void> retryFailedMessage(String tempId) async {
     _cancelDelayedRetry(tempId);
-    final index = _messages.indexWhere((m) => m.tempId == tempId);
-    if (index == -1) return;
-    final message = _messages[index];
+    final message = _messages.where((m) => m.tempId == tempId).firstOrNull;
+    if (message == null) return;
     if (message.deliveryStatus != MessageDeliveryStatus.failed) return;
+    final conv = _conversationsProvider?.conversations
+        .where((c) => c.id == message.conversationId)
+        .firstOrNull;
+    if (conv == null) return;
+    final friend = conv_helpers.getOtherUserId(conv, _currentUserId);
+    final joined = _retryJoinsLine(message, friend);
+    if (joined != null) {
+      await joined;
+      return;
+    }
+    await _retryNow(tempId);
+  }
+
+  /// Sends failed row [tempId] again, from its row, in one synchronous step
+  /// from the status check to the flip to `sending`. True when a peer
+  /// device's box took it.
+  Future<bool> _retryNow(String tempId) async {
+    final index = _messages.indexWhere((m) => m.tempId == tempId);
+    if (index == -1) return false;
+    final message = _messages[index];
+    if (message.deliveryStatus != MessageDeliveryStatus.failed) return false;
 
     final conversations = _conversationsProvider?.conversations ?? [];
     final conv = conversations
         .where((c) => c.id == message.conversationId)
         .firstOrNull;
-    if (conv == null) return;
+    if (conv == null) return false;
     final recipientId = conv_helpers.getOtherUserId(conv, _currentUserId);
 
     // A box attachment whose upload never succeeded (item 3 / media wiring,
@@ -573,9 +595,10 @@ extension MessagingSend on MessagingProvider {
         _boxMediaBodies.containsKey(tempId)) {
       _messages[index] = _messages[index].copyWith(
         deliveryStatus: MessageDeliveryStatus.sending,
+        waitingToSend: false,
       );
       notifyListeners();
-      await _sendMediaOverBox(
+      return _sendMediaOverBox(
         recipientId: recipientId,
         tempId: tempId,
         messageType: message.messageType.name.toUpperCase(),
@@ -587,21 +610,20 @@ extension MessagingSend on MessagingProvider {
         mediaHeight: message.mediaHeight,
         mediaThumbHash: message.mediaThumbHash,
       );
-      return;
     }
 
     if (message.messageType == MessageType.ping) {
       _messages[index] = _messages[index].copyWith(
         deliveryStatus: MessageDeliveryStatus.sending,
+        waitingToSend: false,
       );
       notifyListeners();
-      _encryptAndSend(
+      return _encryptAndSend(
         recipientId: recipientId,
         content: '',
         tempId: tempId,
         messageType: 'PING',
       );
-      return;
     }
 
     if (message.messageType != MessageType.text) {
@@ -614,9 +636,10 @@ extension MessagingSend on MessagingProvider {
       if (isBoxMediaUrl(url) && key != null && iv != null) {
         _messages[index] = _messages[index].copyWith(
           deliveryStatus: MessageDeliveryStatus.sending,
+          waitingToSend: false,
         );
         notifyListeners();
-        _encryptAndSend(
+        return _encryptAndSend(
           recipientId: recipientId,
           content: message.content,
           tempId: tempId,
@@ -631,7 +654,6 @@ extension MessagingSend on MessagingProvider {
           mediaHeight: message.mediaHeight,
           mediaThumbHash: message.mediaThumbHash,
         );
-        return;
       }
       // A voice note that failed before its file was read: the recording is
       // still on the device, so it is sent again from there.
@@ -641,6 +663,7 @@ extension MessagingSend on MessagingProvider {
           !isBoxMediaUrl(url)) {
         _messages[index] = _messages[index].copyWith(
           deliveryStatus: MessageDeliveryStatus.sending,
+          waitingToSend: false,
         );
         notifyListeners();
         // The SAME row goes again: its tempId, quote and timer as it was
@@ -650,7 +673,7 @@ extension MessagingSend on MessagingProvider {
           if (rawBytes.length > MediaCryptoService.maxBytes) {
             throw Exception('Voice file too large');
           }
-          await _sendMediaOverBox(
+          return await _sendMediaOverBox(
             recipientId: recipientId,
             tempId: tempId,
             messageType: 'VOICE',
@@ -663,20 +686,22 @@ extension MessagingSend on MessagingProvider {
         } on Object catch (e) {
           debugPrint('[MessagingProvider] Voice retry failed: $e');
           _markMessageFailed(tempId, 'Failed to send voice message');
+          return false;
         }
       }
-      return;
+      return false;
     }
 
     final content = message.content;
-    if (content.isEmpty) return;
+    if (content.isEmpty) return false;
     // Retry in place against the message's OWN conversation, re-sending to
     // recipientId (sendMessage() would target the active conversation).
     _messages[index] = _messages[index].copyWith(
       deliveryStatus: MessageDeliveryStatus.sending,
+      waitingToSend: false,
     );
     notifyListeners();
-    _encryptAndSend(
+    return _encryptAndSend(
       recipientId: recipientId,
       content: content,
       tempId: tempId,
@@ -725,6 +750,7 @@ extension MessagingSend on MessagingProvider {
     int? mediaHeight,
     String? mediaThumbHash,
     _BoxRowAtSend? boxRowAtSend,
+    Map<String, dynamic>? waitingRecord,
   }) async {
     // The account this send belongs to, read before the first await: a
     // sign-out or account switch while it runs must not see its kept copy
@@ -837,7 +863,7 @@ extension MessagingSend on MessagingProvider {
               )
               .firstOrNull
               ?.id;
-      if (conversationId != null) {
+      if (conversationId != null && waitingRecord == null) {
         await _keepBoxUnsent(
           tempId,
           owner: sendOwner,
@@ -856,6 +882,15 @@ extension MessagingSend on MessagingProvider {
           mediaHeight: onBox ? mediaHeight : null,
           mediaThumbHash: onBox ? mediaThumbHash : null,
         );
+      }
+      // A send to a friend that has a line of waiting messages, or a pump
+      // running, joins the END of it (no overtaking): the pump sends it.
+      if (conversationId != null &&
+          sendOwner != null &&
+          !_pumpOwned.contains(tempId) &&
+          await _friendQueueBusy(sendOwner, recipientId, conversationId)) {
+        await _holdForGate(recipientId, tempId);
+        return false;
       }
 
       // A reply whose quote the row cannot name would be sent without it:
@@ -892,6 +927,9 @@ extension MessagingSend on MessagingProvider {
       // No box route: the row stays failed, kept on the device, and nothing
       // goes to the server (decisions 15, 25, 104). A retry whose route is
       // back re-seals under the same wire id.
+      if (effectiveReplyToId != null && _boxQuoteOf(replyTo) == null) {
+        _sendNeverGoes.add(tempId);
+      }
       _e2eFlowLog('BOX_RETRY_NO_ROUTE', {'tempId': tempId});
       _markMessageFailed(tempId, 'Could not send. Try again.');
       return false;
@@ -987,11 +1025,21 @@ extension MessagingSend on MessagingProvider {
     });
   }
 
+  @visibleForTesting
+  void retrySendInPlaceForTest(String tempId) => _retrySendInPlace(tempId);
+
   void _retrySendInPlace(String tempId) {
     final idx = _messages.indexWhere((m) => m.tempId == tempId);
     if (idx == -1) return;
     final message = _messages[idx];
     if (message.deliveryStatus != MessageDeliveryStatus.failed) {
+      return;
+    }
+    // A waiting row belongs to the release pump (its record carries `q`): a
+    // second send path here would re-keep the record without it and leave a
+    // row that looks waiting with nothing waiting.
+    if (message.waitingToSend) {
+      kickSendPumps();
       return;
     }
     // Only auto-retry text and ping

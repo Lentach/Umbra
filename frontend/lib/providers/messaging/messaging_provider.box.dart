@@ -1,4 +1,6 @@
 part of '../messaging_provider.dart';
+// This part IS MessagingProvider: the protected members it calls are its own.
+// ignore_for_file: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
 
 /// Box deliveries (metadata-privacy PR3.1 slice (b)): the ONE dispatcher. A
 /// journaled delivery is decrypted here, NOW — unlike a server row, nothing
@@ -68,6 +70,7 @@ extension MessagingBox on MessagingProvider {
         'peer': entry.peerUserId,
         'reason': refusal,
       });
+      _clearCalmHold(entry.peerUserId);
       return Future.value(true);
     }
     final msg = MessageModel(
@@ -184,8 +187,10 @@ extension MessagingBox on MessagingProvider {
           msg.encryptedContent!,
         );
     // B3 (decision 143): a PreKey frame under an identity other than the
-    // friend's pinned one is HELD, whatever the key-change setting says —
-    // never decrypted, never shown. Anyone who holds the friend's queue
+    // friend's pinned one is NEVER decrypted before its key is confirmed.
+    // Decision 152 (option C): for an unverified friend with warnings OFF it
+    // waits CALMLY (a neutral line, no network) until the user taps; anything
+    // else is the visible hold at once. Anyone who holds the friend's queue
     // address (a hostile server, a revoked device) can seal one.
     if (preKey) {
       switch (await enc.friendFrameIdentity(
@@ -197,17 +202,33 @@ extension MessagingBox on MessagingProvider {
           // dropped the list it reads).
           newIdentity = newIdentity || (_boxHeld[msg.id] ?? false);
           _boxHeld.remove(msg.id);
+          // Only a frame of the key that WAITS calmly settles that hold (the
+          // anchor reached it); a frame of the pinned key leaves it alone.
+          if (_calmHolds[msg.senderId]?.identity ==
+              preKeyIdentityOf(msg.encryptedContent!)) {
+            _calmHolds.remove(msg.senderId);
+            // Settled: the row is no longer waiting for the tap.
+            kickSendPump(msg.senderId);
+          }
         case FriendFrameIdentity.foreign:
-          return _holdForeignFrame(msg, enc, peer, remint: newIdentity);
+          return _holdForeign(
+            msg,
+            enc,
+            peer,
+            remint: newIdentity,
+            receivedAt: receivedAt,
+          );
       }
     }
     final String plaintext;
+    String? sessionIdentity;
     try {
       plaintext = await enc.decrypt(
         msg.senderId,
         msg.encryptedContent!,
         messageId: msg.id,
         deviceId: msg.originDeviceId ?? 1,
+        onIdentity: (identity) => sessionIdentity = identity,
       );
     } on Object catch (e) {
       // A whisper of a friend with a frame held rides the session that frame
@@ -277,7 +298,13 @@ extension MessagingBox on MessagingProvider {
           });
         }
         link.friendRekeyAnswered(msg.senderId, device);
-        return _takeFriendHandoff(link, msg.senderId, device, plaintext);
+        return _takeFriendHandoff(
+          link,
+          msg.senderId,
+          device,
+          plaintext,
+          learnedUnder: _frameIdentity(msg.encryptedContent!, sessionIdentity),
+        );
       case E2eEnvelope.typeQueueHandoffAck when link != null:
         final sid = E2eEnvelope.parseQueueHandoffAck(plaintext);
         if (sid == null) {
@@ -288,6 +315,7 @@ extension MessagingBox on MessagingProvider {
           msg.senderId,
           msg.originDeviceId ?? 1,
           sid,
+          learnedUnder: _frameIdentity(msg.encryptedContent!, sessionIdentity),
         )) {
           FriendWrite.retryLater => false,
           FriendWrite.stored || FriendWrite.refused => true,
@@ -374,6 +402,125 @@ extension MessagingBox on MessagingProvider {
     }
   }
 
+  /// A friend's PreKey frame under a FOREIGN identity (never decrypted).
+  /// Unparseable: finished, never held (S5). Eligible (warnings OFF, friend
+  /// not verified, anchor pinned, a held list saying NOT enrolled, and no
+  /// other key already waiting): the CALM hold — no network, no red bar, no
+  /// candidate; the line is tappable. Anything else: today's visible hold.
+  Future<bool> _holdForeign(
+    MessageModel msg,
+    EncryptionProvider enc,
+    ContactRecord? peer, {
+    required bool remint,
+    required DateTime receivedAt,
+  }) async {
+    if (peer != null && peer.state != ContactState.friend) {
+      return _dropHeld(msg);
+    }
+    final identity = preKeyIdentityOf(msg.encryptedContent!);
+    if (identity == null) {
+      _e2eFlowLog('BOX_FOREIGN_FRAME_UNPARSEABLE', {'peer': msg.senderId});
+      return true;
+    }
+    final held = _calmHolds[msg.senderId];
+    if ((held == null || held.identity == identity) &&
+        await enc.calmHoldEligible(msg.senderId)) {
+      // One object per peer, updated in place: a tap in flight holds it, and
+      // a replaced one would leave that tap's answer with nothing to settle.
+      if (held == null) {
+        _calmHolds[msg.senderId] = CalmHold(
+          identity: identity,
+          device: msg.originDeviceId ?? 1,
+          firstReceivedAt: receivedAt,
+          ciphertext: msg.encryptedContent!,
+          state: CalmHoldState.waiting,
+        );
+      } else if (receivedAt.isBefore(held.firstReceivedAt)) {
+        held.firstReceivedAt = receivedAt;
+      }
+      final fresh = !_boxHeld.containsKey(msg.id);
+      _boxHeld[msg.id] = remint;
+      enc.holdCalm(msg.senderId);
+      if (fresh) {
+        _e2eFlowLog('BOX_FOREIGN_IDENTITY_CALM', {
+          'peer': msg.senderId,
+          'device': msg.originDeviceId ?? 1,
+        });
+      }
+      notifyListeners();
+      return false;
+    }
+    // The calm hold goes only AFTER the red hold is set: it closes the gate
+    // for the await in between (review 3, P3-1). The red bar holds nothing:
+    // what waited for the calm line goes out to the pinned identity's queue.
+    final held2 = await _holdForeignFrame(msg, enc, peer, remint: remint);
+    if (_calmHolds.remove(msg.senderId) != null) kickSendPump(msg.senderId);
+    return held2;
+  }
+
+  /// What a calm hold of [peerId] shows, or null when none waits.
+  CalmHoldState? calmHoldState(int peerId) => _calmHolds[peerId]?.state;
+
+  /// The tap on a calm hold (a person's act): confirms the waiting key from a
+  /// fresh served bundle. Single flight: a second tap while it runs is
+  /// ignored. Confirmed -> the held frames drain; refused -> the visible hold;
+  /// transient -> the line stays and is tappable again.
+  Future<void> confirmCalmHold(int peerId) async {
+    final hold = _calmHolds[peerId];
+    final enc = _encryptionProvider;
+    if (hold == null || enc == null) return;
+    if (hold.state == CalmHoldState.checking) return;
+    hold.state = CalmHoldState.checking;
+    notifyListeners();
+    // Verified or warnings ON since the hold began: the visible hold, and
+    // no request at all (a lookup spends one of the friend's pre-keys).
+    if (!await enc.calmHoldEligible(peerId)) {
+      if (!identical(_calmHolds[peerId], hold)) return;
+      await enc.holdForeignFrame(peerId, hold.ciphertext);
+      if (identical(_calmHolds[peerId], hold)) {
+        _calmHolds.remove(peerId);
+        kickSendPump(peerId);
+      }
+      notifyListeners();
+      return;
+    }
+    final result = await enc.confirmCalmKey(
+      peerId,
+      hold.device,
+      hold.identity,
+      noteAtMs: hold.firstReceivedAt.millisecondsSinceEpoch - 1,
+    );
+    if (!identical(_calmHolds[peerId], hold)) return;
+    switch (result) {
+      case CalmConfirm.confirmed:
+        // The hold ends, but the friend's handoff is not read yet: until it
+        // is, the address is still the old queue, which the gate sees as
+        // stale (its tag is not the pinned identity), so sends keep waiting.
+        _calmHolds.remove(peerId);
+      case CalmConfirm.refused:
+        // The red hold takes over. It holds nothing: the pinned identity is
+        // unchanged, so what waited for the calm line goes out to its queue
+        // (the kick), as on 0.2.111.
+        await enc.holdForeignFrame(peerId, hold.ciphertext);
+        if (identical(_calmHolds[peerId], hold)) {
+          _calmHolds.remove(peerId);
+          kickSendPump(peerId);
+        }
+      case CalmConfirm.transient:
+        hold.state = CalmHoldState.failed;
+    }
+    notifyListeners();
+    if (result == CalmConfirm.confirmed) {
+      // The hold is over. The held frames are read again (unawaited, exactly
+      // as the red acknowledge does): the friend's handoff in them names the
+      // queue its new install reads. Nothing waits for that read: what was
+      // refused waits as a persisted row, and the pump sends it when the
+      // handoff is STORED (or any other state change opens the gate).
+      enc.drainReleasedFrames(peerId).ignore();
+      kickSendPump(peerId);
+    }
+  }
+
   /// Holds friend frame [msg] (a PreKey message under a foreign identity)
   /// until the user decides (plan B3, decision 143): returns false, so the
   /// journal row stays unconsumed — it is acked already, never pruned
@@ -414,11 +561,33 @@ extension MessagingBox on MessagingProvider {
 
   bool _dropHeld(MessageModel msg) {
     _boxHeld.remove(msg.id);
+    _clearCalmHold(msg.senderId);
     _e2eFlowLog('BOX_HELD_DISCARDED', {
       'peer': msg.senderId,
       'device': msg.originDeviceId ?? 1,
     });
     return true;
+  }
+
+  /// The friendship with [peerId] ended: a calm line and the marks that keep
+  /// its frames held go with it.
+  void _clearCalmHold(int peerId) {
+    if (_calmHolds.remove(peerId) != null) {
+      unawaited(_endWaitingOfFriend(peerId, const []));
+      _encryptionProvider?.releaseCalm(peerId);
+      notifyListeners();
+    }
+  }
+
+  /// [peerId] stops being a friend (unfriend, block, their goodbye): a calm
+  /// line goes with it, and what waited to be sent becomes ordinary failed
+  /// rows ([conversationIds] names chats already taken off the list).
+  void onFriendshipEnded(
+    int peerId, {
+    Iterable<int> conversationIds = const [],
+  }) {
+    _clearCalmHold(peerId);
+    unawaited(_endWaitingOfFriend(peerId, conversationIds));
   }
 
   /// Once per held frame per run (the caller's `_boxHeld` mark): peer and
@@ -429,4 +598,26 @@ extension MessagingBox on MessagingProvider {
       'device': msg.originDeviceId ?? 1,
     });
   }
+}
+
+/// The line a calm hold shows ([MessagingBox.calmHoldState]).
+enum CalmHoldState { waiting, checking, failed }
+
+/// One friend's calm hold: the key its held frames claim, the device that sent
+/// the first, when the first arrived (the note is stamped just before it) and
+/// a ciphertext to turn into the visible hold when the key is refused.
+class CalmHold {
+  CalmHold({
+    required this.identity,
+    required this.device,
+    required this.firstReceivedAt,
+    required this.ciphertext,
+    required this.state,
+  });
+
+  final String identity;
+  final int device;
+  DateTime firstReceivedAt;
+  final String ciphertext;
+  CalmHoldState state;
 }

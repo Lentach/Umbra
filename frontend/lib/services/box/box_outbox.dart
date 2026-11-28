@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import '../contacts/contact_record.dart';
+import 'box_friend_gate.dart';
 import 'box_wire.dart';
 
 /// What one [BoxOutbox.deliver] came to (E93a).
@@ -69,4 +70,33 @@ abstract interface class BoxOutbox {
   /// Deletes media [id] from the box with the secret its upload returned
   /// (plan D3, delete for everyone). Nothing is sent for a malformed pair.
   Future<BoxResult<void>> deleteMedia(Uint8List id, Uint8List secret);
+}
+
+/// The friend lane of the send side (the write gate, `box_friend_gate.dart`):
+/// a permit is taken BEFORE Signal seals and travels with every write to a
+/// friend's queue. `BoxSession` is the one implementation; a stand-in outbox
+/// that is not one is not gated.
+abstract interface class BoxFriendGateOutbox {
+  /// A permit to seal for [friend], or null while the gate is closed.
+  FriendPermit? permitFor(
+    int friend, {
+    Iterable<ContactOutbound> to = const [],
+    bool goodbye = false,
+  });
+
+  /// [BoxOutbox.deliver] under [permit]; refused (not written) unless the
+  /// gate is open at the write.
+  Future<BoxSendOutcome> deliverFriend(
+    ContactOutbound to,
+    Uint8List body, {
+    BoxSendMode? mode,
+    FriendPermit? permit,
+  });
+
+  /// [BoxOutbox.uploadMedia] under [permit].
+  Future<BoxResult<BoxMediaRef>> uploadMediaFriend(
+    ContactOutbound to,
+    Uint8List framed, {
+    FriendPermit? permit,
+  });
 }

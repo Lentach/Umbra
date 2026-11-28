@@ -13,6 +13,114 @@ extension BoxSessionConnection on BoxSession {
     _swap.e2eReady();
     _rotation.run();
     _friends.e2eReady();
+    // The one migration runs BEFORE anything judges an address: the journal
+    // drain and (through the gate) every permit wait for it.
+    // On a closed store it does nothing and [storeOpened] runs it again.
+    unawaited(
+      _label().then((_) {
+        if (_disposed) return;
+        // The journal is judged by the first drain after E2E ready, the empty
+        // one included and with no box connection (the write gate's clause).
+        unawaited(_inbox.drain());
+        unawaited(_reannounce());
+      }),
+    );
+  }
+
+  /// Tags every untagged address with the anchor pinned now
+  /// ([ContactStore.tagUntaggedAddresses]) on an OPEN store; one run at a
+  /// time. Completes without error: a closed store or a failed write leaves
+  /// the gate closed and the next trigger (E2E ready, box or account ready,
+  /// store opened) runs it again. It works per record: a record whose write
+  /// was refused stays untagged (stale: that friend waits), the others are
+  /// open, and every later trigger retries until all are tagged.
+  Future<void> _label() {
+    // The anchors are loaded at E2E init: before it the mirror knows none and
+    // a "labelling" would tag nothing yet count as done. A closed store has
+    // nothing to label ([storeOpened] runs it again).
+    if (_labelComplete || _disposed || !_e2eReady || !_store.isOpen) {
+      return Future.value();
+    }
+    return _labelling ??= _runLabel().whenComplete(() => _labelling = null);
+  }
+
+  Future<void> _runLabel() async {
+    final bool complete;
+    try {
+      final anchorOf = _anchorOf;
+      complete = anchorOf == null || await _store.tagUntaggedAddresses(anchorOf);
+    } on Object catch (error) {
+      E2eDiagLog.add('BOX_LABELLING_FAILED', {'error': error.runtimeType});
+      return;
+    }
+    if (_disposed || !_store.isOpen) return;
+    if (!complete) E2eDiagLog.add('BOX_LABELLING_INCOMPLETE', const {});
+    _labelComplete = complete;
+    _labelled = true;
+    onAddressesLabelled?.call();
+  }
+
+  /// Our own account identity was re-minted while the contact store and the
+  /// queues were kept (decision B a): every friend is handed our queues
+  /// again (same sids), as soon as the store is open.
+  void identityReminted() {
+    if (_disposed) return;
+    _remintPending = true;
+    final running = _reannouncing;
+    // A run already in flight may have read the flag before it was set: one
+    // more follows it (bounded: nothing re-arms it but a refused write).
+    unawaited(
+      running == null ? _reannounce() : running.then((_) => _reannounce()),
+    );
+  }
+
+  /// Decision B: the re-announce, for a re-mint ([identityReminted], every
+  /// friend) and the one-time upgrade (the records a build before this one
+  /// wrote). Our queues forget their handoff state and the existing pass
+  /// hands them; no lookup is made for it. One run at a time; a refused
+  /// write keeps the request for the next trigger.
+  Future<void> _reannounce() {
+    if (_disposed || !_e2eReady || !_store.isOpen) return Future.value();
+    return _reannouncing ??= _runReannounce().whenComplete(
+      () => _reannouncing = null,
+    );
+  }
+
+  Future<void> _runReannounce() async {
+    final everyone = _remintPending;
+    _remintPending = false;
+    // The upgrade one-shot asks the server for nothing: its friends are held
+    // quiet BEFORE the state is cleared, or a pass already running would
+    // find the devices due and seal with fetches. A re-mint's new identity
+    // has no session with any friend device, which one bundle fetch per
+    // device builds (review 3, P2-1).
+    final quiet = everyone
+        ? const <int>[]
+        : [
+            for (final r in _store.all)
+              if (r.state == ContactState.friend && !r.reannounced) r.userId,
+          ];
+    _friends.holdQuiet(quiet);
+    try {
+      final done = await _store.reannounceOwn(everyone: everyone);
+      _friends.releaseQuiet(quiet.where((u) => !done.changed.contains(u)));
+      if (everyone) {
+        done.changed.forEach(_friends.friendChanged);
+      } else if (done.changed.isNotEmpty) {
+        _friends.handQuietly(done.changed, held: done.changed);
+      }
+      if (!done.complete && everyone) _remintPending = true;
+      if (done.changed.isNotEmpty) {
+        E2eDiagLog.add('BOX_REANNOUNCE', {
+          'friends': done.changed.length,
+          'remint': everyone,
+        });
+      }
+    } on Object catch (error) {
+      _friends.releaseQuiet(quiet);
+      if (everyone) _remintPending = true;
+      E2eDiagLog.add('BOX_REANNOUNCE_FAILED', {'error': error.runtimeType});
+    }
   }
 
   /// The own verified device list was dropped (a device linked or revoked).
@@ -48,6 +156,7 @@ extension BoxSessionConnection on BoxSession {
           _rotation.run();
           _registerPush();
           _friends.run();
+          unawaited(_label());
         }),
       )
       ..add(_box.lostQueues.listen(_onLost));
@@ -106,6 +215,7 @@ extension BoxSessionConnection on BoxSession {
     // `socketReady` is what confirms this device's id for the own list.
     _rotation.run();
     if (deviceId != null) _friends.accountReady();
+    unawaited(_label());
   }
 
   /// The contact store (re)opened — a web vault that booted locked was just
@@ -116,11 +226,19 @@ extension BoxSessionConnection on BoxSession {
     if (_request == null) unawaited(_ensure());
     if (_self == null) unawaited(_ensureSelf());
     if (_box.state == BoxState.ready) unawaited(_deleteOwedQueues());
-    unawaited(_receive());
     _swap.run();
     _rotation.run();
     _registerPush();
     _friends.run();
+    // The migration first: the drain judges the journal, and not before the
+    // store's addresses are labelled.
+    unawaited(
+      _label().then((_) {
+        if (_disposed || _revoked) return;
+        unawaited(_receive());
+        unawaited(_reannounce());
+      }),
+    );
   }
 
   /// A queue appeared, or the box is ready: every contact queue gets its

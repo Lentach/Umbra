@@ -121,6 +121,47 @@ void main() {
     );
   });
 
+  test('a waiting entry is exempt from the 30-day prune and the cap; an '
+      'ordinary one of the same age is not', () async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final old = now - const Duration(days: 31).inMilliseconds;
+    await service.saveBoxUnsent(uid, 'temp_q_42', {
+      ...entry(10, atMs: old),
+      'q': 1,
+    });
+    await service.saveBoxUnsent(uid, 'temp_plain_42', entry(10, atMs: old));
+    for (var i = 0; i < EncryptionService.boxUnsentCap + 1; i++) {
+      await service.saveBoxUnsent(
+        uid,
+        'temp_${i}_42',
+        entry(10, atMs: now + i),
+      );
+    }
+
+    final kept = await unsentKeys();
+    expect(kept, contains('${prefix}temp_q_42'));
+    expect(kept, isNot(contains('${prefix}temp_plain_42')));
+    // The cap counts ordinary entries only: 200 of them plus the waiting one.
+    expect(kept, hasLength(EncryptionService.boxUnsentCap + 1));
+    expect(
+      (await service.boxUnsentWaiting(uid)).keys,
+      ['temp_q_42'],
+    );
+  });
+
+  test('setBoxUnsentWaiting flips the flag and keeps the rest; a gone entry '
+      'stays gone', () async {
+    await service.saveBoxUnsent(uid, 'temp_1_42', entry(10));
+    await service.setBoxUnsentWaiting(uid, 'temp_1_42', waiting: true);
+    expect((await service.boxUnsentWaiting(uid)).keys, ['temp_1_42']);
+    expect((await service.boxUnsent(uid, 10))['temp_1_42'], containsPair('content', 'words'));
+    await service.setBoxUnsentWaiting(uid, 'temp_1_42', waiting: false);
+    expect(await service.boxUnsentWaiting(uid), isEmpty);
+    await service.dropBoxUnsent(uid, 'temp_1_42');
+    await service.setBoxUnsentWaiting(uid, 'temp_1_42', waiting: true);
+    expect(await unsentKeys(), isEmpty);
+  });
+
   test("sign-out clears this account's entries and no other's", () async {
     await service.saveBoxUnsent(uid, 'temp_1_42', entry(10));
     final kv = await service.contentKv;

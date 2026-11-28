@@ -536,9 +536,49 @@ class SecureIdentityKeyStore extends IdentityKeyStore {
   ///
   /// Engine-local by design for the per-DEVICE rows: a sibling tab writing a
   /// peer key is not observed here, which can only cost a duplicate warning.
-  /// The ACCOUNT anchor is NOT served from here ([getAccountIdentity] reads
-  /// the store): a stale anchor is not a duplicate warning, it fails sends.
+  /// The ACCOUNT anchor is NOT served from here by [getAccountIdentity] (it
+  /// reads the store): a stale anchor is not a duplicate warning, it fails
+  /// sends. [accountAnchorSync] is the one synchronous reader of it, for a
+  /// caller that cannot await: it is loaded for every friend
+  /// ([loadAccountAnchors]) and the two movers set it BEFORE their storage
+  /// write, so a failed write leaves memo and store disagreeing only in the
+  /// safe direction (memo = the NEW identity) until the next store read
+  /// ([getAccountIdentity]) or restart puts the store's value back.
   final Map<String, IdentityKey> _trustedMemo = {};
+
+  /// Called after a FIRST pin of a peer account's anchor (never after a move)
+  /// with the pinned identity (base64): the addresses learned before the pin
+  /// are tagged with it. Must not throw.
+  void Function(String name, String identityBase64)? onAccountPinned;
+
+  /// The identity (base64) pinned for [name]'s account as this engine last
+  /// read or wrote it; null when none is known. Never awaits.
+  String? accountAnchorSync(String name) {
+    final key = _trustedMemo[_accountKey(name)];
+    return key == null ? null : encodedOf(key);
+  }
+
+  /// Loads every pinned account anchor of the store into the memo (E2E
+  /// init), so [accountAnchorSync] answers for every friend. A peer that
+  /// only has the legacy per-device row is adopted through
+  /// [getAccountIdentity], as the first send would.
+  Future<void> loadAccountAnchors() async {
+    final anchorPrefix = _accountKey('');
+    final devicePrefix = '${_p}trusted_identity_';
+    final names = <String>{};
+    for (final key in (await _storage.readAll()).keys) {
+      if (key.startsWith(anchorPrefix)) {
+        names.add(key.substring(anchorPrefix.length));
+      } else if (key.startsWith(devicePrefix)) {
+        final rest = key.substring(devicePrefix.length);
+        final cut = rest.lastIndexOf('_');
+        if (cut > 0) names.add(rest.substring(0, cut));
+      }
+    }
+    for (final name in names) {
+      await getAccountIdentity(name);
+    }
+  }
 
   @override
   Future<bool> saveIdentity(
@@ -565,6 +605,7 @@ class SecureIdentityKeyStore extends IdentityKeyStore {
         await _storage.read(key: accountKey) == null) {
       await _storage.write(key: accountKey, value: encoded);
       _trustedMemo[accountKey] = identityKey;
+      onAccountPinned?.call(address.getName(), encoded);
     }
     return true;
   }
@@ -591,11 +632,10 @@ class SecureIdentityKeyStore extends IdentityKeyStore {
     }
     final legacy = await getIdentity(SignalProtocolAddress(name, 1));
     if (legacy == null) return null;
-    await _storage.write(
-      key: key,
-      value: base64Encode(legacy.serialize()),
-    );
+    final encoded = base64Encode(legacy.serialize());
+    await _storage.write(key: key, value: encoded);
     _trustedMemo[key] = legacy;
+    onAccountPinned?.call(name, encoded);
     return legacy;
   }
 
@@ -614,6 +654,7 @@ class SecureIdentityKeyStore extends IdentityKeyStore {
     final key = _accountKey(name);
     await _storage.write(key: key, value: encodedOf(identityKey));
     _trustedMemo[key] = identityKey;
+    onAccountPinned?.call(name, encodedOf(identityKey));
     return true;
   }
 
@@ -726,18 +767,26 @@ class SecureIdentityKeyStore extends IdentityKeyStore {
   Future<bool> promotePendingAccountIdentity(
     String name, {
     String? expectedIdentityBase64,
+    String? expectedAnchorBase64,
   }) => _serializePending(name, () async {
     final pendingKey = _pendingKey(name);
     final stored = await _storage.read(key: pendingKey);
     if (stored == null) return false;
+    // The anchor must still be the one the caller decided against.
+    if (expectedAnchorBase64 != null &&
+        await _storage.read(key: _accountKey(name)) != expectedAnchorBase64) {
+      return false;
+    }
     if (expectedIdentityBase64 != null && stored != expectedIdentityBase64) {
       // The candidate moved under us. Refuse: the caller must re-display.
       return false;
     }
     final identity = IdentityKey.fromBytes(base64Decode(stored), 0);
     final key = _accountKey(name);
-    await _storage.write(key: key, value: stored);
+    // Memo FIRST: if the write below fails, the mirror already says "new",
+    // the direction in which a gate closes.
     _trustedMemo[key] = identity;
+    await _storage.write(key: key, value: stored);
     await _storage.delete(key: pendingKey);
     return true;
   });
@@ -811,8 +860,9 @@ class SecureIdentityKeyStore extends IdentityKeyStore {
     required String? expectedPendingBase64,
   }) => _serializePending(name, () async {
     final key = _accountKey(name);
-    await _storage.write(key: key, value: encodedOf(identity));
+    // Memo FIRST, as in [promotePendingAccountIdentity].
     _trustedMemo[key] = identity;
+    await _storage.write(key: key, value: encodedOf(identity));
     final pendingKey = _pendingKey(name);
     final stored = await _storage.read(key: pendingKey);
     if (expectedPendingBase64 == null) {

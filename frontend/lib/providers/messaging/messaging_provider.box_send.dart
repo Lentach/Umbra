@@ -32,7 +32,7 @@ bool _boxCoversLive(List<int> live, Map<int, ContactOutbound> addresses) =>
     live.any((d) => addresses[d]?.relays ?? false);
 
 /// Why a box send could not build its frames ([MessagingBoxSend._sealBoxFrames]).
-enum _BoxSealFailure { noSession, tooLong }
+enum _BoxSealFailure { noSession, tooLong, calmHeld }
 
 /// The box send, out of [MessagingBox]: [_boxRoute] decides whether a
 /// message goes over the box at all, [_sendOverBox] sends it — sessions
@@ -344,7 +344,11 @@ extension MessagingBoxSend on MessagingProvider {
           });
           _markMessageFailed(tempId, 'Could not send. Try again.');
           return false;
+        case _BoxSealFailure.calmHeld:
+          await _holdForGate(recipientId, tempId);
+          return false;
         case _BoxSealFailure.tooLong:
+          _sendNeverGoes.add(tempId);
           _e2eFlowLog('BOX_SEND_TOO_LONG', {
             'tempId': tempId,
             ...sealed.detail,
@@ -369,6 +373,7 @@ extension MessagingBoxSend on MessagingProvider {
         frames,
         peerFrames: peerFrames,
         message: true,
+        permit: sealed.permit,
       );
       final owedPeers = <int>{};
       final owedSiblings = <int>{};
@@ -489,6 +494,7 @@ extension MessagingBoxSend on MessagingProvider {
       List<(ContactOutbound, Uint8List)> frames,
       _BoxSealFailure? failure,
       Map<String, Object> detail,
+      FriendPermit? permit,
     })
   >
   _sealBoxFrames(
@@ -500,6 +506,19 @@ extension MessagingBoxSend on MessagingProvider {
     final enc = _encryptionProvider!;
     final ownUserId = _currentUserId!;
     final frames = <(ContactOutbound, Uint8List)>[];
+    // The gate (taken BEFORE anything is sealed): a calm hold, a journal not
+    // judged yet, or an address that is not current for the friend's pinned
+    // identity refuses it, and then nothing is sealed, be it a message, an
+    // action, a receipt or typing. Today a refusal lands in the deferral list.
+    final permit = _friendPermit(recipientId, to: route.targets);
+    if (permit == null) {
+      return (
+        frames: frames,
+        failure: _BoxSealFailure.calmHeld,
+        detail: {'peer': recipientId},
+        permit: null,
+      );
+    }
     final peerJson = E2eEnvelope.toFriend(
       json,
       relays: _vouchesRelay,
@@ -515,11 +534,17 @@ extension MessagingBoxSend on MessagingProvider {
         frames: frames,
         failure: _BoxSealFailure.noSession,
         detail: {'userId': userId, 'device': to.peerDeviceId},
+        permit: permit,
       );
     }
     for (final (userId, to, body) in sends) {
       final frame = BoxFrame.fromSignalCiphertext(
-        await enc.encrypt(userId, body, deviceId: to.peerDeviceId),
+        await enc.encrypt(
+          userId,
+          body,
+          deviceId: to.peerDeviceId,
+          admit: userId == recipientId ? permit.admitsSession : null,
+        ),
         senderDeviceId: enc.ownDeviceId,
       );
       if (frame == null) throw StateError('encrypt gave no Signal message');
@@ -528,11 +553,17 @@ extension MessagingBoxSend on MessagingProvider {
           frames: frames,
           failure: _BoxSealFailure.tooLong,
           detail: {'bytes': frame.signal.length},
+          permit: permit,
         );
       }
       frames.add((to, frame.encode()));
     }
-    return (frames: frames, failure: null, detail: const <String, Object>{});
+    return (
+      frames: frames,
+      failure: null,
+      detail: const <String, Object>{},
+      permit: permit,
+    );
   }
 
   /// Sends [frames] — the first [peerFrames] to [peer]'s devices, the rest
@@ -547,19 +578,34 @@ extension MessagingBoxSend on MessagingProvider {
     List<(ContactOutbound, Uint8List)> frames, {
     required int peerFrames,
     required bool message,
+    FriendPermit? permit,
   }) async {
     final answers = await Future.wait([
       for (var i = 0; i < frames.length; i++)
-        outbox
-            .deliver(
-              frames[i].$1,
-              frames[i].$2,
-              mode: _boxFrameMode(message: message, toPeer: i < peerFrames),
-            )
-            .catchError((Object _) => BoxSendOutcome.failed),
+        _deliverBoxFrame(
+          outbox,
+          frames[i],
+          mode: _boxFrameMode(message: message, toPeer: i < peerFrames),
+          permit: i < peerFrames ? permit : null,
+        ).catchError((Object _) => BoxSendOutcome.failed),
     ]);
     _noteBoxAnswers(peer, frames, answers, peerFrames: peerFrames);
     return answers;
+  }
+
+  /// One sealed frame to [frame]'s address: a friend's queue goes under
+  /// [permit] when the outbox is the box session; a sibling's (no permit) is
+  /// never gated.
+  Future<BoxSendOutcome> _deliverBoxFrame(
+    BoxOutbox outbox,
+    (ContactOutbound, Uint8List) frame, {
+    required BoxSendMode? mode,
+    required FriendPermit? permit,
+  }) {
+    if (outbox case final BoxFriendGateOutbox gate when permit != null) {
+      return gate.deliverFriend(frame.$1, frame.$2, mode: mode, permit: permit);
+    }
+    return outbox.deliver(frame.$1, frame.$2, mode: mode);
   }
 
   /// What the box answered each of [frames] — the first [peerFrames] to

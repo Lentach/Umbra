@@ -77,6 +77,16 @@ void main() {
       );
     });
 
+    test('false for a row that WAITS to be sent, whatever else it carries', () {
+      // A waiting row keeps status failed; an edit would have to keep the
+      // record's `q` flag, its order and its wire id, which nothing proves.
+      final waiting = _msg(
+        deliveryStatus: MessageDeliveryStatus.failed,
+        createdAt: now,
+      ).copyWith(waitingToSend: true, wireId: 'w-1');
+      expect(messageEditEligible(waiting, isMine: true, now: now), isFalse);
+    });
+
     test('false for placeholder / terminal content', () {
       for (final c in [
         '[encrypted]',

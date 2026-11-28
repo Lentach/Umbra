@@ -20,6 +20,7 @@ import '../services/box/box_device_pause.dart';
 import '../services/box/box_envelope.dart';
 import '../services/box/box_first_contact.dart';
 import '../services/box/box_frame.dart';
+import '../services/box/box_friend_gate.dart';
 import '../services/box/box_friends.dart';
 import '../services/box/box_media_fetcher.dart';
 import '../services/box/box_media_frame.dart';
@@ -35,7 +36,7 @@ import '../services/device_list/device_list_cache.dart';
 import '../services/device_list/sender_list_info.dart';
 import '../services/media_crypto_service.dart';
 import '../services/encryption/prekey_identity.dart'
-    show FriendFrameIdentity, friendFrameIdentity;
+    show FriendFrameIdentity, friendFrameIdentity, preKeyIdentityOf;
 import '../services/encryption_service.dart';
 import '../services/incoming_message_sound_service.dart';
 import '../services/link_preview_service.dart';
@@ -68,6 +69,7 @@ part 'messaging/messaging_provider.box_media_send.dart';
 part 'messaging/messaging_provider.box_receipts.dart';
 part 'messaging/messaging_provider.box_relay.dart';
 part 'messaging/messaging_provider.box_send.dart';
+part 'messaging/messaging_provider.box_pump.dart';
 part 'messaging/messaging_provider.box_sibling_read.dart';
 part 'messaging/messaging_provider.box_store.dart';
 part 'messaging/messaging_provider.box_sync.dart';
@@ -227,6 +229,50 @@ class MessagingProvider extends ChangeNotifier {
   void markSendRefusedForIdentityForTest(String tempId) =>
       _identityRefusedSendTempIds.add(tempId);
 
+  /// Whether a calm hold is pending for friend [peerId]: the friend write
+  /// gate closes on it (the red key-change bar never does).
+  bool hasCalmHold(int peerId) => _calmHolds.containsKey(peerId);
+
+  // The send pump's state (`messaging_provider.box_pump.dart`). A message the
+  // friend write gate refused WAITS: persisted (`q` in its `boxunsent`
+  // record) and sent by the pump when a state change opens the gate. All of
+  // it is keyed by (account, friend) so a switch of account never shares it.
+
+  /// Friends whose pump runs now, and whose pump was kicked while it ran.
+  final Set<(int, int)> _pumping = {};
+  final Set<(int, int)> _pumpAgain = {};
+
+  /// tempIds the pump is sending now: they may not be queued again.
+  final Set<String> _pumpOwned = {};
+
+  /// Waiting rows with no record to wait in: an attachment whose bytes live
+  /// only in RAM. They wait in this process; after a restart they are gone
+  /// like any failed attachment.
+  final Map<String, ({int conversationId, int at})> _ramWaiting = {};
+
+  /// tempIds whose last attempt failed for a reason that never passes (too
+  /// long, quote gone): the pump turns them into ordinary failed rows.
+  final Set<String> _sendNeverGoes = {};
+
+  /// Friends whose chat timer was refused by the closed gate: the CURRENT
+  /// timer is sent once when it opens.
+  final Set<(int, int)> _timerOwed = {};
+
+  /// tempIds the person deleted in this process (written synchronously by
+  /// `deleteMessage`). The pump read its record before the delete may have
+  /// run; [_claimWaiter] refuses such a row, so it is never sealed or sent.
+  final Set<String> _userDeletedTempIds = {};
+
+  void _clearPumpState() {
+    _pumping.clear();
+    _pumpAgain.clear();
+    _pumpOwned.clear();
+    _ramWaiting.clear();
+    _sendNeverGoes.clear();
+    _userDeletedTempIds.clear();
+    _timerOwed.clear();
+  }
+
   /// The `sendToken` minted per tempId: the message's wire id (spec §5.4).
   ///
   /// One token per SEND, deliberately REUSED by a retry of the same optimistic
@@ -305,6 +351,8 @@ class MessagingProvider extends ChangeNotifier {
     onReady: (_) {
       _reportShownBoxChatRead();
       unawaited(syncOwnPhoto());
+      // The lists a send reads are verified: what waited for them may go.
+      kickSendPumps();
     },
   );
 
@@ -417,6 +465,10 @@ class MessagingProvider extends ChangeNotifier {
   /// reads, so it is remembered. RAM only: the journal row is the frame, and
   /// a restart judges it again.
   final Map<int, bool> _boxHeld = {};
+
+  /// Friends whose new-key PreKey frame waits CALMLY for a tap (decision 152,
+  /// option C), by peer id. RAM only: the journal re-offer recreates it.
+  final Map<int, CalmHold> _calmHolds = {};
 
   /// Where a message goes: the box, the only path. `ConnectionProvider`
   /// wires the account session's one. Null = no route: every send fails.
@@ -616,6 +668,28 @@ class MessagingProvider extends ChangeNotifier {
   @visibleForTesting
   void seedCacheForTest(int conversationId, List<MessageModel> messages) {
     _conversationCache[conversationId] = List.from(messages);
+  }
+
+  /// Test-only: a calm hold of [peerId] in [state] (the screen tests need one
+  /// without a real PreKey frame).
+  @visibleForTesting
+  void seedCalmHoldForTest(int peerId, CalmHoldState state) {
+    _calmHolds[peerId] = CalmHold(
+      identity: 'seeded-identity',
+      device: 1,
+      firstReceivedAt: DateTime.utc(2026),
+      ciphertext: '3:AAAA',
+      state: state,
+    );
+    notifyListeners();
+  }
+
+  /// Test-only: the calm hold of [peerId] ends (the person tapped the line),
+  /// without the kick the real confirmation fires.
+  @visibleForTesting
+  void clearCalmHoldForTest(int peerId) {
+    _calmHolds.remove(peerId);
+    notifyListeners();
   }
 
   /// Test-only: the loaded rows INCLUDING the ones [messages] hides, so a test
@@ -951,6 +1025,10 @@ class MessagingProvider extends ChangeNotifier {
       _pendingEdits.clear();
       _emittedSendTempIds.clear();
       _identityRefusedSendTempIds.clear();
+      // The rows and the held attachment bytes are gone with this clear; a
+      // pump running for the same account goes on (it reads the records).
+      _ramWaiting.clear();
+      _sendNeverGoes.clear();
       _sendTokenByTempId.clear();
       _boxTempIds.clear();
       _boxUnsentTempIds.clear();
@@ -971,6 +1049,7 @@ class MessagingProvider extends ChangeNotifier {
       _boxUnsaved.clear();
       _boxSessionEpoch++;
       _boxHeld.clear();
+      _calmHolds.clear();
       _profileSent.clear();
       _profileFilesChecked = false;
       _profileMigrateTriedAt = null;
@@ -1037,11 +1116,13 @@ class MessagingProvider extends ChangeNotifier {
     _boxUnsaved.clear();
     _boxSessionEpoch++;
     _boxHeld.clear();
+    _calmHolds.clear();
     _profileSent.clear();
     _profileFilesChecked = false;
     _profileMigrateTriedAt = null;
     _emittedSendTempIds.clear();
     _identityRefusedSendTempIds.clear();
+    _clearPumpState();
     _sendTokenByTempId.clear();
     _boxTempIds.clear();
     _boxUnsentTempIds.clear();

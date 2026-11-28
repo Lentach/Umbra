@@ -225,6 +225,8 @@ extension MessagingBoxLocalRows on MessagingProvider {
         deliveryStatus: _boxInFlight.contains(tempId)
             ? MessageDeliveryStatus.sending
             : MessageDeliveryStatus.failed,
+        waitingToSend:
+            EncryptionService.boxUnsentWaits(e) && !_boxInFlight.contains(tempId),
         messageType: messageType,
         disappearAfterSeconds: ttl,
         expiresAt: ttl == null ? null : createdAt.add(Duration(seconds: ttl)),

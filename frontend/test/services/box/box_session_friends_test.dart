@@ -3,10 +3,14 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:fireplace/services/box/box_client.dart';
+import 'package:fireplace/services/box/box_first_contact.dart'
+    show BoxRequestSend;
 import 'package:fireplace/services/box/box_frame.dart';
+import 'package:fireplace/services/box/box_friend_gate.dart';
 import 'package:fireplace/services/box/box_friend_handoff.dart'
     show kFriendLookupInterval;
 import 'package:fireplace/services/box/box_friends.dart';
+import 'package:fireplace/services/box/box_outbox.dart';
 import 'package:fireplace/services/box/box_session.dart';
 import 'package:fireplace/services/box/box_signer.dart';
 import 'package:fireplace/services/box/box_wire.dart';
@@ -60,8 +64,11 @@ class _MemKv implements ContentKv {
   @override
   Set<String> getKeys() => _rows.keys.toSet();
 
+  bool failWrites = false;
+
   @override
   Future<bool> setString(String key, String value) async {
+    if (failWrites) return false;
     _rows[key] = value;
     return true;
   }
@@ -136,6 +143,9 @@ class _RoutingBox {
   Map<String, Object?>? deleteRefusal;
   final Map<String, FakeBoxSocket> _reader = {};
   int _queues = 0;
+
+  /// How many queues the box created for anybody so far.
+  int get queuesCreated => _queues;
   int _messages = 0;
   Map<String, Object?>? createRefusal;
 
@@ -155,6 +165,49 @@ class _RoutingBox {
       .length;
 }
 
+/// Seals like the real one but awaits first and then runs [onSeal]: a state
+/// change that lands while a frame is being sealed.
+class _HookSealer extends PointyGcmSealer {
+  void Function()? onSeal;
+
+  @override
+  Future<Uint8List?> seal(Uint8List key, Uint8List plaintext) async {
+    await Future<void>.delayed(Duration.zero);
+    onSeal?.call();
+    return super.seal(key, plaintext);
+  }
+}
+
+/// A [ContactStore] whose one migration a test can hold ([labelGate]) or make
+/// throw ([labelThrows]).
+class _LabelStore extends ContactStore {
+  _LabelStore({
+    required super.open,
+    required super.lock,
+    required super.accepts,
+  });
+
+  Completer<void>? labelGate;
+  bool labelThrows = false;
+
+  /// Returns false WITHOUT tagging anything (a record whose write is
+  /// refused), while set.
+  bool labelFalse = false;
+  int labelCalls = 0;
+
+  @override
+  Future<bool> tagUntaggedAddresses(
+    String? Function(int peerId) anchorOf,
+  ) async {
+    labelCalls++;
+    final gate = labelGate;
+    if (gate != null) await gate.future;
+    if (labelThrows) throw StateError('labelling failed');
+    if (labelFalse) return false;
+    return super.tagUntaggedAddresses(anchorOf);
+  }
+}
+
 /// One device of account [userId], friends with [friendId]: its own
 /// storage, box connection and [BoxSession]. Signal is faked as the identity
 /// (a "ciphertext" is the JSON itself); what is under test is who is handed
@@ -167,10 +220,17 @@ class _Device {
   final int friendId;
   final _RoutingBox box;
   final ContentKv kv = _MemKv();
-  late final ContactStore store;
+  late final _LabelStore store;
+
+  /// What `onAddressesLabelled` calls (the pump's kick in production).
+  void Function()? labelled;
   late BoxSession session;
   late FakeBoxSocket socket;
   bool started = false;
+
+  /// The seal of this device's session; [_HookSealer.onSeal] runs DURING the
+  /// seal's await, the window a write-time check exists for.
+  final _HookSealer sealer = _HookSealer();
 
   /// What the friend's VERIFIED list names live; null = not known now.
   Set<int>? friendLive;
@@ -187,6 +247,20 @@ class _Device {
   /// Every encrypt fails: no session could be built.
   bool encryptFails = false;
 
+  /// No reader is wired (the journal is never judged) while false.
+  bool journalWired = true;
+
+  /// A calm hold is pending for the friend.
+  bool calmHold = false;
+
+  /// `friendSessionUsable` of every session this device connects, wired
+  /// BEFORE the connect's own pass (a restart included); null: not wired.
+  Future<bool> Function(int user, int device)? usableSession;
+
+  /// The identity (base64) the frames this device reads are authenticated
+  /// under, as the messaging reader hands it to the box (null: unknown).
+  String? readIdentity;
+
   /// This device's clock.
   DateTime clock = DateTime.utc(2026, 9, 26, 12);
 
@@ -201,6 +275,7 @@ class _Device {
     int toDevice,
     String json, {
     bool fresh = false,
+    FriendPermit? permit,
   }) async {
     final live = friendLive;
     if (encryptFails ||
@@ -223,6 +298,9 @@ class _Device {
   /// Every `list_update` a friend device sent here (E50d/E50f).
   final List<Map<String, dynamic>> listUpdates = [];
 
+  /// Every body this device's reader decoded from the friend (test record).
+  final List<String> bodies = [];
+
   /// What `MessagingProvider.consumeBoxEntry` does with a friend's entry
   /// once decrypted: the reaction itself is the box's own
   /// [BoxSession.takeFriendHandoff] / [BoxSession.friendAcked].
@@ -230,6 +308,7 @@ class _Device {
     if (deaf || entry.peerUserId != friendId) return true;
     if (entry.carriedList case final list?) carried.add(list);
     final json = utf8.decode(base64Decode(entry.signal!.split(':')[1]));
+    bodies.add(json);
     final handoff = E2eEnvelope.parseQueueHandoff(json);
     if (handoff != null) {
       final taken = await session.takeFriendHandoff(
@@ -237,6 +316,7 @@ class _Device {
         entry.senderDeviceId,
         sid: handoff.sid,
         sealPub: handoff.sealPub,
+        learnedUnder: readIdentity,
       );
       return taken != FriendWrite.retryLater;
     }
@@ -252,6 +332,7 @@ class _Device {
             entry.peerUserId,
             entry.senderDeviceId,
             acked,
+            learnedUnder: readIdentity,
           ) !=
           FriendWrite.retryLater;
     }
@@ -277,6 +358,9 @@ class _Device {
   /// different set.
   List<ContactOutbound> Function()? serves;
 
+  /// The pinned-identity mirror handed to the session; null: none wired.
+  String? Function(int)? anchorOf;
+
   /// Every lookup throws, as a spent or unanswered one does.
   bool lookupFails = false;
 
@@ -292,6 +376,7 @@ class _Device {
           peerDeviceId: peer.deviceId,
           sid: peer.store.requestQueue!.sid,
           sealPub: peer.store.requestQueue!.sealPub,
+          idk: null,
         ),
   ];
 
@@ -313,7 +398,7 @@ class _Device {
   /// lookup spends this process's one ask of the friend, and the friend's
   /// device may not be up yet.
   Future<void> start({bool lookupAtStart = false}) async {
-    store = ContactStore(
+    store = _LabelStore(
       open: () async => kv,
       lock: <T>(_, action) => action(),
       accepts: (_) => true,
@@ -339,18 +424,27 @@ class _Device {
       ),
       store: store,
       emit: (event, _) => emitted.add(event),
-      seal: QueueSeal(cipher: PointyGcmSealer()),
+      seal: QueueSeal(cipher: sealer),
       now: () => clock,
+      anchorOf: anchorOf,
     )..start();
     socket = box.sockets.last;
     session
-      ..consumer = read
+      ..consumer = journalWired ? read : null
+      ..calmHeld = ((_) => calmHold)
       ..encryptForFriend = encrypt
       ..friendLiveDevices = ((user) async =>
           user == friendId ? friendLive : null)
       ..friendRevokedDevices = ((user) async =>
           user == friendId ? friendRevoked : null)
-      ..e2eReady();
+      ..onAddressesLabelled = (() => labelled?.call());
+    if (usableSession case final usable?) {
+      session
+        ..friendSessionUsable = usable
+        ..cachedFriendLiveDevices = ((user) async =>
+            user == friendId ? friendLive : null);
+    }
+    session.e2eReady();
     if (lookupAtStart) session.friendAddressLookup = _lookup;
     started = true;
     socket.serverConnect('S$userId.$deviceId');
@@ -800,6 +894,7 @@ void main() {
               ..[0] = 0xEE
               ..[1] = f,
           ),
+          idk: null,
         );
       }
       final session = BoxSession(
@@ -815,7 +910,7 @@ void main() {
       final socket = box.sockets.last;
       session
         ..consumer = ((_) async => true)
-        ..encryptForFriend = ((user, device, json, {fresh = false}) async =>
+        ..encryptForFriend = ((user, device, json, {fresh = false, permit}) async =>
             BoxFrame(
               kind: BoxFrameKind.whisper,
               senderDeviceId: 2,
@@ -922,7 +1017,7 @@ void main() {
   test('an ack naming a queue we do not hold is refused', () async {
     await a.start();
     expect(
-      await a.session.friendAcked(5, 3, boxB64(_bytes(32, 0x7f))),
+      await a.session.friendAcked(5, 3, boxB64(_bytes(32, 0x7f)), learnedUnder: null),
       FriendWrite.refused,
     );
   });
@@ -1012,6 +1107,7 @@ void main() {
         peerDeviceId: 3,
         sid: boxB64(_bytes(32, 0xEE)),
         sealPub: boxB64(_bytes(32, 0xEF)),
+        idk: null,
       );
       await a.store.update(5, (c) => c!.copyWith(outbound: [held]));
 
@@ -1048,6 +1144,7 @@ void main() {
         peerDeviceId: 3,
         sid: boxB64(_bytes(32, 0xEE)),
         sealPub: boxB64(_bytes(32, 0xEF)),
+        idk: null,
       );
       await a.store.update(5, (c) => c!.copyWith(outbound: [held]));
       a.session
@@ -1075,6 +1172,7 @@ void main() {
         peerDeviceId: 3,
         sid: boxB64(_bytes(32, 0xEE)),
         sealPub: boxB64(_bytes(32, 0xEF)),
+        idk: null,
       );
       await a.store.update(5, (c) => c!.copyWith(outbound: [held]));
       a.session
@@ -1297,6 +1395,33 @@ void main() {
     },
   );
 
+  // Mutation: `rekeyFriend` sets the once-per-session `_friendRekeyed` mark
+  // BEFORE it asks the gate: a re-key refused while the gate was closed is
+  // then given up for the whole session.
+  test(
+    'a re-key during the closed gate is not sent and not marked: it goes '
+    'out, once, when the gate opens',
+    () async {
+      await a.start();
+      await b.start();
+      var held = true;
+      a.session.calmHeld = (_) => held;
+
+      await a.session.rekeyFriend(5, 3);
+      await settle();
+      expect(a.freshFor, isEmpty, reason: 'nothing sealed while closed');
+
+      held = false;
+      await a.session.rekeyFriend(5, 3);
+      await settle();
+      expect(a.freshFor, [3], reason: 'not marked while closed');
+
+      await a.session.rekeyFriend(5, 3);
+      await settle();
+      expect(a.freshFor, [3], reason: 'once per session after that');
+    },
+  );
+
   // Mutation: `rekeyFriend` keeps `_friendAddressAsked` when the lookup
   // answers false (drop the `remove`): a re-key provoked while E2E was not
   // ready is given up for the session.
@@ -1449,6 +1574,7 @@ void main() {
           3,
           sid: handoff.sid,
           sealPub: handoff.sealPub,
+          learnedUnder: null,
         ),
         FriendWrite.stored,
       );
@@ -1462,6 +1588,7 @@ void main() {
         3,
         sid: handoff.sid,
         sealPub: handoff.sealPub,
+        learnedUnder: null,
       );
       a.session.runPass();
       await settle();
@@ -1739,6 +1866,208 @@ void main() {
         },
       );
 
+      // REVIEW3 probe: a hold standing while the friend's live device still
+      // writes to our lead (identity unchanged), and the friend revokes
+      // another device that had our queue: our rotation hands the new lead
+      // to nobody (the hold closes the handoff) and, before the P1 fix, the
+      // old lead was deleted after the box TTL while the live device still
+      // wrote to it. Written against the red clause, which is gone (a red
+      // bar holds nothing): driven through the CALM hold, the one hold left.
+      test('REVIEW3 rotation under a calm hold must not delete the queue a '
+          'live device still writes to', () async {
+        final old = a.friend.queues.single;
+        a.session.calmHeld = (_) => true;
+        a
+          ..friendLive = {4}
+          ..friendRevoked = {3};
+        a.session.friendDevicesChanged(5);
+        await settle();
+        final queues = a.friend.queues;
+        // The probe's diagnostic line, kept as the reviewer wrote it.
+        // ignore: avoid_print
+        print('REVIEW3 lead=${queues.first.sid.substring(0, 6)} '
+            'old=${old.sid.substring(0, 6)} '
+            'b2Holds=${b2.outboundOf(2)?.sid.substring(0, 6)} '
+            'oldRetiredAt=${queues.last.retiredAt}');
+        a.clock = a.clock.add(kBoxRedeliveryWindow + const Duration(minutes: 1));
+        a.session.friendDevicesChanged(5);
+        await settle();
+        final deleted = a.socket.emitted
+            .where((f) => f.event == 'deleteQueue')
+            .map((f) => f.frame['rid'])
+            .toList();
+        // The probe's diagnostic line, kept as the reviewer wrote it.
+        // ignore: avoid_print
+        print('REVIEW3 after31d queues=${a.friend.queues.length} '
+            'oldDeleted=${deleted.contains(old.rid)} '
+            'b2Holds=${b2.outboundOf(2)?.sid.substring(0, 6)}');
+        expect(
+          b2.outboundOf(2)?.sid == old.sid && deleted.contains(old.rid),
+          isFalse,
+          reason: 'b2 still writes to the deleted queue: lost',
+        );
+      });
+
+      /// The rids this device asked the box to delete.
+      List<Object?> deletedRids() => [
+        for (final f in a.socket.emitted)
+          if (f.event == 'deleteQueue') f.frame['rid'],
+      ];
+
+      /// The friend revokes device 3 while a calm hold keeps our handoff to
+      /// its live device 4 closed: our lead rotates, 4 still writes to the
+      /// old one. The old queue.
+      Future<ContactQueue> rotatedUnderAHold() async {
+        final old = a.friend.queues.single;
+        a.session.calmHeld = (_) => true;
+        a
+          ..friendLive = {4}
+          ..friendRevoked = {3};
+        a.session.friendDevicesChanged(5);
+        await settle();
+        expect(a.friend.queues, hasLength(2));
+        expect(a.friend.queues.last.rid, old.rid);
+        expect(b2.outboundOf(2)?.sid, old.sid, reason: 'not handed: held');
+        return old;
+      }
+
+      Future<void> past30Days() async {
+        a.clock = a.clock.add(kBoxRedeliveryWindow + const Duration(minutes: 1));
+        a.session.friendDevicesChanged(5);
+        await settle();
+      }
+
+      test('P1 CALM: a calm hold nobody taps never costs the queue the live '
+          'device still writes to', () async {
+        final old = await rotatedUnderAHold();
+        await past30Days();
+        expect(deletedRids(), isNot(contains(old.rid)));
+        expect(a.friend.queues.map((q) => q.rid), contains(old.rid));
+        // Still kept on every later pass and after a restart.
+        a.calmHold = true;
+        await a.restart();
+        a.session.friendDevicesChanged(5);
+        await settle();
+        expect(deletedRids(), isNot(contains(old.rid)));
+        expect(a.friend.queues.map((q) => q.rid), contains(old.rid));
+      });
+
+      test('P1: the hold ends within 30 d: the new lead is handed and the old '
+          'queue is deleted once the device acks it', () async {
+        final old = await rotatedUnderAHold();
+        a.session.calmHeld = (_) => false;
+        a.session.friendDevicesChanged(5);
+        await settle();
+        final lead = a.friend.queues.first;
+        expect(b2.outboundOf(2)?.sid, lead.sid, reason: 'handed the new lead');
+        expect(lead.ackedBy, [4]);
+        expect(deletedRids(), isEmpty, reason: 'not past the box TTL yet');
+        await past30Days();
+        expect(deletedRids(), [old.rid]);
+        expect(a.friend.queues.single.sid, lead.sid);
+      });
+
+      test('P1: the hold ends AFTER 30 d: the old queue is kept until the '
+          'device acks the new lead, and deleted a full TTL after that', () async {
+        final old = await rotatedUnderAHold();
+        await past30Days();
+        expect(deletedRids(), isEmpty);
+        a.session.calmHeld = (_) => false;
+        a.session.friendDevicesChanged(5);
+        await settle();
+        expect(b2.outboundOf(2)?.sid, a.friend.queues.first.sid);
+        a.session.friendDevicesChanged(5);
+        await settle();
+        expect(deletedRids(), isEmpty, reason: 'not on the next pass');
+        expect(a.friend.queues, hasLength(2));
+        await past30Days();
+        expect(deletedRids(), [old.rid]);
+        expect(a.friend.queues, hasLength(1));
+      });
+
+      // Review 4, P3-1: the box delivers a window of frames in flight, so
+      // the ack of the new lead can be read while the old queue still holds
+      // what the device wrote before it moved. The delete comes a full box
+      // TTL after the last pass that saw the device not yet on the lead.
+      test('a kept queue is not deleted on the pass right after the ack',
+          () async {
+        final old = await rotatedUnderAHold();
+        await past30Days();
+        expect(deletedRids(), isEmpty);
+        a.session.calmHeld = (_) => false;
+        a.session.friendDevicesChanged(5);
+        await settle();
+        final lead = a.friend.queues.first;
+        expect(b2.outboundOf(2)?.sid, lead.sid);
+        expect(lead.ackedBy, [4]);
+        a.clock = a.clock.add(const Duration(minutes: 1));
+        a.session.friendDevicesChanged(5);
+        await settle();
+        expect(deletedRids(), isEmpty, reason: 'the pass right after the ack');
+        expect(a.friend.queues, hasLength(2));
+        a.clock = a.clock.add(kBoxRedeliveryWindow - const Duration(minutes: 1));
+        a.session.friendDevicesChanged(5);
+        await settle();
+        expect(deletedRids(), isEmpty, reason: 'a full TTL has not passed');
+        await past30Days();
+        expect(deletedRids(), [old.rid]);
+        expect(a.friend.queues.single.sid, lead.sid);
+      });
+
+      test("P1: a revoked device's queue is still deleted: the device that "
+          'never took the new lead is revoked too', () async {
+        final old = await rotatedUnderAHold();
+        a
+          ..friendLive = {}
+          ..friendRevoked = {3, 4};
+        await past30Days();
+        expect(deletedRids(), [old.rid]);
+        expect(a.friend.queues, hasLength(1));
+      });
+
+      test('P1: friendship ended: every queue goes, a kept retired one too',
+          () async {
+        final old = await rotatedUnderAHold();
+        await past30Days();
+        final lead = a.friend.queues.first;
+        expect(deletedRids(), isEmpty);
+        await a.session.endBoxFriendship(5, block: false);
+        expect(deletedRids(), unorderedEquals([old.rid, lead.rid]));
+        expect(a.store.byUserId(5), isNull);
+      });
+
+      test('P2-2: a revoke first seen AFTER a re-announce still rotates our '
+          'lead away: the revoked device loses it', () async {
+        final old = a.friend.queues.single;
+        // The re-announce clears what was acked and handed; a calm hold
+        // keeps it from being handed again.
+        a.session.calmHeld = (_) => true;
+        a.session.identityReminted();
+        await settle();
+        expect(a.friend.queues.single.ackedBy, isEmpty);
+        expect(a.friend.queues.single.handedAt, isEmpty);
+        a
+          ..friendLive = {4}
+          ..friendRevoked = {3};
+        a.session.friendDevicesChanged(5);
+        await settle();
+        final queues = a.friend.queues;
+        expect(queues, hasLength(2), reason: 'the lead rotated');
+        expect(queues.first.sid, isNot(old.sid));
+        expect(queues.last.rid, old.rid);
+        expect(queues.last.retiredAt, isNotNull);
+        expect(a.outboundOf(3), isNull);
+        a.session.calmHeld = (_) => false;
+        a.session.friendDevicesChanged(5);
+        await settle();
+        expect(b2.outboundOf(2)?.sid, a.friend.queues.first.sid);
+        expect(
+          b.outboundOf(2)?.sid,
+          old.sid,
+          reason: 'the revoked device never learns the new queue',
+        );
+      });
+
       test(
         'our list goes as a list_update to every live device of the friend '
         'we hold an address for, and only a box that took every frame '
@@ -1838,6 +2167,1208 @@ void main() {
           expect(b2.listUpdates, hasLength(1));
         },
       );
+    });
+  });
+
+  group('the friend write gate (slice 2)', () {
+    /// A second session on [a]'s store whose pinned identity is [anchor].
+    BoxSession gated(String? Function(int) anchor, {bool wired = true}) {
+      final s = BoxSession(
+        box: BoxClient(
+          baseUrl: 'http://box.test',
+          socketFactory: box.sockets.call,
+        ),
+        store: a.store,
+        emit: (event, _) {},
+        seal: QueueSeal(cipher: PointyGcmSealer()),
+        now: () => a.clock,
+        anchorOf: anchor,
+      )..start();
+      if (wired) {
+        s
+          ..consumer = ((_) async => true)
+          ..e2eReady();
+      }
+      return s;
+    }
+
+    Future<ContactOutbound> tagged(String idk) async {
+      await a.store.update(
+        5,
+        (c) => c!.copyWith(
+          outbound: [for (final o in c.outbound) o.copyWith(idk: idk)],
+        ),
+      );
+      return a.friend.outbound.single;
+    }
+
+    Future<void> met() async {
+      await a.start();
+      await b.start();
+      a.session.runPass();
+      b.session.runPass();
+      await settle();
+    }
+
+    test('deliver without permit is refused', () async {
+      await met();
+      final to = a.friend.outbound.single;
+      expect(
+        await a.session.deliver(to, Uint8List.fromList([1, 2, 3])),
+        BoxSendOutcome.failed,
+      );
+      final permit = a.session.permitFor(5, to: [to]);
+      expect(permit, isNotNull);
+      expect(
+        await a.session.deliverFriend(
+          to,
+          Uint8List.fromList([1, 2, 3]),
+          permit: permit,
+        ),
+        BoxSendOutcome.taken,
+      );
+    });
+
+    test('send between E2E ready and the first journal drain waits; the '
+        'empty journal opens the gate', () async {
+      await met();
+      final to = await tagged('A');
+      final s = gated((_) => 'A', wired: false)..e2eReady();
+      expect(s.permitFor(5, to: [to]), isNull, reason: 'no reader wired yet');
+      s.consumer = (_) async => true;
+      await settle();
+      expect(s.permitFor(5, to: [to]), isNotNull, reason: 'empty journal');
+      s.dispose();
+    });
+
+    test('an address tagged with another identity than the pin is refused, '
+        'and a permit sealed before the pin moved is not written', () async {
+      await met();
+      final to = await tagged('A');
+      var anchor = 'A';
+      final s = gated((_) => anchor);
+      await settle();
+      final permit = s.permitFor(5, to: [to])!;
+      anchor = 'B';
+      expect(s.permitFor(5, to: [to]), isNull, reason: 'old address is stale');
+      expect(
+        await s.deliverFriend(to, Uint8List.fromList([9]), permit: permit),
+        BoxSendOutcome.failed,
+        reason: 'sealed under A, written after the move to B',
+      );
+      s.dispose();
+    });
+
+    test('first message to a friend with no anchor goes out', () async {
+      a.anchorOf = (_) => null;
+      await met();
+      final to = a.friend.outbound.single;
+      final permit = a.session.permitFor(5, to: [to])!;
+      expect(permit.firstPin, isTrue);
+      expect(
+        await a.session.deliverFriend(
+          to,
+          Uint8List.fromList([9]),
+          permit: permit,
+        ),
+        BoxSendOutcome.taken,
+      );
+    });
+
+    /// The connected session of [a], with the friend's pin read from
+    /// [anchor].
+    Future<void> metWithAnchor(String Function() anchor) async {
+      a.anchorOf = (_) => anchor();
+      await met();
+    }
+
+    Future<BoxSendOutcome> write(ContactOutbound to, FriendPermit? permit) =>
+        a.session.deliverFriend(
+          to,
+          Uint8List.fromList([9]),
+          permit: permit,
+        );
+
+    test('a permit sealed under the old pin is not written once the SAME '
+        'address is re-tagged under the new one', () async {
+      var pin = 'A';
+      await metWithAnchor(() => pin);
+      var to = await tagged('A');
+      final permit = a.session.permitFor(5, to: [to])!;
+      expect(
+        await write(to, permit),
+        BoxSendOutcome.taken,
+        reason: 'the session writes while nothing moved',
+      );
+      // The friend kept its queue and announced it again under B (the
+      // re-tag): the address is current for B, only the permit is old.
+      pin = 'B';
+      to = await tagged('B');
+      expect(a.session.permitFor(5, to: [to]), isNotNull, reason: 'current');
+      expect(
+        await write(to, permit),
+        BoxSendOutcome.failed,
+        reason: 'sealed under A, written after the pin moved to B',
+      );
+    });
+
+    test('a calm hold closes the gate, and a permit taken before it is not '
+        'written during it', () async {
+      await metWithAnchor(() => 'A');
+      final to = await tagged('A');
+      var held = false;
+      a.session.calmHeld = (_) => held;
+      final permit = a.session.permitFor(5, to: [to])!;
+      held = true;
+      expect(a.session.permitFor(5, to: [to]), isNull, reason: 'none held');
+      expect(
+        await write(to, permit),
+        BoxSendOutcome.failed,
+        reason: 'sealed before the hold, written during it',
+      );
+      held = false;
+      expect(
+        await write(to, permit),
+        BoxSendOutcome.taken,
+        reason: 'the hold ended',
+      );
+    });
+
+    test('a calm hold also refuses an upload on a permit taken before it, '
+        'and the own lane is not gated', () async {
+      await metWithAnchor(() => 'A');
+      final to = await tagged('A');
+      var held = false;
+      a.session.calmHeld = (_) => held;
+      final permit = a.session.permitFor(5, to: [to])!;
+      held = true;
+      expect(a.session.permitFor(5, to: [to]), isNull, reason: 'none given');
+      expect(
+        await write(to, permit),
+        BoxSendOutcome.failed,
+        reason: 'sealed before the hold, written during it',
+      );
+      final framed = Uint8List.fromList(List.filled(kBoxMediaLadder.first, 1));
+      expect(
+        await a.session.uploadMediaFriend(to, framed, permit: permit),
+        isA<BoxRefused<BoxMediaRef>>(),
+      );
+      final self = a.store.selfQueue!;
+      final own = ContactOutbound(
+        peerDeviceId: 9,
+        sid: self.sid,
+        sealPub: self.sealPub,
+        idk: null,
+      );
+      expect(
+        await a.session.deliver(own, Uint8List.fromList([1])),
+        BoxSendOutcome.taken,
+      );
+      held = false;
+      expect(
+        await write(to, permit),
+        BoxSendOutcome.taken,
+        reason: 'the hold ended',
+      );
+    });
+
+    test('an address the friend no longer holds gets no permit and no '
+        'write, though it was current when the permit was taken', () async {
+      await metWithAnchor(() => 'A');
+      final to = await tagged('A');
+      final permit = a.session.permitFor(5, to: [to])!;
+      // The friend's handoff replaced the address: the old sid is nobody's
+      // now.
+      final replaced = ContactOutbound(
+        peerDeviceId: to.peerDeviceId,
+        sid: boxB64(Uint8List(32)..fillRange(0, 32, 7)),
+        sealPub: to.sealPub,
+        idk: 'A',
+      );
+      await a.store.update(5, (c) => c!.copyWith(outbound: [replaced]));
+      expect(a.session.permitFor(5, to: [to]), isNull, reason: 'not held');
+      expect(
+        await write(to, permit),
+        BoxSendOutcome.failed,
+        reason: "the old queue is no longer the friend's",
+      );
+      final framed = Uint8List.fromList(List.filled(kBoxMediaLadder.first, 1));
+      expect(
+        await a.session.uploadMediaFriend(to, framed, permit: permit),
+        isA<BoxRefused<BoxMediaRef>>(),
+        reason: 'nor is a media upload charged to it',
+      );
+    });
+
+    test('with the gate closed for a friend, a write and an upload to the '
+        'own queue (a sibling lane) still go through', () async {
+      await metWithAnchor(() => 'A');
+      final friendTo = await tagged('A');
+      a.session.calmHeld = (_) => true;
+      expect(a.session.permitFor(5, to: [friendTo]), isNull, reason: 'closed');
+      expect(
+        await write(friendTo, null),
+        BoxSendOutcome.failed,
+        reason: 'a friend write is refused',
+      );
+      final self = a.store.selfQueue!;
+      final own = ContactOutbound(
+        peerDeviceId: 9,
+        sid: self.sid,
+        sealPub: self.sealPub,
+        idk: null,
+      );
+      expect(
+        await a.session.deliver(own, Uint8List.fromList([1])),
+        BoxSendOutcome.taken,
+      );
+      final framed = Uint8List.fromList(List.filled(kBoxMediaLadder.first, 1));
+      // The fake box has no media route (an unknown answer): what matters is
+      // that the gate did not refuse it.
+      expect(
+        await a.session.uploadMedia(own, framed),
+        isNot(isA<BoxRefused<BoxMediaRef>>()),
+        reason: 'an own-queue upload is never gated',
+      );
+    });
+
+    group('item 13: the ungated lane is positive', () {
+      final body = Uint8List.fromList([1, 2, 3]);
+      final framed = Uint8List.fromList(List.filled(kBoxMediaLadder.first, 1));
+
+      /// [a] met [b]; then the friend's handoff replaced the address: the
+      /// returned OLD one is nobody's now.
+      Future<ContactOutbound> replacedOld() async {
+        await metWithAnchor(() => 'A');
+        final old = await tagged('A');
+        final replaced = ContactOutbound(
+          peerDeviceId: old.peerDeviceId,
+          sid: boxB64(_bytes(32, 7)),
+          sealPub: old.sealPub,
+          idk: 'A',
+        );
+        await a.store.update(5, (c) => c!.copyWith(outbound: [replaced]));
+        box.sent.clear();
+        return old;
+      }
+
+      test('deliver with no permit to the replaced old sid is refused', () async {
+        final old = await replacedOld();
+        expect(await a.session.deliver(old, body), BoxSendOutcome.failed);
+        expect(box.sent, isNot(contains(old.sid)), reason: 'the OLD queue');
+        expect(box.sent, isEmpty);
+      });
+
+      test('upload with no permit to the replaced old sid is refused', () async {
+        final old = await replacedOld();
+        expect(
+          await a.session.uploadMedia(old, framed),
+          isA<BoxRefused<BoxMediaRef>>(),
+        );
+      });
+
+      test('deliver, request and upload with no permit to a random sid are '
+          'refused', () async {
+        final old = await replacedOld();
+        final random = ContactOutbound(
+          peerDeviceId: 9,
+          sid: boxB64(_bytes(32, 0x33)),
+          sealPub: old.sealPub,
+          idk: null,
+        );
+        expect(await a.session.deliver(random, body), BoxSendOutcome.failed);
+        expect(
+          await a.session.deliverRequest(random, body),
+          BoxRequestSend.failed,
+        );
+        expect(
+          await a.session.uploadMedia(random, framed),
+          isA<BoxRefused<BoxMediaRef>>(),
+        );
+        expect(box.sent, isEmpty, reason: 'no queue was written');
+      });
+
+      test('own self queue, own request queue and a known sibling still take '
+          'a write and an upload with no permit', () async {
+        final old = await replacedOld();
+        final self = a.store.selfQueue!;
+        final request = a.store.requestQueue!;
+        final siblingSid = boxB64(_bytes(32, 0x44));
+        expect(
+          await a.store.learnSibling(9, sid: siblingSid, sealPub: old.sealPub),
+          SiblingWrite.stored,
+        );
+        final own = [
+          for (final (sid, sealPub) in [
+            (self.sid, self.sealPub),
+            (request.sid, request.sealPub),
+            (siblingSid, old.sealPub),
+          ])
+            ContactOutbound(
+              peerDeviceId: 9,
+              sid: sid,
+              sealPub: sealPub,
+              idk: null,
+            ),
+        ];
+        for (final to in own) {
+          expect(await a.session.deliver(to, body), BoxSendOutcome.taken);
+          // The fake box has no media route (an unknown answer): what
+          // matters is that the session did not refuse it.
+          expect(
+            await a.session.uploadMedia(to, framed),
+            isNot(isA<BoxRefused<BoxMediaRef>>()),
+          );
+        }
+        expect(box.sent, [self.sid, request.sid, siblingSid]);
+      });
+
+      test('a first-contact request to a served request address still goes '
+          'out on its request permit', () async {
+        await replacedOld();
+        final theirs = b.store.requestQueue!;
+        final to = ContactOutbound(
+          peerDeviceId: 3,
+          sid: theirs.sid,
+          sealPub: theirs.sealPub,
+          idk: null,
+        );
+        a.session.takeServedAddresses(5, [to]);
+        expect(await a.session.deliverRequest(to, body), BoxRequestSend.taken);
+        expect(box.sent, [theirs.sid]);
+      });
+    });
+
+    group('item 7: a stale address never causes a lookup', () {
+      /// [a] and [b] met under 'A'; then the pin moved to 'B' and the
+      /// friend's stored address (still tagged 'A') is stale.
+      Future<void> staleAfterMove(String Function() pin) async {
+        await metWithAnchor(pin);
+        await tagged('A');
+        box.sent.clear();
+        a.lookups.clear();
+      }
+
+      /// Our queue for the friend: handed to and acked by device 3, as a
+      /// pair that has talked leaves it.
+      Future<void> markHandedAndAcked() async {
+        await a.store.update(
+          5,
+          (c) => c!.copyWith(
+            queues: [
+              for (final q in c.queues) q.withAck(3).withHanded(3, a.clock),
+            ],
+          ),
+        );
+      }
+
+      ContactOutbound requestOf(_Device d, String idk) => ContactOutbound(
+        peerDeviceId: d.deviceId,
+        sid: d.store.requestQueue!.sid,
+        sealPub: d.store.requestQueue!.sealPub,
+        idk: idk,
+      );
+
+      test('an anchor move makes our handoff due again, and it goes only to '
+          'an already-served request address, never the stale queue',
+          () async {
+        var pin = 'A';
+        await staleAfterMove(() => pin);
+        final stale = a.friend.outbound.single;
+        await markHandedAndAcked();
+        expect(a.friend.queues.first.ackedBy, [3], reason: 'acked before');
+        pin = 'B';
+        await a.session.anchorMoved(5);
+        await settle();
+        expect(a.friend.queues.first.ackedBy, isEmpty, reason: 'due again');
+        expect(a.friend.queues.first.handedAt, isEmpty, reason: 'due again');
+        expect(
+          box.sent.where((s) => s == stale.sid),
+          isEmpty,
+          reason: 'nothing served: nothing at all is written to the stale '
+              'queue',
+        );
+        expect(a.lookups, isEmpty, reason: 'and no lookup asked for it');
+
+        a.session.takeServedAddresses(5, [requestOf(b, 'B')]);
+        a.lookups.clear();
+        box.sent.clear();
+        a.session.handOffTo(5);
+        await settle();
+        // The handoff left through b's REQUEST queue; what follows is b's own
+        // ack and hand-back, written into OUR queue (not a's writes).
+        expect(box.sent.first, b.store.requestQueue!.sid);
+        expect(
+          box.sent.skip(1).toSet().difference({
+            for (final q in a.friend.queues) q.sid,
+          }),
+          isEmpty,
+          reason: 'b answers into a queue of ours (the lead), never a write '
+              'of a to the stale one',
+        );
+        expect(box.sent, isNot(contains(stale.sid)));
+        expect(a.lookups, isEmpty);
+      });
+
+      test('connect, handoff passes and pump kicks with a stale address '
+          'record no lookup at all', () async {
+        var pin = 'A';
+        await metWithAnchor(() => pin);
+        final stale = await tagged('A');
+        await a.store.update(
+          5,
+          (c) => c!.copyWith(
+            queues: [for (final q in c.queues) q.withoutHandoffState()],
+          ),
+        );
+        pin = 'B';
+        // Past the 24 h floor: the floor is no reason for there being no
+        // lookup.
+        a.clock = a.clock.add(const Duration(days: 2));
+        box.sent.clear();
+        a.lookups.clear();
+        await a.restart(lookupAtStart: true);
+        a.session
+          ..runPass()
+          ..handOffTo(5)
+          ..friendHeard(5, 3);
+        await settle();
+        a.session.runPass();
+        await settle();
+        expect(a.lookups, isEmpty);
+        expect(
+          box.sent.where((s) => s == stale.sid),
+          isEmpty,
+          reason: 'nothing is written to the stale queue',
+        );
+      });
+    });
+  });
+
+  group('decision A: a stale address receives NOTHING', () {
+    test('across an anchor move, connects, passes and heard frames zero '
+        'frames of any kind are written to the stale sid, no queue is made '
+        'because of staleness and no lookup asked', () async {
+      var pin = 'A';
+      a.anchorOf = (_) => pin;
+      await a.start();
+      await b.start();
+      a.session.runPass();
+      b.session.runPass();
+      await settle();
+      await a.store.update(
+        5,
+        (c) => c!.copyWith(
+          outbound: [for (final o in c.outbound) o.copyWith(idk: 'A')],
+        ),
+      );
+      final stale = a.friend.outbound.single;
+      final queues = [for (final q in a.friend.queues) q.sid];
+      b.deaf = true;
+      a.readIdentity = 'B';
+      box.sent.clear();
+      a.lookups.clear();
+      final created = box.queuesCreated;
+      pin = 'B';
+      await a.session.anchorMoved(5);
+      await settle();
+      for (var i = 0; i < 3; i++) {
+        await a.restart();
+        await settle();
+        a.session
+          ..runPass()
+          ..handOffTo(5)
+          ..friendHeard(5, 3)
+          ..storeOpened()
+          ..accountReady(2);
+        await settle();
+      }
+      expect(
+        box.sent.where((s) => s == stale.sid),
+        isEmpty,
+        reason: 'nothing at all is written to a stale address',
+      );
+      expect(box.sent, isEmpty, reason: 'and nothing served: nothing leaves');
+      expect(box.queuesCreated, created, reason: 'no queue because of it');
+      expect([for (final q in a.friend.queues) q.sid], queues);
+      expect(a.lookups, isEmpty);
+      final to = a.outboundOf(3)!;
+      expect(to.idk, 'A', reason: 'still stale: nothing re-tags it');
+      expect(a.session.permitFor(5, to: [to]), isNull);
+      expect(
+        await a.session.deliverFriend(to, Uint8List(1)),
+        BoxSendOutcome.failed,
+      );
+      expect(box.sent, isEmpty);
+    });
+  });
+
+  group('an ack counts only under the pinned identity', () {
+    Future<ContactQueue> metThenMoved(String? Function() pin) async {
+      a.anchorOf = (_) => pin();
+      await a.start();
+      await b.start();
+      a.session.runPass();
+      b.session.runPass();
+      await settle();
+      await a.store.update(
+        5,
+        (c) => c!.copyWith(
+          outbound: [for (final o in c.outbound) o.copyWith(idk: 'A')],
+        ),
+      );
+      await a.store.update(
+        5,
+        (c) => c!.copyWith(
+          queues: [
+            for (final q in c.queues) q.withAck(3).withHanded(3, a.clock),
+          ],
+        ),
+      );
+      expect(a.friend.queues.first.ackedBy, [3], reason: 'acked before');
+      a.lookups.clear();
+      return a.friend.queues.first;
+    }
+
+    test('anchor moves, our queue is due again, a late ack under the OLD '
+        'identity arrives: ackedBy stays clear and the handoff is still due; '
+        'the ack under the NEW identity marks it', () async {
+      var pin = 'A';
+      final lead = await metThenMoved(() => pin);
+      pin = 'B';
+      await a.session.anchorMoved(5);
+      await settle();
+      expect(a.friend.queues.first.ackedBy, isEmpty, reason: 'due again');
+      expect(
+        await a.session.friendAcked(5, 3, lead.sid, learnedUnder: 'A'),
+        FriendWrite.refused,
+        reason: 'a late ack of the old install',
+      );
+      expect(a.friend.queues.first.ackedBy, isEmpty);
+      expect(
+        await a.session.friendAcked(5, 3, lead.sid, learnedUnder: null),
+        FriendWrite.refused,
+        reason: 'an ack of unknown identity does not count either',
+      );
+      expect(a.friend.queues.first.ackedBy, isEmpty);
+      expect(
+        await a.session.friendAcked(5, 3, lead.sid, learnedUnder: 'B'),
+        FriendWrite.stored,
+      );
+      expect(a.friend.queues.first.ackedBy, [3]);
+      expect(a.lookups, isEmpty);
+    });
+
+    test('with no anchor pinned an ack counts (null-anchor rule)', () async {
+      String? pin = 'A';
+      final lead = await metThenMoved(() => pin);
+      pin = null;
+      await a.store.update(
+        5,
+        (c) => c!.copyWith(
+          queues: [c.queues.first.withoutHandoffState(), ...c.queues.skip(1)],
+        ),
+      );
+      expect(
+        await a.session.friendAcked(5, 3, lead.sid, learnedUnder: null),
+        FriendWrite.stored,
+      );
+      expect(a.friend.queues.first.ackedBy, [3]);
+    });
+
+    test('N04: with no anchor pinned an ack counts under ANY identity, a '
+        'known one included (the rule compares only against a pin)', () async {
+      String? pin = 'A';
+      final lead = await metThenMoved(() => pin);
+      pin = null;
+      await a.store.update(
+        5,
+        (c) => c!.copyWith(
+          queues: [c.queues.first.withoutHandoffState(), ...c.queues.skip(1)],
+        ),
+      );
+      expect(
+        await a.session.friendAcked(5, 3, lead.sid, learnedUnder: 'C'),
+        FriendWrite.stored,
+      );
+      expect(a.friend.queues.first.ackedBy, [3]);
+    });
+  });
+
+  group('re-announce (decision B)', () {
+    int handoffsToB() => b.bodies
+        .where((json) => E2eEnvelope.parseQueueHandoff(json) != null)
+        .length;
+
+    Future<void> met() async {
+      await a.start();
+      await b.start();
+      a.session.runPass();
+      b.session.runPass();
+      await settle();
+      expect(a.friend.queues.first.ackedBy, [3], reason: 'met and acked');
+    }
+
+    Future<void> makeLegacy() => a.store.update(
+      5,
+      (c) => c!.copyWith(reannounced: false),
+    );
+
+    test('upgrade one-shot: the first start hands every friend once, the '
+        'second hands nobody; a fresh install hands nobody; no lookup',
+        () async {
+      await met();
+      final before = handoffsToB();
+      a.lookups.clear();
+      await a.restart();
+      await settle();
+      expect(handoffsToB(), before, reason: 'a fresh install: nobody');
+      await makeLegacy();
+      final sid = a.friend.queues.first.sid;
+      await a.restart();
+      await settle();
+      expect(handoffsToB(), before + 1, reason: 'the upgrade hands once');
+      expect(a.friend.reannounced, isTrue);
+      expect(a.friend.queues.first.sid, sid, reason: 'the SAME queue');
+      await a.restart();
+      await settle();
+      expect(handoffsToB(), before + 1, reason: 'the second start: nobody');
+      expect(a.lookups, isEmpty);
+    });
+
+    test('a kill between clearing and the flag cannot lose the re-announce '
+        'or repeat it forever: they are ONE write', () async {
+      await met();
+      await makeLegacy();
+      final before = handoffsToB();
+      final kv = (a.kv as _MemKv)..failWrites = true;
+      await a.restart();
+      await settle();
+      expect(a.friend.reannounced, isFalse, reason: 'the write was refused');
+      expect(a.friend.queues.first.ackedBy, [3], reason: 'and nothing cleared');
+      expect(handoffsToB(), before);
+      kv.failWrites = false;
+      a.session.storeOpened();
+      await settle();
+      expect(a.friend.reannounced, isTrue);
+      expect(handoffsToB(), before + 1, reason: 'not lost');
+      await a.restart();
+      await settle();
+      expect(handoffsToB(), before + 1, reason: 'not repeated');
+    });
+
+    test('an identity re-minted while the store is kept hands every queue '
+        'again, the same sid; an unchanged queue changes nothing on the '
+        'receiver and is acked; no lookup', () async {
+      await met();
+      final sid = a.friend.queues.first.sid;
+      final before = handoffsToB();
+      final held = jsonEncode([for (final o in b.friend.outbound) o.toJson()]);
+      a.lookups.clear();
+      a.session.identityReminted();
+      await settle();
+      expect(handoffsToB(), before + 1);
+      expect(a.friend.queues.first.sid, sid);
+      expect(
+        jsonEncode([for (final o in b.friend.outbound) o.toJson()]),
+        held,
+        reason: 'nothing changed on the receiver',
+      );
+      expect(a.friend.queues.first.ackedBy, [3], reason: 'and it was acked');
+      expect(a.lookups, isEmpty);
+    });
+
+    group('re-announce fetches (review 3, P2-1)', () {
+      var fetches = 0;
+      var control = 0;
+      var usable = false;
+
+      /// A pre-upgrade record whose friend lists are counted: [fetches] is
+      /// every list the pass asked the SERVER for; the held list is free.
+      Future<void> legacyAndWired() async {
+        await met();
+        a.session
+          ..friendLiveDevices = ((_) async {
+            fetches++;
+            return a.friendLive;
+          })
+          ..cachedFriendLiveDevices = ((_) async => a.friendLive)
+          ..friendSessionUsable = ((_, _) async => usable);
+        await settle();
+        // The store open's own ordinary pass looks lists up like every
+        // connect's: measured on a record that is not legacy, the one-shot
+        // adds nothing to it.
+        fetches = 0;
+        a.session.storeOpened();
+        await settle();
+        control = fetches;
+        expect(control, greaterThan(0), reason: 'the control pass looks up');
+        await makeLegacy();
+        fetches = 0;
+        a.lookups.clear();
+      }
+
+      // Review 4, P2-1: the reviewer's probe, as written.
+      test('REVIEW4 the one-shot skip is not deferred to the next ordinary '
+          'pass', () async {
+        await legacyAndWired();
+        usable = false;
+        final before = handoffsToB();
+        a.session.storeOpened();
+        await settle();
+        expect(handoffsToB(), before, reason: 'skipped');
+        fetches = 0;
+        // Any ordinary pass later in the session (a list change, a
+        // connect): no frame from b in between.
+        a.session.friendDevicesChanged(5);
+        await settle();
+        expect(handoffsToB(), before,
+            reason: 'sealed on an UNUSABLE session (prod: a bundle fetch) '
+                'only because the one-shot cleared the ack');
+      });
+
+      /// The one-shot ran while device 3 had no usable session: skipped.
+      /// Every later session of this device reads [usable] from its start.
+      Future<int> skippedByTheOneShot() async {
+        await legacyAndWired();
+        usable = false;
+        a.usableSession = (_, _) async => usable;
+        final before = handoffsToB();
+        a.session.storeOpened();
+        await settle();
+        expect(a.friend.reannounced, isTrue);
+        expect(handoffsToB(), before, reason: 'skipped');
+        return before;
+      }
+
+      test('after a restart the skipped device is still not handed on an '
+          'unusable session', () async {
+        final before = await skippedByTheOneShot();
+        await a.restart();
+        await settle();
+        expect(handoffsToB(), before, reason: "the start's own pass");
+        a.session.friendDevicesChanged(5);
+        await settle();
+        expect(handoffsToB(), before, reason: 'a later ordinary pass');
+        expect(a.lookups, isEmpty);
+      });
+
+      test('once the session becomes usable it is handed exactly once',
+          () async {
+        final before = await skippedByTheOneShot();
+        a.session.friendDevicesChanged(5);
+        await settle();
+        expect(handoffsToB(), before, reason: 'unusable: an ordinary pass');
+        await a.restart();
+        await settle();
+        expect(handoffsToB(), before, reason: 'unusable: after a restart');
+        usable = true;
+        a.session.friendDevicesChanged(5);
+        await settle();
+        expect(handoffsToB(), before + 1, reason: 'usable: handed');
+        expect(a.friend.queues.first.ackedBy, [3]);
+        usable = false;
+        a.session.friendDevicesChanged(5);
+        await settle();
+        await a.restart();
+        await settle();
+        expect(handoffsToB(), before + 1, reason: 'exactly once');
+        expect(a.lookups, isEmpty);
+      });
+
+      test('a skipped device no address is held for causes no handle lookup '
+          'in a later ordinary pass or after a restart', () async {
+        await legacyAndWired();
+        usable = false;
+        a.usableSession = (_, _) async => usable;
+        await a.store.update(5, (c) => c!.copyWith(outbound: const []));
+        // The 24 h since the last lookup of this friend have passed: a pass
+        // that finds the device due and no address MAY ask now.
+        a.clock = a.clock.add(const Duration(days: 2));
+        await a.restart(lookupAtStart: true);
+        await settle();
+        expect(a.friend.reannounced, isTrue, reason: 'the one-shot ran');
+        a.session.friendDevicesChanged(5);
+        await settle();
+        await a.restart(lookupAtStart: true);
+        await settle();
+        expect(a.lookups, isEmpty);
+      });
+
+      test('an anchor move ends the skip: the new identity of the friend '
+          'holds nothing of ours, so its handoff is due whatever the session',
+          () async {
+        final before = await skippedByTheOneShot();
+        await a.session.anchorMoved(5);
+        await settle();
+        expect(handoffsToB(), before + 1);
+      });
+
+      test('a re-mint ends the skip: every queue is handed again whatever '
+          'the session', () async {
+        final before = await skippedByTheOneShot();
+        a.session.identityReminted();
+        await settle();
+        expect(handoffsToB(), before + 1);
+      });
+
+      test('the upgrade one-shot seals only on a usable session: no fetch, '
+          'the device is skipped, and its next frame hands it', () async {
+        await legacyAndWired();
+        usable = false;
+        final before = handoffsToB();
+        a.session.storeOpened();
+        await settle();
+        expect(a.friend.reannounced, isTrue);
+        expect(a.friend.queues.first.ackedBy, isEmpty);
+        expect(handoffsToB(), before, reason: 'no session: skipped');
+        expect(fetches, lessThanOrEqualTo(control), reason: 'one-shot: none');
+        expect(a.lookups, isEmpty);
+        usable = true;
+        a.session.friendHeard(5, 3);
+        await settle();
+        expect(handoffsToB(), before + 1, reason: 'its frame hands it');
+        expect(a.friend.queues.first.ackedBy, [3]);
+        expect(fetches, lessThanOrEqualTo(control), reason: 'a frame: none');
+        expect(a.lookups, isEmpty);
+      });
+
+      test('the upgrade one-shot on a usable session hands once and '
+          'fetches nothing', () async {
+        await legacyAndWired();
+        usable = true;
+        final before = handoffsToB();
+        a.session.storeOpened();
+        await settle();
+        expect(handoffsToB(), before + 1);
+        expect(fetches, lessThanOrEqualTo(control));
+        expect(a.lookups, isEmpty);
+      });
+
+      test('a re-mint keeps its fetches: a new identity has no session, so '
+          'the pass is not quiet and hands whatever the session state', () async {
+        await legacyAndWired();
+        usable = false;
+        final before = handoffsToB();
+        a.session.identityReminted();
+        await settle();
+        expect(handoffsToB(), before + 1);
+        expect(fetches, greaterThan(0), reason: 'the re-mint pass looks up');
+      });
+    });
+  });
+
+  group('labelling, the gate and the write window (after decision A)', () {
+    var pin = 'A';
+
+    int writesTo(String sid) => box.sent.where((s) => s == sid).length;
+
+    /// [a] and [b] are friends and b writes to our lead; then a's record is
+    /// rewritten as the build before the tag wrote it (untagged) and the
+    /// anchor 'A' is pinned. Our lead.
+    Future<ContactQueue> untagged() async {
+      await a.start();
+      await b.start();
+      a.session.runPass();
+      b.session.runPass();
+      await settle();
+      a.readIdentity = 'A';
+      final lead = a.friend.queues.first;
+      expect(b.outboundOf(2)!.sid, lead.sid, reason: 'b writes to our lead');
+      await a.store.update(
+        5,
+        (c) => c!.copyWith(
+          outbound: [
+            for (final o in c.outbound)
+              ContactOutbound(
+                peerDeviceId: o.peerDeviceId,
+                sid: o.sid,
+                sealPub: o.sealPub,
+                idk: null,
+                relays: o.relays,
+              ),
+          ],
+        ),
+      );
+      expect(a.outboundOf(3)!.idk, isNull);
+      a.anchorOf = (_) => 'A';
+      box.sent.clear();
+      return lead;
+    }
+
+    test('store opens after E2E ready: after it opens no address is stale, '
+        "and a send goes to the friend's address", () async {
+      await untagged();
+      // A new process whose store opens only after E2E ready.
+      a.session.dispose();
+      a.store.close();
+      await a._connect(false);
+      expect(
+        a.session.permitFor(5),
+        isNull,
+        reason: 'the gate is closed until the labelling ran on an open store',
+      );
+      await a.store.open(1);
+      a.session.storeOpened();
+      await settle();
+      expect(a.outboundOf(3)!.idk, 'A', reason: 'labelled at the store open');
+      expect(box.normalCreates(a.socket), 0, reason: 'no queue minted');
+      final to = a.outboundOf(3)!;
+      expect(to.sid, b.friend.queues.first.sid);
+      final before = writesTo(to.sid);
+      final permit = a.session.permitFor(5, to: [to]);
+      expect(permit, isNotNull);
+      expect(
+        await a.session.deliverFriend(to, Uint8List(1), permit: permit),
+        BoxSendOutcome.taken,
+      );
+      expect(writesTo(to.sid), before + 1);
+    });
+
+    Future<void> firstSendAfterHandoff({required String? pin}) async {
+      a.anchorOf = (_) => pin;
+      await a.start();
+      await settle();
+      final seal = QueueSeal.mintKeyPair();
+      final sid = boxB64(_bytes(32, 0x77));
+      expect(
+        await a.session.takeFriendHandoff(
+          5,
+          3,
+          sid: sid,
+          sealPub: boxB64(seal.publicKey),
+          learnedUnder: pin,
+        ),
+        FriendWrite.stored,
+      );
+      await settle();
+      final to = a.outboundOf(3)!;
+      expect(to.sid, sid);
+      final permit = a.session.permitFor(5, to: [to]);
+      expect(permit, isNotNull, reason: 'no wait');
+      final before = writesTo(sid);
+      expect(
+        await a.session.deliverFriend(to, Uint8List(1), permit: permit),
+        BoxSendOutcome.taken,
+      );
+      expect(writesTo(sid), before + 1);
+    }
+
+    test('start-up: a pinned friend whose address arrives by handoff moments '
+        'after start gets its first send at once', () async {
+      await firstSendAfterHandoff(pin: 'A');
+    });
+
+    test('start-up: a friend with NO anchor yet whose address arrives by '
+        'handoff gets its first send at once', () async {
+      await firstSendAfterHandoff(pin: null);
+    });
+
+    test('before the labelling completes a send waits and goes out by itself '
+        'after it', () async {
+      await untagged();
+      final gate = Completer<void>();
+      a.store.labelGate = gate;
+      final outcomes = <Future<BoxSendOutcome>>[];
+      // The pump's kick: what waited is offered again.
+      a.labelled = () {
+        final to = a.outboundOf(3)!;
+        final permit = a.session.permitFor(5, to: [to]);
+        if (permit == null) return;
+        outcomes.add(a.session.deliverFriend(to, Uint8List(1), permit: permit));
+      };
+      await a.restart();
+      await settle();
+      expect(a.session.permitFor(5), isNull, reason: 'not labelled: it waits');
+      expect(a.session.permitFor(5, to: [a.outboundOf(3)!]), isNull);
+      expect(outcomes, isEmpty);
+      gate.complete();
+      await settle();
+      expect(outcomes, hasLength(1), reason: 'kicked once, by itself');
+      expect(await outcomes.single, BoxSendOutcome.taken);
+      expect(writesTo(a.outboundOf(3)!.sid), greaterThan(0));
+      expect(a.outboundOf(3)!.idk, 'A');
+    });
+
+    test('an untagged address is never sent to, even when the labelling '
+        'throws every time', () async {
+      await untagged();
+      a.store.labelThrows = true;
+      await a.restart();
+      await settle();
+      a.session
+        ..runPass()
+        ..storeOpened()
+        ..accountReady(2);
+      await settle();
+      expect(a.outboundOf(3)!.idk, isNull, reason: 'still not labelled');
+      expect(writesTo(a.outboundOf(3)!.sid), 0);
+      expect(
+        a.session.permitFor(5, to: [a.outboundOf(3)!]),
+        isNull,
+        reason: 'a message waits',
+      );
+    });
+
+    test('the labelling throws once and succeeds at the next store open',
+        () async {
+      await untagged();
+      var kicks = 0;
+      a
+        ..labelled = (() => kicks++)
+        ..store.labelThrows = true;
+      await a.restart();
+      await settle();
+      expect(a.outboundOf(3)!.idk, isNull);
+      expect(a.session.permitFor(5), isNull);
+      expect(kicks, 0);
+      a.store.labelThrows = false;
+      a.session.storeOpened();
+      await settle();
+      expect(a.outboundOf(3)!.idk, 'A');
+      expect(kicks, 1, reason: 'what waited is kicked once');
+      expect(a.session.permitFor(5, to: [a.outboundOf(3)!]), isNotNull);
+    });
+
+    test('N10/N11/N12: a labelling that RETURNS false (a record refused): the '
+        'friends tagged are open, the untagged one waits, and every kick '
+        '(account ready, store open, box ready) retries until it succeeds',
+        () async {
+      await untagged();
+      var kicks = 0;
+      a
+        ..labelled = (() => kicks++)
+        ..store.labelFalse = true;
+      await a.restart();
+      await settle();
+      expect(a.outboundOf(3)!.idk, isNull, reason: 'refused: untagged');
+      expect(a.session.permitFor(5), isNotNull, reason: 'the others are open');
+      expect(
+        a.session.permitFor(5, to: [a.outboundOf(3)!]),
+        isNull,
+        reason: 'the untagged friend waits',
+      );
+      expect(kicks, greaterThan(0), reason: 'the pump looks again');
+      a.store.labelCalls = 0;
+      a.session.accountReady(2);
+      await settle();
+      expect(a.store.labelCalls, 1, reason: 'N12: retried at account ready');
+      a.session.storeOpened();
+      await settle();
+      expect(a.store.labelCalls, 2, reason: 'retried at store open');
+      a.socket.serverDrop();
+      a.session.resume();
+      a.socket = box.sockets.last;
+      a.socket.serverConnect('S1.2');
+      await settle();
+      expect(a.store.labelCalls, 3, reason: 'N11: retried at box ready');
+      a.store.labelFalse = false;
+      a.session.storeOpened();
+      await settle();
+      expect(a.outboundOf(3)!.idk, 'A');
+      expect(a.session.permitFor(5, to: [a.outboundOf(3)!]), isNotNull);
+      final calls = a.store.labelCalls;
+      a.session
+        ..accountReady(2)
+        ..storeOpened();
+      await settle();
+      expect(a.store.labelCalls, calls, reason: 'done: no more retries');
+    });
+
+    test('N05/N06: an address that is untagged AFTER the labelling is never '
+        'sent to, nothing else is written to it, and no permit reaches it',
+        () async {
+      await untagged();
+      await a.restart();
+      await settle();
+      expect(a.outboundOf(3)!.idk, 'A', reason: 'labelled');
+      // A restored pre-tag record lands after the labelling.
+      await a.store.update(
+        5,
+        (c) => c!.copyWith(
+          outbound: [
+            for (final o in c.outbound)
+              ContactOutbound(
+                peerDeviceId: o.peerDeviceId,
+                sid: o.sid,
+                sealPub: o.sealPub,
+                idk: null,
+                relays: o.relays,
+              ),
+          ],
+        ),
+      );
+      final to = a.outboundOf(3)!;
+      box.sent.clear();
+      a.lookups.clear();
+      a.session
+        ..runPass()
+        ..handOffTo(5)
+        ..friendHeard(5, 3);
+      await settle();
+      expect(a.session.permitFor(5, to: [to]), isNull);
+      expect(
+        await a.session.deliverFriend(to, Uint8List(1)),
+        BoxSendOutcome.failed,
+      );
+      expect(writesTo(to.sid), 0, reason: 'nothing at all is written to it');
+      expect(a.lookups, isEmpty);
+    });
+
+    /// [a] and [b] are friends, a's address of b is tagged 'A' and 'A' is the
+    /// pin (no move yet).
+    Future<ContactOutbound> pinnedA() async {
+      pin = 'A';
+      a.anchorOf = (_) => pin;
+      await a.start();
+      await b.start();
+      a.session.runPass();
+      b.session.runPass();
+      await settle();
+      await a.store.update(
+        5,
+        (c) => c!.copyWith(
+          outbound: [for (final o in c.outbound) o.copyWith(idk: 'A')],
+        ),
+      );
+      box.sent.clear();
+      return a.outboundOf(3)!;
+    }
+
+    test('S38: the pin moves WHILE a message is being sealed: the write-time '
+        'check refuses it, nothing reaches the queue', () async {
+      final to = await pinnedA();
+      final permit = a.session.permitFor(5, to: [to]);
+      expect(permit, isNotNull);
+      a.sealer.onSeal = () {
+        pin = 'B';
+        a.sealer.onSeal = null;
+      };
+      expect(
+        await a.session.deliverFriend(to, Uint8List(1), permit: permit),
+        BoxSendOutcome.failed,
+      );
+      expect(writesTo(to.sid), 0);
+    });
+
+    test("H482: the pin moves WHILE our ack of the friend's handoff is being "
+        'sealed: the handoff send refuses it at the write', () async {
+      await pinnedA();
+      final fresh = boxB64(_bytes(32, 0x71));
+      final seal = QueueSeal.mintKeyPair();
+      a.sealer.onSeal = () {
+        pin = 'B';
+        a.sealer.onSeal = null;
+      };
+      await a.session.takeFriendHandoff(
+        5,
+        3,
+        sid: fresh,
+        sealPub: boxB64(seal.publicKey),
+        learnedUnder: 'A',
+      );
+      await settle();
+      expect(writesTo(fresh), 0, reason: 'sealed under A, written under B');
     });
   });
 }

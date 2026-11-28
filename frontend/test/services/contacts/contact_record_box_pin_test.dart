@@ -74,7 +74,12 @@ void main() {
           boxOrigin: ContactBoxOrigin(
             at: originAt,
             addresses: const [
-              ContactOutbound(peerDeviceId: 2, sid: 'req-sid', sealPub: 'pub'),
+              ContactOutbound(
+                peerDeviceId: 2,
+                sid: 'req-sid',
+                sealPub: 'pub',
+                idk: null,
+              ),
             ],
             kept: [KeptRequest(deviceId: 2, signal: '3:AAAA', at: originAt)],
           ),

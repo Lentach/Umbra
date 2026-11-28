@@ -405,6 +405,16 @@ void main() {
       peerDeviceId: 2,
       sid: boxB64(_bytes(32, 0x70)),
       sealPub: boxB64(sealKeys.publicKey),
+      idk: null,
+    );
+
+    /// Makes [address] a known sibling's self-queue: the positive ungated
+    /// lane (decision item 13), so the tests of the sealing and the upload
+    /// mechanics can write to it with no permit.
+    Future<void> asSiblingAddress() => store.learnSibling(
+      address.peerDeviceId,
+      sid: address.sid,
+      sealPub: address.sealPub,
     );
 
     Future<void> friend({ContactState state = ContactState.friend}) =>
@@ -486,6 +496,7 @@ void main() {
       "opens under its queue's key",
       () async {
         await boxUp('S1');
+        await asSiblingAddress();
         final body = Uint8List.fromList([1, 3, 0, 1, 9, 9]);
         expect(await session.deliver(address, body), BoxSendOutcome.taken);
 
@@ -504,6 +515,7 @@ void main() {
       'frame carries `mode` (decision 61, E61a)',
       () async {
         await boxUp('S1');
+        await asSiblingAddress();
         expect(
           await session.deliver(address, Uint8List(4)),
           BoxSendOutcome.taken,
@@ -533,6 +545,7 @@ void main() {
       'device, any other refusal is retried (E93a)',
       () async {
         await boxUp('S1');
+        await asSiblingAddress();
         sendAnswer = {'ok': false, 'code': 'queue_full'};
         expect(
           await session.deliver(address, Uint8List(4)),
@@ -560,8 +573,18 @@ void main() {
       () async {
         await boxUp('S1');
         for (final bad in [
-          ContactOutbound(peerDeviceId: 2, sid: 'short', sealPub: address.sealPub),
-          ContactOutbound(peerDeviceId: 2, sid: address.sid, sealPub: 'short'),
+          ContactOutbound(
+            peerDeviceId: 2,
+            sid: 'short',
+            sealPub: address.sealPub,
+            idk: null,
+          ),
+          ContactOutbound(
+            peerDeviceId: 2,
+            sid: address.sid,
+            sealPub: 'short',
+            idk: null,
+          ),
         ]) {
           expect(
             await session.deliver(bad, Uint8List(4)),
@@ -603,6 +626,7 @@ void main() {
       "uploadMedia puts the framed body on the box against the address's "
       "sid (that queue's budget pays) and answers the box's reference",
       () async {
+        await asSiblingAddress();
         final id = _bytes(32, 0x33);
         media = (_) async => http.Response(
           jsonEncode({
@@ -627,6 +651,7 @@ void main() {
     );
 
     test('a refused upload is the refusal, not an answer', () async {
+      await asSiblingAddress();
       media = (_) async =>
           http.Response(jsonEncode({'error': 'quota_exceeded'}), 429);
       final result = await session.uploadMedia(
@@ -648,6 +673,7 @@ void main() {
           peerDeviceId: 2,
           sid: 'short',
           sealPub: address.sealPub,
+          idk: null,
         );
         expect(
           await session.uploadMedia(bad, frameMediaToRung(Uint8List(1))),

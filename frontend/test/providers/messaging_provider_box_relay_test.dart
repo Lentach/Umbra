@@ -83,6 +83,7 @@ class _Encryption extends EncryptionProvider {
     int recipientId,
     String plaintext, {
     int deviceId = 1,
+    bool Function(String? remoteIdentity)? admit,
   }) async {
     sealedTo.add((recipientId, deviceId));
     return '3:${base64Encode(utf8.encode(plaintext))}';
@@ -94,6 +95,7 @@ class _Encryption extends EncryptionProvider {
     String ciphertext, {
     int? messageId,
     int deviceId = 1,
+    void Function(String? remoteIdentity)? onIdentity,
   }) async => inbound;
 
   @override
@@ -231,11 +233,16 @@ ContactOutbound _address(int device, {bool relays = false}) => ContactOutbound(
   peerDeviceId: device,
   sid: 'sid-$device',
   sealPub: 'seal',
+  idk: null,
   relays: relays,
 );
 
-ContactOutbound _selfQueue(int device) =>
-    ContactOutbound(peerDeviceId: device, sid: 'self-$device', sealPub: 'seal');
+ContactOutbound _selfQueue(int device) => ContactOutbound(
+  peerDeviceId: device,
+  sid: 'self-$device',
+  sealPub: 'seal',
+  idk: null,
+);
 
 const Map<String, dynamic> _conv = {
   'id': 10,

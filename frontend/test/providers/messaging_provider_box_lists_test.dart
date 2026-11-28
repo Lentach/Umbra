@@ -55,14 +55,19 @@ class _Link implements BoxFriendLink {
     int deviceId, {
     required String sid,
     required String sealPub,
+    required String? learnedUnder,
   }) async {
     learned.add(sid);
     return FriendWrite.stored;
   }
 
   @override
-  Future<FriendWrite> friendAcked(int userId, int deviceId, String sid) async =>
-      FriendWrite.stored;
+  Future<FriendWrite> friendAcked(
+    int userId,
+    int deviceId,
+    String sid, {
+    required String? learnedUnder,
+  }) async => FriendWrite.stored;
 
   @override
   Future<void> rekeyFriend(int userId, int deviceId) async =>
@@ -118,7 +123,12 @@ class _Outbox implements BoxOutbox {
   Map<int, ContactOutbound> addressesFor(int peerUserId) =>
       peerUserId == _friend
       ? const {
-          3: ContactOutbound(peerDeviceId: 3, sid: 'sid-3', sealPub: 'pub'),
+          3: ContactOutbound(
+            peerDeviceId: 3,
+            sid: 'sid-3',
+            sealPub: 'pub',
+            idk: null,
+          ),
         }
       : const {};
 

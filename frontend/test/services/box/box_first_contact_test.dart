@@ -476,6 +476,7 @@ void main() {
       peerDeviceId: 2,
       sid: 'req-sid',
       sealPub: 'pub',
+      idk: null,
     );
 
     test(

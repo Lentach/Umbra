@@ -650,12 +650,20 @@ void main() {
         expect(a.sibling(3)?.ackedSelfSid, a.store.selfQueue!.sid);
 
         final readsBefore = a.reads.length;
+        // The copy was built while b still held a's OLD address (item 13: a
+        // write to an address the sibling replaced is refused at the
+        // sender, so b is put back in that state).
+        expect(
+          await b.store.learnSibling(2, sid: old.sid, sealPub: old.sealPub),
+          SiblingWrite.stored,
+        );
         expect(
           await b.session.deliver(
             ContactOutbound(
               peerDeviceId: 2,
               sid: old.sid,
               sealPub: old.sealPub,
+              idk: null,
             ),
             BoxFrame(
               kind: BoxFrameKind.whisper,

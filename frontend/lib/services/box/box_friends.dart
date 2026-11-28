@@ -1,5 +1,6 @@
 import '../contacts/contact_record.dart';
 import 'box_frame.dart';
+import 'box_friend_gate.dart';
 
 /// Encrypts [json] for device [deviceId] of friend [userId] (the box asks
 /// only for friends) and answers the frame from THIS device (kind, this
@@ -16,6 +17,7 @@ typedef FriendEncrypt =
       int deviceId,
       String json, {
       bool fresh,
+      FriendPermit? permit,
     });
 
 /// The device ids friend [userId]'s VERIFIED list names live, or null when
@@ -61,18 +63,33 @@ abstract interface class BoxFriendLink {
   /// before it reads our handoff and never answers ours with another. A lost
   /// ack or hand-back costs nothing: the next connect hands off again.
   /// [FriendWrite.stored] once the address is stored, whatever became of
-  /// the sends.
+  /// the sends. [learnedUnder] is the account identity (base64) that
+  /// authenticated the frame the address came from: stored as the address's
+  /// tag, and a handoff learned under another identity than the friend's
+  /// pinned anchor is [FriendWrite.refused] (null: unknown, never refused).
   Future<FriendWrite> takeFriendHandoff(
     int userId,
     int deviceId, {
     required String sid,
     required String sealPub,
+    required String? learnedUnder,
   });
 
   /// Device [deviceId] of friend [userId] acknowledged our queue [sid].
   /// [FriendWrite.refused] when no queue of ours for [userId] has that sid
   /// (an older one): the current one is handed to it on the next pass.
-  Future<FriendWrite> friendAcked(int userId, int deviceId, String sid);
+  ///
+  /// [learnedUnder] is the account identity (base64) that authenticated the
+  /// ack's frame (a PreKey's identity, else the whisper session's remote
+  /// identity; null: unknown). The ack counts (marks `ackedBy`) only when it
+  /// was authenticated under the friend's currently PINNED anchor: a late ack
+  /// of an OLD install must not make us believe the new one holds our queue.
+  Future<FriendWrite> friendAcked(
+    int userId,
+    int deviceId,
+    String sid, {
+    required String? learnedUnder,
+  });
 
   /// Hand our queue for [userId] to its device [deviceId] on a FRESH
   /// session ([FriendEncrypt]'s `fresh`): it sent a PreKey message that would

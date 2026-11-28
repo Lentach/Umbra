@@ -73,6 +73,33 @@ class EncryptionProvider extends ChangeNotifier {
     _revoker
       ..onRevoke = revokeForPasscodeLock
       ..onRestore = restoreAfterPasscodeUnlock;
+    // Decision 152: an unverified friend's new key was accepted from an
+    // artifact. The address that artifact just built a session for is fresh;
+    // the friend's other addresses were keyed to the replaced identity.
+    // The service writes the durable rebuild intents BEFORE the anchor moves
+    // (it asks which addresses we know); this hook does the in-RAM half.
+    _encryptionService.knownAddressesOf = (peerId) => {
+      ...?_deviceListCache.cached(peerId)?.liveDeviceIds,
+    };
+    _encryptionService.onPeerAutoAccepted = (peerId, deviceId) {
+      final others = <int>{1, ...?_deviceListCache.cached(peerId)?.liveDeviceIds}
+        ..remove(deviceId);
+      // The tap's own accept (`confirmCalmKey`) just refreshed this list:
+      // dropping it again would owe a second lookup of the friend, and each
+      // lookup spends one of its one-time pre-keys. On the SEND path (no tap
+      // is running) the drop is an ordinary event's, under the floor and the
+      // cap: only a tap is a person's act that may owe an unfloored lookup.
+      if (!_calmConfirming.contains(peerId)) {
+        invalidateDeviceList(peerId);
+      }
+      for (final other in others) {
+        markSessionRebuild(peerId, deviceId: other);
+      }
+      _e2eFlowLog('PEER_IDENTITY_AUTO_ACCEPTED', {
+        'peerId': peerId,
+        'deviceId': deviceId,
+      });
+    };
   }
 
   final E2eLockRevoker _revoker = E2eLockRevoker.instance;
@@ -166,6 +193,15 @@ class EncryptionProvider extends ChangeNotifier {
   /// storage loss). All messages encrypted for the old identity are unrecoverable.
   bool get hadIdentityReset => _encryptionService.needsKeyUpload;
 
+  /// Whether a new account identity was minted since this was last asked
+  /// (our queues must be handed to every friend again, decision B); asking
+  /// consumes it.
+  bool takeIdentityMinted() {
+    final minted = _encryptionService.identityMinted;
+    _encryptionService.identityMinted = false;
+    return minted;
+  }
+
   /// True when initialization REFUSED to start because the server already
   /// holds a bundle for this login's device while the stored identity is
   /// missing or damaged. E2E is down and stays down until the device is linked
@@ -219,11 +255,154 @@ class EncryptionProvider extends ChangeNotifier {
   /// Called once the user accepted a friend's changed identity while frames
   /// of it were held, after the session state the old key poisoned was
   /// dropped: the box reader offers the journal again.
-  void Function(int peerId)? onHeldFramesReleased;
+  FutureOr<void> Function(int peerId)? onHeldFramesReleased;
+
+  /// The account anchor of `peerId` moved (the person confirmed the key): an
+  /// address tagged with the new identity may now be current, so the send
+  /// pump looks again.
+  void Function(int peerId)? onAnchorMoved;
+
+  /// Reads the frames a confirmed calm hold of [peerId] kept back, and
+  /// completes once they are read (the friend's handoff included).
+  Future<void> drainReleasedFrames(int peerId) async =>
+      onHeldFramesReleased?.call(peerId);
 
   /// Delegates to [EncryptionService.holdForeignFrame].
   Future<void> holdForeignFrame(int userId, String ciphertext) =>
       _encryptionService.holdForeignFrame(userId, ciphertext);
+
+  /// Friends whose new-key PreKey frame is held CALMLY (decision 152, option
+  /// C): the chat shows a neutral "tap to receive" line, never the red bar.
+  Set<int> get peersCalmHeld => _encryptionService.peersCalmHeld;
+
+  /// Delegates to [EncryptionService.calmHoldEligible].
+  Future<bool> calmHoldEligible(int userId) =>
+      _encryptionService.calmHoldEligible(userId);
+
+  /// Delegates to [EncryptionService.holdCalm].
+  void holdCalm(int userId) {
+    _encryptionService.holdCalm(userId);
+    notifyListeners();
+  }
+
+  /// Delegates to [EncryptionService.releaseCalm]: the calm hold ended
+  /// without a confirmed key (the friendship ended).
+  void releaseCalm(int userId) {
+    _encryptionService.releaseCalm(userId);
+    notifyListeners();
+  }
+
+  /// Friends whose calm key is being confirmed by the person's tap right now:
+  /// the lookup that tap made is the one lookup it owes.
+  final Set<int> _calmConfirming = <int>{};
+
+  /// The tap on a calm hold: CONFIRMS [frameIdentityBase64] for [peerId] from a
+  /// fresh served bundle for [deviceId] — a person's act, so the only place a
+  /// foreign-key frame may cause a lookup (decision 153). Nothing is accepted
+  /// unless the served bundle carries exactly the frame's key AND its signed
+  /// pre-key verifies under it (M2); then the session is built from that same
+  /// bundle through `buildSession`'s trust point (pre-swap note stamped
+  /// [noteAtMs]) and the held frames drain. [CalmConfirm.refused]: the held
+  /// frame must turn into the visible hold. [CalmConfirm.transient]: nothing
+  /// could be checked; the calm hold stays.
+  Future<CalmConfirm> confirmCalmKey(
+    int peerId,
+    int deviceId,
+    String frameIdentityBase64, {
+    required int noteAtMs,
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    if (!_e2eInitialized || _currentUserId == null) return CalmConfirm.transient;
+    // Account-scoped: a switch while the tap waits abandons its result.
+    final epoch = _initEpoch;
+    final Map<String, dynamic> bundle;
+    try {
+      if (isBoxOnlyPeer?.call(peerId) ?? false) {
+        // A person's act owes one fresh handle lookup (no floor, no cap, not
+        // counted against the peer-event cap); it refreshes the served
+        // bundles BEFORE anything reads one.
+        invalidateDeviceList(peerId, byPerson: true);
+        await getVerifiedDeviceList(peerId, forceRefresh: true);
+        final served = servedBundleFor?.call(peerId, deviceId);
+        if (served == null) return CalmConfirm.refused; // the device is absent
+        bundle = served;
+      } else {
+        bundle = await _fetchBundleAnswer(peerId, deviceId, timeout);
+      }
+    } on DeviceListVerificationException {
+      return CalmConfirm.refused;
+    } on Object catch (e) {
+      _e2eFlowLog('CALM_CONFIRM_FAILED', {'peerId': peerId, 'error': '$e'});
+      return CalmConfirm.transient;
+    }
+    if (epoch != _initEpoch) return CalmConfirm.transient;
+    // M2: the served key must BE the frame's key, proven by its signature,
+    // before any session work.
+    if (!_encryptionService.bundleProvesIdentity(bundle, frameIdentityBase64)) {
+      return CalmConfirm.refused;
+    }
+    var refused = false;
+    _calmConfirming.add(peerId);
+    try {
+      await _encryptionService.buildSession(
+        peerId,
+        bundle,
+        deviceId: deviceId,
+        expectedIdentityBase64: await _accountIdentityAnchor(
+          peerId,
+          skipDeviceId: deviceId,
+        ),
+        acceptNoteAtMs: noteAtMs,
+      );
+    } on AccountIdentityMismatch {
+      refused = true;
+    } on Object catch (e) {
+      // A libsignal-internal failure after the accept leaves the proven key
+      // pinned; the next ensureSession builds against it (S6).
+      _e2eFlowLog('CALM_CONFIRM_BUILD_FAILED', {'peerId': peerId, 'error': '$e'});
+    } finally {
+      _calmConfirming.remove(peerId);
+    }
+    if (epoch != _initEpoch) return CalmConfirm.transient;
+    if (await _encryptionService.peerTofuIdentityBase64(peerId) !=
+        frameIdentityBase64) {
+      return refused ? CalmConfirm.refused : CalmConfirm.transient;
+    }
+    if (epoch != _initEpoch) return CalmConfirm.transient;
+    _encryptionService.releaseCalm(peerId);
+    _e2eFlowLog('CALM_CONFIRMED', {'peerId': peerId, 'deviceId': deviceId});
+    // The held frames are drained by the caller once it dropped its calm
+    // hold ([drainReleasedFrames]): the drain answers on the friend's queue.
+    notifyListeners();
+    return CalmConfirm.confirmed;
+  }
+
+  /// Whether the user verified [peerId]'s current key (key-bound).
+  Future<bool> isPeerVerified(int peerId) =>
+      _encryptionService.isPeerVerified(peerId);
+
+  /// The user compared [peerId]'s fingerprints and confirms them.
+  Future<bool> markPeerVerified(
+    int peerId, {
+    required String expectedIdentityBase64,
+  }) async {
+    final marked = await _encryptionService.markPeerVerified(
+      peerId,
+      expectedIdentityBase64: expectedIdentityBase64,
+    );
+    notifyListeners();
+    return marked;
+  }
+
+  /// The instants (ms) of key changes accepted automatically for [peerId],
+  /// drawn in the chat as permanent system lines.
+  List<int> peerKeyChangeLog(int peerId) =>
+      _encryptionService.keyChangeLogOf(peerId);
+
+  /// Removes [peerId]'s (or every) accepted-key-change line with the chat's
+  /// local messages.
+  Future<void> forgetKeyChangeLog({int? peerId}) =>
+      _encryptionService.forgetKeyChangeLog(peerId: peerId);
 
   /// One-shot muted key-change notes (amendment (lxxix)): peerId → ISO-8601
   /// instant of the auto-acknowledged change. Rendered as a calm system line
@@ -274,12 +453,14 @@ class EncryptionProvider extends ChangeNotifier {
     int recipientId,
     String plaintext, {
     int deviceId = 1,
+    bool Function(String? remoteIdentity)? admit,
   }) async {
     try {
       return await _encryptionService.encrypt(
         recipientId,
         plaintext,
         deviceId: deviceId,
+        admit: admit,
       );
     } catch (_) {
       notifyListeners();
@@ -300,6 +481,7 @@ class EncryptionProvider extends ChangeNotifier {
     String ciphertext, {
     int? messageId,
     int deviceId = 1,
+    void Function(String? remoteIdentity)? onIdentity,
   }) async {
     try {
       return await _encryptionService.decrypt(
@@ -307,6 +489,7 @@ class EncryptionProvider extends ChangeNotifier {
         ciphertext,
         messageId: messageId,
         deviceId: deviceId,
+        onIdentity: onIdentity,
       );
     } catch (_) {
       notifyListeners();
@@ -356,6 +539,29 @@ class EncryptionProvider extends ChangeNotifier {
     int userId,
     String ciphertext,
   ) => _encryptionService.friendFrameIdentityOf(userId, ciphertext);
+
+  /// The remote identity (base64) of the session with [peerId]'s [deviceId]:
+  /// for a whisper, the identity it was authenticated under. Delegates to
+  /// [EncryptionService.sessionRemoteIdentity].
+  Future<String?> sessionRemoteIdentity(int peerId, {int deviceId = 1}) =>
+      _encryptionService.sessionRemoteIdentity(peerId, deviceId: deviceId);
+
+  /// [peerId]'s pinned account identity (base64) without an await; null when
+  /// none. Delegates to [EncryptionService.accountAnchorSync].
+  String? accountAnchorSync(int peerId) =>
+      _encryptionService.accountAnchorSync(peerId);
+
+  /// Wires [EncryptionService.onBeforeAnchorMoves] (stamp-before-move) and
+  /// [EncryptionService.onAccountAnchorPinned] (tag at first pin).
+  void wireAnchorTags({
+    required Future<bool> Function(int peerId, String oldAnchorBase64)
+    beforeAnchorMoves,
+    required void Function(int peerId, String identityBase64) anchorPinned,
+  }) {
+    _encryptionService
+      ..onBeforeAnchorMoves = beforeAnchorMoves
+      ..onAccountAnchorPinned = anchorPinned;
+  }
 
   /// Ensure a Signal session exists with [recipientId]'s [deviceId]
   /// (default 1 — the pre-multi-device address). If not, fetches that
@@ -1206,6 +1412,9 @@ class EncryptionProvider extends ChangeNotifier {
     );
     if (stale) {
       await _encryptionService.replaceStaleAccountAnchor(userId, served);
+      // The pinned identity moved, as under an acknowledgement: the send
+      // pump looks again for what waited on the old pin.
+      onAnchorMoved?.call(userId);
     }
     unawaited(_encryptionService.recordPeerDeviceList(userId, authorization));
     return verified;
@@ -1794,6 +2003,23 @@ class EncryptionProvider extends ChangeNotifier {
   /// Delegates to [EncryptionService.dropBoxUnsent] (decision 104).
   Future<void> dropBoxUnsent(int userId, String tempId) =>
       _encryptionService.dropBoxUnsent(userId, tempId);
+
+  /// Delegates to [EncryptionService.boxUnsentWaiting].
+  Future<Map<String, Map<String, dynamic>>> boxUnsentWaiting(int userId) =>
+      _encryptionService.boxUnsentWaiting(userId);
+
+  /// Delegates to [EncryptionService.setBoxUnsentWaiting].
+  Future<void> setBoxUnsentWaiting(
+    int userId,
+    String tempId, {
+    required bool waiting,
+    int? queuedAt,
+  }) => _encryptionService.setBoxUnsentWaiting(
+    userId,
+    tempId,
+    waiting: waiting,
+    queuedAt: queuedAt,
+  );
 
   /// Delegates to [EncryptionService.clearBoxUnsent] (decision 104).
   Future<void> clearBoxUnsent(int userId) =>
@@ -3869,6 +4095,7 @@ class EncryptionProvider extends ChangeNotifier {
   Future<bool> acknowledgePeerIdentity(
     int peerId, {
     String? adoptIdentityBase64,
+    bool markVerified = false,
   }) async {
     // Capture the addresses BEFORE anything else: the cached list is the only
     // record of which devices we ever addressed, and device 1 covers the legacy
@@ -3890,6 +4117,7 @@ class EncryptionProvider extends ChangeNotifier {
     final advanced = await _encryptionService.acknowledgePeerIdentity(
       peerId,
       adoptIdentityBase64: adoptIdentityBase64,
+      markVerified: markVerified,
     );
     if (advanced) {
       invalidateDeviceList(peerId, byPerson: true);
@@ -3901,6 +4129,7 @@ class EncryptionProvider extends ChangeNotifier {
         'rebuiltAddresses': addresses.toList(),
       });
       if (wasHeld) onHeldFramesReleased?.call(peerId);
+      onAnchorMoved?.call(peerId);
     } else {
       // Explicitly refused: nothing advanced, so nothing is poisoned and the
       // speculative intent above names no real damage. Only the addresses THIS
@@ -4141,6 +4370,19 @@ class EncryptionProvider extends ChangeNotifier {
     }
     _pendingDeviceListFetches.clear();
   }
+}
+
+/// How a tap on a calm hold ended ([EncryptionProvider.confirmCalmKey]).
+enum CalmConfirm {
+  /// The served bundle proved the frame's key; it is pinned, held frames drain.
+  confirmed,
+
+  /// The served key differs, its signature fails, or the device is absent:
+  /// nothing is accepted and the hold becomes the visible one.
+  refused,
+
+  /// Nothing could be checked (offline, timeout, lookup spent): try again.
+  transient,
 }
 
 /// What [EncryptionProvider.adoptCarriedDeviceList] did with a list a

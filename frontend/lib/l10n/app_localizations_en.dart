@@ -510,6 +510,13 @@ class AppLocalizationsEn extends AppLocalizations {
       'Not sent: this contact\'s security keys changed. Open the red warning in this chat and compare your safety numbers, then retry.';
 
   @override
+  String get messageWaitingTapCalmLine =>
+      'Waiting: tap the line about the new device';
+
+  @override
+  String get messageWaitingToSend => 'Waiting to send';
+
+  @override
   String get authStatusSavedSessionUnreadable =>
       'Could not read the session. Restart the app.';
 
@@ -602,6 +609,16 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get peerIdentityMarkVerifiedAction => 'Fingerprints match';
+
+  @override
+  String get peerIdentityMarkFriendVerifiedAction => 'Mark as verified';
+
+  @override
+  String get peerIdentityVerifiedState => 'Verified';
+
+  @override
+  String get peerIdentityKeyChangedWhileOpen =>
+      'The key changed while this was open. Compare again.';
 
   @override
   String get peerIdentityVerifyMenuAction => 'Verify security keys';
@@ -2226,11 +2243,25 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String calmHoldLine(String name) {
+    return '$name is writing from a new device or browser. Tap to receive.';
+  }
+
+  @override
+  String get calmHoldChecking => 'Checking the key…';
+
+  @override
+  String get calmHoldFailed => 'Could not check. Try again.';
+
+  @override
+  String get calmHoldListPreview => 'New device — tap to receive';
+
+  @override
   String get settingsKeyChangeWarnings => 'Warn when a contact\'s keys change';
 
   @override
   String get settingsKeyChangeWarningsSubtitle =>
-      'By default new keys are accepted and a short note appears in the chat.';
+      'By default new keys are accepted and a short note appears in the chat. New keys from verified contacts always wait for your approval.';
 
   @override
   String get privacyReceiptsAndTyping => 'Read receipts and typing';

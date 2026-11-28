@@ -137,7 +137,12 @@ class BoxSiblingRotation {
       if (_disposed) return;
       if (sid == null || sealPub == null) continue;
       await _sendToSibling(
-        ContactOutbound(peerDeviceId: s.deviceId, sid: sid, sealPub: sealPub),
+        ContactOutbound(
+          peerDeviceId: s.deviceId,
+          sid: sid,
+          sealPub: sealPub,
+          idk: null,
+        ),
         handoff,
       );
     }

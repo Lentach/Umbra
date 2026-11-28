@@ -11,6 +11,7 @@ import '../providers/settings_provider.dart';
 import '../services/voice_audio_coordinator.dart';
 import '../theme/rpg_theme.dart';
 import '../widgets/box_friend_older_app_note.dart';
+import '../widgets/calm_hold_line.dart';
 import '../widgets/glass/glass_top_bar.dart';
 import '../widgets/message/chat_message_bubble.dart';
 import '../widgets/input/chat_input_bar.dart';
@@ -406,6 +407,13 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
         context.select<EncryptionProvider, bool>(
           (e) => e.peersWithHeldMessages.contains(otherUser.id),
         );
+    // Decision 152 (option C): a friend's message from a new device waits
+    // CALMLY for one tap; the red bar, when it shows, wins.
+    final calmHoldState = otherUser == null || peerIdentityChanged
+        ? null
+        : context.select<MessagingProvider, CalmHoldState?>(
+            (m) => m.calmHoldState(otherUser.id),
+          );
     // (lxxxiv): the muted note lives until the next message — it renders only
     // while nothing in the conversation is newer than the change it
     // announces. The list's `lastMessages` entry covers the window before
@@ -424,6 +432,16 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
           convs.lastMessages[widget.conversationId]?.createdAt,
           widget.conversationId,
         );
+    // Decision 152: the permanent lines for key changes accepted automatically.
+    // Selected as one string so an unchanged list does not rebuild the chat.
+    final keyChangeLogJoined = otherUser == null
+        ? ''
+        : context.select<EncryptionProvider, String>(
+            (e) => e.peerKeyChangeLog(otherUser.id).join(','),
+          );
+    final keyChangeLogMs = keyChangeLogJoined.isEmpty
+        ? const <int>[]
+        : [for (final s in keyChangeLogJoined.split(',')) int.parse(s)];
     if (otherUser != null &&
         peerKeyChangeNoteAt != null &&
         !peerKeyChangeNoted &&
@@ -499,8 +517,10 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
               peer: otherUser,
               peerIdentityChanged: peerIdentityChanged,
               peerHeld: peerHeld,
-              peerRefused: peerRefused,
+              peerRefused: peerRefused || calmHoldState != null,
               peerKeyChangeNoted: peerKeyChangeNoted,
+              calmHoldState: calmHoldState,
+              keyChangeLogMs: keyChangeLogMs,
             ),
           ),
           composerFooter,
@@ -527,8 +547,10 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
                 peer: otherUser,
                 peerIdentityChanged: peerIdentityChanged,
                 peerHeld: peerHeld,
-                peerRefused: peerRefused,
+                peerRefused: peerRefused || calmHoldState != null,
                 peerKeyChangeNoted: peerKeyChangeNoted,
+                calmHoldState: calmHoldState,
+                keyChangeLogMs: keyChangeLogMs,
               ),
               composer: composerFooter,
             ),

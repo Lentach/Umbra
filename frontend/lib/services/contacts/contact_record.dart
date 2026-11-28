@@ -32,7 +32,9 @@ class ContactQueue {
     required this.sealPub,
     this.ackedBy = const [],
     this.handedAt = const {},
+    this.takenBy = const [],
     this.retiredAt,
+    this.quietCleared = const [],
   });
 
   factory ContactQueue.fromJson(Map<String, dynamic> j) => ContactQueue(
@@ -52,12 +54,27 @@ class ContactQueue {
         if (int.tryParse(key) case final int device when value is int)
           device: DateTime.fromMillisecondsSinceEpoch(value, isUtc: true),
     },
+    takenBy: [
+      ...{
+        for (final d in j['tb'] as List<dynamic>? ?? const [])
+          if (d is int) d,
+        for (final d in j['ackedBy'] as List<dynamic>? ?? const [])
+          if (d is int) d,
+        for (final key
+            in (j['handedAt'] as Map<String, dynamic>? ?? const {}).keys)
+          if (int.tryParse(key) case final int device) device,
+      },
+    ],
     retiredAt: j['retiredAt'] is int
         ? DateTime.fromMillisecondsSinceEpoch(
             j['retiredAt'] as int,
             isUtc: true,
           )
         : null,
+    quietCleared: [
+      for (final d in j['qs'] as List<dynamic>? ?? const [])
+        if (d is int) d,
+    ],
   );
 
   final String rid;
@@ -80,12 +97,31 @@ class ContactQueue {
   /// one is a blob left in that device's queue. Additive, like [ackedBy].
   final Map<int, DateTime> handedAt;
 
+  /// Every device of the peer that EVER acknowledged or was handed this queue
+  /// (review 3, P1/P2-2): it may still write into it, so a retired queue is
+  /// not deleted while a live one of them has not taken the lead, and a
+  /// revoke of one rotates our lead away. Never cleared by
+  /// [withoutHandoffState] (an anchor move, a re-announce), which only makes
+  /// our handoff due again. A record written before this field reads it as
+  /// the union of [ackedBy] and [handedAt]. Additive (`tb`).
+  final List<int> takenBy;
+
   /// When this queue stopped being the one handed out, because the peer
   /// revoked a device that held it (slice (e), E50e): a newer queue leads
   /// [ContactRecord.queues], and this one stays subscribed and read until
   /// the box TTL has passed, then is deleted. Null for the current queue.
   /// Additive, like [ackedBy].
   final DateTime? retiredAt;
+
+  /// The devices whose ACK the upgrade one-shot's re-announce cleared
+  /// (review 4, P2-1) and that no handoff or ack has covered since: a handoff to one
+  /// is made only on a session that is usable with what is held, by ANY
+  /// pass and after a restart too, so the one-shot never makes a session
+  /// (a bundle fetch) a later ordinary pass would. Ended by a handoff or an
+  /// ack of the device ([withHanded], [withAck]) and by a plain
+  /// [withoutHandoffState] (an anchor move, a re-mint: its own fetches). A
+  /// record written before this field reads it empty. Additive (`qs`).
+  final List<int> quietCleared;
 
   /// This queue, retired at [at] (E50e).
   ContactQueue retired(DateTime at) => ContactQueue(
@@ -97,17 +133,36 @@ class ContactQueue {
     sealPub: sealPub,
     ackedBy: ackedBy,
     handedAt: handedAt,
+    takenBy: takenBy,
     retiredAt: at,
+    quietCleared: quietCleared,
   );
 
   /// This queue, acknowledged by the peer's [deviceId] as well.
   ContactQueue withAck(int deviceId) => ackedBy.contains(deviceId)
       ? this
-      : _with(ackedBy: [...ackedBy, deviceId]);
+      : _with(
+          ackedBy: [...ackedBy, deviceId],
+          takenBy: _taken(deviceId),
+          quietCleared: _unquiet(deviceId),
+        );
 
   /// This queue, handed to the peer's [deviceId] at [at].
-  ContactQueue withHanded(int deviceId, DateTime at) =>
-      _with(handedAt: {...handedAt, deviceId: at});
+  ContactQueue withHanded(int deviceId, DateTime at) => _with(
+    handedAt: {...handedAt, deviceId: at},
+    takenBy: _taken(deviceId),
+    quietCleared: _unquiet(deviceId),
+  );
+
+  List<int> _taken(int deviceId) =>
+      takenBy.contains(deviceId) ? takenBy : [...takenBy, deviceId];
+
+  List<int> _unquiet(int deviceId) => quietCleared.contains(deviceId)
+      ? [
+          for (final d in quietCleared)
+            if (d != deviceId) d,
+        ]
+      : quietCleared;
 
   /// This queue, its last handoff to the peer's [deviceId] forgotten: that
   /// device is heard from, so the day between handoffs no longer applies.
@@ -115,7 +170,41 @@ class ContactQueue {
       ? _with(handedAt: {...handedAt}..remove(deviceId))
       : this;
 
-  ContactQueue _with({List<int>? ackedBy, Map<int, DateTime>? handedAt}) =>
+  /// This queue as never handed or acknowledged by any device: the peer's
+  /// identity moved, so what it acknowledged under the old one proves
+  /// nothing and our handoff is due again. [quiet]: the upgrade one-shot,
+  /// which clears and records in [quietCleared] only the devices that had
+  /// ACKED (without it they are never due again); a device handed and not
+  /// acked keeps its [handedAt], so its ordinary resend a day later, with
+  /// that pass's own fetch and lookup, is untouched (review 5, P2-A).
+  /// Otherwise that set is dropped too.
+  ContactQueue withoutHandoffState({bool quiet = false}) {
+    final cleared = ackedBy.isNotEmpty || handedAt.isNotEmpty;
+    if (quiet) {
+      return ackedBy.isEmpty
+          ? this
+          : _with(
+              ackedBy: const [],
+              handedAt: {
+                for (final e in handedAt.entries)
+                  if (!ackedBy.contains(e.key)) e.key: e.value,
+              },
+              quietCleared: [
+                ...{...quietCleared, ...ackedBy},
+              ],
+            );
+    }
+    return !cleared && quietCleared.isEmpty
+        ? this
+        : _with(ackedBy: const [], handedAt: const {}, quietCleared: const []);
+  }
+
+  ContactQueue _with({
+    List<int>? ackedBy,
+    Map<int, DateTime>? handedAt,
+    List<int>? takenBy,
+    List<int>? quietCleared,
+  }) =>
       ContactQueue(
         rid: rid,
         sid: sid,
@@ -125,7 +214,9 @@ class ContactQueue {
         sealPub: sealPub,
         ackedBy: ackedBy ?? this.ackedBy,
         handedAt: handedAt ?? this.handedAt,
+        takenBy: takenBy ?? this.takenBy,
         retiredAt: retiredAt,
+        quietCleared: quietCleared ?? this.quietCleared,
       );
 
   Map<String, dynamic> toJson() => {
@@ -136,6 +227,8 @@ class ContactQueue {
     'sealPriv': sealPriv,
     'sealPub': sealPub,
     if (ackedBy.isNotEmpty) 'ackedBy': ackedBy,
+    if (takenBy.isNotEmpty) 'tb': takenBy,
+    if (quietCleared.isNotEmpty) 'qs': quietCleared,
     if (handedAt.isNotEmpty)
       'handedAt': {
         for (final MapEntry(:key, :value) in handedAt.entries)
@@ -153,11 +246,18 @@ class ContactQueue {
 /// it covers the account. Learned from its frames, so the contact backup
 /// drops it ([ContactRecord.toBackupJson]): a capability learned must not
 /// move the backup's `rev`.
+///
+/// [idk]: the account identity (base64) that authenticated the frame this
+/// address was learned from. REQUIRED so no rebuild can drop it silently;
+/// null only for an address not yet migrated, or learned before the friend's
+/// anchor was pinned (it is tagged at its first pin). The contact backup
+/// carries it. Nothing reads it to decide a send yet.
 class ContactOutbound {
   const ContactOutbound({
     required this.peerDeviceId,
     required this.sid,
     required this.sealPub,
+    required this.idk,
     this.relays = false,
   });
 
@@ -165,21 +265,37 @@ class ContactOutbound {
     peerDeviceId: j['peerDeviceId'] as int,
     sid: j['sid'] as String,
     sealPub: j['sealPub'] as String,
+    idk: j[idkKey] as String?,
     relays: j[relaysKey] == true,
   );
 
   /// Its key: [ContactRecord.toBackupJson] drops it.
   static const String relaysKey = 'rl';
 
+  /// The key of [idk] in the JSON.
+  static const String idkKey = 'idk';
+
   final int peerDeviceId;
   final String sid;
   final String sealPub;
+  final String? idk;
   final bool relays;
+
+  /// A copy with the named fields replaced; [idk] cannot be cleared, only
+  /// kept or set.
+  ContactOutbound copyWith({String? idk, bool? relays}) => ContactOutbound(
+    peerDeviceId: peerDeviceId,
+    sid: sid,
+    sealPub: sealPub,
+    idk: idk ?? this.idk,
+    relays: relays ?? this.relays,
+  );
 
   Map<String, dynamic> toJson() => {
     'peerDeviceId': peerDeviceId,
     'sid': sid,
     'sealPub': sealPub,
+    if (idk != null) idkKey: idk,
     if (relays) relaysKey: true,
   };
 }
@@ -551,6 +667,7 @@ class ContactRecord {
     this.queues = const [],
     this.legacy = const ContactLegacy(),
     this.boxOrigin,
+    this.reannounced = true,
   });
 
   factory ContactRecord.fromUser(UserModel user, ContactState state) =>
@@ -593,6 +710,7 @@ class ContactRecord {
         j['legacy'] as Map<String, dynamic>? ?? const {},
       ),
       boxOrigin: ContactBoxOrigin.fromJson(j['box']),
+      reannounced: j['ra'] == true,
     );
   }
 
@@ -623,6 +741,14 @@ class ContactRecord {
   /// Set when the friendship was made over the box (slice (f)); null for
   /// every friendship the server knows of.
   final ContactBoxOrigin? boxOrigin;
+
+  /// This record's queues were handed to the friend under THIS build's rules
+  /// (the one-time re-announce after the upgrade, decision B). A record a
+  /// build before it wrote reads false; a record created by this build is
+  /// born true. Cleared handoff state and this flag go in ONE write
+  /// (`ContactStore.reannounceOwn`), so a kill can neither lose the
+  /// re-announce nor repeat it. Device-local: the backup drops it.
+  final bool reannounced;
 
   /// The chat of this contact: its server conversation, else — a friendship
   /// made over the box (owner decision 52) — its local id. The contact
@@ -655,6 +781,7 @@ class ContactRecord {
     if (queues.isNotEmpty) 'queues': queues.map((q) => q.toJson()).toList(),
     'legacy': legacy.toJson(),
     if (boxOrigin != null) 'box': boxOrigin!.toJson(),
+    if (reannounced) 'ra': true,
   };
 
   /// The half of this record another device of the same account could hold —
@@ -674,6 +801,7 @@ class ContactRecord {
   Map<String, dynamic> toBackupJson() {
     final json = toJson()
       ..remove('queues')
+      ..remove('ra')
       ..['settings'] = (settings.toJson()..remove(ContactSettings.boxPinKey));
     // Of `legacy`, only the chat id: a friend from before the box keeps its
     // chat after a restore once no server list re-supplies it (Phase 4 step
@@ -718,6 +846,7 @@ class ContactRecord {
     ContactLegacy? legacy,
     ContactBoxOrigin? boxOrigin,
     bool clearBoxOrigin = false,
+    bool? reannounced,
   }) => ContactRecord(
     userId: userId,
     username: username ?? this.username,
@@ -731,6 +860,7 @@ class ContactRecord {
     queues: queues ?? this.queues,
     legacy: legacy ?? this.legacy,
     boxOrigin: clearBoxOrigin ? null : boxOrigin ?? this.boxOrigin,
+    reannounced: reannounced ?? this.reannounced,
   );
 
   /// Profile fields from a fresh server [user], everything else kept.
