@@ -113,8 +113,8 @@ class ContactQueue {
   /// Additive, like [ackedBy].
   final DateTime? retiredAt;
 
-  /// The devices the upgrade one-shot's re-announce cleared (review 4,
-  /// P2-1) and that no handoff or ack has covered since: a handoff to one
+  /// The devices whose ACK the upgrade one-shot's re-announce cleared
+  /// (review 4, P2-1) and that no handoff or ack has covered since: a handoff to one
   /// is made only on a session that is usable with what is held, by ANY
   /// pass and after a restart too, so the one-shot never makes a session
   /// (a bundle fetch) a later ordinary pass would. Ended by a handoff or an
@@ -173,20 +173,26 @@ class ContactQueue {
   /// This queue as never handed or acknowledged by any device: the peer's
   /// identity moved, so what it acknowledged under the old one proves
   /// nothing and our handoff is due again. [quiet]: the upgrade one-shot,
-  /// which records the devices it cleared in [quietCleared]; otherwise that
-  /// set is dropped too.
+  /// which clears and records in [quietCleared] only the devices that had
+  /// ACKED (without it they are never due again); a device handed and not
+  /// acked keeps its [handedAt], so its ordinary resend a day later, with
+  /// that pass's own fetch and lookup, is untouched (review 5, P2-A).
+  /// Otherwise that set is dropped too.
   ContactQueue withoutHandoffState({bool quiet = false}) {
     final cleared = ackedBy.isNotEmpty || handedAt.isNotEmpty;
     if (quiet) {
-      return cleared
-          ? _with(
+      return ackedBy.isEmpty
+          ? this
+          : _with(
               ackedBy: const [],
-              handedAt: const {},
+              handedAt: {
+                for (final e in handedAt.entries)
+                  if (!ackedBy.contains(e.key)) e.key: e.value,
+              },
               quietCleared: [
-                ...{...ackedBy, ...handedAt.keys},
+                ...{...quietCleared, ...ackedBy},
               ],
-            )
-          : this;
+            );
     }
     return !cleared && quietCleared.isEmpty
         ? this

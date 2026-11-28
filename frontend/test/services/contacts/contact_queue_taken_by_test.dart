@@ -74,11 +74,28 @@ void main() {
       'move or a re-mint (a plain clear) removes them all', () {
     final q = queue
         .withAck(3)
-        .withHanded(4, at)
+        .withAck(4)
         .withoutHandoffState(quiet: true);
     expect(q.quietCleared, unorderedEquals([3, 4]));
     expect(q.withHanded(3, at).quietCleared, [4]);
     expect(q.withAck(4).quietCleared, [3]);
     expect(q.withoutHandoffState().quietCleared, isEmpty);
+  });
+
+  // Review 5, P2-A: a device handed and never acked was due again a day
+  // after its handoff before the one-shot existed; the one-shot must not
+  // turn that resend into a usable-session-only one.
+  test('the one-shot leaves a handed, never acked device as it was: not in '
+      'qs, its handoff time kept; an acked one is cleared and due', () {
+    final q = queue
+        .withAck(3)
+        .withHanded(3, at)
+        .withHanded(4, at)
+        .withoutHandoffState(quiet: true);
+    expect(q.quietCleared, [3]);
+    expect(q.ackedBy, isEmpty);
+    expect(q.handedAt, {4: at});
+    final handedOnly = queue.withHanded(4, at);
+    expect(handedOnly.withoutHandoffState(quiet: true), same(handedOnly));
   });
 }

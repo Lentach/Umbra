@@ -756,11 +756,12 @@ class BoxFriendHandoff {
   /// friendship ends: the box answers `ok` for a deleted queue, so what the
   /// device still writes there would be lost without a sign (review 3, P1;
   /// a hold can keep the lead from being handed for longer than the TTL).
-  /// While it stays, its retirement is re-stamped to now (review 4, P3-1):
-  /// the box delivers a window of frames in flight, so the ack of the lead
-  /// can be read while the old queue still holds what the device wrote
-  /// before it moved; the delete comes one full TTL after the last pass
-  /// that saw a taker not yet on the lead.
+  /// When the TTL has run out and it still stays, its retirement is
+  /// re-stamped to now (review 4, P3-1): the box delivers a window of
+  /// frames in flight, so the ack of the lead can be read while the old
+  /// queue still holds what the device wrote before it moved; the delete
+  /// comes one full TTL after the last re-stamp (a pass inside the TTL
+  /// writes nothing).
   Future<void> _retireExpired(int userId, Set<int> live) async {
     final queues = _store.byUserId(userId)?.queues ?? const <ContactQueue>[];
     final lead = queues.firstOrNull;
